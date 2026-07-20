@@ -1,0 +1,13 @@
+{
+  "host": "127.0.0.1",
+  "port": 8504,
+  "allowedHosts": [],
+  "uploads": {
+    "defaultFolder": ".pi-web/uploads"
+  },
+  "spawnSessions": true,
+  "subsessions": false,
+  "agent": {
+    "command": "pi"
+  }
+}

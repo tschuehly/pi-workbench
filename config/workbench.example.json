@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "workflow": "adaptive-feature-delivery",
+  "piWeb": {
+    "developmentUrl": "http://127.0.0.1:8505"
+  },
+  "storage": {
+    "anchorDirectory": ".pi-workbench"
+  }
+}

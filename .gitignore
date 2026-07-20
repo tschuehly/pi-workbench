@@ -1,0 +1,20 @@
+# Dependencies and builds
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local environment
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Machine-local Pi and PI WEB state
+.pi/
+.pi-web/
+.pi-workbench/runs/
+.pi-workbench/objects/
+
+# Logs
+*.log
