@@ -222,6 +222,33 @@ The controller assembles the smallest sufficient Model Context for each dispatch
 
 Every `DispatchSpec` contains a self-contained work packet with the semantic objective and graph node, repository and input revisions, authority shape, named execution profile, allowed workspace and capabilities, source-backed contracts, relevant evidence, acceptance criteria, material risks, verification obligations, explicit exclusions, episode schema, and size budget. Repository packages may constrain packet size or file scope; the workflow does not impose universal file-count or changed-line limits.
 
+For a Ship Dispatch, the Work Packet is directly executable rather than interpretive setup. It includes:
+
+- The concrete outcome and the exact source revisions or artifact slices that define it.
+- The relevant existing interfaces, with source paths and revisions, plus any referenced Episodes that justify relying on them.
+- Allowed mutation scope when the selected repository profile uses path enforcement, represented as normalized repository-relative paths and a content hash of that scope.
+- Repository examples whose conventions the implementation should follow.
+- Explicit exclusions, neighboring work that must remain untouched, and the acceptance criteria assigned to this Dispatch.
+- Exact validation commands, required evidence classes, and the changes that invalidate each result.
+
+### V1 Ship Execution Contract
+
+Implementation uses one bounded inner feedback loop inside the controller's `execution` state. The loop does not own lifecycle transitions, independent Verification, Acceptance, or Publication.
+
+1. The controller confirms the approved authority, current graph and input revisions, named Ship profile, exclusive workspace lease, expected base revision, and eligible starting workspace state.
+2. The controller Dispatches the Work Packet to one Pi Ship Worker. The worker implements only the assigned semantic slice and returns a typed Episode at every completion, correction, failure, or authority boundary.
+3. After each worker mutation, the controller or a deterministic capability inventories tracked, staged, deleted, renamed, and non-ignored untracked paths. When the profile declares an allowed path set, any path outside it pauses the Dispatch for reconciliation. Scope expands only through a recorded graph or Work Packet revision made before further mutation.
+4. The worker inspects the realized diff and runs the packet's local validation commands. A failed check may produce a correction Dispatch for the same work item, with the failure evidence and unchanged authority boundary.
+5. Every validation result records the command, exit status, output artifact, tool version, base revision, and a workspace fingerprint covering the exact candidate content. Any later content mutation invalidates that result. A landing request cannot rely on validation evidence whose fingerprint differs from the landing candidate.
+6. Each Ship profile has a finite correction ladder. The PhotoQuest pilot Ship profile permits at most three implementation attempts for one semantic slice. Exhaustion creates one deduplicated Attention Item and stops affected work.
+7. A successful Ship Episode includes a mutation receipt: changed paths and change kinds, scope-check result, candidate workspace fingerprint, validation evidence, acceptance-criterion coverage, public-interface changes, deviations, unresolved claims, and residual risks.
+8. The deterministic Repository Workspace module lands the candidate only when the Episode schema, authority, lease, scope, workspace fingerprint, and required validation evidence are current. Models do not stage, commit, rebase, push, or publish as controller pass-through executors.
+9. After landing, the controller records the landing receipt and exposes a source-backed interface-contract view for later Work Packets. The view is derived from landed source and referenced Episodes; it is not an independently authoritative ledger.
+
+The PhotoQuest pilot prefers one coherent semantic slice per commit when the slice is independently green and reviewable. Commit shape, exact path enforcement, and correction limits are repository-profile policies rather than universal workflow invariants.
+
+Resuming an in-flight Ship Dispatch requires the recorded lease, base revision, graph revision, Work Packet hash, allowed-scope hash when present, and latest workspace fingerprint. A dirty workspace is eligible only when it belongs to that recorded Dispatch and its current mutation inventory satisfies the active scope. A changed base, unexplained path, missing lease, or fingerprint contradiction produces reconciliation instead of continuation.
+
 Every dispatch also declares one authority shape orthogonal to its execution profile:
 
 - **Scout:** investigates, plans, audits, reproduces, or prototypes within read-only or disposable scratch scope and returns a self-contained report and evidence. It cannot publish project changes or authorize implementation.
@@ -552,6 +579,10 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - Execution-graph nodes represent only variable semantic work, dependencies, worker bindings, and evidence obligations; fixed lifecycle gates are not graph nodes.
 - Tactical work and context synchronization are recorded as episodes within their owning node.
 - Every dispatch receives a self-contained work packet with source-backed inputs, authority, scope, risks, evidence obligations, and an expected episode schema.
+- Every Ship Work Packet is directly executable: it identifies exact source-backed contracts, optional normalized path scope, repository examples, exclusions, validation commands, and evidence invalidation rules.
+- Ship validation evidence is bound to the exact candidate workspace fingerprint. Any subsequent content mutation invalidates it, and the controller refuses to land a different fingerprint.
+- Every successful Ship Episode contains a mutation receipt covering changed paths, scope evidence, validation, acceptance coverage, public-interface changes, deviations, unresolved claims, and residual risks.
+- The Repository Workspace module alone lands validated candidates. Per-slice commits are repository policy; pushing and pull-request creation remain explicit Publication actions.
 - Workflows declare cognitive roles, required capabilities, effort, continuity, and independence; repository policy resolves or pins the concrete Pi model.
 - Cache affinity never controls workflow correctness or resumption.
 - Workflow definitions and repository policy are versioned separately from mutable run state.
@@ -618,6 +649,11 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - Attempt to release dirty, unlanded, unreported, and evidence-incomplete workspaces; assert that leases remain held until delivery, authorized discard, or sealed scout completion.
 - Exhaust each configured attempt ladder and review-failure threshold; assert one deduplicated attention item and no further affected dispatch.
 - Attempt to submit a dispatch with missing source-backed inputs, invented capabilities, an unrecognized profile, or an incompatible episode schema; assert deterministic rejection.
+- Mutate an allowed file after a green validation result; assert that the workspace fingerprint changes, the evidence becomes stale, and landing is rejected until the candidate is revalidated.
+- Add, delete, rename, stage, and leave untracked paths outside a Ship Work Packet's declared scope; assert deterministic detection before review and before landing.
+- Resume an in-flight Ship Dispatch with matching and mismatching lease, base revision, graph revision, packet hash, scope hash, and workspace fingerprint; assert continuation only for the fully reconciled case.
+- Submit a Ship Episode without a complete mutation receipt or with an interface-contract claim unsupported by landed source; assert rejection or an unverified claim rather than silent promotion.
+- Exhaust the PhotoQuest Ship profile's three-attempt correction ladder; assert one deduplicated Attention Item, preservation of the candidate diff and failure evidence, and no model takeover or landing.
 - Prove that no workflow transition depends on Claude Code, Codex CLI or app-server, or CLI-proxy state.
 - Test staleness detection by changing each revision or hash input independently.
 - Test cleanup with mark-and-sweep fixtures, pinned evidence, policy holds, orphaned blobs, and promotion gates.
