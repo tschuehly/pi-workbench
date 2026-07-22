@@ -6,6 +6,13 @@ Status: provisional candidate-selection contract.
 
 PI WEB and T3 Code are competing graphical-shell candidates. The Workbench does not depend on either shell, and neither candidate owns Runs, lifecycle transitions, authority, evidence, dispatch, or workspace leases.
 
+PI WEB is the first adapter candidate because it already supplies the Pi-native operational shell:
+persistent session hosting, projects and worktrees, terminals and files, browser and mobile access,
+remote machines, service installation, reconnect handling, and a tested plugin system. The first
+evaluation therefore measures how little additional PI WEB surface is required to present and
+control Runs. T3 Code remains the comparison candidate rather than a parallel implementation
+started at the same time.
+
 The intended boundary is:
 
 ```text
@@ -42,6 +49,11 @@ The T3 Code adapter must therefore preserve these distinctions:
 
 Use a browser plugin or narrow upstream extension seam to add Run status, Attention Items, Judgment Dossiers, evidence links, typed control actions, and task-shaped Review Surfaces. PI WEB's native Pi sessions, packages, terminals, machines, and mobile browser support reduce integration distance, but its plugin surface must prove structured Run observation and control.
 
+Reuse PI WEB as an upstream product with a small Workbench-owned adapter. Do not copy its source
+into this repository. A source copy would immediately create a fork while losing the update path
+for Pi compatibility, session hosting, remote machines, browser behavior, installation, and
+security maintenance.
+
 ### T3 Code
 
 Add a distinct Workbench domain that consumes the Run protocol. Reuse T3 Code's project shell, connection runtime, ordered projections, diff review, target-anchored comments, preview annotations, and responsive clients. Do not reuse its multi-provider orchestration as Workbench execution authority.
@@ -69,6 +81,24 @@ A framework-neutral TypeScript Run client and one recorded Run fixture drive bot
 - Read-only behavior without the control lease.
 - Terminal-equivalent outcomes for every supported graphical action.
 
+The client boundary also carries these implementation requirements:
+
+- Browser-safe, runtime-validated protocol messages; native Pi events and filesystem paths do not
+  become the public Run contract.
+- A complete canonical snapshot on attachment, monotonically ordered live changes, bounded replay,
+  and snapshot reconciliation when replay is unavailable.
+- Stable item and event identities so reconnect, refresh, and repeated delivery cannot duplicate
+  messages, evidence, Attention Items, or receipts.
+- Explicit connected, reconnecting, and disconnected states, with no mutation accepted from a
+  client that does not hold the control lease.
+- Bounded previews for tool and validation output; larger content remains a referenced artifact.
+- Safe Markdown rendering without raw HTML, a restricted link policy, visible keyboard focus,
+  accessible dialogs and drawers, reduced-motion support, and usable layouts down to 320 px.
+- A deterministic fake Run client for component, reconnect, stale-event, control-lease, and mobile
+  tests. Default client tests do not start Pi or spend model tokens.
+- Private deployment only. The application server remains bound to loopback behind an explicitly
+  trusted local proxy or private-network ingress; no client adapter adds public sharing.
+
 ## Selection Criteria
 
 Choose the shell that satisfies the fixture with the smallest durable maintenance burden and no authority leaks. Compare:
@@ -79,6 +109,16 @@ Choose the shell that satisfies the fixture with the smallest durable maintenanc
 4. Reconnect, replay, remote-machine, browser, mobile, and multi-workspace behavior.
 5. Accessibility and terminal fallback.
 6. Upstream contribution prospects and long-term fork cost.
+
+Apply this implementation order:
+
+1. Use the documented PI WEB plugin API for a read-oriented Run projection.
+2. Add typed Run mutations only through the framework-neutral Workbench client.
+3. Contribute the smallest generic observation or hosting seams missing from PI WEB upstream.
+4. Maintain a fork only when the selection fixture proves that required shell behavior cannot be
+   expressed through stable upstream seams.
+5. Build a separate shell only when both PI WEB adaptation and a bounded fork would cost more than
+   owning the complete browser, mobile, remote-machine, and operational surface.
 
 Select T3 Code only if the Workbench can remain a distinct client domain and all mutations pass through the controller. Reject an integration that requires `Run = Thread`, `Dispatch = Provider Turn`, or T3 Code to launch and supervise Pi on the controller's behalf.
 
