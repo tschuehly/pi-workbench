@@ -1,6 +1,6 @@
 # Pi Project Workbench — Evolving Specification
 
-Status: evolving specification. The V1 lifecycle, core module interfaces, durable storage shape, and terminal concepts are established; exact schema fields and implementation details remain to be validated through the pilot.
+Status: evolving specification. The V1 lifecycle, core module interfaces, durable storage shape, attention-centered client concepts, and minimal graphical vertical slice are established; exact schema fields and implementation details remain to be validated through the pilot.
 
 Canonical domain language is defined in [CONTEXT.md](CONTEXT.md).
 
@@ -10,28 +10,34 @@ Development work is distributed across agent conversations, IntelliJ, terminals,
 
 Human Attention is scarce and loses value when people must continuously supervise routine work or reconstruct intent, decisions, evidence, and consequences from scattered artifacts. Model Context and Model Effort are also constrained: loading broad histories into every agent, using one model for every Cognitive Role, or preserving continuity where independent judgment is needed makes execution slower, less focused, and harder to evaluate.
 
+Chat serializes communication even when project work is parallel, visual, and changing quickly. Plans, approval requests, progress, evidence, corrections, and completed work become one interleaved timeline; a question may become stale while independent work advances, and a person must juggle tabs and remember which state each conversation represents. A terminal-only pilot can validate controller mechanics but cannot validate this Human-Attention problem.
+
 Long-running agent work also creates substantial temporary state. Without explicit promotion and cleanup rules, ledgers, handoffs, traces, generated artifacts, cached research, and obsolete plans become stale context that harms both people and agents.
 
 ## Solution
 
-Provide a Pi-based project workbench that allocates human and model attention across a durable Run. It establishes Shared Understanding before autonomous work, routes bounded Dispatches by Cognitive Role, Model Effort, Continuity, and Independence, requests In-Run Judgment when it can materially improve the outcome, and supports Acceptance through a task-shaped Review Surface.
+Provide a Pi-based project workbench that allocates human and model attention across concurrent durable Runs. Portfolio and Project Attention Brokers route priorities, guidance, and prepared judgments without replacing the Coordinator accountable for each Run. Each Run establishes Shared Understanding and a resolved Working Mode before autonomous work, routes bounded Dispatches by Cognitive Role, Model Effort, Continuity, and Independence, requests In-Run Judgment when it can materially improve the outcome, and supports Acceptance through a task-shaped Review Surface.
 
 The workbench has a stable trusted shell and one versioned adaptive Workflow Contract. Pi is the only model-worker runtime. A durable local run ledger drives execution. Terminal and graphical clients consume the same run protocol and render interactions appropriate to their capabilities. External systems are connected through explicit import and Publication steps.
 
-The initial workflow defines its quality and authority envelope, capabilities, tools, model roles, permissions, surfaces, external synchronization, evidence requirements, and retention lifecycle. A fixed deterministic controller lifecycle surrounds a revisable graph of variable semantic work. A Pi coordinator organizes that work inside the envelope, while the controller alone advances lifecycle state and performs side effects. The implementation loop is a bounded execution capability; the primary human value is reviewable Judgment before autonomous work, selectively during it, and when evaluating the realized outcome.
+The initial workflow defines its quality and authority envelope, capabilities, tools, model roles, permissions, surfaces, external synchronization, evidence requirements, and retention lifecycle. Repository capabilities, Run intent, uncertainty, impact, reversibility, and available Human Attention resolve a Working Mode rather than selecting a universal maturity level. A fixed deterministic controller lifecycle surrounds a revisable graph of variable semantic work. A Pi coordinator organizes that work inside the envelope, while the controller alone advances lifecycle state and performs side effects. Loops, experimental graphs, planning, implementation, and review are bounded execution capabilities; the primary human value is reviewable Judgment before autonomous work, selectively during it, and when evaluating the realized outcome.
 
 ## High-Level Product Shape
 
 - Pi is the only agent runtime and can use different models for different cognitive roles.
+- A Portfolio Broker allocates attention across projects, and a Project Broker coordinates concurrent Runs inside one repository without replacing their Run Coordinators.
+- One project may run several independent outcomes in parallel; each remains a separate Run with its own authority, evidence, lifecycle, and accountable Coordinator.
 - Attention Allocation matches human judgment moments and model capability, effort, context, continuity, and independence to the repository and task.
+- Working Mode is resolved per Run from the desired outcome, repository capabilities, uncertainty, impact, reversibility, and available Human Attention; no fixed global catalog or maturity ladder is required.
 - The controller advances one fixed lifecycle; the model dynamically organizes only the variable semantic work inside it.
 - Stable guardrails preserve human authority, workspace isolation, durable state, evidence, explicit external actions, and recovery.
 - The coordinator organizes evidence-linked claim, challenge, and response episodes into one accountable synthesis.
-- One Judgment Dossier makes the important reasoning reviewable before implementation and reconciles it with the realized system afterward.
+- One Judgment Dossier makes the important reasoning reviewable before execution and reconciles it with the realized outcome afterward.
 - Every Dispatch receives the smallest self-contained Model Context justified by its Cognitive Role; Episodes carry useful results across context boundaries without copying full tactical histories.
 - Implementation and verification are adaptable execution capabilities rather than a universal sequence of ceremonies.
 - Human Attention is concentrated in two Principal Judgments and requested during execution only when an In-Run Judgment has material value.
 - Review Surfaces assemble the realized outcome, relevant context, Primary Evidence, and target-anchored actions in the format appropriate to the human judgment.
+- The minimal graphical client makes portfolio, project, Run, attention, evidence, and scoped-conversation state visible while terminal clients retain complete structured control paths.
 - Every run analyzes its outcome and orchestration, compounds validated learning, and cleans up disposable state.
 - One cloneable harness repository supplies the shared Pi capabilities and curated skills; target repositories add project-specific overlays.
 - Skills are portable agent capabilities that may progressively add richer project- and task-appropriate interfaces through harness-owned APIs.
@@ -39,6 +45,7 @@ The initial workflow defines its quality and authority envelope, capabilities, t
 - A Pi agent can generate an integrated harness surface for a skill using the same semantic Surface Builder pattern proven by Atelier.
 - Skill surfaces can change during a run as the task, evidence, decisions, and repository context evolve.
 - Mechanical status, validation, configuration health, and routine supervision consume no model turn.
+- Logical Actors retain durable identity while their Pi model sessions remain disposable and reconstructable from source-backed Continuation Artifacts.
 
 Exact schema fields, routing bindings, retention values, and graphical interaction contracts remain intentionally unspecified until exercised by the pilot.
 
@@ -67,6 +74,13 @@ Exact schema fields, routing bindings, retention values, and graphical interacti
 21. Each Pi actor receives only the context justified by its bounded work; durable references carry forward results instead of full conversation histories.
 22. Human Attention brackets autonomous work and enters it conditionally when an In-Run Judgment can materially improve the outcome.
 23. Acceptance is supported by a task-shaped Review Surface that joins intent, realized behavior, Primary Evidence, deviations, risks, feedback, and available actions.
+24. The shortest path to decision-changing evidence takes priority over unbounded issue discovery or review activity.
+25. A loop or graph is an execution shape selected for the outcome, not a workflow or maturity level in itself.
+26. Human-facing state assumes interruption and context switching: it externalizes memory, distinguishes activity from action, preserves place, and explains what changed since the last judgment.
+27. Attention requests pause only affected work when dependencies and authority allow independent work to continue.
+28. Logical Actor identity and accountability outlive replaceable model sessions; no model context is authoritative Run state.
+29. Watchers classify and reconcile routine execution mechanically; models enter only when interpretation or judgment is actionable.
+30. A graphical attention surface is part of the V1 vertical slice because attention allocation, visual evidence, and concurrent work cannot be validated through terminal mechanics alone.
 
 ## Actors
 
@@ -74,12 +88,59 @@ Exact schema fields, routing bindings, retention values, and graphical interacti
 - Developer using the graphical workbench.
 - Non-terminal collaborator reviewing artifacts and making bounded decisions.
 - Workflow owner maintaining the initial workflow contract.
+- Portfolio Broker routing priorities and Human Attention across projects.
+- Project Broker coordinating repository capabilities, conflicts, and concurrent Runs without owning their lifecycle state.
 - Deterministic controller validating transitions, reducing current state, dispatching Pi executions, and owning workspace and supervision leases.
 - Pi coordinator interpreting owner intent, organizing work, selecting bounded dispatches, and synthesizing results without mutating target projects.
-- Pi worker performing planning, implementation, research, review, verification, run analysis, or compounding with a role-specific model.
+- Pi worker performing planning, implementation, research, review, verification, context curation, run analysis, or compounding with a role-specific model.
+- Deterministic Watcher reconciling execution observations, timers, leases, and external waits without a model turn.
 - External system adapter connecting GitHub, Linear, Sentry, CI, IntelliJ, and similar systems.
 
 ## System Architecture
+
+### Attention Brokerage and Concurrent Runs
+
+The Workbench presents three coordination scopes without collapsing them into one conversation or
+one authority hierarchy:
+
+- The **Portfolio Broker** routes attention, priorities, and authorized Run proposals across projects.
+- The **Project Broker** coordinates repository capabilities, resource conflicts, and several
+  concurrent Runs in one project.
+- Each **Run Coordinator** remains accountable for one owner-declared outcome, its semantic work,
+  evidence, and human-facing synthesis.
+
+The owner may enter a project or Run scope and communicate directly with the relevant Broker or
+Coordinator. The higher Broker receives a bounded Episode when that focused interaction ends; it
+does not ingest the complete lower-scope conversation. A pending judgment blocks only affected
+graph nodes or Runs when other work remains dependency-independent and authorized.
+
+Brokers communicate through one versioned, typed protocol rather than relying on prompt obedience.
+Its semantic operations cover:
+
+```text
+propose run
+start authorized run
+guide revisioned run or project work
+set portfolio or project priority
+inspect and watch canonical projections
+request a prepared Review Surface
+pause, resume, stop, or transfer control
+```
+
+Responses include revisioned proposals, receipts, project projections, Attention Items, capability
+needs, cross-Run conflicts, progress digests, Review Surface references, and outcome Episodes. A
+Broker may propose work autonomously, but starting a Run or expanding material scope requires
+explicit authority or a previously approved envelope. System-prompt overlays describe scope,
+repository language, and communication behavior; controllers and schemas enforce authority,
+revisions, and legal operations.
+
+Portfolio and Project Brokers use the same parameterized Pi execution primitive with different
+scope, source projections, allowed commands, profiles, and expected Episode schemas. They are
+Logical Actors whose model sessions may be replaced without changing their identity or authority.
+A Broker or planner may request bounded supporting Subagent Dispatches for investigation,
+comparison, challenge, or preparation. The controller resolves each Work Packet and capability set;
+the Subagent inherits neither the requesting actor's context nor its authority and returns one typed
+Episode to the accountable actor.
 
 ### Harness Distribution Repository
 
@@ -91,7 +152,9 @@ External executables and services are represented as versioned capabilities with
 
 Skills remain self-contained agent capabilities with concise instructions and bundled scripts, references, and assets. The harness gives them common ways to expose progress, decisions, artifacts, inputs, outputs, and relevant actions without requiring each skill to build a separate application.
 
-The resolved skill set is declared per dispatch and loaded only into that Pi execution context. Each resulting episode records the exact skill and adaptation versions that influenced it. Skill instructions leave active context when the episode ends unless a later dispatch resolves them again.
+The resolved skill set is declared per dispatch and loaded only into that Pi execution context. Capability resolution proceeds from the harness catalog through repository-approved capabilities, the Run's Working Mode, a named Execution Profile, and the Dispatch-specific Work Packet. Availability in the harness or repository does not place a skill in every model context. A subordinate Dispatch does not automatically inherit its parent's skills, permissions, or evidence.
+
+Each resulting episode records the exact skill and adaptation versions that influenced it. Skill instructions leave active context when the episode ends unless a later dispatch resolves them again.
 
 Every skill has a complete headless and terminal path. Skills with meaningful human interaction may contribute enhanced interface definitions or sandboxed views as progressive enhancements. Those views project the same durable run state and cannot control identity, permissions, recovery, or workflow transitions independently.
 
@@ -117,7 +180,9 @@ The repository package is versioned with the project and declares:
 - Required capabilities and safety gates.
 - Skills, tools, hooks, validation commands, and model roles.
 - A finite set of named execution profiles resolving model requirements, effort, continuity, permissions, workspace kind, skills, independence, and episode schema.
+- Rules for resolving a Run Working Mode from outcome, uncertainty, scope, risk, reversibility, available Human Attention, and repository capabilities.
 - Work-packet requirements, attempt ladders, attention thresholds, and allowed non-material graph mutations.
+- Alignment participants, interaction cadence, direct-experience surfaces, review responsibilities, and result-packaging requirements.
 - Permission and AFK autonomy limits.
 - External adapters and publication mappings.
 - Supported project surfaces and terminal fallbacks.
@@ -171,7 +236,7 @@ The deterministic controller reducer combines semantic records with live Pi exec
 
 V1 may retain the complete semantic record stream for a run. Sealing may later segment or compact its physical representation without changing record identity or durable references.
 
-Terminal summaries, attention inboxes, notifications, AFK digests, and later graphical clients consume the same `RunSnapshot` and attention records. They do not independently infer state from raw event prose. Large tool results and media are stored as referenced, content-addressed artifacts.
+Terminal summaries, portfolio and project attention, notifications, AFK digests, and graphical clients consume canonical projections and Attention Items. They do not independently infer state from raw event prose. Large tool results and media are stored as referenced, content-addressed artifacts.
 
 ### Repository Workspace Module
 
@@ -219,6 +284,26 @@ The runtime implements one Pi execution primitive parameterized by cognitive rol
 Every bounded dispatch ends or pauses at a synchronization point and returns a typed episode. Worker and subagent activity is visible to the run through the same dispatch, episode, artifact, permission, budget, cancellation, and workspace-lease contract.
 
 The controller assembles the smallest sufficient Model Context for each dispatch from its Work Packet, resolved skills, referenced Episodes, and relevant Primary Evidence. Full coordinator history, unrelated worker transcripts, stale tool output, and standing skill instructions do not enter a dispatch merely because they exist. A Worker preserves Continuity only where repeated work in one semantic scope benefits from it; a Subagent receives a fresh context where narrow focus or Independence is more valuable.
+
+Logical Actor identity is durable, but every Pi model session is disposable. Brokers, Coordinators,
+and Workers may be reconstructed in fresh sessions without changing their address, scope, or
+accountability. Planning and context curation are episodic Cognitive Roles: a planner proposes or
+revises semantic work and returns an Episode; a fresh Context Curator prepares a bounded
+Continuation Artifact from the canonical snapshot, material Episodes, and Primary Evidence.
+
+A Continuation Artifact records the current objective, graph and input revisions, ratified
+decisions and rationale, material assumptions, verified and unverified claims, disagreements,
+evidence references, pending attention, residual uncertainty, and next justified work. Every claim
+references its durable source. The artifact is a replaceable projection for assembling a later Work
+Packet; it does not replace semantic records, the Judgment Dossier, or Primary Evidence.
+
+Authority, corrections, deviations, unresolved Material Questions, conflicting claims, workspace
+mutations, evidence references, and pending Attention Items are retained mechanically regardless of
+curator judgment. Raw transcripts, repeated status, and superseded tactical output may expire under
+policy. Context rotation occurs at synchronization points such as an accepted graph revision,
+completed experiment round, material judgment, landed semantic slice, completed independent
+Verification, or declared context-pressure threshold. Rotation persists and validates the current
+Episode and Continuation Artifact before a fresh session reconciles against the canonical snapshot.
 
 Every `DispatchSpec` contains a self-contained work packet with the semantic objective and graph node, repository and input revisions, authority shape, named execution profile, allowed workspace and capabilities, source-backed contracts, relevant evidence, acceptance criteria, material risks, verification obligations, explicit exclusions, episode schema, and size budget. Repository packages may constrain packet size or file scope; the workflow does not impose universal file-count or changed-line limits.
 
@@ -292,6 +377,26 @@ Models and Model Effort are selected independently by Cognitive Role, task shape
 
 The coordinator can dispatch a specialist to question or challenge a claim and dispatch a response that references the challenge. These claim, challenge, and response episodes are durable and evidence-linked. The initial implementation does not provide peer mailboxes or open-ended worker conversations; one coordinator remains accountable for synthesis and the human-facing result.
 
+### Outcome-Directed Planning and Review
+
+The Coordinator selects the shortest safe path to evidence that can confirm, disconfirm, or redirect
+the desired outcome. A Run with low certainty may establish hypotheses, representative inputs,
+comparison criteria, and stopping conditions before choosing an implementation direction. A Run
+with a known outcome may use one Dispatch, a bounded loop, or a dependency graph according to its
+scope and evidence obligations.
+
+Review is a capability applied to material claims and risks rather than an unbounded search for more
+issues. Every review Dispatch declares the claim under review, why it matters to the outcome,
+required Primary Evidence, finding disposition, attempt bound, and stopping condition. An early
+behavioral experiment or direct human experience may take priority over broad internal review when
+it can invalidate the direction more cheaply. A quality loop cannot continue merely until models
+stop proposing improvements.
+
+Experimental branches return comparable Episodes against criteria established before interpreting
+their results. The Coordinator synthesizes successes, failures, contradictions, and residual
+uncertainty; an independent challenge profile checks material conclusions when required. The human
+receives a task-shaped Review Surface rather than Worker logs or a concatenation of reports.
+
 ### Judgment Dossier
 
 Each run maintains one versioned Judgment Dossier as the authoritative reasoning artifact. Before implementation it records the Shared Understanding: problem and system model, language, evidence, options, trade-offs, assumptions, risks, chosen direction, and success evidence. After implementation it explains the realized system, supporting evidence, deviations, consequences, residual risks, and learning candidates. Review Surfaces project the dossier and its evidence for a particular human judgment without duplicating ownership.
@@ -315,7 +420,12 @@ Clients reconnect to a run by identifier and resume from its canonical snapshot.
 
 ### Schema Registry
 
-One versioned registry defines commands, command receipts, semantic records, snapshots, dispatches, episodes, attention items, dossier revisions, and external receipts. Every type declares its required envelope and values, producer and consumers, authority and acceptable evidence sources, payload requirements, size and retention budgets, compatibility behavior, and invalidation semantics.
+One versioned registry defines Run and Broker commands, command receipts, semantic records, Run,
+project, and portfolio projections, dispatches, Episodes, Continuation Artifacts, Attention Items,
+dossier revisions, Review Surface references, and external receipts. Every type declares its
+required envelope and values, producer and consumers, authority and acceptable evidence sources,
+payload requirements, size and retention budgets, compatibility behavior, and invalidation
+semantics.
 
 `pi-workbench validate` checks repository packages, resolved profiles, graphs, records, evidence references, leases, and environment readiness mechanically. Unknown types, incompatible schema versions, invalid references, or authority-shape violations fail closed.
 
@@ -323,7 +433,7 @@ One versioned registry defines commands, command receipts, semantic records, sna
 
 Exactly one controlling client holds the run's live control lease and may request mutating transitions. Other connected clients remain read-only until an explicit ownership transfer grants them control. The controller remains the sole run-state writer and Pi dispatcher regardless of which client owns the lease.
 
-While any dispatch is in flight, one healthy controller supervision loop owns reconciliation. It consumes structured Pi lifecycle events, execution observations, timers, external adapter results, and authority changes. Routine progress, duplicates, and unchanged observations remain recorded or coalesced without waking a model. The controller creates attention only for an actionable condition such as:
+While any dispatch is in flight, one healthy controller supervision loop owns reconciliation. Its deterministic Watcher consumes structured Pi lifecycle events, execution observations, timers, leases, external adapter results, and authority changes. Routine progress, duplicates, and unchanged observations remain recorded or coalesced without waking a model. The controller creates attention only for an actionable condition such as:
 
 - Missing or exceeded authority.
 - A terminal result requiring synthesis, review, acceptance, or publication.
@@ -333,6 +443,12 @@ While any dispatch is in flight, one healthy controller supervision loop owns re
 
 An `AttentionItem` identifies its run and graph revision, source event, category, urgency, affected work, reconciled current state, required action, evidence references, and deduplication key. The item is persisted before the controller acknowledges the source event, so coordinator-session replacement cannot silently lose actionable work. Coordinator and owner notifications are projections of pending attention rather than raw runtime signals.
 
+Portfolio and Project Brokers consume canonical projections and pending Attention Items rather than
+watching raw logs. They may order, combine, defer, or request preparation of judgments within their
+scope, but they cannot grant missing authority or reinterpret Run state. A higher-scope Broker
+routes the owner into the Broker, Coordinator, or Review Surface closest to the required judgment;
+focused lower-scope conversation returns a bounded Episode rather than its full transcript.
+
 Each named execution profile declares a finite attempt ladder. Failed independent review returns typed findings to the next authorized attempt. The controller pauses affected work and creates one deduplicated attention item when an attempt ladder or review-failure threshold is exhausted, a workspace becomes contaminated or unattributable, an input or approval becomes stale, an execution or external action has unknown outcome, or budget or authority is exhausted. Replanning occurs through a revisioned graph mutation rather than unbounded retry.
 
 The supervision loop is owned by the live controller host and does not require a model session to remain active. Loss of the coordinator session triggers bounded Pi-session replacement or a persisted attention item. Controller-process exit, terminal-induced exit, reboot, and machine loss remain outside the V1 durability scope.
@@ -341,17 +457,26 @@ The supervision loop is owned by the live controller host and does not require a
 
 The shell owns:
 
-- Repository, workspace, worktree, and run navigation.
+- Portfolio, project, repository, workspace, worktree, and Run navigation.
 - User, agent, and model identity.
 - Authentication, authorization, and permission controls.
 - Start, pause, resume, steer, stop, retry, and handoff controls.
-- Notifications and pending-decision inbox.
+- Pending-attention ordering, notifications, and focus transitions into project, Run, work-item, and artifact scope.
+- Preservation of the owner's place, unresolved feedback, and changes since the previous judgment.
 - Recovery, reconciliation, and cleanup entry points.
 - Hosting and isolation of bounded project surfaces.
 
 ### Project Surfaces
 
-A Review Surface is the task-shaped human judgment interface over the current Run. It selects the relevant altitude and medium for the decision—such as a concise evidence summary, diff, rendered behavior, recording, prototype, architecture view, or operational result—and lets feedback attach to the exact outcome, claim, evidence, or behavior it addresses.
+A Review Surface is the task-shaped human judgment interface over the current Run. It selects the relevant altitude and medium for the decision—such as a concise evidence summary, diff, rendered behavior, recording, prototype, architecture view, or operational result—and lets feedback attach to the exact outcome, claim, evidence, or behavior revision it addresses.
+
+Review Surfaces use progressive disclosure. The first layer states the required judgment, why it is
+material now, the recommendation, alternatives, consequences, reversibility, deferral behavior,
+and expected human action. Deeper layers expose comparison criteria, representative successes and
+failures, independent challenge, Primary Evidence, and source Episodes. Superseded evidence remains
+traceable but does not compete visually with the current candidate. The surface distinguishes
+pending, applied, stale, and resolved feedback and shows which independent work continues while a
+judgment is deferred.
 
 Repositories and workflows may provide:
 
@@ -363,9 +488,26 @@ Repositories and workflows may provide:
 
 Project surfaces cannot alter shell-owned permission, identity, or recovery controls.
 
+### Initial Graphical Attention Surface
+
+The V1 vertical slice includes a minimal graphical client over the Run protocol. It provides:
+
+- A portfolio attention view across projects and concurrent Runs.
+- A project workspace showing active Run outcomes, conflicts, and current checkpoints.
+- A Run workspace showing Shared Understanding, Working Mode, semantic work, evidence, and residual uncertainty.
+- A revision-aware Review Surface for rendered behavior, screenshots, diffs, comparisons, and target-anchored feedback.
+- Scoped conversation attached to the selected project, Run, work item, claim, artifact, or judgment.
+- Working Mode and Human-Attention Contract presentation with shell-owned authority controls.
+
+The client externalizes working memory: it separates activity from required action, preserves the
+owner's place across interruptions, and explains what changed since the owner last inspected the
+scope. It consumes canonical snapshots, records, and artifact references and does not infer state
+from chat messages. Generated repository-specific surfaces and selection of a long-term graphical
+shell remain outside this vertical slice.
+
 ### Initial Terminal Surface
 
-The first pilot is operated through six terminal concepts:
+The same V1 protocol is fully operable through six terminal concepts:
 
 ```text
 pi-workbench run
@@ -383,9 +525,9 @@ pi-workbench close
 - `validate` mechanically checks the resolved run contract and environment.
 - `close` analyzes the run, gathers learning-candidate dispositions, seals retained evidence, previews cleanup, and performs owner-authorized collection.
 
-The internal commands remain explicit, typed, revision-checked, and idempotent even when several decisions share the `decide` entry point. The terminal also exposes a structured event stream and durable artifacts using the same interface that later clients project.
+The internal commands remain explicit, typed, revision-checked, and idempotent even when several decisions share the `decide` entry point. The terminal also exposes a structured event stream and durable artifacts using the same interface projected by the graphical client.
 
-The terminal is a projection and control surface over the durable run ledger; it does not own a separate workflow state machine. No graphical client is required for the initial pilot.
+The terminal is a projection and control surface over the durable Run ledger; it does not own a separate workflow state machine. The graphical and terminal clients exercise the same controller semantics and retain structured fallback equivalence for every required action.
 
 ### External Adapters
 
@@ -393,19 +535,19 @@ Adapters read and write collaboration-relevant subsets of external systems. Ever
 
 ## Initial Adaptive Workflow Contract
 
-The initial implementation executes one versioned **adaptive feature-delivery** contract. The owner starts it explicitly. The contract declares required and optional capabilities instead of embedding machine-local paths, credentials, or assumptions. Pi validates the contract, shows its quality envelope and capabilities to the owner, and records its content hash before execution.
+The initial implementation executes one versioned **adaptive project-work** contract. The owner starts it explicitly. The contract supports evidence-producing investigation, experimentation, prototyping, and attributable delivery under one quality and authority envelope. It declares required and optional capabilities instead of embedding machine-local paths, credentials, or assumptions. Pi validates the contract, shows its quality envelope and capabilities to the owner, and records its content hash before execution.
 
 The contract accepts repository, task, risk, environment, and owner inputs, but the initial implementation does not select, compose, inherit, or resolve multiple workflow contracts.
 
 ### Quality and Authority Envelope
 
-- Shared Understanding of the desired outcome, constraints, language, acceptance criteria, unresolved Material Questions, operational impact, and success evidence is explicit before autonomous mutation.
-- Material judgment is ratified in a versioned dossier before implementation and reconciled against the realized system after implementation.
+- Shared Understanding of the desired outcome, constraints, language, acceptance basis, unresolved Material Questions, operational impact, and success evidence is explicit before autonomous work.
+- Material judgment is ratified in a versioned dossier before execution and reconciled against the realized outcome afterward.
 - The owner approves an autonomy envelope covering permissions, impact ceiling, budget, stopping conditions, and publication authority. Missing authority durably pauses the run.
 - The controller is the sole writer of run state and the sole dispatcher of workers and subagents.
 - The coordinator has no mutating project-workspace capability. Every deliverable repository mutation is attributable to a controller-approved ship dispatch; scout scratch mutations remain disposable evidence until explicitly promoted.
 - Every mutating worker holds an exclusive workspace lease; independent reviewers use isolated or read-only scopes.
-- Material implementation is checked by a worker that did not author it. The risk policy determines required review independence, lenses, and evidence depth.
+- Material claims and implementation are checked by a Worker that did not author them when the risk policy requires Independence. The policy determines required review independence, lenses, and evidence depth.
 - Completion claims map acceptance criteria and material risks to primary evidence. Model confidence alone cannot satisfy a requirement.
 - Material deviations and authority expansion require owner approval. Non-material graph changes inside the envelope are recorded with rationale.
 - External publication and production-impacting actions are explicit, idempotent, and owner-authorized.
@@ -413,13 +555,35 @@ The contract accepts repository, task, risk, environment, and owner inputs, but 
 
 ### Human-Attention Contract
 
-The normal feature-delivery Run allocates Human Attention across two Principal Judgments and conditional In-Run Judgment:
+The Run resolves who the owner aligns with, how direct the interaction should be, which evidence is
+needed for review, and what independent work may continue while attention is pending. Portfolio
+priority and cross-project trade-offs are handled with the Portfolio Broker; repository direction,
+capabilities, conflicts, and candidate Runs are handled with the Project Broker; Shared
+Understanding, semantic work, and outcome synthesis are handled with the accountable Run
+Coordinator. The owner may interact directly with a prototype or other evolving result through a
+Review Surface, with feedback routed to the Run Coordinator and anchored to the inspected revision.
 
-1. **Before autonomous work:** establish Shared Understanding and approve the pre-implementation Judgment Dossier and Autonomy Envelope.
+The Run allocates Human Attention across two Principal Judgments and conditional In-Run Judgment:
+
+1. **Before autonomous work:** establish Shared Understanding and approve the pre-execution Judgment Dossier and Autonomy Envelope.
 2. **During autonomous work:** request In-Run Judgment when a Material Question, evolving prototype, direct human experience, or proposed change outside the approved envelope can materially improve or redirect the outcome.
 3. **After autonomous work:** present the realized outcome through a task-shaped Review Surface and ask the owner for Acceptance. The same action may explicitly authorize pull-request Publication while Acceptance and Publication remain separate durable transitions.
 
-The Review Surface assembles the intended outcome, realized behavior, Primary Evidence, independent findings, deviations, consequences, residual risks, and precise feedback actions in the format appropriate to the judgment. Additional attention is created only for material ambiguity, missing authority, a graph revision outside the allowlist, failure, staleness, unknown outcomes, external conflicts, or required learning-candidate disposition. Routine progress and bounded retries remain visible without consuming a coordinator or owner turn.
+The contract records the alignment participant and depth, interaction cadence, permitted direct
+Worker interaction, planned direct-experience surfaces, escalation conditions, review participant,
+required independent challenge, result packaging, and the effect of deferment. A pending judgment
+pauses only affected graph nodes or Runs when dependencies and authority permit unrelated work to
+continue.
+
+The Review Surface assembles the intended outcome, realized behavior, Primary Evidence, independent
+findings, deviations, consequences, residual risks, and precise feedback actions in the format
+appropriate to the judgment. Experimental work presents the question, predeclared comparison
+criteria, what was tried, representative successes and failures, contradictions, recommendation,
+remaining uncertainty, and available next actions instead of concatenating Worker reports.
+Additional attention is created only for material ambiguity, missing authority, a graph revision
+outside the allowlist, failure, staleness, unknown outcomes, external conflicts, or required
+learning-candidate disposition. Routine progress and bounded retries remain visible without
+consuming a Broker, Coordinator, or owner turn.
 
 ### Fixed Controller Lifecycle
 
@@ -428,12 +592,12 @@ The controller advances every run through one fixed lifecycle:
 `intake → judgment → authority → execution → verification → acceptance → publication → close`
 
 - `intake` resolves the task, repository package, revisions, owner, and risk.
-- `judgment` produces and ratifies the pre-implementation Judgment Dossier revision.
+- `judgment` produces and ratifies the pre-execution Judgment Dossier revision, including hypotheses and comparison criteria when the Run is exploratory.
 - `authority` records the approved autonomy, impact, budget, and publication envelope.
-- `execution` runs authorized ship work in leased isolated workspaces.
-- `verification` obtains evidence from an independent execution profile.
+- `execution` runs authorized Scout and Ship work in read-only, disposable scratch, or leased isolated workspaces according to authority.
+- `verification` obtains independent evidence for the material claims, behavior, and mutations required by the Working Mode.
 - `acceptance` presents criteria, evidence, deviations, and residual risks.
-- `publication` performs an explicitly authorized idempotent external action.
+- `publication` performs an explicitly authorized idempotent external action or records that the accepted Run has no publication action.
 - `close` analyzes the run, disposes learning candidates, seals evidence, and performs approved cleanup.
 
 These states and their entry and exit predicates belong only to the controller state machine.
@@ -451,9 +615,9 @@ The real pilot and its controlled drills together exercise the product's definin
 - At least one role-specific model worker.
 - A scout investigation followed by explicit promotion of the same work item to ship authority.
 - Linked claim, challenge, and response episodes when a real material judgment emerges, or through a bounded fixture otherwise.
-- Ratified pre-implementation and post-implementation judgment snapshots.
-- Terminal control plus a structured event stream suitable for later clients.
-- A bounded terminal review summary and structured review artifact.
+- Ratified pre-execution and post-execution judgment snapshots.
+- Terminal control and a minimal graphical attention client over one structured event and artifact protocol.
+- A bounded terminal review summary and revision-aware graphical Review Surface over the same judgment.
 - Explicit external publication.
 - Source-backed run analysis and compounding candidates.
 - Promotion and cleanup at run closure.
@@ -546,7 +710,7 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 17. As a repository owner, I want validated lessons proposed at the narrowest useful scope, so that the system improves without polluting standing context.
 18. As a workflow owner, I want model routing evaluated by role-level quality and resource evidence, so that social heuristics do not become permanent policy without validation.
 19. As a run owner, I want the model to construct and revise the work graph inside explicit quality and authority constraints, so that simple tasks remain simple and difficult tasks receive appropriate rigor.
-20. As a decision maker, I want Shared Understanding of the problem, language, assumptions, options, disagreements, trade-offs, and success evidence before implementation, so that coding does not prematurely settle the design.
+20. As a decision maker, I want Shared Understanding of the problem, language, assumptions, options, disagreements, trade-offs, and success evidence before execution, so that autonomous work does not prematurely settle the direction.
 21. As a reviewer, I want the realized system, evidence, deviations, and residual risks assembled in a task-shaped Review Surface with precise feedback actions, so that I can judge consequences rather than reconstruct the run or only inspect a diff.
 22. As an agent coordinator, I want specialists to produce linked claim, challenge, and response episodes, so that synthesis benefits from genuine disagreement without relying on hidden transcripts or peer mailboxes.
 23. As a developer, I want to clone one harness repository and obtain its supported Pi skills and tool capabilities, so that the workflow does not depend on reconstructing a personal setup.
@@ -564,10 +728,18 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 35. As an operator, I want mechanical status, validation, and environment checks, so that routine inspection consumes no model attention.
 36. As a workflow maintainer, I want fixed lifecycle gates represented once, so that the controller state machine and semantic work graph cannot disagree about authority or closure.
 37. As a run owner, I want repeated failure to become one durable attention item, so that autonomous execution stops instead of retrying a false premise indefinitely.
+38. As a portfolio owner, I want one attention view across projects, so that I can allocate judgment without juggling agent chats and tabs.
+39. As a project owner, I want several independent Runs to progress concurrently, so that one pending judgment does not stop unrelated authorized work.
+40. As an interruptible reviewer, I want the Workbench to preserve my place and show what changed since my previous judgment, so that resumption does not depend on working memory.
+41. As a decision maker, I want experimental results compared against predeclared criteria in a progressive Review Surface, so that I can judge the next direction without reading Worker reports or logs.
+42. As a Broker, I want a typed protocol for proposals, guidance, control, attention, and prepared review, so that cooperation does not depend on prompt obedience or shared chat history.
+43. As a long-lived Logical Actor, I want my model session to be replaceable from a source-backed Continuation Artifact, so that continuity does not require retaining an increasingly stale context window.
+44. As a repository owner, I want installed capabilities resolved into only the Dispatches that need them, so that global skill availability does not pollute every Worker context or expand authority.
 
 ## Implementation Decisions
 
 - Pi is the workflow harness and exposes a durable run protocol to clients.
+- Portfolio and Project Brokers use a typed, revisioned protocol over canonical project and Run projections; they route attention and authorized requests without owning Run lifecycle state.
 - Every model-backed role runs through Pi; model choice is a field of the Pi worker specification rather than a separate harness.
 - Coordinator, worker, and subagent profiles use one parameterized Pi execution primitive and the same dispatch, episode, artifact, permission, budget, cancellation, and workspace-lease vocabulary.
 - Coordinator, worker, and subagent describe execution continuity; scout and ship independently describe authority and expected outcome.
@@ -575,6 +747,7 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - The initial repository package exposes a finite set of named execution profiles, and the controller validates every resolved dispatch field.
 - Every bounded dispatch returns a typed episode that preserves provenance and primary-evidence references without promoting its summary to authoritative truth.
 - Every dispatch receives the smallest sufficient Model Context assembled from its Work Packet, resolved skills, referenced Episodes, and relevant Primary Evidence; unrelated histories and stale tool output remain outside it.
+- Logical Actor identity outlives replaceable model sessions. Fresh Context Curator Dispatches produce source-backed Continuation Artifacts while required authority, decisions, disagreement, evidence, uncertainty, and pending attention remain mechanically preserved.
 - The controller owns the fixed `intake → judgment → authority → execution → verification → acceptance → publication → close` lifecycle.
 - Execution-graph nodes represent only variable semantic work, dependencies, worker bindings, and evidence obligations; fixed lifecycle gates are not graph nodes.
 - Tactical work and context synchronization are recorded as episodes within their owning node.
@@ -589,11 +762,13 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - The local ledger is authoritative for execution and uses a worktree-independent `snapshot.json`, append-only `records.jsonl`, and content-addressed object store.
 - External adapters are explicit, idempotent workflow steps.
 - The shell and project surfaces have separate trust seams.
+- The V1 client surface includes portfolio attention, project and Run workspaces, revision-aware evidence, scoped conversation, and Working Mode presentation over the same controller protocol as the terminal.
 - Declarative surfaces use a trusted interaction catalog; complex surfaces use sandbox isolation.
 - Every required rich interaction has a terminal representation.
 - One schema registry versions commands, receipts, records, snapshots, dispatches, episodes, attention items, dossier revisions, and external receipts.
 - The deterministic controller reducer alone assigns current-state semantics. All run views consume its canonical snapshot and attention records.
 - Actionable attention is persisted before its source event is acknowledged; routine signals and duplicates do not wake a model.
+- A deterministic Watcher performs routine supervision; Brokers consume reconciled snapshots and Attention Items rather than raw execution logs.
 - Exactly one controlling client holds the run's live control lease, and one controller supervision loop remains responsible while dispatches are in flight.
 - Each execution profile has a finite attempt ladder; exhausted attempts, repeated review failure, staleness, contamination, unknown outcomes, and exhausted authority or budget create deduplicated durable attention and pause affected work.
 - Parallel workers operate on dependency-independent tasks or isolated review axes.
@@ -603,15 +778,17 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - Local and cloud model executions use the same dispatch, episode, event, permission, and artifact contracts.
 - The initial implementation executes one versioned adaptive workflow contract selected explicitly by the owner.
 - The coordinator proposes a typed semantic work graph; the controller validates graph mutations against quality, authority, safety, budget, isolation, independence, and evidence requirements.
+- Working Mode is resolved inside the one Workflow Contract from Run intent, repository capabilities, uncertainty, impact, reversibility, and available Human Attention; loops and graphs remain execution shapes rather than global modes or separate workflows.
+- Planning prioritizes the shortest safe path to decision-changing evidence, and every review Dispatch has an outcome-relevant claim, evidence obligation, attempt bound, finding disposition, and stopping condition.
 - Initial coordination is hub-and-spoke: the coordinator issues controller-routed dispatches and workers return episodes; workers do not maintain peer mailboxes.
 - Deliberation uses linked claim, challenge, and response episodes. Every synthesis and controller transition references durable episodes or artifacts.
-- One versioned Judgment Dossier owns the pre-implementation snapshot, deliberation history, and post-implementation snapshot.
+- One versioned Judgment Dossier owns the pre-execution snapshot, deliberation history, and post-execution snapshot.
 - The Human-Attention Contract establishes Shared Understanding before autonomous work, permits conditional In-Run Judgment, and supports Acceptance through a task-shaped Review Surface.
 - The workflow declares capabilities separately from private machine configuration.
 - The run ledger records the workflow version and content hash before execution.
 - The first real run targets PhotoQuest in an isolated worktree and excludes production deployment.
 - The pilot task is PhotoQuest plan 020, revalidated against the run's starting revision.
-- The initial terminal interface exposes `run`, `status`, `decide`, `control`, `validate`, and `close`; its internal commands remain typed, revision-checked, explicit, and idempotent.
+- The terminal interface exposes `run`, `status`, `decide`, `control`, `validate`, and `close`; its internal commands remain typed, revision-checked, explicit, and idempotent and provide fallback equivalence for the graphical attention slice.
 - The harness repository vendors shared skills and Pi-owned resources while declaring external tool prerequisites separately from secrets and machine-local state.
 - Skills use harness-owned interaction concepts and preserve a headless terminal fallback; enhanced surfaces remain optional projections.
 - Resolved skills are dispatch-scoped capabilities whose exact versions are recorded in the resulting episode.
@@ -625,11 +802,15 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - Replay terminal commands and emitted events and assert equivalent durable ledger transitions.
 - Verify deterministic state transitions independently from model output.
 - Exercise `start`, `submit`, `inspect`, and `watch` through terminal and graphical test adapters; assert identical Run Controller semantics.
+- Run several independent Runs under one Project Broker; assert that their lifecycle, authority, evidence, and control leases remain separate while project attention and conflicts are reconciled.
+- Submit stale, unauthorized, and duplicate Broker protocol operations; assert revision checks, idempotent receipts, and deterministic refusal without prompt interpretation.
 - Rebuild a fresh coordinator solely from `snapshot.json`, `records.jsonl`, and referenced objects.
+- Rotate Broker, Coordinator, and Worker sessions at synchronization points; assert reconstruction from validated Continuation Artifacts without transcript dependence or loss of required disagreement, authority, evidence, uncertainty, or attention.
 - Validate valid and invalid commands, records, dispatches, episodes, attention items, dossier revisions, and receipts through the shared schema registry.
 - Attempt to represent an invariant lifecycle gate as a semantic graph node; assert deterministic rejection.
 - Feed stale, contradictory, missing, and prose-only observations into reconciliation; assert that the canonical snapshot reports `unknown` rather than reviving an old event or trusting a model claim.
 - Project the same run through terminal, attention-inbox, AFK-digest, and graphical-view fixtures; assert identical current-state semantics.
+- Resume the graphical client after unrelated and affected work changes; assert preserved focus, accurate change summaries, stale-feedback marking, and current evidence ordering.
 - Crash or replace the coordinator after an actionable source event is observed; assert that its persisted attention item survives and the source event is not acknowledged first.
 - Emit routine progress, duplicate lifecycle events, and unchanged observations; assert that they remain observable without launching a coordinator turn.
 - Attempt concurrent control-lease acquisition and mutation from a read-only client; assert a single mutation owner and deterministic refusal.
@@ -672,7 +853,7 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - Unrecorded private agent conversations that influence run decisions.
 - Peer worker mailboxes and open-ended worker-to-worker conversations in the initial implementation.
 - Multiple coding-agent harnesses, terminal multiplexer backends, and terminal-screen parsing for execution state.
-- Persistent coordinator hierarchies and public social-media task ingress.
+- Unbounded recursive agent hierarchies, model-backed log watching, and public social-media task ingress.
 - A blanket autonomy switch that bypasses the run's explicit authority and quality envelope.
 - Mutable Markdown as authoritative run state.
 - Model-authored lifecycle transitions or model-executed controller Git choreography.
@@ -688,8 +869,7 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - Workflow layering, conflict resolution, and upstream workflow contribution.
 - Concurrent delivery of multiple independent product outcomes in one run.
 - Production deployment from the pilot run.
-- Agent-generated and repository-specific GUI composition in the pilot.
-- A graphical run client and pi-gui integration in the pilot.
+- Agent-generated graphical composition, complete terminal parity in presentation, or commitment to a permanent third-party graphical shell in the pilot.
 - Claude Code, Codex CLI or app-server, and CLI-proxy worker integrations.
 - Copying credentials, subscription state, or platform-specific external tool binaries into the harness repository.
 - Requiring every skill to implement a custom graphical interface.
@@ -706,6 +886,10 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - The exact schema fields, compatibility rules, and sealing representation for commands, semantic records, events, and artifacts.
 - Retention periods, promotion authority, and legal or compliance holds.
 - The exact common skill interface, interaction vocabulary, and sandbox isolation seam.
+- The durable representation of portfolio and project projections, proposals, priorities, and Broker continuation references while each Run ledger remains authoritative for execution.
+- The exact Working Mode input schema, owner override, recommendation behavior, and validation rules inside the single Workflow Contract.
+- The Continuation Artifact schema, size budgets, rotation thresholds, protected fields, and reconstruction checks for replaceable model sessions.
+- The graphical interaction contracts for focus restoration, changes since the previous judgment, revision-aware feedback, progressive Review Surfaces, and scoped conversation.
 - Whether a draft enhanced surface is generated when a skill is added, on first use, or only by explicit request.
 - The promotion rule for sharing a generated surface with the vendored skill.
 - Whether runtime surface adaptations remain run-local by default and what evidence allows promotion into the shared skill package.

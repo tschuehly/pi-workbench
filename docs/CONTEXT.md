@@ -51,6 +51,12 @@ A reconciled, actionable request for human or coordinator judgment tied to the a
 its evidence.
 _Avoid_: Notification, raw event, alert
 
+**Attention Broker:**
+A non-mutating Pi actor that routes priorities, guidance, and prepared judgments across a bounded
+scope without replacing the coordinators or controllers that own individual Runs. A Portfolio
+Broker operates across projects; a Project Broker operates across concurrent Runs in one project.
+_Avoid_: Global coordinator, workflow controller, chat router
+
 ## Run and authority
 
 **Run:**
@@ -60,6 +66,13 @@ _Avoid_: Chat, session, job
 **Workflow Contract:**
 The versioned quality, authority, safety, evidence, and retention envelope governing a Run.
 _Avoid_: Prompt, workflow script, execution plan
+
+**Working Mode:**
+The Run-specific interaction and execution posture resolved from the desired outcome, repository
+capabilities, uncertainty, impact, reversibility, and available Human Attention. It determines
+attention cadence, execution shape, evidence strategy, and stopping conditions without being a
+universal maturity level or fixed global catalog.
+_Avoid_: Workflow profile, autonomy level, agent tier
 
 **Autonomy Envelope:**
 The authority granted for autonomous work, bounded by permissions, impact, budget, stopping
@@ -122,6 +135,11 @@ The Pi actor accountable for interpreting owner intent, organizing semantic work
 evidence without mutating the project.
 _Avoid_: Controller, implementer
 
+**Logical Actor:**
+The durable identity, scope, and accountability of a Broker, Coordinator, Worker, or Subagent,
+independent of any replaceable Pi model session or execution process used for one Dispatch.
+_Avoid_: Model session, conversation, operating-system process
+
 **Worker:**
 A Pi actor that retains useful continuity across bounded actions within one semantic scope.
 _Avoid_: Coordinator, Subagent
@@ -130,6 +148,17 @@ _Avoid_: Coordinator, Subagent
 A fresh Pi actor used for one bounded action where narrow context or independent judgment is
 valuable.
 _Avoid_: Worker, child conversation
+
+**Watcher:**
+The deterministic, non-model supervision capability that reconciles execution observations,
+timers, leases, and external waits and creates durable Attention Items for actionable conditions.
+_Avoid_: Monitoring agent, reviewer, broker
+
+**Context Curator:**
+A fresh, non-authoritative Cognitive Role that prepares a source-backed Continuation Artifact from
+canonical Run state, material Episodes, and Primary Evidence while preserving required decisions,
+disagreements, uncertainty, authority, and attention independently of the actor being reconstructed.
+_Avoid_: Memory manager, transcript summarizer, state writer
 
 **Scout:**
 An authority shape for investigation, planning, audit, reproduction, or disposable prototyping
@@ -144,8 +173,8 @@ _Avoid_: Worker, implementation recommendation
 ## Evidence and review
 
 **Judgment Dossier:**
-The authoritative reasoning artifact connecting the intended direction before implementation to
-the realized system, evidence, deviations, consequences, and residual risks afterward.
+The authoritative reasoning artifact connecting the intended direction before execution to the
+realized outcome, evidence, deviations, consequences, and residual risks afterward.
 _Avoid_: Plan, report, transcript
 
 **Primary Evidence:**
@@ -174,6 +203,12 @@ _Avoid_: Memory, automatic rule, retrospective note
 The disposable working set assembled for one Pi actor from its Work Packet, resolved skills,
 referenced Episodes, and relevant evidence.
 _Avoid_: Run state, project knowledge, full history
+
+**Continuation Artifact:**
+A bounded, source-backed projection of the current objective, decisions, claims, disagreements,
+evidence, uncertainty, pending attention, and next justified work used to reconstruct a Logical
+Actor in a fresh model session. It references rather than replaces the ledger and Primary Evidence.
+_Avoid_: Transcript summary, checkpoint authority, memory dump
 
 **Continuity:**
 Intentional preservation of a Pi actor's working context across related bounded actions in one

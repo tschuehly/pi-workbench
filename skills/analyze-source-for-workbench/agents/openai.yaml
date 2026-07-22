@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Source for Workbench"
+  short_description: "Extract lessons and improvements for Pi Workbench"
+  default_prompt: "Use $analyze-source-for-workbench to analyze this source and identify what Pi Workbench should adopt, adapt, or reject."

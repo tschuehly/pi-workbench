@@ -2,7 +2,7 @@
 
 ## Summary
 
-PI WEB is a strong candidate for the eventual graphical shell, but not for the Workbench controller itself. An initial integration does not require a fork.
+PI WEB is a strong graphical-shell candidate, but not the Workbench controller itself. It is evaluated alongside T3 Code through the same framework-neutral Run client contract. An initial PI WEB integration does not require a fork.
 
 ## Why It Fits
 
@@ -47,6 +47,8 @@ Plugins can access private PI WEB routes, but those routes are explicitly unstab
 PI WEB also assumes trusted users and repositories. It is not itself a sandbox, permission system, or multi-tenant authorization layer. The Workbench controller must enforce the Autonomy Envelope, workspace leases, lifecycle transitions, and authority independently.
 
 ## Recommended Approach
+
+The shared candidate-selection rules and acceptance fixture are defined in [Graphical Shell Strategy](graphical-shell-strategy.md).
 
 ### 1. Do Not Fork Initially
 
@@ -96,14 +98,16 @@ Fork PI WEB only if the Workbench needs to change core shell behavior that plugi
 
 PI WEB is MIT-licensed, so forking is legally straightforward. The main cost would be continuously integrating upstream improvements to sessions, machines, terminals, mobile UI, and Pi SDK compatibility.
 
-## Recommendation
+## Candidate Position
 
-Use PI WEB as a **contribution-first graphical shell candidate**:
+Evaluate PI WEB as a **Pi-native graphical-shell candidate**:
 
 1. Prove Workbench orchestration through the terminal.
 2. Build a separate PI WEB plugin as a read-oriented projection and Review Surface.
 3. Add typed control actions only through the Workbench protocol.
 4. Propose generic missing APIs upstream.
 5. Fork only if those APIs cannot support the required Stable Workbench Shell.
+
+Prefer PI WEB when its Pi-native sessions, packages, remote-machine support, mobile browser access, and smaller semantic gap allow a thin adapter. Do not select it solely because it already runs Pi; it must still prove typed Run controls, ordered observation, durable attention, reconnect behavior, and review interactions against the same fixture as T3 Code.
 
 This preserves a key Pi Workbench principle: **the GUI adds interaction bandwidth without owning workflow semantics.**

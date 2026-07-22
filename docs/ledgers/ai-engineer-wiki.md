@@ -175,4 +175,4 @@ The wiki concepts summarize conference talks and include source timestamps. Find
 
 - Confidence is high that active model context should remain disposable, side effects should be explicit, project UI should be bounded, and reusable knowledge needs evaluation and retirement.
 - Confidence is high that terminal and GUI clients should consume a shared machine-oriented workflow boundary while rendering different interaction surfaces.
-- The exact ledger schema, snapshot cadence, retention periods, mark-and-sweep implementation, synchronization transport, promotion authority, and pi-gui contribution contract remain product design decisions rather than sourced prescriptions.
+- The exact ledger schema, snapshot cadence, retention periods, mark-and-sweep implementation, synchronization transport, promotion authority, and graphical-shell adapter contract remain product design decisions rather than sourced prescriptions.

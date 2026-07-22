@@ -38,7 +38,7 @@ Current Pi, pi-gui, provider integration, multi-model orchestration, and dynamic
 
 ## Implications
 
-- Contribute a generic durable-run and surface-host boundary to pi-gui before adding project-specific features.
+- Treat pi-gui's extension boundary as evidence for a bounded surface host, not as a selected Workbench shell. Graphical candidates must prove the shared Run protocol fixture.
 - Use a short-lived proof fork only when necessary to validate the protocol.
 - Keep workflow semantics in Pi and repository packages, not React components.
 - Treat session history as conversation history rather than authoritative workflow state.
@@ -48,7 +48,7 @@ Current Pi, pi-gui, provider integration, multi-model orchestration, and dynamic
 - Treat cache retention as a measurable routing input, not a durable-state or correctness primitive.
 - Use one Pi package repository as the cloneable distribution unit for extensions, curated skills, prompts, adapters, and project-independent configuration; keep project overlays in target repositories.
 - Preserve incubation and stable distribution as distinct trust levels so experimental skills do not silently enter every cloned harness.
-- Expose enhanced skill interactions through a harness-owned semantic boundary with terminal fallback instead of coupling skills directly to pi-gui or terminal-only custom components.
+- Expose enhanced skill interactions through a harness-owned semantic boundary with terminal fallback instead of coupling skills directly to a graphical shell or terminal-only custom components.
 
 ## Confidence
 
