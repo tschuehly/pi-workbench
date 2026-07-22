@@ -47,7 +47,7 @@ The initial workflow defines its quality and authority envelope, capabilities, t
 - Mechanical status, validation, configuration health, and routine supervision consume no model turn.
 - Logical Actors retain durable identity while their Pi model sessions remain disposable and reconstructable from source-backed Continuation Artifacts.
 
-Exact schema fields, routing bindings, retention values, and graphical interaction contracts remain intentionally unspecified until exercised by the pilot.
+Exact schema fields, routing bindings, retention values, and client-specific graphical interaction schemas remain intentionally unspecified until exercised by the pilot.
 
 ## Product Principles
 
@@ -81,6 +81,7 @@ Exact schema fields, routing bindings, retention values, and graphical interacti
 28. Logical Actor identity and accountability outlive replaceable model sessions; no model context is authoritative Run state.
 29. Watchers classify and reconcile routine execution mechanically; models enter only when interpretation or judgment is actionable.
 30. A graphical attention surface is part of the V1 vertical slice because attention allocation, visual evidence, and concurrent work cannot be validated through terminal mechanics alone.
+31. Graphical interaction is action-first and interruption-resilient by default: required judgment leads, routine activity is perceptually and structurally separate, completed outcomes are concrete, and deeper evidence remains available on demand.
 
 ## Actors
 
@@ -470,6 +471,8 @@ The shell owns:
 
 A Review Surface is the task-shaped human judgment interface over the current Run. It selects the relevant altitude and medium for the decision—such as a concise evidence summary, diff, rendered behavior, recording, prototype, architecture view, or operational result—and lets feedback attach to the exact outcome, claim, evidence, or behavior revision it addresses.
 
+All graphical project surfaces follow the [Graphical Attention Contract](graphical-attention-contract.md). Cognitive accessibility is the default interaction posture: the first layer leads with the required judgment and available action, externalizes re-entry state, and keeps passive activity from competing with attention. This presentation rule does not weaken evidence, authority, or revision requirements.
+
 Review Surfaces use progressive disclosure. The first layer states the required judgment, why it is
 material now, the recommendation, alternatives, consequences, reversibility, deferral behavior,
 and expected human action. Deeper layers expose comparison criteria, representative successes and
@@ -492,7 +495,7 @@ Project surfaces cannot alter shell-owned permission, identity, or recovery cont
 
 The V1 vertical slice includes a minimal graphical client over the Run protocol. It provides:
 
-- A portfolio attention view across projects and concurrent Runs.
+- A default portfolio attention view across projects and concurrent Runs that separates pending judgment from activity progressing without the owner.
 - A project workspace showing active Run outcomes, conflicts, and current checkpoints.
 - A Run workspace showing Shared Understanding, Working Mode, semantic work, evidence, and residual uncertainty.
 - A revision-aware Review Surface for rendered behavior, screenshots, diffs, comparisons, and target-anchored feedback.
@@ -500,10 +503,12 @@ The V1 vertical slice includes a minimal graphical client over the Run protocol.
 - Working Mode and Human-Attention Contract presentation with shell-owned authority controls.
 
 The client externalizes working memory: it separates activity from required action, preserves the
-owner's place across interruptions, and explains what changed since the owner last inspected the
-scope. It consumes canonical snapshots, records, and artifact references and does not infer state
-from chat messages. Generated repository-specific surfaces and selection of a long-term graphical
-shell remain outside this vertical slice.
+owner’s place across interruptions, and explains what changed since the owner last inspected the
+scope. A focused Attention Item states the required judgment, why it is material now, the
+recommendation, consequences and reversibility, deferral behavior, affected work, and the available
+actions before exposing deeper evidence. It consumes canonical snapshots, records, and artifact
+references and does not infer state from chat messages. Generated repository-specific surfaces and
+selection of a long-term graphical shell remain outside this vertical slice.
 
 ### Initial Terminal Surface
 
@@ -763,6 +768,7 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - External adapters are explicit, idempotent workflow steps.
 - The shell and project surfaces have separate trust seams.
 - The V1 client surface includes portfolio attention, project and Run workspaces, revision-aware evidence, scoped conversation, and Working Mode presentation over the same controller protocol as the terminal.
+- The Graphical Attention Contract makes pending judgment the default graphical entry point, separates required action from autonomous activity, restores the owner's place, and defines an action-first progressive Review Surface without changing controller authority.
 - Declarative surfaces use a trusted interaction catalog; complex surfaces use sandbox isolation.
 - Every required rich interaction has a terminal representation.
 - One schema registry versions commands, receipts, records, snapshots, dispatches, episodes, attention items, dossier revisions, and external receipts.
@@ -811,6 +817,8 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - Feed stale, contradictory, missing, and prose-only observations into reconciliation; assert that the canonical snapshot reports `unknown` rather than reviving an old event or trusting a model claim.
 - Project the same run through terminal, attention-inbox, AFK-digest, and graphical-view fixtures; assert identical current-state semantics.
 - Resume the graphical client after unrelated and affected work changes; assert preserved focus, accurate change summaries, stale-feedback marking, and current evidence ordering.
+- Open every fixture Attention Item from the portfolio surface; assert that required judgment, materiality, recommendation, consequences, deferral behavior, affected work, and available actions are discoverable without reading logs or chat.
+- Project routine progress beside pending attention; assert that autonomous activity remains visible but cannot compete with or be mistaken for required owner action.
 - Crash or replace the coordinator after an actionable source event is observed; assert that its persisted attention item survives and the source event is not acknowledged first.
 - Emit routine progress, duplicate lifecycle events, and unchanged observations; assert that they remain observable without launching a coordinator turn.
 - Attempt concurrent control-lease acquisition and mutation from a read-only client; assert a single mutation owner and deterministic refusal.
@@ -881,15 +889,16 @@ Raw transcripts, model self-assessments, and unverified summaries remain evidenc
 - Whether narrowly scoped compounding candidates may be promoted automatically under repository policy or all promotions require owner approval.
 - The cadence and trigger policy for cross-run orchestration analysis.
 - Whether the initial workflow pins exact Pi models or resolves capability-based role declarations at dispatch.
-- The exact allowlisted mutation classes for in-progress semantic graph nodes.
+- The exact allowlisted mutation classes for in-progress semantic graph nodes and the controller behavior when a proposed mutation's materiality cannot be established mechanically.
 - Whether dossier ratification is a controller-validated synthesizer action distinct from human approval, or every ratified snapshot requires human approval.
+- The exact split between mechanically enforceable controller invariants and provenance-bearing human or model judgment attestations for materiality, evidence sufficiency, Independence in substance, and Judgment Dossier completeness.
 - The exact schema fields, compatibility rules, and sealing representation for commands, semantic records, events, and artifacts.
 - Retention periods, promotion authority, and legal or compliance holds.
 - The exact common skill interface, interaction vocabulary, and sandbox isolation seam.
 - The durable representation of portfolio and project projections, proposals, priorities, and Broker continuation references while each Run ledger remains authoritative for execution.
 - The exact Working Mode input schema, owner override, recommendation behavior, and validation rules inside the single Workflow Contract.
 - The Continuation Artifact schema, size budgets, rotation thresholds, protected fields, and reconstruction checks for replaceable model sessions.
-- The graphical interaction contracts for focus restoration, changes since the previous judgment, revision-aware feedback, progressive Review Surfaces, and scoped conversation.
+- The exact graphical wire schemas and client-specific interactions for focus restoration, changes since the previous judgment, revision-aware feedback, progressive Review Surfaces, and scoped conversation.
 - Whether a draft enhanced surface is generated when a skill is added, on first use, or only by explicit request.
 - The promotion rule for sharing a generated surface with the vendored skill.
 - Whether runtime surface adaptations remain run-local by default and what evidence allows promotion into the shared skill package.

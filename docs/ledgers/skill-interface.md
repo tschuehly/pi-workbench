@@ -18,6 +18,8 @@ High-level evidence for making vendored skills first-class Pi harness capabiliti
    - Source: [Codex skill-creator](/Users/tschuehly/.codex/skills/.system/skill-creator/SKILL.md)
 6. Atelier separates task semantics from presentation: a coordinator supplies a bounded Surface Brief, while one Surface Builder owns presentation and receives compact semantic deltas rather than the full reasoning transcript.
    - Source: [Atelier skill](/Users/tschuehly/IdeaProjects/skill-incubator/skills/atelier/SKILL.md)
+7. ADHD-oriented interaction guidance reduces the gap between understanding and action by leading with one concrete action, externalizing current state, bounding sequential work, suppressing tangents, using grounded time estimates, and making completed outcomes visible. These are cognitive-accessibility principles rather than a requirement to remove necessary evidence.
+   - Source: [i-have-adhd skill](https://github.com/ayghri/i-have-adhd/blob/main/skills/i-have-adhd/SKILL.md)
 
 ## Implications
 
@@ -30,6 +32,7 @@ High-level evidence for making vendored skills first-class Pi harness capabiliti
 - Preserve runtime flexibility through compact semantic deltas and stable surface concepts; treat successful run-local adaptations as candidates for evaluated skill promotion.
 - Resolve skills in layers: preserve the upstream core and provenance, add reusable stack or framework adaptations, then apply repository knowledge and optional run-local refinement.
 - Promote generic and stack-level improvements to the narrowest reusable shared scope while keeping repository-specific commands, policies, and conventions with the target project.
+- Make action-first presentation, re-entry state, bounded choices, and concrete completed outcomes the default for graphical surfaces; preserve material alternatives and evidence through progressive disclosure instead of a separate accessibility mode.
 
 ## Confidence
 

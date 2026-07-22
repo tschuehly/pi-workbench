@@ -18,6 +18,10 @@ Run Controller -> Pi Execution -> Pi sessions and processes
 
 Every graphical mutation uses the controller's typed `start`, `submit`, `inspect`, and `watch` interfaces. All clients render the same canonical Run Snapshot, Attention Items, Judgment Dossier revisions, evidence references, and receipts.
 
+Every candidate also implements the [Graphical Attention Contract](graphical-attention-contract.md):
+pending judgment is the default entry point, required action is perceptually and structurally separate from autonomous
+activity, and re-entry state is derived from canonical revisions.
+
 ## Integration Rule
 
 Integrate T3 Code as a Workbench client domain, not by adding Pi to T3 Code's provider-driver abstraction.
@@ -55,10 +59,13 @@ A framework-neutral TypeScript Run client and one recorded Run fixture drive bot
 
 - Run list and current status.
 - Pending Attention Items.
+- Action-first focused attention with required judgment, materiality, recommendation, consequences, deferral behavior, and typed actions.
+- A separate projection of work progressing without owner attention and concrete outcomes completed since the previous judgment.
 - Judgment Dossier and Primary Evidence navigation.
 - Diff-centered review with target-anchored typed feedback.
 - Valid, duplicate, stale, and rejected control submissions.
 - Ordered watch delivery, disconnect, reconnect, and snapshot reconciliation.
+- Focus restoration, changes since the previous judgment, and stale-feedback presentation after reconnect.
 - Read-only behavior without the control lease.
 - Terminal-equivalent outcomes for every supported graphical action.
 
