@@ -1,11 +1,11 @@
 # Pi Workbench working instructions
 
-For every Pi Workbench task:
+Load only the authority needed for the documentation task:
 
-1. Read `CONTEXT.md` completely for the canonical domain language.
-2. Read `SPEC.md` completely for the supported product model and intended behavior.
-3. Read `LEDGER.md` when decision status, open questions, or provenance matters.
-4. Consult `ledgers/` only when evidence lineage is relevant to the task.
+- Read `CONTEXT.md` when domain meaning or canonical language is relevant.
+- Read `SPEC.md` when supported behavior or architecture is relevant.
+- Read `LEDGER.md` when decision status or open questions are relevant.
+- Consult `ledgers/` only when evidence lineage is relevant.
 
 Begin from a faithful understanding of the existing concepts and principles. Do not critique,
 challenge, replace, or redesign them unless the user explicitly requests a review, grill, or
