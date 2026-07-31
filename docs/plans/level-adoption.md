@@ -19,10 +19,14 @@ Each step must end in a working vertical slice before the next begins.
 
 ### 1. Reconcile Pi and PI WEB
 
+**Status:** complete.
+
 - Upgrade PI WEB's Pi dependencies and peer range to the installed Pi `0.83.0` line rather than
   downgrading the Workbench runtime.
-- Verify provider authentication, model availability, fresh quota reporting, session start,
-  cancellation, reconnect, and Pi package loading through PI WEB.
+- Verify provider authentication, model availability, session start, cancellation, reconnect, and
+  Pi package loading through PI WEB.
+- Defer quota reporting until Pi exposes a canonical provider-neutral quota interface; do not add
+  provider-specific quota scraping to PI WEB.
 - Keep credentials, subscription state, active sessions, and machine-specific configuration local.
 
 **Exit:** PI WEB reliably hosts Pi `0.83.0` sessions and passes its focused runtime checks.
