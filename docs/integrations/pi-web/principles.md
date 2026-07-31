@@ -54,7 +54,7 @@ The staged upstream contribution and Workbench adapter work is defined in the
 - PI WEB presents sessions, orchestration, evidence, and controls; it does not become authoritative Run state.
 - Do not infer lifecycle, authority, or completion from chat messages, terminal output, or visual state.
 - Submit mutations through typed Workbench operations when those operations exist.
-- Keep terminal operation available as the recovery and fallback path.
+- Provide recovery and fallback interactions inside PI WEB.
 - Preserve the separation between PI WEB's long-lived session owner and its restartable browser/API processes.
 
 ## Contribute generic shell improvements upstream
@@ -107,4 +107,4 @@ The staged upstream contribution and Workbench adapter work is defined in the
 - PI WEB never owns project mutation authority or workspace leases.
 - Models propose semantic work; deterministic modules own transitions and side effects.
 - Credentials, authentication state, sessions, and machine-local configuration are never committed.
-- Graphical improvements must not remove the structured terminal fallback.
+- Every supported Workbench interaction remains available in PI WEB.

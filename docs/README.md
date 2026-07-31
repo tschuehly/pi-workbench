@@ -18,16 +18,17 @@ When documents disagree, follow the highest applicable authority and repair the 
 ## Contracts
 
 - [`contracts/controller.md`](contracts/controller.md) — controller lifecycle, durable state, workspaces, and artifacts.
+- [`contracts/workstreams.md`](contracts/workstreams.md) — cross-session attention, sparse ledgers, checkpoints, and FirstMate.
 - [`contracts/execution.md`](contracts/execution.md) — Pi actors, Dispatches, Episodes, routing, and execution semantics.
 - [`contracts/workflow.md`](contracts/workflow.md) — authority, quality, Working Mode, semantic work, and compounding.
-- [`contracts/interfaces.md`](contracts/interfaces.md) — Human Attention, supervision, terminal and graphical clients, and adapters.
-- [`contracts/graphical-attention.md`](contracts/graphical-attention.md) — action-first graphical interaction contract.
+- [`contracts/interfaces.md`](contracts/interfaces.md) — Human Attention, supervision, PI WEB interaction, and adapters.
+- [`contracts/graphical-attention.md`](contracts/graphical-attention.md) — action-first PI WEB interaction contract.
 - [`contracts/harness.md`](contracts/harness.md) — harness distribution, Entry Presets, skills, and repository adaptation.
 
 ## Plans and integrations
 
 - [`plans/level-adoption.md`](plans/level-adoption.md) — staged adoption from unmanaged interactive Pi to managed Runs.
-- [`integrations/pi-web/evaluation.md`](integrations/pi-web/evaluation.md) and [`shell-strategy.md`](integrations/pi-web/shell-strategy.md) — candidate evidence and selection strategy.
+- [`integrations/pi-web/evaluation.md`](integrations/pi-web/evaluation.md) and [`shell-strategy.md`](integrations/pi-web/shell-strategy.md) — PI WEB evidence and shell boundary.
 - [`integrations/pi-web/customization-plan.md`](integrations/pi-web/customization-plan.md) and [`principles.md`](integrations/pi-web/principles.md) — upstream delivery sequence and integration-specific development principles.
 
 ## Research

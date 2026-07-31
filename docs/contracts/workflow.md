@@ -91,8 +91,8 @@ The real pilot and its controlled drills together exercise the product's definin
 - A scout investigation followed by explicit promotion of the same work item to ship authority.
 - Linked claim, challenge, and response episodes when a real material judgment emerges, or through a bounded fixture otherwise.
 - Ratified pre-execution and post-execution judgment snapshots.
-- Terminal control and a minimal graphical attention client over one structured event and artifact protocol.
-- A bounded terminal review summary and revision-aware graphical Review Surface over the same judgment.
+- PI WEB control and attention views over one structured event and artifact protocol.
+- A bounded status summary and revision-aware Review Surface over the same judgment.
 - Explicit external publication.
 - Source-backed run analysis and compounding candidates.
 - Promotion and cleanup at run closure.
@@ -131,7 +131,7 @@ Interactive mode streams detailed progress, opens relevant surfaces, and asks qu
 
 ## Team Collaboration
 
-All team members use the same repository package and workflow protocol. Terminal and graphical users may see different projections. Non-terminal collaborators interact through bounded artifacts and decisions rather than agent commands.
+All team members use the same repository package, PI WEB shell, and workflow protocol. Collaborators interact through bounded artifacts and decisions rather than agent commands.
 
 Each run has exactly one active human owner or controlling client. The owner may orchestrate multiple Pi workers using different models. Ownership transfers explicitly through a portable, schema-validated handoff snapshot containing creator metadata, task and workflow versions, current state, pending decisions, artifact references, and external synchronization watermarks.
 

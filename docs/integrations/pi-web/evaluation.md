@@ -2,11 +2,11 @@
 
 ## Conclusion
 
-PI WEB is the first graphical-shell candidate because it already owns the operational shell Pi Workbench needs: persistent Pi sessions, projects, workspaces and worktrees, terminals, files, remote machines, reconnect behavior, browser and mobile access, package management, and a plugin host.
+PI WEB is the selected Workbench shell because it already owns the operational shell Pi Workbench needs: persistent Pi sessions, projects, workspaces and worktrees, terminals, files, remote machines, reconnect behavior, browser and mobile access, package management, and a plugin host.
 
 That reuse is valuable only if Workbench remains a separate client domain. PI WEB sessions are not Runs, PI WEB state is not authoritative Run state, and Workbench mutations must cross the typed Run client rather than private routes or terminal text.
 
-The candidate decision and comparison fixture live in [shell-strategy.md](shell-strategy.md). The upstream contribution sequence lives in [customization-plan.md](customization-plan.md).
+The shell boundary and acceptance fixture live in [shell-strategy.md](shell-strategy.md). The upstream contribution sequence lives in [customization-plan.md](customization-plan.md).
 
 ## Existing fit
 
@@ -57,6 +57,6 @@ Installed PI WEB plugins are trusted browser code. Repository- or agent-generate
 
 ## Evaluation status
 
-The v1 probe justifies continued PI WEB adaptation and the smallest generic navigation and primary-view contribution slice. It does not yet prove the framework-neutral Run client, typed mutations, portfolio attention, shell profiles, or a permanent shell selection.
+The v1 probe justifies continued PI WEB adaptation and the smallest generic navigation and primary-view contribution slice. It does not yet prove the typed Run client, typed mutations, portfolio attention, or shell profiles.
 
-A fork remains unnecessary while generic upstream seams can express accepted interactions. PI WEB becomes the selected shell only after it passes the shared fixture for typed Run controls, ordered observation, durable attention, reconnect behavior, responsive review, accessibility, and terminal fallback.
+A fork remains unnecessary while generic upstream seams can express accepted interactions. PI WEB must pass the shared fixture for typed Workstream and Run controls, ordered observation, durable attention, reconnect behavior, responsive review, and accessibility as those capabilities are added.

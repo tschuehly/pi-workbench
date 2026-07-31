@@ -1,8 +1,8 @@
 # Pi Workbench agent router
 
-Pi Workbench allocates Human Attention and model work across durable project Runs. A deterministic
-Run Controller owns lifecycle and authoritative state; terminal and graphical applications are
-clients of its typed Run protocol.
+Pi Workbench allocates Human Attention and model work across interactive Workstreams and durable
+project Runs. A deterministic Run Controller owns managed lifecycle and authoritative Run state;
+PI WEB is the user-facing client of its typed protocols.
 
 ## Load only what the task needs
 
@@ -24,7 +24,8 @@ clients of its typed Run protocol.
 | Pi dispatch and actors | `docs/contracts/execution.md`, `packages/pi-execution/` |
 | Workspaces and delivery | `docs/contracts/controller.md`, `packages/repository-workspace/` |
 | Evidence and immutable objects | `docs/contracts/controller.md`, `packages/artifact-store/` |
-| Attention, terminal, and graphical clients | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
+| Cross-session Workstreams and FirstMate | `docs/contracts/workstreams.md` |
+| Attention and PI WEB interfaces | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
 | PI WEB integration and upstream customization | `packages/pi-web-integration/`, `docs/integrations/pi-web/` |
 | macOS PI WEB wrapper | `apps/pi-web-macos/` |
 | Workflow or repository policy | `docs/contracts/workflow.md`, `workflows/`, `repositories/` |
@@ -34,7 +35,7 @@ Follow any nearer `AGENTS.md` before changing files in its directory.
 
 ## Invariants
 
-- Keep the Run Controller independent from terminal and graphical clients.
+- Keep the Run Controller independent from PI WEB.
 - Treat PI WEB as a Run-protocol client, never as authoritative Run state.
 - Models propose semantic work; deterministic modules own transitions and side effects.
 - Documentation describes only the supported current workflow and intended state.

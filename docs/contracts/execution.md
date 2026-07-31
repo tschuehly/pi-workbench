@@ -26,7 +26,9 @@ Every bounded dispatch ends or pauses at a synchronization point and returns a t
 
 ## Interactive and Ephemeral Execution
 
-An interactive lead is an ordinary Pi TUI session bound to a Coordinator or Worker profile. An ephemeral Subagent receives one bounded Dispatch, returns one Episode, and ends. A resumable Worker may receive later controller-mediated Dispatches under the same Logical Actor identity when preserving scope context has value. Every follow-up still crosses a synchronization point and returns a new Episode; continuity never turns a conversation into authoritative Run state.
+Every interactive Pi session starts in exactly one Workstream, including unmanaged Levels 1–3 and interactive sessions attached to managed work. The Workstream supplies cross-session re-entry only; it does not change the session's execution authority.
+
+An interactive lead is a Pi session hosted by PI WEB and bound to a Coordinator or Worker profile. An ephemeral Subagent receives one bounded Dispatch, returns one Episode, and ends. A resumable Worker may receive later controller-mediated Dispatches under the same Logical Actor identity when preserving scope context has value. Every follow-up still crosses a synchronization point and returns a new Episode; continuity never turns a conversation into authoritative Run state.
 
 The Pi Execution interface remains `dispatch`, `observe`, and `cancel`. Starting or continuing an interactive Worker is expressed through Dispatch fields for Logical Actor identity, Continuity, and interaction mode rather than a second worker interface. Human or Coordinator messages cannot attach directly to a child process or bypass controller validation. An unmanaged harness adapter may preserve a Pi session for local interactive use, but it does not acquire Run authority, workspace rights, durable identity, or controller-mediated status by doing so.
 
@@ -137,4 +139,4 @@ The coordinator can dispatch a specialist to question or challenge a claim and d
 
 ## Execution Observations
 
-Pi Execution emits structured lifecycle, tool-activity, usage, cancellation, and terminal-result observations to the Run Controller. These observations are evidence for reconciliation; they are not canonical client events or independently authoritative Run state. The controller accepts a result only through the expected Episode schema and exposes current state through its own snapshot and event interface.
+Pi Execution emits structured lifecycle, tool-activity, usage, cancellation, and completion observations to the Run Controller. These observations are evidence for reconciliation; they are not canonical client events or independently authoritative Run state. The controller accepts a result only through the expected Episode schema and exposes current state through its own snapshot and event interface.

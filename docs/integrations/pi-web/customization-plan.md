@@ -1,8 +1,8 @@
 # PI WEB Customization Plan
 
-Status: approved implementation plan. PI WEB remains a provisional graphical-shell candidate; this
-plan improves its generic extension model without selecting it as the permanent Workbench shell.
-The approved [Pi and PI WEB Level Adoption Plan](../../plans/level-adoption.md) supplies the first
+Status: approved implementation plan. PI WEB is the selected Workbench shell; this
+plan improves its generic extension model while keeping Workbench state in typed services.
+The approved [PI WEB Level Adoption Plan](../../plans/level-adoption.md) supplies the first
 primary-view forcing function and governs the sequencing of that vertical slice.
 
 ## Outcome
@@ -35,8 +35,8 @@ global CSS.
 - Run, Attention Item, Judgment Dossier, Primary Evidence, Review Surface, authority, revision, and
   receipt semantics.
 - A Workbench shell profile assembled only from stable PI WEB contribution interfaces.
-- The framework-neutral Run client and deterministic recorded fixtures used by graphical clients.
-- Terminal-equivalent outcomes for every Workbench mutation.
+- The browser-safe typed Run client and deterministic recorded fixtures used by PI WEB.
+- Typed, revision-checked outcomes for every Workbench mutation.
 
 ### Fixed seams
 
@@ -318,7 +318,7 @@ WEB default.
 
 ### Phase 8 — Typed Pi Workbench adapter
 
-Complete the adapter after the framework-neutral Run client and recorded selection fixture can
+Complete the adapter after the typed Run client and recorded fixture can
 execute and replay `start -> submit -> inspect -> watch`.
 
 1. Replace the probe projection source with the Run client while retaining its deterministic fake.
@@ -330,7 +330,7 @@ execute and replay `start -> submit -> inspect -> watch`.
 6. Propose further upstream interfaces only when this adapter demonstrates another generic missing
    capability.
 
-**Exit:** the shared graphical-shell fixture passes without private PI WEB routes, source patches,
+**Exit:** the shared PI WEB fixture passes without private PI WEB routes, source patches,
 session-to-Run inference, or terminal-text mutation transport.
 
 ## Upstream change structure
@@ -368,7 +368,7 @@ cross-cutting changes.
 - Accessibility checks: visible focus, logical order, labels, touch targets, zoom, and no clipped
   controls.
 - Workbench contract tests: deterministic fake Run client, ordered watch, reconnect, stale events,
-  duplicate receipts, read-only lease behavior, and terminal-equivalent typed outcomes.
+  duplicate receipts, read-only lease behavior, and typed outcomes.
 
 For every non-trivial upstream phase, run the narrow changed tests, `npm run typecheck`, relevant
 lint, and finally `npm run verify` before proposing the change.
@@ -388,7 +388,7 @@ lint, and finally `npm run verify` before proposing the change.
 - Removed or changed stable interfaces require a documented migration window; private and unstable
   interfaces receive no compatibility promise.
 - A bounded fork is considered only if an accepted Workbench interaction cannot be represented by
-  these interfaces and the shared shell-selection fixture shows that maintaining the fork costs
+  these interfaces and the shared PI WEB fixture shows that maintaining the fork costs
   less than another adapter.
 
 ## Explicit non-goals
@@ -403,4 +403,3 @@ lint, and finally `npm run verify` before proposing the change.
 - A general page builder or unconstrained plugin layout tree.
 - Plugin ownership of authentication, permissions, recovery, machine connection, or Run state.
 - Workbench-specific protocol concepts in PI WEB upstream.
-- Selecting PI WEB permanently before it passes the shared graphical-shell fixture.

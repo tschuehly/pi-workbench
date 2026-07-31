@@ -6,7 +6,7 @@ This document is authoritative for this contract. [The system overview](../found
 
 ## Run Controller Module
 
-The Run Controller is the primary deep module. Terminal and graphical clients cross one interface:
+The Run Controller is the primary deep module. PI WEB crosses one typed interface:
 
 ```text
 start(StartRun) -> RunSnapshot
@@ -50,7 +50,7 @@ The deterministic controller reducer combines semantic records with live Pi exec
 
 V1 may retain the complete semantic record stream for a run. Sealing may later segment or compact its physical representation without changing record identity or durable references.
 
-Terminal summaries, portfolio and project attention, notifications, AFK digests, and graphical clients consume canonical projections and Attention Items. They do not independently infer state from raw event prose. Large tool results and media are stored as referenced, content-addressed artifacts.
+PI WEB status, portfolio and project attention, notifications, AFK digests, and focused views consume canonical projections and Attention Items. They do not independently infer state from raw event prose. Large tool results and media are stored as referenced, content-addressed artifacts.
 
 ## Client Event and Schema Interface
 

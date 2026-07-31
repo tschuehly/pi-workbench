@@ -1,6 +1,6 @@
 # Attention and Interface Specification
 
-Defines the supported supervision, attention, terminal, graphical, Review Surface, and external-adapter contracts.
+Defines the supported supervision, attention, PI WEB, Review Surface, and external-adapter contracts.
 
 This document is authoritative for attention and interface behavior. [The system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries.
 
@@ -11,7 +11,7 @@ Exactly one controlling client holds the run's live control lease and may reques
 While any dispatch is in flight, one healthy controller supervision loop owns reconciliation. Its deterministic Watcher consumes structured Pi lifecycle events, execution observations, timers, leases, external adapter results, and authority changes. Routine progress, duplicates, and unchanged observations remain recorded or coalesced without waking a model. The controller creates attention only for an actionable condition such as:
 
 - Missing or exceeded authority.
-- A terminal result requiring synthesis, review, acceptance, or publication.
+- A completed result requiring synthesis, review, acceptance, or publication.
 - Failure, cancellation, staleness, conflicting evidence, or unknown execution state.
 - A material graph, quality, budget, workspace, or external-system conflict.
 - A bounded external wait whose recheck condition has matured.
@@ -26,14 +26,14 @@ focused lower-scope conversation returns a bounded Episode rather than its full 
 
 Each named execution profile declares a finite attempt ladder. Failed independent review returns typed findings to the next authorized attempt. The controller pauses affected work and creates one deduplicated attention item when an attempt ladder or review-failure threshold is exhausted, a workspace becomes contaminated or unattributable, an input or approval becomes stale, an execution or external action has unknown outcome, or budget or authority is exhausted. Replanning occurs through a revisioned graph mutation rather than unbounded retry.
 
-The supervision loop is owned by the live controller host and does not require a model session to remain active. Loss of the coordinator session triggers bounded Pi-session replacement or a persisted attention item. Controller-process exit, terminal-induced exit, reboot, and machine loss remain outside the V1 durability scope.
+The supervision loop is owned by the live controller host and does not require a model session to remain active. Loss of the coordinator session triggers bounded Pi-session replacement or a persisted attention item. Controller-process exit, client-induced exit, reboot, and machine loss remain outside the V1 durability scope.
 
 ## Stable Workbench Shell
 
 The shell owns:
 
 - Explicit Entry Preset selection and a visible managed-versus-unmanaged execution boundary.
-- Portfolio, project, repository, workspace, worktree, and Run navigation.
+- FirstMate, Workstream, portfolio, project, repository, workspace, worktree, and Run navigation.
 - User, agent, and model identity.
 - Authentication, authorization, and permission controls.
 - Start, pause, resume, steer, stop, retry, and handoff controls.
@@ -41,6 +41,14 @@ The shell owns:
 - Preservation of the owner's place, unresolved feedback, and changes since the previous judgment.
 - Recovery, reconciliation, and cleanup entry points.
 - Hosting and isolation of bounded project surfaces.
+
+## Workstream Surfaces
+
+Workstreams are the primary home for interactive sessions. The cross-repository Workstream view lists current Workstreams, supports starting a session in exactly one Workstream, and shows each session's latest checkpoint, unresolved human tasks, linked files and Runs, and closure state. FirstMate uses the same projection to help the owner decide what to resume after time away.
+
+Human tasks remain distinct from managed Run Attention Items. The interface may present both in one re-entry experience, but it must not imply that an advisory Workstream task blocks or authorizes a Run transition. The initial ordering between required judgments and suggested Workstreams is a trial question rather than a settled contract.
+
+A deterministic watcher requests checkpoints from a fresh Pi context at configured attention boundaries. The interface shows missing or stale checkpoints instead of presenting old context as current. Several sessions and Workstreams may remain active concurrently.
 
 ## Project Surfaces
 
@@ -64,7 +72,6 @@ Repositories and workflows may provide:
 - Declarative dashboards, forms, decision boards, timelines, dependency maps, and review views from a trusted interaction catalog.
 - Sandboxed application views for complex experiences such as Atelier.
 - Artifact viewers for diffs, tests, screenshots, recordings, reports, and prototypes.
-- Structured terminal summaries and commands for every required workflow interaction.
 - Agent-generated native skill surfaces using the harness's integrated Surface Builder capability.
 
 Project surfaces cannot alter shell-owned permission, identity, or recovery controls.
@@ -75,12 +82,13 @@ PI WEB presents Levels 1–4 in a first-class Workbench primary view contributed
 
 Levels 1–3 launch or configure ordinary Pi sessions in the selected workspace. Their UI must say that subagent write partitions, orchestration, evidence, and recovery are advisory and unmanaged. Level 4 enters the typed Run protocol and may display Working Mode, authority, durable attention, and recovery only after the controller accepts the start. A PI WEB session id is never inferred to be a Run id.
 
-The primary view is hosted through constrained contribution locations. PI WEB retains visible authentication, connectivity, settings, recovery, workspace, and navigation controls. Plugins cannot replace arbitrary internals or use Entry Preset selection to grant permissions. The same preset definitions remain usable from the Pi terminal package when PI WEB is unavailable.
+The primary view is hosted through constrained contribution locations. PI WEB retains visible authentication, connectivity, settings, recovery, workspace, and navigation controls. Plugins cannot replace arbitrary internals or use Entry Preset selection to grant permissions. PI WEB provides every supported preset interaction.
 
 ## Initial Graphical Attention Surface
 
-The V1 vertical slice includes a minimal graphical client over the Run protocol. It provides:
+The V1 vertical slice includes PI WEB views over the Run and Workstream protocols. It provides:
 
+- A FirstMate re-entry view over current Workstreams, session checkpoints, human tasks, and linked Run attention.
 - A default portfolio attention view across projects and concurrent Runs that separates pending judgment from activity progressing without the owner.
 - A project workspace showing active Run outcomes, conflicts, and current checkpoints.
 - A Run workspace showing Shared Understanding, Working Mode, semantic work, evidence, and residual uncertainty.
@@ -88,37 +96,18 @@ The V1 vertical slice includes a minimal graphical client over the Run protocol.
 - Scoped conversation attached to the selected project, Run, work item, claim, artifact, or judgment.
 - Working Mode and Human-Attention Contract presentation with shell-owned authority controls.
 
-The managed graphical client is entered from Level 4 or directly through an authorized Run start. It externalizes working memory: it separates activity from required action, preserves the
+The graphical Workbench is entered through a Workstream for interactive sessions or through Level 4 or an authorized Run start for managed execution. It externalizes working memory: it separates activity from required action, preserves the
 owner’s place across interruptions, and explains what changed since the owner last inspected the
 scope. A focused Attention Item states the required judgment, why it is material now, the
 recommended response, consequences and reversibility, deferral behavior, affected work, and the
 available actions before exposing deeper evidence. It consumes canonical snapshots, records, and artifact
-references and does not infer state from chat messages. Generated repository-specific surfaces and
-selection of a long-term graphical shell remain outside this vertical slice.
+references and does not infer state from chat messages. Generated repository-specific surfaces remain outside this vertical slice.
 
-## Initial Terminal Surface
+## PI WEB Control Surface
 
-The same V1 protocol is fully operable through six terminal concepts:
+PI WEB provides every supported Workstream and Run action. Workstream controls cover listing, creating, inspecting, closing, and starting a session. Managed Run controls cover start or attach, status, decide, pause or resume or stop, validate, and close.
 
-```text
-pi-workbench run
-pi-workbench status
-pi-workbench decide <attention-id>
-pi-workbench control pause|resume|stop
-pi-workbench validate
-pi-workbench close
-```
-
-- `run` starts or attaches to a run.
-- `status` renders the canonical snapshot, execution graph, active owner, progress, evidence references, and pending attention without a model turn.
-- `decide` handles approval, rejection, response, acceptance, promotion, discard, and publication authorization according to the referenced attention-item schema.
-- `control` changes live execution control without creating a new run.
-- `validate` mechanically checks the resolved run contract and environment.
-- `close` analyzes the run, gathers learning-candidate dispositions, seals retained evidence, previews cleanup, and performs owner-authorized collection.
-
-The internal commands remain explicit, typed, revision-checked, and idempotent even when several decisions share the `decide` entry point. The terminal also exposes a structured event stream and durable artifacts using the same interface projected by the graphical client.
-
-The terminal is a projection and control surface over the durable Run ledger; it does not own a separate workflow state machine. The graphical and terminal clients exercise the same controller semantics and retain structured fallback equivalence for every required action.
+Every mutation crosses the typed protocol with revision checks and idempotency. Mechanical status, checkpoint state, validation, durable artifacts, and unresolved human tasks remain inspectable without launching FirstMate or another model turn.
 
 ## External Adapters
 

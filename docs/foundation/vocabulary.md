@@ -1,6 +1,6 @@
 # Pi Workbench vocabulary
 
-Pi Workbench allocates human and model attention across durable project runs. Its language
+Pi Workbench allocates human and model attention across interactive Workstreams and durable project Runs. Its language
 separates judgment, authority, execution, evidence, and presentation so autonomous work can remain
 adaptive without obscuring who decides what.
 
@@ -46,6 +46,12 @@ An unresolved question whose answer can change the desired outcome, approved imp
 trade-offs, acceptance basis, or residual risk.
 _Avoid_: Any question, clarification
 
+**Workstream:**
+A finite, user-local container for restoring and allocating Human Attention across related
+interactive sessions. It may link human tasks, files, artifacts, repositories, and managed Runs,
+but grants no execution authority or managed recovery guarantee.
+_Avoid_: Run, project, chat folder, permanent topic
+
 **Attention Item:**
 A reconciled, actionable request for human or coordinator judgment tied to the affected work and
 its evidence.
@@ -56,6 +62,12 @@ A non-mutating Pi actor that routes priorities, guidance, and prepared judgments
 scope without replacing the coordinators or controllers that own individual Runs. A Portfolio
 Broker operates across projects; a Project Broker operates across concurrent Runs in one project.
 _Avoid_: Global coordinator, workflow controller, chat router
+
+**FirstMate:**
+The owner-facing Portfolio Broker profile for cross-session interaction that helps the owner
+inspect, resume, prioritize, and close Workstreams from their current projections. It may recommend
+action but does not own Workstream storage or Run state.
+_Avoid_: Workstream controller, task database, session watcher
 
 ## Run and authority
 
@@ -159,7 +171,8 @@ _Avoid_: Worker, child conversation
 
 **Watcher:**
 The deterministic, non-model supervision capability that reconciles execution observations,
-timers, leases, and external waits and creates durable Attention Items for actionable conditions.
+timers, leases, and external waits, detects configured Workstream checkpoint boundaries, and
+creates durable requests for the resulting action.
 _Avoid_: Monitoring agent, reviewer, broker
 
 **Context Curator:**

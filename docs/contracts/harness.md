@@ -22,7 +22,7 @@ Each resulting episode records the exact skill and adaptation versions that infl
 
 Unmanaged Levels 1–3 use the same curated capability catalog but do not pretend to create Dispatches or Episodes. Their lead and child Pi processes load only the resources selected for the Entry Preset and bounded task. Any summaries, tool output, or model claims they return remain ordinary session material unless later admitted into a managed Run as source-backed evidence.
 
-Every skill has a complete headless and terminal path. Skills with meaningful human interaction may contribute enhanced interface definitions or sandboxed views as progressive enhancements. Those views project the same durable run state and cannot control identity, permissions, recovery, or workflow transitions independently.
+Every skill remains executable by Pi, and every supported human interaction is available through PI WEB. Skills with meaningful human interaction may contribute focused interface definitions or sandboxed views. Those views project the same durable run state and cannot control identity, permissions, recovery, or workflow transitions independently.
 
 Skills improve through evidence from real runs: observed friction, failed handoffs, weak judgment artifacts, missing tools, and repeated manual steps become evaluated skill or interface candidates rather than automatic standing context.
 
@@ -36,9 +36,11 @@ The vendored source retains its provenance. Reusable stack adaptations can be sh
 
 When a skill is added or improved, a Pi worker can derive a focused interface from the skill's purpose, workflow, decisions, artifacts, progress, inputs, outputs, and human actions. A dedicated Surface Builder translates that semantic brief into a native harness experience while the coordinating agent retains task reasoning.
 
-The generated surface is integrated into the harness UI and remains flexible during execution. The coordinating agent sends semantic changes to the Surface Builder as new artifacts, decisions, and interaction needs emerge. The surface remains a projection over the skill and durable run state, retains a headless path, and can be evaluated and promoted with the skill after real usage.
+The generated surface is integrated into the harness UI and remains flexible during execution. The coordinating agent sends semantic changes to the Surface Builder as new artifacts, decisions, and interaction needs emerge. The surface remains a projection over the skill and durable run state and can be evaluated and promoted with the skill after real usage.
 
 ## Entry Presets and Unmanaged Pi
+
+Interactive sessions start in exactly one Workstream. The Workstream preserves cross-session attention but does not change the preset's authority or recovery boundary.
 
 An Entry Preset is an explicit user-selected starting configuration above the managed Run protocol:
 
@@ -47,7 +49,7 @@ An Entry Preset is an explicit user-selected starting configuration above the ma
 - **Level 3:** Grill with Docs and an approved implementation contract precede fresh-context implementation slices, independent cross-family review, and at most two correction cycles.
 - **Level 4:** enters the controller-managed Run protocol and resolves a Run Working Mode.
 
-The first three Levels are convenience orchestration, not authority. They have no controller-issued workspace lease, enforced path scope, durable Run identity, canonical projection, or recovery claim. The Pi and PI WEB interfaces must expose that boundary. Model selection takes Cognitive Role and Entry Preset as inputs to an Execution Profile; concrete provider, model, and Model Effort remain runtime bindings.
+The first three Levels are convenience orchestration, not authority. Their Workstream has an organizational projection, but they have no controller-issued workspace lease, enforced path scope, durable Run identity, canonical Run projection, or managed recovery claim. The Pi and PI WEB interfaces must expose that boundary. Model selection takes Cognitive Role and Entry Preset as inputs to an Execution Profile; concrete provider, model, and Model Effort remain runtime bindings.
 
 ## Repository Package
 
@@ -62,7 +64,7 @@ The repository package is versioned with the project and declares:
 - Alignment participants, interaction cadence, direct-experience surfaces, review responsibilities, and result-packaging requirements.
 - Permission and AFK autonomy limits.
 - External adapters and publication mappings.
-- Supported project surfaces and terminal fallbacks.
+- Supported PI WEB project surfaces.
 - Artifact classes, retention periods, promotion gates, and cleanup rules.
 
 PhotoQuest and embabel-me use the same controller lifecycle and record schemas. Their packages vary finite policy fields such as judgment depth, required challenge and independent-review profiles, evidence classes, verification commands, risk and impact ceilings, execution profiles, fallback equivalences, retry bounds, and retention rules. A repository package cannot remove invariant authority, independent verification, acceptance, publication, analysis, promotion review, or cleanup obligations.

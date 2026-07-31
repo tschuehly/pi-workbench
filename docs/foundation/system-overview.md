@@ -14,12 +14,12 @@ Pi Workbench must let models perform more bounded work without obscuring who own
 
 ## Product model
 
-Pi Workbench allocates human and model attention across durable project Runs. Pi is the only model-worker runtime. A deterministic Run Controller owns lifecycle and authoritative state; terminal and graphical applications are clients of its typed Run protocol.
+Pi Workbench allocates human and model attention across interactive Workstreams and durable project Runs. Pi is the only model-worker runtime. A deterministic Run Controller owns lifecycle and authoritative state; PI WEB is the user-facing client of its typed Run protocol.
 
 The product has two entry paths:
 
-- **Entry Presets 1–3** start visibly unmanaged Pi workflows for progressively richer interactive delegation. They do not claim Run identity, controller authority, enforced workspace isolation, or durable recovery.
-- **Entry Preset 4** starts a controller-managed Run and resolves its Working Mode, Workflow Contract, Human-Attention Contract, and Autonomy Envelope.
+- **Entry Presets 1–3** start visibly unmanaged Pi workflows for progressively richer interactive delegation. Interactive sessions start inside a user-local Workstream so the owner can resume attention across sessions, but they do not claim Run identity, controller authority, enforced workspace isolation, or durable recovery.
+- **Entry Preset 4** starts a controller-managed Run and resolves its Working Mode, Workflow Contract, Human-Attention Contract, and Autonomy Envelope. The Run may be linked to the Workstream that prompted it without sharing authority or state.
 
 A higher Entry Preset number is a different starting posture, not a universal quality or maturity ranking.
 
@@ -35,7 +35,11 @@ The owner approves Shared Understanding and the Autonomy Envelope before autonom
 
 ## Attention scopes
 
-Pi Workbench separates three scopes of accountability:
+A Workstream is the owner's finite cross-session attention container. It may hold several concurrent interactive sessions and link human tasks, files, repositories, artifacts, and managed Runs. It is user-local and cross-repository. Its sparse ledger and derived projection support re-entry without becoming an execution-authority boundary.
+
+FirstMate is the owner-facing Portfolio Broker profile for cross-session interaction. It reads Workstream projections and linked Run attention to help the owner decide what to resume, while the Workstream service and Run Controller retain their respective state ownership.
+
+Pi Workbench separates three managed accountability scopes:
 
 - A **Portfolio Broker** routes priorities and Human Attention across projects.
 - A **Project Broker** coordinates repository capabilities, conflicts, and concurrent Runs.
@@ -45,16 +49,17 @@ Brokers do not own Run lifecycle state. Focused work returns bounded Episodes ra
 
 ## Deep modules
 
-Four deep modules contain the trusted behavior:
+Five deep modules contain the trusted behavior:
 
 | Module | Small interface | Owns |
 | --- | --- | --- |
+| [Workstream Store](../contracts/workstreams.md) | `create`, `append`, `inspect`, `list`, `watch`, `close` | Sparse cross-session ledgers, current projections, session association, and closure |
 | [Run Controller](../contracts/controller.md) | `start`, `submit`, `inspect`, `watch` | Lifecycle reduction, commands, canonical projections, attention, dispatch coordination, and reconciliation |
 | [Pi Execution](../contracts/execution.md) | `dispatch`, `observe`, `cancel` | Pi actors, Work Packets, Episodes, model execution, continuity, and cancellation |
 | [Repository Workspace](../contracts/controller.md#repository-workspace-module) | `lease`, `inspect`, `land`, `release` | Deterministic workspace isolation, mutation inventory, landing, and cleanup eligibility |
 | [Artifact Store](../contracts/controller.md#artifact-store-module) | `put`, `get`, `pin` | Immutable content-addressed evidence and retention metadata |
 
-The [Workflow contract](../contracts/workflow.md) owns quality, authority, Human Attention, semantic work, staleness, and compounding policy. The [interface contract](../contracts/interfaces.md) owns supervision and client behavior. The [harness contract](../contracts/harness.md) owns distribution, skills, repository adaptation, and Entry Presets.
+The [Workstream contract](../contracts/workstreams.md) owns cross-session attention, sparse ledgers, checkpointing, and FirstMate behavior. The [Workflow contract](../contracts/workflow.md) owns quality, authority, Human Attention, semantic work, staleness, and compounding policy. The [interface contract](../contracts/interfaces.md) owns supervision and client behavior. The [harness contract](../contracts/harness.md) owns distribution, skills, repository adaptation, and Entry Presets.
 
 ## Execution and authority
 
@@ -71,6 +76,8 @@ The Coordinator never receives a project-workspace write lease. The Repository W
 
 Run state is durable; Model Context is disposable. The controller reducer produces one canonical snapshot from immutable semantic records and reconciled execution observations. Raw logs, chat messages, terminal output, and model claims are not authoritative state.
 
+Workstream continuity is separate from Run durability. Pi Workbench stores concise semantic entries only at meaningful attention changes and mechanically projects active sessions, their latest checkpoints, unresolved human tasks, links, and closure state. A fresh context prepares each semantic checkpoint; FirstMate derives any combined “what next?” synthesis on demand rather than persisting repeated summaries.
+
 Each bounded Dispatch returns an Episode that records outcomes, claims, evidence, mutations, authority needs, and justified continuation context. Episodes carry results across context boundaries but do not replace Primary Evidence or the Judgment Dossier.
 
 Logical Actors outlive model sessions. A fresh Context Curator can prepare a source-backed Continuation Artifact from canonical state, material Episodes, and Primary Evidence. Required authority, decisions, disagreement, uncertainty, mutations, and pending attention remain mechanically protected during reconstruction.
@@ -79,15 +86,15 @@ Every retained artifact has a promotion or expiry path. Run analysis and compoun
 
 ## Clients and integrations
 
-Terminal and graphical clients consume the same Run protocol and canonical projections. They may differ in presentation but not in authority or outcome. PI WEB is the first graphical-shell candidate and remains a client, never the owner of Run state.
+PI WEB consumes the Run and Workstream protocols and canonical projections. It is the selected user-facing shell and remains a client, never the owner of Run or Workstream state.
 
-The graphical client is attention-first: required judgment leads, autonomous activity remains visible but secondary, and Review Surfaces join intent, realized behavior, evidence, deviations, and residual risks. Every required rich interaction retains a structured terminal fallback.
+PI WEB is attention-first: required judgment leads, autonomous activity remains visible but secondary, and Review Surfaces join intent, realized behavior, evidence, deviations, and residual risks. Workstreams are the primary home for interactive sessions and provide re-entry views across repositories; Projects and managed Runs remain separate linked views.
 
 External systems such as GitHub, Linear, Sentry, and CI remain collaboration surfaces. Import and Publication are explicit, idempotent adapter operations; external events never advance the local lifecycle implicitly.
 
 ## V1 boundary
 
-V1 validates one adaptive Workflow Contract through terminal and minimal graphical clients. The first external delivery pilot is PhotoQuest plan 020 in an isolated worktree with no production deployment. Embabel work exercises hypothesis-driven exploration against the same lifecycle and records.
+V1 validates one adaptive Workflow Contract through PI WEB. The first external delivery pilot is PhotoQuest plan 020 in an isolated worktree with no production deployment. Embabel work exercises hypothesis-driven exploration against the same lifecycle and records.
 
 V1 durability covers replacement of a failed or exhausted Pi model session while the controller host remains alive. Controller-process exit, reboot, machine loss, a distributed controller, and multi-user concurrent control remain outside V1.
 
@@ -106,7 +113,7 @@ The complete product outcomes and acceptance matrix are in [requirements.md](req
 - Production deployment from the pilot.
 - Implicit external synchronization or publication.
 - Agent-generated ownership of authentication, permissions, recovery, workspace leases, or Run state.
-- Arbitrary graphical composition, global CSS injection, or removal of the structured terminal fallback.
+- Arbitrary graphical composition or global CSS injection.
 - A daemon, database, distributed controller, or controller-process recovery in V1.
 - Multiple selectable or layered Workflow Contracts in the initial implementation.
 - Copying credentials, subscription state, sessions, machine-local configuration, or external binaries into the harness repository.

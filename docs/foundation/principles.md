@@ -8,8 +8,8 @@ These principles govern system-wide design choices. Detailed behavior belongs to
 2. Working state, collaboration state, and durable project knowledge are distinct.
 3. Model Context is disposable; Run state is resumable.
 4. External side effects are explicit and idempotent.
-5. The GUI adds interaction bandwidth without owning workflow semantics.
-6. Terminal clients always have a structured fallback.
+5. PI WEB owns the user experience without owning workflow semantics.
+6. User-facing Workbench interaction is implemented in PI WEB over typed protocols.
 7. Human Attention is spent according to judgment leverage, operational impact, and recovery cost rather than routine workflow activity.
 8. Generated state has an expiry or promotion path.
 9. Trust-sensitive controls remain outside agent-generated surfaces.
@@ -33,5 +33,8 @@ These principles govern system-wide design choices. Detailed behavior belongs to
 27. Attention requests pause only affected work when dependencies and authority allow independent work to continue.
 28. Logical Actor identity and accountability outlive replaceable model sessions; no model context is authoritative Run state.
 29. Watchers classify and reconcile routine execution mechanically; models enter only when interpretation or judgment is actionable.
-30. A graphical attention surface is part of the V1 vertical slice because attention allocation, visual evidence, and concurrent work cannot be validated through terminal mechanics alone.
+30. PI WEB's attention surface is part of the V1 vertical slice because attention allocation, visual evidence, and concurrent work require the real user-facing shell.
 31. Graphical interaction is action-first and interruption-resilient by default: required judgment leads, routine activity is perceptually and structurally separate, completed outcomes are concrete, and deeper evidence remains available on demand.
+32. Workstreams preserve cross-session attention without borrowing the authority or recovery claims of managed Runs.
+33. Cross-session persistence occurs at meaningful attention changes; raw transcripts and routine activity do not become standing context by default.
+34. Workstream ledgers preserve source events while current re-entry state is projected separately and combined synthesis is generated only when needed.

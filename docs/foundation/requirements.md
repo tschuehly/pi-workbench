@@ -5,8 +5,8 @@ This document preserves the product outcomes and system-level validation matrix.
 ## User outcomes
 
 1. As a run owner, I want to start one explicit workflow, so that its behavior is understandable and reproducible.
-2. As a terminal user, I want to operate the same run as GUI users, so that the workflow is not tied to one interface.
-3. As a GUI user, I want a focused review surface, so that I can judge the workflow's output efficiently.
+2. As a PI WEB user, I want every Workbench operation available in the shell, so that I never need a separate terminal client.
+3. As a PI WEB user, I want a focused review surface, so that I can judge the workflow's output efficiently.
 4. As a developer, I want local working state to survive agent context resets, so that the run remains resumable.
 5. As a developer, I want external updates to be explicit, so that collaboration systems do not accidentally advance execution.
 6. As an interactive operator, I want detailed progress and inline decisions, so that I can steer actively.
@@ -28,14 +28,14 @@ This document preserves the product outcomes and system-level validation matrix.
 22. As an agent coordinator, I want specialists to produce linked claim, challenge, and response episodes, so that synthesis benefits from genuine disagreement without relying on hidden transcripts or peer mailboxes.
 23. As a developer, I want to clone one harness repository and obtain its supported Pi skills and tool capabilities, so that the workflow does not depend on reconstructing a personal setup.
 24. As a skill author, I want a stable harness interface for progress, decisions, artifacts, and user input, so that a skill can provide a focused experience without becoming tied to one client.
-25. As a terminal user, I want every enhanced skill to retain a complete headless path, so that richer interfaces never become a prerequisite for using the workflow.
+25. As a skill user, I want every supported skill interaction available through PI WEB, so that using the workflow never requires a separate terminal interface.
 26. As a skill user, I want the agent to generate a focused native interface when I add a skill, so that the skill becomes understandable and interactive without manual frontend development.
 27. As a skill author, I want successful generated surfaces to graduate with the skill, so that other users receive the proven interaction model when they clone the harness.
 28. As a developer, I want an imported skill adapted to my repository's stack, tools, conventions, and verification practices, so that its workflow is useful without carrying irrelevant assumptions from its source project.
 29. As a skill maintainer, I want repository adaptations to preserve upstream provenance and reusable behavior, so that project customization does not create opaque, unmaintainable forks.
 30. As a run owner, I want investigations to be unable to become implementations without separate authority, so that a recommendation never silently expands into project mutation.
 31. As an AFK operator, I want routine progress classified without a model turn and actionable conditions durably queued, so that unattended supervision is efficient without losing decisions or failures.
-32. As a client developer, I want one canonical current-state snapshot, so that terminal and graphical views cannot disagree by interpreting event history differently.
+32. As a client developer, I want one canonical current-state snapshot, so that PI WEB views cannot disagree by interpreting event history differently.
 33. As a repository owner, I want project work to remain leased until its delivery, report, evidence, or explicit discard obligation is satisfied, so that cleanup cannot erase unresolved work.
 34. As a worker, I want one self-contained work packet and typed episode contract, so that execution does not depend on hidden conversation context.
 35. As an operator, I want mechanical status, validation, and environment checks, so that routine inspection consumes no model attention.
@@ -51,13 +51,17 @@ This document preserves the product outcomes and system-level validation matrix.
 45. As a new Pi user, I want an explicit numbered Entry Preset, so that I can begin with fast interactive work and adopt deeper delegation gradually.
 46. As an interactive operator, I want the shell to distinguish unmanaged Pi workflows from managed Runs, so that convenience orchestration is never mistaken for enforced authority or recovery.
 47. As a PI WEB user, I want Level selection in a first-class primary view, so that the adoption posture is visible and understandable rather than hidden in prompts or a narrow side panel.
+48. As an interruptible developer, I want interactive sessions organized in finite Workstreams, so that I can resume related work across days without treating chat history as current state.
+49. As a developer with several active topics, I want FirstMate to show current Workstreams and human tasks across repositories, so that I can choose what to resume after being away.
+50. As a developer, I want each session checkpointed independently, so that several concurrent sessions do not create one duplicated or stale combined summary.
+51. As a repository owner, I want Workstream persistence to exclude raw transcripts and routine activity, so that cross-session continuity does not become unlimited standing context.
 
 ## Validation matrix
 
-- Test the highest common seam: a workflow contract executed through terminal commands and projected as structured events.
-- Replay terminal commands and emitted events and assert equivalent durable ledger transitions.
+- Test the highest common seam: a workflow contract executed through typed commands and projected as structured events in PI WEB.
+- Replay typed commands and emitted events and assert equivalent durable ledger transitions.
 - Verify deterministic state transitions independently from model output.
-- Exercise `start`, `submit`, `inspect`, and `watch` through terminal and graphical test adapters; assert identical Run Controller semantics.
+- Exercise `start`, `submit`, `inspect`, and `watch` through the PI WEB adapter; assert Run Controller semantics independently from presentation.
 - Run several independent Runs under one Project Broker; assert that their lifecycle, authority, evidence, and control leases remain separate while project attention and conflicts are reconciled.
 - Submit stale, unauthorized, and duplicate Broker protocol operations; assert revision checks, idempotent receipts, and deterministic refusal without prompt interpretation.
 - Rebuild a fresh coordinator solely from `snapshot.json`, `records.jsonl`, and referenced objects.
@@ -65,8 +69,8 @@ This document preserves the product outcomes and system-level validation matrix.
 - Validate valid and invalid commands, records, dispatches, episodes, attention items, dossier revisions, and receipts through the shared schema registry.
 - Attempt to represent an invariant lifecycle gate as a semantic graph node; assert deterministic rejection.
 - Feed stale, contradictory, missing, and prose-only observations into reconciliation; assert that the canonical snapshot reports `unknown` rather than reviving an old event or trusting a model claim.
-- Project the same run through terminal, attention-inbox, AFK-digest, and graphical-view fixtures; assert identical current-state semantics.
-- Resume the graphical client after unrelated and affected work changes; assert preserved focus, accurate change summaries, stale-feedback marking, and current evidence ordering.
+- Project the same run through PI WEB attention-inbox, AFK-digest, and focused-view fixtures; assert identical current-state semantics.
+- Resume PI WEB after unrelated and affected work changes; assert preserved focus, accurate change summaries, stale-feedback marking, and current evidence ordering.
 - Open every fixture Attention Item from the portfolio surface; assert that required judgment, materiality, recommendation, consequences, deferral behavior, affected work, and available actions are discoverable without reading logs or chat.
 - Project routine progress beside pending attention; assert that autonomous activity remains visible but cannot compete with or be mistaken for required owner action.
 - Crash or replace the coordinator after an actionable source event is observed; assert that its persisted attention item survives and the source event is not acknowledged first.
@@ -101,3 +105,9 @@ This document preserves the product outcomes and system-level validation matrix.
 - Simulate provider cache support, cache misses, model unavailability, and quota pressure; assert that routing preserves role capabilities and records the reason for every fallback.
 - Security-test sandbox isolation and prove project surfaces cannot alter shell-owned controls.
 - Use repository-specific acceptance suites for policy examples, including browser-visible PhotoQuest behavior.
+- Start several sessions in one Workstream and Workstreams across several repositories; assert one home Workstream per session, atomic pending-to-confirmed association, reconnect reconciliation, and independent latest checkpoints.
+- Reconnect Workstream observation after retained and expired sequences; assert ordered replay or snapshot reconciliation without duplicate current state.
+- Append routine activity, verbose output, and an oversized checkpoint; assert rejection or external artifact referencing rather than ledger growth.
+- Rebuild Workstream current state from its ledger; assert active sessions, latest checkpoints, unresolved human tasks, links, and closure state without a persisted combined narrative.
+- Close a Workstream with unresolved tasks and linked scratch files; assert visible recommendations, preserved unresolved state, and no deletion without human confirmation.
+- Ask a fresh FirstMate context what to resume; assert that its answer is derived from Workstream projections and linked Run attention rather than raw session transcripts.

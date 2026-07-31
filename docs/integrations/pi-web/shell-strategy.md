@@ -1,137 +1,66 @@
-# Graphical Shell Strategy
+# PI WEB Shell Strategy
 
-Status: provisional candidate-selection contract.
+Status: selected shell contract.
 
 ## Decision
 
-PI WEB and T3 Code are competing graphical-shell candidates. The Workbench does not depend on either shell, and neither candidate owns Runs, lifecycle transitions, authority, evidence, dispatch, or workspace leases.
+PI WEB is the only user-facing Pi Workbench shell. Pi Workbench does not maintain a separate terminal client or a second graphical adapter. PI WEB owns the interaction experience while typed Workbench services retain Workstream, Run, authority, evidence, dispatch, and workspace state.
 
-PI WEB is the first adapter candidate because it already supplies the Pi-native operational shell:
-persistent session hosting, projects and worktrees, terminals and files, browser and mobile access,
-remote machines, service installation, reconnect handling, and a tested plugin system. The first
-evaluation therefore measures how little additional PI WEB surface is required to present and
-control Runs. T3 Code remains the comparison candidate rather than a parallel implementation
-started at the same time.
-
-The intended boundary is:
+The boundary is:
 
 ```text
-                         +-> terminal client
-Run Controller protocol +-> PI WEB client
-                         +-> T3 Code client
-
-Run Controller -> Pi Execution -> Pi sessions and processes
+PI WEB -> Workstream protocol
+       -> Run Controller protocol -> Pi Execution -> Pi sessions and processes
 ```
 
-Every graphical mutation uses the controller's typed `start`, `submit`, `inspect`, and `watch` interfaces. All clients render the same canonical Run Snapshot, Attention Items, Judgment Dossier revisions, evidence references, and receipts.
+A PI WEB session is not a Workstream or Run. Every Workstream or Run mutation crosses its typed protocol and returns a revision-checked receipt. PI WEB renders canonical projections rather than inferring current state from conversations, tool output, or visual state.
 
-Every candidate also implements the [Graphical Attention Contract](../../contracts/graphical-attention.md):
-pending judgment is the default entry point, required action is perceptually and structurally
-separate from autonomous activity, and re-entry state is derived from canonical revisions.
+PI WEB implements the [Graphical Attention Contract](../../contracts/graphical-attention.md): FirstMate supports cross-session re-entry, required judgments remain distinct from ordinary human tasks, and interruption state comes from canonical revisions.
 
-## Integration Rule
+## Integration rule
 
-Integrate T3 Code as a Workbench client domain, not by adding Pi to T3 Code's provider-driver abstraction.
+Use a browser plugin or the narrowest stable upstream extension seam to add Workstreams, FirstMate, Run status, Attention Items, Judgment Dossiers, evidence links, typed controls, and task-shaped Review Surfaces.
 
-A direct Pi provider connector inside T3 Code would give the shell responsibility for provider threads, turns, approvals, checkpoints, runtime modes, and worktrees while the Workbench controller separately owns Runs, Dispatches, authority, evidence, leases, and lifecycle. Those overlapping lifecycle owners would make replay, idempotency, recovery, and authority ambiguous.
+Reuse PI WEB as an upstream product with a thin Workbench-owned adapter. Do not copy its source into this repository. Maintain a bounded fork only when an accepted Workbench interaction cannot be expressed through stable upstream seams and the shared fixture demonstrates that the maintenance cost is justified.
 
-The T3 Code adapter must therefore preserve these distinctions:
+PI WEB must not:
 
-- A Workbench Run is not a T3 thread.
-- A Workbench Dispatch is not a provider turn.
-- T3 checkpoints and runtime observations are evidence, not authoritative Run transitions.
-- Every control action is submitted to the Run Controller and receives a typed receipt.
-- T3 Code may project diffs, previews, comments, and attention, but it cannot infer current Run state from provider or terminal output.
+- own Workstream or Run state;
+- reinterpret a Run as a native session or thread;
+- launch another coding-agent harness;
+- infer lifecycle, authority, or completion from chat or terminal text;
+- bypass controller authority through private routes;
+- hide authentication, recovery, permission, or connection controls.
 
-## Candidate Adaptation
+## Required fixture
 
-### PI WEB
+The adapter is driven by deterministic Workstream and Run clients and recorded fixtures. The fixture covers:
 
-Use a browser plugin or narrow upstream extension seam to add Run status, Attention Items, Judgment Dossiers, evidence links, typed control actions, and task-shaped Review Surfaces. PI WEB's native Pi sessions, packages, terminals, machines, and mobile browser support reduce integration distance, but its plugin surface must prove structured Run observation and control.
+- Workstream creation, session launch, independent latest checkpoints, human tasks, links, and closure;
+- FirstMate re-entry across repositories and concurrent sessions;
+- Run list, status, and pending Attention Items;
+- action-first focused judgments and activity progressing without the owner;
+- Judgment Dossier and Primary Evidence navigation;
+- diff-centered review with target-anchored feedback;
+- valid, duplicate, stale, and rejected typed mutations;
+- ordered watch delivery, reconnect, and snapshot reconciliation;
+- focus restoration and stale-feedback presentation;
+- read-only behavior without the control lease.
 
-Reuse PI WEB as an upstream product with a small Workbench-owned adapter. Do not copy its source
-into this repository. A source copy would immediately create a fork while losing the update path
-for Pi compatibility, session hosting, remote machines, browser behavior, installation, and
-security maintenance.
+The client boundary also requires browser-safe runtime-validated messages, stable identities, bounded previews, explicit connection state, safe Markdown, keyboard and mobile support, and deterministic fakes that do not spend model tokens.
 
-### T3 Code
+## Delivery strategy
 
-Add a distinct Workbench domain that consumes the Run protocol. Reuse T3 Code's project shell, connection runtime, ordered projections, diff review, target-anchored comments, preview annotations, and responsive clients. Do not reuse its multi-provider orchestration as Workbench execution authority.
+1. Use the documented PI WEB plugin API for read-oriented projections.
+2. Contribute generic navigation and primary-view seams for Workstreams and Entry Presets.
+3. Add typed mutations only through Workbench clients.
+4. Add observation, focus-restoration, and hosting seams only when a proven interaction needs them.
+5. Keep Workbench semantics in the adapter rather than PI WEB core.
+6. Maintain a bounded fork only when stable upstream seams cannot support an accepted interaction.
 
-## Selection Fixture
-
-Candidate work begins after a controller vertical slice can execute and replay:
-
-```text
-start -> submit one decision -> durable record and receipt
-      -> inspect canonical snapshot -> watch ordered changes -> replay
-```
-
-A framework-neutral TypeScript Run client and one recorded Run fixture drive both candidate adapters. The fixture covers:
-
-- Run list and current status.
-- Pending Attention Items.
-- Action-first focused attention with required judgment, materiality, recommended response,
-  consequences, deferral behavior, and typed actions.
-- A separate projection of work progressing without owner attention and concrete outcomes completed since the previous judgment.
-- Judgment Dossier and Primary Evidence navigation.
-- Diff-centered review with target-anchored typed feedback.
-- Valid, duplicate, stale, and rejected control submissions.
-- Ordered watch delivery, disconnect, reconnect, and snapshot reconciliation.
-- Focus restoration, changes since the previous judgment, and stale-feedback presentation after reconnect.
-- Read-only behavior without the control lease.
-- Terminal-equivalent outcomes for every supported graphical action.
-
-The client boundary also carries these implementation requirements:
-
-- Browser-safe, runtime-validated protocol messages; native Pi events and filesystem paths do not
-  become the public Run contract.
-- A complete canonical snapshot on attachment, monotonically ordered live changes, bounded replay,
-  and snapshot reconciliation when replay is unavailable.
-- Stable item and event identities so reconnect, refresh, and repeated delivery cannot duplicate
-  messages, evidence, Attention Items, or receipts.
-- Explicit connected, reconnecting, and disconnected states, with no mutation accepted from a
-  client that does not hold the control lease.
-- Bounded previews for tool and validation output; larger content remains a referenced artifact.
-- Safe Markdown rendering without raw HTML, a restricted link policy, visible keyboard focus,
-  accessible dialogs and drawers, reduced-motion support, and usable layouts down to 320 px.
-- A deterministic fake Run client for component, reconnect, stale-event, control-lease, and mobile
-  tests. Default client tests do not start Pi or spend model tokens.
-- Private deployment only. The application server remains bound to loopback behind an explicitly
-  trusted local proxy or private-network ingress; no client adapter adds public sharing.
-
-## Selection Criteria
-
-Choose the shell that satisfies the fixture with the smallest durable maintenance burden and no authority leaks. Compare:
-
-1. Required invasive changes and dependence on private APIs.
-2. Preservation of controller authority and domain boundaries.
-3. Quality of attention, dossier, evidence, diff, preview, and feedback interactions.
-4. Reconnect, replay, remote-machine, browser, mobile, and multi-workspace behavior.
-5. Accessibility and terminal fallback.
-6. Upstream contribution prospects and long-term fork cost.
-
-Apply this implementation order:
-
-1. Use the documented PI WEB plugin API for a read-oriented Run projection.
-2. Contribute the smallest generic navigation and primary-view seams needed for the first-class
-   Entry Preset selector, proving them with Level 1 rather than Workbench-specific core code.
-3. Add typed Run mutations only through the framework-neutral Workbench client.
-4. Contribute further generic observation or hosting seams only when accepted interactions prove
-   they are missing.
-5. Maintain a fork only when the selection fixture proves that required shell behavior cannot be
-   expressed through stable upstream seams.
-6. Build a separate shell only when both PI WEB adaptation and a bounded fork would cost more than
-   owning the complete browser, mobile, remote-machine, and operational surface.
-
-Select T3 Code only if the Workbench can remain a distinct client domain and all mutations pass through the controller. Reject an integration that requires `Run = Thread`, `Dispatch = Provider Turn`, or T3 Code to launch and supervise Pi on the controller's behalf.
-
-Select PI WEB only if its extension boundary can support the same typed observation, review, and control behavior without making unstable private routes part of the Workbench contract.
-
-Until one candidate passes this evaluation decisively, the terminal client remains the reference interface and graphical shell selection remains open.
+PI WEB remains privately deployed in V1. The application server stays behind trusted local or private-network ingress; the Workbench adapter does not add public sharing.
 
 ## Evidence
 
 - [PI WEB interface evaluation](evaluation.md)
-- [T3 Code evidence ledger](../../research/sources/t3code.md)
 - [Pi ecosystem evidence ledger](../../research/sources/pi-ecosystem.md)
