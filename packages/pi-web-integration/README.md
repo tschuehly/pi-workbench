@@ -1,7 +1,7 @@
 # Pi Workbench PI WEB integration
 
 This package is the bounded `apiVersion: 1` customization probe from the
-[PI WEB customization plan](../../docs/pi-web-customization-plan.md). It is a read-oriented PI WEB
+[PI WEB customization plan](../../docs/integrations/pi-web/customization-plan.md). It is a read-oriented PI WEB
 browser plugin, not a Run Controller and not authoritative Run state.
 
 ## What the probe contributes

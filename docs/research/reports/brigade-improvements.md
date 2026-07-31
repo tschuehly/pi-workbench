@@ -1,9 +1,9 @@
 # Pi Workbench — Brigade-Informed V1 Improvements
 
 Status: accepted V1 design detail. The authoritative product contracts and decisions are recorded
-in the specification suite rooted at [SPEC.md](SPEC.md) and in [LEDGER.md](LEDGER.md).
+in the specification suite rooted at the [system overview](../../foundation/system-overview.md) and in the [decision record](../../foundation/decisions.md).
 
-Evidence source: [Brigade evidence ledger](ledgers/brigade.md).
+Evidence source: [Brigade evidence ledger](../sources/brigade.md).
 
 ## Intended Outcome
 

@@ -3,7 +3,7 @@
 Status: intended V1 interaction contract.
 
 This document defines how graphical clients present canonical attention and Run state. The
-[Attention and Interface Specification](specs/attention-and-interfaces.md) remains authoritative
+[Attention and Interface Specification](interfaces.md) remains authoritative
 for Attention Item creation, Broker behavior, controller authority, and terminal equivalence.
 
 ## Outcome

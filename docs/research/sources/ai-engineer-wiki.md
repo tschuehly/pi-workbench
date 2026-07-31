@@ -4,7 +4,7 @@
 
 Source-backed patterns from the AI Engineer Wiki relevant to the Pi Project Workbench specification. The review covers agent harnesses, repository-specific workflows, durable local state, external collaboration boundaries, interactive and AFK operation, role-specific model workers, bounded dynamic UI, context hygiene, artifact promotion, provenance, staleness, retention, and garbage collection.
 
-The wiki concepts summarize conference talks and include source timestamps. Findings below are evidence from those concepts. Sections labeled **Synthesis** are architectural implications for [the current specification](../SPEC.md), not claims made directly by a source.
+The wiki concepts summarize conference talks and include source timestamps. Findings below are evidence from those concepts. Sections labeled **Synthesis** are architectural implications for [the current specification](../../foundation/system-overview.md), not claims made directly by a source.
 
 ## Architecture Findings
 

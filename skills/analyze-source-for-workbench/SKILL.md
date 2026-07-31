@@ -9,8 +9,8 @@ Produce a source-faithful comparison that ends in concrete `adopt`, `adapt`, `ex
 
 ## Establish the baseline
 
-1. Read `docs/CONTEXT.md` and `docs/SPEC.md` completely.
-2. Read `docs/LEDGER.md` completely when decision status, provenance, or architectural fit matters.
+1. Read `docs/foundation/vocabulary.md` and `docs/foundation/system-overview.md` completely.
+2. Read `docs/foundation/decisions.md` completely when decision status, provenance, or architectural fit matters.
 3. Inspect the current repository implementation relevant to the comparison. Do not compare a working source only against Pi Workbench's intended architecture.
 4. State the important maturity mismatch: implemented and exercised, specified but unimplemented, or merely claimed.
 
@@ -118,7 +118,7 @@ When applying:
 
 1. Make the smallest coherent change at the destination selected above.
 2. Preserve source provenance for copied or adapted code and comply with its license.
-3. Put external evidence and source-specific findings in `docs/ledgers/` when durable provenance is needed.
-4. Put only supported intended behavior in `docs/SPEC.md`; do not add comparison history or old-versus-new framing.
-5. Record a settled decision in `docs/LEDGER.md` only when the user or existing decision process has actually settled it.
+3. Put external evidence and source-specific findings in `docs/research/sources/` when durable provenance is needed.
+4. Put only supported intended behavior in `docs/foundation/system-overview.md` or the owning document under `docs/contracts/`; do not add comparison history or old-versus-new framing.
+5. Record a settled decision in `docs/foundation/decisions.md` only when the user or existing decision process has actually settled it.
 6. Validate the change in proportion to its risk and report what remains unproven.

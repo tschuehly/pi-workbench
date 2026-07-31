@@ -2,7 +2,7 @@
 
 Defines the supported Pi execution, Dispatch, Episode, coordination, deliberation, and protocol contracts.
 
-This document is authoritative for this contract. [The system specification](../SPEC.md) remains authoritative for system-wide behavior and boundaries.
+This document is authoritative for this contract. [The system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries.
 
 ## Pi Worker Runtime
 
@@ -135,54 +135,6 @@ For unmanaged execution, the router accepts both Cognitive Role and Entry Preset
 
 The coordinator can dispatch a specialist to question or challenge a claim and dispatch a response that references the challenge. These claim, challenge, and response episodes are durable and evidence-linked. The initial implementation does not provide peer mailboxes or open-ended worker conversations; one coordinator remains accountable for synthesis and the human-facing result.
 
-## Outcome-Directed Planning and Review
+## Execution Observations
 
-The Coordinator selects the shortest safe path to evidence that can confirm, disconfirm, or redirect
-the desired outcome. A Run with low certainty may establish hypotheses, representative inputs,
-comparison criteria, and stopping conditions before choosing an implementation direction. A Run
-with a known outcome may use one Dispatch, a bounded loop, or a dependency graph according to its
-scope and evidence obligations.
-
-Review is a capability applied to material claims and risks rather than an unbounded search for more
-issues. Every review Dispatch declares the claim under review, why it matters to the outcome,
-required Primary Evidence, finding disposition, attempt bound, and stopping condition. An early
-behavioral experiment or direct human experience may take priority over broad internal review when
-it can invalidate the direction more cheaply. A quality loop cannot continue merely until models
-stop proposing improvements.
-
-Experimental branches return comparable Episodes against criteria established before interpreting
-their results. The Coordinator synthesizes successes, failures, contradictions, and residual
-uncertainty; an independent challenge profile checks material conclusions when required. The human
-receives a task-shaped Review Surface rather than Worker logs or a concatenation of reports.
-
-## Judgment Dossier
-
-Each run maintains one versioned Judgment Dossier as the authoritative reasoning artifact. Before implementation it records the Shared Understanding: problem and system model, language, evidence, options, trade-offs, assumptions, risks, chosen direction, and success evidence. After implementation it explains the realized system, supporting evidence, deviations, consequences, residual risks, and learning candidates. Review Surfaces project the dossier and its evidence for a particular human judgment without duplicating ownership.
-
-## Event and Stream Interface
-
-The runtime emits structured events for:
-
-- Lifecycle, execution-graph, and work-node progress.
-- Proposed, accepted, rejected, and superseded graph mutations.
-- Worker creation, completion, failure, and cancellation.
-- Dispatch creation, episode return, continuation, and rejection.
-- Tool activity summaries.
-- Questions, approvals, and permission requests.
-- Produced artifacts and verification evidence.
-- External imports and publications.
-- Staleness, reconciliation, and cleanup transitions.
-- Run-analysis results, learning candidates, promotion decisions, and invalidation triggers.
-
-Clients reconnect to a run by identifier and resume from its canonical snapshot. Reducer-defined events after the snapshot advance that projection; clients may display the event history but do not assign it independent current-state semantics.
-
-## Schema Registry
-
-One versioned registry defines Run and Broker commands, command receipts, semantic records, Run,
-project, and portfolio projections, dispatches, Episodes, Continuation Artifacts, Attention Items,
-dossier revisions, Review Surface references, and external receipts. Every type declares its
-required envelope and values, producer and consumers, authority and acceptable evidence sources,
-payload requirements, size and retention budgets, compatibility behavior, and invalidation
-semantics.
-
-`pi-workbench validate` checks repository packages, resolved profiles, graphs, records, evidence references, leases, and environment readiness mechanically. Unknown types, incompatible schema versions, invalid references, or authority-shape violations fail closed.
+Pi Execution emits structured lifecycle, tool-activity, usage, cancellation, and terminal-result observations to the Run Controller. These observations are evidence for reconciliation; they are not canonical client events or independently authoritative Run state. The controller accepts a result only through the expected Episode schema and exposes current state through its own snapshot and event interface.

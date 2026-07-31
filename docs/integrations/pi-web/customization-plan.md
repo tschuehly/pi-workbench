@@ -2,7 +2,7 @@
 
 Status: approved implementation plan. PI WEB remains a provisional graphical-shell candidate; this
 plan improves its generic extension model without selecting it as the permanent Workbench shell.
-The approved [Pi and PI WEB Level Adoption Plan](pi-level-adoption-plan.md) supplies the first
+The approved [Pi and PI WEB Level Adoption Plan](../../plans/level-adoption.md) supplies the first
 primary-view forcing function and governs the sequencing of that vertical slice.
 
 ## Outcome

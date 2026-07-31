@@ -13,9 +13,9 @@ Do not adopt package-level workflow, subagent, worktree, memory, plan-mode, perm
 The catalog was fetched on 2026-07-28 before evaluation:
 
 - Source: [pi.dev package catalog](https://pi.dev/packages)
-- Reproducible fetcher: [`scripts/fetch-pi-packages.py`](../../scripts/fetch-pi-packages.py)
-- Machine-readable index: [`pi-packages-index.json`](pi-packages-index.json)
-- Human-readable index: [`pi-packages-index.md`](pi-packages-index.md)
+- Reproducible fetcher: [`scripts/fetch-pi-packages.py`](../../../scripts/fetch-pi-packages.py)
+- Machine-readable index: [`pi-packages-index.json`](../generated/pi-packages-index.json)
+- Human-readable index: [`pi-packages-index.md`](../generated/pi-packages-index.md)
 - Observed packages: **5,398** over **108** server-rendered pages
 - Declared resource tags: 3,070 extension, 357 skill, 108 theme, and 78 prompt occurrences; 2,039 catalog cards did not declare a resource type
 

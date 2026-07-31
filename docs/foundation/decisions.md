@@ -1,26 +1,26 @@
-# Pi Project Workbench — Decision Ledger
+# Pi Workbench decisions
 
-Status: evolving through the architecture interview. This file is the compact restart point for the conversation.
+Status: evolving decision record. This file owns settled, provisional, deferred, and open design decisions; the system overview is the reader's restart point.
 
 ## Objective
 
 Create a Pi-based project workbench that allocates Human Attention across concurrent project Runs and adapts Working Mode, tools, verification, and Review Surfaces to repository capabilities, desired outcome, uncertainty, operational risk, reversibility, and available attention. Portfolio, project, terminal, and graphical clients operate the same controller protocol and durable Run state.
 
-## Evidence Ledgers
+## Research evidence
 
-- [Pi ecosystem](ledgers/pi-ecosystem.md)
-- [Pi package catalog evaluation](ledgers/pi-package-evaluation.md) and [generated package index](ledgers/pi-packages-index.md)
-- [PhotoQuest Ralph](ledgers/photoquest-ralph.md)
-- [AIHero](ledgers/aihero.md)
-- [AI Engineer wiki](ledgers/ai-engineer-wiki.md)
-- [Recent repositories](ledgers/recent-repositories.md)
-- [Model-routing field notes](ledgers/model-routing-x.md)
-- [Current Quality Loop](ledgers/current-quality-loop.md)
-- [Skill interface](ledgers/skill-interface.md)
-- [Slate](ledgers/slate.md)
-- [FirstMate](ledgers/firstmate.md)
-- [Brigade](ledgers/brigade.md)
-- [T3 Code](ledgers/t3code.md)
+- [Pi ecosystem](../research/sources/pi-ecosystem.md)
+- [Pi package catalog evaluation](../research/sources/pi-package-evaluation.md) and [generated package index](../research/generated/pi-packages-index.md)
+- [PhotoQuest Ralph](../research/sources/photoquest-ralph.md)
+- [AIHero](../research/sources/aihero.md)
+- [AI Engineer wiki](../research/sources/ai-engineer-wiki.md)
+- [Recent repositories](../research/sources/recent-repositories.md)
+- [Model-routing field notes](../research/sources/model-routing-x.md)
+- [Current Quality Loop](../research/sources/current-quality-loop.md)
+- [Skill interface](../research/sources/skill-interface.md)
+- [Slate](../research/sources/slate.md)
+- [FirstMate](../research/sources/firstmate.md)
+- [Brigade](../research/sources/brigade.md)
+- [T3 Code](../research/sources/t3code.md)
 
 ## Agreed Decisions
 
@@ -160,17 +160,3 @@ Create a Pi-based project workbench that allocates Human Attention across concur
 14. **Context rotation:** the exact Continuation Artifact schema, size budgets, pressure thresholds, protected fields, and reconciliation checks used when replacing a model session.
 15. **Graphical attention schemas:** the exact wire fields and client-specific interaction details for the established attention entry, focus restoration, changes-since-last-judgment, revision-aware feedback, progressive Review Surfaces, and scoped conversation contract.
 16. **Validation boundary:** the exact split between mechanically enforceable controller invariants and provenance-bearing human or model judgment attestations for materiality, evidence sufficiency, Independence in substance, and Judgment Dossier completeness.
-
-## Resume Brief
-
-The initial implementation uses one fixed controller lifecycle around a revisable semantic work graph, one controller-owned canonical projection, typed Pi Episodes, durable actionable attention, Portfolio and Project Brokers, one accountable Coordinator per Run, scout and ship authority shapes, finite named Execution Profiles, fail-closed workspace leases, disposable model sessions reconstructed from Continuation Artifacts, and worktree-independent snapshot/records/object storage. Terminal operation is organized around `run`, `status`, `decide`, `control`, `validate`, and `close`; the minimal graphical client exposes portfolio attention, project and Run workspaces, revision-aware evidence, scoped conversation, and Working Mode over the same protocol.
-
-The pilot is PhotoQuest plan 020 plus controlled drills for session replacement, durable attention, fresh-context resumption, AFK authority pause, stale decisions, duplicate publication, workspace integrity, concurrent Run projection, interruption-resilient graphical review, and cleanup. The second V1 repository package is embabel-me, which exercises hypothesis-driven exploration, experimental comparison, direct human judgment, and outcome-directed review over the same lifecycle and protocol.
-
-Graphical shell selection remains provisional. PI WEB and T3 Code must consume the same framework-neutral Run client contract; a direct Pi provider connector inside T3 Code is outside the intended architecture because Pi Execution remains a controller-owned deep module.
-
-Remaining decisions concern compounding authority, cross-Run analysis cadence, retention values,
-exact schema fields and sealing representation, concrete model binding, graph mutation and
-materiality handling, dossier ratification, the mechanical-versus-judgment validation boundary,
-Broker durability, Working Mode resolution, context rotation, graphical attention wire schemas,
-and post-V1 skill-interface and generated-surface details.

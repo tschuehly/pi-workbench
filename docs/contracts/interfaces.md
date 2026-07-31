@@ -2,7 +2,7 @@
 
 Defines the supported supervision, attention, terminal, graphical, Review Surface, and external-adapter contracts.
 
-This document is authoritative for attention and interface behavior. [The system specification](../SPEC.md) remains authoritative for system-wide behavior and boundaries.
+This document is authoritative for attention and interface behavior. [The system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries.
 
 ## Control, Attention, and Supervision
 
@@ -46,7 +46,7 @@ The shell owns:
 
 A Review Surface is the task-shaped human judgment interface over the current Run. It selects the relevant altitude and medium for the decision—such as a concise evidence summary, diff, rendered behavior, recording, prototype, architecture view, or operational result—and lets feedback attach to the exact outcome, claim, evidence, or behavior revision it addresses.
 
-The [Graphical Attention Contract](../graphical-attention-contract.md) defines how graphical project
+The [Graphical Attention Contract](graphical-attention.md) defines how graphical project
 surfaces present this state. The first layer leads with the required judgment and available action,
 restores the state needed to resume, and keeps passive activity from competing with attention.
 Presentation does not weaken evidence, authority, or revision requirements.

@@ -1,4 +1,4 @@
-    # Pi Workbench agent router
+# Pi Workbench agent router
 
 Pi Workbench allocates Human Attention and model work across durable project Runs. A deterministic
 Run Controller owns lifecycle and authoritative state; terminal and graphical applications are
@@ -6,9 +6,10 @@ clients of its typed Run protocol.
 
 ## Load only what the task needs
 
-- Read `docs/CONTEXT.md` when domain meaning or canonical language affects the work.
-- Read `docs/SPEC.md` for system-wide behavior, architecture, product boundaries, and links to the detailed contract specifications under `docs/specs/`.
-- Read `docs/LEDGER.md` when decision status, open questions, or provenance affects the work.
+- Start at `docs/README.md` when the relevant authority is unclear.
+- Read `docs/foundation/vocabulary.md` when domain meaning or canonical language affects the work.
+- Read `docs/foundation/system-overview.md` for system-wide behavior, architecture, product boundaries, and links to detailed contracts.
+- Read `docs/foundation/decisions.md` when decision status, open questions, or provenance affects the work.
 - For localized implementation, begin with the routed code and load documentation only when needed
   to resolve meaning, constraints, or intent.
 
@@ -16,19 +17,18 @@ clients of its typed Run protocol.
 
 | Task | Read or change |
 | --- | --- |
-| Harness distribution and skills | `docs/specs/harness-and-skills.md`, `skills/`, `extensions/`, `prompts/` |
-| Staged Pi and PI WEB adoption | `docs/pi-level-adoption-plan.md` |
+| Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
+| Staged Pi and PI WEB adoption | `docs/plans/level-adoption.md` |
 | Model routing and unmanaged Pi lead launch | `skills/model-orchestration/`, `scripts/pi-role` |
-| Controller lifecycle and protocol | `docs/specs/controller-and-state.md`, `packages/controller/`, `schemas/` |
-| Pi dispatch and actors | `docs/specs/execution.md`, `packages/pi-execution/` |
-| Workspaces and delivery | `docs/specs/controller-and-state.md`, `packages/repository-workspace/` |
-| Evidence and immutable objects | `docs/specs/controller-and-state.md`, `packages/artifact-store/` |
-| Attention, terminal, and graphical clients | `docs/specs/attention-and-interfaces.md` |
-| PI WEB integration and upstream customization | `packages/pi-web-integration/`, `docs/pi-web-interface-evaluation.md`, `docs/pi-web-customization-plan.md` |
+| Controller lifecycle and protocol | `docs/contracts/controller.md`, `packages/controller/`, `schemas/` |
+| Pi dispatch and actors | `docs/contracts/execution.md`, `packages/pi-execution/` |
+| Workspaces and delivery | `docs/contracts/controller.md`, `packages/repository-workspace/` |
+| Evidence and immutable objects | `docs/contracts/controller.md`, `packages/artifact-store/` |
+| Attention, terminal, and graphical clients | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
+| PI WEB integration and upstream customization | `packages/pi-web-integration/`, `docs/integrations/pi-web/` |
 | macOS PI WEB wrapper | `apps/pi-web-macos/` |
-| Graphical-shell boundaries | `docs/graphical-shell-strategy.md`, `docs/graphical-attention-contract.md` |
-| Workflow or repository policy | `docs/specs/workflow.md`, `workflows/`, `repositories/` |
-| Decision evidence | `docs/ledgers/` |
+| Workflow or repository policy | `docs/contracts/workflow.md`, `workflows/`, `repositories/` |
+| Decision evidence | `docs/research/sources/` |
 
 Follow any nearer `AGENTS.md` before changing files in its directory.
 

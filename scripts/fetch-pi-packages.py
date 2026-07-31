@@ -193,8 +193,8 @@ def markdown_index(catalog: dict[str, Any]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=Path("docs/ledgers/pi-packages-index.json"))
-    parser.add_argument("--markdown", type=Path, default=Path("docs/ledgers/pi-packages-index.md"))
+    parser.add_argument("--output", type=Path, default=Path("docs/research/generated/pi-packages-index.json"))
+    parser.add_argument("--markdown", type=Path, default=Path("docs/research/generated/pi-packages-index.md"))
     parser.add_argument("--delay", type=float, default=0.05, help="delay between catalog requests")
     args = parser.parse_args()
 

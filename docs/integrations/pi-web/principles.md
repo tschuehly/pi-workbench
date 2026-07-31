@@ -1,9 +1,9 @@
-# PI WEB Development Principles for Pi Workbench
+# PI WEB integration principles
 
 Status: working principles for interactive development.
 
 The staged upstream contribution and Workbench adapter work is defined in the
-[PI WEB Customization Plan](pi-web-customization-plan.md).
+[PI WEB customization plan](customization-plan.md).
 
 ## Develop through use
 

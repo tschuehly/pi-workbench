@@ -2,7 +2,7 @@
 
 Defines the supported distribution, repository-adaptation, skill-capability, and generated-surface contracts.
 
-This document is authoritative for this contract. [The system specification](../SPEC.md) remains authoritative for system-wide behavior and boundaries.
+This document is authoritative for this contract. [The system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries.
 
 ## Harness Distribution Repository
 

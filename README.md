@@ -4,7 +4,7 @@ Pi Workbench allocates human and model attention across durable project Runs. It
 
 ## Status
 
-Early implementation scaffold. The specification suite is rooted at [`docs/SPEC.md`](docs/SPEC.md), which routes to the detailed behavioral contracts, with canonical language in [`docs/CONTEXT.md`](docs/CONTEXT.md). The approved [Pi and PI WEB Level Adoption Plan](docs/pi-level-adoption-plan.md) defines the staged path from unmanaged interactive Pi to a managed Workbench Run; the Levels are not implemented yet.
+Early implementation scaffold. Start with the [documentation map](docs/README.md). The specification suite is rooted at the [system overview](docs/foundation/system-overview.md), with canonical language in the [vocabulary](docs/foundation/vocabulary.md). The approved [Pi and PI WEB Level Adoption Plan](docs/plans/level-adoption.md) defines the staged path from unmanaged interactive Pi to a managed Workbench Run; the Levels are not implemented yet.
 
 PI WEB is the initial graphical shell candidate. It remains a client of the Workbench Run Controller rather than the owner of workflow semantics.
 
@@ -16,7 +16,7 @@ PI WEB is the initial graphical shell candidate. It remains a client of the Work
 - `skills/`, `extensions/`, `prompts/` — curated Pi capabilities.
 - `schemas/` — the versioned Run protocol registry.
 - `config/` — commit-safe configuration templates.
-- `docs/` — product language, specification, and decisions.
+- `docs/` — foundation, authoritative contracts, plans, integrations, and research evidence.
 
 ## Local development
 

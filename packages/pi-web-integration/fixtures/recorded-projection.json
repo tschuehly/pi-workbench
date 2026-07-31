@@ -35,7 +35,7 @@
       "id": "evidence-customization-plan",
       "title": "PI WEB customization plan",
       "kind": "document",
-      "path": "docs/pi-web-customization-plan.md"
+      "path": "docs/integrations/pi-web/customization-plan.md"
     }
   ]
 }

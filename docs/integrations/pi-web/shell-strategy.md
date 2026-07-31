@@ -25,7 +25,7 @@ Run Controller -> Pi Execution -> Pi sessions and processes
 
 Every graphical mutation uses the controller's typed `start`, `submit`, `inspect`, and `watch` interfaces. All clients render the same canonical Run Snapshot, Attention Items, Judgment Dossier revisions, evidence references, and receipts.
 
-Every candidate also implements the [Graphical Attention Contract](graphical-attention-contract.md):
+Every candidate also implements the [Graphical Attention Contract](../../contracts/graphical-attention.md):
 pending judgment is the default entry point, required action is perceptually and structurally
 separate from autonomous activity, and re-entry state is derived from canonical revisions.
 
@@ -132,6 +132,6 @@ Until one candidate passes this evaluation decisively, the terminal client remai
 
 ## Evidence
 
-- [PI WEB interface evaluation](pi-web-interface-evaluation.md)
-- [T3 Code evidence ledger](ledgers/t3code.md)
-- [Pi ecosystem evidence ledger](ledgers/pi-ecosystem.md)
+- [PI WEB interface evaluation](evaluation.md)
+- [T3 Code evidence ledger](../../research/sources/t3code.md)
+- [Pi ecosystem evidence ledger](../../research/sources/pi-ecosystem.md)

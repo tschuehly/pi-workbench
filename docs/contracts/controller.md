@@ -2,7 +2,7 @@
 
 Defines the supported Run Controller, durable state, Repository Workspace, and Artifact Store contracts.
 
-This document is authoritative for this contract. [The system specification](../SPEC.md) remains authoritative for system-wide behavior and boundaries.
+This document is authoritative for this contract. [The system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries.
 
 ## Run Controller Module
 
@@ -51,6 +51,34 @@ The deterministic controller reducer combines semantic records with live Pi exec
 V1 may retain the complete semantic record stream for a run. Sealing may later segment or compact its physical representation without changing record identity or durable references.
 
 Terminal summaries, portfolio and project attention, notifications, AFK digests, and graphical clients consume canonical projections and Attention Items. They do not independently infer state from raw event prose. Large tool results and media are stored as referenced, content-addressed artifacts.
+
+## Client Event and Schema Interface
+
+The controller publishes structured canonical events, reduced from accepted records and reconciled execution observations, for:
+
+- Lifecycle, execution-graph, and work-node progress.
+- Proposed, accepted, rejected, and superseded graph mutations.
+- Worker creation, completion, failure, and cancellation.
+- Dispatch creation, episode return, continuation, and rejection.
+- Tool activity summaries.
+- Questions, approvals, and permission requests.
+- Produced artifacts and verification evidence.
+- External imports and publications.
+- Staleness, reconciliation, and cleanup transitions.
+- Run-analysis results, learning candidates, promotion decisions, and invalidation triggers.
+
+Clients reconnect to a run by identifier and resume from its canonical snapshot. Reducer-defined events after the snapshot advance that projection; clients may display the event history but do not assign it independent current-state semantics.
+
+### Schema registry
+
+One versioned registry defines Run and Broker commands, command receipts, semantic records, Run,
+project, and portfolio projections, dispatches, Episodes, Continuation Artifacts, Attention Items,
+dossier revisions, Review Surface references, and external receipts. Every type declares its
+required envelope and values, producer and consumers, authority and acceptable evidence sources,
+payload requirements, size and retention budgets, compatibility behavior, and invalidation
+semantics.
+
+`pi-workbench validate` checks repository packages, resolved profiles, graphs, records, evidence references, leases, and environment readiness mechanically. Unknown types, incompatible schema versions, invalid references, or authority-shape violations fail closed.
 
 ## Repository Workspace Module
 

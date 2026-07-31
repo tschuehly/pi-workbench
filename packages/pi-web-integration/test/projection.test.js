@@ -12,7 +12,7 @@ test("accepts the deterministic recorded projection", async () => {
   assert.equal(projection?.run.id, "run-compact-probe-001");
   assert.equal(projection?.run.revision, 7);
   assert.equal(projection?.attention.length, 1);
-  assert.equal(projection?.evidence[0]?.path, "docs/pi-web-customization-plan.md");
+  assert.equal(projection?.evidence[0]?.path, "docs/integrations/pi-web/customization-plan.md");
 });
 
 test("rejects unknown versions and incomplete canonical fields", () => {

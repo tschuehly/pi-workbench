@@ -2,7 +2,7 @@
 
 Defines the supported Workflow Contract, Human Attention, Controller Lifecycle, Semantic Execution Graph, operating-mode, reconciliation, and compounding behavior.
 
-This document is authoritative for this contract. [The system specification](../SPEC.md) remains authoritative for system-wide behavior and boundaries.
+This document is authoritative for this contract. [The system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries.
 
 ## Initial Adaptive Workflow Contract
 
@@ -56,6 +56,10 @@ outside the allowlist, failure, staleness, unknown outcomes, external conflicts,
 learning-candidate disposition. Routine progress and bounded retries remain visible without
 consuming a Broker, Coordinator, or owner turn.
 
+## Judgment Dossier
+
+Each run maintains one versioned Judgment Dossier as the authoritative reasoning artifact. Before implementation it records the Shared Understanding: problem and system model, language, evidence, options, trade-offs, assumptions, risks, chosen direction, and success evidence. After implementation it explains the realized system, supporting evidence, deviations, consequences, residual risks, and learning candidates. Review Surfaces project the dossier and its evidence for a particular human judgment without duplicating ownership.
+
 ## Fixed Controller Lifecycle
 
 The controller advances every run through one fixed lifecycle:
@@ -92,6 +96,26 @@ The real pilot and its controlled drills together exercise the product's definin
 - Explicit external publication.
 - Source-backed run analysis and compounding candidates.
 - Promotion and cleanup at run closure.
+
+## Outcome-Directed Planning and Review
+
+The Coordinator selects the shortest safe path to evidence that can confirm, disconfirm, or redirect
+the desired outcome. A Run with low certainty may establish hypotheses, representative inputs,
+comparison criteria, and stopping conditions before choosing an implementation direction. A Run
+with a known outcome may use one Dispatch, a bounded loop, or a dependency graph according to its
+scope and evidence obligations.
+
+Review is a capability applied to material claims and risks rather than an unbounded search for more
+issues. Every review Dispatch declares the claim under review, why it matters to the outcome,
+required Primary Evidence, finding disposition, attempt bound, and stopping condition. An early
+behavioral experiment or direct human experience may take priority over broad internal review when
+it can invalidate the direction more cheaply. A quality loop cannot continue merely until models
+stop proposing improvements.
+
+Experimental branches return comparable Episodes against criteria established before interpreting
+their results. The Coordinator synthesizes successes, failures, contradictions, and residual
+uncertainty; an independent challenge profile checks material conclusions when required. The human
+receives a task-shaped Review Surface rather than Worker logs or a concatenation of reports.
 
 ## Pilot Boundary
 

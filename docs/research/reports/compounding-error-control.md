@@ -1,8 +1,8 @@
 # Pi Workbench — Compounding Error Control Report
 
 Status: analytical report. The implications and recommendations in this report are not accepted
-product decisions. The specification suite rooted at [SPEC.md](SPEC.md) remains authoritative for intended behavior and
-[LEDGER.md](LEDGER.md) remains authoritative for decision status.
+product decisions. The specification suite rooted at the [system overview](../../foundation/system-overview.md) remains authoritative for intended behavior and
+the [decision record](../../foundation/decisions.md) remains authoritative for decision status.
 
 Source: [Mario Zechner, X thread, 2026-07-19](https://x.com/badlogicgames/status/2078775725973201092)
 
