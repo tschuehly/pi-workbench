@@ -16,6 +16,10 @@ The script starts PI WEB's server, session daemon, plugin watcher, and Vite clie
 development UI at `http://127.0.0.1:8505`; and launches the macOS wrapper. It reuses an existing
 development server and stops only a server it started.
 
+PI WEB frontend changes use Vite hot module replacement. Changes under `Sources/PIWebMac/` or to
+`Package.swift` automatically rebuild and relaunch the native wrapper through `fswatch`. Install the
+watcher with `brew install fswatch` when it is not already available.
+
 The user-local `pi-web-mac` command runs the same complete stack from any directory:
 
 ```sh

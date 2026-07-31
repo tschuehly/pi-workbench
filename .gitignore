@@ -3,6 +3,8 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+__pycache__/
+*.pyc
 
 # Local environment
 .env
@@ -10,7 +12,9 @@ coverage/
 !.env.example
 .DS_Store
 
-# Machine-local Pi and PI WEB state
+# Machine-local editor, agent, Pi, and PI WEB state
+.idea/
+.agentbridge/
 .pi/
 .pi-web/
 .pi-workbench/runs/

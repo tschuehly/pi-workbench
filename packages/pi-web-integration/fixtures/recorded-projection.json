@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "recordedAt": "2026-07-29T10:00:00.000Z",
+  "run": {
+    "id": "run-compact-probe-001",
+    "outcome": "Prove a bounded PI WEB adapter without transferring Run authority",
+    "status": "awaiting_judgment",
+    "revision": 7,
+    "authority": {
+      "controlLease": "read_only",
+      "summary": "Inspect through PI WEB; use the terminal fallback for mutations."
+    }
+  },
+  "attention": [
+    {
+      "id": "attention-compact-review",
+      "category": "acceptance",
+      "urgency": "normal",
+      "requiredJudgment": "Does compact presentation preserve legibility while exposing enough Run context?",
+      "materiality": "This determines whether the PI WEB adapter can continue through supported contribution locations.",
+      "recommendedResponse": "Inspect the compact and narrow layouts, then record acceptance through the terminal client.",
+      "deferralBehavior": "Read-oriented evaluation can continue; typed Run mutation remains blocked.",
+      "revision": 7
+    }
+  ],
+  "activity": [
+    {
+      "id": "activity-adapter-probe",
+      "summary": "Adapter projection and plugin compatibility checks completed",
+      "state": "completed"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evidence-customization-plan",
+      "title": "PI WEB customization plan",
+      "kind": "document",
+      "path": "docs/pi-web-customization-plan.md"
+    }
+  ]
+}

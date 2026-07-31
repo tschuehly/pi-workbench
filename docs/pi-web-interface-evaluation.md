@@ -3,8 +3,10 @@
 ## Summary
 
 PI WEB is the first graphical-shell adapter candidate, but not the Workbench controller itself. It
-is evaluated through the same framework-neutral Run client contract used by T3 Code. The supported
-integration begins with PI WEB's documented plugin surface and does not require a fork.
+hosts both the pre-Run Entry Preset experience and, later, the graphical Run client evaluated
+through the same framework-neutral contract used by T3 Code. The supported integration begins with
+PI WEB's documented plugin surface and generic upstream contribution seams; it does not require a
+fork.
 
 ## Why It Fits
 
@@ -63,11 +65,15 @@ PI WEB also assumes trusted users and repositories. It is not itself a sandbox, 
 
 ## Recommended Approach
 
-The shared candidate-selection rules and acceptance fixture are defined in [Graphical Shell Strategy](graphical-shell-strategy.md).
+The shared candidate-selection rules and acceptance fixture are defined in [Graphical Shell Strategy](graphical-shell-strategy.md). The upstream-first presentation, plugin-host, primary-view, shell-profile, and Workbench adapter sequence is defined in the [PI WEB Customization Plan](pi-web-customization-plan.md).
 
 ### 1. Do Not Fork Initially
 
-First implement and validate the terminal-operated controller and Durable Run Ledger. Then build a PI WEB plugin that provides:
+First prove Level 1 through the terminal Pi package. Then contribute the smallest generic navigation
+and primary-view interfaces needed for a first-class Entry Preset selector. This pre-Run surface
+starts ordinary Pi sessions for Levels 1–3 and must not claim Run identity, authority, or recovery.
+
+In parallel with later controller validation, retain the existing read-oriented PI WEB plugin that provides:
 
 - A Run status panel.
 - Pending Attention Items.
@@ -122,11 +128,12 @@ PI WEB is MIT-licensed, so forking is legally straightforward. The main cost wou
 
 Evaluate PI WEB as a **Pi-native graphical-shell candidate**:
 
-1. Prove Workbench orchestration through the terminal.
-2. Build a separate PI WEB plugin as a read-oriented projection and Review Surface.
-3. Add typed control actions only through the Workbench protocol.
-4. Propose generic missing APIs upstream.
-5. Fork only if those APIs cannot support the required Stable Workbench Shell.
+1. Prove Level 1 through the versioned terminal Pi package.
+2. Prove generic navigation and primary-view contributions with the Entry Preset selector.
+3. Retain the separate PI WEB plugin as a read-oriented Run projection and later Review Surface.
+4. Add typed control actions only through the Workbench protocol.
+5. Propose further generic missing APIs upstream from demonstrated interactions.
+6. Fork only if those APIs cannot support the required Stable Workbench Shell.
 
 Evaluate PI WEB first. Continue to T3 Code when PI WEB cannot satisfy the shared fixture without
 private APIs or when its Session-centered information architecture prevents an attention-first Run

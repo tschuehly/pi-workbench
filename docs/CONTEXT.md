@@ -67,12 +67,20 @@ _Avoid_: Chat, session, job
 The versioned quality, authority, safety, evidence, and retention envelope governing a Run.
 _Avoid_: Prompt, workflow script, execution plan
 
+**Entry Preset:**
+An explicit, numbered starting configuration for entering work through an unmanaged Pi workflow or
+a managed Workbench Run. It bundles initial alignment, implementation independence, verification,
+Human Attention cadence, and execution-profile defaults while leaving those concerns visible. A
+higher number indicates a different default posture, not universal maturity or quality.
+_Avoid_: Working Mode, authority grant, quality tier
+
 **Working Mode:**
-The Run-specific interaction and execution posture resolved from the desired outcome, repository
-capabilities, uncertainty, impact, reversibility, and available Human Attention. It determines
-attention cadence, execution shape, evidence strategy, and stopping conditions without being a
-universal maturity level or fixed global catalog.
-_Avoid_: Workflow profile, autonomy level, agent tier
+The Run-specific combination of alignment depth, implementation independence, verification depth,
+and Human Attention cadence resolved from the desired outcome, repository capabilities,
+uncertainty, impact, reversibility, and available Human Attention. Presets may provide useful
+starting points, but these dimensions remain independently adjustable for the Run rather than
+forming a universal maturity ladder.
+_Avoid_: Entry Preset, workflow profile, autonomy level, agent tier
 
 **Autonomy Envelope:**
 The authority granted for autonomous work, bounded by permissions, impact, budget, stopping

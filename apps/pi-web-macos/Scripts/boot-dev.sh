@@ -16,6 +16,9 @@ workbench_dir="$(cd "${app_dir}/../.." && pwd)"
 pi_web_dir="${PI_WEB_DIR:-$(cd "${workbench_dir}/.." && pwd)/pi-web}"
 pi_web_url="${PI_WEB_URL:-http://127.0.0.1:8505}"
 server_pid=""
+wrapper_pid=""
+watcher_pid=""
+reload_state_dir=""
 check_only=false
 health_url="${pi_web_url%/}/api/machines/local/health"
 
@@ -42,15 +45,27 @@ stack_is_ready() {
     | grep -q '"ok":true'
 }
 
-stop_server() {
+stop_processes() {
+  if [[ -n "${watcher_pid}" ]] && kill -0 "${watcher_pid}" 2>/dev/null; then
+    kill "${watcher_pid}" 2>/dev/null || true
+    wait "${watcher_pid}" 2>/dev/null || true
+  fi
+  if [[ -n "${wrapper_pid}" ]] && kill -0 "${wrapper_pid}" 2>/dev/null; then
+    kill -TERM -- "-${wrapper_pid}" 2>/dev/null || true
+    wait "${wrapper_pid}" 2>/dev/null || true
+  fi
   if [[ -n "${server_pid}" ]] && kill -0 "${server_pid}" 2>/dev/null; then
     echo "Stopping the PI WEB development server..."
     kill -TERM -- "-${server_pid}" 2>/dev/null || true
     wait "${server_pid}" 2>/dev/null || true
   fi
+  if [[ -n "${reload_state_dir}" ]] && [[ -d "${reload_state_dir}" ]]; then
+    rm -f "${reload_state_dir}/changed"
+    rmdir "${reload_state_dir}" 2>/dev/null || true
+  fi
 }
 
-trap stop_server EXIT
+trap stop_processes EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -60,6 +75,7 @@ command -v node >/dev/null 2>&1 || fail "Node.js is required. PI WEB currently r
 command -v npm >/dev/null 2>&1 || fail "npm is required."
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v swift >/dev/null 2>&1 || fail "The Swift toolchain is required. Install Xcode Command Line Tools."
+command -v fswatch >/dev/null 2>&1 || fail "fswatch is required for native wrapper reloads. Install it with 'brew install fswatch'."
 [[ -d "${pi_web_dir}/node_modules" ]] || fail "PI WEB dependencies are missing. Run 'npm install' in ${pi_web_dir}."
 
 if [[ "${check_only}" == true ]]; then
@@ -67,6 +83,7 @@ if [[ "${check_only}" == true ]]; then
   echo "Development UI: ${pi_web_url}"
   echo "Stack health: ${health_url}"
   echo "macOS wrapper: ${app_dir}"
+  echo "Native reload watcher: $(command -v fswatch)"
   echo "All launcher requirements are available."
   exit 0
 fi
@@ -103,6 +120,38 @@ else
   stack_is_ready || fail "PI WEB did not become healthy at ${health_url} within 60 seconds."
 fi
 
-echo "Launching the macOS wrapper"
+echo "Launching the macOS wrapper with native source reloads"
 cd "${app_dir}"
-PI_WEB_URL="${pi_web_url}" swift run PIWebMac
+reload_state_dir="$(mktemp -d /tmp/pi-web-mac.XXXXXX)"
+
+while true; do
+  rm -f "${reload_state_dir}/changed"
+  PI_WEB_URL="${pi_web_url}" swift run PIWebMac &
+  wrapper_pid=$!
+
+  (
+    fswatch -1 "${app_dir}/Package.swift" "${app_dir}/Sources" >/dev/null
+    touch "${reload_state_dir}/changed"
+    kill -TERM -- "-${wrapper_pid}" 2>/dev/null || true
+  ) &
+  watcher_pid=$!
+
+  if wait "${wrapper_pid}"; then
+    wrapper_status=0
+  else
+    wrapper_status=$?
+  fi
+  wrapper_pid=""
+
+  if [[ -f "${reload_state_dir}/changed" ]]; then
+    wait "${watcher_pid}" 2>/dev/null || true
+    watcher_pid=""
+    echo "Native wrapper source changed; rebuilding and relaunching..."
+    continue
+  fi
+
+  kill "${watcher_pid}" 2>/dev/null || true
+  wait "${watcher_pid}" 2>/dev/null || true
+  watcher_pid=""
+  exit "${wrapper_status}"
+done

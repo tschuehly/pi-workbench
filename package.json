@@ -1,0 +1,26 @@
+{
+  "name": "pi-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi-only workbench harness capabilities",
+  "keywords": [
+    "pi-package"
+  ],
+  "bin": {
+    "pi-role": "./scripts/pi-role"
+  },
+  "scripts": {
+    "test:model-routing": "node skills/model-orchestration/scripts/resolve-runtime-binding.test.mjs"
+  },
+  "pi": {
+    "skills": [
+      "./skills"
+    ],
+    "extensions": [
+      "./extensions"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
+  }
+}

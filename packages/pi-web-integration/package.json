@@ -1,0 +1,17 @@
+{
+  "name": "@pi-workbench/pi-web-integration",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check pi-web-plugin.js && npm test"
+  },
+  "piWeb": {
+    "plugins": [
+      {
+        "id": "pi-workbench",
+        "module": "pi-web-plugin.js"
+      }
+    ]
+  }
+}

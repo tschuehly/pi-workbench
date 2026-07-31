@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "source": "skill-incubator/skills/model-orchestration/references/routing-policy.json",
+  "bindings": {
+    "routine-execution": {
+      "provider": "openai-codex",
+      "quotaProvider": "codex",
+      "model": "gpt-5.6-sol",
+      "effort": "medium"
+    },
+    "hard-execution": {
+      "provider": "openai-codex",
+      "quotaProvider": "codex",
+      "model": "gpt-5.6-sol",
+      "effort": "high"
+    },
+    "consequential-deliberation": {
+      "provider": "openai-codex",
+      "quotaProvider": "codex",
+      "model": "gpt-5.6-sol",
+      "effort": "xhigh"
+    },
+    "exceptional-escalation": {
+      "provider": "openai-codex",
+      "quotaProvider": "codex",
+      "model": "gpt-5.6-sol",
+      "effort": "max"
+    },
+    "wide-evidence-gathering": {
+      "provider": "anthropic",
+      "quotaProvider": "claude",
+      "model": "claude-sonnet-5",
+      "effort": "medium"
+    },
+    "bounded-advice": {
+      "provider": "anthropic",
+      "quotaProvider": "claude",
+      "model": "claude-fable-5",
+      "effort": "low"
+    },
+    "gpt-adversary": {
+      "provider": "anthropic",
+      "quotaProvider": "claude",
+      "model": "claude-fable-5",
+      "effort": "high"
+    },
+    "system-comprehension": {
+      "provider": "anthropic",
+      "quotaProvider": "claude",
+      "model": "claude-opus-4-8",
+      "effort": "high"
+    },
+    "gpt-diff-review": {
+      "provider": "anthropic",
+      "quotaProvider": "claude",
+      "model": "claude-opus-4-8",
+      "effort": "high"
+    },
+    "background-mechanics": {
+      "provider": "anthropic",
+      "quotaProvider": "claude",
+      "model": "claude-haiku-4-5-20251001",
+      "effort": "low"
+    }
+  }
+}

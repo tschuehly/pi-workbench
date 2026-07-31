@@ -2,14 +2,19 @@
 
 Status: intended V1 interaction contract.
 
+This document defines how graphical clients present canonical attention and Run state. The
+[Attention and Interface Specification](specs/attention-and-interfaces.md) remains authoritative
+for Attention Item creation, Broker behavior, controller authority, and terminal equivalence.
+
 ## Outcome
 
-The graphical client opens on the owner's highest-value pending judgment and answers one question:
-**What needs my judgment now?** Routine activity remains observable without competing with
-required action.
+The graphical client opens on the owner's highest-priority pending judgment in Broker order and
+answers one question: **What needs my judgment now?** Routine activity remains observable without
+competing with required action. When no judgment is pending, the client states that no owner action
+is required and opens the activity progressing without the owner.
 
-The surface reduces the cost of starting, resuming, and completing a judgment. Cognitive
-accessibility is the default interaction posture rather than a separate mode.
+The surface reduces the work required to start, resume, and complete a judgment. Action-first,
+interruption-resilient presentation is the default rather than an optional mode.
 
 ## Authority and State Boundary
 
@@ -18,8 +23,9 @@ Judgment Dossier revisions, and Primary Evidence. The controller remains authori
 state and legal actions. Brokers may order, combine, defer, or prepare attention within their scope;
 the client does not invent urgency, materiality, authority, or completion from activity streams.
 
-Every graphical action submits a typed, revision-checked command through the Run Controller and
-renders its receipt. Passive inspection remains available without the control lease.
+Every action that may change Run state submits a typed, revision-checked command through the Run
+Controller and renders its receipt. Passive inspection remains available without the control
+lease.
 
 ## Attention Entry Surface
 
@@ -47,24 +53,26 @@ Opening an Attention Item preserves its scope and revision and presents the mini
 layer:
 
 1. **Required judgment** — one concrete question or action.
-2. **Recommendation** — the accountable Coordinator's proposed direction and confidence basis.
+2. **Recommended response** — the proposed action, expected effect, and evidence basis; when no
+   response has been prepared, the surface says so.
 3. **Consequences** — material alternatives, trade-offs, reversibility, and residual risk.
-4. **Deferral behavior** — what pauses, what continues, and when the item becomes stale.
-5. **Actions** — one perceptually and structurally primary action plus bounded alternatives permitted by the item schema.
+4. **Deferral behavior** — what pauses, what continues, and which condition makes the item stale.
+5. **Actions** — one perceptually and structurally primary action plus the bounded alternatives
+   permitted by the item schema.
 
 Deeper layers expose comparison criteria, representative successes and failures, contradictions,
 independent challenge, Primary Evidence, source Episodes, and the relevant Judgment Dossier
 revision. Current evidence is perceptually primary; superseded evidence remains traceable.
 
-Human-effort estimates appear only when they are measured or mechanically bounded. Uncertain work is
-described through its bound or uncertainty rather than a precise-looking guess.
+Human-effort estimates appear only when evidence supports them. The surface states the estimate's
+assumptions and uses a range when uncertainty matters; otherwise, it omits the estimate.
 
 ## Re-entry and Place Preservation
 
 The client restores the owner's selected portfolio, project, Run, work item, artifact, and inspected
-revision. On return it shows:
+revision, then identifies whether that revision remains current. On return it shows:
 
-1. The last judgment made in that scope.
+1. The last judgment made in that scope, or that no previous judgment exists.
 2. Concrete outcomes completed since that judgment.
 3. New or changed Attention Items.
 4. Feedback or evidence made stale by a newer revision.
@@ -90,8 +98,9 @@ revision, evidence, and authority semantics.
 
 A graphical-shell candidate satisfies this contract when the shared recorded Run fixture proves:
 
-1. The owner can identify the required judgment and primary action without reading logs or chat.
+1. The owner can identify the required judgment and primary action without reading logs or chat,
+   or can tell that no action is required.
 2. Required action is perceptually and structurally distinct from activity that continues without the owner.
 3. Re-entry restores place and accurately explains changes from canonical revisions.
 4. Stale feedback and superseded evidence cannot appear current.
-5. Every action produces the same typed outcome as its terminal representation.
+5. Every Run-state action produces the same typed outcome as its terminal representation.

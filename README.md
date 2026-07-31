@@ -4,7 +4,7 @@ Pi Workbench allocates human and model attention across durable project Runs. It
 
 ## Status
 
-Early implementation scaffold. The initial workflow and architecture are specified in [`docs/SPEC.md`](docs/SPEC.md), with canonical language in [`docs/CONTEXT.md`](docs/CONTEXT.md).
+Early implementation scaffold. The specification suite is rooted at [`docs/SPEC.md`](docs/SPEC.md), which routes to the detailed behavioral contracts, with canonical language in [`docs/CONTEXT.md`](docs/CONTEXT.md). The approved [Pi and PI WEB Level Adoption Plan](docs/pi-level-adoption-plan.md) defines the staged path from unmanaged interactive Pi to a managed Workbench Run; the Levels are not implemented yet.
 
 PI WEB is the initial graphical shell candidate. It remains a client of the Workbench Run Controller rather than the owner of workflow semantics.
 

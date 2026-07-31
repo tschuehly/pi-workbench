@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  TARGET="$(readlink "$SOURCE")"
+  case "$TARGET" in
+    /*) SOURCE="$TARGET" ;;
+    *) SOURCE="$SOURCE_DIR/$TARGET" ;;
+  esac
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+RESOLVER="$ROOT/skills/model-orchestration/scripts/resolve-runtime-binding.mjs"
+
+usage() {
+  printf '%s\n' 'usage: ./scripts/pi-role <cognitive-role> [--dry-run] [-- <pi arguments>]' >&2
+}
+
+[ $# -ge 1 ] || { usage; exit 2; }
+ROLE="$1"
+shift
+DRY_RUN=false
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY_RUN=true
+  shift
+fi
+if [ $# -gt 0 ]; then
+  [ "$1" = "--" ] || { usage; exit 2; }
+  shift
+fi
+
+CONTRACT="$(node "$RESOLVER" "$ROLE" --format env)"
+PROVIDER=""
+MODEL=""
+THINKING=""
+while IFS='=' read -r KEY VALUE; do
+  case "$KEY" in
+    PI_PROVIDER) PROVIDER="$VALUE" ;;
+    PI_MODEL) MODEL="$VALUE" ;;
+    PI_THINKING) THINKING="$VALUE" ;;
+  esac
+done <<< "$CONTRACT"
+
+[ -n "$PROVIDER" ] && [ -n "$MODEL" ] && [ -n "$THINKING" ] || {
+  printf '%s\n' 'Pi routing returned an incomplete launch contract.' >&2
+  exit 3
+}
+
+printf 'Launching Pi role=%s model=%s/%s thinking=%s\n' "$ROLE" "$PROVIDER" "$MODEL" "$THINKING" >&2
+if [ "$DRY_RUN" = true ]; then
+  printf 'pi --model %q --thinking %q' "$PROVIDER/$MODEL" "$THINKING"
+  if [ $# -gt 0 ]; then printf ' %q' "$@"; fi
+  printf '\n'
+  exit 0
+fi
+exec pi --model "$PROVIDER/$MODEL" --thinking "$THINKING" "$@"
