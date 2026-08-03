@@ -250,6 +250,29 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
 
     func webView(
         _ webView: WKWebView,
+        runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        let alert = NSAlert()
+        let lines = message.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        alert.messageText = lines.first.map(String.init) ?? "Confirm"
+        alert.informativeText = lines.count > 1 ? String(lines[1]) : ""
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Confirm")
+        alert.addButton(withTitle: "Cancel")
+
+        guard let window = webView.window else {
+            completionHandler(alert.runModal() == .alertFirstButtonReturn)
+            return
+        }
+        alert.beginSheetModal(for: window) { response in
+            completionHandler(response == .alertFirstButtonReturn)
+        }
+    }
+
+    func webView(
+        _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
