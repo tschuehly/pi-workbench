@@ -1,6 +1,6 @@
-# PI WEB for macOS
+# Pi Workbench for macOS
 
-A small native macOS wrapper that displays PI WEB using `WKWebView`. It provides native windows,
+A small native macOS app that displays PI WEB using `WKWebView`. It provides native windows,
 macOS window tabs, shared website data, standard navigation shortcuts, and restricted same-origin
 navigation. It remains a client of PI WEB and does not own Pi sessions or Workbench Run state.
 
@@ -25,6 +25,27 @@ The user-local `pi-web-mac` command runs the same complete stack from any direct
 ```sh
 pi-web-mac
 ```
+
+## Install a Finder launcher
+
+Install **Pi Workbench.app** in your user Applications folder:
+
+```sh
+./apps/pi-web-macos/Scripts/install-app.sh
+```
+
+You can then launch Pi Workbench from Finder, Spotlight, or the Dock without opening a terminal. The
+app starts the same development stack as `pi-web-mac`. Startup failures appear as a macOS alert,
+with details in `~/Library/Logs/PiWorkbench/launcher.log`.
+
+Pass a different `.app` path to choose another installation location:
+
+```sh
+./apps/pi-web-macos/Scripts/install-app.sh "/Applications/Pi Workbench.app"
+```
+
+Re-run the installer after moving this repository because the generated launcher records its current
+location.
 
 Verify paths and requirements without starting anything:
 
