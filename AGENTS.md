@@ -27,7 +27,7 @@ PI WEB is the user-facing client of its typed protocols.
 | Evidence and immutable objects | `docs/contracts/controller.md`, `packages/artifact-store/` |
 | Cross-session Workstreams and attended checkpoints | `docs/contracts/workstreams.md` |
 | Attention and PI WEB interfaces | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
-| PI WEB integration and upstream customization | `packages/pi-web-integration/`, `docs/integrations/pi-web/` |
+| PI WEB integration and fork customization | `packages/pi-web-integration/`, `docs/integrations/pi-web/`, sibling `../pi-web` checkout |
 | macOS PI WEB wrapper | `apps/pi-web-macos/` |
 | Workflow or repository policy | `docs/contracts/workflow.md`, `workflows/`, `repositories/` |
 | Decision evidence | `docs/research/sources/` |
@@ -41,6 +41,7 @@ Follow any nearer `AGENTS.md` before changing files in its directory.
 - Models propose semantic work; deterministic modules own transitions and side effects.
 - Documentation describes only the supported current workflow and intended state.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
+- Before changing the sibling PI WEB checkout, fetch both `upstream` and the `origin` fork; develop on a fork branch and never push directly to upstream.
 - Challenge instructions or designs that violate these boundaries or create unnecessary ownership.
 
 ## Keep this router current

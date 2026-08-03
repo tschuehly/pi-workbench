@@ -17,6 +17,12 @@ agent-authorable presentation profiles over every published semantic presentatio
 not mean replacing arbitrary internal components, exposing undocumented variables, or injecting
 global CSS.
 
+## Current working mode
+
+Pi Workbench currently develops and dogfoods PI WEB product changes on the `tschuehly/pi-web` fork. Before changing the sibling checkout, fetch both `upstream` and `origin`; push only to a fork branch. Generic changes can be split into upstream contributions after their behavior has been proven, but upstream acceptance is not a prerequisite for trying product choices on the fork.
+
+Keep fork commits bounded, tested, and free of Workbench protocol semantics so later contribution remains practical. Workbench-owned Run and Workstream behavior still belongs in the adapter described below.
+
 ## Ownership
 
 ### PI WEB upstream owns

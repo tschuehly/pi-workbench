@@ -24,10 +24,12 @@ resume directly from the Workstream projection; V1 does not launch FirstMate.
 
 ## Integration rule
 
-Use a browser plugin or the narrowest stable upstream extension seam to add V1 Workstreams,
+Use a browser plugin or the narrowest stable PI WEB extension seam to add V1 Workstreams,
 attended session launch, confirmed checkpoints, human tasks, links, closure, and typed controls.
 
-Reuse PI WEB as an upstream product with a thin Workbench-owned adapter. Do not copy its source into this repository. Maintain a bounded fork only when an accepted Workbench interaction cannot be expressed through stable upstream seams and the shared fixture demonstrates that the maintenance cost is justified.
+Reuse PI WEB through the `tschuehly/pi-web` fork with a thin Workbench-owned adapter. Do not copy its source into this repository. Product and interaction choices may be developed on the fork while they are being proven through use; evaluate generic changes for upstream contribution later rather than treating contribution as a prerequisite.
+
+Before work in the sibling `../pi-web` checkout, fetch both `upstream` and the `origin` fork. Develop and push only through a fork branch; the `upstream` remote is fetch-only.
 
 PI WEB must not:
 
@@ -59,7 +61,7 @@ The client boundary also requires browser-safe runtime-validated messages, stabl
 3. Add typed mutations only through Workbench clients.
 4. Add observation, focus-restoration, and hosting seams only when a proven interaction needs them.
 5. Keep Workbench semantics in the adapter rather than PI WEB core.
-6. Maintain a bounded fork only when stable upstream seams cannot support an accepted interaction.
+6. Keep fork changes bounded and reviewable so generic improvements can be proposed upstream later without coupling them to Workbench semantics.
 
 PI WEB remains privately deployed in V1. The application server stays behind trusted local or private-network ingress; the Workbench adapter does not add public sharing.
 
