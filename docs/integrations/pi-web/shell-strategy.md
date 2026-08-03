@@ -4,22 +4,28 @@ Status: selected shell contract.
 
 ## Decision
 
-PI WEB is the only user-facing Pi Workbench shell. Pi Workbench does not maintain a separate terminal client or a second graphical adapter. PI WEB owns the interaction experience while typed Workbench services retain Workstream, Run, authority, evidence, dispatch, and workspace state.
+PI WEB is the only user-facing Pi Workbench shell. Pi Workbench does not maintain a separate
+terminal client or a second graphical adapter. PI WEB owns the interaction experience while the
+Workbench Store retains V1 Workstream state.
 
-The boundary is:
+The V1 boundary is:
 
 ```text
-PI WEB -> Workstream protocol
-       -> Run Controller protocol -> Pi Execution -> Pi sessions and processes
+PI WEB -> Workstream protocol -> attended Pi session
 ```
+
+A future Level 4 boundary may add a Run Controller protocol and Pi Execution, but those concepts do
+not expand V1.
 
 A PI WEB session is not a Workstream or Run. Every Workstream or Run mutation crosses its typed protocol and returns a revision-checked receipt. PI WEB renders canonical projections rather than inferring current state from conversations, tool output, or visual state.
 
-PI WEB implements the [Graphical Attention Contract](../../contracts/graphical-attention.md): FirstMate supports cross-session re-entry, required judgments remain distinct from ordinary human tasks, and interruption state comes from canonical revisions.
+PI WEB uses canonical Workstream revisions for cross-session re-entry. The owner chooses what to
+resume directly from the Workstream projection; V1 does not launch FirstMate.
 
 ## Integration rule
 
-Use a browser plugin or the narrowest stable upstream extension seam to add Workstreams, FirstMate, Run status, Attention Items, Judgment Dossiers, evidence links, typed controls, and task-shaped Review Surfaces.
+Use a browser plugin or the narrowest stable upstream extension seam to add V1 Workstreams,
+attended session launch, confirmed checkpoints, human tasks, links, closure, and typed controls.
 
 Reuse PI WEB as an upstream product with a thin Workbench-owned adapter. Do not copy its source into this repository. Maintain a bounded fork only when an accepted Workbench interaction cannot be expressed through stable upstream seams and the shared fixture demonstrates that the maintenance cost is justified.
 
@@ -34,25 +40,22 @@ PI WEB must not:
 
 ## Required fixture
 
-The adapter is driven by deterministic Workstream and Run clients and recorded fixtures. The fixture covers:
+The V1 adapter is driven by a deterministic Workstream client and recorded fixtures. The fixture
+covers:
 
-- Workstream creation, session launch, independent latest checkpoints, human tasks, links, and closure;
-- FirstMate re-entry across repositories and concurrent sessions;
-- Run list, status, and pending Attention Items;
-- action-first focused judgments and activity progressing without the owner;
-- Judgment Dossier and Primary Evidence navigation;
-- diff-centered review with target-anchored feedback;
+- Workstream creation, attended session launch, independent confirmed checkpoints, human tasks,
+  links, and closure;
+- current and closed Workstreams across repositories and concurrent human-initiated sessions;
 - valid, duplicate, stale, and rejected typed mutations;
 - ordered watch delivery, reconnect, and snapshot reconciliation;
-- focus restoration and stale-feedback presentation;
-- read-only behavior without the control lease.
+- focus restoration and visible missing, failed, or stale checkpoint state.
 
 The client boundary also requires browser-safe runtime-validated messages, stable identities, bounded previews, explicit connection state, safe Markdown, keyboard and mobile support, and deterministic fakes that do not spend model tokens.
 
 ## Delivery strategy
 
 1. Use the documented PI WEB plugin API for read-oriented projections.
-2. Contribute generic navigation and primary-view seams for Workstreams and Entry Presets.
+2. Contribute generic navigation and primary-view seams for Workstreams.
 3. Add typed mutations only through Workbench clients.
 4. Add observation, focus-restoration, and hosting seams only when a proven interaction needs them.
 5. Keep Workbench semantics in the adapter rather than PI WEB core.

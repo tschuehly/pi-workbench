@@ -60,7 +60,7 @@ test("typed Workstream client uses all operations and persists across web-proces
       workstreamId: "ws-browser",
       expectedRevision: created.acceptedRevision,
       idempotencyKey: "append-browser",
-      records: [{ type: "link.upsert", producer: "owner", payload: { link: { id: "link-browser", kind: "reference", reference: "docs/plans/level-adoption.md" } } }],
+      records: [{ type: "link.upsert", producer: "owner", payload: { link: { id: "link-browser", kind: "reference", reference: "docs/plans/level-1.md" } } }],
     });
     assert.equal((await first.list()).length, 1);
     assert.equal((await first.inspect("ws-browser")).links.length, 1);

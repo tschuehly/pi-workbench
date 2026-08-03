@@ -14,14 +14,18 @@ Pi Workbench must let models perform more bounded work without obscuring who own
 
 ## Product model
 
-Pi Workbench allocates human and model attention across interactive Workstreams and durable project Runs. Pi is the only model-worker runtime. A deterministic Run Controller owns lifecycle and authoritative state; PI WEB is the user-facing client of its typed Run protocol.
+Pi Workbench V1 allocates Human Attention across interactive Workstreams. Pi is the model runtime,
+and PI WEB is the user-facing client of the typed Workstream protocol.
 
-The product has two entry paths:
+V1 implements [Operating Level 1: Pair](operating-levels.md): one human works directly with one
+interactive Pi while Human Attention is continuous. Interactive sessions start inside a user-local
+Workstream so the owner can leave and resume without treating chat history as current state. V1
+provides no delegation, background semantic work, unattended execution, managed Run authority,
+enforced workspace isolation, or controller-mediated recovery.
 
-- **Entry Presets 1–3** start visibly unmanaged Pi workflows for progressively richer interactive delegation. Interactive sessions start inside a user-local Workstream so the owner can resume attention across sessions, but they do not claim Run identity, controller authority, enforced workspace isolation, or durable recovery.
-- **Entry Preset 4** starts a controller-managed Run and resolves its Working Mode, Workflow Contract, Human-Attention Contract, and Autonomy Envelope. The Run may be linked to the Workstream that prompted it without sharing authority or state.
-
-A higher Entry Preset number is a different starting posture, not a universal quality or maturity ranking.
+The Operating Levels specification separately defines Levels 2–4 as concepts. They are not V1
+features or roadmap commitments. The managed Run architecture below describes the Level 4 authority
+boundary so Level 1 does not accidentally claim its guarantees.
 
 ## Managed Run model
 
@@ -37,9 +41,10 @@ The owner approves Shared Understanding and the Autonomy Envelope before autonom
 
 A Workstream is the owner's finite cross-session attention container. It may hold several concurrent interactive sessions and link human tasks, files, repositories, artifacts, and managed Runs. It is user-local and cross-repository. Its sparse ledger and derived projection support re-entry without becoming an execution-authority boundary.
 
-FirstMate is the owner-facing Portfolio Broker profile for cross-session interaction. It reads Workstream projections and linked Run attention to help the owner decide what to resume, while the Workstream service and Run Controller retain their respective state ownership.
+In V1, the owner inspects Workstream projections directly in PI WEB to decide what to resume. No
+FirstMate or other model broker performs portfolio synthesis.
 
-Pi Workbench separates three managed accountability scopes:
+The Level 4 concept separates three managed accountability scopes:
 
 - A **Portfolio Broker** routes priorities and Human Attention across projects.
 - A **Project Broker** coordinates repository capabilities, conflicts, and concurrent Runs.
@@ -59,7 +64,11 @@ Five deep modules contain the trusted behavior:
 | [Repository Workspace](../contracts/controller.md#repository-workspace-module) | `lease`, `inspect`, `land`, `release` | Deterministic workspace isolation, mutation inventory, landing, and cleanup eligibility |
 | [Artifact Store](../contracts/controller.md#artifact-store-module) | `put`, `get`, `pin` | Immutable content-addressed evidence and retention metadata |
 
-The [Workstream contract](../contracts/workstreams.md) owns cross-session attention, sparse ledgers, checkpointing, and FirstMate behavior. The [Workflow contract](../contracts/workflow.md) owns quality, authority, Human Attention, semantic work, staleness, and compounding policy. The [interface contract](../contracts/interfaces.md) owns supervision and client behavior. The [harness contract](../contracts/harness.md) owns distribution, skills, repository adaptation, and Entry Presets.
+The [Workstream contract](../contracts/workstreams.md) owns V1 cross-session attention, sparse
+ledgers, attended checkpointing, and closure. The [interface contract](../contracts/interfaces.md)
+owns PI WEB client behavior. The [harness contract](../contracts/harness.md) owns distribution,
+skills, and repository adaptation. Workflow, controller, and execution contracts describe Level 4
+boundaries and do not expand V1.
 
 ## Execution and authority
 
@@ -76,7 +85,11 @@ The Coordinator never receives a project-workspace write lease. The Repository W
 
 Run state is durable; Model Context is disposable. The controller reducer produces one canonical snapshot from immutable semantic records and reconciled execution observations. Raw logs, chat messages, terminal output, and model claims are not authoritative state.
 
-Workstream continuity is separate from Run durability. Pi Workbench stores concise semantic entries only at meaningful attention changes and mechanically projects active sessions, their latest checkpoints, unresolved human tasks, links, and closure state. A fresh context prepares each semantic checkpoint; FirstMate derives any combined “what next?” synthesis on demand rather than persisting repeated summaries.
+Workstream continuity is separate from Run durability. Pi Workbench stores concise semantic entries
+only at meaningful attention changes and mechanically projects active sessions, their latest
+confirmed checkpoints, unresolved human tasks, links, and closure state. In V1 the active Pi session
+proposes a checkpoint only when the owner explicitly requests one, and the owner may correct it
+before confirming persistence. No combined narrative is persisted.
 
 Each bounded Dispatch returns an Episode that records outcomes, claims, evidence, mutations, authority needs, and justified continuation context. Episodes carry results across context boundaries but do not replace Primary Evidence or the Judgment Dossier.
 
@@ -94,11 +107,16 @@ External systems such as GitHub, Linear, Sentry, and CI remain collaboration sur
 
 ## V1 boundary
 
-V1 validates one adaptive Workflow Contract through PI WEB. The first external delivery pilot is PhotoQuest plan 020 in an isolated worktree with no production deployment. Embabel work exercises hypothesis-driven exploration against the same lifecycle and records.
+V1 is the Level 1 human–Pi pair-programming workflow defined in the
+[approved Level 1 plan](../plans/level-1.md). It covers Workstream selection, reconnect-safe attended session
+launch, explicit owner-confirmed checkpoints, restart and resume through PI WEB, human tasks and
+links, and closure.
 
-V1 durability covers replacement of a failed or exhausted Pi model session while the controller host remains alive. Controller-process exit, reboot, machine loss, a distributed controller, and multi-user concurrent control remain outside V1.
+V1 does not include autonomous model-session replacement, a Run Controller, managed execution,
+unattended work, or FirstMate. Browser and PI WEB web-process restart must preserve Workstream state;
+machine loss, multi-user control, and portable cross-machine handoff remain outside V1.
 
-The complete product outcomes and acceptance matrix are in [requirements.md](requirements.md). Detailed pilot and policy decisions are in [decisions.md](decisions.md).
+The complete V1 outcomes and acceptance matrix are in [requirements.md](requirements.md).
 
 ## Out of scope
 
@@ -108,12 +126,12 @@ The complete product outcomes and acceptance matrix are in [requirements.md](req
 - Peer worker mailboxes, open-ended worker conversations, or unbounded recursive agent hierarchies in the initial implementation.
 - Model-backed log watching, terminal-screen parsing, or maximizing worker count as a product goal.
 - A blanket autonomy switch, universal Working Mode ladder, cost tier, Scout-first rule, plan-once rule, or universal file-size limit.
-- Claiming managed authority, recovery, or workspace isolation for Entry Presets 1–3.
+- Claiming managed authority, recovery, or workspace isolation for Level 1.
 - Concurrent human control or concurrent delivery of unrelated product outcomes inside one Run.
 - Production deployment from the pilot.
 - Implicit external synchronization or publication.
 - Agent-generated ownership of authentication, permissions, recovery, workspace leases, or Run state.
 - Arbitrary graphical composition or global CSS injection.
-- A daemon, database, distributed controller, or controller-process recovery in V1.
-- Multiple selectable or layered Workflow Contracts in the initial implementation.
+- A daemon, database, Run Controller, or managed execution in V1.
+- Selecting or implementing Levels 2–4 in V1.
 - Copying credentials, subscription state, sessions, machine-local configuration, or external binaries into the harness repository.

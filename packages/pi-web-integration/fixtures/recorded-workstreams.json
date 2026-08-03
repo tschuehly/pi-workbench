@@ -58,7 +58,7 @@
         {
           "id": "link-adoption-plan",
           "kind": "plan",
-          "reference": "docs/plans/level-adoption.md",
+          "reference": "docs/plans/level-1.md",
           "label": "Level adoption plan"
         }
       ],

@@ -2,8 +2,8 @@
 
 Status: approved implementation plan. PI WEB is the selected Workbench shell; this
 plan improves its generic extension model while keeping Workbench state in typed services.
-The approved [PI WEB Level Adoption Plan](../../plans/level-adoption.md) supplies the first
-primary-view forcing function and governs the sequencing of that vertical slice.
+The approved [Level 1 Plan](../../plans/level-1.md) supplies the Workstreams primary-view forcing function
+and governs the V1 vertical slice.
 
 ## Outcome
 
@@ -180,8 +180,8 @@ need the same behavior.
 ## Delivery sequence
 
 Every phase must be independently releasable. Later interfaces normally begin only after the
-previous interface has been exercised in PI WEB itself or a bounded plugin. The Level 1 Entry
-Preset is the approved exception that pulls the smallest generic navigation and primary-view slice
+previous interface has been exercised in PI WEB itself or a bounded plugin. The V1 Workstreams view
+is the approved exception that pulls the smallest generic navigation and primary-view slice
 forward; it must still prove those interfaces through the Workbench adapter before broader shell
 composition is added.
 
@@ -273,7 +273,7 @@ Add only locations demonstrated necessary by the probe, considering them in this
 1. Status items.
 2. Context-bar items.
 3. Settings panels with namespaced plugin preferences.
-4. Navigation sections beyond the minimal primary-view entry contributed by the approved Level 1 slice.
+4. Navigation sections beyond the minimal primary-view entry contributed by the approved Workstreams slice.
 
 Each addition includes registry qualification, deterministic ordering, error isolation, responsive
 overflow, focus behavior, cleanup, public declarations, documentation, and both generic and probe
@@ -284,8 +284,8 @@ workspace panel or touching PI WEB internals.
 
 ### Phase 6 — Navigation and primary-view vertical slice
 
-The accepted Level selector requires a first-class setup experience rather than prompt insertion or
-a narrow workspace panel. Implement this smallest generic slice after the v1 probe; it may proceed
+The V1 Workstreams destination requires a first-class experience rather than prompt insertion or a
+narrow workspace panel. Implement this smallest generic slice after the v1 probe; it may proceed
 before unrelated Phase 4 and 5 interfaces.
 
 1. Define qualified navigation-entry and primary-view registration with visibility, badges,
@@ -294,13 +294,13 @@ before unrelated Phase 4 and 5 interfaces.
    elements or stores.
 3. Preserve selected view across compatible reload and reconnect scenarios.
 4. Specify focus restoration, mobile navigation, command-palette access, and failure isolation.
-5. Prove the interface with the Level 1 Workbench selector and a generic bundled example.
+5. Prove the interface with the Workstreams destination and a generic bundled example.
 6. Keep authentication, connectivity, settings, recovery, workspace selection, and access to the
    default conversation view protected and visible.
 
-**Exit:** the Workbench adapter can host and navigate to the Level selector as a main-region
-experience while PI WEB retains connection, settings, recovery, and responsive control. This proof
-justifies the hosting seam, not arbitrary navigation replacement or broader shell composition.
+**Exit:** the Workbench adapter can host and navigate to Workstreams as a main-region experience
+while PI WEB retains connection, settings, recovery, and responsive control. This proof justifies
+the hosting seam, not arbitrary navigation replacement or broader shell composition.
 
 ### Phase 7 — Shell profiles
 
@@ -316,23 +316,6 @@ Begin only after primary views and at least two genuinely different shell compos
 **Exit:** users can switch between default and Workbench compositions and always recover to the PI
 WEB default.
 
-### Phase 8 — Typed Pi Workbench adapter
-
-Complete the adapter after the typed Run client and recorded fixture can
-execute and replay `start -> submit -> inspect -> watch`.
-
-1. Replace the probe projection source with the Run client while retaining its deterministic fake.
-2. Project canonical Run and pending-attention state through the proven contributions.
-3. Reuse the primary-view interface proven by the Level selector for managed attention and Review
-   Surfaces; add a Workbench shell profile only after Phase 7 passes its separate evidence gate.
-4. Add typed mutations only through the Run client, with control-lease and revision checks.
-5. Add progressive Review Surfaces and evidence navigation through the smallest proven host.
-6. Propose further upstream interfaces only when this adapter demonstrates another generic missing
-   capability.
-
-**Exit:** the shared PI WEB fixture passes without private PI WEB routes, source patches,
-session-to-Run inference, or terminal-text mutation transport.
-
 ## Upstream change structure
 
 Prefer a sequence of reviewable contributions rather than one customization rewrite:
@@ -343,7 +326,7 @@ Prefer a sequence of reviewable contributions rather than one customization rewr
 4. Versioned custom-profile schema, validation, preview, recovery, and agent-authoring guidance.
 5. Bounded Workbench plugin probe using existing v1 contributions.
 6. Stable host snapshot and watch lifecycle, if the probe proves the need.
-7. Minimal qualified navigation and primary-view contributions proven by the Level 1 selector.
+7. Minimal qualified navigation and primary-view contributions proven by the Workstreams destination.
 8. Status, context, settings, and further navigation contributions, one proven location at a time.
 9. Shell profiles, after two useful compositions exist.
 

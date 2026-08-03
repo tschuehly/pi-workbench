@@ -79,12 +79,18 @@ _Avoid_: Chat, session, job
 The versioned quality, authority, safety, evidence, and retention envelope governing a Run.
 _Avoid_: Prompt, workflow script, execution plan
 
+**Operating Level:**
+A conceptual posture describing how Human Attention, model delegation, and deterministic authority
+relate during work. Level 1 is attended human–Pi pairing; Levels 2–4 describe delegation,
+contract-governed work, and controller-managed execution. A higher number is a different posture,
+not universal maturity or quality.
+_Avoid_: Quality tier, maturity score, roadmap phase
+
 **Entry Preset:**
-An explicit, numbered starting configuration for entering work through an unmanaged Pi workflow or
-a managed Workbench Run. It bundles initial alignment, implementation independence, verification,
-Human Attention cadence, and execution-profile defaults while leaving those concerns visible. A
-higher number indicates a different default posture, not universal maturity or quality.
-_Avoid_: Working Mode, authority grant, quality tier
+An optional starting configuration for a supported Operating Level. It may bundle interaction,
+verification, and execution defaults, but cannot grant authority or guarantees that the underlying
+services do not enforce.
+_Avoid_: Operating Level, Working Mode, authority grant, quality tier
 
 **Working Mode:**
 The Run-specific combination of alignment depth, implementation independence, verification depth,
@@ -170,9 +176,9 @@ valuable.
 _Avoid_: Worker, child conversation
 
 **Watcher:**
-The deterministic, non-model supervision capability that reconciles execution observations,
-timers, leases, and external waits, detects configured Workstream checkpoint boundaries, and
-creates durable requests for the resulting action.
+The deterministic, non-model supervision capability that reconciles managed execution
+observations, timers, leases, and external waits and creates durable requests for the resulting
+action.
 _Avoid_: Monitoring agent, reviewer, broker
 
 **Context Curator:**

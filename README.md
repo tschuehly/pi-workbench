@@ -4,7 +4,7 @@ Pi Workbench allocates human and model attention across durable project Runs. It
 
 ## Status
 
-Early implementation scaffold. Start with the [documentation map](docs/README.md). The specification suite is rooted at the [system overview](docs/foundation/system-overview.md), with canonical language in the [vocabulary](docs/foundation/vocabulary.md). The approved [Pi and PI WEB Level Adoption Plan](docs/plans/level-adoption.md) defines the staged path from unmanaged interactive Pi to a managed Workbench Run; the Levels are not implemented yet.
+Early implementation scaffold. Start with the [documentation map](docs/README.md). The specification suite is rooted at the [system overview](docs/foundation/system-overview.md), with canonical language in the [vocabulary](docs/foundation/vocabulary.md). The approved [Level 1 Plan](docs/plans/level-1.md) implements Level 1 human–Pi pair programming; the [Operating Levels specification](docs/foundation/operating-levels.md) defines Levels 2–4 as concepts rather than roadmap commitments.
 
 PI WEB is the initial graphical shell candidate. It remains a client of the Workbench Run Controller rather than the owner of workflow semantics.
 

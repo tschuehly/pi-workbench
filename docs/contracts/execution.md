@@ -26,18 +26,20 @@ Every bounded dispatch ends or pauses at a synchronization point and returns a t
 
 ## Interactive and Ephemeral Execution
 
-Every interactive Pi session starts in exactly one Workstream, including unmanaged Levels 1–3 and interactive sessions attached to managed work. The Workstream supplies cross-session re-entry only; it does not change the session's execution authority.
+Every V1 interactive Pi session starts in exactly one Workstream. The Workstream supplies
+cross-session re-entry only; it does not grant execution authority.
 
 An interactive lead is a Pi session hosted by PI WEB and bound to a Coordinator or Worker profile. An ephemeral Subagent receives one bounded Dispatch, returns one Episode, and ends. A resumable Worker may receive later controller-mediated Dispatches under the same Logical Actor identity when preserving scope context has value. Every follow-up still crosses a synchronization point and returns a new Episode; continuity never turns a conversation into authoritative Run state.
 
 The Pi Execution interface remains `dispatch`, `observe`, and `cancel`. Starting or continuing an interactive Worker is expressed through Dispatch fields for Logical Actor identity, Continuity, and interaction mode rather than a second worker interface. Human or Coordinator messages cannot attach directly to a child process or bypass controller validation. An unmanaged harness adapter may preserve a Pi session for local interactive use, but it does not acquire Run authority, workspace rights, durable identity, or controller-mediated status by doing so.
 
-Numbered Entry Presets define the supported unmanaged adoption path before controller mediation:
+V1 implements Level 1 human–Pi pairing and does not use Dispatches, Episodes, Workers, or
+Subagents. The active interactive Pi performs semantic work only while the human attends the
+session. The [Operating Levels specification](../foundation/operating-levels.md) defines delegation,
+contract-governed work, and controller-managed execution as Levels 2–4 concepts without making
+them implementation commitments.
 
-- Level 1 gives one editing lead access to fresh read-only advisory subagents.
-- Level 2 lets the lead launch parallel read and write subagents in one workspace. Directory partitions are prompt-level coordination only: they are not enforced leases, do not prevent stale reads or shared-contract conflicts, and must be followed by lead reconciliation and whole-workspace verification.
-- Level 3 requires an approved implementation contract, sends each semantic slice to a fresh context, uses contract-focused and cross-family independent review, and returns unresolved work to the human after at most two correction cycles.
-- Level 4 leaves this unmanaged path and uses controller-validated Dispatches, Episodes, authority, and workspaces.
+The remainder of this contract defines the Level 4 Pi Execution boundary. It does not expand V1.
 
 Unmanaged leads and children are ordinary Pi sessions or processes. Capitalized Run actors, Dispatches, Work Packets, Episodes, Ship authority, and workspace leases apply only after entering managed execution. The interface must show this distinction rather than converting session metadata or child output into authoritative Run state.
 
@@ -74,7 +76,7 @@ For a Ship Dispatch, the Work Packet is directly executable rather than interpre
 - Explicit exclusions, neighboring work that must remain untouched, and the acceptance criteria assigned to this Dispatch.
 - Exact validation commands, required evidence classes, and the changes that invalidate each result.
 
-## V1 Ship Execution Contract
+## Level 4 Ship Execution Contract
 
 Implementation uses one bounded inner feedback loop inside the controller's `execution` state. The loop does not own lifecycle transitions, independent Verification, Acceptance, or Publication.
 
@@ -131,7 +133,9 @@ Graph evolution is explicit and revisioned. A coordinator may request or perform
 
 Models and Model Effort are selected independently by Cognitive Role, task shape, context needs, Continuity, Independence, and available capacity rather than treating one model or effort level as globally strongest. A stronger model does not justify a broader Model Context, and a longer-lived session is used only when its semantic Continuity is valuable. Routing effectiveness is evaluated from run outcomes instead of being fixed from social heuristics.
 
-For unmanaged execution, the router accepts both Cognitive Role and Entry Preset. The role preserves the kind of thinking required; the preset selects an appropriate named Execution Profile and default Model Effort for that interaction posture. Leads and child Pi processes use the same resolver and fail visibly when the requested model family, Independence, or fresh quota evidence is unavailable. Managed Runs additionally validate the resolved binding against the Workflow Contract, Work Packet, authority, budget, and repository policy.
+For V1, the router resolves the one interactive Pi binding without enabling child actors or changing
+the Level 1 posture. A future managed Run would additionally validate resolved bindings against its
+Workflow Contract, Work Packet, authority, budget, and repository policy.
 
 ## Agent Deliberation
 

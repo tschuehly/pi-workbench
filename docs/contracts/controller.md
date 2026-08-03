@@ -48,7 +48,7 @@ The repository-associated ledger anchor is independent of any disposable worktre
 
 The deterministic controller reducer combines semantic records with live Pi execution observations to produce the authoritative current `RunSnapshot`. Immutable records are facts and accepted transitions, not independently interpreted current-state fields. Raw logs, terminal output, model messages, and verbose tool results remain ephemeral or referenced artifacts; they do not enter the semantic stream merely because they occurred. Missing, contradictory, or stale evidence produces `unknown` rather than a guessed state.
 
-V1 may retain the complete semantic record stream for a run. Sealing may later segment or compact its physical representation without changing record identity or durable references.
+An initial Level 4 implementation may retain the complete semantic record stream for a Run. Sealing may later segment or compact its physical representation without changing record identity or durable references.
 
 PI WEB status, portfolio and project attention, notifications, AFK digests, and focused views consume canonical projections and Attention Items. They do not independently infer state from raw event prose. Large tool results and media are stored as referenced, content-addressed artifacts.
 

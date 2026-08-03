@@ -5,7 +5,7 @@ Load only the authority needed for the documentation task:
 - Start at `README.md` when the relevant authority is unclear.
 - Read `foundation/vocabulary.md` when domain meaning or canonical language is relevant.
 - Read `foundation/system-overview.md` for system-wide behavior, architecture, product boundaries, and routing to detailed contracts.
-- Read only the relevant document under `contracts/` when detailed contract behavior affects the work. Cross-session attention and FirstMate behavior belong in `contracts/workstreams.md`.
+- Read only the relevant document under `contracts/` when detailed contract behavior affects the work. V1 cross-session attention and attended checkpoint behavior belong in `contracts/workstreams.md`.
 - Read `foundation/decisions.md` when decision status or open questions are relevant.
 - Consult `research/sources/` only when evidence lineage is relevant.
 

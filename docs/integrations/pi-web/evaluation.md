@@ -64,7 +64,7 @@ Installed PI WEB plugins are trusted browser code. Repository- or agent-generate
 
 The v1 probe and Workstreams primary-view slice justify continued PI WEB adaptation. The generic
 navigation and primary-view interfaces and typed Workstream transport are now proven. The adapter
-does not yet prove the typed managed Run client, managed Run mutations, FirstMate attention, or
-shell profiles.
+does not yet prove attended session-launch orchestration, checkpoint confirmation, or the complete
+V1 resume workflow.
 
 A fork remains unnecessary while generic upstream seams can express accepted interactions. PI WEB must pass the shared fixture for typed Workstream and Run controls, ordered observation, durable attention, reconnect behavior, responsive review, and accessibility as those capabilities are added.

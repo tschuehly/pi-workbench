@@ -26,14 +26,14 @@ focused lower-scope conversation returns a bounded Episode rather than its full 
 
 Each named execution profile declares a finite attempt ladder. Failed independent review returns typed findings to the next authorized attempt. The controller pauses affected work and creates one deduplicated attention item when an attempt ladder or review-failure threshold is exhausted, a workspace becomes contaminated or unattributable, an input or approval becomes stale, an execution or external action has unknown outcome, or budget or authority is exhausted. Replanning occurs through a revisioned graph mutation rather than unbounded retry.
 
-The supervision loop is owned by the live controller host and does not require a model session to remain active. Loss of the coordinator session triggers bounded Pi-session replacement or a persisted attention item. Controller-process exit, client-induced exit, reboot, and machine loss remain outside the V1 durability scope.
+At Level 4, the supervision loop is owned by the live controller host and does not require a model session to remain active. Loss of the coordinator session triggers bounded Pi-session replacement or a persisted attention item. These managed supervision semantics are outside V1.
 
 ## Stable Workbench Shell
 
 The shell owns:
 
-- Explicit Entry Preset selection and a visible managed-versus-unmanaged execution boundary.
-- FirstMate, Workstream, portfolio, project, repository, workspace, worktree, and Run navigation.
+- A visible boundary between attended interaction and any future managed execution.
+- Workstream, conversation, repository, and workspace navigation in V1; any future portfolio, project, worktree, and Run navigation remains shell-owned.
 - User, agent, and model identity.
 - Authentication, authorization, and permission controls.
 - Start, pause, resume, steer, stop, retry, and handoff controls.
@@ -44,11 +44,19 @@ The shell owns:
 
 ## Workstream Surfaces
 
-Workstreams are the primary home for interactive sessions. The cross-repository Workstream view lists current Workstreams, supports starting a session in exactly one Workstream, and shows each session's latest checkpoint, unresolved human tasks, linked files and Runs, and closure state. FirstMate uses the same projection to help the owner decide what to resume after time away.
+Workstreams are the primary home for interactive sessions. The cross-repository Workstream view
+lists current and closed Workstreams, supports starting a session in exactly one Workstream, and
+shows each session's latest confirmed checkpoint, unresolved human tasks, linked files and Runs,
+revision, and closure state. The owner uses this mechanical projection directly to decide what to
+resume; V1 does not launch FirstMate or another broker model.
 
-Human tasks remain distinct from managed Run Attention Items. The interface may present both in one re-entry experience, but it must not imply that an advisory Workstream task blocks or authorizes a Run transition. The initial ordering between required judgments and suggested Workstreams is a trial question rather than a settled contract.
+Human tasks remain distinct from any future managed Run Attention Items. An advisory Workstream
+task cannot block or authorize a Run transition.
 
-A deterministic watcher requests checkpoints from a fresh Pi context at configured attention boundaries. The interface shows missing or stale checkpoints instead of presenting old context as current. Several sessions and Workstreams may remain active concurrently.
+Checkpointing is an explicit attended action. The active Pi session proposes the checkpoint, the
+owner may correct it, and only owner-confirmed content is persisted. The interface shows missing,
+failed, or stale checkpoints instead of presenting old context as current. Several sessions and
+Workstreams may remain active concurrently.
 
 ## Project Surfaces
 
@@ -76,38 +84,40 @@ Repositories and workflows may provide:
 
 Project surfaces cannot alter shell-owned permission, identity, or recovery controls.
 
-## Entry Preset Surface
+## Operating Level Boundary
 
-PI WEB presents Levels 1–4 in a first-class Workbench primary view contributed through generic, stable PI WEB navigation and primary-view interfaces. The view explains each preset's alignment depth, implementation independence, verification depth, Human Attention cadence, model-routing posture, and safety boundary before launch. Selection is explicit; a higher number is not presented as universally better.
+V1 operates at Level 1 and does not present a level selector. PI WEB describes the attended
+human–Pi posture where sessions start: one interactive Pi, continuous Human Attention during
+semantic work, and no delegation, background semantic work, managed authority, or recovery claim.
 
-Levels 1–3 launch or configure ordinary Pi sessions in the selected workspace. Their UI must say that subagent write partitions, orchestration, evidence, and recovery are advisory and unmanaged. Level 4 enters the typed Run protocol and may display Working Mode, authority, durable attention, and recovery only after the controller accepts the start. A PI WEB session id is never inferred to be a Run id.
+The [Operating Levels specification](../foundation/operating-levels.md) defines Levels 2–4 only as
+concepts. If a later approved implementation exposes another level, PI WEB must explain its Human
+Attention, delegation, authority, and recovery boundary before launch. A selection can never grant
+permissions or guarantees by itself, and a PI WEB session identifier is never inferred to be a Run
+identifier.
 
-The primary view is hosted through constrained contribution locations. PI WEB retains visible authentication, connectivity, settings, recovery, workspace, and navigation controls. Plugins cannot replace arbitrary internals or use Entry Preset selection to grant permissions. PI WEB provides every supported preset interaction.
+## V1 Graphical Surface
 
-## Initial Graphical Attention Surface
+The V1 vertical slice is a PI WEB Workstreams destination over the typed Workstream protocol. It
+provides current and closed Workstreams, session association and launch state, confirmed
+checkpoints, unresolved human tasks, links, revision and closure state, and actions to create,
+resume, checkpoint, and close.
 
-The V1 vertical slice includes PI WEB views over the Run and Workstream protocols. It provides:
-
-- A FirstMate re-entry view over current Workstreams, session checkpoints, human tasks, and linked Run attention.
-- A default portfolio attention view across projects and concurrent Runs that separates pending judgment from activity progressing without the owner.
-- A project workspace showing active Run outcomes, conflicts, and current checkpoints.
-- A Run workspace showing Shared Understanding, Working Mode, semantic work, evidence, and residual uncertainty.
-- A revision-aware Review Surface for rendered behavior, screenshots, diffs, comparisons, and target-anchored feedback.
-- Scoped conversation attached to the selected project, Run, work item, claim, artifact, or judgment.
-- Working Mode and Human-Attention Contract presentation with shell-owned authority controls.
-
-The graphical Workbench is entered through a Workstream for interactive sessions or through Level 4 or an authorized Run start for managed execution. It externalizes working memory: it separates activity from required action, preserves the
-owner’s place across interruptions, and explains what changed since the owner last inspected the
-scope. A focused Attention Item states the required judgment, why it is material now, the
-recommended response, consequences and reversibility, deferral behavior, affected work, and the
-available actions before exposing deeper evidence. It consumes canonical snapshots, records, and artifact
-references and does not infer state from chat messages. Generated repository-specific surfaces remain outside this vertical slice.
+The graphical Workbench is entered through a Workstream. It preserves the owner's place across
+interruptions and consumes canonical Workstream projections rather than inferring current state
+from chat messages. PI WEB retains visible authentication, connectivity, settings, recovery,
+workspace, conversation, and navigation controls across loading, empty, failure, reconnect, narrow,
+and mobile states.
 
 ## PI WEB Control Surface
 
-PI WEB provides every supported Workstream and Run action. Workstream controls cover listing, creating, inspecting, closing, and starting a session. Managed Run controls cover start or attach, status, decide, pause or resume or stop, validate, and close.
+PI WEB provides every V1 Workstream action. Controls cover listing, creating, inspecting, starting
+or resuming a session, proposing and confirming a checkpoint, adding human tasks and links, and
+closing.
 
-Every mutation crosses the typed protocol with revision checks and idempotency. Mechanical status, checkpoint state, validation, durable artifacts, and unresolved human tasks remain inspectable without launching FirstMate or another model turn.
+Every mutation crosses the typed protocol with revision checks and idempotency. Mechanical status,
+checkpoint state, and unresolved human tasks remain inspectable without launching another model
+turn. Managed Run controls belong only to a future approved Level 4 implementation.
 
 ## External Adapters
 

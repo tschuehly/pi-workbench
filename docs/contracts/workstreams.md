@@ -1,6 +1,6 @@
 # Workstream Specification
 
-Defines the supported cross-session attention, ledger, checkpoint, and FirstMate behavior.
+Defines the supported cross-session attention, ledger, attended checkpoint, and closure behavior.
 
 This document is authoritative for Workstreams. The [system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries. The [interface contract](interfaces.md) remains authoritative for PI WEB presentation.
 
@@ -33,7 +33,7 @@ watch(WorkstreamWatch) -> WorkstreamEventBatch
 close(CloseWorkstream) -> WorkstreamReceipt
 ```
 
-Mutation requests carry an idempotency key and, after creation, the expected Workstream revision. An exact retry returns the original receipt; reuse of the key with different input is rejected. Each receipt records the accepted revision and resulting snapshot reference. `watch` resumes ordered observation after a sequence and falls back to snapshot reconciliation when replay is unavailable. FirstMate, Pi sessions, watchers, and PI WEB use this interface rather than writing Workstream storage directly. The exact wire schemas remain subject to trial validation.
+Mutation requests carry an idempotency key and, after creation, the expected Workstream revision. An exact retry returns the original receipt; reuse of the key with different input is rejected. Each receipt records the accepted revision and resulting snapshot reference. `watch` resumes ordered observation after a sequence and falls back to snapshot reconciliation when replay is unavailable. Pi sessions and PI WEB use this interface rather than writing Workstream storage directly. The exact wire schemas remain subject to trial validation.
 
 ## Ledger and current state
 
@@ -41,25 +41,18 @@ Each Workstream has a concise append-only ledger. Agents append only at meaningf
 
 The ledger may record session association and checkpoint replacement, human-task changes, relevant links, and closure. Records identify their producer and source session. Size limits and validation prevent a session from turning the ledger into standing model context.
 
-Current state is a separate mechanical projection over accepted records. It includes active sessions, each session's latest checkpoint, unresolved human tasks, relevant links, and closure state. Pi Workbench does not persist a second combined narrative across sessions. FirstMate may synthesize a current “what next?” view on demand from the projection.
+Current state is a separate mechanical projection over accepted records. It includes active sessions, each session's latest confirmed checkpoint, unresolved human tasks, relevant links, and closure state. Pi Workbench does not persist a second combined narrative across sessions.
 
 ## Checkpointing
 
-The session doing the work does not own checkpoint timing. A deterministic watcher observes structured Pi and PI WEB session lifecycle signals and requests a checkpoint at configured attention boundaries. Initial trigger timing is experimental because owners may work in several Workstreams and sessions concurrently.
+Checkpointing is explicit and attended in V1. The owner asks the active Pi session to propose a
+concise checkpoint stating what changed, what remains, and the next useful continuation. The owner
+may correct the proposal before confirming persistence. Only the confirmed checkpoint replaces the
+session's previous checkpoint.
 
-A fresh, focused Pi context prepares the concise checkpoint from the session and referenced files. The checkpoint states what changed, what remains, and the next useful continuation. The watcher triggers and records the operation; it does not perform semantic summarization. Checkpoint failure remains visible and does not invent a successful continuation state.
-
-## FirstMate
-
-FirstMate is the owner-facing Portfolio Broker profile for cross-session interaction in Pi Workbench. One FirstMate works across the owner's Workstreams. It reads Workstream projections and linked Run attention to help the owner:
-
-- see what changed while away;
-- choose a Workstream or session to resume;
-- review human tasks across Workstreams;
-- start a new session in a Workstream;
-- close a finished Workstream.
-
-FirstMate does not own Workstream storage or managed Run state. It may recommend priorities, checkpoint timing, and cleanup, but the supporting services perform persistence and legal Run transitions.
+A failed, rejected, or abandoned proposal remains visible as a checkpoint failure when applicable
+and does not invent continuation state or replace the latest confirmed checkpoint. V1 does not use
+a watcher, background model turn, or fresh model context to create Workstream checkpoints.
 
 ## Completion and cleanup
 

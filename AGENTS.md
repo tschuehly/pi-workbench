@@ -18,13 +18,14 @@ PI WEB is the user-facing client of its typed protocols.
 | Task | Read or change |
 | --- | --- |
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
-| Staged Pi and PI WEB adoption | `docs/plans/level-adoption.md` |
+| V1 human–Pi pair programming | `docs/plans/level-1.md` |
+| Operating-level concepts | `docs/foundation/operating-levels.md` |
 | Model routing and unmanaged Pi lead launch | `skills/model-orchestration/`, `scripts/pi-role` |
 | Controller lifecycle and protocol | `docs/contracts/controller.md`, `packages/controller/`, `schemas/` |
 | Pi dispatch and actors | `docs/contracts/execution.md`, `packages/pi-execution/` |
 | Workspaces and delivery | `docs/contracts/controller.md`, `packages/repository-workspace/` |
 | Evidence and immutable objects | `docs/contracts/controller.md`, `packages/artifact-store/` |
-| Cross-session Workstreams and FirstMate | `docs/contracts/workstreams.md` |
+| Cross-session Workstreams and attended checkpoints | `docs/contracts/workstreams.md` |
 | Attention and PI WEB interfaces | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
 | PI WEB integration and upstream customization | `packages/pi-web-integration/`, `docs/integrations/pi-web/` |
 | macOS PI WEB wrapper | `apps/pi-web-macos/` |
