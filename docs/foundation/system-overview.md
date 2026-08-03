@@ -18,10 +18,12 @@ Pi Workbench V1 allocates Human Attention across interactive Workstreams. Pi is 
 and PI WEB is the user-facing client of the typed Workstream protocol.
 
 V1 implements [Operating Level 1: Pair](operating-levels.md): one human works directly with one
-interactive Pi while Human Attention is continuous. Interactive sessions start inside a user-local
-Workstream so the owner can leave and resume without treating chat history as current state. V1
-provides no delegation, background semantic work, unattended execution, managed Run authority,
-enforced workspace isolation, or controller-mediated recovery.
+interactive lead Pi while Human Attention is continuous. The lead may use bounded ephemeral child
+Pi processes as attended tool activity and remains accountable for their assignments and results.
+Interactive sessions start inside a user-local Workstream so the owner can leave and resume without
+treating chat history as current state. V1 provides no agreed-before execution gate, background
+semantic work, unattended execution, managed Run authority, enforced workspace isolation, or
+controller-mediated recovery.
 
 The Operating Levels specification separately defines Levels 2–4 as concepts. They are not V1
 features or roadmap commitments. The managed Run architecture below describes the Level 4 authority

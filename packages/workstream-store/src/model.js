@@ -118,17 +118,26 @@ function validateRecord(record, limits, field) {
 
   const validators = {
     "session.pending": () => {
-      keys(record.payload, ["sessionId", "associationKey"], `${field}.payload`);
-      id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
+      keys(record.payload, ["sessionId", "associationKey", "machineId", "projectId", "workspaceId"], `${field}.payload`);
+      if (record.payload.sessionId !== undefined) id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
       id(record.payload.associationKey, `${field}.payload.associationKey`, limits);
+      if (record.payload.machineId !== undefined) string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
+      if (record.payload.projectId !== undefined) string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
+      if (record.payload.workspaceId !== undefined) string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
     },
     "session.confirmed": () => {
-      keys(record.payload, ["sessionId"], `${field}.payload`);
+      keys(record.payload, ["sessionId", "associationKey", "machineId", "projectId", "workspaceId"], `${field}.payload`);
       id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
+      if (record.payload.associationKey !== undefined) id(record.payload.associationKey, `${field}.payload.associationKey`, limits);
+      if (record.payload.machineId !== undefined) string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
+      if (record.payload.projectId !== undefined) string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
+      if (record.payload.workspaceId !== undefined) string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
     },
     "session.failed": () => {
-      keys(record.payload, ["sessionId", "reason"], `${field}.payload`);
-      id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
+      keys(record.payload, ["sessionId", "associationKey", "reason"], `${field}.payload`);
+      if (record.payload.sessionId !== undefined) id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
+      if (record.payload.associationKey !== undefined) id(record.payload.associationKey, `${field}.payload.associationKey`, limits);
+      if (record.payload.sessionId === undefined && record.payload.associationKey === undefined) fail("INVALID_RECORD", `${field}.payload requires sessionId or associationKey`);
       string(record.payload.reason, `${field}.payload.reason`, limits.maxTextLength);
     },
     "checkpoint.replaced": () => {
@@ -209,17 +218,23 @@ export function rebuildSnapshot(ledger) {
     snapshot.updatedAt = record.recordedAt;
     const payload = record.payload ?? {};
     switch (record.type) {
-      case "session.pending":
-        sessions.set(payload.sessionId, { id: payload.sessionId, status: "pending", associationKey: payload.associationKey, latestCheckpoint: null, checkpointFailure: null });
-        break;
-      case "session.confirmed": {
-        const session = sessions.get(payload.sessionId) ?? { id: payload.sessionId, latestCheckpoint: null, checkpointFailure: null };
-        sessions.set(payload.sessionId, { ...session, status: "active" });
+      case "session.pending": {
+        const key = payload.sessionId ?? `pending:${payload.associationKey}`;
+        sessions.set(key, { id: key, status: "pending", associationKey: payload.associationKey, machineId: payload.machineId, projectId: payload.projectId, workspaceId: payload.workspaceId, latestCheckpoint: null, checkpointFailure: null });
         break;
       }
-      case "session.failed":
-        sessions.delete(payload.sessionId);
+      case "session.confirmed": {
+        const pendingKey = payload.associationKey === undefined ? payload.sessionId : `pending:${payload.associationKey}`;
+        const session = sessions.get(pendingKey) ?? sessions.get(payload.sessionId) ?? { id: payload.sessionId, latestCheckpoint: null, checkpointFailure: null };
+        sessions.delete(pendingKey);
+        sessions.set(payload.sessionId, { ...session, id: payload.sessionId, status: "active", associationKey: payload.associationKey ?? session.associationKey, machineId: payload.machineId ?? session.machineId, projectId: payload.projectId ?? session.projectId, workspaceId: payload.workspaceId ?? session.workspaceId });
         break;
+      }
+      case "session.failed": {
+        const key = payload.sessionId ?? `pending:${payload.associationKey}`;
+        sessions.delete(key);
+        break;
+      }
       case "checkpoint.replaced": {
         const session = sessions.get(payload.sessionId);
         if (session) sessions.set(payload.sessionId, { ...session, latestCheckpoint: clone(payload.checkpoint), checkpointFailure: null });

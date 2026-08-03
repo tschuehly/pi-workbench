@@ -28,12 +28,13 @@ When documents disagree, follow the highest applicable authority and repair the 
 ## Plans and integrations
 
 - [`plans/level-1.md`](plans/level-1.md) — approved Level 1 human–Pi pair-programming implementation plan.
+- [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — approved attended child Pi execution plan.
 - [`integrations/pi-web/evaluation.md`](integrations/pi-web/evaluation.md) and [`shell-strategy.md`](integrations/pi-web/shell-strategy.md) — PI WEB evidence and shell boundary.
 - [`integrations/pi-web/customization-plan.md`](integrations/pi-web/customization-plan.md) and [`principles.md`](integrations/pi-web/principles.md) — upstream delivery sequence and integration-specific development principles.
 
 ## Research
 
-- [`research/sources/`](research/sources/) — curated evidence and source analyses.
+- [`research/sources/`](research/sources/) — curated evidence and source analyses, including the [subagent implementation comparison](research/sources/subagent-implementations.md).
 - [`research/reports/`](research/reports/) — derived design reports.
 - [`research/generated/`](research/generated/) — reproducible generated indexes; do not treat them as standing context.
 

@@ -10,8 +10,9 @@ browser plugin with a small trusted web-process service, not a Run Controller an
   navigation and primary-view interfaces.
 - **Workstreams primary view:** presents current and closed Workstreams, concurrent sessions, latest
   checkpoints, checkpoint failures, human tasks, links, revision, loading, empty, failure, and
-  reconnect states from the typed Workstream client. It creates Workstreams, appends links, closes
-  Workstreams, renders accepted receipts, and reconciles ordered watch batches.
+  reconnect states from the typed Workstream client. It creates Workstreams; launches, reconciles,
+  and resumes attended sessions; requests and confirms checkpoints; manages human tasks and links;
+  closes Workstreams; renders accepted receipts; and reconciles ordered watch batches.
 - **Workspace label:** current Run state or pending Human Attention count.
 - **Action:** opens the qualified `pi-workbench:run.panel` workspace panel.
 - **Workspace panel:** presents Run status, authority, pending Attention Items, activity progressing
@@ -28,6 +29,12 @@ operations to `@pi-workbench/workstream-store`, which persists user-local ledger
 `~/.pi-workbench/workstreams`. Set `PI_WORKBENCH_WORKSTREAM_DIR` only for isolated tests or an
 intentional alternate user-local location. The deterministic `fake-workstream-client.js` and
 [`recorded-workstreams.json`](fixtures/recorded-workstreams.json) remain available for PI WEB tests.
+
+Session launch uses PI WEB's attended plugin-session helper and `workstream-session-coordinator.js`.
+The coordinator records a launch-key pending association before starting PI, confirms the returned
+runtime session identity, records launch failure, and reconciles browser-local startup-token
+associations on reconnect without launching a duplicate session. The initial prompt carries the
+Workstream identity and Level 1 boundary into a fresh session.
 
 The plugin never infers a Run from a PI WEB session, calls a private PI WEB route, transports a
 mutation through workspace files or terminal text, or injects global CSS. It polls only the typed

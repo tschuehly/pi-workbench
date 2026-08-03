@@ -101,7 +101,7 @@ A bounded pilot may use it for non-material intake clarification in an interacti
 
 | Package class or example | Decision | Reason |
 | --- | --- | --- |
-| Workflow/subagent/team/goal systems: `pi-subagents`, `@quintinshaw/pi-dynamic-workflows`, `pi-crew`, `pi-taskflow`, `pi-autopilot` | Reject | They duplicate Pi Execution actors, Semantic Execution Graph policy, budgets, retries, or coordination. Workbench must not add a second harness or controller. |
+| Workflow/subagent/team/goal systems: `pi-subagents`, `@quintinshaw/pi-dynamic-workflows`, `pi-crew`, `pi-taskflow`, `pi-autopilot` | Reject as authority | Their complete products duplicate Pi Execution actors, Semantic Execution Graph policy, budgets, retries, or coordination. Narrow launch, preflight, observation, and cancellation mechanisms may be independently adapted under the [Workbench-owned execution boundary](subagent-implementations.md). |
 | Worktree and Git orchestration packages | Reject | Repository Workspace alone owns leases, candidate fingerprints, landing, and release. A package may supply Git parsing utilities but not choreography. |
 | Permission extensions such as `@gotgenes/pi-permission-system` or the full `pi-sandbox` extension | Reject as authority | Prompt hooks and session toggles cannot define or expand the Autonomy Envelope. Reuse confinement mechanics beneath controller policy instead. |
 | Memory systems such as `@remnic/plugin-pi`, `pi-hermes-memory`, `pi-memory`, and `open-zk-kb` | Reject | They create another durable knowledge/state channel and can silently promote generated conclusions. Continuation Artifacts, Primary Evidence, records, and explicit Learning Candidate promotion already define the boundary. |

@@ -11,8 +11,9 @@ This document preserves the product outcomes and system-level validation matrix 
    Workstream, so that the session has one durable home for attention continuity.
 2. As a PI WEB user, I want every V1 Workstream operation available in the shell, so that I do not
    need a terminal client.
-3. As a developer, I want to pair directly with one Pi while I am attending the session, so that
-   semantic work remains observable and steerable.
+3. As a developer, I want to pair directly with one lead Pi while I am attending the session and
+   let it delegate bounded work to ephemeral child Pi processes, so that semantic work remains
+   observable, cancellable, and accountable to one lead.
 4. As an interruptible developer, I want current and closed Workstreams to survive browser and PI
    WEB process restarts, so that I can resume related work across days.
 5. As a developer, I want session launch to be idempotent and reconnect-safe, so that failure cannot
@@ -62,7 +63,10 @@ This document preserves the product outcomes and system-level validation matrix 
   oversized checkpoint; assert rejection or reference-based storage rather than ledger growth.
 - Close a Workstream with unresolved tasks and linked scratch files; assert preserved unresolved
   state and no deletion without human confirmation.
-- Verify that V1 launches no child actor, background checkpoint context, portfolio broker, or
-  unattended semantic work.
+- Delegate one bounded task to an ephemeral child Pi process; assert its assignment, progress,
+  cancellation, and result remain part of the attended lead session and create no managed authority
+  or durable Run state.
+- Verify that V1 launches no background checkpoint context, portfolio broker, or unattended
+  semantic work.
 - Exercise loading, empty, failure, reconnect, desktop, narrow, and mobile Workstream views; assert
   that PI WEB-owned protected controls remain visible and operable.

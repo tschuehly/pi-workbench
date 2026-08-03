@@ -80,10 +80,11 @@ The versioned quality, authority, safety, evidence, and retention envelope gover
 _Avoid_: Prompt, workflow script, execution plan
 
 **Operating Level:**
-A conceptual posture describing how Human Attention, model delegation, and deterministic authority
-relate during work. Level 1 is attended human–Pi pairing; Levels 2–4 describe delegation,
-contract-governed work, and controller-managed execution. A higher number is a different posture,
-not universal maturity or quality.
+A conceptual posture describing how Human Attention, prior plan agreement, model delegation, and
+deterministic authority relate during work. Level 1 is attended human–Pi pairing with optional
+bounded delegation; Level 2 adds an execution plan iterated with and agreed by the human before
+implementation; Levels 3–4 describe contract-governed and controller-managed work. A higher number
+is a different posture, not universal maturity or quality.
 _Avoid_: Quality tier, maturity score, roadmap phase
 
 **Entry Preset:**

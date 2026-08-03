@@ -5,7 +5,7 @@
   "uploads": {
     "defaultFolder": ".pi-web/uploads"
   },
-  "spawnSessions": true,
+  "spawnSessions": false,
   "subsessions": false,
   "agent": {
     "command": "pi"

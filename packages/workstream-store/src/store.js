@@ -147,6 +147,7 @@ export class WorkstreamStore {
 
 function validateTransitions(database, workstreamId, before, records) {
   const sessions = new Map(before.sessions.map((session) => [session.id, session.status]));
+  const pendingByAssociation = new Map(before.sessions.filter((session) => session.status === "pending").map((session) => [session.associationKey, session.id]));
   const historicalSessionIds = new Set();
   for (const entry of Object.values(database.workstreams)) {
     for (const record of entry.ledger) {
@@ -157,20 +158,32 @@ function validateTransitions(database, workstreamId, before, records) {
 
   for (const record of records) {
     const sessionId = record.payload.sessionId;
+    const associationKey = record.payload.associationKey;
     switch (record.type) {
-      case "session.pending":
-        if (historicalSessionIds.has(sessionId)) fail("SESSION_ASSIGNED_ELSEWHERE", `session ${sessionId} belongs to another workstream`);
-        if (sessions.has(sessionId)) fail("INVALID_TRANSITION", `session ${sessionId} is already associated`);
-        sessions.set(sessionId, "pending");
+      case "session.pending": {
+        const pendingId = sessionId ?? `pending:${associationKey}`;
+        if (sessionId !== undefined && historicalSessionIds.has(sessionId)) fail("SESSION_ASSIGNED_ELSEWHERE", `session ${sessionId} belongs to another workstream`);
+        if (sessions.has(pendingId) || pendingByAssociation.has(associationKey)) fail("INVALID_TRANSITION", `association ${associationKey} is already pending`);
+        sessions.set(pendingId, "pending");
+        pendingByAssociation.set(associationKey, pendingId);
         break;
-      case "session.confirmed":
-        if (sessions.get(sessionId) !== "pending") fail("INVALID_TRANSITION", `session ${sessionId} is not pending`);
+      }
+      case "session.confirmed": {
+        if (historicalSessionIds.has(sessionId)) fail("SESSION_ASSIGNED_ELSEWHERE", `session ${sessionId} belongs to another workstream`);
+        const pendingId = associationKey === undefined ? sessionId : pendingByAssociation.get(associationKey);
+        if (pendingId === undefined || sessions.get(pendingId) !== "pending") fail("INVALID_TRANSITION", `session ${sessionId} has no matching pending association`);
+        sessions.delete(pendingId);
+        pendingByAssociation.delete(associationKey);
         sessions.set(sessionId, "active");
         break;
-      case "session.failed":
-        if (sessions.get(sessionId) !== "pending") fail("INVALID_TRANSITION", `session ${sessionId} is not pending`);
-        sessions.delete(sessionId);
+      }
+      case "session.failed": {
+        const pendingId = associationKey === undefined ? sessionId : pendingByAssociation.get(associationKey);
+        if (pendingId === undefined || sessions.get(pendingId) !== "pending") fail("INVALID_TRANSITION", `session association is not pending`);
+        sessions.delete(pendingId);
+        pendingByAssociation.delete(associationKey);
         break;
+      }
       case "checkpoint.replaced":
       case "checkpoint.failed":
         if (sessions.get(sessionId) !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);

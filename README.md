@@ -4,13 +4,13 @@ Pi Workbench allocates human and model attention across durable project Runs. It
 
 ## Status
 
-Early implementation scaffold. Start with the [documentation map](docs/README.md). The specification suite is rooted at the [system overview](docs/foundation/system-overview.md), with canonical language in the [vocabulary](docs/foundation/vocabulary.md). The approved [Level 1 Plan](docs/plans/level-1.md) implements Level 1 human–Pi pair programming; the [Operating Levels specification](docs/foundation/operating-levels.md) defines Levels 2–4 as concepts rather than roadmap commitments.
+V1 implements the approved [Level 1 Plan](docs/plans/level-1.md): durable Workstreams, attended PI WEB sessions, confirmed checkpoints, resume and closure, plus bounded attended child Pi execution. Start with the [documentation map](docs/README.md). The specification suite is rooted at the [system overview](docs/foundation/system-overview.md), with canonical language in the [vocabulary](docs/foundation/vocabulary.md). The [Operating Levels specification](docs/foundation/operating-levels.md) defines Levels 2–4 as concepts rather than roadmap commitments.
 
-PI WEB is the initial graphical shell candidate. It remains a client of the Workbench Run Controller rather than the owner of workflow semantics.
+PI WEB hosts the supported interactive runtime and remains a typed-protocol client, not authoritative Workstream or Run state.
 
 ## Repository layout
 
-- `packages/` — the four core modules and client integrations.
+- `packages/` — persistence, execution mechanics, future managed modules, and client integrations.
 - `workflows/` — versioned Workflow Contracts.
 - `repositories/` — repository packages and quality envelopes.
 - `skills/`, `extensions/`, `prompts/` — curated Pi capabilities.
@@ -26,4 +26,14 @@ The current PI WEB source checkout is expected at:
 ../pi-web
 ```
 
-Machine-local PI WEB state remains in `~/.config/pi-web` and `~/.pi-web`. Credentials, authentication state, sessions, and machine-specific paths must not be committed here.
+Machine-local PI WEB state remains in `~/.config/pi-web` and `~/.pi-web`; Workstreams default to `~/.pi-workbench/workstreams`. Credentials, authentication state, sessions, and machine-specific paths must not be committed here.
+
+Run deterministic Level 1 checks with:
+
+```sh
+npm run test:model-routing
+npm run test:pi-execution-adapter
+npm run test:workstream-store
+npm run test:pi-web-integration
+(cd ../pi-web && npm run typecheck && npm test)
+```

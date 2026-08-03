@@ -60,6 +60,17 @@ test("rebuilds an identical deterministic projection from semantic ledger record
   assert.equal(snapshot.links[0].id, "link-1");
 });
 
+test("keeps the previous confirmed checkpoint when a later checkpoint fails", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate", records: associationRecords.slice(0, 2) });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-good", records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: "session-1", payload: { sessionId: "session-1", checkpoint: { id: "cp-good", whatChanged: "Implemented", remains: "Review", next: "Run tests" } } }] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "checkpoint-failed", records: [{ type: "checkpoint.failed", producer: "pi-web", sourceSessionId: "session-1", payload: { sessionId: "session-1", reason: "Persistence interrupted" } }] });
+  const snapshot = await store.inspect("ws-1");
+  assert.equal(snapshot.sessions[0].latestCheckpoint.id, "cp-good");
+  assert.equal(snapshot.sessions[0].checkpointFailure, "Persistence interrupted");
+});
+
 test("returns the original receipt for an exact retry and rejects conflicting key reuse", async () => {
   const { store } = memoryStore();
   const first = await store.create(createRequest);
@@ -126,6 +137,20 @@ test("lists summaries, preserves unresolved tasks on close, and excludes closed 
   assert.deepEqual(await store.list(), []);
   assert.equal((await store.list({ includeClosed: true }))[0].closed, true);
   assert.equal((await store.inspect("ws-1")).humanTasks.length, 1);
+});
+
+test("reconciles a launch-key pending association to the runtime session without duplication", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "pending-runtime", records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "launch-runtime", machineId: "remote a", projectId: "project-1", workspaceId: "workspace-1" } }] });
+  const pending = await store.inspect("ws-1");
+  assert.equal(pending.sessions[0].id, "pending:launch-runtime");
+  assert.equal(pending.sessions[0].status, "pending");
+
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "confirm-runtime", records: [{ type: "session.confirmed", producer: "pi-web", sourceSessionId: "runtime-1", payload: { sessionId: "runtime-1", associationKey: "launch-runtime", machineId: "remote a", projectId: "project-1", workspaceId: "workspace-1" } }] });
+  const confirmed = await store.inspect("ws-1");
+  assert.deepEqual(confirmed.sessions.map((session) => session.id), ["runtime-1"]);
+  assert.equal(confirmed.sessions[0].workspaceId, "workspace-1");
 });
 
 test("rejects a session identifier assigned to another workstream", async () => {

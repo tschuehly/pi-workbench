@@ -87,8 +87,9 @@ Project surfaces cannot alter shell-owned permission, identity, or recovery cont
 ## Operating Level Boundary
 
 V1 operates at Level 1 and does not present a level selector. PI WEB describes the attended
-human–Pi posture where sessions start: one interactive Pi, continuous Human Attention during
-semantic work, and no delegation, background semantic work, managed authority, or recovery claim.
+human–Pi posture where sessions start: one interactive lead Pi, continuous Human Attention during
+semantic work, optional bounded child Pi work reconciled by the lead, and no agreed-before execution
+gate, background semantic work, managed authority, or recovery claim.
 
 The [Operating Levels specification](../foundation/operating-levels.md) defines Levels 2–4 only as
 concepts. If a later approved implementation exposes another level, PI WEB must explain its Human

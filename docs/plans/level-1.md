@@ -50,9 +50,13 @@ Workstream Store remains authoritative; PI WEB transports typed operations and r
 
 ### Attended sessions
 
-The user selects a Workstream before starting a session. One interactive Pi pairs directly with the
-user. V1 has no child actors, delegated implementation, background semantic work, or unattended
-execution.
+The user selects a Workstream before starting a session. One interactive lead Pi pairs directly with
+the user. The lead may launch bounded ephemeral child Pi processes for investigation,
+implementation, or review while the user remains engaged. Child work is visible and cancellable,
+and the lead reconciles it into the attended session. Correcting an assignment requires cancelling
+it and launching a new child. It creates no managed Run,
+workspace-isolation, or recovery guarantee. V1 has no background semantic work or unattended
+execution, and implementation does not wait for a separately agreed execution plan.
 
 ### Confirmed checkpoints
 
@@ -68,12 +72,17 @@ continue the relevant session, review unresolved human tasks, and close complete
 Closing preserves the ledger and unresolved items. File cleanup always requires explicit human
 action.
 
+The focused [Level 1 child execution plan](level-1-subagents.md) defines the bounded implementation
+of this attended delegation capability.
+
 ## Acceptance
 
 V1 is complete when one real project demonstrates the complete workflow across browser and PI WEB
 process restarts, including:
 
 - successful session launch and one-home-Workstream association;
+- one bounded child assignment whose progress and result remain visible and cancellable from the
+  attended lead session;
 - launch failure without an orphaned or duplicate session;
 - reconnect reconciliation without duplicate association;
 - attended checkpoint review and confirmation;
@@ -84,11 +93,11 @@ process restarts, including:
 
 ## Non-goals
 
-V1 does not include automatic checkpointing, background semantic model work, FirstMate, subagents,
-parallel delegation, contract-driven multi-agent execution, independent model review, unattended
-execution, or controller-managed Runs. Levels 2–4 are concepts, not scheduled implementation. Any
-expansion beyond Level 1 requires a new decision and implementation plan based on evidence from
-sustained V1 use.
+V1 does not include automatic checkpointing, background semantic model work, FirstMate, an
+agreed-before execution-plan gate, contract-driven multi-agent execution, durable child identity,
+independent acceptance authority, unattended execution, or controller-managed Runs. Levels 2–4 are
+concepts, not scheduled implementation. Any expansion beyond Level 1 requires a new decision and
+implementation plan based on evidence from sustained V1 use.
 
 ## Evidence
 

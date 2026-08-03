@@ -9,8 +9,17 @@
   "bin": {
     "pi-role": "./scripts/pi-role"
   },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
   "scripts": {
+    "test": "npm run test:model-routing && npm run test:pi-execution-adapter && npm run test:workstream-store && npm run test:pi-web-integration",
     "test:model-routing": "node skills/model-orchestration/scripts/resolve-runtime-binding.test.mjs",
+    "test:pi-execution-adapter": "npm --prefix packages/pi-execution-adapter test",
     "test:workstream-store": "npm --prefix packages/workstream-store test",
     "test:pi-web-integration": "npm --prefix packages/pi-web-integration test"
   },

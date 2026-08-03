@@ -45,13 +45,15 @@ The generated surface is integrated into the harness UI and remains flexible dur
 
 Every interactive session starts in exactly one Workstream. V1 implements Level 1 from the
 [Operating Levels specification](../foundation/operating-levels.md): one human pairs with one
-interactive Pi under continuous Human Attention. The harness does not launch child actors,
-delegated semantic work, background model turns, or managed Runs.
+interactive lead Pi under continuous Human Attention. The lead may launch bounded ephemeral child
+Pi processes as attended tool activity and remains accountable for their assignments and results.
+The harness does not launch background model turns or managed Runs.
 
 The Workstream preserves cross-session attention but grants no workspace lease, enforced path
 scope, durable Run identity, managed authority, or recovery guarantee. Model selection may resolve
-the interactive Pi's concrete provider, model, and Model Effort, but that binding does not change
-the Level 1 posture. Levels 2–4 have no V1 package or preset resources.
+the interactive lead and child processes' concrete providers, models, and Model Effort, but those
+bindings do not change the Level 1 posture. Level 1 does not require an agreed execution plan before
+implementation begins. Levels 2–4 have no V1 package or preset resources.
 
 ## Repository Package
 

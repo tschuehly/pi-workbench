@@ -1,4 +1,5 @@
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams } from "./workstream-client.js";
+import { WorkstreamSessionCoordinator } from "./workstream-session-coordinator.js";
 
 const PROJECTION_PATH = ".pi-workbench/projection.json";
 const PANEL_ID = "pi-workbench:run.panel";
@@ -34,6 +35,12 @@ export default {
             order: 10,
             icon: svg`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"></path><circle cx="18" cy="18" r="2"></circle></svg>`,
             badge: () => recordedWorkstreamState.status === "ready" ? recordedWorkstreamState.snapshots.filter((snapshot) => !snapshot.closed).length : undefined,
+          },
+        ],
+        sessionStartGuards: [
+          {
+            id: "workstreams.session-home",
+            disabledReason: () => "Start new sessions from a Workstream so every interactive session has one durable home.",
           },
         ],
         primaryViews: [
@@ -162,6 +169,70 @@ function installWorkstreamsElement() {
       void this.#mutate((client) => client.create({ workstreamId: id, idempotencyKey: key, title: title.trim(), producer: "owner" }));
     }
 
+    #coordinator() {
+      if (workstreamClient === undefined || this.#context?.sessions === undefined) throw new Error("Attended session launch is unavailable.");
+      return new WorkstreamSessionCoordinator(workstreamClient, this.#context.sessions);
+    }
+
+    #start(snapshot) {
+      void this.#mutate(async () => {
+        const session = await this.#coordinator().launch(snapshot);
+        recordedWorkstreamState.notice = `Started session ${session.id}.`;
+        return { acceptedRevision: (await workstreamClient.inspect(snapshot.id)).revision, sequence: recordedWorkstreamState.sequence };
+      });
+    }
+
+    #resume(session) {
+      void this.#coordinator().resume(session).catch((error) => { recordedWorkstreamState.error = errorMessage(error); this.#render(); });
+    }
+
+    #requestCheckpoint(session) {
+      if (this.#context?.sessions === undefined) { recordedWorkstreamState.error = "Attended session controls are unavailable."; this.#render(); return; }
+      const location = { sessionId: session.id, machineId: session.machineId, projectId: session.projectId, workspaceId: session.workspaceId };
+      void this.#context.sessions.prompt(location, "Propose a concise attended Workstream checkpoint with exactly three labeled parts: What changed, What remains, and Next useful action. Do not persist it; I will review and confirm it in the Workstreams view.")
+        .catch((error) => { recordedWorkstreamState.error = errorMessage(error); this.#render(); });
+    }
+
+    #saveCheckpoint(snapshot, session) {
+      const prior = session.latestCheckpoint;
+      const whatChanged = window.prompt("What changed? Review and correct Pi's proposal before saving.", prior?.whatChanged ?? "");
+      if (whatChanged === null || whatChanged.trim() === "") return;
+      const remains = window.prompt("What remains?", prior?.remains ?? "");
+      if (remains === null || remains.trim() === "") return;
+      const next = window.prompt("Next useful action?", prior?.next ?? "");
+      if (next === null || next.trim() === "") return;
+      if (!window.confirm(`Save this checkpoint?\n\nChanged: ${whatChanged}\n\nRemains: ${remains}\n\nNext: ${next}`)) return;
+      void this.#mutate(async (client) => {
+        try {
+          return await client.append({
+            workstreamId: snapshot.id,
+            expectedRevision: snapshot.revision,
+            idempotencyKey: newId("checkpoint"),
+            records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: session.id, payload: { sessionId: session.id, checkpoint: { id: newId("cp"), whatChanged: whatChanged.trim(), remains: remains.trim(), next: next.trim() } } }],
+          });
+        } catch (error) {
+          const current = await client.inspect(snapshot.id);
+          return client.append({
+            workstreamId: snapshot.id,
+            expectedRevision: current.revision,
+            idempotencyKey: newId("checkpoint-failed"),
+            records: [{ type: "checkpoint.failed", producer: "pi-web", sourceSessionId: session.id, payload: { sessionId: session.id, reason: `Confirmed checkpoint was not saved: ${errorMessage(error)}` } }],
+          });
+        }
+      });
+    }
+
+    #addTask(snapshot) {
+      const title = window.prompt("Human task");
+      if (title === null || title.trim() === "") return;
+      const detail = window.prompt("Detail (optional)");
+      void this.#mutate((client) => client.append({ workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: newId("task"), records: [{ type: "human-task.upsert", producer: "owner", payload: { task: { id: newId("task"), title: title.trim(), ...(detail?.trim() ? { detail: detail.trim() } : {}) } } }] }));
+    }
+
+    #resolveTask(snapshot, task) {
+      void this.#mutate((client) => client.append({ workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: newId("task-resolved"), records: [{ type: "human-task.resolved", producer: "owner", payload: { taskId: task.id } }] }));
+    }
+
     #appendLink(snapshot) {
       const reference = window.prompt("Link reference (file, repository, artifact, or URL)");
       if (reference === null || reference.trim() === "") return;
@@ -202,11 +273,18 @@ function installWorkstreamsElement() {
         empty.append(button("Create Workstream", () => { this.#create(); }));
         main.append(empty);
       } else {
+        if (recordedWorkstreamState.error !== "") main.append(message(recordedWorkstreamState.error, "checkpoint-error"));
         if (recordedWorkstreamState.notice !== "") main.append(message(recordedWorkstreamState.notice, "receipt"));
         main.append(renderWorkstreams(
           recordedWorkstreamState.snapshots,
           recordedWorkstreamState.sequence,
           () => { this.#create(); },
+          (snapshot) => { this.#start(snapshot); },
+          (session) => { this.#resume(session); },
+          (session) => { this.#requestCheckpoint(session); },
+          (snapshot, session) => { this.#saveCheckpoint(snapshot, session); },
+          (snapshot) => { this.#addTask(snapshot); },
+          (snapshot, task) => { this.#resolveTask(snapshot, task); },
           (snapshot) => { this.#appendLink(snapshot); },
           (snapshot) => { this.#close(snapshot); },
         ));
@@ -232,7 +310,14 @@ async function loadRecordedWorkstreams(context, force = false) {
     snapshots: recordedWorkstreamState.snapshots,
     sequence: recordedWorkstreamState.sequence,
   })
-    .then((projection) => {
+    .then(async (projection) => {
+      if (context.sessions !== undefined) {
+        const coordinator = new WorkstreamSessionCoordinator(workstreamClient, context.sessions);
+        const reconciled = (await Promise.all(projection.snapshots.map((snapshot) => coordinator.reconcile(snapshot)))).flat();
+        if (reconciled.some((result) => result.status === "confirmed")) {
+          projection = await reconcileWorkstreams(workstreamClient, projection);
+        }
+      }
       recordedWorkstreamState.status = "ready";
       recordedWorkstreamState.snapshots = projection.snapshots;
       recordedWorkstreamState.sequence = projection.sequence;
@@ -249,7 +334,7 @@ async function loadRecordedWorkstreams(context, force = false) {
   return recordedWorkstreamState.promise;
 }
 
-function renderWorkstreams(snapshots, sequence, onCreate, onAppendLink, onClose) {
+function renderWorkstreams(snapshots, sequence, onCreate, onStart, onResume, onRequestCheckpoint, onSaveCheckpoint, onAddTask, onResolveTask, onAppendLink, onClose) {
   const fragment = document.createDocumentFragment();
   const header = document.createElement("header");
   const heading = document.createElement("div");
@@ -263,18 +348,18 @@ function renderWorkstreams(snapshots, sequence, onCreate, onAppendLink, onClose)
   const open = snapshots.filter((snapshot) => !snapshot.closed);
   const closed = snapshots.filter((snapshot) => snapshot.closed);
   const openSection = section("Current", open.length === 0 ? "No current Workstreams." : undefined);
-  for (const snapshot of open) openSection.append(workstreamArticle(snapshot, onAppendLink, onClose));
+  for (const snapshot of open) openSection.append(workstreamArticle(snapshot, onStart, onResume, onRequestCheckpoint, onSaveCheckpoint, onAddTask, onResolveTask, onAppendLink, onClose));
   fragment.append(openSection);
   if (closed.length > 0) {
     const closedSection = section("Closed");
     closedSection.classList.add("closed-section");
-    for (const snapshot of closed) closedSection.append(workstreamArticle(snapshot, onAppendLink, onClose));
+    for (const snapshot of closed) closedSection.append(workstreamArticle(snapshot, onStart, onResume, onRequestCheckpoint, onSaveCheckpoint, onAddTask, onResolveTask, onAppendLink, onClose));
     fragment.append(closedSection);
   }
   return fragment;
 }
 
-function workstreamArticle(snapshot, onAppendLink, onClose) {
+function workstreamArticle(snapshot, onStart, onResume, onRequestCheckpoint, onSaveCheckpoint, onAddTask, onResolveTask, onAppendLink, onClose) {
   const article = document.createElement("article");
   article.className = `workstream${snapshot.closed ? " closed" : ""}`;
   const heading = document.createElement("div");
@@ -290,7 +375,7 @@ function workstreamArticle(snapshot, onAppendLink, onClose) {
   } else {
     const sessions = document.createElement("div");
     sessions.className = "sessions";
-    for (const session of snapshot.sessions) sessions.append(sessionRow(session));
+    for (const session of snapshot.sessions) sessions.append(sessionRow(snapshot, session, onResume, onRequestCheckpoint, onSaveCheckpoint));
     article.append(sessions);
   }
 
@@ -298,7 +383,15 @@ function workstreamArticle(snapshot, onAppendLink, onClose) {
     const tasks = document.createElement("div");
     tasks.className = "tasks";
     tasks.append(label("Needs you"));
-    for (const task of snapshot.humanTasks) tasks.append(strong(task.title), ...(task.detail ? [message(task.detail, "muted")] : []));
+    for (const task of snapshot.humanTasks) {
+      const taskRow = document.createElement("div");
+      taskRow.className = "task-row";
+      const copy = document.createElement("div");
+      copy.append(strong(task.title), ...(task.detail ? [message(task.detail, "muted")] : []));
+      taskRow.append(copy);
+      if (!snapshot.closed) taskRow.append(button("Resolve", () => { onResolveTask(snapshot, task); }));
+      tasks.append(taskRow);
+    }
     article.append(tasks);
   }
 
@@ -306,13 +399,13 @@ function workstreamArticle(snapshot, onAppendLink, onClose) {
   if (!snapshot.closed) {
     const actions = document.createElement("div");
     actions.className = "workstream-actions";
-    actions.append(button("Add link", () => { onAppendLink(snapshot); }), button("Close", () => { onClose(snapshot); }));
+    actions.append(button("Start session", () => { onStart(snapshot); }), button("Add task", () => { onAddTask(snapshot); }), button("Add link", () => { onAppendLink(snapshot); }), button("Close", () => { onClose(snapshot); }));
     article.append(actions);
   }
   return article;
 }
 
-function sessionRow(session) {
+function sessionRow(snapshot, session, onResume, onRequestCheckpoint, onSaveCheckpoint) {
   const row = document.createElement("div");
   row.className = "session";
   const header = document.createElement("div");
@@ -325,6 +418,12 @@ function sessionRow(session) {
     row.append(message("No current checkpoint is available.", "muted"));
   }
   if (session.checkpointFailure !== null) row.append(message(session.checkpointFailure, "checkpoint-error"));
+  if (session.status === "active" && !snapshot.closed) {
+    const actions = document.createElement("div");
+    actions.className = "workstream-actions";
+    actions.append(button("Resume", () => { onResume(session); }), button("Ask for checkpoint", () => { onRequestCheckpoint(session); }), button("Save checkpoint", () => { onSaveCheckpoint(snapshot, session); }));
+    row.append(actions);
+  }
   return row;
 }
 
@@ -359,7 +458,10 @@ function workstreamsStyleElement() {
     .sequence, .state, .task-count { flex: 0 0 auto; border-radius: 999px; background: var(--pi-surface); color: var(--pi-muted); padding: 3px 7px; font-size: 11px; white-space: nowrap; }
     .task-count { background: var(--pi-warning-surface); color: var(--pi-warning); }
     .next { color: var(--pi-text-bright); font-weight: 650; }
-    .tasks { display: grid; gap: 4px; padding: var(--pi-message-padding, 12px); background: var(--pi-warning-surface); }
+    .tasks { display: grid; gap: 8px; padding: var(--pi-message-padding, 12px); background: var(--pi-warning-surface); }
+    .task-row { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+    .task-row > div { display: grid; gap: 3px; min-width: 0; }
+    @media (max-width: 720px) { .workstream-actions { flex-wrap: wrap; justify-content: flex-start; } }
     .checkpoint-error, .connection { padding: var(--pi-message-padding, 12px); background: var(--pi-warning-surface); color: var(--pi-warning); }
     .connection { border-radius: 8px; }
     .receipt { padding: var(--pi-message-padding, 12px); border-radius: 8px; background: var(--pi-success-surface); color: var(--pi-success); }

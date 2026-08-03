@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
 import { parseWorkbenchProjection } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
+import { WorkstreamSessionCoordinator } from "../workstream-session-coordinator.js";
 
 const fixtureUrl = new URL("../fixtures/recorded-projection.json", import.meta.url);
 
@@ -96,6 +97,100 @@ test("reconnect reconciliation applies ordered replay or replaces from a snapsho
   assert.equal(reconciled.mode, "snapshot");
   assert.equal(reconciled.sequence, 9);
   assert.equal(reconciled.snapshots[0].id, "ws-1");
+});
+
+test("session launch records pending before start and confirms exactly one runtime session", async () => {
+  const calls = [];
+  let snapshot = { id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false };
+  const client = {
+    inspect: async () => structuredClone(snapshot),
+    append: async (request) => {
+      calls.push(request.records[0].type);
+      snapshot = { ...snapshot, revision: snapshot.revision + 1 };
+      return { acceptedRevision: snapshot.revision, sequence: snapshot.revision };
+    },
+  };
+  const host = {
+    currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
+    start: async ({ startupToken, initialPrompt }) => {
+      assert.equal(calls[0], "session.pending");
+      assert.match(initialPrompt, /Workstream “Pair”/);
+      return { id: "session-runtime", location: { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" } };
+    },
+    open: async () => {},
+    findByStartupToken: async () => undefined,
+  };
+  const result = await new WorkstreamSessionCoordinator(client, host).launch(snapshot);
+  assert.equal(result.id, "session-runtime");
+  assert.deepEqual(calls, ["session.pending", "session.confirmed"]);
+});
+
+test("confirmation response loss reconciles the accepted association without failing or relaunching", async () => {
+  let starts = 0;
+  let snapshot = { id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false };
+  const client = {
+    inspect: async () => structuredClone(snapshot),
+    append: async (request) => {
+      const record = request.records[0];
+      snapshot = { ...snapshot, revision: snapshot.revision + 1 };
+      if (record.type === "session.pending") snapshot.sessions = [{ id: `pending:${record.payload.associationKey}`, status: "pending", associationKey: record.payload.associationKey }];
+      if (record.type === "session.confirmed") {
+        snapshot.sessions = [{ id: record.payload.sessionId, status: "active", associationKey: record.payload.associationKey }];
+        throw new Error("response lost after commit");
+      }
+      return { acceptedRevision: snapshot.revision, sequence: snapshot.revision };
+    },
+  };
+  const host = {
+    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
+    start: async () => { starts += 1; return { id: "runtime-1", location: { machineId: "local", workspaceId: "workspace-1" } }; },
+    open: async () => {}, findByStartupToken: async () => undefined,
+  };
+  const result = await new WorkstreamSessionCoordinator(client, host).launch(snapshot);
+  assert.equal(result.id, "runtime-1");
+  assert.equal(starts, 1);
+  assert.deepEqual(snapshot.sessions.map((session) => session.id), ["runtime-1"]);
+});
+
+test("confirmation failure leaves the created session pending for reconnect reconciliation", async () => {
+  let snapshot = { id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false };
+  const client = {
+    inspect: async () => structuredClone(snapshot),
+    append: async (request) => {
+      const record = request.records[0];
+      if (record.type === "session.pending") {
+        snapshot = { ...snapshot, revision: 2, sessions: [{ id: `pending:${record.payload.associationKey}`, status: "pending", associationKey: record.payload.associationKey }] };
+        return { acceptedRevision: 2, sequence: 2 };
+      }
+      throw new Error("store temporarily unavailable");
+    },
+  };
+  const host = {
+    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
+    start: async () => ({ id: "runtime-1", location: { machineId: "local", workspaceId: "workspace-1" } }),
+    open: async () => {}, findByStartupToken: async () => undefined,
+  };
+  await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch(snapshot), /store temporarily unavailable/);
+  assert.equal(snapshot.sessions[0].status, "pending");
+});
+
+test("session launch failure records failure and does not retry the host start", async () => {
+  const records = [];
+  let revision = 1;
+  let starts = 0;
+  const client = {
+    inspect: async () => ({ id: "ws-1", title: "Pair", revision, sessions: [], closed: false }),
+    append: async (request) => { records.push(request.records[0].type); revision += 1; return { acceptedRevision: revision, sequence: revision }; },
+  };
+  const host = {
+    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
+    start: async () => { starts += 1; throw new Error("launch exploded"); },
+    open: async () => {},
+    findByStartupToken: async () => undefined,
+  };
+  await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch({ id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false }), /launch exploded/);
+  assert.equal(starts, 1);
+  assert.deepEqual(records, ["session.pending", "session.failed"]);
 });
 
 test("typed Workstream client preserves semantic service errors", async () => {

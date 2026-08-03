@@ -19,6 +19,7 @@ __pycache__/
 .pi-web/
 .pi-workbench/runs/
 .pi-workbench/objects/
+.scratch/
 
 # Logs
 *.log

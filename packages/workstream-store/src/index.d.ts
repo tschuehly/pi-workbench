@@ -24,9 +24,9 @@ export interface CloseWorkstream {
 }
 
 export type WorkstreamRecord =
-  | SemanticRecord<"session.pending", { sessionId: string; associationKey: string }>
-  | SemanticRecord<"session.confirmed", { sessionId: string }>
-  | SemanticRecord<"session.failed", { sessionId: string; reason: string }>
+  | SemanticRecord<"session.pending", { sessionId?: string; associationKey: string; machineId?: string; projectId?: string; workspaceId?: string }>
+  | SemanticRecord<"session.confirmed", { sessionId: string; associationKey?: string; machineId?: string; projectId?: string; workspaceId?: string }>
+  | SemanticRecord<"session.failed", { sessionId?: string; associationKey?: string; reason: string }>
   | SemanticRecord<"checkpoint.replaced", { sessionId: string; checkpoint: Checkpoint }>
   | SemanticRecord<"checkpoint.failed", { sessionId: string; reason: string }>
   | SemanticRecord<"human-task.upsert", { task: HumanTask }>
@@ -65,6 +65,9 @@ export interface WorkstreamSession {
   id: string;
   status: "pending" | "active";
   associationKey?: string;
+  machineId?: string;
+  projectId?: string;
+  workspaceId?: string;
   latestCheckpoint: Checkpoint | null;
   checkpointFailure: string | null;
 }

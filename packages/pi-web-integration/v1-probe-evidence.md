@@ -2,6 +2,19 @@
 
 Status: bounded v1 probe, generic navigation/primary-view slice, and typed Workstream transport completed.
 
+## 2026-08-03 Level 1 attended workflow probe
+
+Against the live PI WEB Vite client and trusted Workbench plugin service, the Workstreams primary
+view loaded the user-local projection, created a Workstream through the typed service, updated the
+navigation badge, and closed it without deleting its ledger. The ordinary PI WEB new-session control
+was disabled while the Workbench session-home guard was active, directing starts through a
+Workstream. The probe Workstream remains as closed machine-local evidence; no generated state was
+written to the repository.
+
+Session launch/reconnect and checkpoint failure paths are exercised deterministically in
+`test/projection.test.js`; real Pi RPC launch, persistence, streaming, and cancellation evidence is
+recorded in `../pi-execution-adapter/real-smoke-evidence.md`.
+
 ## Supported through documented v1 interfaces
 
 | Interaction | v1 mechanism | Result |
