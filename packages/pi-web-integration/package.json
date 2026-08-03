@@ -4,13 +4,14 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check pi-web-plugin.js && npm test"
+    "check": "node --check pi-web-plugin.js && node --check fake-workstream-client.js && node --check workstream-client.js && node --check workstream-service.js && npm test"
   },
   "piWeb": {
     "plugins": [
       {
         "id": "pi-workbench",
-        "module": "pi-web-plugin.js"
+        "module": "pi-web-plugin.js",
+        "service": "workstream-service.js"
       }
     ]
   }

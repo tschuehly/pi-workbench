@@ -10,7 +10,9 @@
     "pi-role": "./scripts/pi-role"
   },
   "scripts": {
-    "test:model-routing": "node skills/model-orchestration/scripts/resolve-runtime-binding.test.mjs"
+    "test:model-routing": "node skills/model-orchestration/scripts/resolve-runtime-binding.test.mjs",
+    "test:workstream-store": "npm --prefix packages/workstream-store test",
+    "test:pi-web-integration": "npm --prefix packages/pi-web-integration test"
   },
   "pi": {
     "skills": [

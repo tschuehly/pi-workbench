@@ -33,6 +33,8 @@ Each step must end in a working vertical slice before the next begins.
 
 ### 2. Implement the Workstream Store
 
+**Status:** complete.
+
 - Create `packages/workstream-store/` behind the interface in
   [`../contracts/workstreams.md`](../contracts/workstreams.md).
 - Implement `create`, `append`, `inspect`, `list`, `watch`, and `close` with typed requests and
@@ -48,6 +50,8 @@ reuse, invalid records, and oversized mutations.
 
 ### 3. Add navigation and primary views to PI WEB
 
+**Status:** complete.
+
 - Contribute generic navigation-entry and primary-view interfaces upstream.
 - Preserve selected view, focus, loading, empty, failure, reconnect, narrow, and mobile behavior.
 - Keep authentication, connectivity, settings, recovery, workspace selection, and conversation
@@ -59,6 +63,8 @@ reuse, invalid records, and oversized mutations.
 private APIs or arbitrary shell replacement.
 
 ### 4. Connect the Workstream Store to PI WEB
+
+**Status:** complete.
 
 - Add the smallest stable PI WEB host seam needed to call the Workstream interface from the browser.
 - Keep persistence and Workstream semantics in Pi Workbench; PI WEB transports typed requests and

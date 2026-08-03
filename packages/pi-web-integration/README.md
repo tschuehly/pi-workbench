@@ -1,11 +1,17 @@
 # Pi Workbench PI WEB integration
 
 This package is the bounded `apiVersion: 1` customization probe from the
-[PI WEB customization plan](../../docs/integrations/pi-web/customization-plan.md). It is a read-oriented PI WEB
-browser plugin, not a Run Controller and not authoritative Run state.
+[PI WEB customization plan](../../docs/integrations/pi-web/customization-plan.md). It is a PI WEB
+browser plugin with a small trusted web-process service, not a Run Controller and not authoritative Run state.
 
-## What the probe contributes
+## What the adapter contributes
 
+- **Workstreams navigation entry:** opens a first-class primary view through PI WEB's qualified
+  navigation and primary-view interfaces.
+- **Workstreams primary view:** presents current and closed Workstreams, concurrent sessions, latest
+  checkpoints, checkpoint failures, human tasks, links, revision, loading, empty, failure, and
+  reconnect states from the typed Workstream client. It creates Workstreams, appends links, closes
+  Workstreams, renders accepted receipts, and reconciles ordered watch batches.
 - **Workspace label:** current Run state or pending Human Attention count.
 - **Action:** opens the qualified `pi-workbench:run.panel` workspace panel.
 - **Workspace panel:** presents Run status, authority, pending Attention Items, activity progressing
@@ -16,10 +22,18 @@ helper. When that generated projection is absent, it renders the deterministic
 [`recorded-projection.json`](fixtures/recorded-projection.json) fixture and says that it is doing so.
 The fixture is presentation evidence only.
 
-The plugin never infers a Run from a PI WEB session, calls a private PI WEB route, polls, injects
-CSS, or performs a Workbench mutation. Evidence inspection uses the documented workspace-file
-helper. Until the framework-neutral Run client exists, mutations remain in the structured terminal
-fallback.
+The Workstreams view calls PI WEB's plugin-scoped JSON service helper through
+`workstream-client.js`. `workstream-service.js` owns no semantics: it delegates the six typed
+operations to `@pi-workbench/workstream-store`, which persists user-local ledgers under
+`~/.pi-workbench/workstreams`. Set `PI_WORKBENCH_WORKSTREAM_DIR` only for isolated tests or an
+intentional alternate user-local location. The deterministic `fake-workstream-client.js` and
+[`recorded-workstreams.json`](fixtures/recorded-workstreams.json) remain available for PI WEB tests.
+
+The plugin never infers a Run from a PI WEB session, calls a private PI WEB route, transports a
+mutation through workspace files or terminal text, or injects global CSS. It polls only the typed
+`watch` operation, carrying the last accepted sequence so reconnect applies ordered replay or a
+canonical snapshot reconciliation. Workstream revisions, validation, idempotency, receipts, and
+persistence remain in Pi Workbench.
 
 ## Develop locally
 
@@ -30,8 +44,8 @@ mkdir -p ~/.pi-web/plugins
 ln -s /path/to/pi-workbench/packages/pi-web-integration ~/.pi-web/plugins/pi-workbench
 ```
 
-Reload the PI WEB browser tab and select a workspace. The plugin should appear in
-`pi-web-plugins/manifest.json`. Run the deterministic checks with:
+Reload the PI WEB browser tab. The plugin manifest entry should include both `module` and `service`.
+Workstreams are portfolio-wide and do not require a selected workspace. Run the deterministic checks with:
 
 ```sh
 cd packages/pi-web-integration
@@ -53,7 +67,7 @@ The temporary probe projection contains:
 This JSON is not the final Run protocol. Phase 7 replaces the projection source with the
 framework-neutral Run client while retaining this deterministic fixture.
 
-## Proven v1 behavior and gaps
+## Proven behavior and gaps
 
 See [`v1-probe-evidence.md`](v1-probe-evidence.md) for the exercised contribution behavior and the
 specific upstream interface gaps. That evidence gates any proposal for stable host observation or

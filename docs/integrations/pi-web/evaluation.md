@@ -35,13 +35,18 @@ The Workbench adapter under `packages/pi-web-integration/` demonstrates that the
 
 The detailed observations and gaps are recorded in [`packages/pi-web-integration/v1-probe-evidence.md`](../../../packages/pi-web-integration/v1-probe-evidence.md).
 
+The subsequent upstream vertical slice adds qualified navigation entries and primary views. The
+Workbench adapter proves them with a read-only Workstreams destination over a deterministic fake
+client, including route restoration, focus transfer, reconnect presentation, narrow and mobile
+layouts, and visible access back to Conversation and protected shell controls.
+
 ## Missing stable interfaces
 
 The current plugin interface does not yet provide stable support for:
 
-- A first-class navigation contribution and primary view for the Entry Preset selector.
-- Ordered observation of an external Run event stream across disconnect and reconnect.
-- Typed Workbench commands and receipts.
+- Ordered observation of an external managed Run event stream across disconnect and reconnect.
+- Typed managed Run commands and receipts. Workstreams now use the narrower plugin-scoped JSON
+  service transport.
 - Run control leases, authority, or durable attention semantics.
 - Namespaced plugin preference and focus-restoration state sufficient for richer Review Surfaces.
 - Portfolio-wide attention independent of the selected workspace.
@@ -57,6 +62,9 @@ Installed PI WEB plugins are trusted browser code. Repository- or agent-generate
 
 ## Evaluation status
 
-The v1 probe justifies continued PI WEB adaptation and the smallest generic navigation and primary-view contribution slice. It does not yet prove the typed Run client, typed mutations, portfolio attention, or shell profiles.
+The v1 probe and Workstreams primary-view slice justify continued PI WEB adaptation. The generic
+navigation and primary-view interfaces and typed Workstream transport are now proven. The adapter
+does not yet prove the typed managed Run client, managed Run mutations, FirstMate attention, or
+shell profiles.
 
 A fork remains unnecessary while generic upstream seams can express accepted interactions. PI WEB must pass the shared fixture for typed Workstream and Run controls, ordered observation, durable attention, reconnect behavior, responsive review, and accessibility as those capabilities are added.

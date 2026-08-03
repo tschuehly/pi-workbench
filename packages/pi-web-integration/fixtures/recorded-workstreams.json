@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "sequence": 12,
+  "snapshots": [
+    {
+      "id": "ws-workstream-store",
+      "title": "Deliver Workstream continuity",
+      "revision": 4,
+      "createdAt": "2026-07-30T08:00:00.000Z",
+      "updatedAt": "2026-07-31T14:20:00.000Z",
+      "sessions": [
+        {
+          "id": "session-store-contract",
+          "status": "active",
+          "latestCheckpoint": {
+            "id": "checkpoint-store-green",
+            "whatChanged": "The typed store and both persistence adapters pass their contract tests.",
+            "remains": "Connect the store through the browser-safe Workstream client.",
+            "next": "Define the smallest stable host transport.",
+            "references": ["packages/workstream-store"]
+          },
+          "checkpointFailure": null
+        },
+        {
+          "id": "session-interface-probe",
+          "status": "active",
+          "latestCheckpoint": null,
+          "checkpointFailure": "The latest checkpoint attempt failed; the previous continuation is not current."
+        }
+      ],
+      "humanTasks": [
+        {
+          "id": "task-review-interface",
+          "title": "Review the Workstreams primary-view behavior",
+          "detail": "Check narrow layout, reconnect state, and focus restoration."
+        }
+      ],
+      "links": [
+        {
+          "id": "link-contract",
+          "kind": "file",
+          "reference": "docs/contracts/workstreams.md",
+          "label": "Workstream contract"
+        }
+      ],
+      "closed": false,
+      "closedAt": null
+    },
+    {
+      "id": "ws-pi-runtime-reconciliation",
+      "title": "Reconcile Pi and PI WEB",
+      "revision": 3,
+      "createdAt": "2026-07-28T09:00:00.000Z",
+      "updatedAt": "2026-07-29T16:45:00.000Z",
+      "sessions": [],
+      "humanTasks": [],
+      "links": [
+        {
+          "id": "link-adoption-plan",
+          "kind": "plan",
+          "reference": "docs/plans/level-adoption.md",
+          "label": "Level adoption plan"
+        }
+      ],
+      "closed": true,
+      "closedAt": "2026-07-29T16:45:00.000Z"
+    }
+  ]
+}
