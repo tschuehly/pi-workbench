@@ -69,13 +69,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appItem.submenu = appMenu
         appMenu.addItem(
-            withTitle: "About PI WEB",
+            withTitle: "About Pi Workbench",
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
         appMenu.addItem(.separator())
         appMenu.addItem(
-            withTitle: "Quit PI WEB",
+            withTitle: "Quit Pi Workbench",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -206,7 +206,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
             backing: .buffered,
             defer: false
         )
-        window.title = "PI WEB"
+        window.title = "Pi Workbench"
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = false
         window.tabbingIdentifier = "pi-web-browser"
@@ -245,7 +245,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        window?.title = webView.title?.isEmpty == false ? webView.title! : "PI WEB"
+        window?.title = webView.title?.isEmpty == false ? webView.title! : "Pi Workbench"
     }
 
     func webView(
@@ -368,4 +368,7 @@ private let application = NSApplication.shared
 private let delegate = AppDelegate()
 application.delegate = delegate
 application.setActivationPolicy(.regular)
+if let iconPath = ProcessInfo.processInfo.environment["PI_WEB_ICON"] {
+    application.applicationIconImage = NSImage(contentsOfFile: iconPath)
+}
 application.run()

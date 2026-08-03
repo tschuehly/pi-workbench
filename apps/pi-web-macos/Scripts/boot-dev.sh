@@ -126,7 +126,7 @@ reload_state_dir="$(mktemp -d /tmp/pi-web-mac.XXXXXX)"
 
 while true; do
   rm -f "${reload_state_dir}/changed"
-  PI_WEB_URL="${pi_web_url}" swift run PIWebMac &
+  PI_WEB_ICON="${PI_WEB_ICON:-${app_dir}/Resources/AppIcon.icns}" PI_WEB_URL="${pi_web_url}" swift run PIWebMac &
   wrapper_pid=$!
 
   (

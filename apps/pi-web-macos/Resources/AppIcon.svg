@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Pi Workbench</title>
+  <desc id="desc">A luminous cyan horizon set into a deep graphite app tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="210" y1="112" x2="786" y2="916" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#202632"/>
+      <stop offset="0.52" stop-color="#111620"/>
+      <stop offset="1" stop-color="#080b11"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="218" y1="130" x2="782" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3e4859"/>
+      <stop offset="0.42" stop-color="#1d2430"/>
+      <stop offset="1" stop-color="#05070b"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="256" y1="430" x2="776" y2="592" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5dffe9"/>
+      <stop offset="0.38" stop-color="#10ead5"/>
+      <stop offset="1" stop-color="#00bfae"/>
+    </linearGradient>
+    <linearGradient id="barEdge" x1="512" y1="437" x2="512" y2="586" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b7fff5" stop-opacity=".72"/>
+      <stop offset=".18" stop-color="#5dffe9" stop-opacity=".08"/>
+      <stop offset="1" stop-color="#007e74" stop-opacity=".52"/>
+    </linearGradient>
+    <radialGradient id="ambient" cx="50%" cy="50%" r="50%">
+      <stop stop-color="#11ead5" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#11ead5" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="tileShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="30"/>
+      <feOffset dy="28"/>
+      <feColorMatrix values="0 0 0 0 0 0 0 0 0 0.02 0 0 0 0 0.04 0 0 0 .42 0"/>
+      <feBlend in="SourceGraphic"/>
+    </filter>
+    <filter id="barShadow" x="-30%" y="-80%" width="160%" height="260%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="20" result="blur"/>
+      <feOffset in="blur" dy="24" result="offset"/>
+      <feFlood flood-color="#00050a" flood-opacity=".72" result="shadowColor"/>
+      <feComposite in="shadowColor" in2="offset" operator="in" result="shadow"/>
+      <feBlend in="SourceGraphic" in2="shadow"/>
+    </filter>
+    <clipPath id="tileClip">
+      <rect x="92" y="72" width="840" height="840" rx="194"/>
+    </clipPath>
+  </defs>
+
+  <g filter="url(#tileShadow)">
+    <rect x="92" y="72" width="840" height="840" rx="194" fill="url(#tile)"/>
+    <rect x="93" y="73" width="838" height="838" rx="193" fill="none" stroke="url(#rim)" stroke-width="2"/>
+  </g>
+
+  <g clip-path="url(#tileClip)">
+    <ellipse cx="512" cy="512" rx="400" ry="235" fill="url(#ambient)"/>
+    <path d="M166 204C326 99 650 87 860 218" fill="none" stroke="#fff" stroke-opacity=".055" stroke-width="88" stroke-linecap="round"/>
+    <path d="M150 786C355 879 678 871 872 732" fill="none" stroke="#000" stroke-opacity=".22" stroke-width="112" stroke-linecap="round"/>
+  </g>
+
+  <g filter="url(#barShadow)">
+    <rect x="226" y="434" width="572" height="156" rx="42" fill="#060a10" opacity=".72" transform="translate(0 12)"/>
+    <rect x="226" y="426" width="572" height="156" rx="42" fill="url(#bar)"/>
+    <rect x="227" y="427" width="570" height="154" rx="41" fill="none" stroke="url(#barEdge)" stroke-width="2"/>
+    <path d="M270 447H754" stroke="#d6fff9" stroke-opacity=".38" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>
