@@ -186,6 +186,42 @@ private final class BrowserCoordinator {
     }
 }
 
+private final class DirectoryPickerMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage,
+        replyHandler: @escaping (Any?, String?) -> Void
+    ) {
+        guard message.frameInfo.isMainFrame else {
+            replyHandler(nil, "The folder picker is only available to the main page")
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Add Project"
+        panel.message = "Choose a project folder"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.resolvesAliases = true
+
+        let complete: (NSApplication.ModalResponse) -> Void = { response in
+            if response == .OK, let path = panel.url?.path {
+                replyHandler(path, nil)
+            } else {
+                replyHandler(NSNull(), nil)
+            }
+        }
+        if let window = message.webView?.window {
+            panel.beginSheetModal(for: window, completionHandler: complete)
+        } else {
+            complete(panel.runModal())
+        }
+    }
+}
+
 private final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private let serverURL: URL
     private let webView: WKWebView
@@ -198,6 +234,26 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.preferences.isElementFullscreenEnabled = true
+
+        let userContentController = WKUserContentController()
+        userContentController.addScriptMessageHandler(
+            DirectoryPickerMessageHandler(),
+            contentWorld: .page,
+            name: "piWebDirectoryPicker"
+        )
+        userContentController.addUserScript(WKUserScript(
+            source: """
+            Object.defineProperty(window, "piWebNative", {
+              configurable: false,
+              value: Object.freeze({
+                pickDirectory: () => window.webkit.messageHandlers.piWebDirectoryPicker.postMessage({})
+              })
+            });
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        configuration.userContentController = userContentController
         webView = WKWebView(frame: .zero, configuration: configuration)
 
         let window = NSWindow(
