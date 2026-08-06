@@ -4,11 +4,46 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { parseWorkbenchProjection } from "../pi-web-plugin.js";
+import { dedicatedWorkstreamLayout, parseWorkbenchProjection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
 import { WorkstreamSessionCoordinator } from "../workstream-session-coordinator.js";
 
 const fixtureUrl = new URL("../fixtures/recorded-projection.json", import.meta.url);
+
+test("dedicated Workstream tools preserve Sessions and Human Tasks with truthful scope", () => {
+  assert.deepEqual(dedicatedWorkstreamLayout({ tool: "files", sessionsPaneOpen: true, tasksPaneOpen: true }), {
+    sessionsPaneVisible: true,
+    tasksPaneVisible: true,
+    surface: "files",
+    scope: "selected-session-checkout",
+  });
+  assert.deepEqual(dedicatedWorkstreamLayout({ tool: "git", sessionsPaneOpen: true, tasksPaneOpen: true }), {
+    sessionsPaneVisible: true,
+    tasksPaneVisible: true,
+    surface: "git",
+    scope: "selected-session-checkout-observed-unattributed",
+  });
+});
+
+test("dedicated Workstream UI transitions preserve pane state and checkout-scoped tool state", () => {
+  const initial = { tool: "chat", sessionsPaneOpen: true, tasksPaneOpen: true, terminalOpen: false, mobilePane: "sessions" };
+  const files = transitionDedicatedWorkstreamUi(initial, { type: "select-surface", surface: "files" });
+  assert.deepEqual(files, { ...initial, tool: "files", mobilePane: "workspace" });
+
+  const terminal = transitionDedicatedWorkstreamUi(files, { type: "select-surface", surface: "terminal" });
+  assert.deepEqual(terminal, { ...files, terminalOpen: true });
+  assert.equal(terminal.tool, "files");
+
+  const collapsed = transitionDedicatedWorkstreamUi(terminal, { type: "toggle-tasks" });
+  assert.equal(collapsed.tasksPaneOpen, false);
+  assert.equal(collapsed.sessionsPaneOpen, true);
+  assert.equal(collapsed.tool, "files");
+});
+
+test("checkout scope follows the selected Workstream session anchor", () => {
+  assert.equal(sessionAnchor({ projectId: "pi-web", workspaceId: "feature/workstreams", machineId: "studio" }), "pi-web · feature/workstreams · studio");
+  assert.equal(sessionAnchor({ projectId: "workbench", workspaceId: "main", machineId: "laptop" }), "workbench · main · laptop");
+});
 
 test("accepts the deterministic recorded projection", async () => {
   const fixture = JSON.parse(await readFile(fixtureUrl, "utf8"));

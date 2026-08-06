@@ -8,11 +8,18 @@ browser plugin with a small trusted web-process service, not a Run Controller an
 
 - **Workstreams navigation entry:** opens a first-class primary view through PI WEB's qualified
   navigation and primary-view interfaces.
-- **Workstreams primary view:** presents current and closed Workstreams, concurrent sessions, latest
-  checkpoints, checkpoint failures, human tasks, links, revision, loading, empty, failure, and
-  reconnect states from the typed Workstream client. It creates Workstreams; launches, reconciles,
-  and resumes attended sessions; requests and confirms checkpoints; manages human tasks and links;
-  closes Workstreams; renders accepted receipts; and reconciles ordered watch batches.
+- **Workstreams primary view:** presents a portfolio and a dedicated, pane-preserving Workstream
+  shell over the typed projection. The shell keeps flat Sessions and Human Tasks panes visible while
+  switching among host-owned Chat, Files, and Git surfaces, and opens host-owned Terminal as a
+  selected-session checkout drawer. Host actions and shortcuts stay contextual to those surfaces,
+  while mobile pane navigation retains access to Sessions, Workspace, and Human Tasks. Checkpoints
+  remain contract-compatible per-session checkpoints.
+  Git currently shows the selected checkout's observed, unattributed state; historical cross-repository
+  commits remain deferred to PI WEB's upstream Git-plugin integration. The view also preserves current
+  and closed Workstreams, revision, loading, empty, failure, and reconnect states; creates Workstreams;
+  launches, reconciles, and resumes attended sessions; requests and confirms checkpoints; manages
+  human tasks and links; closes Workstreams; renders accepted receipts; and reconciles ordered watch
+  batches.
 - **Workspace label:** current Run state or pending Human Attention count.
 - **Action:** opens the qualified `pi-workbench:run.panel` workspace panel.
 - **Workspace panel:** presents Run status, authority, pending Attention Items, activity progressing
@@ -76,6 +83,6 @@ framework-neutral Run client while retaining this deterministic fixture.
 
 ## Proven behavior and gaps
 
-See [`v1-probe-evidence.md`](v1-probe-evidence.md) for the exercised contribution behavior and the
-specific upstream interface gaps. That evidence gates any proposal for stable host observation or
-additional contribution locations.
+See [`level-1-acceptance-evidence.md`](level-1-acceptance-evidence.md) for the live create, launch,
+checkpoint, browser-restart, resume, task-preservation, and closure workflow. Earlier contribution
+probe evidence and upstream interface gaps remain in [`v1-probe-evidence.md`](v1-probe-evidence.md).
