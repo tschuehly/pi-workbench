@@ -42,23 +42,30 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .panel{min-width:0;min-height:0;overflow:auto;background:var(--surface)}.left-panel{border-right:1px solid var(--border);display:flex;flex-direction:column}
 .resizer{position:relative;z-index:8;background:var(--border);cursor:col-resize;touch-action:none;user-select:none}.resizer:hover,.resizer.dragging{background:color-mix(in srgb,var(--accent) 45%,var(--border))}
 /* left nav */
-.nav-head{display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border);padding:8px 8px 8px 10px}
+.nav-topblock{border-bottom:1px solid var(--border)}
+.nav-head{display:flex;align-items:center;gap:6px;padding:8px 8px 6px 10px}
 .nav-head .ws-identity{flex:1;min-width:0}.nav-scroll{flex:1;min-height:0;overflow:auto}
+.ws-head-status{display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:0 10px 9px}
+.nav-foot{flex:0 0 auto;border-top:1px solid var(--border);padding:9px 12px;display:grid;gap:2px}.nav-foot strong{color:var(--bright);font-size:12px}.nav-foot span{color:var(--muted);font-size:11px}
 .ws-identity{display:flex;align-items:center;gap:8px;min-width:0;border-color:transparent;background:transparent;padding:6px;text-align:left}
 .ws-identity:hover{background:var(--hover)}.ws-identity.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}.ws-identity strong{display:block;font-size:14px}
-.section-title{display:flex;align-items:center;justify-content:space-between;margin:12px 10px 4px;color:var(--muted);font-size:11px;font-weight:750;letter-spacing:.05em;text-transform:uppercase}.section-title span{display:flex;align-items:center;gap:6px}
+.section-title{display:flex;align-items:center;justify-content:space-between;margin:12px 10px 4px;color:var(--muted);font-size:11px;font-weight:750;letter-spacing:.05em;text-transform:uppercase}
 .nav-list{display:grid;gap:2px;padding:0 8px}
-.nav-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;border-color:transparent;background:transparent;padding:8px;text-align:left}
-.nav-row:hover{background:var(--hover)}.nav-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}.nav-row .meta{display:block;color:var(--muted);font-size:11px}
-.session-row{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:9px;width:100%;border:0;border-radius:0;background:transparent;padding:11px 10px;text-align:left}
+.nav-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:8px;width:100%;border-color:transparent;background:transparent;padding:9px 8px;text-align:left}
+.nav-row:hover{background:var(--hover)}.nav-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.nav-main{min-width:0;display:grid;gap:3px}.nav-main .row-top{display:flex;align-items:center;gap:8px;min-width:0}.nav-main strong{font-size:13.5px}
+.meta{color:var(--muted);font-size:11px}
+.continuation-snip{color:var(--text);font-size:12px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.status-line{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:1px;color:var(--muted);font-size:11px}.status-line .s{display:inline-flex;align-items:center;gap:4px}
+.s-dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:0 0 auto}.s-dot.need{background:var(--orange)}.s-dot.run{background:var(--green)}
+.session-row{display:grid;grid-template-columns:minmax(0,1fr);width:100%;border:0;border-radius:0;background:transparent;padding:11px 10px;text-align:left}
 .session-row:hover{background:var(--hover)}.session-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}
-.session-row .ic{margin-top:1px;color:var(--muted)}.session-row.selected .ic{color:var(--accent)}.session-row strong,.session-row small{display:block}.session-row small{margin-top:3px;color:var(--muted);line-height:1.35}
 .sessions-wrap{border-bottom:1px solid var(--border)}
 /* subagent child executions */
 .child-block{margin:0 8px 6px 26px;border-left:1px solid var(--border);padding-left:8px}
 .child-toggle{width:100%;justify-content:flex-start;gap:6px;border:0;background:transparent;padding:6px 4px;color:var(--muted);font-size:11px;font-weight:700}
-.child-toggle:hover{background:transparent;color:var(--bright)}.child-toggle .chev{transition:transform .15s}.child-toggle.open .chev{transform:rotate(90deg)}
-.child-row{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:start;border:0;border-radius:5px;background:transparent;padding:7px 5px;text-align:left;font-size:11px}
+.child-toggle:hover{background:transparent;color:var(--bright)}.child-toggle .ic{transition:transform .15s}.child-toggle.open .ic{transform:rotate(90deg)}
+.child-row{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:start;border:0;border-radius:5px;background:transparent;padding:7px 5px;text-align:left;font-size:11px}
 .child-row:hover{background:var(--hover)}.child-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}
 .child-row .cdot{width:7px;height:7px;margin-top:4px;border-radius:50%;background:var(--muted)}.child-row .cdot.running{background:var(--green)}.child-row .cdot.warning{background:var(--orange)}.child-row .cdot.success{background:var(--accent)}
 .child-row strong{display:block}.child-row small{color:var(--muted)}
@@ -104,7 +111,7 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .tree-head{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 8px;color:var(--muted);font-size:11px;font-weight:750;letter-spacing:.05em;text-transform:uppercase}
 .tnode{width:100%;display:flex;align-items:center;gap:7px;border:0;border-radius:5px;background:transparent;padding:5px 6px;text-align:left;color:var(--text)}
 .tnode:hover{background:var(--hover)}.tnode.on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--bright)}
-.tnode .chev{color:var(--muted);transition:transform .12s}.tnode.open .chev{transform:rotate(90deg)}.tnode .ic.folder{color:var(--accent)}.tnode .ic.file{color:var(--muted)}
+.tw-chev{display:inline-flex;color:var(--muted);transition:transform .12s}.tw-chev.open{transform:rotate(90deg)}.tnode .ic.folder{color:var(--accent)}.tnode .ic.file{color:var(--muted)}
 .file-view{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--canvas)}
 .file-view header{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:10px 14px;color:var(--muted);font-size:12px}
 .code{flex:1;min-height:0;overflow:auto;margin:0;padding:16px 18px;color:var(--text);font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;tab-size:2}
@@ -187,13 +194,10 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 <script>
 "use strict";
 /* ---------- icons ---------- */
+/* Icons are used only for icon-only controls (nav toggles, menus) and to distinguish
+   folders from files in the tree. Everything else relies on its text label. */
 const ICONS={
  menu:'<path d="M3 6h18M3 12h18M3 18h18"/>',
- chat:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
- files:'<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/>',
- git:'<circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/><circle cx="17" cy="9" r="2.6"/><path d="M6 8.6v6.8M17 11.6c0 4-3 4.4-8.4 4.4"/>',
- terminal:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
- context:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
  folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
  file:'<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/>',
  plus:'<path d="M12 5v14M5 12h14"/>',
@@ -202,29 +206,16 @@ const ICONS={
  expand:'<path d="M13 6l6 6-6 6M6 6l6 6-6 6"/>',
  dots:'<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
  chevron:'<path d="M9 6l6 6-6 6"/>',
- check:'<path d="M20 6L9 17l-5-5"/>',
- link:'<path d="M9 15l6-6M10.5 6.5l1-1a4 4 0 1 1 5.7 5.7l-1 1M13.5 17.5l-1 1a4 4 0 1 1-5.7-5.7l1-1"/>',
- workstream:'<rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="18" height="4" rx="1"/>',
- bot:'<rect x="4" y="8" width="16" height="11" rx="2"/><path d="M12 8V4M9 4h6"/><circle cx="9" cy="13.5" r="1"/><circle cx="15" cy="13.5" r="1"/>',
- theme:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/>',
- close:'<path d="M6 6l12 12M18 6L6 18"/>',
- send:'<path d="M4 12l16-7-5 16-4-6-7-3z"/>',
- promote:'<path d="M12 19V6M6 12l6-6 6 6"/>',
- dot:'<circle cx="12" cy="12" r="4"/>',
- anchor:'<circle cx="12" cy="5" r="2.5"/><path d="M12 7.5V21M5 13a7 7 0 0 0 14 0M4 13h2M18 13h2"/>',
- palette:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 9h8M8 13h5"/>',
- gear:'<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.5H9.7l-.3 2.5a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.5h4.6l.3-2.5a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z"/>',
- shield:'<path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6z"/>',
- folders:'<path d="M4 6a1 1 0 0 1 1-1h3l1.5 1.5H16a1 1 0 0 1 1 1"/><path d="M6 9h12a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/>'
+ close:'<path d="M6 6l12 12M18 6L6 18"/>'
 };
 function icon(n,cls=''){return `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]||''}</svg>`}
 /* ---------- fixtures ---------- */
 const standaloneChats={
- release:{id:'release',title:'ChatGPT plugin release permissions',anchor:'embabel · main',
+ release:{id:'release',title:'ChatGPT plugin release permissions',anchor:'embabel · main',time:'2 min ago',
   user:'Can I push to main on the chatgpt plugin repo?',
   assistant:'Yes. You have admin and push permission, and main is currently unprotected with no ruleset preventing direct pushes.',
   decision:{kind:'choice',prompt:'Push directly to main now, or open a short-lived PR first?',detail:'This choice affects the release audit trail for this session.',options:['Push to main','Open a PR','Ask me later']}},
- photo:{id:'photo',title:'Review photo upload race',anchor:'PhotoQuest · main',
+ photo:{id:'photo',title:'Review photo upload race',anchor:'PhotoQuest · main',time:'1 hour ago',
   user:'Can we reproduce the upload race before changing the queue?',
   assistant:'Yes. I will keep this Chat lightweight and reproduce the iOS path against the current main checkout first.',
   decision:{kind:'text',prompt:'Which device and OS should I reproduce against first?',detail:'Free-text answer. Name the device and iOS version.',options:[]}}
@@ -333,6 +324,9 @@ function unansweredTasks(ws){return ws.taskIds.filter(id=>!state.taskAnswers[id]
 function childrenOf(sid){return Object.values(subagents).filter(c=>c.session===sid)}
 function childStatus(c){return state.cancelState[c.id]||c.status}
 function statusLabel(c){const v=childStatus(c);return v==='running'?'Running':v==='success'?'Succeeded':v==='warning'?'Outcome unknown':v==='cancelling'?'Cancelling…':v==='cancelled'?'Cancelled':v}
+function decisionPending(kind,id){const ent=kind==='chat'?standaloneChats[id]:sessions[id];if(!ent||!ent.decision)return false;const st=state.live[kind+':'+id];return !st||st.status!=='answered'}
+function totalNeedsYou(){return Object.values(workstreams).reduce((a,w)=>a+unansweredTasks(w).length,0)}
+function navFoot(){return `<div class="nav-foot"><strong>Needs you · ${totalNeedsYou()}</strong><span>across ${Object.keys(workstreams).length} Workstreams · Lead · gpt-5.6-sol · medium</span></div>`}
 /* ---------- top bar + menus ---------- */
 function topbar(){
  return `<header class="topbar">
@@ -346,61 +340,64 @@ function piMenu(){
  if(state.menu!=='pi')return'';
  return `<nav class="menu" data-menu-panel style="top:50px;left:12px;width:300px" aria-label="PI WEB menu">
   <div class="menu-head"><span class="pi-mark">π</span><span><strong>PI WEB</strong><small>Shell actions</small></span><span class="dot" title="Connected"></span></div>
-  <button data-act="palette">${icon('palette')}Command palette<span class="kbd">⌘K</span></button>
-  <button data-act="projects">${icon('folders')}Projects &amp; checkouts</button>
+  <button data-act="palette">Command palette<span class="kbd">⌘K</span></button>
+  <button data-act="projects">Projects &amp; checkouts</button>
   <div class="sep"></div>
-  <button data-act="auth">${icon('shield')}Authentication</button>
-  <button data-act="recovery">${icon('back')}Recovery</button>
+  <button data-act="auth">Authentication</button>
+  <button data-act="recovery">Recovery</button>
   <div class="sep"></div>
-  <button data-act="theme">${icon('theme')}Theme &amp; presentation<span class="kbd">${state.theme==='dark'?'Dark':'Light'}</span></button>
-  <button data-act="settings">${icon('gear')}Settings</button>
+  <button data-act="theme">Theme &amp; presentation<span class="kbd">${state.theme==='dark'?'Dark':'Light'}</span></button>
+  <button data-act="settings">Settings</button>
  </nav>`;
 }
 function workstreamMenu(){
  if(state.menu!=='workstream')return'';
  return `<nav class="menu" data-menu-panel style="top:96px;left:${state.navCollapsed?12:220}px" aria-label="Workstream menu">
   <span class="menu-label">Workstream</span>
-  <button data-act="ws-rename">${icon('file')}Rename…</button>
-  <button data-act="ws-link">${icon('link')}Add link…</button>
+  <button data-act="ws-rename">Rename…</button>
+  <button data-act="ws-link">Add link…</button>
   <div class="sep"></div>
-  <button class="danger" data-act="ws-close">${icon('close')}Close Workstream</button>
+  <button class="danger" data-act="ws-close">Close Workstream</button>
  </nav>`;
 }
 function sessionMenu(){
  if(state.menu!=='session')return'';
  return `<nav class="menu" data-menu-panel style="top:104px;right:16px" aria-label="Session menu">
   <span class="menu-label">Session</span>
-  <button data-act="sess-anchor">${icon('anchor')}Inspect anchor</button>
-  <button data-act="sess-resume">${icon('chat')}Resume session</button>
+  <button data-act="sess-anchor">Inspect anchor</button>
+  <button data-act="sess-resume">Resume session</button>
   <div class="sep"></div>
-  <button data-act="sess-checkpoint">${icon('check')}Request checkpoint…</button>
+  <button data-act="sess-checkpoint">Request checkpoint…</button>
  </nav>`;
 }
 /* ---------- left navigation ---------- */
 function rootNav(){
- const chats=Object.values(standaloneChats).map(c=>`<button class="nav-row ${state.destination==='standalone-chat'&&state.standaloneId===c.id?'selected':''}" data-open-chat="${c.id}">${icon('chat')}<span class="truncate">${esc(c.title)}<span class="meta">${esc(c.anchor)}</span></span><span class="muted">${icon('chevron','sm')}</span></button>`).join('');
- const ws=Object.values(workstreams).map(w=>{const need=unansweredTasks(w).length;return `<button class="nav-row" data-open-workstream="${w.id}">${icon('workstream')}<span class="truncate">${esc(w.title)}${w.closed?' <span class="badge">Closed</span>':''}<span class="meta">${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · ${need?need+' need you':'no open tasks'}</span></span>${need?`<span class="badge orange">${need}</span>`:''}</button>`}).join('');
+ const total=totalNeedsYou();
+ const chats=Object.values(standaloneChats).map(c=>{const pending=decisionPending('chat',c.id);const sel=state.destination==='standalone-chat'&&state.standaloneId===c.id;return `<button class="nav-row ${sel?'selected':''}" data-open-chat="${c.id}"><span class="nav-main"><strong class="truncate">${esc(c.title)}</strong><span class="meta">${esc(c.anchor)} · ${esc(c.time)}</span></span>${pending?`<span class="badge orange">Needs you</span>`:'<span class="s-dot"></span>'}</button>`}).join('');
+ const ws=Object.values(workstreams).map(w=>{const need=unansweredTasks(w).length;return `<button class="nav-row ws-row" data-open-workstream="${w.id}"><span class="nav-main"><span class="row-top"><strong class="truncate">${esc(w.title)}</strong><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale'}</span>${w.closed?'<span class="badge">Closed</span>':''}</span><span class="continuation-snip">${esc(w.continuation)}</span><span class="meta">${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · ${need?need+' need you':'no open tasks'}</span></span></button>`}).join('');
  return `<aside class="panel left-panel">
-  <div class="nav-head"><strong style="flex:1;padding-left:2px">Navigator</strong><button class="icon" data-collapse-nav aria-label="Collapse navigation">${icon('collapse')}</button></div>
+  <div class="nav-topblock"><div class="nav-head"><strong style="flex:1;padding-left:2px">Navigator</strong><button class="icon" data-collapse-nav aria-label="Collapse navigation">${icon('collapse')}</button></div><div class="ws-head-status"><span class="badge ${total?'orange':''}">Needs you · ${total}</span><span class="muted">${Object.keys(workstreams).length} Workstreams</span></div></div>
   <div class="nav-scroll">
-   <div class="section-title"><span>${icon('chat','sm')}Chats</span><button class="icon small" aria-label="New Chat">${icon('plus','sm')}</button></div>
+   <div class="section-title"><span>Chats</span><button class="icon small" aria-label="New Chat">${icon('plus','sm')}</button></div>
    <div class="nav-list">${chats}</div>
-   <div class="section-title"><span>${icon('workstream','sm')}Workstreams</span><span>${Object.keys(workstreams).length}</span></div>
+   <div class="section-title"><span>Workstreams</span><span>${Object.keys(workstreams).length}</span></div>
    <div class="nav-list">${ws}</div>
   </div>
+  ${navFoot()}
  </aside>`;
 }
 function childBlock(sid){
  const kids=childrenOf(sid);if(!kids.length)return'';
  const open=state.childOpen[sid],active=kids.filter(c=>childStatus(c)==='running').length;
- return `<div class="child-block"><button class="child-toggle ${open?'open':''}" data-child-toggle="${sid}">${icon('chevron','sm')}<span class="chev" style="display:none"></span>${icon('bot','sm')} ${kids.length} child executions${active?` · ${active} active`:''}</button>${open?kids.map(c=>`<button class="child-row ${state.childChat===c.id?'selected':''}" data-child="${c.id}"><i class="cdot ${childStatus(c)}"></i><span><strong>${esc(c.title)}</strong><small>${esc(c.profile)} · ${esc(statusLabel(c))}</small></span>${icon('chevron','sm')}</button>`).join(''):''}</div>`;
+ return `<div class="child-block"><button class="child-toggle ${open?'open':''}" data-child-toggle="${sid}">${icon('chevron','sm')} ${kids.length} child executions${active?` · ${active} active`:''}</button>${open?kids.map(c=>`<button class="child-row ${state.childChat===c.id?'selected':''}" data-child="${c.id}"><i class="cdot ${childStatus(c)}"></i><span><strong>${esc(c.title)}</strong><small>${esc(c.profile)} · ${esc(statusLabel(c))}</small></span></button>`).join(''):''}</div>`;
 }
 function workstreamNav(){
- const w=currentWorkstream();
- const rows=w.sessionIds.map(id=>{const s=sessions[id];const sel=state.destination==='workstream-session'&&state.sessionId===id;const kids=childrenOf(id);return `<div class="sessions-wrap"><button class="session-row ${sel?'selected':''}" data-open-session="${id}">${icon('chat')}<span><strong>${esc(s.title)}${kids.length?` <span class="count">${kids.length}</span>`:''}</strong><small>${esc(s.anchor)}</small><small>${esc(s.summary)}</small></span></button>${childBlock(id)}</div>`}).join('');
+ const w=currentWorkstream();const need=unansweredTasks(w).length;
+ const rows=w.sessionIds.map(id=>{const s=sessions[id];const sel=state.destination==='workstream-session'&&state.sessionId===id;const kids=childrenOf(id);const running=kids.filter(c=>childStatus(c)==='running').length;const pending=decisionPending('session',id);const cp=state.checkpoints[id];const failed=state.checkpointFailure[id];const status=[pending?'<span class="s"><i class="s-dot need"></i>Needs you</span>':'',running?`<span class="s"><i class="s-dot run"></i>${running} running</span>`:'',`<span class="s">${failed?'Checkpoint failed':esc(cp.at)}</span>`].join('');return `<div class="sessions-wrap"><button class="session-row ${sel?'selected':''}" data-open-session="${id}"><span class="nav-main"><span class="row-top"><strong class="truncate">${esc(s.title)}</strong>${kids.length?`<span class="count">${kids.length}</span>`:''}</span><span class="meta">${esc(s.anchor)}</span><span class="status-line">${status}</span></span></button>${childBlock(id)}</div>`}).join('');
  return `<aside class="panel left-panel">
-  <div class="nav-head"><button class="icon" data-back-root aria-label="Back to all Chats and Workstreams">${icon('back')}</button><button class="ws-identity ${state.destination==='workstream'?'selected':''}" data-open-brief aria-label="Open Workstream brief"><span class="truncate"><span class="label" style="margin:0">Workstream</span><strong class="truncate">${esc(w.title)}</strong></span></button><button class="icon" data-menu-toggle="workstream" aria-haspopup="true" aria-expanded="${state.menu==='workstream'}" aria-label="Workstream menu">${icon('dots')}</button><button class="icon" data-collapse-nav aria-label="Collapse session navigation">${icon('collapse')}</button></div>
-  <div class="nav-scroll"><div class="section-title"><span>${icon('workstream','sm')}Sessions · ${w.sessionIds.length}</span><button class="icon small" data-new-session aria-label="New session">${icon('plus','sm')}</button></div>${rows}</div>
+  <div class="nav-topblock"><div class="nav-head"><button class="icon" data-back-root aria-label="Back to all Chats and Workstreams">${icon('back')}</button><button class="ws-identity ${state.destination==='workstream'?'selected':''}" data-open-brief aria-label="Open Workstream brief"><span class="truncate"><span class="label" style="margin:0">Workstream</span><strong class="truncate">${esc(w.title)}</strong></span></button><button class="icon" data-menu-toggle="workstream" aria-haspopup="true" aria-expanded="${state.menu==='workstream'}" aria-label="Workstream menu">${icon('dots')}</button><button class="icon" data-collapse-nav aria-label="Collapse session navigation">${icon('collapse')}</button></div><div class="ws-head-status"><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale checkpoint'}</span><span class="muted">rev ${w.revision}</span>${need?`<span class="badge orange">Needs you · ${need}</span>`:''}</div></div>
+  <div class="nav-scroll"><div class="section-title"><span>Sessions · ${w.sessionIds.length}</span><button class="icon small" data-new-session aria-label="New session">${icon('plus','sm')}</button></div>${rows}</div>
+  ${navFoot()}
  </aside>`;
 }
 function leftPane(){return wsMode()?workstreamNav():rootNav()}
@@ -409,11 +406,11 @@ function stripView(){
  if(wsMode()){
   const w=currentWorkstream();
   const tabs=w.sessionIds.map(id=>`<button class="${state.destination==='workstream-session'&&state.sessionId===id&&!state.childChat?'active':''}" data-open-session="${id}">${esc(sessions[id].title)}</button>`).join('');
-  return `<nav class="workstream-strip" aria-label="Workstream sessions"><button class="icon" data-expand-nav aria-label="Expand navigation">${icon('expand')}</button><button class="strip-id" data-open-brief>${icon('workstream','sm')} ${esc(w.title)}</button><button class="${state.destination==='workstream'?'active':''}" data-open-brief>Brief</button><span class="strip-div"></span>${tabs}<button class="icon" data-new-session aria-label="New session">${icon('plus','sm')}</button><span style="flex:1"></span><button class="icon" data-menu-toggle="workstream" aria-label="Workstream menu">${icon('dots')}</button></nav>`;
+  return `<nav class="workstream-strip" aria-label="Workstream sessions"><button class="icon" data-expand-nav aria-label="Expand navigation">${icon('expand')}</button><button class="strip-id" data-open-brief>${esc(w.title)}</button><button class="${state.destination==='workstream'?'active':''}" data-open-brief>Brief</button><span class="strip-div"></span>${tabs}<button class="icon" data-new-session aria-label="New session">${icon('plus','sm')}</button><span style="flex:1"></span><button class="icon" data-menu-toggle="workstream" aria-label="Workstream menu">${icon('dots')}</button></nav>`;
  }
- const chats=Object.values(standaloneChats).map(c=>`<button class="${state.standaloneId===c.id?'active':''}" data-open-chat="${c.id}">${icon('chat','sm')} ${esc(c.title)}</button>`).join('');
- const ws=Object.values(workstreams).map(w=>`<button data-open-workstream="${w.id}">${icon('workstream','sm')} ${esc(w.title)}</button>`).join('');
- return `<nav class="workstream-strip" aria-label="Chats and Workstreams"><button class="icon" data-expand-nav aria-label="Expand navigation">${icon('expand')}</button><span class="strip-id">${icon('chat','sm')} Chats</span>${chats}<button class="icon" aria-label="New Chat">${icon('plus','sm')}</button><span class="strip-div"></span><span class="strip-id">${icon('workstream','sm')} Workstreams</span>${ws}</nav>`;
+ const chats=Object.values(standaloneChats).map(c=>`<button class="${state.standaloneId===c.id?'active':''}" data-open-chat="${c.id}">${esc(c.title)}</button>`).join('');
+ const ws=Object.values(workstreams).map(w=>`<button data-open-workstream="${w.id}">${esc(w.title)}</button>`).join('');
+ return `<nav class="workstream-strip" aria-label="Chats and Workstreams"><button class="icon" data-expand-nav aria-label="Expand navigation">${icon('expand')}</button><span class="strip-id">Chats</span>${chats}<button class="icon" aria-label="New Chat">${icon('plus','sm')}</button><span class="strip-div"></span><span class="strip-id">Workstreams</span>${ws}</nav>`;
 }
 /* ---------- conversation + live decision ---------- */
 function liveDecisionCard(){
@@ -422,7 +419,7 @@ function liveDecisionCard(){
  let inner;
  if(st.status==='submitting')inner=`<div class="ld-status"><span class="dot" style="background:var(--orange)"></span>Submitting your answer…</div>`;
  else if(st.status==='answered')inner=`<div class="ld-outcome"><span>Answered · <strong>${esc(st.value)}</strong> · sent to the live session</span><button class="ld-linkbtn" data-live-correct>Correct</button></div>`;
- else if(st.mode==='text'||st.correcting)inner=`<div class="${st.correcting?'ld-correct':'ld-text'}"><textarea data-live-draft placeholder="Type your answer…">${esc(st.value||'')}</textarea><button class="primary" data-live-submit>${icon('send','sm')}Send</button></div>`;
+ else if(st.mode==='text'||st.correcting)inner=`<div class="${st.correcting?'ld-correct':'ld-text'}"><textarea data-live-draft placeholder="Type your answer…">${esc(st.value||'')}</textarea><button class="primary" data-live-submit>Send</button></div>`;
  else inner=`<div class="ld-options">${d.options.map(o=>`<button data-live-option="${esc(o)}">${esc(o)}</button>`).join('')}</div><button class="ld-linkbtn" data-live-type style="margin-top:8px">Write a different answer</button>`;
  return `<div class="live-decision"><div class="ld-tag"><span class="dot" style="background:var(--accent)"></span>Live decision · needs you now</div><h3>${esc(d.prompt)}</h3><p>${esc(d.detail)}</p>${inner}</div>`;
 }
@@ -434,56 +431,56 @@ function chatSurface(){
    <div class="exchange assistant"><div class="message-meta"><span class="role">ASSISTANT</span><span>openai-codex/gpt-5.6-sol · medium</span></div><div class="message-copy">${esc(e.assistant)}</div></div>
    ${sent}${liveDecisionCard()}
   </div>
-  <div class="composer"><div class="composer-box"><input aria-label="Message Pi" placeholder="Message Pi… Use / for commands, @ for files"><button class="primary" data-send>${icon('send','sm')}Send</button></div><div class="composer-meta"><span>openai-codex/gpt-5.6-sol</span><span>↑148k · ↓24k · $3.87</span></div></div>
+  <div class="composer"><div class="composer-box"><input aria-label="Message Pi" placeholder="Message Pi… Use / for commands, @ for files"><button class="primary" data-send>Send</button></div><div class="composer-meta"><span>openai-codex/gpt-5.6-sol</span><span>↑148k · ↓24k · $3.87</span></div></div>
  </section>`;
 }
 /* ---------- files finder ---------- */
 function treeNodes(nodes,prefix){
  return nodes.map(n=>{const path=prefix?prefix+'/'+n.name:n.name;const depth=(path.match(/\//g)||[]).length;const pad=`style="padding-left:${8+depth*14}px"`;
-  if(n.t==='d'){const open=state.foldersOpen[path];return `<button class="tnode ${open?'open':''}" ${pad} data-folder="${esc(path)}">${icon('chevron','sm')}<span class="chev"></span>${icon('folder','folder')}<span class="truncate">${esc(n.name)}</span></button>${open?treeNodes(n.kids,path):''}`;}
-  return `<button class="tnode ${state.fileOpen===path?'on':''}" ${pad} data-file="${esc(path)}"><span style="width:14px"></span>${icon('file','file')}<span class="truncate">${esc(n.name)}</span></button>`;
+  if(n.t==='d'){const open=state.foldersOpen[path];return `<button class="tnode" ${pad} data-folder="${esc(path)}"><span class="tw-chev ${open?'open':''}">${icon('chevron','sm')}</span>${icon('folder','folder')}<span class="truncate">${esc(n.name)}</span></button>${open?treeNodes(n.kids,path):''}`;}
+  return `<button class="tnode ${state.fileOpen===path?'on':''}" ${pad} data-file="${esc(path)}"><span class="tw-chev" style="visibility:hidden">${icon('chevron','sm')}</span>${icon('file','file')}<span class="truncate">${esc(n.name)}</span></button>`;
  }).join('');
 }
 function filesSurface(){
  const e=currentEntity();const content=fileContent[state.fileOpen]||'<span class="cm">// no preview available</span>';
- return `<div class="files"><nav class="tree"><div class="tree-head"><span>${esc(e.anchor)}</span><button class="icon small" aria-label="New file">${icon('plus','sm')}</button></div>${treeNodes(fileTree,'')}</nav><div class="file-view"><header>${icon('file','sm')}<span class="truncate">${esc(state.fileOpen)}</span></header><pre class="code">${content}</pre></div></div>`;
+ return `<div class="files"><nav class="tree"><div class="tree-head"><span>${esc(e.anchor)}</span><button class="icon small" aria-label="New file">${icon('plus','sm')}</button></div>${treeNodes(fileTree,'')}</nav><div class="file-view"><header><span class="truncate">${esc(state.fileOpen)}</span></header><pre class="code">${content}</pre></div></div>`;
 }
 /* ---------- git diff ---------- */
 function gitSurface(){
  const e=currentEntity();const diff=gitDiffs[state.gitFile]||[];
  const list=gitChanges.map(c=>`<button class="change-row ${state.gitFile===c.path?'on':''}" data-git="${esc(c.path)}"><span class="stat ${c.stat}">${c.stat}</span><span class="truncate">${esc(c.path.split('/').pop())}</span></button>`).join('');
  const rows=diff.map(([t,n,txt])=>`<div class="dline ${t==='add'?'add':t==='del'?'del':''}"><span class="gutter">${t==='del'?'-':t==='add'?'+':n}</span><span class="txt">${esc(txt)}</span></div>`).join('');
- return `<div class="git"><aside class="changes"><div class="tree-head"><span>${icon('git','sm')} Changes · ${gitChanges.length}</span></div>${list}</aside><div class="diff"><div class="diff-head">${esc(e.anchor)} · ${esc(state.gitFile)}</div>${rows}</div></div>`;
+ return `<div class="git"><aside class="changes"><div class="tree-head"><span>Changes · ${gitChanges.length}</span></div>${list}</aside><div class="diff"><div class="diff-head">${esc(e.anchor)} · ${esc(state.gitFile)}</div>${rows}</div></div>`;
 }
 /* ---------- context ---------- */
 function durableTaskCard(id){
  const t=humanTasks[id],answer=state.taskAnswers[id],resolved=state.taskResolved[id];
  let answerArea;
- if(answer)answerArea=`<div class="task-answered"><span>${icon('check','sm')} Answered: <strong>${esc(answer)}</strong> · ${esc(state.taskAnswerAt[id]||'just now')}</span><button class="task-open" data-task-clear="${id}">Change</button></div>`;
- else if(t.kind==='text')answerArea=`<div class="task-text"><textarea data-task-draft="${id}" placeholder="Type your answer…"></textarea><button class="primary" data-task-submit="${id}">${icon('send','sm')}Send</button></div>`;
+ if(answer)answerArea=`<div class="task-answered"><span>Answered: <strong>${esc(answer)}</strong> · ${esc(state.taskAnswerAt[id]||'just now')}</span><button class="task-open" data-task-clear="${id}">Change</button></div>`;
+ else if(t.kind==='text')answerArea=`<div class="task-text"><textarea data-task-draft="${id}" placeholder="Type your answer…"></textarea><button class="primary" data-task-submit="${id}">Send</button></div>`;
  else answerArea=`<div class="task-answers">${t.options.map(o=>`<button data-task-answer="${id}|${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
- const resolveRow=answer?`<div class="task-resolve"><span class="badge ${resolved?'green':'orange'}">${resolved?'Resolved':'Open · awaiting resolution'}</span>${resolved?`<button class="task-open" data-task-reopen="${id}">Reopen</button>`:`<button class="small" data-task-resolve="${id}">${icon('check','sm')}Resolve</button>`}</div>`:'';
+ const resolveRow=answer?`<div class="task-resolve"><span class="badge ${resolved?'green':'orange'}">${resolved?'Resolved':'Open · awaiting resolution'}</span>${resolved?`<button class="task-open" data-task-reopen="${id}">Reopen</button>`:`<button class="small" data-task-resolve="${id}">Resolve</button>`}</div>`:'';
  return `<article class="task-card"><div class="task-top"><h3>${esc(t.title)}</h3><span class="badge ${t.materiality.startsWith('High')?'red':t.materiality.startsWith('Medium')?'orange':''}">${esc(t.materiality.split(' · ')[0])}</span></div><p>${esc(t.detail)}</p><div class="task-prov">Source: <button class="task-open" data-open-source="${id}">${esc(sessions[t.source].title)}</button> · <span class="badge ${answer?'green':''}">${answer?'Answered':'Unanswered'}</span></div>${answerArea}${resolveRow}</article>`;
 }
 function contextSurface(){
  const w=currentWorkstream(),s=currentSession(),cp=state.checkpoints[s.id],failed=state.checkpointFailure[s.id];
  return `<div class="ctx"><div class="ctx-inner">
-  <div class="panel-section"><span class="label">${icon('workstream','sm')} Workstream brief · revision ${w.revision}</span><p class="continuation" style="font-size:14px">${esc(w.continuation)}</p><button class="ctx-link" data-open-brief>Open full Workstream brief ›</button></div>
+  <div class="panel-section"><span class="label">Workstream brief · revision ${w.revision}</span><p class="continuation" style="font-size:14px">${esc(w.continuation)}</p><button class="ctx-link" data-open-brief>Open full Workstream brief ›</button></div>
   <div class="panel-section"><span class="label">Durable Human Tasks · ${w.taskIds.length}</span>${w.taskIds.map(durableTaskCard).join('')}</div>
   <div class="panel-section"><span class="label">Selected-session checkpoint</span><div class="checkpoint-box"><span class="badge ${failed?'red':'green'}">${failed?'Last request failed · previous confirmation retained':'Latest confirmed'}</span><p>${esc(cp.text)}</p><small class="muted">${esc(cp.at)}</small></div></div>
-  <div class="panel-section"><span class="label">Links</span>${w.links.map(l=>`<div class="link-row">${icon('link','sm')}<span>${esc(l)}</span></div>`).join('')}</div>
-  <div class="panel-section"><span class="label">Session anchor</span><div class="link-row">${icon('anchor','sm')}<span>${esc(s.anchor)}</span></div><small class="muted">Explicit selected-session checkout</small></div>
+  <div class="panel-section"><span class="label">Links</span>${w.links.map(l=>`<div class="link-row"><span>${esc(l)}</span></div>`).join('')}</div>
+  <div class="panel-section"><span class="label">Session anchor</span><div class="link-row"><span>${esc(s.anchor)}</span></div><small class="muted">Explicit selected-session checkout</small></div>
  </div></div>`;
 }
 /* ---------- terminal bottom pane ---------- */
 function terminalPane(){
  const e=currentEntity();
- return `<div class="terminal-pane" style="height:${state.terminal.height}px"><div class="term-resize" data-resize="term"></div><div class="term-head">${icon('terminal','sm')}<span>Terminal · ${esc(e.anchor)}</span><span class="push"><button class="icon small" aria-label="New terminal">${icon('plus','sm')}</button><button class="icon small" data-terminal-close aria-label="Close terminal">${icon('close','sm')}</button></span></div><pre class="term-body"><span class="p">${esc(e.anchor.split(' · ')[0])} $</span> git status --short\n<span class="m"># working tree clean</span>\n<span class="p">${esc(e.anchor.split(' · ')[0])} $</span> gh pr status\n<span class="m">Current branch</span>  2 open · 0 draft\n<span class="p">${esc(e.anchor.split(' · ')[0])} $</span> <span aria-hidden="true">▋</span></pre></div>`;
+ return `<div class="terminal-pane" style="height:${state.terminal.height}px"><div class="term-resize" data-resize="term"></div><div class="term-head"><span>Terminal · ${esc(e.anchor)}</span><span class="push"><button class="icon small" aria-label="New terminal">${icon('plus','sm')}</button><button class="icon small" data-terminal-close aria-label="Close terminal">${icon('close','sm')}</button></span></div><pre class="term-body"><span class="p">${esc(e.anchor.split(' · ')[0])} $</span> git status --short\n<span class="m"># working tree clean</span>\n<span class="p">${esc(e.anchor.split(' · ')[0])} $</span> gh pr status\n<span class="m">Current branch</span>  2 open · 0 draft\n<span class="p">${esc(e.anchor.split(' · ')[0])} $</span> <span aria-hidden="true">▋</span></pre></div>`;
 }
 /* ---------- child chat (subagent inspect) ---------- */
 function childChatSurface(){
  const c=subagents[state.childChat];const st=childStatus(c);
- const acts=st==='running'?`<button class="small danger" data-cancel="${c.id}">${icon('close','sm')}Cancel child</button>`:st==='cancelling'?`<button class="small" disabled>Confirming termination…</button>`:`<button class="small" data-copy="${esc(c.sessionId)}">Copy session ID</button>`;
+ const acts=st==='running'?`<button class="small danger" data-cancel="${c.id}">Cancel child</button>`:st==='cancelling'?`<button class="small" disabled>Confirming termination…</button>`:`<button class="small" data-copy="${esc(c.sessionId)}">Copy session ID</button>`;
  return `<section class="chat"><header class="child-head"><button class="icon" data-child-close aria-label="Back to parent chat">${icon('back')}</button><span class="child-glyph">↳π</span><div class="hmeta"><strong>${esc(c.title)}</strong><small>Read-only child conversation · ${esc(c.profile)} · ${esc(c.role)}</small></div><span class="st-pill ${st} st">${esc(statusLabel(c))}</span></header>
   <div class="child-body">
    <article class="cmsg input"><div class="message-meta"><span class="role">LEAD INPUT</span><span>fresh context</span></div>${esc(c.task)}</article>
@@ -511,13 +508,13 @@ function briefSurface(){
 /* ---------- center ---------- */
 function sessionHead(){
  const e=currentEntity();
- if(state.destination==='standalone-chat')return `<header class="session-head"><div class="st-title"><h1>${esc(e.title)}</h1><div class="crumbs"><span class="badge">Standalone Chat</span> · ${esc(e.anchor)}</div></div><div class="acts"><button class="primary" data-promote>${icon('promote','sm')}Promote to Workstream</button></div></header>`;
+ if(state.destination==='standalone-chat')return `<header class="session-head"><div class="st-title"><h1>${esc(e.title)}</h1><div class="crumbs"><span class="badge">Standalone Chat</span> · ${esc(e.anchor)}</div></div><div class="acts"><button class="primary" data-promote>Promote to Workstream</button></div></header>`;
  const w=currentWorkstream(),need=unansweredTasks(w).length;
  return `<header class="session-head"><div class="st-title"><h1>${esc(e.title)}</h1><div class="crumbs"><span class="badge green">Workstream</span> · ${esc(w.title)} · ${esc(e.anchor)}</div></div><div class="acts">${need?`<button data-open-context>Needs you · ${need}</button>`:''}<button data-menu-toggle="session" aria-haspopup="true" aria-expanded="${state.menu==='session'}" aria-label="Session menu">${icon('dots')}</button></div></header>`;
 }
 function toolBar(){
- const tools=toolsFor(),cur=currentTool();const ic={Chat:'chat',Context:'context',Files:'files',Git:'git'};
- return `<div class="tool-bar"><div class="tabs">${tools.map(t=>`<button class="${cur===t&&!state.childChat?'active':''}" data-tool="${t}">${icon(ic[t],'sm')}${t}</button>`).join('')}</div><span class="spacer"></span><button class="term-btn ${state.terminal.open?'active':''}" data-terminal-toggle>${icon('terminal','sm')}Terminal</button></div>`;
+ const tools=toolsFor(),cur=currentTool();
+ return `<div class="tool-bar"><div class="tabs">${tools.map(t=>`<button class="${cur===t&&!state.childChat?'active':''}" data-tool="${t}">${t}</button>`).join('')}</div><span class="spacer"></span><button class="term-btn ${state.terminal.open?'active':''}" data-terminal-toggle>Terminal</button></div>`;
 }
 function toolSurface(){
  const t=currentTool();
