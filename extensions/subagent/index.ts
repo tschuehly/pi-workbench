@@ -141,6 +141,7 @@ function failure(outcome: string, diagnostic: string) {
 function progressText(observation: { type: string; detail?: any }): string {
   if (observation.type.startsWith("tool_")) return `${observation.type.replaceAll("_", " ")}: ${String(observation.detail?.toolName ?? "tool")}`;
   if (observation.type === "assistant_progress") return "Child Pi is responding…";
+  if (observation.type === "quota_degraded") return `Quota telemetry ${String(observation.detail?.telemetryStatus ?? "unavailable")}; attempting verified model launch.`;
   if (observation.type === "binding_verified") return `Binding verified: ${String(observation.detail?.provider)}/${String(observation.detail?.model)}:${String(observation.detail?.effort)}`;
   if (observation.type === "terminal") return `Child ${String(observation.detail?.outcome ?? "finished")}.`;
   return observation.type.replaceAll("_", " ");

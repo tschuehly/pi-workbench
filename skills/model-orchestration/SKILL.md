@@ -40,11 +40,11 @@ Run:
 node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role>
 ```
 
-The resolver checks the vendored policy, the current Pi model catalog, and a fresh `quota-axi --json` snapshot. It fails closed when the role is unknown, the model is absent, quota is stale or unreadable, or a relevant window is exhausted. Quota gates eligibility; it never weakens or silently substitutes the requested role.
+The resolver checks the vendored policy, the current Pi model catalog, and `quota-axi --json`. Fresh quota telemetry with an exhausted relevant window blocks routing. Stale, unavailable, or unreadable quota telemetry produces a `degraded-quota-telemetry` admission instead: the child launch proceeds and Pi's runtime binding verification remains authoritative. An unknown role or absent model still fails closed. Routing never silently substitutes the requested role.
 
 Refresh before a major fan-out, scarce Claude call, exceptional escalation, or later major phase. Identify windows by `windowSeconds` and `resetsAt`; labels are secondary. A model-scoped window applies only to that model. Compare percentages only within one provider.
 
-**Complete when:** every role has one resolver-produced `provider`, `model`, `effort`, and fresh quota snapshot, or the unavailable role is explicit.
+**Complete when:** every role has one resolver-produced `provider`, `model`, `effort`, quota admission, and quota snapshot, or the unavailable role is explicit. Disclose degraded telemetry; do not describe it as fresh quota evidence.
 
 ## 3. Submit the proposed binding
 
@@ -58,6 +58,6 @@ For an interactive Pi lead outside a managed Run, the harness launcher provides 
 
 That launcher selects only the current Pi session. It does not claim controller mediation or durable Run state.
 
-**Complete when:** the controller receipt records the accepted binding, or the result is `ROUTING=BLOCKED` with the condition required to continue.
+**Complete when:** the controller receipt records the accepted binding, or the result is `ROUTING=BLOCKED` with the condition required to continue. If an independent child fails to launch or complete, disclose that failure rather than presenting the lead's own work as independent review.
 
 Read [routing rationale](references/routing-rationale.md) only when evaluating the current policy. Read [port provenance](references/provenance.md) when auditing what graduated from Claudex.

@@ -38,21 +38,23 @@ if (!binding) {
 }
 
 let rawQuota;
+let quotaError;
 try {
   if (quotaInput === "-") rawQuota = fs.readFileSync(0, "utf8");
   else if (quotaInput) rawQuota = fs.readFileSync(quotaInput, "utf8");
   else rawQuota = execFileSync("quota-axi", ["--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 } catch (error) {
-  console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=quota snapshot unavailable: ${error.message}`);
-  process.exit(3);
+  rawQuota = typeof error.stdout === "string" && error.stdout.trim() !== "" ? error.stdout : undefined;
+  quotaError = `quota snapshot unavailable: ${error.message}`;
 }
 
 let snapshot;
-try {
-  snapshot = JSON.parse(rawQuota);
-} catch (error) {
-  console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=invalid quota JSON: ${error.message}`);
-  process.exit(3);
+if (rawQuota !== undefined) {
+  try {
+    snapshot = JSON.parse(rawQuota);
+  } catch (error) {
+    quotaError = `invalid quota JSON: ${error.message}`;
+  }
 }
 
 let rawCatalog;
@@ -69,14 +71,27 @@ const availableModels = new Set(rawCatalog.split(/\r?\n/).map((line) => {
   return provider && model ? `${provider}/${model}` : "";
 }).filter(Boolean));
 
-const provider = snapshot.providers?.find((candidate) => candidate.provider === binding.quotaProvider);
-const windows = provider?.windows ?? [];
+const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
+const provider = providers.find((candidate) => candidate.provider === binding.quotaProvider);
+const windows = Array.isArray(provider?.windows) ? provider.windows : [];
 const relevantWindows = windows.filter((window) => window.kind !== "model" || binding.model.includes(window.id.replace(/^model:/, "")));
+const telemetryStatus = provider === undefined
+  ? "unavailable"
+  : provider.state?.status === "fresh" && provider.state?.stale !== true
+    ? "fresh"
+    : provider.state?.status === "stale" || provider.state?.stale === true
+      ? "stale"
+      : "unavailable";
+const telemetryError = telemetryStatus === "fresh"
+  ? null
+  : provider?.state?.error
+    ?? quotaError
+    ?? (provider === undefined
+      ? `quota provider '${binding.quotaProvider}' is absent`
+      : `quota provider '${binding.quotaProvider}' is ${telemetryStatus}`);
 let reason;
 if (!availableModels.has(`${binding.provider}/${binding.model}`)) reason = `Pi model '${binding.provider}/${binding.model}' is unavailable`;
-else if (!provider) reason = `quota provider '${binding.quotaProvider}' is absent`;
-else if (provider.state?.status !== "fresh" || provider.state?.stale) reason = `quota provider '${binding.quotaProvider}' is not fresh`;
-else if (relevantWindows.some((window) => Number(window.percentRemaining) <= 0)) reason = `quota exhausted for '${binding.quotaProvider}'`;
+else if (telemetryStatus === "fresh" && relevantWindows.some((window) => Number(window.percentRemaining) <= 0)) reason = `quota exhausted for '${binding.quotaProvider}'`;
 
 if (reason) {
   console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=${reason}`);
@@ -90,8 +105,10 @@ const result = {
     provider: binding.provider,
     model: binding.model,
     effort: binding.effort,
+    admission: telemetryStatus === "fresh" ? "fresh-quota" : "degraded-quota-telemetry",
     quotaSnapshot: {
-      generatedAt: snapshot.generatedAt ?? null,
+      generatedAt: snapshot?.generatedAt ?? null,
+      telemetryStatus,
       relevantWindows: relevantWindows.map((window) => ({
         id: window.id,
         kind: window.kind,
@@ -99,9 +116,9 @@ const result = {
         resetsAt: window.resetsAt ?? null,
         percentRemaining: window.percentRemaining,
       })),
-      stale: false,
-      refreshedAt: provider.state?.refreshedAt ?? null,
-      error: null,
+      stale: telemetryStatus === "stale",
+      refreshedAt: provider?.state?.refreshedAt ?? null,
+      error: telemetryError,
     },
   },
 };
@@ -112,7 +129,9 @@ if (format === "env") {
   console.log(`PI_PROVIDER=${binding.provider}`);
   console.log(`PI_MODEL=${binding.model}`);
   console.log(`PI_THINKING=${binding.effort}`);
-  console.log(`QUOTA_GENERATED_AT=${snapshot.generatedAt ?? ""}`);
+  console.log(`QUOTA_ADMISSION=${result.modelBinding.admission}`);
+  console.log(`QUOTA_TELEMETRY_STATUS=${telemetryStatus}`);
+  console.log(`QUOTA_GENERATED_AT=${snapshot?.generatedAt ?? ""}`);
 } else {
   console.log(JSON.stringify(result, null, 2));
 }

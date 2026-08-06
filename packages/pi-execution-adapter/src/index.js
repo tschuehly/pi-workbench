@@ -19,13 +19,16 @@ export class PiRpcExecutionAdapter {
   }
 
   async dispatch(spec) {
-    validateSpec(spec, this.hostTools, this.clock(), this.bindingMaxAgeMs);
+    const quotaDegradation = validateSpec(spec, this.hostTools, this.clock(), this.bindingMaxAgeMs);
     if (this.activeCount >= this.concurrency) throw typedError("CONCURRENCY_LIMIT", "The attended child concurrency cap is reached.");
     const executionId = randomUUID();
     const acceptedAt = this.clock().toISOString();
     const state = createState(executionId, spec, acceptedAt);
+    state.quotaAdmission = quotaDegradation === undefined ? spec.binding.admission : "degraded-quota-telemetry";
+    state.quotaTelemetryStatus = quotaDegradation?.telemetryStatus ?? spec.binding.quotaSnapshot.telemetryStatus;
     this.executions.set(executionId, state);
     this.activeCount += 1;
+    if (quotaDegradation !== undefined) this.#emit(state, "quota_degraded", quotaDegradation);
     this.#emit(state, "launch", { status: "starting" });
     this.#launch(state);
     return { executionId, acceptedAt };
@@ -232,12 +235,22 @@ function validateSpec(spec, hostTools, now, maxAgeMs) {
   if (!Array.isArray(spec.tools) || spec.tools.some((tool) => !hostTools.has(tool))) throw typedError("CAPABILITY_EXCEEDED", "Requested tools exceed the host capability ceiling.");
   const binding = spec.binding;
   if (!binding || binding.cognitiveRole !== spec.cognitiveRole || !binding.provider || !binding.model || !binding.effort) throw typedError("INVALID_BINDING", "Resolved binding does not match the requested Cognitive Role.");
-  if (binding.quotaSnapshot?.stale !== false || binding.quotaSnapshot?.error !== null) throw typedError("STALE_BINDING", "Binding quota evidence is stale or invalid.");
-  const freshness = binding.quotaSnapshot.refreshedAt ?? binding.quotaSnapshot.generatedAt;
-  if (typeof freshness !== "string" || !Number.isFinite(Date.parse(freshness)) || now.valueOf() - Date.parse(freshness) > maxAgeMs || Date.parse(freshness) > now.valueOf() + 60_000) throw typedError("STALE_BINDING", "Binding quota evidence is not fresh.");
+  if (!["fresh-quota", "degraded-quota-telemetry"].includes(binding.admission)) throw typedError("INVALID_BINDING", "Binding quota admission is invalid.");
+  const quota = binding.quotaSnapshot;
+  if (!quota || !["fresh", "stale", "unavailable"].includes(quota.telemetryStatus) || !Array.isArray(quota.relevantWindows)) throw typedError("INVALID_BINDING", "Binding quota telemetry is invalid.");
+  if (binding.admission === "degraded-quota-telemetry") {
+    if (quota.telemetryStatus === "fresh") throw typedError("INVALID_BINDING", "Degraded quota admission requires stale or unavailable telemetry.");
+    return { telemetryStatus: quota.telemetryStatus, error: quota.error };
+  }
+  if (quota.telemetryStatus !== "fresh" || quota.stale !== false || quota.error !== null) throw typedError("INVALID_BINDING", "Fresh quota admission requires fresh, valid telemetry.");
+  if (quota.relevantWindows.some((window) => Number(window?.percentRemaining) <= 0)) throw typedError("QUOTA_EXHAUSTED", "Fresh quota evidence confirms an exhausted relevant window.");
+  const freshness = quota.refreshedAt ?? quota.generatedAt;
+  if (typeof freshness !== "string" || !Number.isFinite(Date.parse(freshness)) || now.valueOf() - Date.parse(freshness) > maxAgeMs || Date.parse(freshness) > now.valueOf() + 60_000) {
+    return { telemetryStatus: "stale", error: "Quota binding evidence exceeded the freshness window." };
+  }
 }
 
-function resultFor(state, outcome, text = "", diagnostic) { const b = state.spec.binding; return { outcome, text: bounded(text, 50_000), profile: state.spec.profile, cognitiveRole: state.spec.cognitiveRole, provider: b.provider, model: b.model, effort: b.effort, ...(state.sessionId ? { sessionId: state.sessionId } : {}), ...(diagnostic ? { diagnostic: bounded(diagnostic, 8_000) } : {}) }; }
+function resultFor(state, outcome, text = "", diagnostic) { const b = state.spec.binding; return { outcome, text: bounded(text, 50_000), profile: state.spec.profile, cognitiveRole: state.spec.cognitiveRole, provider: b.provider, model: b.model, effort: b.effort, quotaAdmission: state.quotaAdmission, quotaTelemetryStatus: state.quotaTelemetryStatus, ...(state.sessionId ? { sessionId: state.sessionId } : {}), ...(diagnostic ? { diagnostic: bounded(diagnostic, 8_000) } : {}) }; }
 function assistantText(message) { return Array.isArray(message.content) ? message.content.filter((part) => part?.type === "text").map((part) => part.text).join("\n") : ""; }
 function typedError(code, message) { const error = new Error(message); error.code = code; return error; }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }

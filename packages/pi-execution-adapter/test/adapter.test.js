@@ -8,7 +8,14 @@ const now = new Date("2026-03-20T12:00:00.000Z");
 function spec(overrides = {}) {
   return {
     task: "Inspect src and report.", profile: "scout", cognitiveRole: "wide-evidence-gathering", cwd: "/tmp", tools: ["read", "bash"],
-    binding: { cognitiveRole: "wide-evidence-gathering", provider: "anthropic", model: "claude-test", effort: "high", quotaSnapshot: { generatedAt: now.toISOString(), refreshedAt: now.toISOString(), stale: false, error: null, relevantWindows: [] } },
+    binding: {
+      cognitiveRole: "wide-evidence-gathering",
+      provider: "anthropic",
+      model: "claude-test",
+      effort: "high",
+      admission: "fresh-quota",
+      quotaSnapshot: { generatedAt: now.toISOString(), refreshedAt: now.toISOString(), telemetryStatus: "fresh", stale: false, error: null, relevantWindows: [] },
+    },
     ...overrides,
   };
 }
@@ -62,10 +69,76 @@ test("launches one persistent RPC child, verifies binding, and returns compact m
   assert.equal(observations.some((value) => JSON.stringify(value).includes("secret reasoning")), false);
 });
 
-test("fails closed on stale evidence, capability expansion, and runtime binding mismatch", async () => {
+test("launches with degraded quota telemetry and makes the degradation observable", async () => {
+  const binding = {
+    ...spec().binding,
+    admission: "degraded-quota-telemetry",
+    quotaSnapshot: {
+      generatedAt: now.toISOString(),
+      refreshedAt: "2026-03-20T10:00:00.000Z",
+      telemetryStatus: "stale",
+      stale: true,
+      error: "Claude sign-in required",
+      relevantWindows: [],
+    },
+  };
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  const receipt = await adapter.dispatch(spec({ binding }));
+  const observations = [];
+  const collecting = (async () => { for await (const observation of adapter.observe(receipt.executionId)) observations.push(observation); })();
+  const result = await adapter.result(receipt.executionId);
+  assert.equal(result.outcome, "success");
+  assert.equal(result.quotaAdmission, "degraded-quota-telemetry");
+  assert.equal(result.quotaTelemetryStatus, "stale");
+  await collecting;
+  assert.equal(observations.some((value) => value.type === "quota_degraded" && value.detail?.error === "Claude sign-in required"), true);
+});
+
+test("launches when quota telemetry is unavailable", async () => {
+  const binding = {
+    ...spec().binding,
+    admission: "degraded-quota-telemetry",
+    quotaSnapshot: {
+      generatedAt: now.toISOString(),
+      refreshedAt: null,
+      telemetryStatus: "unavailable",
+      stale: false,
+      error: "quota snapshot unavailable",
+      relevantWindows: [],
+    },
+  };
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  const receipt = await adapter.dispatch(spec({ binding }));
+  const result = await adapter.result(receipt.executionId);
+  assert.equal(result.outcome, "success");
+  assert.equal(result.quotaAdmission, "degraded-quota-telemetry");
+  assert.equal(result.quotaTelemetryStatus, "unavailable");
+});
+
+test("treats fresh quota evidence that aged before dispatch as degraded telemetry", async () => {
+  const binding = {
+    ...spec().binding,
+    quotaSnapshot: { ...spec().binding.quotaSnapshot, refreshedAt: "2026-03-20T10:00:00.000Z" },
+  };
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  const receipt = await adapter.dispatch(spec({ binding }));
+  const observations = [];
+  const collecting = (async () => { for await (const observation of adapter.observe(receipt.executionId)) observations.push(observation); })();
+  const result = await adapter.result(receipt.executionId);
+  assert.equal(result.outcome, "success");
+  assert.equal(result.quotaAdmission, "degraded-quota-telemetry");
+  assert.equal(result.quotaTelemetryStatus, "stale");
+  await collecting;
+  assert.equal(observations.some((value) => value.type === "quota_degraded" && value.detail?.telemetryStatus === "stale"), true);
+});
+
+test("fails closed on inconsistent admission, capability expansion, fresh exhaustion, and runtime binding mismatch", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, hostTools: ["read", "bash"], spawn: () => fakeRpc({ model: "wrong" }) });
   await assert.rejects(adapter.dispatch(spec({ tools: ["write"] })), (error) => error.code === "CAPABILITY_EXCEEDED");
-  await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, quotaSnapshot: { ...spec().binding.quotaSnapshot, refreshedAt: "2026-03-20T10:00:00.000Z" } } })), (error) => error.code === "STALE_BINDING");
+  await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, admission: "degraded-quota-telemetry" } })), (error) => error.code === "INVALID_BINDING");
+  await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, quotaSnapshot: { ...spec().binding.quotaSnapshot, telemetryStatus: "stale", stale: true, error: "stale" } } })), (error) => error.code === "INVALID_BINDING");
+  await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, quotaSnapshot: undefined } })), (error) => error.code === "INVALID_BINDING");
+  await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, quotaSnapshot: { ...spec().binding.quotaSnapshot, relevantWindows: [{ percentRemaining: 0 }] } } })), (error) => error.code === "QUOTA_EXHAUSTED");
   const receipt = await adapter.dispatch(spec());
   assert.notEqual((await adapter.result(receipt.executionId)).outcome, "success");
 });
