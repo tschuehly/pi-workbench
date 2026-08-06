@@ -1,7 +1,8 @@
 # Subagents inside a Workstream — prototype investigation
 
 Status: **Variant A selected by the owner as the preferred direction.** This remains exploratory UX
-evidence, not a supported behavioral or protocol contract.
+evidence, not a supported behavioral or protocol contract. Delivery is sequenced in the
+[PI WEB subagent conversation-card implementation plan](../../plans/pi-web-subagent-conversation-cards.md).
 
 ## Question
 
