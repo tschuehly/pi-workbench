@@ -42,6 +42,7 @@ Follow any nearer `AGENTS.md` before changing files in its directory.
 - Models propose semantic work; deterministic modules own transitions and side effects.
 - Documentation describes only the supported current workflow and intended state.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
+- Commit each coherent unit of work once it is complete and no further human input is required.
 - Before changing the sibling PI WEB checkout, fetch both `upstream` and the `origin` fork; develop on a fork branch and never push directly to upstream.
 - Challenge instructions or designs that violate these boundaries or create unnecessary ownership.
 

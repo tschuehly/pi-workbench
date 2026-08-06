@@ -9,7 +9,7 @@ export interface ExecutionObservation { executionId: string; sequence: number; a
 export interface ExecutionResult { outcome: ExecutionOutcome; text: string; profile: string; cognitiveRole: string; provider: string; model: string; effort: string; quotaAdmission: QuotaAdmission; quotaTelemetryStatus: QuotaTelemetryStatus; sessionId?: string; diagnostic?: string }
 export interface CancellationReceipt { executionId: string; outcome: "cancelled" | "outcome_unknown" }
 export class PiRpcExecutionAdapter {
-  constructor(options?: { command?: string; concurrency?: number; timeoutMs?: number; bindingMaxAgeMs?: number; hostTools?: string[]; clock?: () => Date; spawn?: Function; killGraceMs?: number });
+  constructor(options?: { command?: string; timeoutMs?: number; bindingMaxAgeMs?: number; hostTools?: string[]; clock?: () => Date; spawn?: Function; killGraceMs?: number });
   dispatch(spec: ResolvedExecutionSpec): Promise<ExecutionReceipt>;
   observe(executionId: string): AsyncIterable<ExecutionObservation>;
   result(executionId: string): Promise<ExecutionResult>;

@@ -46,7 +46,7 @@ const Params = Type.Object({
 type Observation = { type: string; detail?: unknown };
 
 export default function subagentExtension(pi: ExtensionAPI) {
-  const adapter = new PiRpcExecutionAdapter({ concurrency: 1 });
+  const adapter = new PiRpcExecutionAdapter();
 
   pi.on("session_shutdown", async () => {
     await adapter.cancelAll("Attended parent session ended.");

@@ -7,7 +7,6 @@ const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execu
 export class PiRpcExecutionAdapter {
   constructor(options = {}) {
     this.command = options.command ?? "pi";
-    this.concurrency = options.concurrency ?? 1;
     this.defaultTimeoutMs = options.timeoutMs ?? 20 * 60_000;
     this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 5 * 60_000;
     this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write"]);
@@ -15,19 +14,16 @@ export class PiRpcExecutionAdapter {
     this.spawn = options.spawn ?? nodeSpawn;
     this.killGraceMs = options.killGraceMs ?? 2_000;
     this.executions = new Map();
-    this.activeCount = 0;
   }
 
   async dispatch(spec) {
     const quotaDegradation = validateSpec(spec, this.hostTools, this.clock(), this.bindingMaxAgeMs);
-    if (this.activeCount >= this.concurrency) throw typedError("CONCURRENCY_LIMIT", "The attended child concurrency cap is reached.");
     const executionId = randomUUID();
     const acceptedAt = this.clock().toISOString();
     const state = createState(executionId, spec, acceptedAt);
     state.quotaAdmission = quotaDegradation === undefined ? spec.binding.admission : "degraded-quota-telemetry";
     state.quotaTelemetryStatus = quotaDegradation?.telemetryStatus ?? spec.binding.quotaSnapshot.telemetryStatus;
     this.executions.set(executionId, state);
-    this.activeCount += 1;
     if (quotaDegradation !== undefined) this.#emit(state, "quota_degraded", quotaDegradation);
     this.#emit(state, "launch", { status: "starting" });
     this.#launch(state);
@@ -94,8 +90,6 @@ export class PiRpcExecutionAdapter {
       if (!state.done) {
         const outcome = state.cancelKind ?? (state.prompted ? (code === 0 ? "outcome_unknown" : "execution_failed") : "launch_failed");
         this.#finish(state, resultFor(state, outcome, state.finalText, stderr || `Pi RPC exited (${String(code ?? signal)}).`));
-      } else if (state.result?.outcome === "outcome_unknown") {
-        this.#releaseSlot(state);
       }
     });
     void this.#command(state, "get_state").catch((error) => {
@@ -209,18 +203,12 @@ export class PiRpcExecutionAdapter {
     state.done = true;
     state.result = result;
     clearTimeout(state.timeout);
-    if (result.outcome !== "outcome_unknown") this.#releaseSlot(state);
     this.#emit(state, "terminal", { outcome: result.outcome });
     for (const pending of state.commands.values()) pending.reject(new Error("Execution ended."));
     state.commands.clear();
     state.resultResolve(result);
   }
 
-  #releaseSlot(state) {
-    if (state.slotReleased) return;
-    state.slotReleased = true;
-    this.activeCount -= 1;
-  }
 }
 
 function createState(executionId, spec, acceptedAt) {

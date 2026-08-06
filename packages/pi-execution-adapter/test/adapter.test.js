@@ -151,16 +151,20 @@ test("distinguishes confirmed timeout from an unknown termination outcome", asyn
   const unknown = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true, confirmKill: false }), timeoutMs: 1, killGraceMs: 1 });
   const unknownReceipt = await unknown.dispatch(spec());
   assert.equal((await unknown.result(unknownReceipt.executionId)).outcome, "outcome_unknown");
-  await assert.rejects(unknown.dispatch(spec()), (error) => error.code === "CONCURRENCY_LIMIT");
 });
 
-test("reserves concurrency atomically and confirms cancellation", async () => {
-  const child = fakeRpc({ hang: true, settleOnAbort: true });
-  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, killGraceMs: 1 });
+test("allows concurrent executions and confirms their cancellation", async () => {
+  const children = [fakeRpc({ hang: true, settleOnAbort: true }), fakeRpc({ hang: true, settleOnAbort: true })];
+  let spawnIndex = 0;
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => children[spawnIndex++], killGraceMs: 1 });
   const first = await adapter.dispatch(spec());
-  await assert.rejects(adapter.dispatch(spec()), (error) => error.code === "CONCURRENCY_LIMIT");
-  const cancellation = await adapter.cancel(first.executionId, "test");
-  assert.equal(cancellation.outcome, "cancelled");
+  const second = await adapter.dispatch(spec());
+  const cancellations = await Promise.all([
+    adapter.cancel(first.executionId, "test"),
+    adapter.cancel(second.executionId, "test"),
+  ]);
+  assert.deepEqual(cancellations.map(({ outcome }) => outcome), ["cancelled", "cancelled"]);
   assert.equal((await adapter.result(first.executionId)).outcome, "cancelled");
-  assert.equal(child.kills.includes("SIGTERM"), true);
+  assert.equal((await adapter.result(second.executionId)).outcome, "cancelled");
+  assert.equal(children.every((child) => child.kills.includes("SIGTERM")), true);
 });

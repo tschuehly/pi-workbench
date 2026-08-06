@@ -22,7 +22,7 @@ This is unmanaged Level 1 execution. The method may be named `dispatch`, but its
 
 ## Level 1 behavior
 
-The parent model invokes one child at a time with three semantic inputs:
+Each parent tool invocation launches one child with three semantic inputs:
 
 ```ts
 {
@@ -84,7 +84,7 @@ The first runner is a Pi RPC subprocess. Do not introduce a generic runner frame
 
 The module keeps only bounded live process state: execution identifier, process identifier, RPC connection, Pi session identifier, latest usage, cancellation state, and latest observation. The parent Pi session retains the compact tool result and visible progress. The module owns no durable authoritative state.
 
-The host configures one atomic local concurrency cap. Level 1 uses a conservative implementation default and no scheduler. Future managed scheduling remains controller-owned.
+Level 1 imposes no local child concurrency cap and provides no scheduler. Each invocation still represents one bounded child execution; future managed admission and scheduling remain controller-owned.
 
 Each execution also has a configurable timeout. Timeout follows the same termination sequence as user cancellation; the initial default is an implementation constant rather than a new product-level budget policy.
 
@@ -130,8 +130,8 @@ Replace the temporary official-example implementation only after tests prove:
 8. terminal parent context is compact and includes the Pi session identifier;
 9. child sessions persist in Pi's standard machine-local store but are never reopened automatically;
 10. cancellation, timeout, forced termination, and unknown outcomes are distinguishable;
-11. the atomic concurrency cap rejects excess local executions without a spawn race;
-12. parent termination cleans up the child; and
+11. concurrent invocations launch independently and remain cancellable;
+12. parent termination cleans up every active child; and
 13. existing Level 1 Workstream launch, checkpoint, restart, resume, and closure behavior remains intact.
 
 Use a fake RPC process for deterministic lifecycle and failure tests. Keep one real Pi RPC smoke test for launch, binding, session persistence, streaming, and cancellation.
