@@ -1,6 +1,7 @@
 # Subagents inside a Workstream — prototype investigation
 
-Status: exploratory UX evidence. This is not a supported behavioral or protocol contract.
+Status: **Variant A selected by the owner as the preferred direction.** This remains exploratory UX
+evidence, not a supported behavioral or protocol contract.
 
 ## Question
 
@@ -80,27 +81,30 @@ observations, outcome, and session ID.
 **Risk:** it is more navigation than ordinary single-child use warrants and can drift toward a
 managed-Run graph metaphor. It should not become the default production surface for Level 1.
 
-## Recommendation
+## Selected direction
 
-Use a **hybrid of A and B**:
+The owner selected **A — Conversation-native cards** as the preferred base direction.
 
-1. Keep the existing nested delegation rows as a compact origin/status index beneath the parent
-   session.
-2. Put a compact chronological marker at the `subagent` invocation point in Chat.
-3. Keep child detail collapsed by default so Chat retains the full session workspace; show only a
-   compact session count and chronological invocation/result markers.
-4. Open one session-scoped execution tray on demand for detailed progress, cancellation, errors,
-   inputs, result, runtime facts, and Pi session ID.
-5. Offer **Inspect child chat** from that detail surface. It opens a read-only conversation view with
+Carry it forward with these constraints:
+
+1. Keep each child invocation at its chronological point in the parent Chat.
+2. Keep execution detail collapsed by default so the full conversation remains readable.
+3. Show assignment, status, profile, Cognitive Role, and elapsed time in the collapsed row.
+4. Expand in place for inputs, progress, runtime facts, cancellation, result, and Pi session ID.
+5. Offer **Inspect child chat** from the expanded card. It opens a read-only conversation view with
    an explicit return to the parent Chat; it never creates a peer tab or resume affordance.
-6. Return the compact terminal result to Chat so the lead’s reconciliation remains visible.
-7. Do not ship C as the default; retain its parent-and-branch grammar only if later usability work
-   proves that users regularly coordinate several concurrent children.
+6. Keep only a collapsed child count beneath the parent session in the session hierarchy.
+7. Return the compact terminal result to the parent Chat so the lead’s reconciliation remains
+   visible.
 
-This provides progressive disclosure without duplicating authority:
+Variant B remains useful evidence for high-concurrency monitoring, but it should not define the
+primary interaction. Do not ship C as the default; its graph-like grammar can imply managed Run
+orchestration.
+
+The selected disclosure path is:
 
 ```text
-session count/status → nested child index → Chat marker → execution detail → lead synthesis
+session count/status → chronological child card → expanded execution detail → optional read-only child chat → lead synthesis
 ```
 
 ## Recommended detail order
