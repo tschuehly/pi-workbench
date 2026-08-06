@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PI WEB — Unified Chats + Workstreams Prototype</title>
+<!-- THROWAWAY PROTOTYPE — one coherent Chat/Workstream shell for human validation.
+     The middle pane has three destinations: standalone Chat, Workstream brief, Workstream session.
+     Live ask_user decisions live inline in Chat. Durable Human Tasks live in Workstream Context.
+     This prototype does not claim standalone sessions or promotion are supported by the current protocol. -->
+<style>
+:root{color-scheme:dark;--bg:#0d1117;--canvas:#010409;--surface:#161b22;--surface2:#21262d;--hover:#262c36;--border:#30363d;--muted:#8b949e;--text:#c9d1d9;--bright:#f0f6fc;--accent:#58a6ff;--accent2:#1f6feb;--green:#3fb950;--green-bg:#12261e;--orange:#d29922;--orange-bg:#2d2108;--purple:#a371f7;--red:#f85149;--red-bg:#2a1315;--shadow:0 12px 34px #0008;--radius:6px}
+html[data-theme="light"]{color-scheme:light;--bg:#f6f8fa;--canvas:#fff;--surface:#f6f8fa;--surface2:#eaeef2;--hover:#afb8c133;--border:#d0d7de;--muted:#57606a;--text:#24292f;--bright:#1f2328;--accent:#0969da;--accent2:#0969da;--green:#1a7f37;--green-bg:#dafbe1;--orange:#9a6700;--orange-bg:#fff8c5;--purple:#8250df;--red:#cf222e;--red-bg:#ffebe9;--shadow:0 12px 34px #1f232826}
+*{box-sizing:border-box}html,body,#root{height:100%;margin:0;overflow:hidden}body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+button,input,textarea{font:inherit}button{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);color:var(--bright);padding:7px 11px;cursor:pointer}button:hover{background:var(--hover)}button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.primary{border-color:var(--accent2);background:var(--accent2);color:#fff;font-weight:650}.primary:hover{filter:brightness(1.08)}.ghost{border-color:transparent;background:transparent}.icon{min-width:32px;padding-inline:8px}.danger{color:var(--red)}.small{padding:4px 8px;font-size:12px}
+.label{display:block;margin-bottom:5px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.badge{display:inline-flex;align-items:center;gap:5px;width:max-content;border-radius:20px;background:var(--surface2);padding:2px 8px;color:var(--muted);font-size:11px}.badge.green{background:var(--green-bg);color:var(--green)}.badge.orange{background:var(--orange-bg);color:var(--orange)}.badge.red{background:var(--red-bg);color:var(--red)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:0 0 auto}.muted{color:var(--muted)}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;color:var(--bright)}h3{font-size:13px;color:var(--bright)}
+.app{height:100%;display:grid;grid-template-rows:52px minmax(0,1fr);background:var(--canvas)}
+/* top bar */
+.topbar{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);background:var(--surface);padding:0 12px}
+.pi-mark{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--bright);color:var(--canvas);font-weight:900;cursor:pointer}
+.brand[aria-expanded="true"] .pi-mark{outline:2px solid var(--accent);outline-offset:1px}
+.brand{display:flex;align-items:center;gap:8px;border:0;background:transparent;padding:0}
+.scope{min-width:0;display:flex;align-items:baseline;gap:9px}.scope strong{color:var(--bright)}.topbar .push{margin-left:auto;display:flex;align-items:center;gap:8px}
+.prototag{padding:2px 7px;border:1px solid var(--border);border-radius:20px;color:var(--muted);font-size:10px;font-weight:750;letter-spacing:.09em}
+.narrow-only{display:none}
+/* menus */
+.menu{position:fixed;z-index:90;min-width:230px;padding:6px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow)}
+.menu button{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;border:0;border-radius:6px;background:transparent;padding:8px 9px;text-align:left;color:var(--text)}
+.menu button:hover{background:var(--hover);color:var(--bright)}.menu .menu-label{display:block;padding:6px 8px 3px;color:var(--muted);font-size:10px;font-weight:750;letter-spacing:.07em;text-transform:uppercase}
+.menu .sep{height:1px;margin:5px 4px;background:var(--border)}.menu .kbd{color:var(--muted);font-size:11px}
+.menu-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:center;padding:6px 8px 9px}.menu-head small{display:block;color:var(--muted)}
+/* body */
+.body{min-height:0;display:grid;grid-template-columns:var(--lw,290px) var(--lr,4px) minmax(0,1fr) var(--rr,4px) var(--rw,340px)}
+.left-panel,.slot-left{grid-column:1}.left-resizer,.slot-lr{grid-column:2}.center{grid-column:3}.right-resizer,.slot-rr{grid-column:4}.right-panel,.slot-right{grid-column:5}
+.panel{min-width:0;min-height:0;overflow:auto;background:var(--surface)}.left-panel{border-right:1px solid var(--border)}.right-panel{border-left:1px solid var(--border)}
+.resizer{position:relative;z-index:8;display:grid;place-items:center;background:var(--border);cursor:col-resize;touch-action:none;user-select:none}
+.resizer:hover,.resizer.dragging{background:color-mix(in srgb,var(--accent) 45%,var(--border))}
+.resizer button{width:16px;height:40px;border:1px solid var(--border);border-radius:9px;background:var(--canvas);padding:0;color:var(--muted);cursor:pointer}.resizer button:hover{color:var(--bright)}
+/* left nav */
+.section-title{display:flex;align-items:center;justify-content:space-between;margin:14px 10px 4px;color:var(--muted);font-size:11px;font-weight:750;letter-spacing:.05em;text-transform:uppercase}
+.nav-list{display:grid;gap:2px;padding:0 8px}
+.nav-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;border-color:transparent;background:transparent;padding:8px;text-align:left}
+.nav-row:hover{background:var(--hover)}.nav-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.nav-row .meta{display:block;color:var(--muted);font-size:11px}
+.ws-nav-head{display:grid;gap:8px;border-bottom:1px solid var(--border);padding:10px}
+.ws-nav-head-top{display:flex;align-items:center;gap:6px}.ws-nav-head h2{font-size:15px}
+.ws-identity{flex:1;display:flex;align-items:center;gap:8px;min-width:0;border-color:transparent;background:transparent;padding:6px;text-align:left}
+.ws-identity:hover{background:var(--hover)}.ws-identity.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.session-row{display:grid;grid-template-columns:9px minmax(0,1fr);align-items:start;gap:9px;width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;padding:12px 10px;text-align:left}
+.session-row:hover{background:var(--hover)}.session-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.session-row>.dot{margin-top:5px}.session-row strong,.session-row small{display:block}.session-row small{margin-top:3px;color:var(--muted);line-height:1.35}
+/* middle chat */
+.center{min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);background:var(--canvas)}
+.workstream-strip{display:flex;align-items:center;gap:4px;min-height:44px;overflow-x:auto;border-bottom:1px solid var(--border);background:var(--surface);padding:6px 10px}
+.workstream-strip button{flex:0 0 auto;border-color:transparent;background:transparent;padding:5px 9px;color:var(--muted)}
+.workstream-strip button:hover{background:var(--hover)}.workstream-strip button.active{border-color:var(--border);background:var(--canvas);color:var(--bright);font-weight:650}
+.workstream-strip .strip-id{font-weight:700;color:var(--bright);padding-inline:6px}
+.chat{min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--canvas)}
+.chat-head{min-height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--border);padding:11px 18px}
+.chat-title{min-width:0}.chat-title .crumbs{margin-top:3px;color:var(--muted);font-size:12px}.chat-actions{display:flex;gap:7px;flex:0 0 auto}
+.messages{min-height:0;overflow:auto;padding:24px max(20px,calc((100% - 880px)/2));scrollbar-color:var(--border) transparent}
+.exchange{border-bottom:1px solid var(--border);padding:0 4px 22px;margin-bottom:22px}
+.message-meta{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:var(--muted);font-size:11px}
+.role{color:var(--accent);font-size:12px;font-weight:750;letter-spacing:.04em}.assistant .role{color:var(--purple)}
+.message-copy{color:var(--bright);font-size:15px;line-height:1.6}.event-fold{margin:16px 0 0;border-top:1px solid var(--border);padding-top:11px;color:var(--muted);font-weight:650;font-size:12px}
+.composer{border-top:1px solid var(--border);padding:12px max(16px,calc((100% - 920px)/2)) 14px}
+.composer-box{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;border:1px solid var(--border);border-radius:9px;background:var(--canvas);padding:10px}
+.composer input{min-width:0;border:0;outline:0;background:transparent;color:var(--bright);padding:5px}
+.composer-meta{display:flex;justify-content:space-between;margin-top:8px;color:var(--muted);font-size:11px}
+/* live decision (inline, belongs to the live session) */
+.live-decision{margin:6px 4px 4px;border:1px solid var(--accent2);border-radius:9px;background:color-mix(in srgb,var(--accent) 9%,var(--canvas));padding:13px}
+.live-decision .ld-tag{display:flex;align-items:center;gap:7px;margin-bottom:5px;color:var(--accent);font-size:11px;font-weight:750;letter-spacing:.04em;text-transform:uppercase}
+.live-decision h3{font-size:14px;line-height:1.35}.live-decision p{margin:5px 0 10px;color:var(--muted);font-size:12px}
+.ld-options{display:flex;flex-wrap:wrap;gap:6px}.ld-options button{padding:5px 10px}
+.ld-correct{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;margin-top:9px}
+.ld-correct textarea,.ld-text textarea{width:100%;min-height:52px;resize:vertical;border:1px solid var(--border);border-radius:7px;background:var(--canvas);color:var(--bright);padding:8px}
+.ld-text{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:end}
+.ld-status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+.ld-outcome{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--green);font-size:12px}
+.ld-linkbtn{border:0;background:transparent;color:var(--accent);padding:0}
+/* right panel: context + tools */
+.tool-tabs{display:flex;gap:5px;border-bottom:1px solid var(--border);padding:10px}
+.tool-tabs button{border-color:transparent;background:transparent;color:var(--muted);padding:6px 10px}
+.tool-tabs button:hover{background:var(--hover)}.tool-tabs button.active{border-color:var(--border);background:color-mix(in srgb,var(--accent) 16%,var(--surface));color:var(--accent);font-weight:650}
+.panel-section{border-bottom:1px solid var(--border);padding:14px}.panel-section:last-child{border-bottom:0}
+.file-row{display:flex;align-items:center;gap:9px;border-bottom:1px solid var(--border);padding:8px 2px}.file-row:last-child{border:0}
+.terminal-mini{margin-top:8px;border:1px solid var(--border);border-radius:7px;background:#010409;color:#7ee787;padding:12px;font:12px/1.5 ui-monospace,monospace}
+.ctx-link{border:0;background:transparent;color:var(--accent);padding:6px 0 0}
+.checkpoint-box{border:1px solid var(--border);border-radius:8px;background:var(--canvas);padding:11px}.checkpoint-box p{margin:4px 0 0;color:var(--text)}
+/* durable Human Task cards (belong to the Workstream) */
+.task-card{border:1px solid var(--border);border-radius:8px;background:var(--canvas);padding:12px;margin-bottom:10px}
+.task-card:last-child{margin-bottom:0}
+.task-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.task-card h3{font-size:13px;line-height:1.35}.task-card p{margin:5px 0 9px;color:var(--muted);font-size:12px}
+.task-prov{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:9px;color:var(--muted);font-size:11px}
+.task-answers{display:flex;flex-wrap:wrap;gap:6px}.task-answers button{padding:5px 9px}
+.task-text{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px}.task-text textarea{width:100%;min-height:54px;resize:vertical;border:1px solid var(--border);border-radius:7px;background:var(--canvas);color:var(--bright);padding:8px}
+.task-answered{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--border);margin-top:9px;padding-top:9px;color:var(--green);font-size:12px}
+.task-resolve{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--border);margin-top:9px;padding-top:9px;font-size:12px}
+.task-open{border:0;background:transparent;color:var(--accent);padding:0}
+/* Workstream brief (middle surface) */
+.brief{min-width:0;min-height:0;overflow:auto;background:var(--canvas);padding:26px clamp(22px,5vw,64px) 60px}
+.brief-head{display:flex;align-items:flex-start;justify-content:space-between;gap:22px;margin-bottom:22px}
+.brief-head h1{font-size:24px;letter-spacing:-.02em;margin-top:8px}
+.brief-head .brief-meta{margin-top:6px;color:var(--muted);font-size:12px}
+.brief-actions{display:flex;gap:7px;flex:0 0 auto}
+.brief-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr);gap:32px}
+.brief-section h2{font-size:14px;margin-bottom:11px;padding-top:14px;border-top:1px solid var(--border)}
+.continuation{font-size:16px;font-weight:650;color:var(--bright);line-height:1.4}
+.brief-facts{display:grid;grid-template-columns:120px minmax(0,1fr);gap:9px 14px;margin-top:14px;color:var(--muted);font-size:13px}.brief-facts dt{font-weight:650}.brief-facts dd{margin:0;color:var(--text);line-height:1.45}
+.brief-task{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;border-bottom:1px solid var(--border);padding:11px 2px}
+.brief-task:last-child{border-bottom:0}.brief-task small{color:var(--muted);font-size:11px}.brief-task .sub{grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.brief-updates{margin-top:26px}
+.brief-update{display:grid;grid-template-columns:220px minmax(0,1fr) auto;gap:14px;border-bottom:1px solid var(--border);padding:11px 0;font-size:12px}.brief-update small{color:var(--muted)}
+.session-index{margin-top:26px}
+.index-row{display:grid;grid-template-columns:minmax(200px,1fr) minmax(240px,1.4fr) 180px auto;gap:16px;align-items:center;width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;padding:13px 4px;text-align:left}
+.index-row:hover{background:var(--hover)}.index-row small{color:var(--muted)}.index-row .open{border:1px solid var(--border);border-radius:6px;padding:5px 9px;color:var(--bright)}
+/* dialogs */
+.backdrop{position:fixed;z-index:100;inset:0;display:grid;place-items:center;background:#010409a8;padding:18px;backdrop-filter:blur(3px)}
+.dialog{width:min(500px,100%);border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);padding:18px}
+.dialog h2{font-size:18px}.dialog p{margin:7px 0 14px;color:var(--muted)}
+.dialog label{display:grid;gap:6px;margin:12px 0;color:var(--bright);font-weight:650}
+.dialog input,.dialog textarea{width:100%;border:1px solid var(--border);border-radius:6px;background:var(--canvas);color:var(--bright);padding:9px}.dialog textarea{min-height:88px;resize:vertical;font-weight:400}
+.dialog-facts{display:grid;gap:7px;border-block:1px solid var(--border);padding:12px 0;margin:14px 0;color:var(--muted);font-size:12px}
+.dialog .actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.toast{position:fixed;z-index:95;left:50%;bottom:22px;max-width:min(560px,calc(100vw - 24px));transform:translateX(-50%);border:1px solid var(--accent);border-radius:7px;background:var(--surface);color:var(--bright);padding:8px 13px;box-shadow:var(--shadow);font-size:12px;text-align:center;pointer-events:none}
+.hidden{display:none!important}
+/* overlays for narrow widths */
+.overlay-pane{position:fixed;z-index:70;top:52px;bottom:0;width:min(340px,86vw);overflow:auto;background:var(--surface);box-shadow:var(--shadow)}
+.overlay-pane.left{left:0;border-right:1px solid var(--border)}.overlay-pane.right{right:0;border-left:1px solid var(--border)}
+.overlay-head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding:10px 12px}
+@media(max-width:1040px){.body{--rw:0px;--rr:0px}.body>.right-panel,.body>.right-resizer{display:none}.narrow-only .ctx-toggle{display:inline-flex}}
+@media(max-width:820px){.body{--lw:0px;--lr:0px}.body>.left-panel,.body>.left-resizer{display:none}.narrow-only{display:flex;gap:6px}.scope .muted{display:none}.brief-grid{grid-template-columns:1fr}.brief-update,.index-row{grid-template-columns:1fr;gap:5px}.messages{padding:18px 14px}}
+@media(min-width:821px){.overlay-pane{display:none!important}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+"use strict";
+/* ---------- fixtures ---------- */
+const standaloneChats={
+ release:{id:'release',title:'ChatGPT plugin release permissions',anchor:'embabel · main',
+  user:'Can I push to main on the chatgpt plugin repo?',
+  assistant:'Yes. You have admin and push permission, and main is currently unprotected with no ruleset preventing direct pushes.',
+  decision:{kind:'choice',prompt:'Push directly to main now, or open a short-lived PR first?',detail:'This choice affects the release audit trail for this session.',options:['Push to main','Open a PR','Ask me later']}},
+ photo:{id:'photo',title:'Review photo upload race',anchor:'PhotoQuest · main',
+  user:'Can we reproduce the upload race before changing the queue?',
+  assistant:'Yes. I will keep this Chat lightweight and reproduce the iOS path against the current main checkout first.',
+  decision:{kind:'text',prompt:'Which device and OS should I reproduce against first?',detail:'Free-text answer. Name the device and iOS version.',options:[]}}
+};
+const workstreams={
+ admin:{id:'admin',title:'Admin operations UX',revision:12,freshness:'Checkpoint stale after new activity',fresh:'orange',
+  provenance:'Confirmed by owner · source: Shape interaction shell',
+  continuation:'Confirm the unified navigation, then carry the selected shell into production.',
+  changed:'Standalone Chats and durable Workstream sessions now share one conversation canvas.',
+  remains:'Confirm the panel hierarchy, the collapsed navigation handoff, and promotion behavior.',
+  links:['embabel/pi-web#412','PhotoQuest/admin#88'],closed:false,
+  sessionIds:['shape','contracts','inspect'],taskIds:['structure','brief-entry','missing']},
+ model:{id:'model',title:'Model evaluation',revision:5,freshness:'Current · confirmed 6 min ago',fresh:'green',
+  provenance:'Confirmed by owner · source: Compare model evidence',
+  continuation:'Record which model binding wins, then close the Workstream.',
+  changed:'Benchmark evidence favors the high-effort lead binding.',
+  remains:'Resolve the final Human Task before closure.',
+  links:['pi-workbench/benchmarks#9'],closed:false,
+  sessionIds:['modelcompare'],taskIds:['binding']}
+};
+const sessions={
+ shape:{id:'shape',workstreamId:'admin',title:'Shape interaction shell',anchor:'PhotoQuest · admin-operations-ux',
+  summary:'Map navigation, brief, tasks, and tools into one shell',
+  update:'Prototype now separates return context from focused session work.',updatedAt:'Confirmed 8 min ago',
+  user:'The navigation and active work need to feel like one system.',
+  assistant:'I mapped the session hierarchy, Workstream brief, Human Tasks, and checkout-scoped tools into one stable shell.',
+  decision:{kind:'choice',prompt:'Should collapsing the left pane switch to horizontal session tabs?',detail:'This governs the vertical/horizontal navigation handoff.',options:['Yes','No','Change']}},
+ contracts:{id:'contracts',workstreamId:'admin',title:'Reconcile interface contracts',anchor:'pi-workbench · workstreams-ui',
+  summary:'Resolve which interface decisions still block the shell',
+  update:'Contract work is waiting on the shell decision; no newer checkpoint.',updatedAt:'Confirmed yesterday',
+  user:'Which interface decisions still block the shell?',
+  assistant:'The remaining decision is how standalone Chats acquire durable context without changing their conversation surface.',
+  decision:{kind:'choice',prompt:'Treat promotion as the only path to durable context?',detail:'Choose whether standalone Chats gain context solely by promotion.',options:['Yes','No','Change']}},
+ inspect:{id:'inspect',workstreamId:'admin',title:'Inspect PI WEB shell',anchor:'pi-web · main',
+  summary:'Map shell-owned controls and host surfaces',
+  update:'Shell-owned controls and host surface seams are mapped.',updatedAt:'Confirmed 42 min ago',
+  user:'Which controls must remain owned by PI WEB?',
+  assistant:'Authentication, recovery, projects, the command palette, and runtime session controls remain host-owned.',
+  decision:{kind:'text',prompt:'Which host-owned control needs the clearest placement?',detail:'Free-text answer describing the control and where it belongs.',options:[]}},
+ modelcompare:{id:'modelcompare',workstreamId:'model',title:'Compare model evidence',anchor:'pi-workbench · benchmark',
+  summary:'Summarize benchmark evidence without reopening transcripts',
+  update:'Latest confirmed update favors the high-effort lead binding.',updatedAt:'Confirmed 6 min ago',
+  user:'Summarize the benchmark evidence without reopening every transcript.',
+  assistant:'The latest confirmed update favors the high-effort lead binding; one Human Task remains before closure.',
+  decision:{kind:'choice',prompt:'Adopt the high-effort lead binding as the default?',detail:'Confirm the default before the Workstream closes.',options:['Yes','No','Change']}}
+};
+const humanTasks={
+ structure:{id:'structure',workstreamId:'admin',source:'shape',kind:'decision',materiality:'High · shapes the shell',
+  title:'Adopt the unified session hierarchy?',detail:'Keep vertical sessions in the left pane, with horizontal tabs when the pane collapses.',options:['Yes','No','Change']},
+ 'brief-entry':{id:'brief-entry',workstreamId:'admin',source:'contracts',kind:'choice',materiality:'Medium · affects re-entry',
+  title:'How should the brief enter session work?',detail:'Choose the default presentation when returning to a Workstream.',options:['Middle-pane brief','Context summary','Only when stale']},
+ missing:{id:'missing',workstreamId:'admin',source:'inspect',kind:'text',materiality:'Low · informational',
+  title:'What context is missing before resuming?',detail:'Free-text. Describe anything the checkpoint, tasks, and session summaries do not cover.',options:[]},
+ binding:{id:'binding',workstreamId:'model',source:'modelcompare',kind:'decision',materiality:'High · blocks closure',
+  title:'Confirm the high-effort lead binding?',detail:'This is the last Human Task before the Model evaluation Workstream can close.',options:['Yes','No','Change']}
+};
+/* ---------- state ---------- */
+const state={
+ destination:'standalone-chat', // standalone-chat | workstream | workstream-session
+ standaloneId:'release',
+ workstreamId:'admin',
+ sessionId:'shape',
+ toolByScope:{},
+ navCollapsed:false,
+ theme:localStorage.getItem('unified-prototype-theme')||'dark',
+ panels:{left:{open:true,width:300},right:{open:true,width:360}},
+ menu:'',          // pi | workstream | session
+ dialog:null,      // {type, ...}
+ overlay:'',       // narrow only: nav | ctx
+ notice:'',
+ sent:{},          // scopeKey -> [messages]
+ live:{},          // scopeKey -> {status, mode, value, correcting}
+ taskAnswers:{}, taskAnswerAt:{}, taskResolved:{},
+ checkpoints:{
+  shape:{text:'Unified shell mapped; navigation and active work read as one system.',at:'Confirmed 8 min ago'},
+  contracts:{text:'Contract reconciliation paused pending the shell decision.',at:'Confirmed yesterday'},
+  inspect:{text:'Host-owned controls and surface seams mapped.',at:'Confirmed 42 min ago'},
+  modelcompare:{text:'High-effort lead binding favored by current evidence.',at:'Confirmed 6 min ago'}
+ },
+ checkpointFailure:{}
+};
+document.documentElement.dataset.theme=state.theme;
+const root=document.querySelector('#root');
+/* ---------- helpers ---------- */
+function esc(v){const n=document.createElement('span');n.textContent=v==null?'':String(v);return n.innerHTML}
+function wsMode(){return state.destination==='workstream'||state.destination==='workstream-session'}
+function currentWorkstream(){return workstreams[state.workstreamId]}
+function currentSession(){return sessions[state.sessionId]}
+function scopeKey(){return state.destination==='standalone-chat'?'chat:'+state.standaloneId:'session:'+state.sessionId}
+function currentEntity(){return state.destination==='standalone-chat'?standaloneChats[state.standaloneId]:currentSession()}
+function toolsFor(){return state.destination==='standalone-chat'?['Files','Git','Terminal']:['Context','Files','Git','Terminal']}
+function currentTool(){const k=scopeKey();const def=state.destination==='standalone-chat'?'Files':'Context';const t=state.toolByScope[k]||def;return toolsFor().includes(t)?t:def}
+function pendingTasks(ws){return ws.taskIds.filter(id=>!state.taskResolved[id])}
+function unansweredTasks(ws){return ws.taskIds.filter(id=>!state.taskAnswers[id])}
+/* ---------- top bar + menus ---------- */
+function topbar(){
+ return `<header class="topbar">
+  <button class="brand" data-menu-toggle="pi" aria-haspopup="true" aria-expanded="${state.menu==='pi'}" aria-label="PI WEB menu"><span class="pi-mark">π</span></button>
+  <div class="scope"><strong>Chats + Workstreams</strong><span class="muted">one stable workspace</span></div>
+  <div class="push"><span class="prototag">PROTOTYPE</span></div>
+  <div class="narrow-only">
+   <button class="icon" data-overlay="nav" aria-label="Open navigation">☰</button>
+   <button class="icon ctx-toggle" data-overlay="ctx" aria-label="Open context and tools">◫</button>
+  </div>
+ </header>`;
+}
+function piMenu(){
+ if(state.menu!=='pi')return'';
+ return `<nav class="menu" data-menu-panel style="top:50px;left:12px;width:300px" aria-label="PI WEB menu">
+  <div class="menu-head"><span class="pi-mark">π</span><span><strong>PI WEB</strong><small>Shell actions</small></span><span class="dot" title="Connected"></span></div>
+  <button data-act="palette">Command palette<span class="kbd">⌘K</span></button>
+  <button data-act="projects">Projects &amp; checkouts</button>
+  <div class="sep"></div>
+  <button data-act="auth">Authentication</button>
+  <button data-act="recovery">Recovery</button>
+  <div class="sep"></div>
+  <button data-act="theme">Theme &amp; presentation<span class="kbd">${state.theme==='dark'?'Dark':'Light'}</span></button>
+  <button data-act="settings">Settings</button>
+ </nav>`;
+}
+function workstreamMenu(){
+ if(state.menu!=='workstream')return'';
+ const y=wsMode()&&!state.navCollapsed?116:96;
+ return `<nav class="menu" data-menu-panel style="top:${y}px;left:${state.navCollapsed?12:220}px" aria-label="Workstream menu">
+  <span class="menu-label">Workstream</span>
+  <button data-act="ws-rename">Rename…</button>
+  <button data-act="ws-link">Add link…</button>
+  <div class="sep"></div>
+  <button class="danger" data-act="ws-close">Close Workstream</button>
+ </nav>`;
+}
+function sessionMenu(){
+ if(state.menu!=='session')return'';
+ return `<nav class="menu" data-menu-panel style="top:104px;right:16px" aria-label="Session menu">
+  <span class="menu-label">Session</span>
+  <button data-act="sess-anchor">Inspect anchor</button>
+  <button data-act="sess-resume">Resume session</button>
+  <div class="sep"></div>
+  <button data-act="sess-checkpoint">Request checkpoint…</button>
+ </nav>`;
+}
+/* ---------- left navigation ---------- */
+function rootNav(){
+ const chats=Object.values(standaloneChats).map(c=>`<button class="nav-row ${state.destination==='standalone-chat'&&state.standaloneId===c.id?'selected':''}" data-open-chat="${c.id}"><span class="dot" style="background:${state.standaloneId===c.id?'var(--green)':'var(--muted)'}"></span><span class="truncate">${esc(c.title)}<span class="meta">${esc(c.anchor)}</span></span><span class="muted">›</span></button>`).join('');
+ const ws=Object.values(workstreams).map(w=>{const need=unansweredTasks(w).length;return `<button class="nav-row" data-open-workstream="${w.id}"><span class="muted">›</span><span class="truncate">${esc(w.title)}${w.closed?' <span class="badge">Closed</span>':''}<span class="meta">${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · ${need?need+' need you':'no open tasks'}</span></span>${need?`<span class="badge orange">${need}</span>`:''}</button>`}).join('');
+ return `<aside class="panel left-panel">
+  <div class="section-title"><span>Chats</span><button class="icon" aria-label="New Chat">＋</button></div>
+  <div class="nav-list">${chats}</div>
+  <div class="section-title"><span>Workstreams</span><span>${Object.keys(workstreams).length}</span></div>
+  <div class="nav-list">${ws}</div>
+ </aside>`;
+}
+function workstreamNav(){
+ const w=currentWorkstream();
+ const rows=w.sessionIds.map(id=>{const s=sessions[id];return `<button class="session-row ${state.destination==='workstream-session'&&state.sessionId===id?'selected':''}" data-open-session="${id}"><span class="dot"></span><span><strong>${esc(s.title)}</strong><small>${esc(s.anchor)}</small><small>${esc(s.summary)}</small></span></button>`}).join('');
+ return `<aside class="panel left-panel">
+  <header class="ws-nav-head">
+   <div class="ws-nav-head-top">
+    <button class="icon" data-back-root aria-label="Back to all Chats and Workstreams">←</button>
+    <button class="ws-identity ${state.destination==='workstream'?'selected':''}" data-open-brief aria-label="Open Workstream brief"><span class="truncate"><span class="label">Workstream</span><strong class="truncate">${esc(w.title)}</strong></span></button>
+    <button class="icon" data-menu-toggle="workstream" aria-haspopup="true" aria-expanded="${state.menu==='workstream'}" aria-label="Workstream menu">···</button>
+   </div>
+   <div style="display:flex;gap:6px"><button class="small" data-collapse-nav aria-label="Collapse session navigation to horizontal tabs">⇤ Collapse</button></div>
+  </header>
+  <div class="section-title"><span>Sessions · ${w.sessionIds.length}</span><button class="icon" data-new-session aria-label="New session">＋</button></div>
+  <div>${rows}</div>
+ </aside>`;
+}
+function leftPane(){return wsMode()?workstreamNav():rootNav()}
+/* ---------- workstream strip (collapsed navigation) ---------- */
+function workstreamStrip(){
+ const w=currentWorkstream();
+ const tabs=w.sessionIds.map(id=>`<button class="${state.destination==='workstream-session'&&state.sessionId===id?'active':''}" data-open-session="${id}">${esc(sessions[id].title)}</button>`).join('');
+ return `<nav class="workstream-strip" aria-label="Workstream sessions">
+  <button class="icon" data-expand-nav aria-label="Expand session navigation vertically">⇥</button>
+  <button class="strip-id" data-open-brief>${esc(w.title)}</button>
+  <button class="${state.destination==='workstream'?'active':''}" data-open-brief>Brief</button>
+  <span style="width:1px;height:22px;background:var(--border);flex:0 0 auto"></span>
+  ${tabs}
+  <button class="icon" data-new-session aria-label="New session">＋</button>
+  <span style="flex:1"></span>
+  <button class="icon" data-menu-toggle="workstream" aria-label="Workstream menu">···</button>
+ </nav>`;
+}
+/* ---------- conversation + live decision ---------- */
+function liveDecisionCard(){
+ const e=currentEntity(),d=e.decision,key=scopeKey();
+ if(!d)return'';
+ const st=state.live[key]||{status:'pending',mode:d.kind==='text'?'text':'choice',correcting:false,value:''};
+ state.live[key]=st;
+ let inner;
+ if(st.status==='submitting'){
+  inner=`<div class="ld-status"><span class="dot" style="background:var(--orange)"></span>Submitting your answer…</div>`;
+ }else if(st.status==='answered'){
+  inner=`<div class="ld-outcome"><span>Answered · <strong>${esc(st.value)}</strong> · sent to the live session</span><button class="ld-linkbtn" data-live-correct>Correct</button></div>`;
+ }else if(st.mode==='text'||st.correcting){
+  inner=`<div class="${st.correcting?'ld-correct':'ld-text'}"><textarea data-live-draft placeholder="Type your answer…">${esc(st.value||'')}</textarea><button class="primary" data-live-submit>Send</button></div>`;
+ }else{
+  inner=`<div class="ld-options">${d.options.map(o=>`<button data-live-option="${esc(o)}">${esc(o)}</button>`).join('')}</div><button class="ld-linkbtn" data-live-type style="margin-top:8px">Write a different answer</button>`;
+ }
+ return `<div class="live-decision"><div class="ld-tag"><span class="dot" style="background:var(--accent)"></span>Live decision · needs you now</div><h3>${esc(d.prompt)}</h3><p>${esc(d.detail)}</p>${inner}</div>`;
+}
+function conversation(){
+ const e=currentEntity(),key=scopeKey();
+ const sent=(state.sent[key]||[]).map(m=>`<div class="exchange"><div class="message-meta"><span class="role">USER</span><span>just now</span></div><div class="message-copy">${esc(m)}</div></div>`).join('');
+ return `<div class="messages">
+  <div class="exchange"><div class="message-meta"><span class="role">USER</span><span>10:52 AM</span></div><div class="message-copy">${esc(e.user)}</div><div class="event-fold">▸ Events · 4 events · 1 assistant · 3 tool</div></div>
+  <div class="exchange assistant"><div class="message-meta"><span class="role">ASSISTANT</span><span>openai-codex/gpt-5.6-sol · medium</span></div><div class="message-copy">${esc(e.assistant)}</div></div>
+  ${sent}
+  ${liveDecisionCard()}
+ </div>`;
+}
+function chatHead(){
+ const e=currentEntity();
+ if(state.destination==='standalone-chat'){
+  return `<header class="chat-head"><div class="chat-title"><h1>${esc(e.title)}</h1><div class="crumbs"><span class="badge">Standalone Chat</span> · ${esc(e.anchor)}</div></div><div class="chat-actions"><button class="primary" data-promote>Promote to Workstream</button></div></header>`;
+ }
+ const w=currentWorkstream(),need=unansweredTasks(w).length;
+ return `<header class="chat-head"><div class="chat-title"><h1>${esc(e.title)}</h1><div class="crumbs"><span class="badge green">Workstream</span> · ${esc(w.title)} · ${esc(e.anchor)}</div></div><div class="chat-actions">${need?`<button data-open-context>Needs you · ${need}</button>`:''}<button data-menu-toggle="session" aria-haspopup="true" aria-expanded="${state.menu==='session'}" aria-label="Session menu">···</button></div></header>`;
+}
+function chatSurface(){
+ return `<main class="chat">${chatHead()}${conversation()}<div class="composer"><div class="composer-box"><input aria-label="Message Pi" placeholder="Message Pi… Use / for commands, @ for files"><button class="primary" data-send>Send</button></div><div class="composer-meta"><span>openai-codex/gpt-5.6-sol</span><span>↑148k · ↓24k · $3.87</span></div></div></main>`;
+}
+/* ---------- Workstream brief (middle) ---------- */
+function briefSurface(){
+ const w=currentWorkstream();
+ const unresolved=pendingTasks(w);
+ const tasks=unresolved.length?unresolved.map(id=>{const t=humanTasks[id],answered=state.taskAnswers[id];return `<div class="brief-task"><strong>${esc(t.title)}</strong><span class="badge ${answered?'green':'orange'}">${answered?'Answered':'Unanswered'}</span><div class="sub"><small>From ${esc(sessions[t.source].title)}</small><span class="badge">${esc(t.materiality)}</span><button class="ctx-link" data-open-task-context="${id}">Answer in Context ›</button></div></div>`}).join(''):`<p class="muted">No unresolved Human Tasks.</p>`;
+ const updates=w.sessionIds.map(id=>{const s=sessions[id];return `<div class="brief-update"><strong>${esc(s.title)}</strong><span>${esc(s.update)}</span><small>${esc(s.updatedAt)}</small></div>`}).join('');
+ const index=w.sessionIds.map(id=>{const s=sessions[id];return `<button class="index-row" data-open-session="${id}"><span><strong>${esc(s.title)}</strong><br><small>${esc(s.summary)}</small></span><span>${esc(s.update)}</span><small>${esc(s.anchor)}</small><span class="open">Open conversation</span></button>`}).join('');
+ return `<main class="brief" aria-label="Workstream brief">
+  <div class="brief-head">
+   <div><span class="badge ${w.fresh}">${esc(w.freshness)}</span><h1>${esc(w.title)}</h1><div class="brief-meta">Workstream brief · revision ${w.revision} · ${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · ${esc(w.provenance)}</div></div>
+   <div class="brief-actions"><button data-menu-toggle="workstream" aria-label="Workstream menu">···</button><button class="primary" data-open-session="${w.sessionIds[0]}">Continue in session</button></div>
+  </div>
+  <div class="brief-grid">
+   <section class="brief-section"><h2>Next useful continuation</h2><p class="continuation">${esc(w.continuation)}</p>
+    <dl class="brief-facts"><dt>What changed</dt><dd>${esc(w.changed)}</dd><dt>What remains</dt><dd>${esc(w.remains)}</dd><dt>Freshness</dt><dd>${esc(w.freshness)}</dd><dt>Provenance</dt><dd>${esc(w.provenance)}</dd></dl>
+   </section>
+   <section class="brief-section"><h2>Unresolved Human Tasks · ${unresolved.length}</h2>${tasks}<p class="muted" style="margin-top:10px;font-size:11px">Answer and resolve durable Human Tasks in a session's Context tab.</p></section>
+  </div>
+  <section class="brief-updates"><h2 class="brief-section" style="border:0;padding:0">Latest confirmed session updates</h2>${updates}</section>
+  <section class="session-index"><h2 class="brief-section" style="border:0;padding:0">Session index</h2>${index}</section>
+ </main>`;
+}
+/* ---------- middle pane ---------- */
+function middlePane(){
+ const strip=(wsMode()&&state.navCollapsed)?workstreamStrip():'';
+ const surface=state.destination==='workstream'?briefSurface():chatSurface();
+ return `<section class="center">${strip?`<div>${strip}</div>`:'<div style="display:none"></div>'}${surface}</section>`;
+}
+/* ---------- right pane: Context + tools ---------- */
+function toolTabs(){
+ const tabs=toolsFor();const cur=currentTool();
+ return `<div class="tool-tabs">${tabs.map(t=>`<button class="${cur===t?'active':''}" data-tool="${t}">${t}</button>`).join('')}</div>`;
+}
+function durableTaskCard(id){
+ const t=humanTasks[id],answer=state.taskAnswers[id],resolved=state.taskResolved[id];
+ let answerArea;
+ if(answer){
+  answerArea=`<div class="task-answered"><span>Answered: <strong>${esc(answer)}</strong> · ${esc(state.taskAnswerAt[id]||'just now')}</span><button class="task-open" data-task-clear="${id}">Change</button></div>`;
+ }else if(t.kind==='text'){
+  answerArea=`<div class="task-text"><textarea data-task-draft="${id}" placeholder="Type your answer…"></textarea><button class="primary" data-task-submit="${id}">Send</button></div>`;
+ }else{
+  answerArea=`<div class="task-answers">${t.options.map(o=>`<button data-task-answer="${id}|${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+ }
+ const resolveRow=answer?`<div class="task-resolve"><span class="badge ${resolved?'green':'orange'}">${resolved?'Resolved':'Open · awaiting resolution'}</span>${resolved?`<button class="task-open" data-task-reopen="${id}">Reopen</button>`:`<button class="small" data-task-resolve="${id}">Resolve</button>`}</div>`:'';
+ return `<article class="task-card"><div class="task-top"><h3>${esc(t.title)}</h3><span class="badge ${t.materiality.startsWith('High')?'red':t.materiality.startsWith('Medium')?'orange':''}">${esc(t.materiality.split(' · ')[0])}</span></div><p>${esc(t.detail)}</p><div class="task-prov">Source: <button class="task-open" data-open-source="${id}">${esc(sessions[t.source].title)}</button> · <span class="badge ${answer?'green':''}">${answer?'Answered':'Unanswered'}</span></div>${answerArea}${resolveRow}</article>`;
+}
+function contextTab(){
+ const w=currentWorkstream(),s=currentSession(),cp=state.checkpoints[s.id],failed=state.checkpointFailure[s.id];
+ const tasks=w.taskIds.map(durableTaskCard).join('');
+ return `<div class="panel-section"><span class="label">Workstream brief · revision ${w.revision}</span><p class="continuation" style="font-size:14px">${esc(w.continuation)}</p><button class="ctx-link" data-open-brief>Open full Workstream brief ›</button></div>
+  <div class="panel-section"><span class="label">Durable Human Tasks · ${w.taskIds.length}</span>${tasks}</div>
+  <div class="panel-section"><span class="label">Selected-session checkpoint</span><div class="checkpoint-box"><span class="badge ${failed?'red':'green'}">${failed?'Last request failed · previous confirmation retained':'Latest confirmed'}</span><p>${esc(cp.text)}</p><small class="muted">${esc(cp.at)}</small></div></div>
+  <div class="panel-section"><span class="label">Links</span>${w.links.map(l=>`<div class="file-row"><span class="badge">🔗</span><span>${esc(l)}</span></div>`).join('')}</div>
+  <div class="panel-section"><span class="label">Session anchor</span><p>${esc(s.anchor)}</p><small class="muted">Explicit selected-session checkout</small></div>`;
+}
+function toolContent(){
+ const tool=currentTool(),e=currentEntity();
+ if(tool==='Context')return contextTab();
+ if(tool==='Files')return `<div class="panel-section"><span class="label">Checkout files · ${esc(e.anchor)}</span><div class="file-row">▸ <span>.github</span></div><div class="file-row">▸ <span>packages/</span></div><div class="file-row">▸ <span>README.md</span></div></div>`;
+ if(tool==='Git')return `<div class="panel-section"><span class="label">Repository state</span><h3>${esc(e.anchor)}</h3><p class="muted">clean · ahead 0 · behind 0</p><div class="file-row"><span class="badge green">2 linked PRs</span></div></div>`;
+ return `<div class="panel-section"><span class="label">Terminal · ${esc(e.anchor)}</span><div class="terminal-mini">$ git status --short<br><span class="muted"># working tree clean</span><br>$ gh pr status</div></div>`;
+}
+function rightPane(){return `<aside class="panel right-panel">${toolTabs()}${toolContent()}</aside>`}
+/* ---------- resizers ---------- */
+function leftResizer(){const open=!wsMode()?state.panels.left.open:true;const arrow=open?'‹':'›';return `<div class="resizer left-resizer" data-resize="left"><button data-toggle-panel="left" aria-label="Resize or collapse navigation" title="Drag to resize">${arrow}</button></div>`}
+function rightResizer(){const open=state.panels.right.open;return `<div class="resizer right-resizer" data-resize="right"><button data-toggle-panel="right" aria-label="Resize or collapse context" title="Drag to resize">${open?'›':'‹'}</button></div>`}
+/* ---------- dialogs ---------- */
+function dialogView(){
+ const d=state.dialog;if(!d)return'';
+ let body;
+ if(d.type==='promote'){const c=standaloneChats[state.standaloneId];body=`<span class="badge orange">Durable context</span><h2>Promote this Chat to a Workstream</h2><p>The current conversation stays in place and becomes the Workstream's first session.</p><label>Workstream title<input value="${esc(d.title)}" data-dialog-input aria-label="Workstream title"></label><div class="dialog-facts"><span>Chat · ${esc(c.title)}</span><span>Checkout · ${esc(c.anchor)}</span><span>Association · permanent in this prototype</span></div><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Create Workstream</button></div>`;}
+ else if(d.type==='rename'){body=`<h2>Rename Workstream</h2><p>Update the Workstream title in prototype memory.</p><label>Title<input value="${esc(d.value)}" data-dialog-input aria-label="Workstream title"></label><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Rename</button></div>`;}
+ else if(d.type==='addlink'){body=`<h2>Add link</h2><p>Attach a reference link to this Workstream.</p><label>Link<input value="${esc(d.value)}" data-dialog-input placeholder="owner/repo#123 or URL" aria-label="Link"></label><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Add link</button></div>`;}
+ else if(d.type==='checkpoint'){const s=sessions[d.sessionId];body=`<span class="badge">Attended</span><h2>Request checkpoint · ${esc(s.title)}</h2><p>Pi proposes a checkpoint. Correct the text if needed, then confirm. Only confirmation changes the displayed latest checkpoint.</p><label>Proposed checkpoint<textarea data-dialog-input aria-label="Proposed checkpoint">${esc(d.draft)}</textarea></label><div class="actions"><button data-dialog-cancel>Cancel</button><button data-dialog-fail>Confirm (simulate failure)</button><button class="primary" data-dialog-confirm>Confirm checkpoint</button></div>`;}
+ return `<div class="backdrop" data-dialog-backdrop><section class="dialog" role="dialog" aria-modal="true">${body}</section></div>`;
+}
+/* ---------- narrow overlays ---------- */
+function overlayView(){
+ if(!state.overlay)return'';
+ const side=state.overlay==='nav'?'left':'right';
+ const content=state.overlay==='nav'?leftPane():(state.destination==='workstream'?'<div class="panel-section muted">Open a session to see Context and tools.</div>':rightPane());
+ return `<aside class="overlay-pane ${side}"><div class="overlay-head"><strong>${state.overlay==='nav'?'Navigate':'Context &amp; tools'}</strong><button class="icon" data-overlay-close aria-label="Close">×</button></div>${content}</aside>`;
+}
+/* ---------- render ---------- */
+function bodyVars(){
+ const leftVisible=wsMode()?!state.navCollapsed:state.panels.left.open;
+ const lw=leftVisible?state.panels.left.width:0;
+ const rightUsed=state.destination!=='workstream';
+ const rw=rightUsed&&state.panels.right.open?state.panels.right.width:0;
+ const el=document.documentElement;
+ el.style.setProperty('--lw',lw+'px');
+ el.style.setProperty('--lr',(wsMode()&&state.navCollapsed)?'0px':'4px');
+ el.style.setProperty('--rw',rw+'px');
+ el.style.setProperty('--rr',rightUsed?'4px':'0px');
+ return{leftVisible,rightUsed};
+}
+function render(){
+ const{leftVisible,rightUsed}=bodyVars();
+ const collapsedNav=wsMode()&&state.navCollapsed;
+ const leftEl=leftVisible?leftPane():'<div class="slot-left"></div>';
+ const leftRz=collapsedNav?'<div class="slot-lr"></div>':leftResizer();
+ const rightOpen=rightUsed&&state.panels.right.open;
+ const rightRz=rightUsed?rightResizer():'<div class="slot-rr"></div>';
+ const rightEl=rightOpen?rightPane():'<div class="slot-right"></div>';
+ root.innerHTML=`<div class="app" ${state.dialog?'inert':''}>
+  ${topbar()}
+  <div class="body">${leftEl}${leftRz}${middlePane()}${rightRz}${rightEl}</div>
+ </div>
+ ${piMenu()}${workstreamMenu()}${sessionMenu()}
+ ${overlayView()}
+ ${dialogView()}
+ ${state.notice?`<div class="toast" role="status">${esc(state.notice)}</div>`:''}`;
+ if(state.dialog)queueMicrotask(()=>document.querySelector('[data-dialog-input]')?.focus());
+}
+/* ---------- interactions ---------- */
+function notice(t){state.notice=t}
+function openStandalone(id){state.destination='standalone-chat';state.standaloneId=id;state.menu='';state.overlay='';notice(`Opened standalone Chat: ${standaloneChats[id].title}.`)}
+function openWorkstream(id){state.destination='workstream';state.workstreamId=id;state.menu='';state.overlay='';notice(`Opened Workstream brief: ${workstreams[id].title}.`)}
+function openSession(id){const s=sessions[id];state.destination='workstream-session';state.workstreamId=s.workstreamId;state.sessionId=id;state.menu='';state.overlay='';notice(`Opened Workstream session: ${s.title}.`)}
+root.parentElement.addEventListener('click',onClick);
+function onClick(e){
+ const b=e.target.closest('button');
+ const menuPanel=e.target.closest('[data-menu-panel]');
+ // close menus when clicking outside a menu and outside a menu toggle
+ if(state.menu&&!menuPanel&&!(b&&b.dataset.menuToggle)){state.menu='';}
+ if(!b){if(state.menu===''){render()}return}
+ const d=b.dataset;
+ // navigation
+ if(d.openChat){openStandalone(d.openChat);return render()}
+ if(d.openWorkstream){openWorkstream(d.openWorkstream);return render()}
+ if(d.openSession){openSession(d.openSession);return render()}
+ if(d.openBrief!==undefined){state.destination='workstream';state.menu='';notice('Opened Workstream brief.');return render()}
+ if(d.backRoot!==undefined){state.destination='standalone-chat';state.menu='';notice('Returned to all Chats and Workstreams.');return render()}
+ if(d.openContext!==undefined){state.toolByScope[scopeKey()]='Context';state.overlay=matchMedia('(max-width:1040px)').matches?'ctx':'';notice('Context opened.');return render()}
+ if(d.openTaskContext){const t=humanTasks[d.openTaskContext];openSession(t.source);state.toolByScope['session:'+t.source]='Context';notice(`Opened Context for ${sessions[t.source].title}.`);return render()}
+ if(d.openSource){const t=humanTasks[d.openSource];openSession(t.source);notice(`Opened source conversation: ${sessions[t.source].title}.`);return render()}
+ // nav collapse / expand
+ if(d.collapseNav!==undefined){state.navCollapsed=true;state.menu='';notice('Session navigation collapsed to horizontal tabs.');return render()}
+ if(d.expandNav!==undefined){state.navCollapsed=false;state.menu='';notice('Session navigation expanded.');return render()}
+ if(d.newSession!==undefined){notice('New session — prototype placeholder; no session was created.');return render()}
+ // tools
+ if(d.tool){state.toolByScope[scopeKey()]=d.tool;notice(`${d.tool} opened for the selected session.`);return render()}
+ // menus
+ if(d.menuToggle){state.menu=state.menu===d.menuToggle?'':d.menuToggle;return render()}
+ if(d.overlay){state.overlay=state.overlay===d.overlay?'':d.overlay;return render()}
+ if(d.overlayClose!==undefined){state.overlay='';return render()}
+ if(d.togglePanel){const side=d.togglePanel;if(wsMode()&&side==='left'){state.navCollapsed=!state.navCollapsed}else{state.panels[side].open=!state.panels[side].open}notice(`${side[0].toUpperCase()+side.slice(1)} panel ${((wsMode()&&side==='left')?!state.navCollapsed:state.panels[side].open)?'expanded':'collapsed'}.`);return render()}
+ // PI WEB menu actions
+ if(d.act){handleMenuAct(d.act);return render()}
+ // live decision
+ if(d.liveOption!==undefined){submitLive(d.liveOption);return render()}
+ if(d.liveType!==undefined){const k=scopeKey();state.live[k].correcting=true;state.live[k].mode='text';return render()}
+ if(d.liveSubmit!==undefined){const ta=document.querySelector('[data-live-draft]');const v=(ta?.value||'').trim();if(!v){notice('Enter an answer before sending.');return render()}submitLive(v);return render()}
+ if(d.liveCorrect!==undefined){const k=scopeKey();state.live[k]={status:'pending',mode:currentEntity().decision.kind==='text'?'text':'choice',correcting:false,value:''};notice('Live decision reopened for correction.');return render()}
+ // durable tasks
+ if(d.taskAnswer){const[id,val]=d.taskAnswer.split('|');state.taskAnswers[id]=val;state.taskAnswerAt[id]='received just now';notice(`Human Task answered: ${val}.`);return render()}
+ if(d.taskSubmit){const ta=document.querySelector(`[data-task-draft="${d.taskSubmit}"]`);const v=(ta?.value||'').trim();if(!v){notice('Enter an answer before sending.');return render()}state.taskAnswers[d.taskSubmit]=v;state.taskAnswerAt[d.taskSubmit]='received just now';notice('Human Task answered.');return render()}
+ if(d.taskClear){delete state.taskAnswers[d.taskClear];delete state.taskAnswerAt[d.taskClear];state.taskResolved[d.taskClear]=false;notice('Human Task answer cleared.');return render()}
+ if(d.taskResolve){state.taskResolved[d.taskResolve]=true;notice('Human Task resolved.');return render()}
+ if(d.taskReopen){state.taskResolved[d.taskReopen]=false;notice('Human Task resolution reopened.');return render()}
+ // promotion
+ if(d.promote!==undefined){state.dialog={type:'promote',title:standaloneChats[state.standaloneId].title};return render()}
+ // dialog
+ if(d.dialogCancel!==undefined){state.dialog=null;notice('Cancelled.');return render()}
+ if(d.dialogConfirm!==undefined){confirmDialog();return render()}
+ if(d.dialogFail!==undefined){failCheckpoint();return render()}
+ if(d.send!==undefined){const inp=document.querySelector('input[aria-label="Message Pi"]');const v=(inp?.value||'').trim();if(!v){notice('Enter a message before sending.');return render()}const k=scopeKey();(state.sent[k]=state.sent[k]||[]).push(v);notice('Message added to the same conversation.');return render()}
+ render();
+}
+function submitLive(value){
+ const k=scopeKey();state.live[k]={status:'submitting',value,mode:currentEntity().decision.kind==='text'?'text':'choice',correcting:false};
+ notice('Submitting live decision…');render();
+ setTimeout(()=>{const cur=state.live[k];if(cur&&cur.status==='submitting'){state.live[k]={status:'answered',value,mode:cur.mode};notice(`Live decision answered: ${value}.`);render()}},500);
+}
+function handleMenuAct(act){
+ state.menu='';
+ switch(act){
+  case'palette':notice('Command palette (⌘K) — prototype placeholder.');break;
+  case'projects':notice('Projects & checkouts — prototype placeholder.');break;
+  case'auth':notice('Authentication — host-owned control.');break;
+  case'recovery':notice('Recovery — host-owned control.');break;
+  case'settings':notice('Settings — prototype placeholder.');break;
+  case'theme':state.theme=state.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=state.theme;localStorage.setItem('unified-prototype-theme',state.theme);notice(`GitHub ${state.theme==='dark'?'Dark':'Light'} applied.`);break;
+  case'ws-rename':state.dialog={type:'rename',value:currentWorkstream().title};break;
+  case'ws-link':state.dialog={type:'addlink',value:''};break;
+  case'ws-close':currentWorkstream().closed=true;notice(`${currentWorkstream().title} marked closed.`);break;
+  case'sess-anchor':notice(`Anchor: ${currentSession().anchor} · explicit selected-session checkout.`);break;
+  case'sess-resume':notice(`Resumed session: ${currentSession().title}.`);break;
+  case'sess-checkpoint':state.dialog={type:'checkpoint',sessionId:state.sessionId,draft:`Proposed: ${currentSession().summary.toLowerCase()}; confirm to update the latest checkpoint.`};break;
+ }
+}
+function confirmDialog(){
+ const d=state.dialog;if(!d)return;
+ const val=document.querySelector('[data-dialog-input]')?.value.trim();
+ if(d.type==='promote'){
+  const c=standaloneChats[state.standaloneId];const title=val||c.title;
+  const wsId='promoted-'+c.id, sId='s-'+c.id;
+  workstreams[wsId]={id:wsId,title,revision:1,freshness:'Current · just created',fresh:'green',provenance:'Confirmed by owner · source: '+c.title,continuation:'Continue the promoted conversation as the first session.',changed:'Standalone Chat promoted into a Workstream.',remains:'Add durable context as work continues.',links:[c.anchor],closed:false,sessionIds:[sId],taskIds:[]};
+  sessions[sId]={id:sId,workstreamId:wsId,title:c.title,anchor:c.anchor,summary:'Promoted from standalone Chat',update:'Conversation preserved from the standalone Chat.',updatedAt:'Just now',user:c.user,assistant:c.assistant,decision:c.decision};
+  state.checkpoints[sId]={text:'Promoted from standalone Chat; no checkpoint confirmed yet.',at:'No confirmation yet'};
+  // preserve conversation state across the promotion
+  const from='chat:'+c.id, to='session:'+sId;
+  if(state.sent[from])state.sent[to]=state.sent[from].slice();
+  if(state.live[from])state.live[to]=Object.assign({},state.live[from]);
+  state.dialog=null;openSession(sId);notice('Workstream created around the existing Chat; the same conversation was preserved.');return;
+ }
+ if(d.type==='rename'){if(val)currentWorkstream().title=val;state.dialog=null;notice('Workstream renamed.');return}
+ if(d.type==='addlink'){if(val)currentWorkstream().links.push(val);state.dialog=null;notice('Link added.');return}
+ if(d.type==='checkpoint'){const text=val||d.draft;state.checkpoints[d.sessionId]={text,at:'Confirmed just now'};state.checkpointFailure[d.sessionId]=false;state.dialog=null;notice('Checkpoint confirmed; latest checkpoint updated.');return}
+}
+function failCheckpoint(){const d=state.dialog;if(d&&d.type==='checkpoint'){state.checkpointFailure[d.sessionId]=true;state.dialog=null;notice('Checkpoint request failed; the previous confirmation is retained.')}}
+/* ---------- resize ---------- */
+root.parentElement.addEventListener('pointerdown',e=>{
+ const handle=e.target.closest('[data-resize]');if(!handle||e.target.closest('button'))return;
+ const side=handle.dataset.resize,panel=state.panels[side];
+ if(side==='left'&&wsMode()&&state.navCollapsed)return;
+ e.preventDefault();handle.classList.add('dragging');
+ const startX=e.clientX,startWidth=panel.width;document.body.style.userSelect='none';
+ const move=ev=>{const delta=side==='left'?ev.clientX-startX:startX-ev.clientX;panel.width=Math.round(Math.max(200,Math.min(Math.min(560,innerWidth*.5),startWidth+delta)));bodyVars()};
+ const finish=()=>{handle.classList.remove('dragging');document.body.style.userSelect='';removeEventListener('pointermove',move);removeEventListener('pointerup',finish);removeEventListener('pointercancel',finish)};
+ addEventListener('pointermove',move);addEventListener('pointerup',finish);addEventListener('pointercancel',finish);
+});
+/* ---------- keyboard ---------- */
+addEventListener('keydown',e=>{
+ if(e.key==='Escape'){if(state.dialog){state.dialog=null;render();return}if(state.menu){state.menu='';render();return}if(state.overlay){state.overlay='';render();return}}
+ const ae=document.activeElement;
+ if(e.key==='Enter'&&ae?.matches('input[aria-label="Message Pi"]')){document.querySelector('[data-send]')?.click();return}
+ if(e.key==='Enter'&&ae?.matches('[data-dialog-input]')&&ae.tagName==='INPUT'){document.querySelector('[data-dialog-confirm]')?.click();return}
+});
+render();
+</script>
+</body>
+</html>
