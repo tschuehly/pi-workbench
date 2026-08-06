@@ -58,6 +58,19 @@ it and launching a new child. It creates no managed Run,
 workspace-isolation, or recovery guarantee. V1 has no background semantic work or unattended
 execution, and implementation does not wait for a separately agreed execution plan.
 
+### Optional phase-boundary compaction trial
+
+When attended work is organized into multiple implementation phases, the lead may trial
+`compact_and_continue` after completing, saving, and verifying one phase. The tool compacts older
+Model Context in the same Pi session and starts one concrete next phase automatically. Calling it is
+model-decided rather than required after every phase, and it must be the lead's only tool call at
+that boundary.
+
+This trial changes only disposable Model Context. It does not create or replace a confirmed
+Workstream checkpoint, produce a Continuation Artifact, grant unattended execution, or act as a
+durable cross-session handoff. Compaction failure remains ordinary attended session material; the
+lead reports it and continues only when the remaining context is sufficient.
+
 ### Confirmed checkpoints
 
 Checkpointing is explicit and attended. The active Pi session proposes a concise checkpoint stating
@@ -104,5 +117,7 @@ implementation plan based on evidence from sustained V1 use.
 Evaluate V1 by whether it reduces the Human Attention needed to leave and resume real work. Record
 where users still reconstruct context manually, whether checkpoints remain concise and accurate,
 launch and reconnect failures, conflicting associations, unnecessary Workstream interactions, and
-whether human tasks and links aid resumption. Do not add orchestration machinery without observed
-V1 evidence that justifies it.
+whether human tasks and links aid resumption. During the optional phase-boundary compaction trial,
+record whether the lead chooses useful boundaries, preserves enough verified context, begins the
+named next phase successfully, or causes premature compaction, repetition, or recovery work. Do not
+add orchestration machinery without observed V1 evidence that justifies it.
