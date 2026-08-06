@@ -80,6 +80,7 @@ interface SubagentExecutionDetailsV1 {
   kind: "pi-workbench.subagent-execution";
   version: 1;
   executionId?: string;
+  acceptedAt?: string;
   input: {
     task: string;
     profile: "scout" | "planner" | "reviewer" | "implementer";
@@ -108,8 +109,11 @@ interface SubagentExecutionDetailsV1 {
 }
 ```
 
-Bounds remain enforced at the producer: maximum observation count, task/result/diagnostic lengths,
-and no unbounded arbitrary detail objects.
+Bounds remain enforced at the extension producer: at most 30 observations (matching its current
+sliding window), bounded task/result/diagnostic lengths, and no unbounded arbitrary detail objects.
+The adapter may retain its existing 200-observation internal process buffer; only the latest 30
+enter the presentation envelope. `acceptedAt` comes from the adapter receipt and is the elapsed-time
+origin.
 
 ### PI WEB core
 
@@ -136,19 +140,23 @@ transcripts.
 ### Pi Workbench adapter
 
 The Workbench adapter may show a collapsed count/index beneath the **selected parent session** only
-through a generic PI WEB-owned `SessionChildExecutionHost`:
+through a generic PI WEB-owned `SessionChildExecutionHost`, following the existing
+`SessionAttentionHost` snapshot/watch/focus precedent:
 
 ```ts
 interface SessionChildExecutionHost {
   snapshot(): SessionChildExecutionSnapshot;
   watch(handler: (snapshot: SessionChildExecutionSnapshot) => void): () => void;
-  focus(executionId: string): Promise<boolean>;
+  focus(toolCallId: string): Promise<boolean>;
 }
 ```
 
-The snapshot contains bounded presentation facts—parent session identity, execution identity,
-title, state, and active/terminal status—not task text, observations, result text, or child
-transcript. `focus` selects Chat, scrolls to the chronological card, expands it, and restores focus.
+The snapshot contains bounded presentation facts—parent session identity, tool-call identity,
+optional execution identity, title, state, and active/terminal status—not task text, observations,
+result text, or child transcript. Tool-call identity remains available for preflight failures that
+never receive an execution ID. The host snapshot and `focus(toolCallId)` are scoped to the already
+selected parent session; they do not perform cross-session lookup. `focus` selects Chat, scrolls to
+the chronological card, expands it, and restores focus.
 The host is live presentation state, never Workstream authority. Absence means “not currently
 observed,” not “no child executions exist.”
 
@@ -160,7 +168,7 @@ Show:
 
 - assignment title derived from the first bounded line of `task`;
 - `profile` and Cognitive Role;
-- elapsed time when available;
+- elapsed time derived from `acceptedAt` when available;
 - one non-color-only lifecycle label;
 - disclosure affordance.
 
@@ -184,11 +192,13 @@ has no child-chat action because no child session exists.
 
 ### Cancellation
 
-The first production cut uses PI WEB's existing stop-active-work path. The card action must say
-**Stop child and lead turn**, with confirmation text explaining that PI WEB will abort the current
-lead turn and the extension will then confirm child termination. It may change to **Cancel child**
-only after a generic, tested tool-call cancellation mechanism can target one active invocation
-without claiming the lead remains unaffected.
+The first production cut uses PI WEB's existing stop-active-work path. Because one parent turn may
+contain concurrent tool calls, the action must say **Stop lead turn and all active children**, with
+confirmation text explaining that PI WEB will abort the current lead turn and every in-flight child
+in that turn, then wait for each extension invocation to report its terminal state. Cards from the
+same turn share this stop action. It may change to **Cancel child** only after a generic, tested
+tool-call cancellation mechanism can target one active invocation without affecting the lead or
+sibling children.
 
 During termination the card says **Cancelling…** and disables repeated submission. The terminal
 state comes only from the extension envelope. A lost or unreconciled process becomes **Outcome
@@ -204,9 +214,12 @@ Workbench shell and parent session selection. The inspector header shows:
 - “Read-only child conversation”;
 - profile, Cognitive Role, and lifecycle status.
 
-The body reuses PI WEB's safe message normalization and Chat rendering where possible, including
-history paging. It omits the composer and all mutating session controls. The footer states that the
-session is inspection evidence from one bounded execution and offers **Copy Pi session ID**.
+The body reuses PI WEB's pure `normalizeMessages` and `groupChatMessages` pipeline plus extracted
+safe message-part rendering. It does not mount `ChatView` wholesale because that module is coupled
+to selected-session asks, dialogs, queues, notifications, activity, and load-more state. The
+inspector owns its read-only paging state and omits the composer and all mutating session controls.
+The footer states that the session is inspection evidence from one bounded execution and offers
+**Copy Pi session ID**.
 Returning restores the parent card's scroll anchor and focus.
 
 For a running child, refresh the transcript with a bounded foreground poll only while the inspector
@@ -222,14 +235,17 @@ baseline, and preserve unrelated local changes.
 
 1. Capture real `tool.start`, `tool.update`, and `tool.end` events from the current Level 1
    extension, including success, active cancellation, and `outcome_unknown`.
-2. Prove that `sessionsApi.messages({ id: childSessionId, cwd: parent.cwd }, machineId)` can read the
-   separately launched child's persisted transcript while running and after completion without
-   selecting or registering it as a normal PI WEB session.
-3. Confirm how soon the child session file becomes discoverable and specify bounded loading/retry
+2. Prove that `sessionsApi.messages({ id: childSessionId, cwd: parent.cwd }, { before, limit },
+   machineId)` can read the separately launched child's persisted transcript while running and
+   after completion without selecting or registering it as a normal PI WEB session.
+3. Confirm that message normalization can run independently from selected-session `AppState`; if
+   not, extract the pure read-only rendering seam before building the inspector.
+4. Confirm how soon the child session file becomes discoverable and specify bounded loading/retry
    behavior for startup races.
-4. Approve the V1 combined-stop wording. Do not label an abort of the parent turn as child-only
-   cancellation.
-5. Freeze the V1 details schema, bounds, lifecycle table, and malformed-input fallback.
+5. Approve the V1 combined-stop wording. Do not label an abort of the parent turn and sibling
+   children as child-only cancellation.
+6. Freeze the V1 details schema, 30-observation bound, lifecycle table, and malformed-input
+   fallback.
 
 Exit: one recorded fixture proves every required fact can reach PI WEB and the transcript inspector
 can read the child without changing selected session state. If live reads are impossible, keep the
@@ -237,8 +253,9 @@ inspector terminal-only for the first cut rather than adding hidden session regi
 
 ### 1. Produce typed execution details
 
-1. Add `sessionId` to the adapter's verified-binding observation and update its declarations and
-   deterministic tests.
+1. Add `sessionId` to the adapter's **initial** verified-binding observation emitted after
+   `#command` validates runtime identity, not only the later completion-time duplicate. Update its
+   declarations and deterministic tests so running inspection receives the ID.
 2. Add a pure extension-side projector that builds `SubagentExecutionDetailsV1` from params,
    binding, receipt, observations, cancellation, and result.
 3. Emit the same versioned envelope on every `onUpdate` and final return.
@@ -255,8 +272,10 @@ Exit: fixture streams are bounded, versioned, and require no prose parsing by PI
 2. Project raw `ToolExecutionPart` plus args into one stable view model. A pending or running
    `subagent` call with valid typed args may produce a provisional preflight/launching model before
    its first details update; a terminal or replayed record requires the versioned envelope.
-3. Give `groupChatMessages` one predicate from that module so a validated subagent execution is a
+3. Give the module-private `isReadablePart(message, part)` path in `groupChatMessages` one
+   part-level predicate from the projection module so only a validated subagent execution is a
    readable standalone message rather than disappearing inside the generic event-group disclosure.
+   Unrelated tool parts remain grouped.
 4. Keep generic `ToolExecutionView` as the fallback for absent, legacy, malformed, oversized, or
    unknown-version details.
 5. Preserve live update reconciliation by `toolCallId`; updates must not reset user disclosure.
@@ -271,7 +290,7 @@ Exit: callers learn one small projection interface and no rendering module under
 2. Render the selected collapsed and expanded content hierarchy.
 3. Keep cards collapsed by default and stable through current-exchange grouping, earlier-history
    expansion, live streaming, and result replacement.
-4. Wire copy-session-ID and truthful stop-active-work actions.
+4. Wire copy-session-ID and the shared **Stop lead turn and all active children** action.
 5. Make tool and execution failures legible without opening raw details.
 6. Preserve generic tool cards for every other tool.
 
@@ -280,10 +299,11 @@ without leaving its chronological context.
 
 ### 4. Add read-only child transcript inspection
 
-1. Add `ChildSessionInspector` and a small controller that loads `sessionsApi.messages` with the
-   child ID, parent checkout, and selected machine.
-2. Normalize messages through the existing transcript pipeline and reuse safe Markdown, tool,
-   image, and history presentation.
+1. Add `ChildSessionInspector` and a small controller that calls
+   `sessionsApi.messages({ id: childSessionId, cwd: parent.cwd }, { before, limit }, machineId)`.
+2. Normalize pages through pure `normalizeMessages`/`groupChatMessages` functions and extract the
+   safe message-part renderer needed for Markdown, tools, images, and history without selected-
+   session `AppState`.
 3. Exclude composer, prompting, model controls, checkpoint controls, branch/fork controls, and
    session selection.
 4. Add loading, startup-race retry, missing session, malformed history, remote-machine, reconnect,
@@ -348,8 +368,10 @@ Automated coverage must include:
 - fresh and degraded quota admission;
 - updates before binding verification and before child session ID discovery;
 - duplicate, missing, out-of-order, oversized, malformed, and unknown-version details;
-- two concurrent subagent tool calls with independent disclosure and status;
-- cancellation confirmation, timeout, forced termination, and outcome unknown;
+- two concurrent subagent tool calls with independent disclosure and status but one truthful shared
+  **Stop lead turn and all active children** action;
+- cancellation confirmation for every affected child, timeout, forced termination, and outcome
+  unknown;
 - current exchange, collapsed earlier history, transcript paging, reconnect, and result replay;
 - child transcript loading while running and after completion;
 - child transcript not found, wrong checkout, remote machine, and startup race;
