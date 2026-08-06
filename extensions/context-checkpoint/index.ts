@@ -1,6 +1,12 @@
 import type { CompactionResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { createCheckpointCoordinator, latestAssistantToolCallCount } from "./coordinator.mjs";
+import {
+  createCheckpointCoordinator,
+  latestAssistantToolCallCount,
+  MAX_NEXT_PHASE_CHARS,
+  MAX_SUMMARY_FOCUS_CHARS,
+  validateCheckpointRequest,
+} from "./coordinator.mjs";
 
 type CheckpointRequest = {
   summaryFocus: string;
@@ -49,23 +55,22 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
     name: "compact_and_continue",
     label: "Compact and Continue",
     description:
-      "End the current agent run at a coherent phase boundary, compact older session context with a requested focus, then automatically start the next phase in the same session.",
+      "End the current agent run at a coherent phase boundary, compact older session context using a short focus directive, then automatically start the next phase in the same session. summaryFocus directs Pi's summarizer; it is not a handoff summary and must be 1200 characters or fewer.",
     promptSnippet: "Compact context at a coherent phase boundary and continue with a named next phase",
     promptGuidelines: [
       "Call compact_and_continue alone as the final action of a completed phase, after saving and verifying work that must survive compaction.",
       "Use compact_and_continue only when the next phase is concrete and materially benefits from a smaller context; do not use it to avoid difficult reasoning or unfinished work.",
-      "Do not describe compact_and_continue as a durable cross-session handoff or as authoritative Workstream state.",
+      "Keep compact_and_continue summaryFocus at 1200 characters or fewer; use it as a short summarizer directive and reference existing evidence paths instead of restating session history.",
+      "Do not create a progress file solely for compact_and_continue or call generated notes authoritative, durable checkpoints, Continuation Artifacts, or cross-session handoffs.",
     ],
     parameters: Type.Object({
       summaryFocus: Type.String({
         minLength: 1,
-        maxLength: 2000,
-        description: "What the compaction summary must preserve for subsequent work",
+        description: `Brief directive to Pi's summarizer, not a handoff summary; at most ${MAX_SUMMARY_FOCUS_CHARS} characters`,
       }),
       nextPhase: Type.String({
         minLength: 1,
-        maxLength: 2000,
-        description: "Concrete next phase to begin automatically after compaction",
+        description: `One concrete next phase to begin automatically after compaction; at most ${MAX_NEXT_PHASE_CHARS} characters`,
       }),
     }),
     executionMode: "sequential",
@@ -75,9 +80,8 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
         summaryFocus: params.summaryFocus.trim(),
         nextPhase: params.nextPhase.trim(),
       };
-      if (request.summaryFocus.length === 0 || request.nextPhase.length === 0) {
-        throw new Error("summaryFocus and nextPhase must contain non-whitespace text");
-      }
+      const validationError = validateCheckpointRequest(request);
+      if (validationError !== undefined) throw new Error(validationError);
 
       const siblingToolCalls = latestAssistantToolCallCount(ctx.sessionManager.getBranch());
       if (siblingToolCalls > 1) {

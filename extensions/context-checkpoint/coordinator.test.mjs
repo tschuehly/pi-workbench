@@ -4,6 +4,9 @@ import {
   compactionInstructions,
   createCheckpointCoordinator,
   latestAssistantToolCallCount,
+  MAX_NEXT_PHASE_CHARS,
+  MAX_SUMMARY_FOCUS_CHARS,
+  validateCheckpointRequest,
 } from "./coordinator.mjs";
 
 const request = {
@@ -16,7 +19,20 @@ test("builds phase-boundary compaction instructions", () => {
   assert.match(instructions, /phase-boundary context checkpoint/);
   assert.match(instructions, /Preserve implementation decisions/);
   assert.match(instructions, /Review the finished implementation/);
-  assert.match(instructions, /not.*durable cross-session handoff/i);
+  assert.match(instructions, /do not.*durable checkpoint.*cross-session handoff/is);
+});
+
+test("validates concise checkpoint directives with actionable lengths", () => {
+  assert.equal(validateCheckpointRequest(request), undefined);
+  assert.match(
+    validateCheckpointRequest({ ...request, summaryFocus: "x".repeat(MAX_SUMMARY_FOCUS_CHARS + 1) }),
+    new RegExp(`summaryFocus is ${MAX_SUMMARY_FOCUS_CHARS + 1} characters.*not the summary itself`),
+  );
+  assert.match(
+    validateCheckpointRequest({ ...request, nextPhase: "x".repeat(MAX_NEXT_PHASE_CHARS + 1) }),
+    new RegExp(`nextPhase is ${MAX_NEXT_PHASE_CHARS + 1} characters`),
+  );
+  assert.match(validateCheckpointRequest({ summaryFocus: "", nextPhase: "phase" }), /non-whitespace/);
 });
 
 test("counts sibling tool calls in the latest assistant message", () => {
