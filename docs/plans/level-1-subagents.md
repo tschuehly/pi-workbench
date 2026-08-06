@@ -4,7 +4,7 @@ Status: approved implementation plan.
 
 ## Outcome
 
-Add one small, attended `subagent` tool to Level 1. One invocation launches one fresh child Pi process for one bounded assignment, streams its progress, permits cancellation, and returns a compact result to the interactive lead.
+Add one small, attended `subagent` tool to Level 1. One invocation launches one fresh child Pi process for one bounded assignment, streams its progress, permits cancellation, and returns a compact result to the interactive lead. It may also launch in the background and return a handle immediately, so the lead can run several children within the attended session and reconcile each later. Backgrounding is in-session only; a child still terminates when the attended session ends and gains no durable identity or recovery.
 
 The implementation separates reusable Pi process mechanics from the interactive tool:
 
@@ -29,6 +29,7 @@ Each parent tool invocation launches one child with three semantic inputs:
   task: string;
   profile: "scout" | "planner" | "reviewer" | "implementer";
   cognitiveRole: CognitiveRole;
+  background?: boolean;
 }
 ```
 
@@ -38,7 +39,7 @@ Each parent tool invocation launches one child with three semantic inputs:
 
 The extension supplies the validated current working directory and host capability ceiling. The parent cannot provide a model, provider, Model Effort, executable, environment, session directory, arbitrary tools, or sandbox policy.
 
-One invocation maps to one execution request. Parallel batches, chains, retries, review loops, and result synthesis are not extension behavior. The attended lead remains accountable for deciding what to delegate and for reconciling the result.
+One invocation maps to one execution request. When `background` is true the tool returns a handle immediately instead of blocking; the lead reconciles it within the same session through the companion `subagent_collect`, `subagent_status`, and `subagent_cancel` tools. This in-session non-blocking launch lets a lead keep several children in flight, but the extension still performs no batches, chains, retries, review loops, or result synthesis, and no child outlives the attended session. The attended lead remains accountable for deciding what to delegate and for reconciling each result.
 
 ## Profiles and routing
 
@@ -76,9 +77,15 @@ The child runs in the current Level 1 working directory. The adapter does not cr
 interface PiExecutionAdapter {
   dispatch(spec: ResolvedExecutionSpec): Promise<ExecutionReceipt>;
   observe(executionId: string): AsyncIterable<ExecutionObservation>;
+  result(executionId: string): Promise<ExecutionResult>;
+  status(executionId: string): ExecutionStatus;
+  list(): ExecutionSummary[];
   cancel(executionId: string, reason: string): Promise<CancellationReceipt>;
+  cancelAll(reason: string): Promise<CancellationReceipt[]>;
 }
 ```
+
+`status` and `list` are non-blocking reads of live process state that let the attended tool present backgrounded children without awaiting their terminal result. They expose only bounded live state and confer no durable authority.
 
 The first runner is a Pi RPC subprocess. Do not introduce a generic runner framework or Pi SDK implementation until measured startup latency or another real requirement justifies a second runner.
 
@@ -131,8 +138,9 @@ Replace the temporary official-example implementation only after tests prove:
 9. child sessions persist in Pi's standard machine-local store but are never reopened automatically;
 10. cancellation, timeout, forced termination, and unknown outcomes are distinguishable;
 11. concurrent invocations launch independently and remain cancellable;
-12. parent termination cleans up every active child; and
-13. existing Level 1 Workstream launch, checkpoint, restart, resume, and closure behavior remains intact.
+12. a background launch returns a handle immediately, and `status`, `list`, and `collect` reconcile the child within the session without ever letting it outlive the attended parent;
+13. parent termination cleans up every active child; and
+14. existing Level 1 Workstream launch, checkpoint, restart, resume, and closure behavior remains intact.
 
 Use a fake RPC process for deterministic lifecycle and failure tests. Keep one real Pi RPC smoke test for launch, binding, session persistence, streaming, and cancellation.
 
@@ -141,7 +149,7 @@ Use a fake RPC process for deterministic lifecycle and failure tests. Keep one r
 Do not implement these features as part of this plan:
 
 - durable Worker continuity or Logical Actor recovery;
-- background execution outside an attended parent lifetime;
+- durable or unattended background execution that survives the attended parent lifetime (in-session non-blocking launch is supported; a child still dies with the session);
 - parent-transcript forks;
 - project or user-authored child profiles;
 - structured result schemas and correction turns;

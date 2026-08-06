@@ -44,6 +44,37 @@ export class PiRpcExecutionAdapter {
     return this.#state(executionId).resultPromise;
   }
 
+  status(executionId) {
+    const state = this.#state(executionId);
+    const latest = state.observations[state.observations.length - 1];
+    const b = state.spec.binding;
+    return {
+      executionId,
+      profile: state.spec.profile,
+      cognitiveRole: state.spec.cognitiveRole,
+      provider: b.provider,
+      model: b.model,
+      effort: b.effort,
+      running: !state.done,
+      outcome: state.done ? state.result.outcome : undefined,
+      acceptedAt: state.acceptedAt,
+      observationCount: state.observationSequence,
+      latestObservation: latest === undefined ? undefined : { type: latest.type, at: latest.at, detail: structuredClone(latest.detail) },
+      sessionId: state.sessionId ?? (state.done ? state.result.sessionId : undefined),
+    };
+  }
+
+  list() {
+    return [...this.executions.values()].map((state) => ({
+      executionId: state.executionId,
+      profile: state.spec.profile,
+      cognitiveRole: state.spec.cognitiveRole,
+      running: !state.done,
+      outcome: state.done ? state.result.outcome : undefined,
+      acceptedAt: state.acceptedAt,
+    }));
+  }
+
   async cancel(executionId, reason) {
     const state = this.#state(executionId);
     if (state.done) {

@@ -153,6 +153,24 @@ test("distinguishes confirmed timeout from an unknown termination outcome", asyn
   assert.equal((await unknown.result(unknownReceipt.executionId)).outcome, "outcome_unknown");
 });
 
+test("reports non-blocking status and list snapshots for background reconciliation", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }), timeoutMs: 60_000 });
+  const receipt = await adapter.dispatch(spec());
+  const running = adapter.status(receipt.executionId);
+  assert.equal(running.running, true);
+  assert.equal(running.outcome, undefined);
+  assert.equal(running.provider, "anthropic");
+  assert.equal(adapter.list().length, 1);
+  assert.equal(adapter.list()[0].running, true);
+  assert.throws(() => adapter.status("missing"), (error) => error.code === "EXECUTION_NOT_FOUND");
+
+  await adapter.cancel(receipt.executionId, "test");
+  const done = adapter.status(receipt.executionId);
+  assert.equal(done.running, false);
+  assert.equal(done.outcome, "cancelled");
+  assert.equal(adapter.list()[0].outcome, "cancelled");
+});
+
 test("allows concurrent executions and confirms their cancellation", async () => {
   const children = [fakeRpc({ hang: true, settleOnAbort: true }), fakeRpc({ hang: true, settleOnAbort: true })];
   let spawnIndex = 0;
