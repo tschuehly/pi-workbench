@@ -91,8 +91,10 @@ Use a **hybrid of A and B**:
    compact session count and chronological invocation/result markers.
 4. Open one session-scoped execution tray on demand for detailed progress, cancellation, errors,
    inputs, result, runtime facts, and Pi session ID.
-5. Return the compact terminal result to Chat so the lead’s reconciliation remains visible.
-6. Do not ship C as the default; retain its parent-and-branch grammar only if later usability work
+5. Offer **Inspect child chat** from that detail surface. It opens a read-only conversation view with
+   an explicit return to the parent Chat; it never creates a peer tab or resume affordance.
+6. Return the compact terminal result to Chat so the lead’s reconciliation remains visible.
+7. Do not ship C as the default; retain its parent-and-branch grammar only if later usability work
    proves that users regularly coordinate several concurrent children.
 
 This provides progressive disclosure without duplicating authority:
