@@ -153,16 +153,22 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .st-pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 8px;background:var(--surface2);color:var(--muted);font-size:11px;font-weight:700}.st-pill.running,.st-pill.success{background:var(--green-bg);color:var(--green)}.st-pill.warning,.st-pill.cancelling{background:var(--orange-bg);color:var(--orange)}.st-pill.cancelled{background:var(--red-bg);color:var(--red)}.st-pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 /* brief */
 .brief{flex:1;min-width:0;min-height:0;overflow:auto;background:var(--canvas)}
-.brief-inner{padding:24px clamp(22px,5vw,60px) 60px}
-.brief-head{display:flex;align-items:flex-start;justify-content:space-between;gap:22px;margin-bottom:22px}
-.brief-head h1{font-size:24px;letter-spacing:-.02em;margin-top:8px}.brief-head .brief-meta{margin-top:6px;color:var(--muted);font-size:12px}.brief-actions{display:flex;gap:7px;flex:0 0 auto}
-.brief-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr);gap:32px}
-.brief-section h2{font-size:14px;margin-bottom:11px;padding-top:14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:7px}
-.continuation{font-size:16px;font-weight:650;color:var(--bright);line-height:1.4}
-.brief-facts{display:grid;grid-template-columns:120px minmax(0,1fr);gap:9px 14px;margin-top:14px;color:var(--muted);font-size:13px}.brief-facts dt{font-weight:650}.brief-facts dd{margin:0;color:var(--text);line-height:1.45}
-.brief-task{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;border-bottom:1px solid var(--border);padding:11px 2px}.brief-task:last-child{border-bottom:0}.brief-task small{color:var(--muted);font-size:11px}.brief-task .sub{grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.brief-updates{margin-top:26px}.brief-update{display:grid;grid-template-columns:220px minmax(0,1fr) auto;gap:14px;border-bottom:1px solid var(--border);padding:11px 0;font-size:12px}.brief-update small{color:var(--muted)}
-.session-index{margin-top:26px}.index-row{display:grid;grid-template-columns:minmax(200px,1fr) minmax(220px,1.3fr) 170px auto;gap:16px;align-items:center;width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;padding:13px 4px;text-align:left}.index-row:hover{background:var(--hover)}.index-row small{color:var(--muted)}.index-row .open{border:1px solid var(--border);border-radius:6px;padding:5px 9px;color:var(--bright)}
+.brief-inner{max-width:1040px;padding:26px clamp(22px,5vw,56px) 56px}
+.brief-head{display:flex;align-items:flex-start;justify-content:space-between;gap:22px;margin-bottom:24px}
+.brief-head h1{font-size:22px;letter-spacing:-.02em;margin-top:9px}.brief-head .brief-meta{margin-top:5px;color:var(--muted);font-size:12px}.brief-actions{display:flex;gap:7px;flex:0 0 auto}
+.brief-h{margin-bottom:12px;color:var(--muted);font-size:11px;font-weight:750;letter-spacing:.06em;text-transform:uppercase}
+.brief-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(300px,.9fr);gap:40px;padding-top:18px;border-top:1px solid var(--border)}
+.continuation{font-size:17px;font-weight:650;color:var(--bright);line-height:1.42}
+.since{margin-top:14px;color:var(--text);font-size:13px;line-height:1.5}.since-label{color:var(--muted);font-weight:650}
+.task-list{list-style:none;margin:0;padding:0}
+.task-item{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}.task-item:last-child{border-bottom:0}
+.ti-main{min-width:0}.ti-main strong{font-size:13.5px;color:var(--bright);font-weight:650}.ti-sub{margin-top:4px;color:var(--muted);font-size:11px}
+.mat{font-weight:650}.mat.High{color:var(--red)}.mat.Medium{color:var(--orange)}.mat.Low{color:var(--muted)}
+.task-item .ctx-link{flex:0 0 auto;white-space:nowrap;padding:0}
+.brief-sessions{margin-top:30px;padding-top:18px;border-top:1px solid var(--border)}
+.sess-item{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,auto) auto;gap:18px;align-items:center;width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;padding:12px 2px;text-align:left}.sess-item:last-child{border-bottom:0}.sess-item:hover{background:var(--hover)}
+.si-main{min-width:0}.si-main strong{font-size:13.5px}.si-update{display:block;margin-top:3px;color:var(--muted);font-size:12px;line-height:1.35}
+.si-anchor{color:var(--muted);font-size:12px}.si-open{border:1px solid var(--border);border-radius:6px;padding:5px 12px;color:var(--bright);font-size:12px;justify-self:end}
 /* dialogs */
 .backdrop{position:fixed;z-index:100;inset:0;display:grid;place-items:center;background:#010409a8;padding:18px;backdrop-filter:blur(3px)}
 .dialog{width:min(500px,100%);border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);padding:18px}
@@ -491,17 +497,15 @@ function childChatSurface(){
 /* ---------- brief ---------- */
 function briefSurface(){
  const w=currentWorkstream();const unresolved=pendingTasks(w);
- const tasks=unresolved.length?unresolved.map(id=>{const t=humanTasks[id],answered=state.taskAnswers[id];return `<div class="brief-task"><strong>${esc(t.title)}</strong><span class="badge ${answered?'green':'orange'}">${answered?'Answered':'Unanswered'}</span><div class="sub"><small>From ${esc(sessions[t.source].title)}</small><span class="badge">${esc(t.materiality)}</span><button class="ctx-link" data-open-task-context="${id}">Answer in Context ›</button></div></div>`}).join(''):`<p class="muted">No unresolved Human Tasks.</p>`;
- const updates=w.sessionIds.map(id=>{const s=sessions[id];return `<div class="brief-update"><strong>${esc(s.title)}</strong><span>${esc(s.update)}</span><small>${esc(s.updatedAt)}</small></div>`}).join('');
- const index=w.sessionIds.map(id=>{const s=sessions[id];const kids=childrenOf(id).length;return `<button class="index-row" data-open-session="${id}"><span><strong>${esc(s.title)}</strong>${kids?` <span class="count">${kids}</span>`:''}<br><small>${esc(s.summary)}</small></span><span>${esc(s.update)}</span><small>${esc(s.anchor)}</small><span class="open">Open conversation</span></button>`}).join('');
+ const tasks=unresolved.length?unresolved.map(id=>{const t=humanTasks[id],answered=state.taskAnswers[id];const lvl=t.materiality.split(' · ')[0];return `<li class="task-item"><div class="ti-main"><strong>${esc(t.title)}</strong><div class="ti-sub">${esc(sessions[t.source].title)} · <span class="mat ${lvl}">${esc(lvl)}</span></div></div>${answered?`<span class="badge green">Answered</span>`:`<button class="ctx-link" data-open-task-context="${id}">Answer ›</button>`}</li>`}).join(''):`<p class="muted">Nothing needs you right now.</p>`;
+ const list=w.sessionIds.map(id=>{const s=sessions[id];const kids=childrenOf(id).length;return `<button class="sess-item" data-open-session="${id}"><span class="si-main"><strong class="truncate">${esc(s.title)}${kids?` <span class="count">${kids}</span>`:''}</strong><span class="si-update">${esc(s.update)}</span></span><span class="si-anchor">${esc(s.anchor)}</span><span class="si-open">Open</span></button>`}).join('');
  return `<main class="brief" aria-label="Workstream brief"><div class="brief-inner">
-  <div class="brief-head"><div><span class="badge ${w.fresh}">${esc(w.freshness)}</span><h1>${esc(w.title)}</h1><div class="brief-meta">Workstream brief · revision ${w.revision} · ${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · ${esc(w.provenance)}</div></div><div class="brief-actions"><button data-menu-toggle="workstream" aria-label="Workstream menu">${icon('dots')}</button><button class="primary" data-open-session="${w.sessionIds[0]}">${icon('chat','sm')}Continue in session</button></div></div>
+  <header class="brief-head"><div><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale checkpoint'}</span><h1>${esc(w.title)}</h1><div class="brief-meta">Revision ${w.revision} · ${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · confirmed by owner</div></div><div class="brief-actions"><button class="icon" data-menu-toggle="workstream" aria-label="Workstream menu">${icon('dots')}</button><button class="primary" data-open-session="${w.sessionIds[0]}">Continue in session</button></div></header>
   <div class="brief-grid">
-   <section class="brief-section"><h2>Next useful continuation</h2><p class="continuation">${esc(w.continuation)}</p><dl class="brief-facts"><dt>What changed</dt><dd>${esc(w.changed)}</dd><dt>What remains</dt><dd>${esc(w.remains)}</dd><dt>Freshness</dt><dd>${esc(w.freshness)}</dd><dt>Provenance</dt><dd>${esc(w.provenance)}</dd></dl></section>
-   <section class="brief-section"><h2>Unresolved Human Tasks · ${unresolved.length}</h2>${tasks}<p class="muted" style="margin-top:10px;font-size:11px">Answer and resolve durable Human Tasks in a session's Context tab.</p></section>
+   <section><h2 class="brief-h">Next</h2><p class="continuation">${esc(w.continuation)}</p><p class="since"><span class="since-label">Since you left:</span> ${esc(w.changed)}</p></section>
+   <section><h2 class="brief-h">Needs you · ${unresolved.length}</h2><ul class="task-list">${tasks}</ul></section>
   </div>
-  <section class="brief-updates"><h2 class="brief-section" style="border:0;padding:0">Latest confirmed session updates</h2>${updates}</section>
-  <section class="session-index"><h2 class="brief-section" style="border:0;padding:0">Session index</h2>${index}</section>
+  <section class="brief-sessions"><h2 class="brief-h">Resume a session · ${w.sessionIds.length}</h2>${list}</section>
  </div></main>`;
 }
 /* ---------- center ---------- */
