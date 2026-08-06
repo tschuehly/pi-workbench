@@ -87,10 +87,12 @@ Use a **hybrid of A and B**:
 1. Keep the existing nested delegation rows as a compact origin/status index beneath the parent
    session.
 2. Put a compact chronological marker at the `subagent` invocation point in Chat.
-3. Open one session-scoped execution tray for detailed progress, cancellation, errors, inputs,
-   result, runtime facts, and Pi session ID.
-4. Return the compact terminal result to Chat so the lead’s reconciliation remains visible.
-5. Do not ship C as the default; retain its parent-and-branch grammar only if later usability work
+3. Keep child detail collapsed by default so Chat retains the full session workspace; show only a
+   compact session count and chronological invocation/result markers.
+4. Open one session-scoped execution tray on demand for detailed progress, cancellation, errors,
+   inputs, result, runtime facts, and Pi session ID.
+5. Return the compact terminal result to Chat so the lead’s reconciliation remains visible.
+6. Do not ship C as the default; retain its parent-and-branch grammar only if later usability work
    proves that users regularly coordinate several concurrent children.
 
 This provides progressive disclosure without duplicating authority:
