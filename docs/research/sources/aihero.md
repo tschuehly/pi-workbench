@@ -2,7 +2,7 @@
 
 ## Scope
 
-Primary AIHero material about coding-agent harnesses, repository-specific workflows, local and external state, multi-agent execution, human review, resumability, context management, and artifact retention. Reviewed on 2026-07-15.
+Primary AIHero material about coding-agent harnesses, repository-specific workflows, local and external state, multi-agent execution, human review, resumability, context management, and artifact retention. Reviewed on 2026-07-15; Skills v1.2 delta reviewed on 2026-08-07.
 
 ## Author Claims
 
@@ -26,6 +26,16 @@ Primary AIHero material about coding-agent harnesses, repository-specific workfl
    - Source: [Stream Claude Code With AFK Ralph](https://www.aihero.dev/heres-how-to-stream-claude-code-with-afk-ralph), 2026-01-22.
 10. Human interaction should match the decision. Logic prototypes use a terminal state explorer that exposes the full state after each action; UI prototypes present multiple rendered alternatives for the human to compare.
     - Source: [The `/prototype` Skill](https://www.aihero.dev/skills-prototype), RSS timestamp 2026-07-06.
+11. Skills v1.2 enforces the user-invoked versus model-invoked split structurally per harness: `disable-model-invocation: true` in Claude Code and `policy.allow_implicit_invocation: false` in a Codex `agents/openai.yaml` sidecar keep user-invoked skills out of model context until typed.
+    - Source: [Skills v1.2 changelog](https://www.aihero.dev/skills/skills-changelog-v12-wait-what-writing-for-agents-claude-code-plugin-and-more), 2026-08-05.
+12. Grilling moved from one question per turn to dependency-frontier rounds. The interview is a design tree; each round asks every question whose prerequisites are settled, recomputes the frontier from the answers, and sends environment-answerable facts to subagents so research never blocks a round. The same 13 questions land in about 3 rounds.
+    - Source: [Skills v1.2 changelog](https://www.aihero.dev/skills/skills-changelog-v12-wait-what-writing-for-agents-claude-code-plugin-and-more), 2026-08-05.
+13. The router's phase-boundary choice is an ordered five-option decision tree — continue, clear, handoff, subagent, compact — where continue is preferred as the only option that keeps the conversation a primary source, handoff is narrowed to work that must travel, and compact is the last resort rather than the first reach.
+    - Source: [Skills v1.2 changelog](https://www.aihero.dev/skills/skills-changelog-v12-wait-what-writing-for-agents-claude-code-plugin-and-more), 2026-08-05.
+14. Human-only procedure steps are handled by `/wizard`, a generated deterministic bash script that opens URLs, captures pasted values, and writes secrets to `.env` and CI secret stores so no typed secret transits the agent. The agent invokes it when it reaches a step only a human can perform. Externally owned decisions are handled by `/to-questionnaire`, a portable questionnaire aimed at the one person who can answer, where the interview grills about the send rather than the subject.
+    - Source: [Skills v1.2 changelog](https://www.aihero.dev/skills/skills-changelog-v12-wait-what-writing-for-agents-claude-code-plugin-and-more), 2026-08-05.
+15. Writing-for-agents gains the pruning term "cache": a document restating what the environment already answers (scripts, config, directory layout, `--help`) is a cache of a cheap lookup and rarely earns its context load. Cache only what the agent cannot find by looking — unwritten conventions, reasons behind choices, edge cases no config confesses.
+    - Source: [Skills v1.2 changelog](https://www.aihero.dev/skills/skills-changelog-v12-wait-what-writing-for-agents-claude-code-plugin-and-more), 2026-08-05.
 
 ## Retention Claims
 
@@ -35,6 +45,8 @@ Primary AIHero material about coding-agent harnesses, repository-specific workfl
    - Source: [My 7 Phases Of AI Development](https://www.aihero.dev/my-7-phases-of-ai-development), 2026-03-16.
 3. Prototype code is disposable. Once it answers its question, the answer and question are promoted to a durable commit message, ADR, issue, or notes artifact, then the code is deleted or absorbed.
    - Source: [The `/prototype` Skill](https://www.aihero.dev/skills-prototype), RSS timestamp 2026-07-06.
+   - Revised in v1.2: throwaway no longer means deleted. The prototype is kept as runnable evidence on a `prototype/<name>` branch off main with a context pointer on the implementation issue; main keeps only the validated decision. Research findings are likewise captured on `research/<name>` branches, burned down in parallel by AFK `/research` subagents during charting.
+   - Source: [Skills v1.2 changelog](https://www.aihero.dev/skills/skills-changelog-v12-wait-what-writing-for-agents-claude-code-plugin-and-more), 2026-08-05.
 4. A handoff contains only the resumable live thread and references settled specs, ADRs, issues, commits, and diffs rather than copying them. It is stored in the operating system's temporary directory so it does not become another workspace artifact to maintain.
    - Source: [The `/handoff` Skill](https://www.aihero.dev/skills-handoff), RSS timestamp 2026-07-06.
 5. Compaction is lossy. It is safest at a deliberate phase boundary after important decisions have been written to inspectable artifacts. Clearing is appropriate when settled state already lives somewhere better than the polluted session.

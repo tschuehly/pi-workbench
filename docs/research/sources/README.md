@@ -13,7 +13,7 @@ in `adopt`, `adapt`, `experiment`, or `reject` on its own evidence.
 
 | Source | Ledger | Watch for updates | Last reviewed |
 | --- | --- | --- | --- |
-| Matt Pocock — AI Hero skills and workflow | [`aihero.md`](aihero.md), [`ai-engineer-wiki.md`](ai-engineer-wiki.md) | [AI Hero skills changelog](https://www.aihero.dev/skills) and posts | 2026-07-15 |
+| Matt Pocock — AI Hero skills and workflow | [`aihero.md`](aihero.md), [`ai-engineer-wiki.md`](ai-engineer-wiki.md) | [AI Hero skills changelog](https://www.aihero.dev/skills) and posts | 2026-08-07 |
 | kunchenguid — FirstMate | [`firstmate.md`](firstmate.md), [`afk-supervision-packages.md`](afk-supervision-packages.md) | [Repository commits and docs](https://github.com/kunchenguid/firstmate) | 2026-07-18 |
 
 When a re-analysis lands, update the ledger and the `Last reviewed` date in the same change. Add a
