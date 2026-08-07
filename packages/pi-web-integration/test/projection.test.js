@@ -4,11 +4,24 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { checkpointProposalPrompt, copyNextSessionPrompt, dedicatedWorkstreamLayout, parseWorkbenchProjection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
+import { checkpointProposalPrompt, copyNextSessionPrompt, dedicatedMobileControlState, dedicatedWorkstreamLayout, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
 import { WorkstreamSessionCoordinator, workstreamPrompt } from "../workstream-session-coordinator.js";
 
 const fixtureUrl = new URL("../fixtures/recorded-projection.json", import.meta.url);
+
+test("restores the recorded Workstream and remembered active session after the host reconstructs the plugin element", () => {
+  const snapshots = [{ id: "ws-other", sessions: [] }, { id: "ws-selected", sessions: [
+    { id: "session-first", status: "active" },
+    { id: "session-remembered", status: "active" },
+  ] }];
+
+  assert.deepEqual(recordedWorkstreamSelection(snapshots, "ws-selected", "session-remembered"), {
+    snapshot: snapshots[1],
+    sessionId: "session-remembered",
+  });
+  assert.equal(recordedWorkstreamSelection(snapshots, "missing", "session-remembered"), undefined);
+});
 
 test("dedicated Workstream tools preserve Sessions and Human Tasks with truthful scope", () => {
   assert.deepEqual(dedicatedWorkstreamLayout({ tool: "files", sessionsPaneOpen: true, tasksPaneOpen: true }), {
@@ -38,6 +51,22 @@ test("dedicated Workstream UI transitions preserve pane state and checkout-scope
   assert.equal(collapsed.tasksPaneOpen, false);
   assert.equal(collapsed.sessionsPaneOpen, true);
   assert.equal(collapsed.tool, "files");
+});
+
+test("legacy mobile Context panes coerce to Workspace and Context state follows the drawer", () => {
+  assert.equal(normalizeDedicatedMobilePane("tasks"), "workspace");
+  assert.equal(transitionDedicatedWorkstreamUi({ mobilePane: "sessions" }, { type: "select-mobile-pane", pane: "tasks" }).mobilePane, "workspace");
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: true }, "context"), {
+    pressed: true,
+    expanded: true,
+    controls: "workstream-context-drawer",
+  });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: false }, "context"), {
+    pressed: false,
+    expanded: false,
+    controls: "workstream-context-drawer",
+  });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: true }, "workspace"), { pressed: true });
 });
 
 test("checkout scope follows the selected Workstream session anchor", () => {
@@ -75,15 +104,20 @@ test("fake Workstream client deterministically lists, inspects, and reconciles t
   const current = await client.list();
   const inspected = await client.inspect("ws-workstream-store");
   const reconciliation = await client.watch({ afterSequence: 0 });
-  const caughtUp = await client.watch({ afterSequence: 12 });
+  const caughtUp = await client.watch({ afterSequence: 16 });
 
   assert.deepEqual(current.map((workstream) => workstream.id), ["ws-workstream-store"]);
-  assert.equal(inspected.sessions.length, 2);
+  assert.equal(current[0].failedSessionCount, 1);
+  assert.equal(current[0].unresolvedHumanTaskCount, 1);
+  assert.equal(inspected.sessions.length, 5);
   assert.match(inspected.sessions[0].latestCheckpoint.nextSessionPrompt, /Continue connecting the Workstream Store/);
   assert.equal(inspected.sessions[1].latestCheckpoint.nextSessionPrompt, null);
+  assert.equal(inspected.sessions.find((session) => session.status === "failed")?.launchFailure.reason, "PI WEB could not create the attended session.");
+  assert.equal(inspected.sessions.find((session) => session.checkpointStaleness !== null)?.checkpointStaleness.checkpointId, "checkpoint-before-protocol-change");
+  assert.equal(inspected.humanTasks.find((task) => task.status === "answered")?.answer.optionId, "change");
   assert.equal(reconciliation.mode, "snapshot");
   assert.equal(reconciliation.snapshots.length, 2);
-  assert.deepEqual(caughtUp, { mode: "replay", events: [], nextSequence: 12 });
+  assert.deepEqual(caughtUp, { mode: "replay", events: [], nextSequence: 16 });
 });
 
 test("checkpoint proposal and new-session guidance carry the complete attended contract", () => {
@@ -209,8 +243,8 @@ test("confirmation response loss reconciles the accepted association without fai
     },
   };
   const host = {
-    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
-    start: async () => { starts += 1; return { id: "runtime-1", location: { machineId: "local", workspaceId: "workspace-1" } }; },
+    currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
+    start: async () => { starts += 1; return { id: "runtime-1", location: { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" } }; },
     open: async () => {}, findByStartupToken: async () => undefined,
   };
   const result = await new WorkstreamSessionCoordinator(client, host).launch(snapshot);
@@ -233,8 +267,8 @@ test("confirmation failure leaves the created session pending for reconnect reco
     },
   };
   const host = {
-    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
-    start: async () => ({ id: "runtime-1", location: { machineId: "local", workspaceId: "workspace-1" } }),
+    currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
+    start: async () => ({ id: "runtime-1", location: { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" } }),
     open: async () => {}, findByStartupToken: async () => undefined,
   };
   await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch(snapshot), /store temporarily unavailable/);
@@ -250,7 +284,7 @@ test("session launch failure records failure and does not retry the host start",
     append: async (request) => { records.push(request.records[0].type); revision += 1; return { acceptedRevision: revision, sequence: revision }; },
   };
   const host = {
-    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
+    currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
     start: async () => { starts += 1; throw new Error("launch exploded"); },
     open: async () => {},
     findByStartupToken: async () => undefined,
@@ -275,10 +309,67 @@ test("fake Workstream client rejects replacement checkpoints without the require
   const client = new DeterministicFakeWorkstreamClient(fixture);
   await assert.rejects(client.append({
     workstreamId: "ws-workstream-store",
-    expectedRevision: 4,
+    expectedRevision: 8,
     idempotencyKey: "missing-next-session-prompt",
     records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-store-contract", checkpoint: { id: "cp-invalid", whatChanged: "Changed", remains: "Remains", next: "Next" } } }],
   }), /requires a next-session prompt/);
+});
+
+test("typed Workstream client rejects malformed canonical success values", async () => {
+  const client = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: { id: "incomplete" } }) });
+  await assert.rejects(client.inspect("ws-1"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
+});
+
+test("typed Workstream client structurally validates optional projected session anchors", async () => {
+  const fixtureUrl = new URL("../fixtures/anchorless-active-session.json", import.meta.url);
+  const fixture = JSON.parse(await readFile(fixtureUrl, "utf8"));
+  fixture.snapshots[0].sessions[0].machineId = 42;
+  assert.equal(parseRecordedWorkstreams(fixture), undefined);
+  const client = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: fixture.snapshots[0] }) });
+  await assert.rejects(client.inspect("ws-anchorless-session"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
+});
+
+test("fake client requires complete new confirmations and validated append-only repairs", async () => {
+  const fixtureUrl = new URL("../fixtures/anchorless-active-session.json", import.meta.url);
+  const fixture = parseRecordedWorkstreams(JSON.parse(await readFile(fixtureUrl, "utf8")));
+  const client = new DeterministicFakeWorkstreamClient(fixture);
+  await client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 1,
+    idempotencyKey: "pending-new",
+    records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "launch-new" } }],
+  });
+  await assert.rejects(client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 2,
+    idempotencyKey: "confirm-incomplete",
+    records: [{ type: "session.confirmed", producer: "pi-web", payload: { associationKey: "launch-new", sessionId: "session-new" } }],
+  }), /complete machineId, projectId, and workspaceId/);
+  await assert.rejects(client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 2,
+    idempotencyKey: "repair-invalid",
+    records: [{ type: "session.anchor.repaired", producer: "pi-web", payload: { sessionId: "session-photoquest-anchorless", machineId: "studio", projectId: "photoquest", workspaceId: "main", resolution: {} } }],
+  }), /complete-machine-scan resolution evidence/);
+
+  await client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 2,
+    idempotencyKey: "repair-valid",
+    records: [{ type: "session.anchor.repaired", producer: "pi-web", payload: { sessionId: "session-photoquest-anchorless", machineId: "studio", projectId: "photoquest", workspaceId: "main", resolution: { method: "complete-machine-scan", evidenceId: "catalog-1", matchedCwd: "/PhotoQuest", scannedScopeCount: 2, verifiedAt: "2026-08-01T09:00:01.000Z" } } }],
+  });
+  assert.equal((await client.inspect("ws-anchorless-session")).sessions[0].workspaceId, "main");
+});
+
+test("session launch refuses an incomplete selected location before writing a new association", async () => {
+  let appends = 0;
+  const client = { append: async () => { appends += 1; }, inspect: async () => ({}) };
+  const host = { currentLocation: () => ({ machineId: "local", workspaceId: "main" }) };
+  await assert.rejects(
+    new WorkstreamSessionCoordinator(client, host).launch({ id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false }),
+    /complete machine, project, and workspace location/,
+  );
+  assert.equal(appends, 0);
 });
 
 test("typed Workstream client preserves semantic service errors", async () => {

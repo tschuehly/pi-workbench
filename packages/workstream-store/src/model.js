@@ -8,16 +8,23 @@ export const DEFAULT_LIMITS = Object.freeze({
   maxTextLength: 4_000,
   maxCheckpointPromptLength: 2_000,
   maxIdLength: 128,
+  maxTaskOptions: 20,
   maxWatchBatch: 200,
 });
+
+const ANSWER_KINDS = new Set(["yes-no", "choice", "free-text"]);
+const MATERIALITIES = new Set(["material", "non-material"]);
 
 const RECORD_TYPES = new Set([
   "session.pending",
   "session.confirmed",
+  "session.anchor.repaired",
   "session.failed",
   "checkpoint.replaced",
   "checkpoint.failed",
+  "checkpoint.stale",
   "human-task.upsert",
+  "human-task.answered",
   "human-task.resolved",
   "link.upsert",
   "link.removed",
@@ -130,9 +137,23 @@ function validateRecord(record, limits, field) {
       keys(record.payload, ["sessionId", "associationKey", "machineId", "projectId", "workspaceId"], `${field}.payload`);
       id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
       if (record.payload.associationKey !== undefined) id(record.payload.associationKey, `${field}.payload.associationKey`, limits);
-      if (record.payload.machineId !== undefined) string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
-      if (record.payload.projectId !== undefined) string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
-      if (record.payload.workspaceId !== undefined) string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
+      string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
+      string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
+      string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
+    },
+    "session.anchor.repaired": () => {
+      keys(record.payload, ["sessionId", "machineId", "projectId", "workspaceId", "resolution"], `${field}.payload`);
+      id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
+      string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
+      string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
+      string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
+      const resolution = object(record.payload.resolution, `${field}.payload.resolution`);
+      keys(resolution, ["method", "evidenceId", "matchedCwd", "scannedScopeCount", "verifiedAt"], `${field}.payload.resolution`);
+      if (resolution.method !== "complete-machine-scan") fail("INVALID_RECORD", `${field}.payload.resolution.method is not supported`);
+      id(resolution.evidenceId, `${field}.payload.resolution.evidenceId`, limits);
+      string(resolution.matchedCwd, `${field}.payload.resolution.matchedCwd`, limits.maxTextLength);
+      if (!Number.isSafeInteger(resolution.scannedScopeCount) || resolution.scannedScopeCount < 1) fail("INVALID_RECORD", `${field}.payload.resolution.scannedScopeCount must be a positive safe integer`);
+      string(resolution.verifiedAt, `${field}.payload.resolution.verifiedAt`, limits.maxTextLength);
     },
     "session.failed": () => {
       keys(record.payload, ["sessionId", "associationKey", "reason"], `${field}.payload`);
@@ -161,13 +182,21 @@ function validateRecord(record, limits, field) {
       id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
       string(record.payload.reason, `${field}.payload.reason`, limits.maxTextLength);
     },
+    "checkpoint.stale": () => {
+      keys(record.payload, ["sessionId", "checkpointId", "reason"], `${field}.payload`);
+      id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
+      id(record.payload.checkpointId, `${field}.payload.checkpointId`, limits);
+      string(record.payload.reason, `${field}.payload.reason`, limits.maxTextLength);
+    },
     "human-task.upsert": () => {
       keys(record.payload, ["task"], `${field}.payload`);
-      const task = object(record.payload.task, `${field}.payload.task`);
-      keys(task, ["id", "title", "detail"], `${field}.payload.task`);
-      id(task.id, `${field}.payload.task.id`, limits);
-      string(task.title, `${field}.payload.task.title`, limits.maxTitleLength);
-      string(task.detail, `${field}.payload.task.detail`, limits.maxTextLength, { optional: true });
+      validateHumanTaskInput(record.payload.task, limits, `${field}.payload.task`);
+    },
+    "human-task.answered": () => {
+      keys(record.payload, ["taskId", "answerId", "answer"], `${field}.payload`);
+      id(record.payload.taskId, `${field}.payload.taskId`, limits);
+      id(record.payload.answerId, `${field}.payload.answerId`, limits);
+      validateHumanTaskAnswer(record.payload.answer, limits, `${field}.payload.answer`);
     },
     "human-task.resolved": () => {
       keys(record.payload, ["taskId"], `${field}.payload`);
@@ -189,6 +218,69 @@ function validateRecord(record, limits, field) {
   };
   validators[record.type]();
   if (byteSize(record) > limits.maxRecordBytes) fail("RECORD_TOO_LARGE", `${field} exceeds ${limits.maxRecordBytes} bytes`);
+}
+
+function validateHumanTaskInput(value, limits, field) {
+  const task = object(value, field);
+  keys(task, ["id", "title", "detail", "answerKind", "options", "materiality"], field);
+  id(task.id, `${field}.id`, limits);
+  string(task.title, `${field}.title`, limits.maxTitleLength);
+  string(task.detail, `${field}.detail`, limits.maxTextLength, { optional: true });
+
+  const typedFields = [task.answerKind, task.options, task.materiality];
+  if (typedFields.every((entry) => entry === undefined)) return;
+  if (typedFields.some((entry) => entry === undefined)) {
+    fail("INVALID_RECORD", `${field} must provide answerKind, options, and materiality together`);
+  }
+  if (!ANSWER_KINDS.has(task.answerKind)) fail("INVALID_RECORD", `${field}.answerKind is not supported`);
+  if (!MATERIALITIES.has(task.materiality)) fail("INVALID_RECORD", `${field}.materiality is not supported`);
+  if (!Array.isArray(task.options) || task.options.length > limits.maxTaskOptions) {
+    fail("INVALID_RECORD", `${field}.options must be an array of at most ${limits.maxTaskOptions} entries`);
+  }
+  const optionIds = new Set();
+  task.options.forEach((option, index) => {
+    const optionField = `${field}.options[${index}]`;
+    object(option, optionField);
+    keys(option, ["id", "label"], optionField);
+    id(option.id, `${optionField}.id`, limits);
+    string(option.label, `${optionField}.label`, limits.maxTitleLength);
+    if (optionIds.has(option.id)) fail("INVALID_RECORD", `${field}.options contains duplicate id ${option.id}`);
+    optionIds.add(option.id);
+  });
+  if (task.answerKind === "free-text" && task.options.length !== 0) fail("INVALID_RECORD", `${field}.options must be empty for free-text tasks`);
+  if (task.answerKind === "choice" && task.options.length < 1) fail("INVALID_RECORD", `${field}.options must contain at least one choice`);
+  if (task.answerKind === "yes-no" && (task.options.length < 2 || task.options.length > 3 || !optionIds.has("yes") || !optionIds.has("no") || [...optionIds].some((optionId) => !["yes", "no", "change"].includes(optionId)))) {
+    fail("INVALID_RECORD", `${field}.options for yes-no tasks must contain yes and no, with optional change`);
+  }
+}
+
+function validateHumanTaskAnswer(value, limits, field) {
+  const answer = object(value, field);
+  if (answer.kind === "free-text") {
+    keys(answer, ["kind", "text"], field);
+    string(answer.text, `${field}.text`, limits.maxTextLength);
+    return;
+  }
+  if (answer.kind === "yes-no" || answer.kind === "choice") {
+    keys(answer, ["kind", "optionId"], field);
+    id(answer.optionId, `${field}.optionId`, limits);
+    return;
+  }
+  fail("INVALID_RECORD", `${field}.kind is not supported`);
+}
+
+function projectHumanTask(task, record) {
+  const typed = task.answerKind !== undefined;
+  return {
+    ...clone(task),
+    answerKind: typed ? task.answerKind : null,
+    options: typed ? clone(task.options) : [],
+    materiality: typed ? task.materiality : null,
+    sourceSessionId: record.sourceSessionId ?? null,
+    status: "pending",
+    answer: null,
+    answerReceipt: null,
+  };
 }
 
 export function emptySnapshot(created) {
@@ -222,19 +314,74 @@ export function rebuildSnapshot(ledger) {
     switch (record.type) {
       case "session.pending": {
         const key = payload.sessionId ?? `pending:${payload.associationKey}`;
-        sessions.set(key, { id: key, status: "pending", associationKey: payload.associationKey, machineId: payload.machineId, projectId: payload.projectId, workspaceId: payload.workspaceId, latestCheckpoint: null, checkpointFailure: null });
+        sessions.set(key, {
+          id: key,
+          status: "pending",
+          associationKey: payload.associationKey,
+          machineId: payload.machineId,
+          projectId: payload.projectId,
+          workspaceId: payload.workspaceId,
+          latestCheckpoint: null,
+          checkpointFailure: null,
+          checkpointStaleness: null,
+          launchFailure: null,
+        });
         break;
       }
       case "session.confirmed": {
-        const pendingKey = payload.associationKey === undefined ? payload.sessionId : `pending:${payload.associationKey}`;
-        const session = sessions.get(pendingKey) ?? sessions.get(payload.sessionId) ?? { id: payload.sessionId, latestCheckpoint: null, checkpointFailure: null };
+        const pendingEntry = [...sessions.entries()].find(([id, session]) =>
+          id === payload.sessionId || (payload.associationKey !== undefined && session.associationKey === payload.associationKey));
+        const [pendingKey, session] = pendingEntry ?? [payload.sessionId, {
+          id: payload.sessionId,
+          latestCheckpoint: null,
+          checkpointFailure: null,
+          checkpointStaleness: null,
+          launchFailure: null,
+        }];
         sessions.delete(pendingKey);
-        sessions.set(payload.sessionId, { ...session, id: payload.sessionId, status: "active", associationKey: payload.associationKey ?? session.associationKey, machineId: payload.machineId ?? session.machineId, projectId: payload.projectId ?? session.projectId, workspaceId: payload.workspaceId ?? session.workspaceId });
+        sessions.set(payload.sessionId, {
+          ...session,
+          id: payload.sessionId,
+          status: "active",
+          associationKey: payload.associationKey ?? session.associationKey,
+          machineId: payload.machineId ?? session.machineId,
+          projectId: payload.projectId ?? session.projectId,
+          workspaceId: payload.workspaceId ?? session.workspaceId,
+          launchFailure: null,
+        });
+        break;
+      }
+      case "session.anchor.repaired": {
+        const session = sessions.get(payload.sessionId);
+        if (session) sessions.set(payload.sessionId, {
+          ...session,
+          machineId: payload.machineId,
+          projectId: payload.projectId,
+          workspaceId: payload.workspaceId,
+        });
         break;
       }
       case "session.failed": {
-        const key = payload.sessionId ?? `pending:${payload.associationKey}`;
-        sessions.delete(key);
+        const failedEntry = [...sessions.entries()].find(([id, session]) =>
+          id === payload.sessionId || (payload.associationKey !== undefined && session.associationKey === payload.associationKey));
+        if (failedEntry) {
+          const [pendingKey, session] = failedEntry;
+          const failedId = payload.sessionId ?? pendingKey;
+          sessions.delete(pendingKey);
+          sessions.set(failedId, {
+            ...session,
+            id: failedId,
+            status: "failed",
+            associationKey: payload.associationKey ?? session.associationKey,
+            launchFailure: {
+              reason: payload.reason,
+              recordedAt: record.recordedAt,
+              revision: record.revision,
+              producer: record.producer,
+              sourceSessionId: record.sourceSessionId ?? null,
+            },
+          });
+        }
         break;
       }
       case "checkpoint.replaced": {
@@ -243,6 +390,7 @@ export function rebuildSnapshot(ledger) {
           ...session,
           latestCheckpoint: { ...clone(payload.checkpoint), nextSessionPrompt: payload.checkpoint.nextSessionPrompt ?? null },
           checkpointFailure: null,
+          checkpointStaleness: null,
         });
         break;
       }
@@ -251,12 +399,47 @@ export function rebuildSnapshot(ledger) {
         if (session) sessions.set(payload.sessionId, { ...session, checkpointFailure: payload.reason });
         break;
       }
+      case "checkpoint.stale": {
+        const session = sessions.get(payload.sessionId);
+        if (session) sessions.set(payload.sessionId, {
+          ...session,
+          checkpointStaleness: {
+            checkpointId: payload.checkpointId,
+            reason: payload.reason,
+            recordedAt: record.recordedAt,
+            revision: record.revision,
+            producer: record.producer,
+            sourceSessionId: record.sourceSessionId ?? null,
+          },
+        });
+        break;
+      }
       case "human-task.upsert":
-        tasks.set(payload.task.id, clone(payload.task));
+        tasks.set(payload.task.id, projectHumanTask(payload.task, record));
         break;
-      case "human-task.resolved":
-        tasks.delete(payload.taskId);
+      case "human-task.answered": {
+        const task = tasks.get(payload.taskId);
+        if (task) tasks.set(payload.taskId, {
+          ...task,
+          status: "answered",
+          answer: clone(payload.answer),
+          answerReceipt: {
+            answerId: payload.answerId,
+            taskId: payload.taskId,
+            acceptedRevision: record.revision,
+            recordedAt: record.recordedAt,
+            producer: record.producer,
+            sourceSessionId: record.sourceSessionId ?? null,
+          },
+        });
         break;
+      }
+      case "human-task.resolved": {
+        const task = tasks.get(payload.taskId);
+        if (task?.answerKind === null) tasks.delete(payload.taskId);
+        else if (task) tasks.set(payload.taskId, { ...task, status: "resolved" });
+        break;
+      }
       case "link.upsert":
         links.set(payload.link.id, clone(payload.link));
         break;

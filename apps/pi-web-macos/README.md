@@ -6,25 +6,27 @@ navigation. It remains a client of PI WEB and does not own Pi sessions or Workbe
 
 ## Run the development environment
 
-Keep the PI WEB checkout next to this repository at `../pi-web`, then run:
+Keep the PI WEB checkout next to this repository at `../pi-web`, install the app as described below,
+then open it from Finder, Spotlight, the Dock, or:
+
+```sh
+pi-web-mac
+```
+
+`pi-web-mac` only activates the installed bundle through macOS Launch Services. The AppKit process
+opens a window immediately, checks PI WEB's typed lifecycle status asynchronously, starts already
+installed services when needed, and loads the development UI at `http://127.0.0.1:8505` after the UI
+and session daemon are healthy. PI WEB frontend changes continue to use Vite hot module replacement.
+Re-run the app installer after changing native Swift code.
+
+The old entry point remains as a compatibility adapter:
 
 ```sh
 ./apps/pi-web-macos/Scripts/boot-dev.sh
 ```
 
-The script starts PI WEB's server, session daemon, plugin watcher, and Vite client; waits for the
-development UI at `http://127.0.0.1:8505`; and launches the macOS wrapper. It reuses an existing
-development server and stops only a server it started.
-
-PI WEB frontend changes use Vite hot module replacement. Changes under `Sources/PIWebMac/` or to
-`Package.swift` automatically rebuild and relaunch the native wrapper through `fswatch`. Install the
-watcher with `brew install fswatch` when it is not already available.
-
-The user-local `pi-web-mac` command runs the same complete stack from any directory:
-
-```sh
-pi-web-mac
-```
+It delegates installation and startup to `pi-web install --dev` and `pi-web start`, then activates the
+same installed app. It does not create a Workbench-owned supervisor or another session daemon.
 
 ## Install a Finder launcher
 
@@ -34,23 +36,17 @@ Install **Pi Workbench.app** in your user Applications folder:
 ./apps/pi-web-macos/Scripts/install-app.sh
 ```
 
-You can then launch Pi Workbench from Finder, Spotlight, or the Dock without opening a terminal. The
-app starts the same development stack as `pi-web-mac`. Startup failures appear as a macOS alert,
-with details in `~/Library/Logs/PiWorkbench/launcher.log`.
+The installer builds the release `PIWebMac` executable, records the resolved PI WEB checkout and CLI
+inside the bundle, preflights `pi-web status --json`, installs the split development services, and
+atomically replaces the prior app. Re-run it after moving either checkout or changing native code.
+
+You can then launch Pi Workbench from Finder, Spotlight, the Dock, or `pi-web-mac`. Startup failures
+appear in the visible app window with **Open logs**, **Run doctor**, and **Retry** actions.
 
 Pass a different `.app` path to choose another installation location:
 
 ```sh
 ./apps/pi-web-macos/Scripts/install-app.sh "/Applications/Pi Workbench.app"
-```
-
-Re-run the installer after moving this repository because the generated launcher records its current
-location.
-
-Verify paths and requirements without starting anything:
-
-```sh
-pi-web-mac --check
 ```
 
 Set `PI_WEB_DIR` when the PI WEB checkout is elsewhere:
@@ -61,17 +57,23 @@ PI_WEB_DIR=/path/to/pi-web ./apps/pi-web-macos/Scripts/boot-dev.sh
 
 PI WEB dependencies must already be installed with `npm install`.
 
-## Run the wrapper only
+## Lifecycle actions
 
-The wrapper defaults to the installed PI WEB address at `http://127.0.0.1:8504`:
+Use **Reload** to reload only the current web view. **Restart PI WEB UI** replaces the UI service
+without restarting the session daemon. **Restart Session Runtime…** warns before replacing sessiond
+because in-flight turns, asks, and terminals cannot migrate. **Open Lifecycle Status** shows the typed
+status and doctor reports.
+
+For terminal diagnostics, use:
 
 ```sh
-cd apps/pi-web-macos
-swift run PIWebMac
+pi-web status --json
+pi-web doctor --json
+pi-web restart --component ui
+pi-web restart --component sessiond
 ```
 
-Set `PI_WEB_URL` to use another trusted instance. The wrapper keeps same-origin navigation inside
-the app and opens other links in the default browser.
+The wrapper keeps same-origin navigation inside the app and opens other links in the default browser.
 
 ## Shortcuts
 

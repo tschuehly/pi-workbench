@@ -25,11 +25,14 @@ export interface CloseWorkstream {
 
 export type WorkstreamRecord =
   | SemanticRecord<"session.pending", { sessionId?: string; associationKey: string; machineId?: string; projectId?: string; workspaceId?: string }>
-  | SemanticRecord<"session.confirmed", { sessionId: string; associationKey?: string; machineId?: string; projectId?: string; workspaceId?: string }>
+  | SemanticRecord<"session.confirmed", { sessionId: string; associationKey?: string; machineId: string; projectId: string; workspaceId: string }>
+  | SemanticRecord<"session.anchor.repaired", { sessionId: string; machineId: string; projectId: string; workspaceId: string; resolution: SessionAnchorResolutionReceipt }>
   | SemanticRecord<"session.failed", { sessionId?: string; associationKey?: string; reason: string }>
   | SemanticRecord<"checkpoint.replaced", { sessionId: string; checkpoint: Checkpoint }>
   | SemanticRecord<"checkpoint.failed", { sessionId: string; reason: string }>
-  | SemanticRecord<"human-task.upsert", { task: HumanTask }>
+  | SemanticRecord<"checkpoint.stale", { sessionId: string; checkpointId: string; reason: string }>
+  | SemanticRecord<"human-task.upsert", { task: HumanTaskInput }>
+  | SemanticRecord<"human-task.answered", { taskId: string; answerId: string; answer: HumanTaskAnswer }>
   | SemanticRecord<"human-task.resolved", { taskId: string }>
   | SemanticRecord<"link.upsert", { link: WorkstreamLink }>
   | SemanticRecord<"link.removed", { linkId: string }>;
@@ -39,6 +42,14 @@ export interface SemanticRecord<T extends string, P> {
   producer: string;
   sourceSessionId?: string;
   payload: P;
+}
+
+export interface SessionAnchorResolutionReceipt {
+  method: "complete-machine-scan";
+  evidenceId: string;
+  matchedCwd: string;
+  scannedScopeCount: number;
+  verifiedAt: string;
 }
 
 export interface Checkpoint {
@@ -59,7 +70,36 @@ export interface ProjectedCheckpoint {
   references?: string[];
 }
 
-export interface HumanTask { id: string; title: string; detail?: string }
+export type HumanTaskAnswerKind = "yes-no" | "choice" | "free-text";
+export type HumanTaskMateriality = "material" | "non-material";
+export interface HumanTaskOption { id: string; label: string }
+export type HumanTaskInput =
+  | { id: string; title: string; detail?: string }
+  | { id: string; title: string; detail?: string; answerKind: HumanTaskAnswerKind; options: HumanTaskOption[]; materiality: HumanTaskMateriality };
+export type HumanTaskAnswer =
+  | { kind: "yes-no"; optionId: "yes" | "no" | "change" }
+  | { kind: "choice"; optionId: string }
+  | { kind: "free-text"; text: string };
+export interface HumanTaskAnswerReceipt {
+  answerId: string;
+  taskId: string;
+  acceptedRevision: Revision;
+  recordedAt: string;
+  producer: string;
+  sourceSessionId: string | null;
+}
+export interface HumanTask {
+  id: string;
+  title: string;
+  detail?: string;
+  answerKind: HumanTaskAnswerKind | null;
+  options: HumanTaskOption[];
+  materiality: HumanTaskMateriality | null;
+  sourceSessionId: string | null;
+  status: "pending" | "answered" | "resolved";
+  answer: HumanTaskAnswer | null;
+  answerReceipt: HumanTaskAnswerReceipt | null;
+}
 export interface WorkstreamLink { id: string; kind: string; reference: string; label?: string }
 
 export interface WorkstreamReceipt {
@@ -71,15 +111,24 @@ export interface WorkstreamReceipt {
   recordedAt: string;
 }
 
+export interface WorkstreamRecordProvenance {
+  recordedAt: string;
+  revision: Revision;
+  producer: string;
+  sourceSessionId: string | null;
+}
+
 export interface WorkstreamSession {
   id: string;
-  status: "pending" | "active";
+  status: "pending" | "active" | "failed";
   associationKey?: string;
   machineId?: string;
   projectId?: string;
   workspaceId?: string;
   latestCheckpoint: ProjectedCheckpoint | null;
   checkpointFailure: string | null;
+  checkpointStaleness: (WorkstreamRecordProvenance & { checkpointId: string; reason: string }) | null;
+  launchFailure: (WorkstreamRecordProvenance & { reason: string }) | null;
 }
 
 export interface WorkstreamSnapshot {
@@ -102,6 +151,7 @@ export interface WorkstreamSummary {
   updatedAt: string;
   activeSessionCount: number;
   pendingSessionCount: number;
+  failedSessionCount: number;
   unresolvedHumanTaskCount: number;
   closed: boolean;
 }
