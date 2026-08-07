@@ -1,0 +1,465 @@
+<!doctype html>
+<!--
+  THROWAWAY PROTOTYPE — not production, do not ship this HTML.
+  Belongs on a throwaway branch (see skills/prototype). The pure reducer below
+  (mateReducer + evaluatePolicy) is the only part meant to survive into real code.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FirstMate decision policy — logic prototype</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --ink: #e6e9ef; --dim: #99a2b3; --accent: #6ea8fe;
+    --good: #4ec9a5; --warn: #e2b341; --stop: #e26d6d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--dim); margin: 0 0 20px; }
+  .intro {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 24px; color: var(--dim);
+  }
+  .intro b { color: var(--ink); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 820px){ .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px;
+  }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 14px; }
+  .config { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+  .config label { color: var(--dim); font-size: 13px; }
+  input[type=range]{ accent-color: var(--accent); width: 180px; vertical-align: middle; }
+  .thresh { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+  .toggle { cursor: pointer; user-select: none; border: 1px solid var(--line); border-radius: 999px;
+            padding: 4px 12px; font-size: 13px; background: var(--panel2); }
+  .toggle.on { border-color: var(--good); color: var(--good); }
+  .toggle.off { border-color: var(--stop); color: var(--stop); }
+
+  .attn { display: flex; gap: 10px; margin: 6px 0 18px; flex-wrap: wrap; }
+  .pill { border-radius: 8px; padding: 8px 12px; font-size: 13px; border: 1px solid var(--line); background: var(--panel2); }
+  .pill b { font-variant-numeric: tabular-nums; }
+  .pill.running { border-color: var(--good); }
+  .pill.blocked { border-color: var(--warn); }
+  .pill.unattended { border-color: var(--accent); }
+
+  .session { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; background: var(--panel2); }
+  .session .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .session .name { font-weight: 600; }
+  .phase { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 6px; }
+  .phase.running { color: var(--good); background: rgba(78,201,165,.12); }
+  .phase.blocked { color: var(--warn); background: rgba(226,179,65,.14); }
+  .phase.done   { color: var(--dim);  background: rgba(153,162,179,.12); }
+  .pending { color: var(--dim); font-size: 13px; margin-top: 6px; }
+  .pending .conf { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .minibtns { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .badge { font-size: 12px; color: var(--accent); margin-top: 6px; }
+
+  button {
+    background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 11px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  button.answer { border-color: var(--warn); color: var(--warn); }
+
+  .freeplay { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .tab { font-size: 13px; }
+  .tab.active { border-color: var(--accent); color: var(--accent); }
+  .scenario-desc { color: var(--dim); font-size: 13px; margin: 4px 0 12px; }
+  .steps { display: flex; flex-direction: column; gap: 8px; }
+  .step { display: flex; align-items: center; gap: 10px; }
+  .step .n { color: var(--dim); font-variant-numeric: tabular-nums; width: 18px; }
+  .step.done .label { color: var(--dim); text-decoration: line-through; }
+  .step.current button { border-color: var(--accent); }
+
+  .log { max-height: 240px; overflow: auto; font-size: 13px; }
+  .log .entry { padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--dim); }
+  .log .entry .tag { font-weight: 600; margin-right: 6px; }
+  .log .auto  .tag { color: var(--accent); }
+  .log .escal .tag { color: var(--warn); }
+  .log .human .tag { color: var(--good); }
+  .log .sys   .tag { color: var(--dim); }
+  .full { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>FirstMate decision policy</h1>
+  <p class="sub">Logic prototype — press buttons, watch the mate decide.</p>
+
+  <div class="intro">
+    <p><b>The question.</b> You are "vibing" across several interactive Pi sessions with loose specs.
+    Each session periodically hits a <b>decision point</b> and pauses. A watching <b>mate</b> either
+    <b>lets the session continue</b> (when it judges the decision safe with reasonable certainty) or
+    <b>notifies you</b> and blocks the session until you answer.</p>
+    <p>This demo pushes that policy through cases that are hard to reason about on paper:
+    where should the <b>confidence threshold</b> sit? What does "reasonable certainty" cost you?
+    The counter that matters most is <b>decisions the mate let proceed without you</b> — the price of not babysitting.</p>
+    <p style="margin-bottom:0"><b>Not modelled:</b> actually reading a live session or sending it an answer — neither
+    Pi Workbench seam exposes that yet. This prototype only answers whether the <i>policy</i> feels right.</p>
+  </div>
+
+  <div class="card full" style="margin-bottom:20px">
+    <h2>Mate configuration</h2>
+    <div class="config">
+      <label>Auto-continue</label>
+      <span id="autoToggle" class="toggle">…</span>
+      <label>Confidence threshold</label>
+      <input id="thresh" type="range" min="0" max="100" value="75" />
+      <span id="threshVal" class="thresh">0.75</span>
+      <span style="color:var(--dim);font-size:13px">— continue on its own only when its confidence ≥ this</span>
+    </div>
+  </div>
+
+  <div class="attn" id="attn"></div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Sessions</h2>
+      <div id="sessions"></div>
+    </div>
+
+    <div class="card">
+      <h2>Free play</h2>
+      <p class="scenario-desc">Make any session hit a decision at a chosen confidence, then answer or finish it. Any order.</p>
+      <div class="freeplay" id="freeplay"></div>
+    </div>
+
+    <div class="card">
+      <h2>Guided walkthroughs</h2>
+      <div class="tabs" id="tabs"></div>
+      <p class="scenario-desc" id="scenarioDesc"></p>
+      <div class="steps" id="steps"></div>
+    </div>
+
+    <div class="card">
+      <h2>What just happened</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+ * PURE MODULE — the part worth keeping. No DOM, no globals reach inside.
+ * The mate's policy is one function; the fleet is a reducer over it.
+ * ==========================================================================*/
+
+/** The whole decision: given a paused session and mate config, continue or escalate. */
+function evaluatePolicy(pending, config) {
+  if (!config.autoContinue) {
+    return { action: "escalate", reason: "auto-continue is off — every decision goes to you" };
+  }
+  if (pending.confidence >= config.threshold) {
+    return { action: "continue", reason: `confidence ${pending.confidence.toFixed(2)} ≥ threshold ${config.threshold.toFixed(2)}` };
+  }
+  return { action: "escalate", reason: `confidence ${pending.confidence.toFixed(2)} < threshold ${config.threshold.toFixed(2)}` };
+}
+
+const SESSION_NAMES = { s1: "auth-refactor", s2: "landing-page", s3: "flaky-test-hunt" };
+
+function initialState() {
+  return {
+    config: { autoContinue: true, threshold: 0.75 },
+    sessions: {
+      s1: newSession("s1"), s2: newSession("s2"), s3: newSession("s3"),
+    },
+    log: [],
+    stats: { autoContinued: 0, escalated: 0 },
+    seq: 0,
+  };
+}
+function newSession(id) {
+  return { id, name: SESSION_NAMES[id], phase: "running", pending: null, autoDecisions: 0 };
+}
+
+/** (state, action) => state. Pure. */
+function mateReducer(state, action) {
+  switch (action.type) {
+    case "SET_AUTO":
+      return log({ ...state, config: { ...state.config, autoContinue: action.value } },
+                 "sys", `auto-continue ${action.value ? "ON" : "OFF"}`);
+    case "SET_THRESHOLD":
+      return { ...state, config: { ...state.config, threshold: action.value } };
+
+    case "REACH_DECISION": {
+      const s = state.sessions[action.sessionId];
+      if (!s || s.phase === "done") return state;
+      const pending = { desc: action.desc, confidence: action.confidence };
+      const verdict = evaluatePolicy(pending, state.config);
+      let next = { ...state, seq: state.seq + 1 };
+      if (verdict.action === "continue") {
+        next.sessions = { ...state.sessions,
+          [s.id]: { ...s, phase: "running", pending: null, autoDecisions: s.autoDecisions + 1 } };
+        next.stats = { ...state.stats, autoContinued: state.stats.autoContinued + 1 };
+        return log(next, "auto", `${s.name}: mate continued without you — “${action.desc}” (${verdict.reason})`);
+      } else {
+        next.sessions = { ...state.sessions, [s.id]: { ...s, phase: "blocked", pending } };
+        next.stats = { ...state.stats, escalated: state.stats.escalated + 1 };
+        return log(next, "escal", `${s.name}: NOTIFYING YOU — “${action.desc}” (${verdict.reason})`);
+      }
+    }
+
+    case "HUMAN_ANSWER": {
+      const s = state.sessions[action.sessionId];
+      if (!s || s.phase !== "blocked") return state;
+      const next = { ...state,
+        sessions: { ...state.sessions, [s.id]: { ...s, phase: "running", pending: null } } };
+      return log(next, "human", `${s.name}: you answered “${action.choice}” — session resumed`);
+    }
+
+    case "FINISH": {
+      const s = state.sessions[action.sessionId];
+      if (!s || s.phase === "done") return state;
+      const next = { ...state,
+        sessions: { ...state.sessions, [s.id]: { ...s, phase: "done", pending: null } } };
+      return log(next, "sys", `${s.name}: finished`);
+    }
+
+    case "RESET":
+      return initialState();
+
+    default:
+      return state;
+  }
+}
+
+/** Derived views — pure selectors over state. */
+function attentionSummary(state) {
+  const list = Object.values(state.sessions);
+  return {
+    running: list.filter(s => s.phase === "running").length,
+    blocked: list.filter(s => s.phase === "blocked").length,
+    done: list.filter(s => s.phase === "done").length,
+    unattendedDecisions: state.stats.autoContinued,
+    escalations: state.stats.escalated,
+  };
+}
+
+function log(state, kind, text) {
+  return { ...state, log: [{ kind, text, at: state.seq }, ...state.log].slice(0, 40) };
+}
+
+/* ============================================================================
+ * THROWAWAY PAGE SHELL — thin. Calls into the module; nothing flows back in.
+ * ==========================================================================*/
+let state = initialState();
+function dispatch(action) { state = mateReducer(state, action); render(); }
+
+const $ = (id) => document.getElementById(id);
+
+// ---- config controls
+$("thresh").addEventListener("input", (e) => {
+  dispatch({ type: "SET_THRESHOLD", value: e.target.value / 100 });
+});
+$("autoToggle").addEventListener("click", () => {
+  dispatch({ type: "SET_AUTO", value: !state.config.autoContinue });
+});
+
+// ---- free play
+const CONFIDENCES = [
+  { label: "very sure (0.95)", v: 0.95 },
+  { label: "likely (0.80)", v: 0.80 },
+  { label: "unsure (0.55)", v: 0.55 },
+  { label: "shaky (0.35)", v: 0.35 },
+];
+const SAMPLE_DECISIONS = {
+  s1: "rename `verifyToken` → `assertToken` across callers?",
+  s2: "use the teal hero or the gradient hero?",
+  s3: "delete the test or add a retry?",
+};
+function renderFreeplay() {
+  const el = $("freeplay"); el.innerHTML = "";
+  for (const id of Object.keys(state.sessions)) {
+    const s = state.sessions[id];
+    for (const c of CONFIDENCES) {
+      const b = document.createElement("button");
+      b.textContent = `${s.name}: decision @ ${c.label}`;
+      b.disabled = s.phase !== "running";
+      b.onclick = () => dispatch({ type: "REACH_DECISION", sessionId: id, desc: SAMPLE_DECISIONS[id], confidence: c.v });
+      el.appendChild(b);
+    }
+  }
+  const reset = document.createElement("button");
+  reset.textContent = "↺ reset everything"; reset.className = "primary";
+  reset.onclick = () => { activeTab = null; stepIdx = 0; dispatch({ type: "RESET" }); };
+  el.appendChild(reset);
+}
+
+// ---- walkthroughs
+const SCENARIOS = [
+  {
+    name: "Happy vibe",
+    desc: "Loose specs, confident calls. The mate lets the fleet run and barely bothers you — but watch the “let proceed without you” counter climb. That number is the trade you are making.",
+    steps: [
+      { label: "auth-refactor: very sure decision", a: { type: "REACH_DECISION", sessionId: "s1", desc: SAMPLE_DECISIONS.s1, confidence: 0.95 } },
+      { label: "landing-page: likely decision", a: { type: "REACH_DECISION", sessionId: "s2", desc: SAMPLE_DECISIONS.s2, confidence: 0.80 } },
+      { label: "auth-refactor: very sure decision", a: { type: "REACH_DECISION", sessionId: "s1", desc: "extract token guard helper?", confidence: 0.92 } },
+      { label: "auth-refactor: finish", a: { type: "FINISH", sessionId: "s1" } },
+    ],
+  },
+  {
+    name: "Correct escalation",
+    desc: "A genuinely ambiguous, destructive call comes in below threshold. The mate should stop and notify you, blocking that session while the others keep flowing.",
+    steps: [
+      { label: "flaky-test-hunt: shaky decision (delete a test)", a: { type: "REACH_DECISION", sessionId: "s3", desc: SAMPLE_DECISIONS.s3, confidence: 0.35 } },
+      { label: "landing-page: likely decision (keeps flowing)", a: { type: "REACH_DECISION", sessionId: "s2", desc: SAMPLE_DECISIONS.s2, confidence: 0.80 } },
+      { label: "You answer flaky-test-hunt: “add a retry”", a: { type: "HUMAN_ANSWER", sessionId: "s3", choice: "add a retry" } },
+    ],
+  },
+  {
+    name: "Threshold too loose",
+    desc: "You drag the threshold down to 0.20 to “move faster.” Now a shaky 0.35 call auto-continues. This is the “wait — that should NOT have proceeded” moment. It shows why the threshold is the whole ballgame while vibing.",
+    steps: [
+      { label: "Set threshold to 0.20", a: { type: "SET_THRESHOLD", value: 0.20 }, slider: 20 },
+      { label: "flaky-test-hunt: shaky decision (delete a test)", a: { type: "REACH_DECISION", sessionId: "s3", desc: SAMPLE_DECISIONS.s3, confidence: 0.35 } },
+    ],
+  },
+  {
+    name: "Mate off (baseline)",
+    desc: "Turn auto-continue off — the “no mate” world. Every decision, confident or not, stops and waits for you. Feel how much attention that costs across three sessions.",
+    steps: [
+      { label: "Turn auto-continue OFF", a: { type: "SET_AUTO", value: false } },
+      { label: "auth-refactor: very sure decision", a: { type: "REACH_DECISION", sessionId: "s1", desc: SAMPLE_DECISIONS.s1, confidence: 0.95 } },
+      { label: "landing-page: very sure decision", a: { type: "REACH_DECISION", sessionId: "s2", desc: SAMPLE_DECISIONS.s2, confidence: 0.95 } },
+      { label: "You answer auth-refactor", a: { type: "HUMAN_ANSWER", sessionId: "s1", choice: "yes, rename" } },
+    ],
+  },
+  {
+    name: "Fleet overload",
+    desc: "All three sessions hit a decision at once — some safe, one shaky. Watch the mate auto-continue two while queueing one for you: the attention pills and the unattended counter move together.",
+    steps: [
+      { label: "auth-refactor: likely decision", a: { type: "REACH_DECISION", sessionId: "s1", desc: SAMPLE_DECISIONS.s1, confidence: 0.85 } },
+      { label: "landing-page: likely decision", a: { type: "REACH_DECISION", sessionId: "s2", desc: SAMPLE_DECISIONS.s2, confidence: 0.82 } },
+      { label: "flaky-test-hunt: shaky decision", a: { type: "REACH_DECISION", sessionId: "s3", desc: SAMPLE_DECISIONS.s3, confidence: 0.40 } },
+    ],
+  },
+];
+let activeTab = null;
+let stepIdx = 0;
+
+function startScenario(i) {
+  activeTab = i; stepIdx = 0;
+  state = initialState();          // known start every time
+  if (SCENARIOS[i].steps[0]?.slider === undefined) render();
+  render();
+}
+function renderTabs() {
+  const el = $("tabs"); el.innerHTML = "";
+  SCENARIOS.forEach((sc, i) => {
+    const b = document.createElement("button");
+    b.className = "tab" + (activeTab === i ? " active" : "");
+    b.textContent = sc.name;
+    b.onclick = () => startScenario(i);
+    el.appendChild(b);
+  });
+}
+function renderSteps() {
+  const desc = $("scenarioDesc"), steps = $("steps");
+  if (activeTab === null) {
+    desc.textContent = "Pick a walkthrough above. Each resets to a clean fleet and runs the same way every time.";
+    steps.innerHTML = ""; return;
+  }
+  const sc = SCENARIOS[activeTab];
+  desc.textContent = sc.desc;
+  steps.innerHTML = "";
+  sc.steps.forEach((st, i) => {
+    const row = document.createElement("div");
+    row.className = "step" + (i < stepIdx ? " done" : i === stepIdx ? " current" : "");
+    const n = document.createElement("span"); n.className = "n"; n.textContent = (i + 1) + ".";
+    const b = document.createElement("button");
+    b.className = "label"; b.textContent = st.label; b.disabled = i !== stepIdx;
+    b.onclick = () => {
+      if (typeof st.slider === "number") $("thresh").value = st.slider;
+      dispatch(st.a); stepIdx = i + 1; render();
+    };
+    row.append(n, b);
+    steps.appendChild(row);
+  });
+}
+
+// ---- render
+function render() {
+  // config
+  const t = $("autoToggle");
+  t.textContent = state.config.autoContinue ? "ON" : "OFF";
+  t.className = "toggle " + (state.config.autoContinue ? "on" : "off");
+  $("threshVal").textContent = state.config.threshold.toFixed(2);
+  if (Math.round(state.config.threshold * 100) !== Number($("thresh").value)) {
+    $("thresh").value = Math.round(state.config.threshold * 100);
+  }
+
+  // attention summary
+  const a = attentionSummary(state);
+  $("attn").innerHTML = "";
+  const pills = [
+    { c: "running", t: `${a.running} running` },
+    { c: "blocked", t: `${a.blocked} blocked on you` },
+    { c: "unattended", t: `${a.unattendedDecisions} decisions let proceed without you` },
+    { c: "", t: `${a.escalations} escalations · ${a.done} finished` },
+  ];
+  for (const p of pills) {
+    const el = document.createElement("span");
+    el.className = "pill " + p.c; el.innerHTML = `<b>${p.t}</b>`;
+    $("attn").appendChild(el);
+  }
+
+  // sessions
+  const box = $("sessions"); box.innerHTML = "";
+  for (const id of Object.keys(state.sessions)) {
+    const s = state.sessions[id];
+    const card = document.createElement("div"); card.className = "session";
+    const row = document.createElement("div"); row.className = "row";
+    const name = document.createElement("span"); name.className = "name"; name.textContent = s.name;
+    const phase = document.createElement("span"); phase.className = "phase " + s.phase; phase.textContent = s.phase;
+    row.append(name, phase); card.append(row);
+    if (s.pending) {
+      const p = document.createElement("div"); p.className = "pending";
+      p.innerHTML = `⏸ waiting on you: “${s.pending.desc}” <span class="conf">(mate confidence ${s.pending.confidence.toFixed(2)})</span>`;
+      card.append(p);
+      const mb = document.createElement("div"); mb.className = "minibtns";
+      const yes = document.createElement("button"); yes.className = "answer"; yes.textContent = "answer → resume";
+      yes.onclick = () => dispatch({ type: "HUMAN_ANSWER", sessionId: id, choice: "your call" });
+      mb.append(yes); card.append(mb);
+    }
+    if (s.autoDecisions > 0) {
+      const badge = document.createElement("div"); badge.className = "badge";
+      badge.textContent = `mate made ${s.autoDecisions} call${s.autoDecisions > 1 ? "s" : ""} here without you`;
+      card.append(badge);
+    }
+    if (s.phase === "running") {
+      const mb = document.createElement("div"); mb.className = "minibtns";
+      const fin = document.createElement("button"); fin.textContent = "finish";
+      fin.onclick = () => dispatch({ type: "FINISH", sessionId: id });
+      mb.append(fin); card.append(mb);
+    }
+    box.append(card);
+  }
+
+  // log
+  const l = $("log"); l.innerHTML = "";
+  if (state.log.length === 0) l.innerHTML = `<div class="entry">No events yet — press a button.</div>`;
+  for (const e of state.log) {
+    const d = document.createElement("div"); d.className = "entry " + e.kind;
+    const tag = e.kind === "auto" ? "AUTO-CONTINUE" : e.kind === "escal" ? "NOTIFY YOU" : e.kind === "human" ? "YOU" : "SYS";
+    d.innerHTML = `<span class="tag">${tag}</span>${e.text}`;
+    l.append(d);
+  }
+
+  renderFreeplay(); renderTabs(); renderSteps();
+}
+
+render();
+</script>
+</body>
+</html>
