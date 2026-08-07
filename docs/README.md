@@ -39,7 +39,7 @@ When documents disagree, follow the highest applicable authority and repair the 
 ## Research
 
 - [`research/sources/`](research/sources/) — curated evidence and source analyses, including the [subagent implementation comparison](research/sources/subagent-implementations.md).
-- [`research/reports/`](research/reports/) — derived design reports. The [unified Chats and Workstreams artifact](research/reports/pi-web-unified-chat-workstream-prototype.html) is the canonical working interaction prototype; the earlier [Workbench UX report](research/reports/pi-web-workbench-ux-prototype.md), [structural artifact](research/reports/pi-web-workbench-ux-prototype.html), and [current-exchange artifact](research/reports/pi-web-current-exchange-prototype.html) remain supporting references.
+- [`research/reports/`](research/reports/) — derived design reports. The [multidimensional Working Mode proposal](research/reports/multidimensional-working-mode-proposal.md) is explicitly challenge-pending and non-authoritative. The [unified Chats and Workstreams artifact](research/reports/pi-web-unified-chat-workstream-prototype.html) is the canonical working interaction prototype; the earlier [Workbench UX report](research/reports/pi-web-workbench-ux-prototype.md), [structural artifact](research/reports/pi-web-workbench-ux-prototype.html), and [current-exchange artifact](research/reports/pi-web-current-exchange-prototype.html) remain supporting references.
 - [`research/generated/`](research/generated/) — reproducible generated indexes; do not treat them as standing context.
 
 Operational documentation remains beside the module it describes under `packages/`, `apps/`, `skills/`, or `scripts/`.

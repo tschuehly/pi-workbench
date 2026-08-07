@@ -22,6 +22,7 @@ Create a Pi-based project workbench that allocates Human Attention across concur
 - [FirstMate](../research/sources/firstmate.md)
 - [Brigade](../research/sources/brigade.md)
 - [T3 Code](../research/sources/t3code.md)
+- [Multidimensional Working Mode proposal](../research/reports/multidimensional-working-mode-proposal.md) — proposed direction awaiting challenge, not authoritative behavior
 
 ## Agreed Decisions
 
@@ -170,3 +171,4 @@ Create a Pi-based project workbench that allocates Human Attention across concur
 14. **Context rotation:** the exact Continuation Artifact schema, size budgets, pressure thresholds, protected fields, and reconciliation checks used when replacing a model session.
 15. **PI WEB attention schemas:** the exact wire fields and client-specific interaction details for the established attention entry, focus restoration, changes-since-last-judgment, revision-aware feedback, progressive Review Surfaces, and scoped conversation contract.
 16. **Validation boundary:** the exact split between mechanically enforceable controller invariants and provenance-bearing human or model judgment attestations for materiality, evidence sufficiency, Independence in substance, and Judgment Dossier completeness.
+17. **Multidimensional execution posture:** whether to retire numbered Operating Levels as the primary model in favor of a validated Working Mode vector, which fields are true dimensions versus constraining capabilities or observed facts, how named presets avoid recreating a ladder, and how existing attended and managed boundaries migrate without weakening guarantees. Challenge the [proposal](../research/reports/multidimensional-working-mode-proposal.md) before recording a decision.
