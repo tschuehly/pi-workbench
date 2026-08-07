@@ -8,7 +8,7 @@ Status: active working prototype
 
 ## Owner-pinned direction
 
-Standalone Chats are a required product destination. Do not fold every Chat into an automatically created Workstream merely to fit the current V1 protocol. The prototype must preserve a lightweight standalone conversation path while making any later transition into durable Workstream context explicit.
+Standalone Chats are a required product destination. Do not fold every Chat into an automatically created Workstream merely to fit the current V1 protocol. The prototype must preserve a lightweight standalone conversation path and support both explicit relationships with durable Workstream context: promotion changes the Chat into a Workstream session, while linking leaves the Chat standalone and adds a Workstream reference.
 
 This direction intentionally extends beyond V1, where every interactive session currently starts in a Workstream. The prototype remains the place to validate that extension; production work requires a separate protocol and implementation decision.
 
@@ -95,9 +95,14 @@ Add separate contextual menus:
 
 Request checkpoint demonstrates the attended propose → correct → confirm interaction in memory. Only confirmation changes the displayed latest checkpoint; a simulated failure leaves the previous confirmation visible with an explicit failure state. Menu labels and placement must make ownership visible.
 
-### 7. Retain promotion as a bounded transition
+### 7. Support two bounded standalone-to-Workstream relationships
 
-A standalone Chat has one Promote action. Confirmation collects the Workstream title and displays the existing Chat and checkout association. Confirmation preserves the same conversation and opens the resulting Workstream session state. No separate full-screen promotion-preview state is allowed.
+A standalone Chat offers two explicit operations:
+
+- **Promote into a Workstream:** confirmation collects the Workstream title, preserves the same conversation and checkout association, and opens the resulting Workstream session state.
+- **Link to a Workstream:** confirmation selects an existing Workstream, keeps the Chat standalone, and adds a reference visible from the Chat and Workstream context.
+
+Do not conflate the two operations or silently change conversation ownership. No separate full-screen transition-preview state is allowed.
 
 ### 8. Verify the complete prototype
 
@@ -115,6 +120,7 @@ Browser-test the final working prototype at desktop and narrow widths. Required 
 - confirm the redundant status bar is absent and context-window usage changes with the selected session, including the high-usage warning;
 - open history with Double Escape and continue from an earlier point as a branch;
 - promote a Chat without changing its transcript;
+- link a Chat to an existing Workstream while confirming it remains standalone;
 - operate every menu by pointer and keyboard;
 - confirm no duplicate Workstream lists, actions, session navigation, or decision records.
 
