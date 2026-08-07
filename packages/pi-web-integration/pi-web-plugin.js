@@ -1,5 +1,6 @@
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams } from "./workstream-client.js";
 import { WorkstreamSessionCoordinator } from "./workstream-session-coordinator.js";
+import { selectWorkstreamSession } from "./workstream-brief-projection.js";
 
 const PROJECTION_PATH = ".pi-workbench/projection.json";
 const PANEL_ID = "pi-workbench:run.panel";
@@ -50,10 +51,7 @@ export function transitionDedicatedWorkstreamUi(state, action) {
 export function recordedWorkstreamSelection(snapshots, workstreamId, rememberedSessionId) {
   const snapshot = snapshots.find((candidate) => candidate.id === workstreamId);
   if (snapshot === undefined) return undefined;
-  const sessionId = snapshot.sessions.find((session) => session.status === "active" && session.id === rememberedSessionId)?.id
-    ?? snapshot.sessions.find((session) => session.status === "active")?.id
-    ?? snapshot.sessions[0]?.id;
-  return { snapshot, sessionId };
+  return { snapshot, sessionId: selectWorkstreamSession(snapshot, rememberedSessionId)?.id };
 }
 
 export function sessionAnchorRepairOffer(snapshot, session, error, machine) {

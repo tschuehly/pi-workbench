@@ -211,6 +211,11 @@ a reason to reopen the baseline.
 
 ### Phase 1 — Add the generic native-session navigation host
 
+Status: complete in PI WEB commit `f655413`. The optional public host, shared bounded catalog
+traversal, explicit completeness/failure state, refresh/select operations, docs, changeset, and
+focused tests are present. PI WEB `npm run verify` (2,553 passed, 3 skipped) and `npm run build`
+pass.
+
 Add a small PI WEB-owned `SessionNavigationHost` to `PrimaryViewContext`, following the immutable
 snapshot/watch/dispose shape already proven by `SessionAttentionHost`. Its public view model should
 contain only stable presentation data: selected-machine scope, session identity, title/summary
@@ -234,6 +239,11 @@ dedicated primary view, preserve that primary view, distinguish loading/reconnec
 without `AppState`, private routes, Workstream vocabulary, or session creation.
 
 ### Phase 2 — Lock the paired fixture and destination reducer
+
+Status: complete. The adapter now has a canonically validated paired fixture, fail-closed Chat join,
+pure destination reducer, deterministic brief projection, session-scoped memory, and table-driven
+Node coverage for reconciliation, races, invalidation, reconnect, duplicate homes, anchor repair,
+and checkpoint/Human Task truth.
 
 Add a deterministic paired fixture in `packages/pi-web-integration/` with at least:
 

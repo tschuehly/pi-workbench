@@ -38,6 +38,23 @@ operations to `@pi-workbench/workstream-store`, which persists user-local ledger
 intentional alternate user-local location. The deterministic `fake-workstream-client.js` and
 [`recorded-workstreams.json`](fixtures/recorded-workstreams.json) remain available for PI WEB tests.
 
+The unified-navigation Phase 2 seam is intentionally pure and UI-independent:
+
+- `unified-navigation-state.js` joins only complete native and canonical inventories, keeps every
+  positive canonical association (including an anchorless legacy association) out of Chats, and
+  owns destination, selection-race, session-scoped surface/Terminal, and per-Workstream session
+  memory.
+- `workstream-brief-projection.js` mechanically projects sourced checkpoint and Human Task fields
+  and exports the one deterministic remembered-active/first-active/first-session selection rule.
+- `fixtures/unified-navigation.json` pairs canonically valid current and closed Workstreams with
+  native sessions and separate attention state. It covers archived and unmatched Chats, anchor
+  repair, pending/failed associations, answered/resolved tasks, retained checkpoint failure and
+  reconnect snapshots, complete empty and unavailable hosts, and duplicate-home failure.
+
+Neither an incomplete nor malformed inventory may classify a Chat. Reconnect keeps retained
+snapshots available but labels them non-ready; restoration and selection are validated only after a
+complete reconciliation.
+
 Session launch uses PI WEB's attended plugin-session helper and `workstream-session-coordinator.js`.
 The coordinator records a launch-key pending association before starting PI, confirms the returned
 runtime session identity with a complete location, records launch failure, and reconciles

@@ -1,0 +1,683 @@
+{
+  "version": 1,
+  "native": {
+    "machine": {
+      "id": "studio",
+      "name": "Studio Mac"
+    },
+    "complete": true,
+    "reconnecting": false,
+    "sequence": 12,
+    "selectedIdentity": "studio\u0000chat-review",
+    "sessions": [
+      {
+        "sessionId": "chat-review",
+        "machineId": "studio",
+        "projectId": "pi-web",
+        "workspaceId": "main",
+        "title": "Review upstream changes",
+        "summary": "Compare the current release",
+        "archived": true,
+        "modifiedAt": "2026-08-04T10:00:00.000Z"
+      },
+      {
+        "sessionId": "chat-ask",
+        "machineId": "studio",
+        "projectId": "photoquest",
+        "workspaceId": "feature/search",
+        "title": "Tune search",
+        "summary": "Waiting for an answer",
+        "archived": false,
+        "modifiedAt": "2026-08-04T09:00:00.000Z"
+      },
+      {
+        "sessionId": "session-a",
+        "machineId": "studio",
+        "projectId": "pi-workbench",
+        "workspaceId": "feature/unified",
+        "title": "Build navigation",
+        "archived": false,
+        "modifiedAt": "2026-08-04T08:00:00.000Z"
+      },
+      {
+        "sessionId": "session-b",
+        "machineId": "studio",
+        "projectId": "pi-web",
+        "workspaceId": "pi-workbench",
+        "title": "Add host",
+        "archived": false,
+        "modifiedAt": "2026-08-04T07:00:00.000Z"
+      },
+      {
+        "sessionId": "session-c",
+        "machineId": "studio",
+        "projectId": "photoquest",
+        "workspaceId": "main",
+        "title": "Verify anchors",
+        "archived": false,
+        "modifiedAt": "2026-08-04T06:00:00.000Z"
+      },
+      {
+        "sessionId": "session-anchorless",
+        "machineId": "studio",
+        "projectId": "legacy",
+        "workspaceId": "imported",
+        "title": "Repair imported session",
+        "summary": "Canonical anchor needs repair",
+        "archived": false,
+        "modifiedAt": "2026-08-04T05:00:00.000Z"
+      }
+    ]
+  },
+  "workstreams": {
+    "version": 1,
+    "complete": true,
+    "reconnecting": false,
+    "sequence": 24,
+    "snapshots": [
+      {
+        "id": "ws-unified",
+        "title": "Ship unified navigation",
+        "revision": 11,
+        "closed": false,
+        "sessions": [
+          {
+            "id": "session-a",
+            "status": "active",
+            "machineId": "studio",
+            "projectId": "pi-workbench",
+            "workspaceId": "feature/unified",
+            "latestCheckpoint": {
+              "id": "cp-a",
+              "whatChanged": "The destination model is fixed.",
+              "remains": "Build the responsive shell.",
+              "next": "Implement the root navigator.",
+              "nextSessionPrompt": "Continue the unified navigator implementation.",
+              "references": [
+                "docs/plans/pi-web-unified-ui-production.md"
+              ]
+            },
+            "checkpointFailure": null,
+            "checkpointStaleness": null,
+            "launchFailure": null
+          },
+          {
+            "id": "session-b",
+            "status": "active",
+            "machineId": "studio",
+            "projectId": "pi-web",
+            "workspaceId": "pi-workbench",
+            "latestCheckpoint": {
+              "id": "cp-b",
+              "whatChanged": "The host contract is drafted.",
+              "remains": "Verify reconnect.",
+              "next": "Run host tests.",
+              "nextSessionPrompt": "Verify the generic host.",
+              "references": []
+            },
+            "checkpointFailure": null,
+            "checkpointStaleness": {
+              "reason": "The catalog changed.",
+              "checkpointId": "cp-b",
+              "recordedAt": "2026-08-04T10:00:00.000Z",
+              "revision": 11,
+              "producer": "owner",
+              "sourceSessionId": "session-b"
+            },
+            "launchFailure": null
+          },
+          {
+            "id": "session-c",
+            "status": "active",
+            "machineId": "studio",
+            "projectId": "photoquest",
+            "workspaceId": "main",
+            "latestCheckpoint": {
+              "id": "cp-c-prior",
+              "whatChanged": "The prior anchor verification passed.",
+              "remains": "Retry the rejected update.",
+              "next": "Review the prior checkpoint before retrying.",
+              "nextSessionPrompt": "Resume from the prior confirmed checkpoint.",
+              "references": []
+            },
+            "checkpointFailure": "The attempted checkpoint was rejected.",
+            "checkpointStaleness": null,
+            "launchFailure": null
+          },
+          {
+            "id": "pending:launch",
+            "status": "pending",
+            "associationKey": "launch",
+            "machineId": "studio",
+            "projectId": "pi-web",
+            "workspaceId": "feature/new",
+            "latestCheckpoint": null,
+            "checkpointFailure": null,
+            "checkpointStaleness": null,
+            "launchFailure": null
+          },
+          {
+            "id": "pending:failed",
+            "status": "failed",
+            "associationKey": "failed",
+            "machineId": "studio",
+            "projectId": "pi-web",
+            "workspaceId": "feature/failed",
+            "latestCheckpoint": null,
+            "checkpointFailure": null,
+            "checkpointStaleness": null,
+            "launchFailure": {
+              "reason": "Session start failed.",
+              "recordedAt": "2026-08-04T10:00:00.000Z",
+              "revision": 11,
+              "producer": "pi-web",
+              "sourceSessionId": null
+            }
+          }
+        ],
+        "humanTasks": [
+          {
+            "id": "task-pending",
+            "title": "Choose the narrow navigation behavior",
+            "sourceSessionId": "session-a",
+            "materiality": "material",
+            "status": "pending",
+            "answerKind": "yes-no",
+            "options": [
+              {
+                "id": "yes",
+                "label": "Yes"
+              },
+              {
+                "id": "no",
+                "label": "No"
+              }
+            ],
+            "answer": null,
+            "answerReceipt": null
+          },
+          {
+            "id": "task-answered",
+            "title": "Confirm density",
+            "sourceSessionId": "session-b",
+            "materiality": "non-material",
+            "status": "answered",
+            "answerKind": "choice",
+            "options": [
+              {
+                "id": "comfortable",
+                "label": "Comfortable"
+              },
+              {
+                "id": "compact",
+                "label": "Compact"
+              }
+            ],
+            "answer": {
+              "kind": "choice",
+              "optionId": "compact"
+            },
+            "answerReceipt": {
+              "answerId": "answer-density",
+              "taskId": "task-answered",
+              "acceptedRevision": 11,
+              "recordedAt": "2026-08-04T10:00:00.000Z",
+              "producer": "owner",
+              "sourceSessionId": "session-b"
+            }
+          },
+          {
+            "id": "task-resolved",
+            "title": "Confirm fixture scope",
+            "sourceSessionId": null,
+            "materiality": "material",
+            "status": "resolved",
+            "answerKind": "free-text",
+            "options": [],
+            "answer": null,
+            "answerReceipt": null
+          }
+        ],
+        "links": [
+          {
+            "id": "link-plan",
+            "kind": "file",
+            "reference": "docs/plans/pi-web-unified-ui-production.md",
+            "label": "Production plan"
+          }
+        ],
+        "createdAt": "2026-08-01T08:00:00.000Z",
+        "updatedAt": "2026-08-04T10:00:00.000Z",
+        "closedAt": null
+      },
+      {
+        "id": "ws-anchor-repair",
+        "title": "Repair imported session",
+        "revision": 2,
+        "closed": false,
+        "sessions": [
+          {
+            "id": "session-anchorless",
+            "status": "active",
+            "latestCheckpoint": null,
+            "checkpointFailure": null,
+            "checkpointStaleness": null,
+            "launchFailure": null
+          }
+        ],
+        "humanTasks": [],
+        "links": [],
+        "createdAt": "2026-08-02T08:00:00.000Z",
+        "updatedAt": "2026-08-04T10:00:00.000Z",
+        "closedAt": null
+      },
+      {
+        "id": "ws-closed",
+        "title": "Prior release",
+        "revision": 7,
+        "closed": true,
+        "closedAt": "2026-08-01T10:00:00.000Z",
+        "sessions": [],
+        "humanTasks": [],
+        "links": [],
+        "createdAt": "2026-08-03T08:00:00.000Z",
+        "updatedAt": "2026-08-04T10:00:00.000Z"
+      }
+    ]
+  },
+  "states": {
+    "nativeReconnect": {
+      "machine": {
+        "id": "studio",
+        "name": "Studio Mac"
+      },
+      "complete": false,
+      "reconnecting": true,
+      "sequence": 12,
+      "sessions": [
+        {
+          "sessionId": "chat-review",
+          "machineId": "studio",
+          "projectId": "pi-web",
+          "workspaceId": "main",
+          "title": "Review upstream changes",
+          "archived": true,
+          "modifiedAt": "2026-08-04T10:00:00.000Z"
+        }
+      ]
+    },
+    "partialNative": {
+      "machine": {
+        "id": "studio",
+        "name": "Studio Mac"
+      },
+      "complete": false,
+      "reconnecting": false,
+      "sequence": 12,
+      "selectedIdentity": "studio\u0000chat-review",
+      "sessions": [
+        {
+          "sessionId": "chat-review",
+          "machineId": "studio",
+          "projectId": "pi-web",
+          "workspaceId": "main",
+          "title": "Review upstream changes",
+          "summary": "Compare the current release",
+          "archived": true,
+          "modifiedAt": "2026-08-04T10:00:00.000Z"
+        },
+        {
+          "sessionId": "chat-ask",
+          "machineId": "studio",
+          "projectId": "photoquest",
+          "workspaceId": "feature/search",
+          "title": "Tune search",
+          "summary": "Waiting for an answer",
+          "archived": false,
+          "modifiedAt": "2026-08-04T09:00:00.000Z"
+        },
+        {
+          "sessionId": "session-a",
+          "machineId": "studio",
+          "projectId": "pi-workbench",
+          "workspaceId": "feature/unified",
+          "title": "Build navigation",
+          "archived": false,
+          "modifiedAt": "2026-08-04T08:00:00.000Z"
+        },
+        {
+          "sessionId": "session-b",
+          "machineId": "studio",
+          "projectId": "pi-web",
+          "workspaceId": "pi-workbench",
+          "title": "Add host",
+          "archived": false,
+          "modifiedAt": "2026-08-04T07:00:00.000Z"
+        },
+        {
+          "sessionId": "session-c",
+          "machineId": "studio",
+          "projectId": "photoquest",
+          "workspaceId": "main",
+          "title": "Verify anchors",
+          "archived": false,
+          "modifiedAt": "2026-08-04T06:00:00.000Z"
+        },
+        {
+          "sessionId": "session-anchorless",
+          "machineId": "studio",
+          "projectId": "legacy",
+          "workspaceId": "imported",
+          "title": "Repair imported session",
+          "summary": "Canonical anchor needs repair",
+          "archived": false,
+          "modifiedAt": "2026-08-04T05:00:00.000Z"
+        }
+      ]
+    },
+    "workstreamReconnect": {
+      "complete": false,
+      "reconnecting": true,
+      "sequence": 24,
+      "snapshots": [
+        {
+          "id": "ws-unified",
+          "title": "Ship unified navigation",
+          "revision": 11,
+          "closed": false,
+          "sessions": [
+            {
+              "id": "session-a",
+              "status": "active",
+              "machineId": "studio",
+              "projectId": "pi-workbench",
+              "workspaceId": "feature/unified",
+              "latestCheckpoint": {
+                "id": "cp-a",
+                "whatChanged": "The destination model is fixed.",
+                "remains": "Build the responsive shell.",
+                "next": "Implement the root navigator.",
+                "nextSessionPrompt": "Continue the unified navigator implementation.",
+                "references": [
+                  "docs/plans/pi-web-unified-ui-production.md"
+                ]
+              },
+              "checkpointFailure": null,
+              "checkpointStaleness": null,
+              "launchFailure": null
+            },
+            {
+              "id": "session-b",
+              "status": "active",
+              "machineId": "studio",
+              "projectId": "pi-web",
+              "workspaceId": "pi-workbench",
+              "latestCheckpoint": {
+                "id": "cp-b",
+                "whatChanged": "The host contract is drafted.",
+                "remains": "Verify reconnect.",
+                "next": "Run host tests.",
+                "nextSessionPrompt": "Verify the generic host.",
+                "references": []
+              },
+              "checkpointFailure": null,
+              "checkpointStaleness": {
+                "reason": "The catalog changed.",
+                "checkpointId": "cp-b",
+                "recordedAt": "2026-08-04T10:00:00.000Z",
+                "revision": 11,
+                "producer": "owner",
+                "sourceSessionId": "session-b"
+              },
+              "launchFailure": null
+            },
+            {
+              "id": "session-c",
+              "status": "active",
+              "machineId": "studio",
+              "projectId": "photoquest",
+              "workspaceId": "main",
+              "latestCheckpoint": {
+                "id": "cp-c-prior",
+                "whatChanged": "The prior anchor verification passed.",
+                "remains": "Retry the rejected update.",
+                "next": "Review the prior checkpoint before retrying.",
+                "nextSessionPrompt": "Resume from the prior confirmed checkpoint.",
+                "references": []
+              },
+              "checkpointFailure": "The attempted checkpoint was rejected.",
+              "checkpointStaleness": null,
+              "launchFailure": null
+            },
+            {
+              "id": "pending:launch",
+              "status": "pending",
+              "associationKey": "launch",
+              "machineId": "studio",
+              "projectId": "pi-web",
+              "workspaceId": "feature/new",
+              "latestCheckpoint": null,
+              "checkpointFailure": null,
+              "checkpointStaleness": null,
+              "launchFailure": null
+            },
+            {
+              "id": "pending:failed",
+              "status": "failed",
+              "associationKey": "failed",
+              "machineId": "studio",
+              "projectId": "pi-web",
+              "workspaceId": "feature/failed",
+              "latestCheckpoint": null,
+              "checkpointFailure": null,
+              "checkpointStaleness": null,
+              "launchFailure": {
+                "reason": "Session start failed.",
+                "recordedAt": "2026-08-04T10:00:00.000Z",
+                "revision": 11,
+                "producer": "pi-web",
+                "sourceSessionId": null
+              }
+            }
+          ],
+          "humanTasks": [
+            {
+              "id": "task-pending",
+              "title": "Choose the narrow navigation behavior",
+              "sourceSessionId": "session-a",
+              "materiality": "material",
+              "status": "pending",
+              "answerKind": "yes-no",
+              "options": [
+                {
+                  "id": "yes",
+                  "label": "Yes"
+                },
+                {
+                  "id": "no",
+                  "label": "No"
+                }
+              ],
+              "answer": null,
+              "answerReceipt": null
+            },
+            {
+              "id": "task-answered",
+              "title": "Confirm density",
+              "sourceSessionId": "session-b",
+              "materiality": "non-material",
+              "status": "answered",
+              "answerKind": "choice",
+              "options": [
+                {
+                  "id": "comfortable",
+                  "label": "Comfortable"
+                },
+                {
+                  "id": "compact",
+                  "label": "Compact"
+                }
+              ],
+              "answer": {
+                "kind": "choice",
+                "optionId": "compact"
+              },
+              "answerReceipt": {
+                "answerId": "answer-density",
+                "taskId": "task-answered",
+                "acceptedRevision": 11,
+                "recordedAt": "2026-08-04T10:00:00.000Z",
+                "producer": "owner",
+                "sourceSessionId": "session-b"
+              }
+            },
+            {
+              "id": "task-resolved",
+              "title": "Confirm fixture scope",
+              "sourceSessionId": null,
+              "materiality": "material",
+              "status": "resolved",
+              "answerKind": "free-text",
+              "options": [],
+              "answer": null,
+              "answerReceipt": null
+            }
+          ],
+          "links": [
+            {
+              "id": "link-plan",
+              "kind": "file",
+              "reference": "docs/plans/pi-web-unified-ui-production.md",
+              "label": "Production plan"
+            }
+          ],
+          "createdAt": "2026-08-01T08:00:00.000Z",
+          "updatedAt": "2026-08-04T10:00:00.000Z",
+          "closedAt": null
+        },
+        {
+          "id": "ws-anchor-repair",
+          "title": "Repair imported session",
+          "revision": 2,
+          "closed": false,
+          "sessions": [
+            {
+              "id": "session-anchorless",
+              "status": "active",
+              "latestCheckpoint": null,
+              "checkpointFailure": null,
+              "checkpointStaleness": null,
+              "launchFailure": null
+            }
+          ],
+          "humanTasks": [],
+          "links": [],
+          "createdAt": "2026-08-02T08:00:00.000Z",
+          "updatedAt": "2026-08-04T10:00:00.000Z",
+          "closedAt": null
+        },
+        {
+          "id": "ws-closed",
+          "title": "Prior release",
+          "revision": 7,
+          "closed": true,
+          "closedAt": "2026-08-01T10:00:00.000Z",
+          "sessions": [],
+          "humanTasks": [],
+          "links": [],
+          "createdAt": "2026-08-03T08:00:00.000Z",
+          "updatedAt": "2026-08-04T10:00:00.000Z"
+        }
+      ]
+    },
+    "duplicateHome": [
+      {
+        "sessionId": "duplicate",
+        "machineId": "studio",
+        "projectId": "one",
+        "workspaceId": "main",
+        "title": "Duplicate",
+        "modifiedAt": "2026-08-04T10:00:00.000Z"
+      },
+      {
+        "sessionId": "duplicate",
+        "machineId": "studio",
+        "projectId": "two",
+        "workspaceId": "main",
+        "title": "Duplicate",
+        "modifiedAt": "2026-08-04T10:00:00.000Z"
+      }
+    ],
+    "completeEmpty": {
+      "machine": {
+        "id": "studio",
+        "name": "Studio Mac"
+      },
+      "complete": true,
+      "reconnecting": false,
+      "sequence": 13,
+      "sessions": []
+    },
+    "hostUnavailable": {
+      "available": false,
+      "complete": false,
+      "reconnecting": false,
+      "sessions": []
+    }
+  },
+  "anchorRepair": {
+    "request": {
+      "workstreamId": "ws-anchor-repair",
+      "expectedRevision": 2,
+      "idempotencyKey": "fixture-anchor-repair",
+      "records": [
+        {
+          "type": "session.anchor.repaired",
+          "producer": "pi-web",
+          "sourceSessionId": "session-anchorless",
+          "payload": {
+            "sessionId": "session-anchorless",
+            "machineId": "studio",
+            "projectId": "legacy",
+            "workspaceId": "imported",
+            "resolution": {
+              "method": "complete-machine-scan",
+              "evidenceId": "fixture-scan",
+              "matchedCwd": "/fixture/legacy",
+              "scannedScopeCount": 4,
+              "verifiedAt": "2026-08-04T10:05:00.000Z"
+            }
+          }
+        }
+      ]
+    },
+    "expectedLocation": {
+      "sessionId": "session-anchorless",
+      "machineId": "studio",
+      "projectId": "legacy",
+      "workspaceId": "imported"
+    }
+  },
+  "attention": {
+    "sequence": 5,
+    "reconnectComplete": true,
+    "items": [
+      {
+        "identity": "ask-chat",
+        "machineId": "studio",
+        "projectId": "photoquest",
+        "workspaceId": "feature/search",
+        "sessionId": "chat-ask",
+        "askId": "ask-search"
+      },
+      {
+        "identity": "ask-workstream",
+        "machineId": "studio",
+        "projectId": "pi-web",
+        "workspaceId": "pi-workbench",
+        "sessionId": "session-b",
+        "askId": "ask-host"
+      }
+    ]
+  }
+}
