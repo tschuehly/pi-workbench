@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "sequence": 1,
+  "snapshots": [
+    {
+      "id": "ws-anchorless-session",
+      "title": "Recover the existing PhotoQuest session",
+      "revision": 1,
+      "createdAt": "2026-08-01T09:00:00.000Z",
+      "updatedAt": "2026-08-01T09:00:00.000Z",
+      "sessions": [
+        {
+          "id": "session-photoquest-anchorless",
+          "status": "active",
+          "latestCheckpoint": null,
+          "checkpointFailure": null,
+          "checkpointStaleness": null,
+          "launchFailure": null
+        }
+      ],
+      "humanTasks": [],
+      "links": [],
+      "closed": false,
+      "closedAt": null
+    }
+  ]
+}
