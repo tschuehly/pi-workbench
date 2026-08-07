@@ -13,6 +13,7 @@ export class PiRpcExecutionAdapter {
     this.clock = options.clock ?? (() => new Date());
     this.spawn = options.spawn ?? nodeSpawn;
     this.killGraceMs = options.killGraceMs ?? 2_000;
+    this.settlementProbeMs = options.settlementProbeMs ?? 5_000;
     this.executions = new Map();
   }
 
@@ -148,6 +149,7 @@ export class PiRpcExecutionAdapter {
       state.finalText = assistantText(event.message);
       const usage = event.message.usage;
       if (usage !== undefined) this.#emit(state, "usage", usage);
+      if (event.message.stopReason !== "toolUse") this.#scheduleSettlementProbe(state);
       return;
     }
     if (event.type === "tool_execution_start") this.#emit(state, "tool_start", { toolCallId: event.toolCallId, toolName: event.toolName });
@@ -157,25 +159,76 @@ export class PiRpcExecutionAdapter {
     else if (event.type === "agent_settled") void this.#completeSuccess(state);
   }
 
-  async #completeSuccess(state) {
+  #scheduleSettlementProbe(state) {
+    if (state.done || state.cancelKind !== undefined || state.settlementTimer !== undefined) return;
+    state.settlementTimer = setTimeout(() => {
+      state.settlementTimer = undefined;
+      void this.#probeSettlement(state);
+    }, this.settlementProbeMs);
+  }
+
+  async #probeSettlement(state) {
     if (state.done || state.completing || state.cancelKind !== undefined) return;
     state.completing = true;
     try {
       const current = await this.#command(state, "get_state");
-      const reportedProvider = current?.model?.provider;
-      const reportedModel = current?.model?.id;
-      const reportedEffort = current?.thinkingLevel;
-      if (reportedProvider !== state.spec.binding.provider || reportedModel !== state.spec.binding.model || reportedEffort !== state.spec.binding.effort) {
-        await this.#terminate(state, "binding mismatch");
-        if (!state.done) this.#finish(state, resultFor(state, "execution_failed", "", `Runtime binding mismatch: ${String(reportedProvider)}/${String(reportedModel)}:${String(reportedEffort)}`));
+      const idle = current?.isStreaming === false && current?.isCompacting === false && current?.pendingMessageCount === 0;
+      if (idle) {
+        this.#emit(state, "settlement_reconciled", { reason: "terminal output with idle RPC state" });
+        await this.#finishSuccess(state, current);
         return;
       }
-      this.#emit(state, "binding_verified", { provider: reportedProvider, model: reportedModel, effort: reportedEffort });
-      this.#finish(state, { ...resultFor(state, "success", state.finalText), sessionId: current.sessionId });
-      state.child?.stdin?.end();
+    } catch (error) {
+      if (!state.done) this.#emit(state, "diagnostic", { message: `Settlement probe failed: ${errorMessage(error)}` });
+    } finally {
+      if (!state.done) state.completing = false;
+    }
+    this.#scheduleSettlementProbe(state);
+  }
+
+  async #completeSuccess(state) {
+    if (state.done || state.completing || state.cancelKind !== undefined) return;
+    clearTimeout(state.settlementTimer);
+    state.settlementTimer = undefined;
+    state.completing = true;
+    try {
+      const current = await this.#command(state, "get_state");
+      await this.#finishSuccess(state, current);
     } catch (error) {
       if (!state.done) this.#finish(state, resultFor(state, "execution_failed", state.finalText, errorMessage(error)));
     }
+  }
+
+  async #finishSuccess(state, current) {
+    const reportedProvider = current?.model?.provider;
+    const reportedModel = current?.model?.id;
+    const reportedEffort = current?.thinkingLevel;
+    if (reportedProvider !== state.spec.binding.provider || reportedModel !== state.spec.binding.model || reportedEffort !== state.spec.binding.effort) {
+      await this.#terminate(state, "binding mismatch");
+      if (!state.done) this.#finish(state, resultFor(state, "execution_failed", "", `Runtime binding mismatch: ${String(reportedProvider)}/${String(reportedModel)}:${String(reportedEffort)}`));
+      return;
+    }
+    this.#emit(state, "binding_verified", { provider: reportedProvider, model: reportedModel, effort: reportedEffort });
+    this.#finish(state, { ...resultFor(state, "success", state.finalText), sessionId: current.sessionId });
+    state.child?.stdin?.end();
+    void this.#retireSuccessfulProcess(state);
+  }
+
+  async #retireSuccessfulProcess(state) {
+    await this.#waitForClose(state, this.killGraceMs);
+    if (!state.closed) state.child?.kill?.("SIGTERM");
+    await this.#waitForClose(state, this.killGraceMs);
+    if (!state.closed) state.child?.kill?.("SIGKILL");
+  }
+
+  async #waitForClose(state, timeoutMs) {
+    if (state.closed) return;
+    let timer;
+    await Promise.race([
+      state.closePromise,
+      new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+    ]);
+    clearTimeout(timer);
   }
 
   #command(state, type) {
@@ -213,9 +266,9 @@ export class PiRpcExecutionAdapter {
     try { state.child?.stdin?.write(`${JSON.stringify({ id: `${state.executionId}:abort`, type: "abort" })}\n`); } catch {}
     await delay(Math.min(100, this.killGraceMs));
     if (!state.closed) state.child?.kill?.("SIGTERM");
-    await Promise.race([state.closePromise, delay(this.killGraceMs)]);
+    await this.#waitForClose(state, this.killGraceMs);
     if (!state.closed) state.child?.kill?.("SIGKILL");
-    await Promise.race([state.closePromise, delay(this.killGraceMs)]);
+    await this.#waitForClose(state, this.killGraceMs);
     const outcome = state.closed ? (state.cancelKind ?? "cancelled") : "outcome_unknown";
     if (!state.done) this.#finish(state, resultFor(state, outcome, state.finalText, state.closed ? undefined : "Process termination could not be confirmed."));
     return { executionId: state.executionId, outcome: outcome === "outcome_unknown" ? "outcome_unknown" : "cancelled" };
@@ -234,6 +287,8 @@ export class PiRpcExecutionAdapter {
     state.done = true;
     state.result = result;
     clearTimeout(state.timeout);
+    clearTimeout(state.settlementTimer);
+    state.settlementTimer = undefined;
     this.#emit(state, "terminal", { outcome: result.outcome });
     for (const pending of state.commands.values()) pending.reject(new Error("Execution ended."));
     state.commands.clear();

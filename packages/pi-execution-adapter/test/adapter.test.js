@@ -26,7 +26,13 @@ function fakeRpc(options = {}) {
   child.stderr = new PassThrough();
   child.closed = false;
   let input = "";
-  child.stdin = new Writable({ write(chunk, _encoding, callback) { input += String(chunk); drain(); callback(); } });
+  child.stdin = new Writable({
+    write(chunk, _encoding, callback) { input += String(chunk); drain(); callback(); },
+    final(callback) {
+      if (options.closeOnStdinEnd !== false) queueMicrotask(() => child.emit("close", 0, null));
+      callback();
+    },
+  });
   child.kill = (signal) => { child.kills.push(signal); if (options.confirmKill !== false) queueMicrotask(() => child.emit("close", null, signal)); return true; };
   child.kills = [];
   child.commands = [];
@@ -35,15 +41,15 @@ function fakeRpc(options = {}) {
     for (;;) {
       const index = input.indexOf("\n"); if (index < 0) return;
       const command = JSON.parse(input.slice(0, index)); input = input.slice(index + 1); child.commands.push(command);
-      if (command.type === "get_state") send({ id: command.id, type: "response", command: "get_state", success: true, data: { model: { provider: options.provider ?? "anthropic", id: options.model ?? "claude-test" }, thinkingLevel: options.effort ?? "high", sessionId: "child-session" } });
+      if (command.type === "get_state") send({ id: command.id, type: "response", command: "get_state", success: true, data: { model: { provider: options.provider ?? "anthropic", id: options.model ?? "claude-test" }, thinkingLevel: options.effort ?? "high", sessionId: "child-session", isStreaming: false, isCompacting: false, pendingMessageCount: 0 } });
       if (command.type === "abort" && options.settleOnAbort) queueMicrotask(() => send({ type: "agent_settled" }));
       if (command.type === "prompt") {
         send({ id: command.id, type: "response", command: "prompt", success: true });
         if (!options.hang) queueMicrotask(() => {
           send({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "secret reasoning" } });
           send({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "src" } });
-          send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Compact result" }] } });
-          send({ type: "agent_settled" });
+          send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Compact result" }], stopReason: "stop" } });
+          if (!options.omitSettled) send({ type: "agent_settled" });
         });
       }
     }
@@ -92,6 +98,20 @@ test("launches with degraded quota telemetry and makes the degradation observabl
   assert.equal(result.quotaTelemetryStatus, "stale");
   await collecting;
   assert.equal(observations.some((value) => value.type === "quota_degraded" && value.detail?.error === "Claude sign-in required"), true);
+});
+
+test("reconciles terminal output when the settled event is missing but RPC state is idle", async () => {
+  const adapter = new PiRpcExecutionAdapter({
+    clock: () => now,
+    spawn: () => fakeRpc({ omitSettled: true }),
+    settlementProbeMs: 1,
+    timeoutMs: 20,
+    killGraceMs: 1,
+  });
+  const receipt = await adapter.dispatch(spec());
+  const result = await adapter.result(receipt.executionId);
+  assert.equal(result.outcome, "success");
+  assert.equal(result.text, "Compact result");
 });
 
 test("launches when quota telemetry is unavailable", async () => {
@@ -151,6 +171,15 @@ test("distinguishes confirmed timeout from an unknown termination outcome", asyn
   const unknown = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true, confirmKill: false }), timeoutMs: 1, killGraceMs: 1 });
   const unknownReceipt = await unknown.dispatch(spec());
   assert.equal((await unknown.result(unknownReceipt.executionId)).outcome, "outcome_unknown");
+});
+
+test("forces a successful RPC child to terminate when graceful stdin shutdown hangs", async () => {
+  const child = fakeRpc({ closeOnStdinEnd: false });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec());
+  assert.equal((await adapter.result(receipt.executionId)).outcome, "success");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(child.kills.includes("SIGTERM"), true);
 });
 
 test("reports non-blocking status and list snapshots for background reconciliation", async () => {
