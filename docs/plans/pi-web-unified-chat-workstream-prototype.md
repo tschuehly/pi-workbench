@@ -6,6 +6,12 @@ Status: active working prototype
 
 `docs/research/reports/pi-web-unified-chat-workstream-prototype.html` is the canonical interaction prototype for ongoing owner judgment. Iterate product slices there before production planning. The prototype is not protocol authority or production code; accepted interactions must still be reconciled with the contracts and implemented through a separate production plan.
 
+## Owner-pinned direction
+
+Standalone Chats are a required product destination. Do not fold every Chat into an automatically created Workstream merely to fit the current V1 protocol. The prototype must preserve a lightweight standalone conversation path while making any later transition into durable Workstream context explicit.
+
+This direction intentionally extends beyond V1, where every interactive session currently starts in a Workstream. The prototype remains the place to validate that extension; production work requires a separate protocol and implementation decision.
+
 ## Outcome
 
 Replace the current prototype’s additive layout with one coherent interaction model:
@@ -23,7 +29,7 @@ Only the working prototype is in scope:
 - use `docs/research/reports/pi-web-workbench-ux-prototype.html` as a read-only interaction reference;
 - do not change PI WEB, the Workbench adapter, the Workstream Store, contracts, or schemas.
 
-The result is an interactive working example for human validation. It does not claim that standalone sessions or promotion are supported by the current protocol. Production implementation receives a separate plan only after the prototype is accepted.
+The result is an interactive working example for human validation. Standalone Chats are required product behavior, but neither standalone session ownership nor promotion is supported by the current protocol. Production implementation receives a separate plan only after the prototype is accepted.
 
 ## Interaction contract
 
@@ -116,4 +122,4 @@ Browser-test the final working prototype at desktop and narrow widths. Required 
 
 Completion means one self-contained HTML prototype demonstrates every required state and transition with in-memory fixtures, working pointer and keyboard interactions, resizable panels, and responsive layouts.
 
-After human acceptance, record which interactions won and create a separate production implementation plan. That later plan must reconcile the current contract requirement that every interactive session starts in a Workstream before proposing standalone Chats or promotion. No production or protocol change belongs to this prototype task.
+After human acceptance, record which interactions won and create a separate production implementation plan. That later plan must explicitly extend the current contract—where every interactive session starts in a Workstream—to support required standalone Chats and the accepted transition into durable Workstream context. Do not remove standalone Chats simply to preserve the V1 constraint. No production or protocol change belongs to this prototype task.
