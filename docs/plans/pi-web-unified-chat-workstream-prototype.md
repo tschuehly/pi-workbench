@@ -6,6 +6,12 @@ Status: active working prototype
 
 `docs/research/reports/pi-web-unified-chat-workstream-prototype.html` is the canonical interaction prototype for ongoing owner judgment. Iterate product slices there before production planning. The prototype is not protocol authority or production code; accepted interactions must still be reconciled with the contracts and implemented through a separate production plan.
 
+## Owner-pinned direction
+
+Standalone Chats are a required product destination. Do not fold every Chat into an automatically created Workstream merely to fit the current V1 protocol. The prototype must preserve a lightweight standalone conversation path and support both explicit relationships with durable Workstream context: promotion changes the Chat into a Workstream session, while linking leaves the Chat standalone and adds a Workstream reference.
+
+This direction intentionally extends beyond V1, where every interactive session currently starts in a Workstream. The prototype remains the place to validate that extension; production work requires a separate protocol and implementation decision.
+
 ## Outcome
 
 Replace the current prototype’s additive layout with one coherent interaction model:
@@ -23,7 +29,7 @@ Only the working prototype is in scope:
 - use `docs/research/reports/pi-web-workbench-ux-prototype.html` as a read-only interaction reference;
 - do not change PI WEB, the Workbench adapter, the Workstream Store, contracts, or schemas.
 
-The result is an interactive working example for human validation. It does not claim that standalone sessions or promotion are supported by the current protocol. Production implementation receives a separate plan only after the prototype is accepted.
+The result is an interactive working example for human validation. Standalone Chats are required product behavior, but neither standalone session ownership nor promotion is supported by the current protocol. Production implementation receives a separate plan only after the prototype is accepted.
 
 ## Interaction contract
 
@@ -33,7 +39,7 @@ The middle pane has three destination states:
 2. **Workstream Brief** — continuation, changes, remaining work, Human Tasks, session updates, and session index.
 3. **Workstream Session** — the selected Workstream session’s conversation and live decisions.
 
-A Workstream row opens state 2. A session row or horizontal session tab opens state 3. Chat, Context, Files, and Git are peer middle surfaces; switching surfaces does not change the selected standalone or Workstream session. Terminal is a checkout-labelled bottom dock scoped to the explicit session anchor.
+A Workstream row opens state 2. A session row or horizontal session tab opens state 3. Chat, Context, Files, and Git are peer middle surfaces; switching surfaces does not change the selected standalone or Workstream session. Terminal is a checkout-labelled bottom dock scoped to the explicit session anchor. Do not add a second status/navigation bar beneath the global toolbar: anchor and checkpoint state remain available in session navigation, Context, the Session menu, and Terminal.
 
 ## Delivery sequence
 
@@ -74,7 +80,7 @@ Render illustrative durable Human Tasks in the Workstream Context tab with answe
 
 ### 5. Rebuild Context, tools, history, and Terminal
 
-Standalone Chat exposes Chat, Files, and Git as peer middle surfaces. A Workstream session also exposes Context. Context contains the brief summary, durable Human Tasks, selected-session checkpoint, links, and anchor. Files, Git, and the Terminal dock remain scoped to the selected session. Remember the selected surface and Terminal state per session in prototype memory.
+Standalone Chat exposes Chat, Files, and Git as peer middle surfaces. A Workstream session also exposes Context. Context contains the brief summary, durable Human Tasks, selected-session checkpoint, links, and anchor. Files, Git, and the Terminal dock remain scoped to the selected session. Remember the selected surface and Terminal state per session in prototype memory. Show selected-session context-window consumption beside the composer as used tokens, capacity, percentage, and a compact meter; warn visually at high usage.
 
 Keep message history out of the permanent navbar. Double Escape opens earlier conversation points, and the Session menu provides a discoverable entry. Continuing from an earlier point returns to Chat and branches from that point.
 
@@ -89,9 +95,14 @@ Add separate contextual menus:
 
 Request checkpoint demonstrates the attended propose → correct → confirm interaction in memory. Only confirmation changes the displayed latest checkpoint; a simulated failure leaves the previous confirmation visible with an explicit failure state. Menu labels and placement must make ownership visible.
 
-### 7. Retain promotion as a bounded transition
+### 7. Support two bounded standalone-to-Workstream relationships
 
-A standalone Chat has one Promote action. Confirmation collects the Workstream title and displays the existing Chat and checkout association. Confirmation preserves the same conversation and opens the resulting Workstream session state. No separate full-screen promotion-preview state is allowed.
+A standalone Chat offers two explicit operations:
+
+- **Promote into a Workstream:** confirmation collects the Workstream title, preserves the same conversation and checkout association, and opens the resulting Workstream session state.
+- **Link to a Workstream:** confirmation selects an existing Workstream, keeps the Chat standalone, and adds a reference visible from the Chat and Workstream context.
+
+Do not conflate the two operations or silently change conversation ownership. No separate full-screen transition-preview state is allowed.
 
 ### 8. Verify the complete prototype
 
@@ -106,8 +117,10 @@ Browser-test the final working prototype at desktop and narrow widths. Required 
 - answer a durable Human Task, inspect its receipt, resolve it separately, and open its source session;
 - request a checkpoint, correct the proposal, confirm it, and inspect a failed proposal without losing the latest confirmation;
 - switch surfaces and the Terminal dock across differently anchored sessions;
+- confirm the redundant status bar is absent and context-window usage changes with the selected session, including the high-usage warning;
 - open history with Double Escape and continue from an earlier point as a branch;
 - promote a Chat without changing its transcript;
+- link a Chat to an existing Workstream while confirming it remains standalone;
 - operate every menu by pointer and keyboard;
 - confirm no duplicate Workstream lists, actions, session navigation, or decision records.
 
@@ -115,4 +128,4 @@ Browser-test the final working prototype at desktop and narrow widths. Required 
 
 Completion means one self-contained HTML prototype demonstrates every required state and transition with in-memory fixtures, working pointer and keyboard interactions, resizable panels, and responsive layouts.
 
-After human acceptance, record which interactions won and create a separate production implementation plan. That later plan must reconcile the current contract requirement that every interactive session starts in a Workstream before proposing standalone Chats or promotion. No production or protocol change belongs to this prototype task.
+After human acceptance, record which interactions won and create a separate production implementation plan. That later plan must explicitly extend the current contract—where every interactive session starts in a Workstream—to support required standalone Chats and the accepted transition into durable Workstream context. Do not remove standalone Chats simply to preserve the V1 constraint. No production or protocol change belongs to this prototype task.

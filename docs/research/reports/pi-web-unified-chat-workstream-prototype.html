@@ -54,14 +54,14 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .section-title{display:flex;align-items:center;justify-content:space-between;margin:12px 10px 4px;color:var(--muted);font-size:11px;font-weight:750;letter-spacing:.05em;text-transform:uppercase}
 .nav-list{display:grid;gap:2px;padding:0 8px}
 .nav-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:8px;width:100%;border-color:transparent;background:transparent;padding:9px 8px;text-align:left}
-.nav-row:hover{background:var(--hover)}.nav-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.nav-row:hover{background:var(--hover)}.nav-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}.nav-row.selected .meta{color:var(--text)}
 .nav-main{min-width:0;display:grid;gap:3px}.nav-main .row-top{display:flex;align-items:center;gap:8px;min-width:0}.nav-main strong{font-size:13.5px}
 .meta{color:var(--muted);font-size:11px}
 .continuation-snip{color:var(--text);font-size:12px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .status-line{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:1px;color:var(--muted);font-size:11px}.status-line .s{display:inline-flex;align-items:center;gap:4px}
 .s-dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:0 0 auto}.s-dot.need{background:var(--orange)}.s-dot.run{background:var(--green)}
 .session-row{display:grid;grid-template-columns:minmax(0,1fr);width:100%;border:0;border-radius:0;background:transparent;padding:11px 10px;text-align:left}
-.session-row:hover{background:var(--hover)}.session-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.session-row:hover{background:var(--hover)}.session-row.selected{background:color-mix(in srgb,var(--accent) 16%,transparent)}.session-row.selected .meta,.session-row.selected .status-line{color:var(--text)}
 .sessions-wrap{border-bottom:1px solid var(--border)}
 /* subagent child executions */
 .child-block{margin:0 8px 6px 26px;border-left:1px solid var(--border);padding-left:8px}
@@ -78,7 +78,6 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .workstream-strip button{flex:0 0 auto;border-color:transparent;background:transparent;padding:5px 9px;color:var(--muted)}
 .workstream-strip button:hover{background:var(--hover)}.workstream-strip button.active{border-color:var(--border);background:var(--canvas);color:var(--bright);font-weight:650}
 .workstream-strip .strip-id{font-weight:700;color:var(--bright)}.strip-div{width:1px;height:22px;background:var(--border);flex:0 0 auto;margin:0 2px}
-.anchor-bar{min-height:38px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:7px 16px;color:var(--muted);font-size:12px;flex:0 0 auto}.anchor-bar .anchor{min-width:0;color:var(--text)}.anchor-bar .push{margin-left:auto;align-items:center;gap:7px}.anchor-bar .mobile-action{display:none}
 .surface-wrap{flex:1 1 auto;min-height:0;display:flex;min-width:0}
 /* chat surface */
 .chat{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
@@ -90,7 +89,7 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .composer{border-top:1px solid var(--border);padding:12px max(16px,calc((100% - 900px)/2)) 14px;flex:0 0 auto}
 .composer-box{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;border:1px solid var(--border);border-radius:9px;background:var(--canvas);padding:10px}
 .composer input{min-width:0;border:0;outline:0;background:transparent;color:var(--bright);padding:5px}
-.composer-meta{display:flex;justify-content:space-between;margin-top:8px;color:var(--muted);font-size:11px}
+.composer-meta{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:8px;color:var(--muted);font-size:11px}.context-meter{display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums}.context-meter strong{color:var(--text);font-weight:650}.context-bar{display:block;width:88px;height:5px;overflow:hidden;border-radius:99px;background:var(--surface2)}.context-bar i{display:block;width:var(--usage);height:100%;border-radius:inherit;background:var(--accent)}.context-meter.warning .context-bar i{background:var(--orange)}.context-meter.warning strong{color:var(--orange)}
 /* live decision */
 .live-decision{margin:6px 4px 2px;border:1px solid var(--accent2);border-radius:9px;background:color-mix(in srgb,var(--accent) 9%,var(--canvas));padding:13px}
 .live-decision .ld-tag{display:flex;align-items:center;gap:7px;margin-bottom:5px;color:var(--accent);font-size:11px;font-weight:750;letter-spacing:.04em;text-transform:uppercase}
@@ -186,7 +185,7 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .overlay-pane{position:fixed;z-index:70;top:var(--topbar-h);bottom:0;left:0;width:min(320px,86vw);overflow:auto;background:var(--surface);border-right:1px solid var(--border);box-shadow:var(--shadow);display:flex;flex-direction:column}
 .overlay-head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding:10px 12px}
 .history-pane{position:fixed;z-index:75;inset:var(--topbar-h) 0 0;display:flex;flex-direction:column;background:var(--canvas)}.history-head{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);background:var(--surface);padding:12px 18px}.history-head h2{font-size:16px}.history-head p{color:var(--muted);font-size:12px}.history-head .push{margin-left:auto}.history-inner{width:min(780px,100%);margin:0 auto;padding:24px 20px;overflow:auto}.history-tree{margin:0 0 18px 12px;border-left:1px solid var(--border);padding-left:18px}.history-node{position:relative;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;border:0;border-radius:7px;background:transparent;padding:10px 12px;text-align:left}.history-node::before{content:"";position:absolute;left:-19px;top:22px;width:18px;border-top:1px solid var(--border)}.history-node:hover{background:var(--hover)}.history-node.current{background:color-mix(in srgb,var(--accent) 12%,transparent)}.history-node strong,.history-node small{display:block}.history-node small{margin-top:3px;color:var(--muted)}.history-role{color:var(--accent);font-size:10px;font-weight:750;letter-spacing:.05em}.history-foot{border-top:1px solid var(--border);padding-top:14px;color:var(--muted);font-size:12px}.kbd-chip{border:1px solid var(--border);border-radius:4px;background:var(--canvas);padding:2px 6px;color:var(--muted);font:11px ui-monospace,monospace}
-@media(max-width:900px){:root{--topbar-h:96px}.topbar{grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:48px 48px;gap:0 9px;padding:0 12px}.scope{grid-column:2;grid-row:1}.work-context{display:contents}.top-tools{grid-column:1/-1;grid-row:2;align-self:stretch;overflow-x:auto;border-top:1px solid var(--border);scrollbar-width:none}.top-tools::-webkit-scrollbar{display:none}.top-tools button{min-height:38px;padding-inline:11px}.topbar .push{grid-column:3;grid-row:1}.top-needs,.top-promote,.prototag{display:none}.body{--lw:0px;--lr:0px}.body>.left-panel,.body>.left-resizer{display:none}.narrow-only{display:flex;gap:6px}.anchor-bar .mobile-action{display:inline-flex}.anchor-bar{padding-inline:12px}.files,.git{grid-template-columns:1fr}.tree,.changes{display:none}.brief-grid{grid-template-columns:1fr}.brief-update,.index-row{grid-template-columns:1fr;gap:5px}.app:has(.topbar.child-mode){grid-template-rows:48px minmax(0,1fr)}.topbar.child-mode{grid-template-rows:48px}.ctx-head,.child-note{align-items:flex-start;flex-direction:column}.ctx-checkpoint{grid-template-columns:1fr}.ctx-reference{grid-template-columns:1fr}.ctx-reference dd{margin-bottom:7px}.child-facts{grid-template-columns:1fr}.child-note .push{margin-left:0!important;width:100%;flex-wrap:wrap}}
+@media(max-width:900px){:root{--topbar-h:96px}.topbar{grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:48px 48px;gap:0 9px;padding:0 12px}.scope{grid-column:2;grid-row:1}.work-context{display:contents}.top-tools{grid-column:1/-1;grid-row:2;align-self:stretch;overflow-x:auto;border-top:1px solid var(--border);scrollbar-width:none}.top-tools::-webkit-scrollbar{display:none}.top-tools button{min-height:38px;padding-inline:11px}.topbar .push{grid-column:3;grid-row:1}.top-needs,.prototag{display:none}.body{--lw:0px;--lr:0px}.body>.left-panel,.body>.left-resizer{display:none}.narrow-only{display:flex;gap:6px}.files,.git{grid-template-columns:1fr}.tree,.changes{display:none}.brief-grid{grid-template-columns:1fr}.brief-update,.index-row{grid-template-columns:1fr;gap:5px}.app:has(.topbar.child-mode){grid-template-rows:48px minmax(0,1fr)}.topbar.child-mode{grid-template-rows:48px}.ctx-head,.child-note{align-items:flex-start;flex-direction:column}.ctx-checkpoint{grid-template-columns:1fr}.ctx-reference{grid-template-columns:1fr}.ctx-reference dd{margin-bottom:7px}.child-facts{grid-template-columns:1fr}.composer-meta{align-items:flex-start;flex-direction:column;gap:6px}.context-meter{width:100%}.context-bar{flex:1}.child-note .push{margin-left:0!important;width:100%;flex-wrap:wrap}}
 @media(min-width:901px){.overlay-pane{display:none!important}}
 </style>
 </head>
@@ -256,6 +255,11 @@ const sessions={
   user:'Summarize the benchmark evidence without reopening every transcript.',assistant:'The latest confirmed update favors the high-effort lead binding; one Human Task remains before closure.',
   decision:{kind:'choice',prompt:'Adopt the high-effort lead binding as the default?',detail:'Confirm the default before the Workstream closes.',options:['Yes','No','Change']}}
 };
+const contextWindows={
+ 'chat:release':{used:172,limit:256},'chat:photo':{used:91,limit:256},
+ 'session:shape':{used:148,limit:256},'session:contracts':{used:219,limit:256},
+ 'session:inspect':{used:64,limit:256},'session:modelcompare':{used:118,limit:256}
+};
 const subagents={
  'sa-challenge':{id:'sa-challenge',session:'shape',title:'Challenge the shell hierarchy',status:'running',profile:'reviewer',role:'gpt-adversary',binding:'anthropic/claude-opus-4-6 · high',quota:'admitted',elapsed:'2m 14s',sessionId:'019fd741-35cc-7c02-aabc-477b65d53910',task:'Review the unified shell against the Workstream and graphical-attention contracts. Name structural contradictions, accessibility risks, and the smallest viable corrections. Do not edit files.',result:'',observations:[['10:46:02','Resolved runtime binding and verified model'],['10:46:05','Read Workstream and interface contracts'],['10:47:21','Comparing collapsed-nav and Human Task states']]},
  'sa-seams':{id:'sa-seams',session:'shape',title:'Map incumbent navigation seams',status:'success',profile:'scout',role:'system-comprehension',binding:'openai/gpt-5.4-mini · medium',quota:'degraded-quota-telemetry',elapsed:'3m 08s',sessionId:'019fd72a-8b7b-75df-8fa8-783fd64b7be9',task:'Inspect the PI WEB shell and identify which navigation, session, and tool surfaces are core-owned versus Workbench-owned. Return file paths and a compact ownership map. Do not edit files.',result:'Mapped five host seams. PI WEB owns global controls and session tools; the adapter owns Workstream selection, canonical session association, and the hierarchy that mounts the selected Chat surface.',observations:[['10:38:14','Launched with degraded quota telemetry'],['10:38:29','Inspected host contributions and session controller'],['10:41:22','Returned compact ownership map']]},
@@ -305,7 +309,7 @@ const state={
  terminal:{open:false,height:210},historyPoint:{},editorDraft:{},
  theme:localStorage.getItem('unified-prototype-theme')||'dark',
  panels:{left:{width:300}},
- menu:'',dialog:null,overlay:'',notice:'',
+ menu:'',dialog:null,overlay:'',notice:'',chatLinks:{},
  sent:{},live:{},taskAnswers:{},taskAnswerAt:{},taskResolved:{},
  checkpoints:{shape:{text:'Unified shell mapped; navigation and active work read as one system.',at:'Confirmed 8 min ago'},contracts:{text:'Contract reconciliation paused pending the shell decision.',at:'Confirmed yesterday'},inspect:{text:'Host-owned controls and surface seams mapped.',at:'Confirmed 42 min ago'},modelcompare:{text:'High-effort lead binding favored by current evidence.',at:'Confirmed 6 min ago'}},
  checkpointFailure:{}
@@ -329,6 +333,7 @@ function statusLabel(c){const v=childStatus(c);return v==='running'?'Running':v=
 function decisionPending(kind,id){const ent=kind==='chat'?standaloneChats[id]:sessions[id];if(!ent||!ent.decision)return false;const st=state.live[kind+':'+id];return !st||st.status!=='answered'}
 function totalNeedsYou(){return Object.values(workstreams).reduce((a,w)=>a+unansweredTasks(w).length,0)}
 function navFoot(){return `<div class="nav-foot"><strong>Needs you · ${totalNeedsYou()}</strong><span>across ${Object.keys(workstreams).length} Workstreams · Lead · gpt-5.6-sol · medium</span></div>`}
+function contextMeter(){const u=contextWindows[scopeKey()]||{used:0,limit:256},pct=Math.round(u.used/u.limit*100),warn=pct>=80;return `<span class="context-meter ${warn?'warning':''}" title="${u.used}k of ${u.limit}k tokens in this session context"><span>Context <strong>${u.used}k / ${u.limit}k · ${pct}%</strong></span><span class="context-bar" role="progressbar" aria-label="Context window usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" style="--usage:${pct}%"><i></i></span></span>`}
 /* ---------- top bar + menus ---------- */
 function topbar(){
  const sessionView=state.destination!=='workstream',w=wsMode()?currentWorkstream():null;
@@ -336,7 +341,7 @@ function topbar(){
  let actions='';
  if(state.destination==='workstream')actions=`<button class="primary" data-open-session="${w.sessionIds[0]}">Continue</button><button class="icon" data-menu-toggle="workstream" aria-label="Workstream menu">${icon('dots')}</button>`;
  else if(state.destination==='workstream-session')actions=`<button class="icon" data-menu-toggle="session" aria-haspopup="true" aria-expanded="${state.menu==='session'}" aria-label="Session menu">${icon('dots')}</button>`;
- else actions=`<button class="primary top-promote" data-promote>Promote</button>`;
+ else actions=`<button class="primary top-promote" data-promote>Promote</button><button class="icon" data-menu-toggle="standalone" aria-haspopup="true" aria-expanded="${state.menu==='standalone'}" aria-label="Standalone Chat menu">${icon('dots')}</button>`;
  return `<header class="topbar ${state.childChat?'child-mode':''}">
   <button class="brand" data-menu-toggle="pi" aria-haspopup="true" aria-expanded="${state.menu==='pi'}" aria-label="PI WEB menu"><span class="pi-mark">π</span></button>
   <div class="scope"><strong>Chats + Workstreams</strong></div>
@@ -356,6 +361,16 @@ function piMenu(){
   <div class="sep"></div>
   <button data-act="theme">Theme &amp; presentation<span class="kbd">${state.theme==='dark'?'Dark':'Light'}</span></button>
   <button data-act="settings">Settings</button>
+ </nav>`;
+}
+function standaloneMenu(){
+ if(state.menu!=='standalone')return'';
+ const linked=state.chatLinks[state.standaloneId],w=linked?workstreams[linked]:null;
+ return `<nav class="menu" data-menu-panel style="top:calc(var(--topbar-h) + 4px);right:12px" aria-label="Standalone Chat menu">
+  <span class="menu-label">Standalone Chat</span>
+  <button data-act="chat-link">${w?`Change Workstream link · ${esc(w.title)}`:'Link to Workstream…'}</button>
+  <div class="sep"></div>
+  <button data-promote>Promote into a Workstream…</button>
  </nav>`;
 }
 function workstreamMenu(){
@@ -382,7 +397,7 @@ function sessionMenu(){
 /* ---------- left navigation ---------- */
 function rootNav(){
  const total=totalNeedsYou();
- const chats=Object.values(standaloneChats).map(c=>{const pending=decisionPending('chat',c.id);const sel=state.destination==='standalone-chat'&&state.standaloneId===c.id;return `<button class="nav-row ${sel?'selected':''}" data-open-chat="${c.id}"><span class="nav-main"><strong class="truncate">${esc(c.title)}</strong><span class="meta">${esc(c.anchor)} · ${esc(c.time)}</span></span>${pending?`<span class="badge orange">Needs you</span>`:'<span class="s-dot"></span>'}</button>`}).join('');
+ const chats=Object.values(standaloneChats).map(c=>{const pending=decisionPending('chat',c.id),linked=state.chatLinks[c.id],linkText=linked?` · linked to ${workstreams[linked].title}`:'';const sel=state.destination==='standalone-chat'&&state.standaloneId===c.id;return `<button class="nav-row ${sel?'selected':''}" data-open-chat="${c.id}"><span class="nav-main"><strong class="truncate">${esc(c.title)}</strong><span class="meta">${esc(c.anchor)} · ${esc(c.time+linkText)}</span></span>${pending?`<span class="badge orange">Needs you</span>`:'<span class="s-dot"></span>'}</button>`}).join('');
  const ws=Object.values(workstreams).map(w=>{const need=unansweredTasks(w).length;return `<button class="nav-row ws-row" data-open-workstream="${w.id}"><span class="nav-main"><span class="row-top"><strong class="truncate">${esc(w.title)}</strong><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale'}</span>${w.closed?'<span class="badge">Closed</span>':''}</span><span class="continuation-snip">${esc(w.continuation)}</span><span class="meta">${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · ${need?need+' need you':'no open tasks'}</span></span></button>`}).join('');
  return `<aside class="panel left-panel">
   <div class="nav-topblock"><div class="nav-head"><strong style="flex:1;padding-left:2px">Navigator</strong><button class="icon" data-collapse-nav aria-label="Collapse navigation">${icon('collapse')}</button></div><div class="ws-head-status"><span class="badge ${total?'orange':''}">Needs you · ${total}</span><span class="muted">${Object.keys(workstreams).length} Workstreams</span></div></div>
@@ -442,7 +457,7 @@ function chatSurface(){
    ${point>=2?`<div class="exchange assistant"><div class="message-meta"><span class="role">ASSISTANT</span><span>openai-codex/gpt-5.6-sol · medium</span></div><div class="message-copy">${esc(e.assistant)}</div></div>`:''}
    ${sent}${point>=3?liveDecisionCard():''}
   </div>
-  <div class="composer"><div class="composer-box"><input aria-label="Message Pi" value="${esc(state.editorDraft[key]||'')}" placeholder="Message Pi… Use / for commands, @ for files"><button class="primary" data-send>Send</button></div><div class="composer-meta"><span>openai-codex/gpt-5.6-sol</span><span>↑148k · ↓24k · $3.87</span></div></div>
+  <div class="composer"><div class="composer-box"><input aria-label="Message Pi" value="${esc(state.editorDraft[key]||'')}" placeholder="Message Pi… Use / for commands, @ for files"><button class="primary" data-send>Send</button></div><div class="composer-meta"><span>openai-codex/gpt-5.6-sol · medium</span>${contextMeter()}</div></div>
  </section>`;
 }
 /* ---------- files finder ---------- */
@@ -520,12 +535,6 @@ function briefSurface(){
  </div></main>`;
 }
 /* ---------- center ---------- */
-function anchorBar(){
- const e=currentEntity();
- if(state.destination==='standalone-chat')return `<div class="anchor-bar"><span class="badge">Standalone Chat</span><span class="anchor truncate">${esc(e.anchor)}</span><span class="push mobile-action"><button class="primary" data-promote>Promote</button></span></div>`;
- const w=currentWorkstream(),need=unansweredTasks(w).length;
- return `<div class="anchor-bar"><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale checkpoint'}</span><span class="anchor truncate">${esc(e.anchor)}</span><span class="push mobile-action">${need?`<button data-open-context>Needs you · ${need}</button>`:''}</span></div>`;
-}
 function toolSurface(){
  const t=currentTool();
  if(t==='Files')return filesSurface();
@@ -538,13 +547,14 @@ function centerPane(){
  if(state.destination==='workstream')return `<section class="center">${strip}${briefSurface()}</section>`;
  const body=state.childChat?childChatSurface():`<div class="surface-wrap">${toolSurface()}</div>`;
  const terminal=!state.childChat?(state.terminal.open?terminalPane():terminalDock()):'';
- return `<section class="center">${strip}${anchorBar()}${body}${terminal}</section>`;
+ return `<section class="center">${strip}${body}${terminal}</section>`;
 }
 /* ---------- resizers, dialogs, overlays ---------- */
 function leftResizer(){return `<div class="resizer left-resizer" data-resize="left"></div>`}
 function dialogView(){
  const d=state.dialog;if(!d)return'';let body;
  if(d.type==='promote'){const c=standaloneChats[state.standaloneId];body=`<span class="badge orange">Durable context</span><h2>Promote this Chat to a Workstream</h2><p>The current conversation stays in place and becomes the Workstream's first session.</p><label>Workstream title<input value="${esc(d.title)}" data-dialog-input aria-label="Workstream title"></label><div class="dialog-facts"><span>Chat · ${esc(c.title)}</span><span>Checkout · ${esc(c.anchor)}</span><span>Association · permanent in this prototype</span></div><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Create Workstream</button></div>`;}
+ else if(d.type==='linkchat'){const c=standaloneChats[d.chatId];body=`<span class="badge">Reference only</span><h2>Link this Chat to a Workstream</h2><p>The Chat stays standalone. The selected Workstream receives a reference for context and discovery.</p><label>Workstream<select data-dialog-workstream aria-label="Workstream">${Object.values(workstreams).filter(w=>!w.closed).map(w=>`<option value="${w.id}" ${d.workstreamId===w.id?'selected':''}>${esc(w.title)}</option>`).join('')}</select></label><div class="dialog-facts"><span>Chat · ${esc(c.title)}</span><span>Conversation ownership · remains standalone</span></div><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Link Chat</button></div>`;}
  else if(d.type==='rename')body=`<h2>Rename Workstream</h2><p>Update the Workstream title in prototype memory.</p><label>Title<input value="${esc(d.value)}" data-dialog-input aria-label="Workstream title"></label><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Rename</button></div>`;
  else if(d.type==='addlink')body=`<h2>Add link</h2><p>Attach a reference link to this Workstream.</p><label>Link<input value="${esc(d.value)}" data-dialog-input placeholder="owner/repo#123 or URL" aria-label="Link"></label><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Add link</button></div>`;
  else if(d.type==='checkpoint'){const s=sessions[d.sessionId];body=`<span class="badge">Attended</span><h2>Request checkpoint · ${esc(s.title)}</h2><p>Pi proposes a checkpoint. Correct the text if needed, then confirm. Only confirmation changes the displayed latest checkpoint.</p><label>Proposed checkpoint<textarea data-dialog-input aria-label="Proposed checkpoint">${esc(d.draft)}</textarea></label><div class="actions"><button data-dialog-cancel>Cancel</button><button data-dialog-fail>Confirm (simulate failure)</button><button class="primary" data-dialog-confirm>Confirm checkpoint</button></div>`;}
@@ -572,8 +582,8 @@ function render(){
  bodyVars();
  const leftEl=state.navCollapsed?'<div class="slot-left"></div>':leftPane();
  const leftRz=state.navCollapsed?'<div class="slot-lr"></div>':leftResizer();
- root.innerHTML=`<div class="app" ${state.dialog||state.overlay?'inert':''}>${topbar()}<div class="body">${leftEl}${leftRz}${centerPane()}</div></div>${piMenu()}${workstreamMenu()}${sessionMenu()}${overlayView()}${dialogView()}${state.notice?`<div class="toast" role="status">${esc(state.notice)}</div>`:''}`;
- if(state.dialog)queueMicrotask(()=>document.querySelector('[data-dialog-input]')?.focus());
+ root.innerHTML=`<div class="app" ${state.dialog||state.overlay?'inert':''}>${topbar()}<div class="body">${leftEl}${leftRz}${centerPane()}</div></div>${piMenu()}${standaloneMenu()}${workstreamMenu()}${sessionMenu()}${overlayView()}${dialogView()}${state.notice?`<div class="toast" role="status">${esc(state.notice)}</div>`:''}`;
+ if(state.dialog)queueMicrotask(()=>document.querySelector('[data-dialog-input],[data-dialog-workstream],[data-dialog-anchor]')?.focus());
 }
 /* ---------- interactions ---------- */
 function notice(t){state.notice=t}
@@ -641,6 +651,7 @@ function handleMenuAct(act){
   case'recovery':notice('Recovery — host-owned control.');break;
   case'settings':notice('Settings — prototype placeholder.');break;
   case'theme':state.theme=state.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=state.theme;localStorage.setItem('unified-prototype-theme',state.theme);notice(`GitHub ${state.theme==='dark'?'Dark':'Light'} applied.`);break;
+  case'chat-link':{const linked=state.chatLinks[state.standaloneId];state.dialog={type:'linkchat',chatId:state.standaloneId,workstreamId:linked||Object.keys(workstreams)[0]};break}
   case'ws-rename':state.dialog={type:'rename',value:currentWorkstream().title};break;
   case'ws-link':state.dialog={type:'addlink',value:''};break;
   case'ws-close':currentWorkstream().closed=true;notice(`${currentWorkstream().title} marked closed.`);break;
@@ -657,6 +668,7 @@ function confirmDialog(){
   state.checkpoints[sId]={text:'Promoted from standalone Chat; no checkpoint confirmed yet.',at:'No confirmation yet'};
   const from='chat:'+c.id,to='session:'+sId;if(state.sent[from])state.sent[to]=state.sent[from].slice();if(state.live[from])state.live[to]=Object.assign({},state.live[from]);
   state.dialog=null;openSession(sId);notice('Workstream created around the existing Chat; the same conversation was preserved.');return;}
+ if(d.type==='linkchat'){const wsId=document.querySelector('[data-dialog-workstream]')?.value,w=workstreams[wsId],c=standaloneChats[d.chatId];if(!w){notice('Choose a Workstream.');return}state.chatLinks[d.chatId]=wsId;const ref=`Standalone Chat · ${c.title}`;if(!w.links.includes(ref))w.links.push(ref);state.dialog=null;openStandalone(d.chatId);notice(`Chat linked to ${w.title}; it remains standalone.`);return}
  if(d.type==='rename'){if(val)currentWorkstream().title=val;state.dialog=null;notice('Workstream renamed.');return}
  if(d.type==='addlink'){if(val)currentWorkstream().links.push(val);state.dialog=null;notice('Link added.');return}
  if(d.type==='newsession'){const anchor=document.querySelector('[data-dialog-anchor]')?.value||'';d.title=val||'';d.anchor=anchor;if(!val||!anchor){notice('Choose both a session title and an explicit project/workspace anchor.');return}const w=workstreams[d.workstreamId],id='session-'+Date.now();sessions[id]={id,workstreamId:w.id,title:val,anchor,summary:'New attended session',update:'Session created with an explicitly confirmed anchor.',updatedAt:'Just now',user:'Start this attended session from the confirmed anchor.',assistant:'The session is anchored explicitly and ready for attended work.',decision:null};w.sessionIds.push(id);state.checkpoints[id]={text:'No checkpoint confirmed yet.',at:'No confirmation yet'};state.dialog=null;openSession(id);notice(`Session started in ${anchor}.`);return}
