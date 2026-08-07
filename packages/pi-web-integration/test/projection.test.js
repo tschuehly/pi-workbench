@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { dedicatedWorkstreamLayout, parseWorkbenchProjection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
+import { dedicatedMobileControlState, dedicatedWorkstreamLayout, normalizeDedicatedMobilePane, parseWorkbenchProjection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
 import { WorkstreamSessionCoordinator } from "../workstream-session-coordinator.js";
 
@@ -38,6 +38,22 @@ test("dedicated Workstream UI transitions preserve pane state and checkout-scope
   assert.equal(collapsed.tasksPaneOpen, false);
   assert.equal(collapsed.sessionsPaneOpen, true);
   assert.equal(collapsed.tool, "files");
+});
+
+test("legacy mobile Context panes coerce to Workspace and Context state follows the drawer", () => {
+  assert.equal(normalizeDedicatedMobilePane("tasks"), "workspace");
+  assert.equal(transitionDedicatedWorkstreamUi({ mobilePane: "sessions" }, { type: "select-mobile-pane", pane: "tasks" }).mobilePane, "workspace");
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: true }, "context"), {
+    pressed: true,
+    expanded: true,
+    controls: "workstream-context-drawer",
+  });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: false }, "context"), {
+    pressed: false,
+    expanded: false,
+    controls: "workstream-context-drawer",
+  });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: true }, "workspace"), { pressed: true });
 });
 
 test("checkout scope follows the selected Workstream session anchor", () => {
@@ -75,13 +91,18 @@ test("fake Workstream client deterministically lists, inspects, and reconciles t
   const current = await client.list();
   const inspected = await client.inspect("ws-workstream-store");
   const reconciliation = await client.watch({ afterSequence: 0 });
-  const caughtUp = await client.watch({ afterSequence: 12 });
+  const caughtUp = await client.watch({ afterSequence: 16 });
 
   assert.deepEqual(current.map((workstream) => workstream.id), ["ws-workstream-store"]);
-  assert.equal(inspected.sessions.length, 2);
+  assert.equal(current[0].failedSessionCount, 1);
+  assert.equal(current[0].unresolvedHumanTaskCount, 1);
+  assert.equal(inspected.sessions.length, 5);
+  assert.equal(inspected.sessions.find((session) => session.status === "failed")?.launchFailure.reason, "PI WEB could not create the attended session.");
+  assert.equal(inspected.sessions.find((session) => session.checkpointStaleness !== null)?.checkpointStaleness.checkpointId, "checkpoint-before-protocol-change");
+  assert.equal(inspected.humanTasks.find((task) => task.status === "answered")?.answer.optionId, "change");
   assert.equal(reconciliation.mode, "snapshot");
   assert.equal(reconciliation.snapshots.length, 2);
-  assert.deepEqual(caughtUp, { mode: "replay", events: [], nextSequence: 12 });
+  assert.deepEqual(caughtUp, { mode: "replay", events: [], nextSequence: 16 });
 });
 
 test("typed Workstream client uses all operations and persists across web-process service replacement", async () => {
@@ -226,6 +247,11 @@ test("session launch failure records failure and does not retry the host start",
   await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch({ id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false }), /launch exploded/);
   assert.equal(starts, 1);
   assert.deepEqual(records, ["session.pending", "session.failed"]);
+});
+
+test("typed Workstream client rejects malformed canonical success values", async () => {
+  const client = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: { id: "incomplete" } }) });
+  await assert.rejects(client.inspect("ws-1"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
 });
 
 test("typed Workstream client preserves semantic service errors", async () => {

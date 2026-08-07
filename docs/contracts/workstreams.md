@@ -41,7 +41,7 @@ Each Workstream has a concise append-only ledger. Agents append only at meaningf
 
 The ledger may record session association and checkpoint replacement, human-task changes, relevant links, and closure. Records identify their producer and source session. Size limits and validation prevent a session from turning the ledger into standing model context.
 
-Current state is a separate mechanical projection over accepted records. It includes active sessions, each session's latest confirmed checkpoint, unresolved human tasks, relevant links, and closure state. Pi Workbench does not persist a second combined narrative across sessions.
+Current state is a separate mechanical projection over accepted records. It includes pending, active, and failed session associations; each session's latest confirmed checkpoint plus explicit failure or staleness; durable Human Tasks and answer receipts; relevant links; and closure state. Pi Workbench does not persist a second combined narrative across sessions.
 
 ## Checkpointing
 
@@ -50,9 +50,27 @@ concise checkpoint stating what changed, what remains, and the next useful conti
 may correct the proposal before confirming persistence. Only the confirmed checkpoint replaces the
 session's previous checkpoint.
 
+The proposing session writes the checkpoint for the owner who will read it later, following the
+`write-for-humans` skill. Each field leads with its point, uses plain concrete language, names the
+concrete artifacts it refers to, and lets the owner resume without rereading the session. `whatChanged`
+states what now exists or works, `remains` separates what is blocked or still owed, and `next` ends with
+one obvious action the owner can start now.
+
 A failed, rejected, or abandoned proposal remains visible as a checkpoint failure when applicable
-and does not invent continuation state or replace the latest confirmed checkpoint. V1 does not use
-a watcher, background model turn, or fresh model context to create Workstream checkpoints.
+and does not invent continuation state or replace the latest confirmed checkpoint. Staleness changes
+only through an explicit record naming the latest confirmed checkpoint; Chat and tool activity never
+imply it. A later confirmed replacement clears the stale state. V1 does not use a watcher, background
+model turn, or fresh model context to create Workstream checkpoints.
+
+## Human Tasks
+
+A durable answerable Human Task declares a yes/no, finite-choice, or free-text answer kind, explicit
+options where applicable, source-session provenance, and materiality. Answering is a separate,
+revision-checked, idempotent Workstream mutation that records the answer and its receipt. Resolving
+a task is distinct from answering it.
+
+A live PI WEB `ask_user` submission remains live session attention. It is not copied into a durable
+Human Task implicitly, and submitting one does not make a Workstream answer atomic with it.
 
 ## Completion and cleanup
 

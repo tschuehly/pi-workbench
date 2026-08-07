@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "sequence": 12,
+  "sequence": 16,
   "snapshots": [
     {
       "id": "ws-workstream-store",
       "title": "Deliver Workstream continuity",
-      "revision": 4,
+      "revision": 8,
       "createdAt": "2026-07-30T08:00:00.000Z",
       "updatedAt": "2026-07-31T14:20:00.000Z",
       "sessions": [
@@ -22,7 +22,9 @@
             "next": "Define the smallest stable host transport.",
             "references": ["packages/workstream-store"]
           },
-          "checkpointFailure": null
+          "checkpointFailure": null,
+          "checkpointStaleness": null,
+          "launchFailure": null
         },
         {
           "id": "session-interface-probe",
@@ -30,15 +32,126 @@
           "machineId": "studio-mac",
           "projectId": "pi-web",
           "workspaceId": "pi-workbench",
+          "latestCheckpoint": {
+            "id": "checkpoint-interface-prior",
+            "whatChanged": "The first interface probe was recorded.",
+            "remains": "Retry the interrupted checkpoint.",
+            "next": "Review the prior continuation before retrying."
+          },
+          "checkpointFailure": "The latest checkpoint attempt failed; the prior confirmed checkpoint remains available.",
+          "checkpointStaleness": null,
+          "launchFailure": null
+        },
+        {
+          "id": "pending:launch-checkout-probe",
+          "status": "pending",
+          "associationKey": "launch-checkout-probe",
+          "machineId": "studio-mac",
+          "projectId": "pi-web",
+          "workspaceId": "feature/checkout-probe",
           "latestCheckpoint": null,
-          "checkpointFailure": "The latest checkpoint attempt failed; the previous continuation is not current."
+          "checkpointFailure": null,
+          "checkpointStaleness": null,
+          "launchFailure": null
+        },
+        {
+          "id": "pending:launch-failed-probe",
+          "status": "failed",
+          "associationKey": "launch-failed-probe",
+          "machineId": "studio-mac",
+          "projectId": "pi-web",
+          "workspaceId": "feature/failed-probe",
+          "latestCheckpoint": null,
+          "checkpointFailure": null,
+          "checkpointStaleness": null,
+          "launchFailure": {
+            "reason": "PI WEB could not create the attended session.",
+            "recordedAt": "2026-07-31T13:40:00.000Z",
+            "revision": 6,
+            "producer": "pi-web",
+            "sourceSessionId": null
+          }
+        },
+        {
+          "id": "session-stale-checkpoint",
+          "status": "active",
+          "machineId": "local",
+          "projectId": "pi-workbench",
+          "workspaceId": "feature/protocol",
+          "latestCheckpoint": {
+            "id": "checkpoint-before-protocol-change",
+            "whatChanged": "The earlier projection schema was implemented.",
+            "remains": "Reconcile the checkpoint with the reviewed protocol change.",
+            "next": "Confirm a replacement checkpoint."
+          },
+          "checkpointFailure": null,
+          "checkpointStaleness": {
+            "checkpointId": "checkpoint-before-protocol-change",
+            "reason": "The owner accepted a protocol change after this checkpoint was confirmed.",
+            "recordedAt": "2026-07-31T14:10:00.000Z",
+            "revision": 7,
+            "producer": "owner",
+            "sourceSessionId": "session-stale-checkpoint"
+          },
+          "launchFailure": null
         }
       ],
       "humanTasks": [
         {
           "id": "task-review-interface",
-          "title": "Review the Workstreams primary-view behavior",
-          "detail": "Check narrow layout, reconnect state, and focus restoration."
+          "title": "Approve the Workstreams primary-view behavior?",
+          "detail": "Check narrow layout, reconnect state, and focus restoration.",
+          "answerKind": "yes-no",
+          "options": [
+            { "id": "yes", "label": "Yes" },
+            { "id": "no", "label": "No" },
+            { "id": "change", "label": "Change" }
+          ],
+          "sourceSessionId": "session-interface-probe",
+          "materiality": "material",
+          "status": "pending",
+          "answer": null,
+          "answerReceipt": null
+        },
+        {
+          "id": "task-density-choice",
+          "title": "Choose the default desktop density",
+          "answerKind": "choice",
+          "options": [
+            { "id": "comfortable", "label": "Comfortable" },
+            { "id": "compact", "label": "Compact" },
+            { "id": "change", "label": "Change the proposal" }
+          ],
+          "sourceSessionId": "session-store-contract",
+          "materiality": "non-material",
+          "status": "answered",
+          "answer": { "kind": "choice", "optionId": "change" },
+          "answerReceipt": {
+            "answerId": "answer-density-change",
+            "taskId": "task-density-choice",
+            "acceptedRevision": 7,
+            "recordedAt": "2026-07-31T14:05:00.000Z",
+            "producer": "owner",
+            "sourceSessionId": null
+          }
+        },
+        {
+          "id": "task-continuation-note",
+          "title": "Record the desired continuation",
+          "answerKind": "free-text",
+          "options": [],
+          "sourceSessionId": "session-stale-checkpoint",
+          "materiality": "material",
+          "status": "resolved",
+          "answer": { "kind": "free-text", "text": "Replace the stale checkpoint after protocol verification." },
+          "answerReceipt": {
+            "answerId": "answer-continuation-note",
+            "taskId": "task-continuation-note",
+            "acceptedRevision": 8,
+            "recordedAt": "2026-07-31T14:20:00.000Z",
+            "producer": "owner",
+            "sourceSessionId": null
+          }
         }
       ],
       "links": [
