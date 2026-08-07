@@ -1,157 +1,42 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
-set -m
 
-source_path="${BASH_SOURCE[0]}"
-while [[ -L "${source_path}" ]]; do
-  source_dir="$(cd "$(dirname "${source_path}")" && pwd)"
-  source_path="$(readlink "${source_path}")"
-  [[ "${source_path}" = /* ]] || source_path="${source_dir}/${source_path}"
-done
-
-script_dir="$(cd "$(dirname "${source_path}")" && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 app_dir="$(cd "${script_dir}/.." && pwd)"
 workbench_dir="$(cd "${app_dir}/../.." && pwd)"
-pi_web_dir="${PI_WEB_DIR:-$(cd "${workbench_dir}/.." && pwd)/pi-web}"
-pi_web_url="${PI_WEB_URL:-http://127.0.0.1:8505}"
-server_pid=""
-wrapper_pid=""
-watcher_pid=""
-reload_state_dir=""
-check_only=false
-health_url="${pi_web_url%/}/api/machines/local/health"
-
-if [[ "${1:-}" == "--check" ]]; then
-  check_only=true
-elif [[ $# -gt 0 ]]; then
-  echo "Usage: pi-web-mac [--check]" >&2
-  exit 2
+sibling_root="$(cd "$(dirname "${workbench_dir}")" && pwd)"
+if [[ -d "${sibling_root}/pi-web.durable-lifecycle" ]]; then
+  default_pi_web_dir="${sibling_root}/pi-web.durable-lifecycle"
+else
+  default_pi_web_dir="${sibling_root}/pi-web"
 fi
+pi_web_dir="${PI_WEB_DIR:-${default_pi_web_dir}}"
+app_path="${PI_WEB_APP_PATH:-${HOME}/Applications/Pi Workbench.app}"
+open_command="${PI_WEB_OPEN:-/usr/bin/open}"
 
 fail() {
-  echo "PI WEB launcher: $*" >&2
+  echo "PI WEB compatibility adapter: $*" >&2
   exit 1
 }
 
-frontend_is_ready() {
-  curl --fail --silent --show-error --max-time 1 "${pi_web_url}" >/dev/null 2>&1
-}
-
-stack_is_ready() {
-  frontend_is_ready || return 1
-  curl --fail --silent --show-error --max-time 2 "${health_url}" 2>/dev/null \
-    | tr -d '[:space:]' \
-    | grep -q '"ok":true'
-}
-
-stop_processes() {
-  if [[ -n "${watcher_pid}" ]] && kill -0 "${watcher_pid}" 2>/dev/null; then
-    kill "${watcher_pid}" 2>/dev/null || true
-    wait "${watcher_pid}" 2>/dev/null || true
-  fi
-  if [[ -n "${wrapper_pid}" ]] && kill -0 "${wrapper_pid}" 2>/dev/null; then
-    kill -TERM -- "-${wrapper_pid}" 2>/dev/null || true
-    wait "${wrapper_pid}" 2>/dev/null || true
-  fi
-  if [[ -n "${server_pid}" ]] && kill -0 "${server_pid}" 2>/dev/null; then
-    echo "Stopping the PI WEB development server..."
-    kill -TERM -- "-${server_pid}" 2>/dev/null || true
-    wait "${server_pid}" 2>/dev/null || true
-  fi
-  if [[ -n "${reload_state_dir}" ]] && [[ -d "${reload_state_dir}" ]]; then
-    rm -f "${reload_state_dir}/changed"
-    rmdir "${reload_state_dir}" 2>/dev/null || true
-  fi
-}
-
-trap stop_processes EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
+[[ $# -eq 0 ]] || fail "this adapter does not accept arguments"
 [[ -d "${pi_web_dir}" ]] || fail "PI WEB checkout not found at ${pi_web_dir}. Set PI_WEB_DIR to its location."
+pi_web_dir="$(cd "${pi_web_dir}" && pwd -P)"
 [[ -f "${pi_web_dir}/package.json" ]] || fail "${pi_web_dir} does not contain a package.json."
-command -v node >/dev/null 2>&1 || fail "Node.js is required. PI WEB currently requires Node.js 22.19.0 or newer."
-command -v npm >/dev/null 2>&1 || fail "npm is required."
-command -v curl >/dev/null 2>&1 || fail "curl is required."
-command -v swift >/dev/null 2>&1 || fail "The Swift toolchain is required. Install Xcode Command Line Tools."
-command -v fswatch >/dev/null 2>&1 || fail "fswatch is required for native wrapper reloads. Install it with 'brew install fswatch'."
-[[ -d "${pi_web_dir}/node_modules" ]] || fail "PI WEB dependencies are missing. Run 'npm install' in ${pi_web_dir}."
-
-if [[ "${check_only}" == true ]]; then
-  echo "PI WEB checkout: ${pi_web_dir}"
-  echo "Development UI: ${pi_web_url}"
-  echo "Stack health: ${health_url}"
-  echo "macOS wrapper: ${app_dir}"
-  echo "Native reload watcher: $(command -v fswatch)"
-  echo "All launcher requirements are available."
-  exit 0
-fi
-
-if stack_is_ready; then
-  echo "Using the complete PI WEB development stack already running at ${pi_web_url}"
-elif frontend_is_ready; then
-  echo "Waiting for the existing PI WEB development stack to become healthy"
-  for _ in {1..60}; do
-    stack_is_ready && break
-    sleep 1
-  done
-  stack_is_ready || fail "A partial PI WEB stack is using ${pi_web_url}, but ${health_url} did not become healthy. Stop that stack and run pi-web-mac again."
+if [[ -n "${PI_WEB_CLI:-}" ]]; then
+  pi_web_cli="${PI_WEB_CLI}"
 else
-  echo "Starting PI WEB from ${pi_web_dir}"
-  (
-    cd "${pi_web_dir}"
-    exec npm run dev
-  ) &
-  server_pid=$!
-
-  echo "Waiting for ${pi_web_url}"
-  for _ in {1..60}; do
-    if stack_is_ready; then
-      break
-    fi
-    if ! kill -0 "${server_pid}" 2>/dev/null; then
-      wait "${server_pid}" || true
-      fail "The PI WEB development server exited before becoming ready."
-    fi
-    sleep 1
-  done
-
-  stack_is_ready || fail "PI WEB did not become healthy at ${health_url} within 60 seconds."
+  pi_web_cli="$(command -v pi-web 2>/dev/null)" || fail "PI WEB CLI not found. Set PI_WEB_CLI."
 fi
+[[ -x "${pi_web_cli}" ]] || fail "PI WEB CLI is not executable: ${pi_web_cli}"
+pi_web_cli="$(cd "$(dirname "${pi_web_cli}")" && pwd -P)/$(basename "${pi_web_cli}")"
+[[ -d "${app_path}" ]] || fail "Pi Workbench app not found at ${app_path}. Run install-app.sh first."
+[[ -x "${open_command}" ]] || fail "open command is not executable: ${open_command}"
 
-echo "Launching the macOS wrapper with native source reloads"
-cd "${app_dir}"
-reload_state_dir="$(mktemp -d /tmp/pi-web-mac.XXXXXX)"
-
-while true; do
-  rm -f "${reload_state_dir}/changed"
-  PI_WEB_ICON="${PI_WEB_ICON:-${app_dir}/Resources/AppIcon.icns}" PI_WEB_URL="${pi_web_url}" swift run PIWebMac &
-  wrapper_pid=$!
-
-  (
-    fswatch -1 "${app_dir}/Package.swift" "${app_dir}/Sources" >/dev/null
-    touch "${reload_state_dir}/changed"
-    kill -TERM -- "-${wrapper_pid}" 2>/dev/null || true
-  ) &
-  watcher_pid=$!
-
-  if wait "${wrapper_pid}"; then
-    wrapper_status=0
-  else
-    wrapper_status=$?
-  fi
-  wrapper_pid=""
-
-  if [[ -f "${reload_state_dir}/changed" ]]; then
-    wait "${watcher_pid}" 2>/dev/null || true
-    watcher_pid=""
-    echo "Native wrapper source changed; rebuilding and relaunching..."
-    continue
-  fi
-
-  kill "${watcher_pid}" 2>/dev/null || true
-  wait "${watcher_pid}" 2>/dev/null || true
-  watcher_pid=""
-  exit "${wrapper_status}"
-done
+(
+  cd "${pi_web_dir}"
+  "${pi_web_cli}" install --dev
+  "${pi_web_cli}" start
+)
+exec "${open_command}" "${app_path}"
