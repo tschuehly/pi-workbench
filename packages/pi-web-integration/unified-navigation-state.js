@@ -1,5 +1,9 @@
 const ROOT_DESTINATION = Object.freeze({ type: "root" });
 const VALID_SURFACES = new Set(["chat", "context", "files", "git"]);
+export const TERMINAL_MIN_HEIGHT = 180;
+export const TERMINAL_MAX_HEIGHT = 640;
+export const TERMINAL_DEFAULT_HEIGHT = 260;
+const TERMINAL_VIEWPORT_RATIO = 0.6;
 
 export function rootDestination() {
   return ROOT_DESTINATION;
@@ -21,6 +25,55 @@ export function sessionSurfacePreferenceName(sessionOrKey) {
 export function rememberedSessionSurface(value, allowContext = true) {
   const allowed = allowContext ? VALID_SURFACES : new Set(["chat", "files", "git"]);
   return allowed.has(value) ? value : "chat";
+}
+
+export function sessionTerminalPreferenceName(sessionOrKey) {
+  const key = typeof sessionOrKey === "string" ? sessionOrKey : completeSessionKey(sessionOrKey);
+  return `terminal.${encodeURIComponent(key)}`;
+}
+
+export function boundedTerminalHeight(value, fallback = TERMINAL_DEFAULT_HEIGHT) {
+  const safeFallback = Number.isFinite(fallback)
+    ? Math.min(TERMINAL_MAX_HEIGHT, Math.max(TERMINAL_MIN_HEIGHT, fallback))
+    : TERMINAL_DEFAULT_HEIGHT;
+  return bounded(value, TERMINAL_MIN_HEIGHT, TERMINAL_MAX_HEIGHT, safeFallback);
+}
+
+export function renderedTerminalHeightBounds(value, viewportHeight) {
+  const viewportMaximum = Number.isFinite(viewportHeight) && viewportHeight > 0
+    ? Math.max(1, Math.floor(viewportHeight * TERMINAL_VIEWPORT_RATIO))
+    : TERMINAL_MAX_HEIGHT;
+  const maxHeight = Math.min(TERMINAL_MAX_HEIGHT, viewportMaximum);
+  const minHeight = Math.min(TERMINAL_MIN_HEIGHT, maxHeight);
+  return {
+    height: bounded(boundedTerminalHeight(value), minHeight, maxHeight, minHeight),
+    minHeight,
+    maxHeight,
+  };
+}
+
+export function terminalKeyboardDelta(key, shiftKey = false) {
+  const step = shiftKey ? 40 : 12;
+  if (key === "ArrowUp") return step;
+  if (key === "ArrowDown") return -step;
+  if (key === "Home") return -Infinity;
+  if (key === "End") return Infinity;
+  return undefined;
+}
+
+export function parseTerminalPreference(value) {
+  if (typeof value !== "string" || value === "") return { open: false, height: TERMINAL_DEFAULT_HEIGHT };
+  try {
+    const preference = JSON.parse(value);
+    if (!isRecord(preference)) return { open: false, height: TERMINAL_DEFAULT_HEIGHT };
+    return { open: preference.open === true, height: boundedTerminalHeight(preference.height) };
+  } catch {
+    return { open: false, height: TERMINAL_DEFAULT_HEIGHT };
+  }
+}
+
+export function serializeTerminalPreference(preference) {
+  return JSON.stringify({ open: preference?.open === true, height: boundedTerminalHeight(preference?.height) });
 }
 
 export function serializeDestinationPreference(destination) {
@@ -149,7 +202,7 @@ export function reduceUnifiedNavigation(inputState, action) {
       const sessionKey = destinationSessionKey(state.destination);
       if (sessionKey === undefined) return state;
       const prior = state.terminalBySession[sessionKey];
-      return { ...state, terminalBySession: { ...state.terminalBySession, [sessionKey]: { open: action.open === true, height: bounded(action.height, 120, 640, prior?.height ?? 260) } } };
+      return { ...state, terminalBySession: { ...state.terminalBySession, [sessionKey]: { open: action.open === true, height: boundedTerminalHeight(action.height, prior?.height ?? TERMINAL_DEFAULT_HEIGHT) } } };
     }
     case "set-navigation": {
       const mode = ["expanded", "collapsed", "narrow-overlay"].includes(action.mode) ? action.mode : state.navigation.mode;

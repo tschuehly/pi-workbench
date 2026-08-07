@@ -1,8 +1,8 @@
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams } from "./workstream-client.js";
 import { WorkstreamSessionCoordinator } from "./workstream-session-coordinator.js";
 import { projectSessionContext, projectWorkstreamBrief, selectWorkstreamSession } from "./workstream-brief-projection.js";
-import { completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, reduceUnifiedNavigation, rememberedSessionSurface, serializeDestinationPreference, sessionSurfacePreferenceName } from "./unified-navigation-state.js";
-import { attentionForWorkstreamSession, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, expandedSessionListRenderKey, formatDateTime, formatModifiedTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, NAVIGATOR_MAX_WIDTH, NAVIGATOR_MIN_WIDTH, NAVIGATOR_MODE_PREFERENCE, NAVIGATOR_WIDTH_PREFERENCE, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, unifiedChatBannerRenderKey, unifiedNavigatorRenderKey, workstreamNavigatorItem } from "./unified-navigation-view-model.js";
+import { completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, parseTerminalPreference, reduceUnifiedNavigation, rememberedSessionSurface, renderedTerminalHeightBounds, serializeDestinationPreference, serializeTerminalPreference, sessionSurfacePreferenceName, sessionTerminalPreferenceName, terminalKeyboardDelta, TERMINAL_DEFAULT_HEIGHT } from "./unified-navigation-state.js";
+import { attentionDestinationFromItem, attentionForWorkstreamSession, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, destinationsMatch, expandedSessionListRenderKey, formatDateTime, formatModifiedTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, NAVIGATOR_MAX_WIDTH, NAVIGATOR_MIN_WIDTH, NAVIGATOR_MODE_PREFERENCE, NAVIGATOR_WIDTH_PREFERENCE, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, unifiedChatBannerRenderKey, unifiedNavigatorRenderKey, workstreamNavigatorItem } from "./unified-navigation-view-model.js";
 
 const PROJECTION_PATH = ".pi-workbench/projection.json";
 const PANEL_ID = "pi-workbench:run.panel";
@@ -273,7 +273,6 @@ function installWorkstreamsElement() {
     #selectedSessionId;
     #tool = "chat";
     #sessionsPaneOpen = true;
-    #terminalOpen = false;
     #mobilePane = "workspace";
     #surfaceSelectionRelease;
     #attentionRelease;
@@ -391,6 +390,7 @@ function installWorkstreamsElement() {
     }
 
     #selectSurface(surface, activateHost = true) {
+      if (surface === "terminal" && this.#destinationSessionKey() === undefined) return;
       if (surface === "context" && this.#unifiedState.destination.type !== "workstream-session") return;
       if (surface !== "terminal" && ["chat", "context", "files", "git"].includes(surface)) {
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "select-surface", surface });
@@ -402,7 +402,7 @@ function installWorkstreamsElement() {
         if (activeKey !== undefined) this.#lastHostActivationKey = activeKey;
       }
       const focusTarget = surface === "terminal"
-        ? this.#dedicatedView?.terminalToggle
+        ? this.#selectedChat === undefined ? this.#dedicatedView?.terminalToggle : this.#chatView?.terminalToggle
         : this.#selectedChat === undefined ? this.#dedicatedView?.toolButtons.get(surface) : this.#chatView?.toolButtons.get(surface);
       focusTarget?.focus({ preventScroll: true });
     }
@@ -442,16 +442,44 @@ function installWorkstreamsElement() {
       return this.#tool;
     }
 
+    #terminalPreference() {
+      const key = this.#destinationSessionKey();
+      return key === undefined ? undefined : this.#unifiedState.terminalBySession[key];
+    }
+
+    #restoreTerminalPreference() {
+      const key = this.#destinationSessionKey();
+      if (key === undefined) return { open: false, height: TERMINAL_DEFAULT_HEIGHT };
+      const preference = parseTerminalPreference(this.#readPreference(sessionTerminalPreferenceName(key), ""));
+      this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "set-terminal", ...preference });
+      return preference;
+    }
+
+    #writeTerminalPreference(expectedKey = this.#destinationSessionKey()) {
+      const key = this.#destinationSessionKey();
+      const preference = key === undefined || key !== expectedKey ? undefined : this.#unifiedState.terminalBySession[key];
+      if (preference !== undefined) this.#writePreference(sessionTerminalPreferenceName(key), serializeTerminalPreference(preference));
+    }
+
+    #setTerminalHeight(height, persist = false) {
+      const key = this.#destinationSessionKey();
+      if (key === undefined) return;
+      this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "set-terminal", open: true, height });
+      if (persist) this.#writeTerminalPreference(key);
+      this.#render();
+    }
+
     #transition(action) {
+      const terminalKey = this.#destinationSessionKey();
+      if ((action.type === "toggle-terminal" || action.type === "select-surface" && action.surface === "terminal") && terminalKey === undefined) return;
       const next = transitionDedicatedWorkstreamUi({
         tool: this.#tool,
         sessionsPaneOpen: this.#sessionsPaneOpen,
-        terminalOpen: this.#terminalOpen,
+        terminalOpen: this.#terminalPreference()?.open === true,
         mobilePane: this.#mobilePane,
       }, action);
       this.#tool = next.tool;
       this.#sessionsPaneOpen = next.sessionsPaneOpen;
-      this.#terminalOpen = next.terminalOpen;
       this.#mobilePane = next.mobilePane;
       if (action.type === "select-surface" && action.surface !== "terminal") {
         const key = this.#destinationSessionKey();
@@ -466,9 +494,10 @@ function installWorkstreamsElement() {
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "set-navigation", mode, width: this.#unifiedState.navigation.width });
         this.#writePreference(NAVIGATOR_MODE_PREFERENCE, mode);
         this.#writePreference("sessions-open", String(next.sessionsPaneOpen));
-      } else if (action.type === "toggle-terminal" && this.#unifiedState.destination.type === "workstream-session") {
-        const remembered = this.#unifiedState.terminalBySession[completeSessionKey({ ...this.#unifiedState.destination.location, sessionId: this.#unifiedState.destination.sessionId })];
+      } else if (action.type === "toggle-terminal" || action.type === "select-surface" && action.surface === "terminal") {
+        const remembered = this.#unifiedState.terminalBySession[terminalKey];
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "set-terminal", open: next.terminalOpen, height: remembered?.height });
+        this.#writeTerminalPreference(terminalKey);
       }
       this.#render();
     }
@@ -560,7 +589,6 @@ function installWorkstreamsElement() {
       this.#writePreference("selected-workstream", "");
       this.#selectedSessionId = undefined;
       this.#anchorRepair = undefined;
-      this.#terminalOpen = false;
       this.#dedicatedView = undefined;
       this.#chatView = undefined;
       this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "select-root" });
@@ -573,9 +601,9 @@ function installWorkstreamsElement() {
 
     async #selectSession(session, requestedWorkstreamId = this.#selectedWorkstreamId, requireSessionNavigation = false) {
       this.#clearStartLocationRecovery(true);
-      if (session.status !== "active") return;
+      if (session.status !== "active") return false;
       const workstreamId = requestedWorkstreamId;
-      if (workstreamId === undefined) return;
+      if (workstreamId === undefined) return false;
       const location = { sessionId: session.id, machineId: session.machineId, projectId: session.projectId, workspaceId: session.workspaceId };
       if (!completeSessionLocation(session)) {
         this.#anchorRepair = undefined;
@@ -587,7 +615,7 @@ function installWorkstreamsElement() {
           if (this.#recordSessionFailure(session, failure, workstreamId) === undefined) recordedWorkstreamState.error = selectionFailureMessage(failure);
         }
         this.#render();
-        return;
+        return false;
       }
       const destination = { type: "workstream-session", workstreamId, sessionId: session.id, location };
       const token = ++this.#selectionToken;
@@ -597,7 +625,7 @@ function installWorkstreamsElement() {
       try {
         await selectWorkstreamSessionLocation(this.#context, session, requireSessionNavigation);
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "selection-succeeded", token });
-        if (this.#unifiedState.destination !== destination) return;
+        if (this.#unifiedState.destination !== destination) return false;
         const snapshot = recordedWorkstreamState.snapshots.find((candidate) => candidate.id === workstreamId);
         if (snapshot !== undefined && this.#selectedWorkstreamId !== workstreamId) this.#applyWorkstreamSelection(snapshot);
         this.#selectedWorkstreamId = workstreamId;
@@ -610,16 +638,18 @@ function installWorkstreamsElement() {
         this.#writeDestinationPreference();
         const restoredSurface = this.#restoreSessionSurface(true);
         this.#activateHostSurface(restoredSurface, true);
-        const terminal = this.#unifiedState.terminalBySession[completeSessionKey(location)];
-        this.#terminalOpen = terminal?.open === true;
+        this.#restoreTerminalPreference();
         this.#mobilePane = "workspace";
         window.requestAnimationFrame(() => { this.#dedicatedView?.surfaces.get(this.#selectedSurface("chat"))?.focus({ preventScroll: true }); });
+        this.#render();
+        return true;
       } catch (error) {
-        if (this.#unifiedState.pendingSelection?.token !== token) return;
+        if (this.#unifiedState.pendingSelection?.token !== token) return false;
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "selection-failed", token, error: typedSelectionError(error) });
         this.#recordSessionFailure(session, error, workstreamId);
       }
       this.#render();
+      return false;
     }
 
     async #selectChat(chat) {
@@ -633,22 +663,25 @@ function installWorkstreamsElement() {
         if (typeof this.#context?.sessionNavigation?.select !== "function") throw new Error("Native Chat navigation is unavailable in this PI WEB version.");
         await this.#context.sessionNavigation.select(location);
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "selection-succeeded", token });
-        if (this.#unifiedState.destination !== destination) return;
+        if (this.#unifiedState.destination !== destination) return false;
         this.#selectedWorkstreamId = undefined;
         recordedWorkstreamState.selectedWorkstreamId = undefined;
         this.#selectedSessionId = undefined;
         this.#dedicatedView = undefined;
         this.#selectedChat = chat;
-        this.#chatView = undefined;
         const restoredSurface = this.#restoreSessionSurface(false);
+        this.#restoreTerminalPreference();
         this.#writeDestinationPreference();
         this.#activateHostSurface(restoredSurface, true);
         window.requestAnimationFrame(() => { this.#chatView?.surfaces.get(this.#selectedSurface("chat"))?.focus({ preventScroll: true }); });
+        this.#render();
+        return true;
       } catch (error) {
-        if (this.#unifiedState.pendingSelection?.token !== token) return;
+        if (this.#unifiedState.pendingSelection?.token !== token) return false;
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "selection-failed", token, error: typedSelectionError(error) });
       }
       this.#render();
+      return false;
     }
 
     #recordSessionFailure(session, error, workstreamId = this.#selectedWorkstreamId) {
@@ -804,10 +837,29 @@ function installWorkstreamsElement() {
     }
 
     #focusAttention(item) {
-      void this.#context?.attention?.focus?.(item).catch((error) => {
-        recordedWorkstreamState.error = errorMessage(error);
+      void this.#focusAttentionDestination(item);
+    }
+
+    async #focusAttentionDestination(item) {
+      const target = attentionDestinationFromItem(this.#joinedNavigation(), item);
+      if (!target.ok) {
+        recordedWorkstreamState.error = `${target.error.code}: ${target.error.message}`;
         this.#render();
-      });
+        return;
+      }
+      const selected = target.kind === "chat"
+        ? await this.#selectChat(target.chat)
+        : await this.#selectSession(target.session, target.workstreamId, true);
+      if (!selected || !destinationsMatch(this.#unifiedState.destination, target.destination)) return;
+      try {
+        if (typeof this.#context?.attention?.focus !== "function") throw typedAttentionError(undefined, "ATTENTION_FOCUS_UNAVAILABLE", "Live ask focus is unavailable in this PI WEB version.");
+        const focused = await this.#context.attention.focus(item);
+        if (!focused) throw typedAttentionError(undefined, "ATTENTION_FOCUS_REJECTED", "The selected ask is no longer available to focus.");
+      } catch (error) {
+        const failure = typedAttentionError(error, "ATTENTION_FOCUS_FAILED", "Could not focus the selected live ask.");
+        recordedWorkstreamState.error = `${failure.code}: ${failure.message}`;
+        this.#render();
+      }
     }
 
     async #refreshChats() {
@@ -994,6 +1046,8 @@ function installWorkstreamsElement() {
           joined: this.#joinedNavigation(), machine: this.#nativeNavigation.machine ?? context?.machine,
           attentionItems: this.#attentionItems, navigation: this.#unifiedState.navigation,
           destination: this.#unifiedState.destination, surface: this.#selectedSurface("chat"),
+          terminalOpen: this.#unifiedState.terminalBySession[this.#destinationSessionKey()]?.open === true,
+          terminalHeight: this.#unifiedState.terminalBySession[this.#destinationSessionKey()]?.height,
           pending: this.#unifiedState.pendingSelection !== undefined,
           onBack: () => { this.#returnToPortfolio(); },
           onOpenChat: (chat) => { void this.#selectChat(chat); },
@@ -1005,8 +1059,15 @@ function installWorkstreamsElement() {
           onSelectSurface: (surface) => { this.#selectSurface(surface); },
           onToggleMode: () => { this.#transition({ type: "toggle-sessions" }); },
           onNavigatorResize: (width) => { this.#setNavigatorWidth(width); },
+          onToggleTerminal: () => {
+            const opening = this.#terminalPreference()?.open !== true;
+            this.#transition({ type: "toggle-terminal" });
+            if (opening) this.#activateHostSurface("terminal");
+          },
+          onTerminalResize: (height, persist) => { this.#setTerminalHeight(height, persist); },
+          anchor: `${sessionAnchor(this.#selectedChat)} · Session ${this.#selectedChat.sessionId}`,
         };
-        if (this.#chatView?.sessionKey !== this.#unifiedState.destination.sessionKey || this.#chatView.surfaceHost !== context?.surfaceHost) {
+        if (hostedChatViewRequiresRemount(this.#chatView, context?.surfaceHost)) {
           this.#chatView = createUnifiedChatDestination(chatOptions);
           main.replaceChildren(this.#chatView.element);
         }
@@ -1025,6 +1086,9 @@ function installWorkstreamsElement() {
           terminalOpen: this.#unifiedState.destination.type === "workstream-session"
             ? this.#unifiedState.terminalBySession[completeSessionKey({ ...this.#unifiedState.destination.location, sessionId: this.#unifiedState.destination.sessionId })]?.open === true
             : false,
+          terminalHeight: this.#unifiedState.destination.type === "workstream-session"
+            ? this.#unifiedState.terminalBySession[completeSessionKey({ ...this.#unifiedState.destination.location, sessionId: this.#unifiedState.destination.sessionId })]?.height
+            : undefined,
           mobilePane: this.#mobilePane,
           reconnecting: context?.connection?.status === "reconnecting",
           joined: this.#joinedNavigation(),
@@ -1052,10 +1116,11 @@ function installWorkstreamsElement() {
           onNavigatorResize: (width) => { this.#setNavigatorWidth(width); },
           onToggleSessions: () => { this.#transition({ type: "toggle-sessions" }); },
           onToggleTerminal: () => {
-            const opening = !this.#terminalOpen;
+            const opening = this.#terminalPreference()?.open !== true;
             this.#transition({ type: "toggle-terminal" });
             if (opening) this.#activateHostSurface("terminal");
           },
+          onTerminalResize: (height, persist) => { this.#setTerminalHeight(height, persist); },
           onStart: () => { this.#start(selected); },
           onResume: (session) => { this.#resume(session); },
           anchorRepair: this.#anchorRepair,
@@ -1264,6 +1329,10 @@ function unifiedInventoryNotice(joined, onRefresh) {
   return notice;
 }
 
+export function hostedChatViewRequiresRemount(view, surfaceHost) {
+  return view === undefined || view.surfaceHost !== surfaceHost;
+}
+
 function createUnifiedChatDestination(options) {
   const view = { sessionKey: completeSessionKey(options.chat), surfaceHost: options.context?.surfaceHost, surfaces: new Map(), overlayOpen: false };
   const shell = document.createElement("section");
@@ -1347,6 +1416,7 @@ function createUnifiedChatDestination(options) {
   view.body = document.createElement("div");
   view.body.className = "unified-destination-body";
   view.body.append(view.navigation, view.scrim, view.separator, view.content);
+  installTerminalDock(view);
   view.navigation.addEventListener("keydown", (event) => {
     const active = view.element.getRootNode().activeElement;
     const action = narrowOverlayKeyboardAction({ narrow: matchMedia("(max-width: 720px)").matches, open: view.overlayOpen, focusInside: view.navigation.contains(active), key: event.key });
@@ -1364,7 +1434,7 @@ function createUnifiedChatDestination(options) {
     event.preventDefault();
     controls[next].focus({ preventScroll: true });
   });
-  shell.append(view.banner, header, view.body);
+  shell.append(view.banner, header, view.body, view.terminal);
   view.element = shell;
   view.options = options;
   return view;
@@ -1372,6 +1442,8 @@ function createUnifiedChatDestination(options) {
 
 function updateUnifiedChatDestination(view, options) {
   view.options = options;
+  view.sessionKey = completeSessionKey(options.chat);
+  view.surfaceHost = options.context?.surfaceHost;
   view.element.style.setProperty("--navigator-width", `${String(options.navigation.width)}px`);
   view.title.textContent = options.chat.title;
   view.scope.textContent = `Chat · ${sessionAnchor(options.chat)}`;
@@ -1399,6 +1471,7 @@ function updateUnifiedChatDestination(view, options) {
     else control.removeAttribute("aria-current");
   }
   for (const [surface, container] of view.surfaces) setSurfaceVisibility(container, surface === options.surface);
+  updateTerminalDock(view, options, true, options.anchor);
 }
 
 function renderUnifiedChatBanner(options) {
@@ -1451,6 +1524,12 @@ export function startLocationFailureMessage(error) {
 
 function typedSelectionError(error) {
   return typedHostError(error, "SESSION_SELECTION_FAILED");
+}
+
+function typedAttentionError(error, fallbackCode, fallbackMessage) {
+  if (error === undefined) return { code: fallbackCode, message: fallbackMessage };
+  const typed = typedHostError(error, fallbackCode);
+  return { ...typed, message: typed.message || fallbackMessage };
 }
 
 function createDedicatedWorkstream(snapshot, options) {
@@ -1592,15 +1671,7 @@ function createDedicatedWorkstream(snapshot, options) {
   view.scrim.className = "overlay-scrim";
   body.append(sessions, view.scrim, view.sessionsEdge, workspace);
 
-  const terminal = document.createElement("section");
-  terminal.className = "terminal-drawer";
-  view.terminal = terminal;
-  view.terminalToggle = button("", () => { view.options.onToggleTerminal(); });
-  view.terminalToggle.title = "Terminal for selected session checkout";
-  view.terminalScope = message("", "terminal-scope");
-  view.terminalContent = document.createElement("div");
-  view.terminalContent.className = "terminal-content";
-  terminal.append(view.terminalToggle, view.terminalScope, view.terminalContent);
+  installTerminalDock(view);
 
   sessions.addEventListener("keydown", (event) => {
     const active = view.element.getRootNode().activeElement;
@@ -1619,7 +1690,7 @@ function createDedicatedWorkstream(snapshot, options) {
     event.preventDefault();
     controls[next].focus({ preventScroll: true });
   });
-  shell.append(banner, topbar, view.sessionTabs, mobileNavigation, body, terminal);
+  shell.append(banner, topbar, view.sessionTabs, mobileNavigation, body, view.terminal);
   updateDedicatedWorkstream(view, snapshot, options);
   return view;
 }
@@ -1778,18 +1849,7 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   }
   view.hostUnavailable.hidden = selected === undefined || options.tool === "context" || surfacesAvailable;
 
-  view.terminal.classList.toggle("open", options.terminalOpen);
-  view.terminalToggle.textContent = options.terminalOpen ? "Hide Terminal ↓" : "Terminal ↑";
-  view.terminalToggle.disabled = selected === undefined;
-  view.terminalToggle.title = selected === undefined ? "Select a Workstream session before opening Terminal" : "Terminal for selected session checkout";
-  view.terminalToggle.setAttribute("aria-expanded", String(options.terminalOpen));
-  view.terminalScope.textContent = selected === undefined ? "Terminal unavailable without a selected session checkout." : `Selected session checkout · ${sessionAnchor(selected)}`;
-  view.terminalScope.hidden = !options.terminalOpen;
-  view.terminalContent.hidden = !options.terminalOpen || selected === undefined;
-  if (options.terminalOpen && selected !== undefined && view.terminalSurface === undefined) {
-    view.terminalSurface = mountedHostSurface(options.context, "terminal");
-    view.terminalContent.append(view.terminalSurface);
-  }
+  updateTerminalDock(view, options, selected !== undefined, selected === undefined ? undefined : `${sessionAnchor(selected)} · Session ${selected.id}`);
 }
 
 function renderExpandedSessionList(snapshot, options) {
@@ -2034,16 +2094,98 @@ function setSurfaceVisibility(container, visible) {
   container.setAttribute("aria-hidden", String(!visible));
 }
 
+function installTerminalDock(view) {
+  view.terminal = document.createElement("section");
+  view.terminal.className = "terminal-drawer";
+  view.terminalResize = document.createElement("div");
+  view.terminalResize.className = "terminal-resize-separator";
+  configureTerminalResizeSeparator(view.terminalResize, () => view.options.terminalHeight, (height, persist) => { view.options.onTerminalResize(height, persist); });
+  view.terminalToggle = button("", () => { view.options.onToggleTerminal(); });
+  view.terminalToggle.title = "Terminal for selected session checkout";
+  view.terminalScope = message("", "terminal-scope");
+  view.terminalContent = document.createElement("div");
+  view.terminalContent.className = "terminal-content";
+  view.terminalContent.id = "selected-session-terminal-dock";
+  view.terminalToggle.setAttribute("aria-controls", view.terminalContent.id);
+  view.terminal.append(view.terminalResize, view.terminalToggle, view.terminalScope, view.terminalContent);
+}
+
+function updateTerminalDock(view, options, enabled, anchor) {
+  const bounds = renderedTerminalHeightBounds(options.terminalHeight, window.innerHeight);
+  view.terminal.classList.toggle("open", options.terminalOpen && enabled);
+  view.terminal.style.height = options.terminalOpen && enabled ? `${String(bounds.height)}px` : "";
+  view.terminalToggle.textContent = options.terminalOpen && enabled ? "Hide Terminal ↓" : enabled ? `Terminal ↑ · ${anchor}` : "Terminal ↑";
+  view.terminalToggle.disabled = !enabled;
+  view.terminalToggle.title = enabled ? `Terminal for ${anchor}` : "Select a Workstream session before opening Terminal";
+  view.terminalToggle.setAttribute("aria-label", enabled ? `${options.terminalOpen ? "Hide" : "Open"} Terminal for ${anchor}` : "Terminal unavailable without a selected session checkout");
+  view.terminalToggle.setAttribute("aria-expanded", String(options.terminalOpen && enabled));
+  view.terminalScope.textContent = enabled ? `Selected session checkout · ${anchor}` : "Terminal unavailable without a selected session checkout.";
+  view.terminalScope.hidden = !options.terminalOpen || !enabled;
+  view.terminalResize.hidden = !options.terminalOpen || !enabled;
+  view.terminalResize.setAttribute("aria-valuemin", String(bounds.minHeight));
+  view.terminalResize.setAttribute("aria-valuemax", String(bounds.maxHeight));
+  view.terminalResize.setAttribute("aria-valuenow", String(bounds.height));
+  view.terminalResize.setAttribute("aria-valuetext", `${String(bounds.height)} pixels high; maximum ${String(bounds.maxHeight)} pixels for this viewport`);
+  view.terminalContent.hidden = !options.terminalOpen || !enabled;
+  if (options.terminalOpen && enabled && view.terminalSurface === undefined) {
+    view.terminalSurface = mountedHostSurface(options.context, "terminal");
+    view.terminalContent.append(view.terminalSurface);
+  }
+}
+
+export function hostedSurfaceMountOptions(surface) {
+  return surface === "chat" ? { chatStatusPlacement: "prompt-editor" } : undefined;
+}
+
 function mountedHostSurface(context, surface) {
   const container = document.createElement("div");
   container.className = `host-surface ${surface}-surface`;
   container.tabIndex = -1;
   try {
-    context?.surfaceHost?.mount(container, surface);
+    const mountOptions = hostedSurfaceMountOptions(surface);
+    if (mountOptions === undefined) context?.surfaceHost?.mount(container, surface);
+    else context?.surfaceHost?.mount(container, surface, mountOptions);
   } catch (error) {
     container.append(message(`Could not open ${surface}: ${errorMessage(error)}`, "checkpoint-error"));
   }
   return container;
+}
+
+function configureTerminalResizeSeparator(edge, getHeight, onResize) {
+  edge.setAttribute("role", "separator");
+  edge.setAttribute("aria-label", "Resize Terminal dock");
+  edge.setAttribute("aria-orientation", "horizontal");
+  edge.tabIndex = 0;
+  edge.addEventListener("keydown", (event) => {
+    const delta = terminalKeyboardDelta(event.key, event.shiftKey);
+    if (delta === undefined) return;
+    event.preventDefault();
+    const bounds = renderedTerminalHeightBounds(getHeight(), window.innerHeight);
+    const requestedHeight = delta === -Infinity ? bounds.minHeight
+      : delta === Infinity ? bounds.maxHeight : bounds.height + delta;
+    onResize(renderedTerminalHeightBounds(requestedHeight, window.innerHeight).height, true);
+  });
+  let drag;
+  edge.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const startHeight = renderedTerminalHeightBounds(getHeight(), window.innerHeight).height;
+    drag = { pointerId: event.pointerId, startY: event.clientY, startHeight, height: startHeight };
+    edge.setPointerCapture?.(event.pointerId);
+  });
+  edge.addEventListener("pointermove", (event) => {
+    if (drag?.pointerId !== event.pointerId) return;
+    drag.height = renderedTerminalHeightBounds(drag.startHeight + drag.startY - event.clientY, window.innerHeight).height;
+    onResize(drag.height, false);
+  });
+  const finish = (event) => {
+    if (drag?.pointerId !== event.pointerId) return;
+    edge.releasePointerCapture?.(event.pointerId);
+    const height = drag.height;
+    drag = undefined;
+    onResize(height, true);
+  };
+  edge.addEventListener("pointerup", finish);
+  edge.addEventListener("pointercancel", finish);
 }
 
 function configureResizeSeparator(edge, labelText, getWidth, onResize) {
@@ -2248,11 +2390,14 @@ function workstreamsStyleElement() {
     .surface-stack { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
     .host-surface { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
     .host-surface > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
-    .terminal-drawer { flex: 0 0 auto; display: grid; justify-items: center; border-top: 1px solid var(--pi-border); background: var(--pi-bg); }
-    .terminal-drawer > button { min-width: 130px; min-height: 24px; padding-block: 2px; border-radius: 8px 8px 0 0; }
-    .terminal-drawer.open { height: min(280px, 38vh); grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); justify-items: stretch; }
+    .terminal-drawer { flex: 0 0 auto; min-height: 0; display: grid; gap: 0; justify-items: center; border-top: 1px solid var(--pi-border); background: var(--pi-bg); }
+    .terminal-drawer > button { min-width: 130px; max-width: min(100%, 56ch); min-height: max(44px, var(--pi-control-min-size, 44px)); overflow: hidden; padding-block: 2px; border-radius: 8px 8px 0 0; text-overflow: ellipsis; white-space: nowrap; }
+    .terminal-drawer.open { grid-template: 6px auto auto minmax(0, 1fr) / minmax(0, 1fr); justify-items: stretch; }
     .terminal-drawer.open > button { justify-self: center; }
-    .terminal-scope { padding: 4px 12px; color: var(--pi-muted); font-size: 11px; }
+    .terminal-resize-separator { position: relative; z-index: 2; width: 100%; min-height: 6px; background: var(--pi-border-muted); cursor: row-resize; touch-action: none; }
+    .terminal-resize-separator::before { position: absolute; right: 0; bottom: 0; left: 0; height: max(44px, var(--pi-control-min-size, 44px)); content: ""; }
+    .terminal-resize-separator:focus-visible { z-index: 3; outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+    .terminal-scope { min-width: 0; overflow: hidden; padding: 4px 12px; color: var(--pi-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
     .terminal-content { min-width: 0; min-height: 0; display: flex; overflow: hidden; }
     .terminal-drawer .host-surface { width: 100%; }
     .icon-button { flex: 0 0 auto; }

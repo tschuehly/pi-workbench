@@ -67,6 +67,57 @@ export function selectedDestinationFromIdentity(joined, identity) {
   return undefined;
 }
 
+export function attentionDestinationFromItem(joined, item) {
+  if (joined?.status !== "ready" || !Array.isArray(joined.chats) || !Array.isArray(joined.nativeSessions) || !Array.isArray(joined.workstreams)) {
+    return attentionLookupFailure("ATTENTION_INVENTORY_UNAVAILABLE", "Cannot focus this ask until the complete Chat and Workstream inventory is ready.");
+  }
+  if (![item?.identity, item?.machineId, item?.projectId, item?.workspaceId, item?.sessionId, item?.askId].every(nonEmpty)) {
+    return attentionLookupFailure("ATTENTION_IDENTITY_INCOMPLETE", "Cannot focus this ask because its complete machine/project/workspace/session identity is unavailable.");
+  }
+  const matchesItem = (candidate) => candidate.identity === item.identity
+    && candidate.machineId === item.machineId
+    && candidate.projectId === item.projectId
+    && candidate.workspaceId === item.workspaceId
+    && candidate.sessionId === item.sessionId;
+  const nativeMatches = joined.nativeSessions.filter(matchesItem);
+  if (nativeMatches.length !== 1) {
+    return attentionLookupFailure("ATTENTION_DESTINATION_NOT_FOUND", "No ready Chat or active Workstream session matches this ask's complete identity.");
+  }
+  const native = nativeMatches[0];
+  const sessionKey = completeSessionKey(native);
+  const chats = joined.chats.filter((candidate) => matchesItem(candidate) && completeSessionKey(candidate) === sessionKey);
+  const workstreamMatches = [];
+  for (const workstream of joined.workstreams) {
+    for (const session of workstream.sessions ?? []) {
+      if (session.status === "active" && completeSessionKey({ ...session, sessionId: session.id }) === sessionKey) {
+        workstreamMatches.push({ workstream, session });
+      }
+    }
+  }
+  if (chats.length === 1 && workstreamMatches.length === 0) {
+    return { ok: true, kind: "chat", chat: chats[0], destination: { type: "chat", sessionKey, location: sessionLocation(native) } };
+  }
+  if (chats.length === 0 && workstreamMatches.length === 1) {
+    const { workstream, session } = workstreamMatches[0];
+    return {
+      ok: true,
+      kind: "workstream-session",
+      workstreamId: workstream.id,
+      session,
+      destination: { type: "workstream-session", workstreamId: workstream.id, sessionId: session.id, location: sessionLocation(native) },
+    };
+  }
+  return attentionLookupFailure("ATTENTION_DESTINATION_MISMATCH", "The ready inventory does not identify exactly one destination for this ask.");
+}
+
+export function destinationsMatch(left, right) {
+  if (left?.type !== right?.type || !sameCompleteLocation(left?.location, right?.location)) return false;
+  if (left.type === "chat") return nonEmpty(left.sessionKey) && left.sessionKey === right.sessionKey;
+  if (left.type === "workstream-session") return nonEmpty(left.workstreamId) && left.workstreamId === right.workstreamId
+    && nonEmpty(left.sessionId) && left.sessionId === right.sessionId;
+  return false;
+}
+
 export function workstreamNavigatorItem(workstream, rememberedSessionKey) {
   const brief = projectWorkstreamBrief(workstream, rememberedSessionKey);
   const unresolvedTasks = brief.unresolvedHumanTasks.length;
@@ -228,6 +279,15 @@ export function attentionForWorkstreamSession(items, session) {
   if (!Array.isArray(items) || !nonEmpty(session?.id)) return undefined;
   return items.find((item) => item?.sessionId === session.id
     && (!nonEmpty(session.machineId) || item.machineId === session.machineId));
+}
+
+function attentionLookupFailure(code, message) {
+  return { ok: false, error: { code, message } };
+}
+
+function sameCompleteLocation(left, right) {
+  const fields = ["machineId", "projectId", "workspaceId", "sessionId"];
+  return fields.every((field) => nonEmpty(left?.[field]) && left[field] === right?.[field]);
 }
 
 function completeSessionKey(session) {

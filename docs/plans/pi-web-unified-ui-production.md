@@ -341,6 +341,15 @@ new mutation type was invented.
 
 ### Phase 5 — Finish session presentation on the shared canvas
 
+Status: complete across PI WEB and the adapter. Native Chats and Workstream sessions use PI WEB's
+host-owned Chat, Files, Git, and Terminal compositions; inline asks and attention focus stay on the
+dedicated canvas. Surface and Terminal dock state are keyed by complete session identity, Terminal
+height is bounded and accessible, and native Chat mounts survive session changes while host
+capabilities remain stable. Hosted Chat requests the additive generic prompt-editor status placement;
+default hosted and ordinary shells retain `StatusBar` compatibility. PI WEB verification passed with
+2,567 tests (3 skipped), production build passed, adapter checks passed with 71 tests, and independent
+review findings were resolved. Real-browser interaction evidence remains Phase 7 work.
+
 Use one core-owned mounted Chat composition for both Chat and Workstream-session destinations. Do
 not fork `ChatView`, `PromptEditor`, `AskUserCard`, Files, Git, or Terminal in the adapter.
 

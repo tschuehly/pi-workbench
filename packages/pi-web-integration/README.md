@@ -17,9 +17,18 @@ browser plugin with a small trusted web-process service, not a Run Controller an
   strip—never both. Narrow layouts keep the destination full width and expose Workstream navigation as
   an Escape-dismissable focused overlay. Browser-local mode and width values use PI WEB's namespaced
   preferences host. Older hosts retain the canonical Workstreams-only fallback without private APIs.
-  Existing typed Workstream actions, Chat/Files/Git surfaces, checkout-scoped Terminal, and a
-  canonical selected-session **Context** surface remain available in the Workstream shell. Opening a
-  Workstream itself shows the Phase 4 full brief: identity and health, truthful resumability,
+  Existing typed Workstream actions and the host-owned Chat/Files/Git surfaces remain available;
+  Workstream sessions additionally expose the canonical selected-session **Context** surface. Phase 5
+  keeps the core Chat composition (including inline live asks) mounted intact and requests the public
+  hosted status placement beside Prompt Editor controls. Both native Chats and Workstream sessions
+  have a collapsed, complete-anchor-labelled Terminal bottom dock. Dock open state and bounded height
+  are browser-local preferences keyed by complete machine/project/workspace/session identity, while
+  PI WEB continues to own terminal processes and terminal selection. Requested heights remain bounded
+  independently of the rendered height, which adapts to a 60% viewport cap. The dock separator supports
+  pointer and keyboard vertical resizing. The viewport bound is recomputed when the Workbench view
+  renders; a browser-only resize can leave the prior pixel height in place until the next render because
+  the public adapter lifecycle does not currently expose a resize subscription. Opening a Workstream
+  itself shows the Phase 4 full brief: identity and health, truthful resumability,
   unresolved Human Tasks, retained per-session confirmed checkpoint fields, session index, and links.
   Checkpoints remain contract-compatible per-session checkpoints.
   Git currently shows the selected checkout's observed, unattributed state; historical cross-repository
@@ -53,8 +62,9 @@ The unified-navigation state and Phase 4 projection/view-model seams are intenti
 - `unified-navigation-state.js` joins only complete native and canonical inventories, keeps every
   positive canonical association (including an anchorless legacy association) out of Chats, and
   owns destination, selection-race, session-scoped surface/Terminal, and per-Workstream session
-  memory. Browser-local surface preference falls back to Chat and is keyed by the complete stable
-  machine/session/project/workspace identity, so a new session cannot inherit another session's tool.
+  memory. Browser-local surface and Terminal preferences fall back safely and are keyed by the
+  complete stable machine/session/project/workspace identity, so a new session cannot inherit
+  another session's selected surface, dock visibility, or dock height.
 - `workstream-brief-projection.js` mechanically projects the Phase 4 full brief and selected-session
   Context from sourced checkpoint, launch, link, and Human Task fields. Its continuation projection
   claims resumability only for active sessions with complete checkout anchors and otherwise reports

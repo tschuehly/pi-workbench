@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, reduceUnifiedNavigation, rememberedSessionSurface, serializeDestinationPreference, sessionSurfacePreferenceName } from "../unified-navigation-state.js";
+import { boundedTerminalHeight, completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, parseTerminalPreference, reduceUnifiedNavigation, rememberedSessionSurface, renderedTerminalHeightBounds, serializeDestinationPreference, serializeTerminalPreference, sessionSurfacePreferenceName, sessionTerminalPreferenceName, terminalKeyboardDelta, TERMINAL_DEFAULT_HEIGHT, TERMINAL_MAX_HEIGHT, TERMINAL_MIN_HEIGHT } from "../unified-navigation-state.js";
 import { projectSessionContext, projectWorkstreamBrief, selectWorkstreamSession, workstreamSessionKey } from "../workstream-brief-projection.js";
 
 const fixture = JSON.parse(await readFile(new URL("../fixtures/unified-navigation.json", import.meta.url), "utf8"));
@@ -117,6 +117,48 @@ test("persisted surface preference names use the complete session identity witho
   assert.equal(rememberedSessionSurface("context", true), "context");
 });
 
+test("Terminal preferences use complete identity, parse safely, and keep bounded heights", () => {
+  const first = { machineId: "studio", sessionId: "same", projectId: "project-a", workspaceId: "main" };
+  const second = { ...first, workspaceId: "feature" };
+  assert.notEqual(sessionTerminalPreferenceName(first), sessionTerminalPreferenceName(second));
+  assert.match(decodeURIComponent(sessionTerminalPreferenceName(first)), /studio\u0000same\u0000project-a\u0000main/);
+  assert.deepEqual(parseTerminalPreference(""), { open: false, height: TERMINAL_DEFAULT_HEIGHT });
+  assert.deepEqual(parseTerminalPreference("{broken"), { open: false, height: TERMINAL_DEFAULT_HEIGHT });
+  assert.deepEqual(parseTerminalPreference(JSON.stringify({ open: true, height: 900 })), { open: true, height: TERMINAL_MAX_HEIGHT });
+  assert.deepEqual(parseTerminalPreference(serializeTerminalPreference({ open: true, height: 480 })), { open: true, height: 480 });
+  assert.equal(boundedTerminalHeight(20), TERMINAL_MIN_HEIGHT);
+  assert.equal(boundedTerminalHeight(Number.NaN, 333), 333);
+  assert.equal(boundedTerminalHeight(Number.NaN, 999), TERMINAL_MAX_HEIGHT);
+  assert.equal(terminalKeyboardDelta("ArrowUp"), 12);
+  assert.equal(terminalKeyboardDelta("ArrowDown", true), -40);
+  assert.equal(terminalKeyboardDelta("Home"), -Infinity);
+  assert.equal(terminalKeyboardDelta("End"), Infinity);
+  assert.equal(terminalKeyboardDelta("Enter"), undefined);
+});
+
+test("Terminal rendered height and bounds truthfully adapt to the viewport cap", () => {
+  assert.deepEqual(renderedTerminalHeightBounds(undefined, 1000), {
+    height: TERMINAL_DEFAULT_HEIGHT,
+    minHeight: TERMINAL_MIN_HEIGHT,
+    maxHeight: 600,
+  });
+  assert.deepEqual(renderedTerminalHeightBounds(640, 500), {
+    height: 300,
+    minHeight: TERMINAL_MIN_HEIGHT,
+    maxHeight: 300,
+  });
+  assert.deepEqual(renderedTerminalHeightBounds(640, 200), {
+    height: 120,
+    minHeight: 120,
+    maxHeight: 120,
+  });
+  assert.deepEqual(renderedTerminalHeightBounds(20, undefined), {
+    height: TERMINAL_MIN_HEIGHT,
+    minHeight: TERMINAL_MIN_HEIGHT,
+    maxHeight: TERMINAL_MAX_HEIGHT,
+  });
+});
+
 test("surface and Terminal memory is session-scoped and Context is unavailable to native Chats", () => {
   const chat = joined.chats[0];
   let state = createUnifiedNavigationState({ destination: { type: "chat", sessionKey: completeSessionKey(chat), location: chat } });
@@ -126,12 +168,24 @@ test("surface and Terminal memory is session-scoped and Context is unavailable t
   assert.equal(Object.values(state.surfaceBySession)[0], "files");
   assert.deepEqual(Object.values(state.terminalBySession)[0], { open: true, height: 640 });
 
+  const secondChat = joined.chats[1];
+  state = { ...state, destination: { type: "chat", sessionKey: completeSessionKey(secondChat), location: secondChat } };
+  state = reduceUnifiedNavigation(state, { type: "select-surface", surface: "git" });
+  state = reduceUnifiedNavigation(state, { type: "set-terminal", open: false, height: 180 });
+  assert.equal(state.surfaceBySession[completeSessionKey(chat)], "files");
+  assert.deepEqual(state.terminalBySession[completeSessionKey(chat)], { open: true, height: 640 });
+  assert.equal(state.surfaceBySession[completeSessionKey(secondChat)], "git");
+  assert.deepEqual(state.terminalBySession[completeSessionKey(secondChat)], { open: false, height: 180 });
+
   state = { ...state, destination: { type: "workstream-session", workstreamId: "ws-unified", sessionId: "session-a", location: { machineId: "studio", projectId: "pi-workbench", workspaceId: "feature/unified" } } };
   state = reduceUnifiedNavigation(state, { type: "select-surface", surface: "context" });
   assert.equal(state.surfaceBySession[completeSessionKey({ machineId: "studio", projectId: "pi-workbench", workspaceId: "feature/unified", sessionId: "session-a" })], "context");
 });
 
-test("Terminal visibility changes preserve the remembered per-session height", () => {
+test("Terminal visibility changes require a destination session and preserve its remembered height", () => {
+  const root = createUnifiedNavigationState();
+  assert.strictEqual(reduceUnifiedNavigation(root, { type: "set-terminal", open: true, height: 480 }), root);
+
   const chat = joined.chats[0];
   let state = createUnifiedNavigationState({ destination: { type: "chat", sessionKey: completeSessionKey(chat), location: chat } });
   state = reduceUnifiedNavigation(state, { type: "set-terminal", open: true, height: 480 });

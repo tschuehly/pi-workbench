@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { attentionForWorkstreamSession, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, expandedSessionListRenderKey, formatDateTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, unifiedNavigatorRenderKey, workstreamNavigatorItem } from "../unified-navigation-view-model.js";
+import { attentionDestinationFromItem, attentionForWorkstreamSession, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, destinationsMatch, expandedSessionListRenderKey, formatDateTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, unifiedNavigatorRenderKey, workstreamNavigatorItem } from "../unified-navigation-view-model.js";
 
 const hostSnapshot = {
   sequence: 3,
@@ -63,6 +63,42 @@ test("selected host identity maps to an exact Chat or canonical Workstream sessi
   };
   assert.equal(selectedDestinationFromIdentity({ ...ready, chats: [], workstreams: [workstream] }, "native-id").workstreamId, "ws-1");
   assert.equal(selectedDestinationFromIdentity(ready, "other"), undefined);
+});
+
+test("attention lookup resolves a Chat only from the ask's complete ready identity", () => {
+  const chat = normalizeSessionNavigationSnapshot(hostSnapshot).sessions[0];
+  const joined = { status: "ready", chats: [chat], nativeSessions: [chat], workstreams: [] };
+  const item = { identity: "native-id", machineId: "studio", projectId: "pi-web", workspaceId: "main", sessionId: "chat-review", askId: "ask-1" };
+  const result = attentionDestinationFromItem(joined, item);
+  assert.equal(result.ok, true);
+  assert.equal(result.kind, "chat");
+  assert.deepEqual(result.destination, {
+    type: "chat",
+    sessionKey: "studio\u0000chat-review\u0000pi-web\u0000main",
+    location: { sessionId: "chat-review", machineId: "studio", projectId: "pi-web", workspaceId: "main" },
+  });
+  assert.equal(destinationsMatch(result.destination, { ...result.destination, location: { ...result.destination.location } }), true);
+  assert.equal(destinationsMatch(result.destination, { ...result.destination, sessionKey: "stale" }), false);
+});
+
+test("attention lookup resolves the exact active Workstream session and fails typed on mismatch or unavailable identity", () => {
+  const native = normalizeSessionNavigationSnapshot(hostSnapshot).sessions[0];
+  const session = { id: "chat-review", status: "active", machineId: "studio", projectId: "pi-web", workspaceId: "main" };
+  const joined = { status: "ready", chats: [], nativeSessions: [native], workstreams: [{ id: "ws-1", sessions: [session] }] };
+  const item = { identity: "native-id", machineId: "studio", projectId: "pi-web", workspaceId: "main", sessionId: "chat-review", askId: "ask-1" };
+  const result = attentionDestinationFromItem(joined, item);
+  assert.equal(result.ok, true);
+  assert.equal(result.kind, "workstream-session");
+  assert.equal(result.workstreamId, "ws-1");
+  assert.equal(result.session, session);
+  assert.equal(destinationsMatch(result.destination, { ...result.destination, location: { ...result.destination.location, workspaceId: "other" } }), false);
+
+  assert.deepEqual(attentionDestinationFromItem(joined, { ...item, projectId: "other" }), {
+    ok: false,
+    error: { code: "ATTENTION_DESTINATION_NOT_FOUND", message: "No ready Chat or active Workstream session matches this ask's complete identity." },
+  });
+  assert.equal(attentionDestinationFromItem(joined, { ...item, workspaceId: undefined }).error.code, "ATTENTION_IDENTITY_INCOMPLETE");
+  assert.equal(attentionDestinationFromItem({ ...joined, status: "reconnecting" }, item).error.code, "ATTENTION_INVENTORY_UNAVAILABLE");
 });
 
 test("navigator summaries remain mechanical and sourced", () => {

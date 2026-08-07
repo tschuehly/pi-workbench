@@ -4,11 +4,12 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { checkpointProposalPrompt, copyNextSessionPrompt, currentSessionLocationResult, dedicatedMobileControlState, dedicatedWorkstreamLayout, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, startLocationFailureMessage, startLocationRecoveryVisible, transitionDedicatedWorkstreamUi, typedHostError } from "../pi-web-plugin.js";
+import { checkpointProposalPrompt, copyNextSessionPrompt, currentSessionLocationResult, dedicatedMobileControlState, dedicatedWorkstreamLayout, hostedChatViewRequiresRemount, hostedSurfaceMountOptions, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, startLocationFailureMessage, startLocationRecoveryVisible, transitionDedicatedWorkstreamUi, typedHostError } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
 import { WorkstreamSessionCoordinator, workstreamPrompt } from "../workstream-session-coordinator.js";
 
 const fixtureUrl = new URL("../fixtures/recorded-projection.json", import.meta.url);
+const pluginSource = await readFile(new URL("../pi-web-plugin.js", import.meta.url), "utf8");
 
 test("restores the recorded Workstream and remembered active session after the host reconstructs the plugin element", () => {
   const snapshots = [{ id: "ws-other", sessions: [] }, { id: "ws-selected", sessions: [
@@ -21,6 +22,29 @@ test("restores the recorded Workstream and remembered active session after the h
     sessionId: "session-remembered",
   });
   assert.equal(recordedWorkstreamSelection(snapshots, "missing", "session-remembered"), undefined);
+});
+
+test("hosted Chat requests prompt-editor status placement without changing other surface mounts", () => {
+  assert.deepEqual(hostedSurfaceMountOptions("chat"), { chatStatusPlacement: "prompt-editor" });
+  assert.equal(hostedSurfaceMountOptions("files"), undefined);
+  assert.equal(hostedSurfaceMountOptions("terminal"), undefined);
+});
+
+test("native Chat destinations retain mounted host surfaces while the surface host is stable", () => {
+  const surfaceHost = {};
+  assert.equal(hostedChatViewRequiresRemount(undefined, surfaceHost), true);
+  assert.equal(hostedChatViewRequiresRemount({ sessionKey: "old", surfaceHost }, surfaceHost), false);
+  assert.equal(hostedChatViewRequiresRemount({ sessionKey: "old", surfaceHost }, {}), true);
+});
+
+test("Terminal dock uses its retained view node and bounded accessible presentation", () => {
+  assert.match(pluginSource, /shell\.append\(banner, topbar, view\.sessionTabs, mobileNavigation, body, view\.terminal\)/);
+  assert.doesNotMatch(pluginSource, /terminalContext|body, terminal\)/);
+  assert.doesNotMatch(pluginSource, /max-height:\s*min\(60dvh/);
+  assert.match(pluginSource, /\.terminal-drawer > button \{[^}]*min-height: max\(44px, var\(--pi-control-min-size, 44px\)\)/);
+  assert.match(pluginSource, /\.terminal-drawer\.open \{ grid-template: 6px/);
+  assert.match(pluginSource, /\.terminal-resize-separator::before \{[^}]*bottom: 0;[^}]*height: max\(44px, var\(--pi-control-min-size, 44px\)\)/);
+  assert.doesNotMatch(pluginSource, /\.terminal-resize-separator \{[^}]*min-height: 44px/);
 });
 
 test("dedicated Workstream surfaces give Context canonical selected-session scope", () => {
