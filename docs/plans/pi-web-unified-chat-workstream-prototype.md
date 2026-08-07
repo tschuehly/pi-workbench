@@ -1,6 +1,10 @@
 # Unified Chats and Workstreams prototype plan
 
-Status: proposed
+Status: active working prototype
+
+## Prototype authority
+
+`docs/research/reports/pi-web-unified-chat-workstream-prototype.html` is the canonical interaction prototype for ongoing owner judgment. Iterate product slices there before production planning. The prototype is not protocol authority or production code; accepted interactions must still be reconciled with the contracts and implemented through a separate production plan.
 
 ## Outcome
 
@@ -29,7 +33,7 @@ The middle pane has three destination states:
 2. **Workstream Brief** — continuation, changes, remaining work, Human Tasks, session updates, and session index.
 3. **Workstream Session** — the selected Workstream session’s conversation and live decisions.
 
-A Workstream row opens state 2. A session row or horizontal session tab opens state 3. Chat, Files, Git, and Terminal are orthogonal tool state for either kind of session: switching tools replaces the middle surface without changing its selected standalone or Workstream session.
+A Workstream row opens state 2. A session row or horizontal session tab opens state 3. Chat, Context, Files, and Git are peer middle surfaces; switching surfaces does not change the selected standalone or Workstream session. Terminal is a checkout-labelled bottom dock scoped to the explicit session anchor.
 
 ## Delivery sequence
 
@@ -39,13 +43,13 @@ Remove the A–E variant switcher and the four losing structures. Keep the unifi
 
 Represent the selected destination as `standalone-chat`, `workstream`, or `workstream-session`, rather than deriving the center from whether a Workstream happens to be active. Keep selected Workstream, session, tool, panel widths, and collapsed navigation as separate in-memory presentation state.
 
-Use fixture data with at least two standalone Chats, two Workstreams, and one Workstream containing three differently anchored sessions. Every navigation control must update the middle pane, breadcrumb, active selection, context, and available actions.
+Use fixture data with at least two standalone Chats, two Workstreams, and one Workstream containing three differently anchored sessions. Every navigation control must update the middle pane, active selection, explicit anchor, context, and available actions without repeating Workstream or session identity in the global navbar.
 
 ### 2. Restore coordinated Workstream navigation
 
 When a Workstream is selected, render the original prototype’s session hierarchy in the left pane. Clicking the Workstream identity opens the brief; clicking a session opens Chat.
 
-When the left pane collapses, remove the vertical hierarchy and show the Workstream identity, a Brief tab, and horizontal session tabs above the middle surface. Expanding the pane removes that strip. Preserve New session and selected-session identity in both modes.
+When the left pane collapses, remove the vertical hierarchy and show the Workstream identity, a Brief tab, and horizontal session tabs above the middle surface. Expanding the pane removes that strip. Preserve attention markers, running-child counts, New session, and selected-session identity in both modes. New session must collect an explicit project/workspace anchor before launch rather than inherit hidden shell state.
 
 Keep PI WEB-style narrow resize rails and compact collapse controls. Do not render both navigation modes simultaneously.
 
@@ -68,11 +72,11 @@ Render live `ask_user` decisions inline at the current Chat tail using the compa
 
 Render illustrative durable Human Tasks in the Workstream Context tab with answer kind, options, source-session provenance, materiality, answer status, answer receipt, resolution status, and “Open source conversation.” Model answering and resolving as separate in-memory interactions. Do not imply that the prototype writes canonical Workstream state or automatically combines live decisions with durable tasks.
 
-### 5. Rebuild Context and tools
+### 5. Rebuild Context, tools, history, and Terminal
 
-Standalone Chat exposes Files, Git, and Terminal only. Workstream session Chat exposes Context, Files, Git, and Terminal.
+Standalone Chat exposes Chat, Files, and Git as peer middle surfaces. A Workstream session also exposes Context. Context contains the brief summary, durable Human Tasks, selected-session checkpoint, links, and anchor. Files, Git, and the Terminal dock remain scoped to the selected session. Remember the selected surface and Terminal state per session in prototype memory.
 
-Context contains the brief summary, durable Human Tasks, selected-session checkpoint, links, and anchor. Files, Git, and Terminal remain scoped to the selected session. Remember the selected tool per session in prototype memory.
+Keep message history out of the permanent navbar. Double Escape opens earlier conversation points, and the Session menu provides a discoverable entry. Continuing from an earlier point returns to Chat and branches from that point.
 
 ### 6. Replace generic Actions with owned menus
 
@@ -81,7 +85,7 @@ Remove the current Search and Actions controls. Add one PI WEB menu for command 
 Add separate contextual menus:
 
 - Workstream: rename, add link, close;
-- Session: inspect anchor, resume, request checkpoint.
+- Session: inspect anchor, resume, message history, request checkpoint.
 
 Request checkpoint demonstrates the attended propose → correct → confirm interaction in memory. Only confirmation changes the displayed latest checkpoint; a simulated failure leaves the previous confirmation visible with an explicit failure state. Menu labels and placement must make ownership visible.
 
@@ -95,12 +99,14 @@ Browser-test the final working prototype at desktop and narrow widths. Required 
 
 - select each standalone Chat, Workstream, and session;
 - open the Workstream brief from Workstream identity and Context;
-- collapse and expand navigation, confirming the vertical/horizontal handoff;
+- collapse and expand navigation, confirming the vertical/horizontal handoff and matching attention markers;
+- start a session only after explicitly selecting its project/workspace anchor;
 - resize and collapse side panels;
 - answer, correct, and submit an inline live decision;
 - answer a durable Human Task, inspect its receipt, resolve it separately, and open its source session;
 - request a checkpoint, correct the proposal, confirm it, and inspect a failed proposal without losing the latest confirmation;
-- switch tools across differently anchored sessions;
+- switch surfaces and the Terminal dock across differently anchored sessions;
+- open history with Double Escape and continue from an earlier point as a branch;
 - promote a Chat without changing its transcript;
 - operate every menu by pointer and keyboard;
 - confirm no duplicate Workstream lists, actions, session navigation, or decision records.

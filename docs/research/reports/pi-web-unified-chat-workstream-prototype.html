@@ -6,12 +6,12 @@
 <title>PI WEB — Unified Chats + Workstreams Prototype</title>
 <!-- THROWAWAY PROTOTYPE — one coherent Chat/Workstream shell for human validation.
      Middle destinations: standalone Chat, Workstream brief, Workstream session.
-     Session tools (Chat/Context/Files/Git) replace the main surface; Terminal is a bottom pane.
+     Chat/Context/Files/Git are peer workspace surfaces in the top navigation; Terminal is a bottom pane.
      Live ask_user decisions live inline in Chat; durable Human Tasks live in Workstream Context.
      Bounded subagent child executions are inspectable evidence under their session, not peer sessions.
      This prototype does not claim standalone sessions or promotion are supported by the current protocol. -->
 <style>
-:root{color-scheme:dark;--bg:#0d1117;--canvas:#010409;--surface:#161b22;--surface2:#21262d;--hover:#262c36;--border:#30363d;--muted:#8b949e;--text:#c9d1d9;--bright:#f0f6fc;--accent:#58a6ff;--accent2:#1f6feb;--green:#3fb950;--green-bg:#12261e;--orange:#d29922;--orange-bg:#2d2108;--purple:#a371f7;--red:#f85149;--red-bg:#2a1315;--add:#12261e;--add-t:#3fb950;--del:#2a1315;--del-t:#f85149;--shadow:0 12px 34px #0008;--radius:6px}
+:root{color-scheme:dark;--topbar-h:52px;--bg:#0d1117;--canvas:#010409;--surface:#161b22;--surface2:#21262d;--hover:#262c36;--border:#30363d;--muted:#8b949e;--text:#c9d1d9;--bright:#f0f6fc;--accent:#58a6ff;--accent2:#1f6feb;--green:#3fb950;--green-bg:#12261e;--orange:#d29922;--orange-bg:#2d2108;--purple:#a371f7;--red:#f85149;--red-bg:#2a1315;--add:#12261e;--add-t:#3fb950;--del:#2a1315;--del-t:#f85149;--shadow:0 12px 34px #0008;--radius:6px}
 html[data-theme="light"]{color-scheme:light;--bg:#f6f8fa;--canvas:#fff;--surface:#f6f8fa;--surface2:#eaeef2;--hover:#afb8c133;--border:#d0d7de;--muted:#57606a;--text:#24292f;--bright:#1f2328;--accent:#0969da;--accent2:#0969da;--green:#1a7f37;--green-bg:#dafbe1;--orange:#9a6700;--orange-bg:#fff8c5;--purple:#8250df;--red:#cf222e;--red-bg:#ffebe9;--add:#dafbe1;--add-t:#1a7f37;--del:#ffebe9;--del-t:#cf222e;--shadow:0 12px 34px #1f232826}
 *{box-sizing:border-box}html,body,#root{height:100%;margin:0;overflow:hidden}body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
 button,input,textarea{font:inherit}button{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);color:var(--bright);padding:7px 11px;cursor:pointer}button:hover{background:var(--hover)}
@@ -22,14 +22,16 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 .badge{display:inline-flex;align-items:center;gap:5px;width:max-content;border-radius:20px;background:var(--surface2);padding:2px 8px;color:var(--muted);font-size:11px}.badge.green{background:var(--green-bg);color:var(--green)}.badge.orange{background:var(--orange-bg);color:var(--orange)}.badge.red{background:var(--red-bg);color:var(--red)}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:0 0 auto}.muted{color:var(--muted)}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;color:var(--bright)}h3{font-size:13px;color:var(--bright)}
-.app{height:100%;display:grid;grid-template-rows:52px minmax(0,1fr);background:var(--canvas)}
-/* top bar */
-.topbar{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);background:var(--surface);padding:0 12px}
+.app{height:100%;display:grid;grid-template-rows:var(--topbar-h) minmax(0,1fr);background:var(--canvas)}
+/* top bar: global shell, selected scope, and peer workspace surfaces */
+.topbar{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;align-items:center;gap:12px;border-bottom:1px solid var(--border);background:var(--surface);padding:0 12px}
 .pi-mark{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:7px;border:1px solid var(--border);background:var(--bright);color:var(--canvas);font-weight:900;cursor:pointer}
 .brand{padding:0;border:0;background:transparent}.brand[aria-expanded="true"] .pi-mark{outline:2px solid var(--accent);outline-offset:1px}
-.scope{min-width:0;display:flex;align-items:baseline;gap:9px}.scope strong{color:var(--bright)}.topbar .push{margin-left:auto;display:flex;align-items:center;gap:8px}
-.prototag{padding:2px 7px;border:1px solid var(--border);border-radius:20px;color:var(--muted);font-size:10px;font-weight:750;letter-spacing:.09em}
-.narrow-only{display:none}
+.scope{min-width:0;display:flex;align-items:baseline;gap:9px}.scope strong{color:var(--bright)}
+.work-context{min-width:0;display:flex;align-items:center;gap:14px}
+.top-tools{display:flex;align-items:center;gap:3px;min-width:0}.surface-tabs{display:flex;align-items:center;gap:3px}.top-tools button{flex:0 0 auto;border-color:transparent;background:transparent;color:var(--muted);padding:6px 9px}.top-tools button:hover{background:var(--hover)}.top-tools button.active{border-color:var(--border);background:var(--canvas);color:var(--accent);font-weight:650}.top-tools .terminal.active{color:var(--green)}
+.topbar .push{display:flex;align-items:center;justify-content:flex-end;gap:7px}.topbar .push button{white-space:nowrap}
+.prototag{padding:2px 7px;border:1px solid var(--border);border-radius:20px;color:var(--muted);font-size:10px;font-weight:750;letter-spacing:.09em}.narrow-only,.mobile-action{display:none}
 /* menus */
 .menu{position:fixed;z-index:90;min-width:236px;padding:6px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow)}
 .menu button{width:100%;justify-content:flex-start;gap:10px;border:0;border-radius:6px;background:transparent;padding:8px 9px;text-align:left;color:var(--text)}
@@ -76,12 +78,7 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .workstream-strip button{flex:0 0 auto;border-color:transparent;background:transparent;padding:5px 9px;color:var(--muted)}
 .workstream-strip button:hover{background:var(--hover)}.workstream-strip button.active{border-color:var(--border);background:var(--canvas);color:var(--bright);font-weight:650}
 .workstream-strip .strip-id{font-weight:700;color:var(--bright)}.strip-div{width:1px;height:22px;background:var(--border);flex:0 0 auto;margin:0 2px}
-.session-head{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--border);padding:11px 16px;flex:0 0 auto}
-.session-head .st-title{min-width:0}.session-head .crumbs{margin-top:3px;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px}.session-head .acts{display:flex;gap:7px;flex:0 0 auto}
-.tool-bar{display:flex;align-items:center;gap:5px;border-bottom:1px solid var(--border);padding:8px 12px;flex:0 0 auto;background:var(--surface)}
-.tool-bar .tabs{display:flex;gap:4px}.tool-bar button{border-color:transparent;background:transparent;color:var(--muted);padding:6px 10px}
-.tool-bar button:hover{background:var(--hover)}.tool-bar button.active{border-color:var(--border);background:var(--canvas);color:var(--accent);font-weight:650}
-.tool-bar .spacer{flex:1}.tool-bar .term-btn.active{border-color:var(--border);background:var(--canvas);color:var(--green)}
+.anchor-bar{min-height:38px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:7px 16px;color:var(--muted);font-size:12px;flex:0 0 auto}.anchor-bar .anchor{min-width:0;color:var(--text)}.anchor-bar .push{margin-left:auto;align-items:center;gap:7px}.anchor-bar .mobile-action{display:none}
 .surface-wrap{flex:1 1 auto;min-height:0;display:flex;min-width:0}
 /* chat surface */
 .chat{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
@@ -129,11 +126,13 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .dline .txt{padding:0 12px}.dline.add{background:var(--add)}.dline.add .txt{color:var(--add-t)}.dline.del{background:var(--del)}.dline.del .txt{color:var(--del-t)}
 /* context surface */
 .ctx{flex:1;min-width:0;min-height:0;overflow:auto;background:var(--canvas)}
-.ctx-inner{max-width:820px;margin:0 auto;padding:20px 22px 40px}
-.panel-section{border-bottom:1px solid var(--border);padding:16px 0}.panel-section:last-child{border-bottom:0}
-.ctx-link{border:0;background:transparent;color:var(--accent);padding:6px 0 0}
-.checkpoint-box{border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:11px}.checkpoint-box p{margin:6px 0 0;color:var(--text)}
-.link-row{display:flex;align-items:center;gap:9px;padding:6px 0;color:var(--text)}
+.ctx-inner{max-width:880px;margin:0 auto;padding:24px 24px 44px}
+.ctx-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding-bottom:18px}.ctx-head h1{font-size:18px}.ctx-head p{max-width:62ch;margin-top:5px;color:var(--text)}
+.panel-section{border-top:1px solid var(--border);padding:18px 0}.panel-section:last-child{padding-bottom:0}
+.ctx-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px}.ctx-section-head h2{font-size:12px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase}
+.ctx-link{border:0;background:transparent;color:var(--accent);padding:0}
+.ctx-checkpoint{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:10px}.ctx-checkpoint p{color:var(--text)}
+.ctx-reference{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px 14px;font-size:12px}.ctx-reference dt{color:var(--muted)}.ctx-reference dd{min-width:0;margin:0;color:var(--text)}.ctx-reference .reference-list{display:flex;flex-wrap:wrap;gap:6px 12px}
 /* durable Human Task cards */
 .task-card{border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:12px;margin-bottom:10px}.task-card:last-child{margin-bottom:0}
 .task-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.task-card h3{font-size:13px;line-height:1.35}.task-card p{margin:5px 0 9px;color:var(--muted);font-size:12px}
@@ -144,19 +143,20 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .task-resolve{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--border);margin-top:9px;padding-top:9px;font-size:12px}
 .task-open{border:0;background:transparent;color:var(--accent);padding:0}
 /* terminal bottom pane */
+.terminal-dock{width:100%;min-height:36px;justify-content:flex-start;border:0;border-top:1px solid var(--border);border-radius:0;background:var(--surface);padding:7px 14px;color:var(--muted);font-size:12px;flex:0 0 auto}.terminal-dock:hover{background:var(--hover);color:var(--bright)}.terminal-dock .push{margin-left:auto;color:var(--green);font-weight:650}
 .terminal-pane{flex:0 0 auto;display:flex;flex-direction:column;border-top:1px solid var(--border);background:#010409;min-height:120px}
 .term-resize{height:6px;margin-top:-6px;cursor:row-resize;background:transparent;touch-action:none}.term-resize:hover{background:color-mix(in srgb,var(--accent) 40%,transparent)}
 .term-head{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:7px 12px;color:var(--muted);font-size:12px}.term-head .push{margin-left:auto;display:flex;gap:6px}
 .term-body{flex:1;min-height:0;overflow:auto;padding:12px 14px;color:#7ee787;font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}.term-body .p{color:var(--accent)}.term-body .m{color:var(--muted)}
-/* child chat (subagent inspect) */
+/* child execution inspection */
 .child-head{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);background:var(--surface);padding:11px 16px;flex:0 0 auto}
-.child-glyph{display:grid;place-items:center;width:30px;height:30px;border-radius:7px;background:var(--surface2);color:var(--accent);font-weight:800;font-size:13px}
 .child-head .hmeta{min-width:0}.child-head .hmeta strong,.child-head .hmeta small{display:block}.child-head .hmeta small{color:var(--muted);margin-top:2px}.child-head .st{margin-left:auto}
-.child-body{flex:1;min-height:0;overflow:auto;padding:20px max(20px,calc((100% - 820px)/2))}
-.cmsg{margin:0 0 20px;line-height:1.55}.cmsg.input{padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--surface)}
-.ctool{margin:0 0 14px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--muted);font:12px/1.5 ui-monospace,monospace}
-.cresult{margin-top:6px;padding:12px;border-radius:8px;background:var(--green-bg);color:var(--green)}.cresult.warning{background:var(--orange-bg);color:var(--orange)}
-.child-note{border-top:1px solid var(--border);background:var(--surface);padding:11px 16px;color:var(--muted);font-size:12px;flex:0 0 auto;display:flex;align-items:center;gap:10px}.child-note strong{color:var(--bright)}
+.child-body{flex:1;min-height:0;overflow:auto;padding:24px max(20px,calc((100% - 820px)/2))}
+.child-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin-bottom:22px;background:var(--border);border:1px solid var(--border)}.child-fact{min-width:0;background:var(--canvas);padding:9px 11px}.child-fact span,.child-fact strong{display:block}.child-fact span{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}.child-fact strong{margin-top:3px;font-size:12px}
+.child-section{border-top:1px solid var(--border);padding:16px 0}.child-section h2{margin-bottom:8px;color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase}.child-assignment{max-width:72ch;color:var(--bright);line-height:1.55}
+.child-activity{list-style:none;margin:0;padding:0}.child-activity li{display:grid;grid-template-columns:64px minmax(0,1fr);gap:10px;padding:5px 0;color:var(--text);font-size:12px}.child-activity time{color:var(--muted);font-variant-numeric:tabular-nums}
+.cresult{color:var(--green);line-height:1.55}.cresult.warning{color:var(--orange)}
+.child-note{border-top:1px solid var(--border);background:var(--surface);padding:10px 16px;color:var(--muted);font-size:12px;flex:0 0 auto;display:flex;align-items:center;gap:10px}.child-note strong{color:var(--bright)}
 .st-pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 8px;background:var(--surface2);color:var(--muted);font-size:11px;font-weight:700}.st-pill.running,.st-pill.success{background:var(--green-bg);color:var(--green)}.st-pill.warning,.st-pill.cancelling{background:var(--orange-bg);color:var(--orange)}.st-pill.cancelled{background:var(--red-bg);color:var(--red)}.st-pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 /* brief */
 .brief{flex:1;min-width:0;min-height:0;overflow:auto;background:var(--canvas)}
@@ -180,12 +180,13 @@ h1,h2,h3,p{margin:0}h1{font-size:17px;color:var(--bright)}h2{font-size:14px;colo
 .backdrop{position:fixed;z-index:100;inset:0;display:grid;place-items:center;background:#010409a8;padding:18px;backdrop-filter:blur(3px)}
 .dialog{width:min(500px,100%);border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);padding:18px}
 .dialog h2{font-size:18px}.dialog p{margin:7px 0 14px;color:var(--muted)}.dialog label{display:grid;gap:6px;margin:12px 0;color:var(--bright);font-weight:650}
-.dialog input,.dialog textarea{width:100%;border:1px solid var(--border);border-radius:6px;background:var(--canvas);color:var(--bright);padding:9px}.dialog textarea{min-height:88px;resize:vertical;font-weight:400}
+.dialog input,.dialog textarea,.dialog select{width:100%;border:1px solid var(--border);border-radius:6px;background:var(--canvas);color:var(--bright);padding:9px}.dialog textarea{min-height:88px;resize:vertical;font-weight:400}
 .dialog-facts{display:grid;gap:7px;border-block:1px solid var(--border);padding:12px 0;margin:14px 0;color:var(--muted);font-size:12px}.dialog .actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .toast{position:fixed;z-index:95;left:50%;bottom:22px;max-width:min(560px,calc(100vw - 24px));transform:translateX(-50%);border:1px solid var(--accent);border-radius:7px;background:var(--surface);color:var(--bright);padding:8px 13px;box-shadow:var(--shadow);font-size:12px;text-align:center;pointer-events:none}
-.overlay-pane{position:fixed;z-index:70;top:52px;bottom:0;left:0;width:min(320px,86vw);overflow:auto;background:var(--surface);border-right:1px solid var(--border);box-shadow:var(--shadow);display:flex;flex-direction:column}
+.overlay-pane{position:fixed;z-index:70;top:var(--topbar-h);bottom:0;left:0;width:min(320px,86vw);overflow:auto;background:var(--surface);border-right:1px solid var(--border);box-shadow:var(--shadow);display:flex;flex-direction:column}
 .overlay-head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding:10px 12px}
-@media(max-width:900px){.body{--lw:0px;--lr:0px}.body>.left-panel,.body>.left-resizer{display:none}.narrow-only{display:flex;gap:6px}.scope .muted{display:none}.files,.git{grid-template-columns:1fr}.tree,.changes{display:none}.brief-grid{grid-template-columns:1fr}.brief-update,.index-row{grid-template-columns:1fr;gap:5px}}
+.history-pane{position:fixed;z-index:75;inset:var(--topbar-h) 0 0;display:flex;flex-direction:column;background:var(--canvas)}.history-head{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);background:var(--surface);padding:12px 18px}.history-head h2{font-size:16px}.history-head p{color:var(--muted);font-size:12px}.history-head .push{margin-left:auto}.history-inner{width:min(780px,100%);margin:0 auto;padding:24px 20px;overflow:auto}.history-tree{margin:0 0 18px 12px;border-left:1px solid var(--border);padding-left:18px}.history-node{position:relative;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;border:0;border-radius:7px;background:transparent;padding:10px 12px;text-align:left}.history-node::before{content:"";position:absolute;left:-19px;top:22px;width:18px;border-top:1px solid var(--border)}.history-node:hover{background:var(--hover)}.history-node.current{background:color-mix(in srgb,var(--accent) 12%,transparent)}.history-node strong,.history-node small{display:block}.history-node small{margin-top:3px;color:var(--muted)}.history-role{color:var(--accent);font-size:10px;font-weight:750;letter-spacing:.05em}.history-foot{border-top:1px solid var(--border);padding-top:14px;color:var(--muted);font-size:12px}.kbd-chip{border:1px solid var(--border);border-radius:4px;background:var(--canvas);padding:2px 6px;color:var(--muted);font:11px ui-monospace,monospace}
+@media(max-width:900px){:root{--topbar-h:96px}.topbar{grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:48px 48px;gap:0 9px;padding:0 12px}.scope{grid-column:2;grid-row:1}.work-context{display:contents}.top-tools{grid-column:1/-1;grid-row:2;align-self:stretch;overflow-x:auto;border-top:1px solid var(--border);scrollbar-width:none}.top-tools::-webkit-scrollbar{display:none}.top-tools button{min-height:38px;padding-inline:11px}.topbar .push{grid-column:3;grid-row:1}.top-needs,.top-promote,.prototag{display:none}.body{--lw:0px;--lr:0px}.body>.left-panel,.body>.left-resizer{display:none}.narrow-only{display:flex;gap:6px}.anchor-bar .mobile-action{display:inline-flex}.anchor-bar{padding-inline:12px}.files,.git{grid-template-columns:1fr}.tree,.changes{display:none}.brief-grid{grid-template-columns:1fr}.brief-update,.index-row{grid-template-columns:1fr;gap:5px}.app:has(.topbar.child-mode){grid-template-rows:48px minmax(0,1fr)}.topbar.child-mode{grid-template-rows:48px}.ctx-head,.child-note{align-items:flex-start;flex-direction:column}.ctx-checkpoint{grid-template-columns:1fr}.ctx-reference{grid-template-columns:1fr}.ctx-reference dd{margin-bottom:7px}.child-facts{grid-template-columns:1fr}.child-note .push{margin-left:0!important;width:100%;flex-wrap:wrap}}
 @media(min-width:901px){.overlay-pane{display:none!important}}
 </style>
 </head>
@@ -206,7 +207,8 @@ const ICONS={
  expand:'<path d="M13 6l6 6-6 6M6 6l6 6-6 6"/>',
  dots:'<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
  chevron:'<path d="M9 6l6 6-6 6"/>',
- close:'<path d="M6 6l12 12M18 6L6 18"/>'
+ close:'<path d="M6 6l12 12M18 6L6 18"/>',
+ history:'<path d="M4 6h10a5 5 0 0 1 5 5v7M4 6l4-4M4 6l4 4"/><path d="M8 18h11"/>'
 };
 function icon(n,cls=''){return `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]||''}</svg>`}
 /* ---------- fixtures ---------- */
@@ -300,7 +302,7 @@ const state={
  toolByScope:{},navCollapsed:false,childChat:null,childOpen:{},cancelState:{},
  fileOpen:'packages/chatgpt-plugin/index.ts',foldersOpen:{'packages':true,'packages/chatgpt-plugin':true},
  gitFile:'packages/chatgpt-plugin/index.ts',
- terminal:{open:false,height:210},
+ terminal:{open:false,height:210},historyPoint:{},editorDraft:{},
  theme:localStorage.getItem('unified-prototype-theme')||'dark',
  panels:{left:{width:300}},
  menu:'',dialog:null,overlay:'',notice:'',
@@ -329,16 +331,22 @@ function totalNeedsYou(){return Object.values(workstreams).reduce((a,w)=>a+unans
 function navFoot(){return `<div class="nav-foot"><strong>Needs you · ${totalNeedsYou()}</strong><span>across ${Object.keys(workstreams).length} Workstreams · Lead · gpt-5.6-sol · medium</span></div>`}
 /* ---------- top bar + menus ---------- */
 function topbar(){
- return `<header class="topbar">
+ const sessionView=state.destination!=='workstream',w=wsMode()?currentWorkstream():null;
+ const tools=sessionView&&!state.childChat?toolsFor().map(t=>`<button role="tab" aria-selected="${currentTool()===t}" class="${currentTool()===t?'active':''}" data-tool="${t}">${t}</button>`).join(''):'';
+ let actions='';
+ if(state.destination==='workstream')actions=`<button class="primary" data-open-session="${w.sessionIds[0]}">Continue</button><button class="icon" data-menu-toggle="workstream" aria-label="Workstream menu">${icon('dots')}</button>`;
+ else if(state.destination==='workstream-session')actions=`<button class="icon" data-menu-toggle="session" aria-haspopup="true" aria-expanded="${state.menu==='session'}" aria-label="Session menu">${icon('dots')}</button>`;
+ else actions=`<button class="primary top-promote" data-promote>Promote</button>`;
+ return `<header class="topbar ${state.childChat?'child-mode':''}">
   <button class="brand" data-menu-toggle="pi" aria-haspopup="true" aria-expanded="${state.menu==='pi'}" aria-label="PI WEB menu"><span class="pi-mark">π</span></button>
-  <div class="scope"><strong>Chats + Workstreams</strong><span class="muted">one stable workspace</span></div>
-  <div class="push"><span class="prototag">PROTOTYPE</span></div>
-  <div class="narrow-only"><button class="icon" data-overlay="nav" aria-label="Open navigation">${icon('menu')}</button></div>
+  <div class="scope"><strong>Chats + Workstreams</strong></div>
+  <div class="work-context">${sessionView&&!state.childChat?`<nav class="top-tools" aria-label="Workspace surfaces"><span class="surface-tabs" role="tablist">${tools}</span></nav>`:''}</div>
+  <div class="push">${actions}<span class="prototag">PROTOTYPE</span><span class="narrow-only"><button class="icon" data-overlay="nav" aria-label="Open navigation">${icon('menu')}</button></span></div>
  </header>`;
 }
 function piMenu(){
  if(state.menu!=='pi')return'';
- return `<nav class="menu" data-menu-panel style="top:50px;left:12px;width:300px" aria-label="PI WEB menu">
+ return `<nav class="menu" data-menu-panel style="top:calc(var(--topbar-h) + 4px);left:12px;width:300px" aria-label="PI WEB menu">
   <div class="menu-head"><span class="pi-mark">π</span><span><strong>PI WEB</strong><small>Shell actions</small></span><span class="dot" title="Connected"></span></div>
   <button data-act="palette">Command palette<span class="kbd">⌘K</span></button>
   <button data-act="projects">Projects &amp; checkouts</button>
@@ -352,7 +360,7 @@ function piMenu(){
 }
 function workstreamMenu(){
  if(state.menu!=='workstream')return'';
- return `<nav class="menu" data-menu-panel style="top:96px;left:${state.navCollapsed?12:220}px" aria-label="Workstream menu">
+ return `<nav class="menu" data-menu-panel style="top:calc(var(--topbar-h) + 4px);right:12px" aria-label="Workstream menu">
   <span class="menu-label">Workstream</span>
   <button data-act="ws-rename">Rename…</button>
   <button data-act="ws-link">Add link…</button>
@@ -362,10 +370,11 @@ function workstreamMenu(){
 }
 function sessionMenu(){
  if(state.menu!=='session')return'';
- return `<nav class="menu" data-menu-panel style="top:104px;right:16px" aria-label="Session menu">
+ return `<nav class="menu" data-menu-panel style="top:calc(var(--topbar-h) + 4px);right:12px" aria-label="Session menu">
   <span class="menu-label">Session</span>
   <button data-act="sess-anchor">Inspect anchor</button>
   <button data-act="sess-resume">Resume session</button>
+  <button data-history>Message history<span class="kbd">Esc Esc</span></button>
   <div class="sep"></div>
   <button data-act="sess-checkpoint">Request checkpoint…</button>
  </nav>`;
@@ -395,7 +404,7 @@ function workstreamNav(){
  const w=currentWorkstream();const need=unansweredTasks(w).length;
  const rows=w.sessionIds.map(id=>{const s=sessions[id];const sel=state.destination==='workstream-session'&&state.sessionId===id;const kids=childrenOf(id);const running=kids.filter(c=>childStatus(c)==='running').length;const pending=decisionPending('session',id);const cp=state.checkpoints[id];const failed=state.checkpointFailure[id];const status=[pending?'<span class="s"><i class="s-dot need"></i>Needs you</span>':'',running?`<span class="s"><i class="s-dot run"></i>${running} running</span>`:'',`<span class="s">${failed?'Checkpoint failed':esc(cp.at)}</span>`].join('');return `<div class="sessions-wrap"><button class="session-row ${sel?'selected':''}" data-open-session="${id}"><span class="nav-main"><span class="row-top"><strong class="truncate">${esc(s.title)}</strong>${kids.length?`<span class="count">${kids.length}</span>`:''}</span><span class="meta">${esc(s.anchor)}</span><span class="status-line">${status}</span></span></button>${childBlock(id)}</div>`}).join('');
  return `<aside class="panel left-panel">
-  <div class="nav-topblock"><div class="nav-head"><button class="icon" data-back-root aria-label="Back to all Chats and Workstreams">${icon('back')}</button><button class="ws-identity ${state.destination==='workstream'?'selected':''}" data-open-brief aria-label="Open Workstream brief"><span class="truncate"><span class="label" style="margin:0">Workstream</span><strong class="truncate">${esc(w.title)}</strong></span></button><button class="icon" data-menu-toggle="workstream" aria-haspopup="true" aria-expanded="${state.menu==='workstream'}" aria-label="Workstream menu">${icon('dots')}</button><button class="icon" data-collapse-nav aria-label="Collapse session navigation">${icon('collapse')}</button></div><div class="ws-head-status"><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale checkpoint'}</span><span class="muted">rev ${w.revision}</span>${need?`<span class="badge orange">Needs you · ${need}</span>`:''}</div></div>
+  <div class="nav-topblock"><div class="nav-head"><button class="icon" data-back-root aria-label="Back to all Chats and Workstreams">${icon('back')}</button><button class="ws-identity ${state.destination==='workstream'?'selected':''}" data-open-brief aria-label="Open Workstream brief"><span class="truncate"><span class="label" style="margin:0">Workstream</span><strong class="truncate">${esc(w.title)}</strong></span></button><button class="icon" data-collapse-nav aria-label="Collapse session navigation">${icon('collapse')}</button></div><div class="ws-head-status"><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale checkpoint'}</span><span class="muted">rev ${w.revision}</span>${need?`<span class="badge orange">Needs you · ${need}</span>`:''}</div></div>
   <div class="nav-scroll"><div class="section-title"><span>Sessions · ${w.sessionIds.length}</span><button class="icon small" data-new-session aria-label="New session">${icon('plus','sm')}</button></div>${rows}</div>
   ${navFoot()}
  </aside>`;
@@ -405,8 +414,9 @@ function leftPane(){return wsMode()?workstreamNav():rootNav()}
 function stripView(){
  if(wsMode()){
   const w=currentWorkstream();
-  const tabs=w.sessionIds.map(id=>`<button class="${state.destination==='workstream-session'&&state.sessionId===id&&!state.childChat?'active':''}" data-open-session="${id}">${esc(sessions[id].title)}</button>`).join('');
-  return `<nav class="workstream-strip" aria-label="Workstream sessions"><button class="icon" data-expand-nav aria-label="Expand navigation">${icon('expand')}</button><button class="strip-id" data-open-brief>${esc(w.title)}</button><button class="${state.destination==='workstream'?'active':''}" data-open-brief>Brief</button><span class="strip-div"></span>${tabs}<button class="icon" data-new-session aria-label="New session">${icon('plus','sm')}</button><span style="flex:1"></span><button class="icon" data-menu-toggle="workstream" aria-label="Workstream menu">${icon('dots')}</button></nav>`;
+  const tabs=w.sessionIds.map(id=>{const s=sessions[id],pending=decisionPending('session',id),running=childrenOf(id).filter(c=>childStatus(c)==='running').length;return `<button class="${state.destination==='workstream-session'&&state.sessionId===id&&!state.childChat?'active':''}" data-open-session="${id}"><span>${esc(s.title)}</span>${pending?'<i class="s-dot need" title="Needs you"></i>':''}${running?`<span class="badge green">${running} running</span>`:''}</button>`}).join('');
+  const need=unansweredTasks(w).length;
+  return `<nav class="workstream-strip" aria-label="Workstream sessions"><button class="icon" data-expand-nav aria-label="Expand navigation">${icon('expand')}</button><button class="strip-id" data-open-brief>${esc(w.title)}</button><button class="${state.destination==='workstream'?'active':''}" data-open-brief>Brief${need?` <span class="badge orange">${need}</span>`:''}</button><span class="strip-div"></span>${tabs}<button class="icon" data-new-session aria-label="New session">${icon('plus','sm')}</button><span style="flex:1"></span></nav>`;
  }
  const chats=Object.values(standaloneChats).map(c=>`<button class="${state.standaloneId===c.id?'active':''}" data-open-chat="${c.id}">${esc(c.title)}</button>`).join('');
  const ws=Object.values(workstreams).map(w=>`<button data-open-workstream="${w.id}">${esc(w.title)}</button>`).join('');
@@ -424,14 +434,15 @@ function liveDecisionCard(){
  return `<div class="live-decision"><div class="ld-tag"><span class="dot" style="background:var(--accent)"></span>Live decision · needs you now</div><h3>${esc(d.prompt)}</h3><p>${esc(d.detail)}</p>${inner}</div>`;
 }
 function chatSurface(){
- const e=currentEntity(),key=scopeKey();
- const sent=(state.sent[key]||[]).map(m=>`<div class="exchange"><div class="message-meta"><span class="role">USER</span><span>just now</span></div><div class="message-copy">${esc(m)}</div></div>`).join('');
+ const e=currentEntity(),key=scopeKey(),point=state.historyPoint[key]??999;
+ const sent=(state.sent[key]||[]).slice(0,Math.max(0,point-3)).map(m=>`<div class="exchange"><div class="message-meta"><span class="role">USER</span><span>just now</span></div><div class="message-copy">${esc(m)}</div></div>`).join('');
+ const empty=point===0?`<div class="exchange"><div class="message-meta"><span class="role">SESSION START</span></div><div class="message-copy muted">Continue here to create a new branch from the beginning.</div></div>`:'';
  return `<section class="chat"><div class="messages">
-   <div class="exchange"><div class="message-meta"><span class="role">USER</span><span>10:52 AM</span></div><div class="message-copy">${esc(e.user)}</div><div class="event-fold">${icon('chevron','sm')} Events · 4 events · 1 assistant · 3 tool</div></div>
-   <div class="exchange assistant"><div class="message-meta"><span class="role">ASSISTANT</span><span>openai-codex/gpt-5.6-sol · medium</span></div><div class="message-copy">${esc(e.assistant)}</div></div>
-   ${sent}${liveDecisionCard()}
+   ${empty}${point>=1?`<div class="exchange"><div class="message-meta"><span class="role">USER</span><span>10:52 AM</span></div><div class="message-copy">${esc(e.user)}</div><div class="event-fold">${icon('chevron','sm')} Events · 4 events · 1 assistant · 3 tool</div></div>`:''}
+   ${point>=2?`<div class="exchange assistant"><div class="message-meta"><span class="role">ASSISTANT</span><span>openai-codex/gpt-5.6-sol · medium</span></div><div class="message-copy">${esc(e.assistant)}</div></div>`:''}
+   ${sent}${point>=3?liveDecisionCard():''}
   </div>
-  <div class="composer"><div class="composer-box"><input aria-label="Message Pi" placeholder="Message Pi… Use / for commands, @ for files"><button class="primary" data-send>Send</button></div><div class="composer-meta"><span>openai-codex/gpt-5.6-sol</span><span>↑148k · ↓24k · $3.87</span></div></div>
+  <div class="composer"><div class="composer-box"><input aria-label="Message Pi" value="${esc(state.editorDraft[key]||'')}" placeholder="Message Pi… Use / for commands, @ for files"><button class="primary" data-send>Send</button></div><div class="composer-meta"><span>openai-codex/gpt-5.6-sol</span><span>↑148k · ↓24k · $3.87</span></div></div>
  </section>`;
 }
 /* ---------- files finder ---------- */
@@ -456,23 +467,26 @@ function gitSurface(){
 function durableTaskCard(id){
  const t=humanTasks[id],answer=state.taskAnswers[id],resolved=state.taskResolved[id];
  let answerArea;
- if(answer)answerArea=`<div class="task-answered"><span>Answered: <strong>${esc(answer)}</strong> · ${esc(state.taskAnswerAt[id]||'just now')}</span><button class="task-open" data-task-clear="${id}">Change</button></div>`;
+ if(answer)answerArea=`<div class="task-answered"><span><strong>${esc(answer)}</strong> · answer receipt ${esc(state.taskAnswerAt[id]||'just now')}</span><button class="task-open" data-task-clear="${id}">Change</button></div>`;
  else if(t.kind==='text')answerArea=`<div class="task-text"><textarea data-task-draft="${id}" placeholder="Type your answer…"></textarea><button class="primary" data-task-submit="${id}">Send</button></div>`;
  else answerArea=`<div class="task-answers">${t.options.map(o=>`<button data-task-answer="${id}|${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
  const resolveRow=answer?`<div class="task-resolve"><span class="badge ${resolved?'green':'orange'}">${resolved?'Resolved':'Open · awaiting resolution'}</span>${resolved?`<button class="task-open" data-task-reopen="${id}">Reopen</button>`:`<button class="small" data-task-resolve="${id}">Resolve</button>`}</div>`:'';
  return `<article class="task-card"><div class="task-top"><h3>${esc(t.title)}</h3><span class="badge ${t.materiality.startsWith('High')?'red':t.materiality.startsWith('Medium')?'orange':''}">${esc(t.materiality.split(' · ')[0])}</span></div><p>${esc(t.detail)}</p><div class="task-prov">Source: <button class="task-open" data-open-source="${id}">${esc(sessions[t.source].title)}</button> · <span class="badge ${answer?'green':''}">${answer?'Answered':'Unanswered'}</span></div>${answerArea}${resolveRow}</article>`;
 }
 function contextSurface(){
- const w=currentWorkstream(),s=currentSession(),cp=state.checkpoints[s.id],failed=state.checkpointFailure[s.id];
+ const w=currentWorkstream(),s=currentSession(),cp=state.checkpoints[s.id],failed=state.checkpointFailure[s.id],open=pendingTasks(w).length;
  return `<div class="ctx"><div class="ctx-inner">
-  <div class="panel-section"><span class="label">Workstream brief · revision ${w.revision}</span><p class="continuation" style="font-size:14px">${esc(w.continuation)}</p><button class="ctx-link" data-open-brief>Open full Workstream brief ›</button></div>
-  <div class="panel-section"><span class="label">Durable Human Tasks · ${w.taskIds.length}</span>${w.taskIds.map(durableTaskCard).join('')}</div>
-  <div class="panel-section"><span class="label">Selected-session checkpoint</span><div class="checkpoint-box"><span class="badge ${failed?'red':'green'}">${failed?'Last request failed · previous confirmation retained':'Latest confirmed'}</span><p>${esc(cp.text)}</p><small class="muted">${esc(cp.at)}</small></div></div>
-  <div class="panel-section"><span class="label">Links</span>${w.links.map(l=>`<div class="link-row"><span>${esc(l)}</span></div>`).join('')}</div>
-  <div class="panel-section"><span class="label">Session anchor</span><div class="link-row"><span>${esc(s.anchor)}</span></div><small class="muted">Explicit selected-session checkout</small></div>
+  <header class="ctx-head"><div><h1>Context</h1><p>${esc(w.continuation)}</p></div><button class="ctx-link" data-open-brief>Open full brief</button></header>
+  <section class="panel-section"><div class="ctx-section-head"><h2>Checkpoint</h2><span class="muted">${esc(cp.at)}</span></div><div class="ctx-checkpoint"><span class="badge ${failed?'red':'green'}">${failed?'Request failed':'Confirmed'}</span><p>${esc(cp.text)}</p>${failed?'<small class="muted">Previous confirmation retained</small>':''}</div></section>
+  <section class="panel-section"><div class="ctx-section-head"><h2>Human Tasks</h2><span class="badge ${open?'orange':'green'}">${open} open</span></div>${w.taskIds.map(durableTaskCard).join('')}</section>
+  <section class="panel-section"><div class="ctx-section-head"><h2>Reference</h2><span class="muted">Workstream rev ${w.revision}</span></div><dl class="ctx-reference"><dt>Session anchor</dt><dd>${esc(s.anchor)} <span class="muted">· explicit checkout</span></dd><dt>Links</dt><dd class="reference-list">${w.links.map(l=>`<span>${esc(l)}</span>`).join('')}</dd></dl></section>
  </div></div>`;
 }
 /* ---------- terminal bottom pane ---------- */
+function terminalDock(){
+ const e=currentEntity();
+ return `<button class="terminal-dock" data-terminal-toggle><span>Terminal · ${esc(e.anchor)}</span><span class="push">Open</span></button>`;
+}
 function terminalPane(){
  const e=currentEntity();
  return `<div class="terminal-pane" style="height:${state.terminal.height}px"><div class="term-resize" data-resize="term"></div><div class="term-head"><span>Terminal · ${esc(e.anchor)}</span><span class="push"><button class="icon small" aria-label="New terminal">${icon('plus','sm')}</button><button class="icon small" data-terminal-close aria-label="Close terminal">${icon('close','sm')}</button></span></div><pre class="term-body"><span class="p">${esc(e.anchor.split(' · ')[0])} $</span> git status --short\n<span class="m"># working tree clean</span>\n<span class="p">${esc(e.anchor.split(' · ')[0])} $</span> gh pr status\n<span class="m">Current branch</span>  2 open · 0 draft\n<span class="p">${esc(e.anchor.split(' · ')[0])} $</span> <span aria-hidden="true">▋</span></pre></div>`;
@@ -481,14 +495,14 @@ function terminalPane(){
 function childChatSurface(){
  const c=subagents[state.childChat];const st=childStatus(c);
  const acts=st==='running'?`<button class="small danger" data-cancel="${c.id}">Cancel child</button>`:st==='cancelling'?`<button class="small" disabled>Confirming termination…</button>`:`<button class="small" data-copy="${esc(c.sessionId)}">Copy session ID</button>`;
- return `<section class="chat"><header class="child-head"><button class="icon" data-child-close aria-label="Back to parent chat">${icon('back')}</button><span class="child-glyph">↳π</span><div class="hmeta"><strong>${esc(c.title)}</strong><small>Read-only child conversation · ${esc(c.profile)} · ${esc(c.role)}</small></div><span class="st-pill ${st} st">${esc(statusLabel(c))}</span></header>
-  <div class="child-body">
-   <article class="cmsg input"><div class="message-meta"><span class="role">LEAD INPUT</span><span>fresh context</span></div>${esc(c.task)}</article>
-   <article class="cmsg"><div class="message-meta"><span class="role">CHILD PI</span><span>${esc(c.binding)} · quota ${esc(c.quota)}</span></div>I will handle this bounded assignment independently and return a compact result to the lead.</article>
-   ${c.observations.map(o=>`<div class="ctool">${esc(o[0])} · ${esc(o[1])}</div>`).join('')}
-   ${c.result?`<div class="cresult ${c.status==='warning'?'warning':''}"><span class="label">Compact result returned to lead</span>${esc(c.result)}</div>`:`<article class="cmsg"><div class="message-meta"><span class="role">CHILD PI</span><span>latest visible progress</span></div>${esc(c.observations.at(-1)[1])}.</article>`}
+ return `<section class="chat"><header class="child-head"><button class="icon" data-child-close aria-label="Back to parent chat">${icon('back')}</button><div class="hmeta"><strong>${esc(c.title)}</strong><small>Child execution · inspection only</small></div><span class="st-pill ${st} st">${esc(statusLabel(c))}</span></header>
+  <div class="child-body" role="region" tabindex="0" aria-label="Child execution evidence">
+   <div class="child-facts"><div class="child-fact"><span>Profile · role</span><strong>${esc(c.profile)} · ${esc(c.role)}</strong></div><div class="child-fact"><span>Model · effort</span><strong>${esc(c.binding)}</strong></div><div class="child-fact"><span>Elapsed</span><strong>${esc(c.elapsed)}</strong></div><div class="child-fact"><span>Admission</span><strong>${esc(c.quota)}</strong></div></div>
+   <section class="child-section"><h2>Assignment</h2><p class="child-assignment">${esc(c.task)}</p></section>
+   <section class="child-section"><h2>Activity</h2><ol class="child-activity">${c.observations.map(o=>`<li><time>${esc(o[0])}</time><span>${esc(o[1])}</span></li>`).join('')}</ol></section>
+   <section class="child-section"><h2>${c.result?'Result':'Current state'}</h2><p class="cresult ${c.status==='warning'?'warning':''}">${esc(c.result||c.observations.at(-1)[1]+'.')}</p></section>
   </div>
-  <footer class="child-note"><span><strong>Inspection only.</strong> This persisted Pi session is bounded evidence, not a resumable Workstream session.</span><span class="push" style="margin-left:auto;display:flex;gap:6px"><span class="badge" style="align-self:center">Pi session ${esc(c.sessionId.slice(0,13))}…</span>${acts}</span></footer>
+  <footer class="child-note"><span><strong>Bounded evidence.</strong> Not a resumable Workstream session.</span><span class="push" style="margin-left:auto;display:flex;gap:6px"><span class="badge" style="align-self:center">Pi session ${esc(c.sessionId.slice(0,13))}…</span>${acts}</span></footer>
  </section>`;
 }
 /* ---------- brief ---------- */
@@ -497,7 +511,7 @@ function briefSurface(){
  const tasks=unresolved.length?unresolved.map(id=>{const t=humanTasks[id],answered=state.taskAnswers[id];const lvl=t.materiality.split(' · ')[0];return `<li class="task-item"><div class="ti-main"><strong>${esc(t.title)}</strong><div class="ti-sub">${esc(sessions[t.source].title)} · <span class="mat ${lvl}">${esc(lvl)}</span></div></div>${answered?`<span class="badge green">Answered</span>`:`<button class="ctx-link" data-open-task-context="${id}">Answer ›</button>`}</li>`}).join(''):`<p class="muted">Nothing needs you right now.</p>`;
  const list=w.sessionIds.map(id=>{const s=sessions[id];const kids=childrenOf(id).length;return `<button class="sess-item" data-open-session="${id}"><span class="si-main"><strong class="truncate">${esc(s.title)}${kids?` <span class="count">${kids}</span>`:''}</strong><span class="si-update">${esc(s.update)}</span></span><span class="si-anchor">${esc(s.anchor)}</span><span class="si-open">Open</span></button>`}).join('');
  return `<main class="brief" aria-label="Workstream brief"><div class="brief-inner">
-  <header class="brief-head"><div><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale checkpoint'}</span><h1>${esc(w.title)}</h1><div class="brief-meta">Revision ${w.revision} · ${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · confirmed by owner</div></div><div class="brief-actions"><button class="icon" data-menu-toggle="workstream" aria-label="Workstream menu">${icon('dots')}</button><button class="primary" data-open-session="${w.sessionIds[0]}">Continue in session</button></div></header>
+  <header class="brief-head"><div><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale checkpoint'}</span><h1>${esc(w.title)}</h1><div class="brief-meta">Revision ${w.revision} · ${w.sessionIds.length} session${w.sessionIds.length===1?'':'s'} · confirmed by owner</div></div></header>
   <div class="brief-grid">
    <section><h2 class="brief-h">Next</h2><p class="continuation">${esc(w.continuation)}</p><p class="since"><span class="since-label">Since you left:</span> ${esc(w.changed)}</p></section>
    <section><h2 class="brief-h">Needs you · ${unresolved.length}</h2><ul class="task-list">${tasks}</ul></section>
@@ -506,15 +520,11 @@ function briefSurface(){
  </div></main>`;
 }
 /* ---------- center ---------- */
-function sessionHead(){
+function anchorBar(){
  const e=currentEntity();
- if(state.destination==='standalone-chat')return `<header class="session-head"><div class="st-title"><h1>${esc(e.title)}</h1><div class="crumbs"><span class="badge">Standalone Chat</span> · ${esc(e.anchor)}</div></div><div class="acts"><button class="primary" data-promote>Promote to Workstream</button></div></header>`;
+ if(state.destination==='standalone-chat')return `<div class="anchor-bar"><span class="badge">Standalone Chat</span><span class="anchor truncate">${esc(e.anchor)}</span><span class="push mobile-action"><button class="primary" data-promote>Promote</button></span></div>`;
  const w=currentWorkstream(),need=unansweredTasks(w).length;
- return `<header class="session-head"><div class="st-title"><h1>${esc(e.title)}</h1><div class="crumbs"><span class="badge green">Workstream</span> · ${esc(w.title)} · ${esc(e.anchor)}</div></div><div class="acts">${need?`<button data-open-context>Needs you · ${need}</button>`:''}<button data-menu-toggle="session" aria-haspopup="true" aria-expanded="${state.menu==='session'}" aria-label="Session menu">${icon('dots')}</button></div></header>`;
-}
-function toolBar(){
- const tools=toolsFor(),cur=currentTool();
- return `<div class="tool-bar"><div class="tabs">${tools.map(t=>`<button class="${cur===t&&!state.childChat?'active':''}" data-tool="${t}">${t}</button>`).join('')}</div><span class="spacer"></span><button class="term-btn ${state.terminal.open?'active':''}" data-terminal-toggle>Terminal</button></div>`;
+ return `<div class="anchor-bar"><span class="badge ${w.fresh}">${w.fresh==='green'?'Current':'Stale checkpoint'}</span><span class="anchor truncate">${esc(e.anchor)}</span><span class="push mobile-action">${need?`<button data-open-context>Needs you · ${need}</button>`:''}</span></div>`;
 }
 function toolSurface(){
  const t=currentTool();
@@ -526,9 +536,9 @@ function toolSurface(){
 function centerPane(){
  const strip=state.navCollapsed?stripView():'';
  if(state.destination==='workstream')return `<section class="center">${strip}${briefSurface()}</section>`;
- const body=state.childChat?childChatSurface():`${toolBar()}<div class="surface-wrap">${toolSurface()}</div>`;
- const head=state.childChat?'':sessionHead();
- return `<section class="center">${strip}${head}${body}${state.terminal.open&&!state.childChat?terminalPane():''}</section>`;
+ const body=state.childChat?childChatSurface():`<div class="surface-wrap">${toolSurface()}</div>`;
+ const terminal=!state.childChat?(state.terminal.open?terminalPane():terminalDock()):'';
+ return `<section class="center">${strip}${anchorBar()}${body}${terminal}</section>`;
 }
 /* ---------- resizers, dialogs, overlays ---------- */
 function leftResizer(){return `<div class="resizer left-resizer" data-resize="left"></div>`}
@@ -538,9 +548,21 @@ function dialogView(){
  else if(d.type==='rename')body=`<h2>Rename Workstream</h2><p>Update the Workstream title in prototype memory.</p><label>Title<input value="${esc(d.value)}" data-dialog-input aria-label="Workstream title"></label><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Rename</button></div>`;
  else if(d.type==='addlink')body=`<h2>Add link</h2><p>Attach a reference link to this Workstream.</p><label>Link<input value="${esc(d.value)}" data-dialog-input placeholder="owner/repo#123 or URL" aria-label="Link"></label><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Add link</button></div>`;
  else if(d.type==='checkpoint'){const s=sessions[d.sessionId];body=`<span class="badge">Attended</span><h2>Request checkpoint · ${esc(s.title)}</h2><p>Pi proposes a checkpoint. Correct the text if needed, then confirm. Only confirmation changes the displayed latest checkpoint.</p><label>Proposed checkpoint<textarea data-dialog-input aria-label="Proposed checkpoint">${esc(d.draft)}</textarea></label><div class="actions"><button data-dialog-cancel>Cancel</button><button data-dialog-fail>Confirm (simulate failure)</button><button class="primary" data-dialog-confirm>Confirm checkpoint</button></div>`;}
+ else if(d.type==='newsession'){body=`<span class="badge orange">Explicit anchor required</span><h2>Start a session in ${esc(workstreams[d.workstreamId].title)}</h2><p>Choose the project and workspace deliberately. PI WEB will not inherit a hidden current checkout.</p><label>Session title<input value="${esc(d.title)}" data-dialog-input aria-label="Session title" placeholder="What will this session do?"></label><label>Project and workspace<select data-dialog-anchor aria-label="Project and workspace"><option value="">Choose explicitly…</option><option value="PhotoQuest · main" ${d.anchor==='PhotoQuest · main'?'selected':''}>PhotoQuest · main</option><option value="PhotoQuest · admin-operations-ux" ${d.anchor==='PhotoQuest · admin-operations-ux'?'selected':''}>PhotoQuest · admin-operations-ux</option><option value="pi-workbench · workstreams-ui" ${d.anchor==='pi-workbench · workstreams-ui'?'selected':''}>pi-workbench · workstreams-ui</option><option value="pi-web · main" ${d.anchor==='pi-web · main'?'selected':''}>pi-web · main</option></select></label><div class="dialog-facts"><span>Workstream · ${esc(workstreams[d.workstreamId].title)}</span><span>Anchor is confirmed before launch</span></div><div class="actions"><button data-dialog-cancel>Cancel</button><button class="primary" data-dialog-confirm>Start session</button></div>`;}
  return `<div class="backdrop" data-dialog-backdrop><section class="dialog" role="dialog" aria-modal="true">${body}</section></div>`;
 }
+function historyView(){
+ const e=currentEntity(),key=scopeKey(),rawPoint=state.historyPoint[key]??999,point=rawPoint===999?3:rawPoint;
+ const nodes=[
+  {point:0,role:'ROOT',title:'Session start',detail:'Start a new branch with no prior messages'},
+  {point:1,role:'USER',title:e.user,detail:'Edit and resubmit this message',draft:e.user},
+  {point:2,role:'ASSISTANT',title:e.assistant,detail:'Continue after this response'},
+  {point:3,role:'DECISION',title:e.decision?.prompt||'Current conversation tail',detail:'Continue from the current decision'}
+ ];
+ return `<section class="history-pane" role="dialog" aria-modal="true" aria-label="Message history"><header class="history-head"><div><h2>Message history</h2><p>${esc(e.title)} · choose where to continue</p></div><span class="push"><span class="kbd-chip">Esc</span> <button class="icon" data-overlay-close aria-label="Close message history">${icon('close','sm')}</button></span></header><div class="history-inner"><div class="history-tree">${nodes.map(n=>`<button class="history-node ${point===n.point?'current':''}" data-history-point="${n.point}" data-history-draft="${esc(n.draft||'')}"><span><span class="history-role">${n.role}</span><strong>${esc(n.title)}</strong><small>${esc(n.detail)}</small></span>${point===n.point?'<span class="badge green">Current</span>':''}</button>`).join('')}</div><div class="history-foot">Selecting an earlier point preserves this session and makes the next message a new branch, matching Pi’s session-tree behavior.</div></div></section>`;
+}
 function overlayView(){
+ if(state.overlay==='history')return historyView();
  if(state.overlay!=='nav')return'';
  return `<aside class="overlay-pane"><div class="overlay-head"><strong>Navigate</strong><button class="icon" data-overlay-close aria-label="Close">${icon('close','sm')}</button></div>${leftPane()}</aside>`;
 }
@@ -550,7 +572,7 @@ function render(){
  bodyVars();
  const leftEl=state.navCollapsed?'<div class="slot-left"></div>':leftPane();
  const leftRz=state.navCollapsed?'<div class="slot-lr"></div>':leftResizer();
- root.innerHTML=`<div class="app" ${state.dialog?'inert':''}>${topbar()}<div class="body">${leftEl}${leftRz}${centerPane()}</div></div>${piMenu()}${workstreamMenu()}${sessionMenu()}${overlayView()}${dialogView()}${state.notice?`<div class="toast" role="status">${esc(state.notice)}</div>`:''}`;
+ root.innerHTML=`<div class="app" ${state.dialog||state.overlay?'inert':''}>${topbar()}<div class="body">${leftEl}${leftRz}${centerPane()}</div></div>${piMenu()}${workstreamMenu()}${sessionMenu()}${overlayView()}${dialogView()}${state.notice?`<div class="toast" role="status">${esc(state.notice)}</div>`:''}`;
  if(state.dialog)queueMicrotask(()=>document.querySelector('[data-dialog-input]')?.focus());
 }
 /* ---------- interactions ---------- */
@@ -574,11 +596,13 @@ function onClick(e){
  if(d.openBrief!==undefined){state.destination='workstream';state.childChat=null;state.menu='';notice('Opened Workstream brief.');return render()}
  if(d.backRoot!==undefined){state.destination='standalone-chat';state.childChat=null;state.menu='';notice('Returned to all Chats and Workstreams.');return render()}
  if(d.openContext!==undefined){state.toolByScope[scopeKey()]='Context';notice('Context opened.');return render()}
+ if(d.history!==undefined){state.overlay='history';state.menu='';notice('');return render()}
+ if(d.historyPoint!==undefined){const k=scopeKey(),p=Number(d.historyPoint);state.historyPoint[k]=p;state.editorDraft[k]=d.historyDraft||'';state.overlay='';state.toolByScope[k]='Chat';notice(p<3?'Moved to an earlier message. Your next message creates a new branch.':'Returned to the current conversation tail.');return render()}
  if(d.openTaskContext){const t=humanTasks[d.openTaskContext];openSession(t.source);state.toolByScope['session:'+t.source]='Context';notice(`Opened Context for ${sessions[t.source].title}.`);return render()}
  if(d.openSource){const t=humanTasks[d.openSource];openSession(t.source);notice(`Opened source conversation: ${sessions[t.source].title}.`);return render()}
  if(d.collapseNav!==undefined){state.navCollapsed=true;state.menu='';notice('Navigation collapsed to horizontal tabs.');return render()}
  if(d.expandNav!==undefined){state.navCollapsed=false;state.menu='';notice('Navigation expanded.');return render()}
- if(d.newSession!==undefined){notice('New session — prototype placeholder; no session was created.');return render()}
+ if(d.newSession!==undefined){state.dialog={type:'newsession',workstreamId:state.workstreamId,title:''};state.menu='';return render()}
  if(d.tool){state.toolByScope[scopeKey()]=d.tool;state.childChat=null;notice(`${d.tool} opened for the selected session.`);return render()}
  if(d.folder){state.foldersOpen[d.folder]=!state.foldersOpen[d.folder];return render()}
  if(d.file){state.fileOpen=d.file;notice(`Opened ${d.file}.`);return render()}
@@ -604,7 +628,7 @@ function onClick(e){
  if(d.dialogCancel!==undefined){state.dialog=null;notice('Cancelled.');return render()}
  if(d.dialogConfirm!==undefined){confirmDialog();return render()}
  if(d.dialogFail!==undefined){failCheckpoint();return render()}
- if(d.send!==undefined){const inp=document.querySelector('input[aria-label="Message Pi"]');const v=(inp?.value||'').trim();if(!v){notice('Enter a message before sending.');return render()}const k=scopeKey();(state.sent[k]=state.sent[k]||[]).push(v);notice('Message added to the same conversation.');return render()}
+ if(d.send!==undefined){const inp=document.querySelector('input[aria-label="Message Pi"]');const v=(inp?.value||'').trim();if(!v){notice('Enter a message before sending.');return render()}const k=scopeKey();(state.sent[k]=state.sent[k]||[]).push(v);state.historyPoint[k]=3+state.sent[k].length;state.editorDraft[k]='';notice('Message added to this branch.');return render()}
  render();
 }
 function submitLive(value){const k=scopeKey();state.live[k]={status:'submitting',value,mode:currentEntity().decision.kind==='text'?'text':'choice',correcting:false};notice('Submitting live decision…');render();setTimeout(()=>{const cur=state.live[k];if(cur&&cur.status==='submitting'){state.live[k]={status:'answered',value,mode:cur.mode};notice(`Live decision answered: ${value}.`);render()}},500)}
@@ -635,6 +659,7 @@ function confirmDialog(){
   state.dialog=null;openSession(sId);notice('Workstream created around the existing Chat; the same conversation was preserved.');return;}
  if(d.type==='rename'){if(val)currentWorkstream().title=val;state.dialog=null;notice('Workstream renamed.');return}
  if(d.type==='addlink'){if(val)currentWorkstream().links.push(val);state.dialog=null;notice('Link added.');return}
+ if(d.type==='newsession'){const anchor=document.querySelector('[data-dialog-anchor]')?.value||'';d.title=val||'';d.anchor=anchor;if(!val||!anchor){notice('Choose both a session title and an explicit project/workspace anchor.');return}const w=workstreams[d.workstreamId],id='session-'+Date.now();sessions[id]={id,workstreamId:w.id,title:val,anchor,summary:'New attended session',update:'Session created with an explicitly confirmed anchor.',updatedAt:'Just now',user:'Start this attended session from the confirmed anchor.',assistant:'The session is anchored explicitly and ready for attended work.',decision:null};w.sessionIds.push(id);state.checkpoints[id]={text:'No checkpoint confirmed yet.',at:'No confirmation yet'};state.dialog=null;openSession(id);notice(`Session started in ${anchor}.`);return}
  if(d.type==='checkpoint'){state.checkpoints[d.sessionId]={text:val||d.draft,at:'Confirmed just now'};state.checkpointFailure[d.sessionId]=false;state.dialog=null;notice('Checkpoint confirmed; latest checkpoint updated.');return}
 }
 function failCheckpoint(){const d=state.dialog;if(d&&d.type==='checkpoint'){state.checkpointFailure[d.sessionId]=true;state.dialog=null;notice('Checkpoint request failed; the previous confirmation is retained.')}}
@@ -648,8 +673,17 @@ root.parentElement.addEventListener('pointerdown',e=>{
  addEventListener('pointermove',move);addEventListener('pointerup',finish);addEventListener('pointercancel',finish);
 });
 /* ---------- keyboard ---------- */
+let lastEscapeAt=0;
 addEventListener('keydown',e=>{
- if(e.key==='Escape'){if(state.dialog){state.dialog=null;render();return}if(state.menu){state.menu='';render();return}if(state.overlay){state.overlay='';render();return}if(state.childChat){state.childChat=null;render();return}}
+ if(e.key==='Escape'){
+  if(state.dialog){state.dialog=null;lastEscapeAt=0;render();return}
+  if(state.menu){state.menu='';lastEscapeAt=0;render();return}
+  if(state.overlay){state.overlay='';lastEscapeAt=0;render();return}
+  if(state.childChat){state.childChat=null;lastEscapeAt=0;render();return}
+  const now=Date.now();
+  if(now-lastEscapeAt<600&&state.destination!=='workstream'){state.overlay='history';state.notice='';lastEscapeAt=0;render();return}
+  lastEscapeAt=now;notice('Press Esc again to open message history.');render();return;
+ }
  const ae=document.activeElement;
  if(e.key==='Enter'&&ae?.matches('input[aria-label="Message Pi"]')){document.querySelector('[data-send]')?.click();return}
  if(e.key==='Enter'&&ae?.matches('[data-dialog-input]')&&ae.tagName==='INPUT'){document.querySelector('[data-dialog-confirm]')?.click();return}
