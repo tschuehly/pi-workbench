@@ -33,7 +33,7 @@ const quota = {
 };
 const catalog = [
   "anthropic claude-fable-5 1M 128K yes yes",
-  "anthropic claude-opus-4-8 1M 128K yes yes",
+  "anthropic claude-opus-5 1M 128K yes yes",
   "openai-codex gpt-5.6-sol 272K 128K yes yes",
 ].join("\n");
 
@@ -45,6 +45,12 @@ try {
   assert.equal(pass.status, "pass");
   assert.equal(pass.modelBinding.provider, "anthropic");
   assert.equal(pass.modelBinding.quotaSnapshot.relevantWindows.length, 2);
+
+  for (const role of ["system-comprehension", "gpt-diff-review"]) {
+    const opus = JSON.parse(execFileSync(process.execPath, [resolver, role, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+    assert.equal(opus.modelBinding.model, "claude-opus-5");
+    assert.equal(opus.modelBinding.effort, "high");
+  }
 
   quota.providers[0].windows[0].percentRemaining = 0;
   quota.providers[0].state = {

@@ -47,13 +47,13 @@
     "system-comprehension": {
       "provider": "anthropic",
       "quotaProvider": "claude",
-      "model": "claude-opus-4-8",
+      "model": "claude-opus-5",
       "effort": "high"
     },
     "gpt-diff-review": {
       "provider": "anthropic",
       "quotaProvider": "claude",
-      "model": "claude-opus-4-8",
+      "model": "claude-opus-5",
       "effort": "high"
     },
     "background-mechanics": {
