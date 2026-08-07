@@ -1,6 +1,6 @@
 # Level 1 Child Pi Execution Plan
 
-Status: approved implementation plan.
+Status: implemented V1; real and deterministic evidence is maintained in `packages/pi-execution-adapter/`.
 
 ## Outcome
 
@@ -43,11 +43,11 @@ One invocation maps to one execution request. When `background` is true the tool
 
 ## Profiles and routing
 
-V1 loads only the four bundled child profiles. Project and user profile discovery is disabled until a trust and validation model exists. Each profile declares allowed Cognitive Roles; an unknown profile, unknown Cognitive Role, or invalid pair fails preflight.
+V1 loads only the four bundled child profiles. Project and user profile discovery is disabled until a trust and validation model exists. Profiles and Cognitive Roles are validated independently: a profile selects child behavior and requested tools, while a Cognitive Role selects the required kind of thinking and its runtime binding. Any known Cognitive Role may be paired with any bundled profile; an unknown profile or unknown Cognitive Role fails preflight.
 
-The extension invokes the package-relative `skills/model-orchestration/scripts/resolve-runtime-binding.mjs` for every child launch and validates its JSON response. The resolved binding contains a Cognitive Role, provider-qualified model, Model Effort, and fresh quota evidence. Routing, quota, and catalog failures stop in the extension before it calls Pi Execution.
+The extension invokes the package-relative `skills/model-orchestration/scripts/resolve-runtime-binding.mjs` for every child launch and validates its JSON response. The resolved binding contains a Cognitive Role, provider-qualified model, Model Effort, quota admission, and quota telemetry. Fresh confirmed exhaustion, an unknown role, and an unavailable catalog model stop before Pi Execution. Stale, unavailable, or unreadable quota telemetry is admitted explicitly as `degraded-quota-telemetry`; it is visible in observations and does not prevent a verified launch.
 
-The execution adapter accepts only the resulting `ResolvedExecutionSpec`. It rejects malformed or stale binding evidence and fails closed when authentication, launch-time model availability, or runtime binding verification fails. It never selects a fallback. A parent may request a new resolution and start another execution after a typed failure. After Pi starts, the adapter verifies that the reported provider, model, and effort match the resolved binding before prompting the child.
+The execution adapter accepts only the resulting `ResolvedExecutionSpec`. It rejects malformed or internally inconsistent bindings and fresh confirmed exhaustion, while a fresh binding that ages before dispatch becomes visible degraded telemetry rather than a blocker. It fails closed when launch-time model availability or runtime binding verification fails. Quota-collector authentication is telemetry health, not proof that Pi's provider authentication is unusable; the Pi launch is authoritative. The adapter never selects a fallback. A parent may request a new resolution and start another execution after a typed failure. After Pi starts, the adapter verifies that the reported provider, model, and effort match the resolved binding before prompting the child.
 
 Static `model` fields are removed from bundled profiles.
 
@@ -107,7 +107,7 @@ The adapter normalizes Pi RPC activity into bounded observations for:
 - cancellation and timeout; and
 - terminal outcome.
 
-Detailed observations drive the tool UI but do not enter parent Model Context. The parent receives only terminal status, final text, child profile, Cognitive Role, resolved provider/model/effort, and Pi session identifier. V1 does not expose arbitrary JSON Schema or automatic correction turns. Usage is observed, but custom token and cost enforcement remains deferred.
+Detailed observations drive the tool UI but do not enter parent Model Context. The parent receives only terminal status, final text, child profile, Cognitive Role, resolved provider/model/effort, effective quota admission and telemetry status, and Pi session identifier. V1 does not expose arbitrary JSON Schema or automatic correction turns. Usage is observed, but custom token and cost enforcement remains deferred.
 
 The stable Level 1 outcome categories are:
 
@@ -128,9 +128,9 @@ Cancellation is successful only after termination is confirmed. The adapter firs
 Replace the temporary official-example implementation only after tests prove:
 
 1. one tool invocation creates exactly one Pi RPC child execution;
-2. only bundled profiles and allowed profile/Cognitive Role pairs pass preflight;
+2. only bundled profiles and known Cognitive Roles pass preflight, with profile and role validated independently;
 3. every launch uses a fresh provider-qualified binding and explicit Model Effort;
-4. stale quota, missing authentication, unavailable models, and invalid pairs fail closed without fallback;
+4. stale, unavailable, and unreadable quota telemetry launches with visible degraded admission, while fresh confirmed exhaustion, unavailable models, and unknown profiles or Cognitive Roles fail closed without fallback;
 5. the runtime-reported binding must match the resolved binding;
 6. the effective Pi tool set cannot exceed the profile request and host ceiling;
 7. progress streams through normalized observations without raw thinking content entering the public contract;
