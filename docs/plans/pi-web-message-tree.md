@@ -27,6 +27,8 @@ Baselines:
 
 ## Non-goals
 
+Session-derivation coordination is shared with the [Workstream continuation extension plan](workstream-continuation-extension.md). This plan remains authoritative for fork-from-entry semantics, `session.cancelled`, derivation correlation, and the server-owned operation-token journal; `packages/workstream-session-coordination/` owns the common pending/confirmed/cancelled/failed handshake used by fork, blank launch, and checkpoint continuation. Do not implement a second Workstream coordinator behind the PI WEB contribution described below.
+
 This work does not change Workstream checkpoints, Human Tasks, concise current-exchange grouping,
 transcript paging, Git history, child-Pi relationships, or repository undo behavior. It does not
 expose PI WEB transcript data to the Workbench adapter. `/clone` remains a session action for the
@@ -103,12 +105,11 @@ or inventing a session.
 Bring the three upstream fork-from-entry commits onto the Workbench PI WEB branch, then extend their
 request with an optional opaque operation token:
 
-1. Accept `entryId`, `expectedLeafId`, and the token at the client, federated route, server route, and
-   runtime seams.
+1. Make the derivation journal generic for `kind: "blank" | "checkpoint" | "fork"`. Accept the opaque token at client, federated route, server route, and runtime seams for both `sessions.start` and fork-from-entry; fork additionally accepts `entryId` and `expectedLeafId`.
 2. Preserve the source semantics: user entries fork from before the entry and return their text as
-   the new session's prompt draft; other entries fork at the entry.
+   the new session's prompt draft; other entries fork at the entry. Blank and checkpoint starts use their supplied initial prompt and explicit location.
 3. Before runtime mutation, write a server-owned derivation journal entry keyed by token in
-   `prepared` state. Create the fork with the same token in its durable session header, then advance
+   `prepared` state. Create the session or fork with the same token in its durable session header, then advance
    the journal to `created` with the session identity before returning success. Reuse of a token
    returns or resumes the same operation and must never create a second session.
 4. Expose a server-backed lookup result of `absent`, `prepared`, `created`, `cancelled`, or `failed`.
@@ -129,8 +130,8 @@ including through remote-machine proxying and reconnect.
 
 ### 2. Add the derived-session coordinator and Workstream handshake
 
-Add one generic `SessionDerivationCoordinatorContribution` to the PI WEB plugin interface. Its small
-interface receives `{ operationId, kind: "fork", source }`, where `source` contains the selected
+Add one generic `SessionDerivationCoordinatorContribution` to the PI WEB plugin interface as the PI WEB adapter over `packages/workstream-session-coordination/`. Its small
+interface receives `{ operationId, kind: "blank" | "checkpoint" | "fork", source }`, where `source` contains the selected
 machine, project, workspace, and session identity. `operationId` is PI WEB's in-memory request
 identity for duplicate-click suppression; the coordinator's `operationToken` is the durable
 cross-system correlation key. The contribution provides these lifecycle methods:
@@ -146,9 +147,9 @@ the generic fork directly. When the Workbench plugin is installed, the coordinat
 ordinary and mounted Chat, regardless of which primary view is currently visible.
 
 The Workbench adapter resolves the source session against canonical snapshots before `prepare`.
-Exactly one open home Workstream must contain that active session. No home, multiple homes, a closed
+For fork and checkpoint continuation, exactly one open home Workstream must contain the active source session. No home, multiple homes, a closed
 home, pending/failed source state, or mismatched location blocks creation with a precise recovery
-message. `prepare` appends `session.pending` with the operation token, `derivationKind: "fork"`,
+message. `prepare` appends `session.pending` with the operation token and the corresponding optional `derivationKind`,
 source-session provenance, and location. The projected pending association retains enough typed data
 to reconstruct the reconciliation request after process replacement. `confirm`, `cancel`, and known
 `fail` append the corresponding record idempotently. Plugin activation, reconnect completion, and

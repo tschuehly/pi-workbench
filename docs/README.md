@@ -29,6 +29,7 @@ When documents disagree, follow the highest applicable authority and repair the 
 
 - [`plans/level-1.md`](plans/level-1.md) — approved Level 1 human–Pi pair-programming implementation plan.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — approved attended child Pi execution plan.
+- [`plans/workstream-continuation-extension.md`](plans/workstream-continuation-extension.md) — shared attended-session coordination and checkpoint continuation through PI WEB and a Pi terminal extension.
 - [`plans/pi-web-workbench-ui.md`](plans/pi-web-workbench-ui.md) — implemented desktop-first sequence for the selected Workbench hierarchy and concise current exchange.
 - [`plans/pi-web-unified-ui-production.md`](plans/pi-web-unified-ui-production.md) — active production sequence for the unified Chats and Workstreams UI on the rebased PI WEB fork.
 - [`plans/pi-web-message-tree.md`](plans/pi-web-message-tree.md) — implementation sequence for compact session-history navigation, continue-from-entry, and correlated Workstream forks.
