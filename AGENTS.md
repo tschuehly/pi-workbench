@@ -28,7 +28,7 @@ PI WEB is the user-facing client of its typed protocols.
 | Evidence and immutable objects | `docs/contracts/controller.md`, `packages/artifact-store/` |
 | Cross-session Workstreams and attended checkpoints | `docs/contracts/workstreams.md` |
 | Attention and PI WEB interfaces | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
-| PI WEB integration and fork customization | `packages/pi-web-integration/`, `docs/integrations/pi-web/`, `docs/plans/pi-web-workbench-ui.md`, sibling `../pi-web` checkout |
+| PI WEB integration and fork customization | `packages/pi-web-integration/`, `docs/integrations/pi-web/`, `docs/plans/pi-web-unified-ui-production.md`, sibling `../pi-web` checkout |
 | macOS PI WEB wrapper | `apps/pi-web-macos/` |
 | Workflow or repository policy | `docs/contracts/workflow.md`, `workflows/`, `repositories/` |
 | Decision evidence | `docs/research/sources/` |
