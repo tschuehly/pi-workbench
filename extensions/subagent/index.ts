@@ -5,6 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
+import { progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
@@ -45,7 +46,8 @@ const IdParam = Type.Object({ executionId: Type.String({ minLength: 1, descripti
 const StatusParams = Type.Object({ executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect; omit to list every child launched this session" })) });
 const CancelParams = Type.Object({ executionId: Type.String({ minLength: 1 }), reason: Type.Optional(Type.String({ description: "Why the child is being cancelled" })) });
 
-type Observation = { type: string; detail?: unknown };
+type Observation = { type: string; at: string; detail?: unknown };
+type ProgressEntry = { at: string; key: string; text: string };
 type LaunchMeta = { profile: string; cognitiveRole: string; taskPreview: string; launchedAt: string };
 
 export default function subagentExtension(pi: ExtensionAPI) {
@@ -119,7 +121,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
         };
       }
 
-      return streamToResult(adapter, receipt.executionId, params.profile, params.cognitiveRole, signal, onUpdate, { cancelOnAbort: true });
+      return streamToResult(adapter, receipt.executionId, params.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true });
     },
   });
 
@@ -131,7 +133,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     parameters: IdParam,
     async execute(_toolCallId, params, signal, onUpdate) {
       const meta = launched.get(params.executionId);
-      return streamToResult(adapter, params.executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", signal, onUpdate, { cancelOnAbort: false });
+      return streamToResult(adapter, params.executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", meta?.launchedAt ?? new Date().toISOString(), signal, onUpdate, { cancelOnAbort: false });
     },
   });
 
@@ -186,6 +188,7 @@ async function streamToResult(
   executionId: string,
   profile: string,
   cognitiveRole: string,
+  launchedAt: string,
   signal: AbortSignal | undefined,
   onUpdate: ((update: { content: { type: "text"; text: string }[]; details?: unknown }) => void) | undefined,
   options: { cancelOnAbort: boolean },
@@ -202,15 +205,22 @@ async function streamToResult(
   else signal?.addEventListener("abort", abort, { once: true });
 
   const observations: Observation[] = [];
+  const progressEntries: ProgressEntry[] = [];
+  const parsedStartedAt = Date.parse(launchedAt);
+  const startedAt = Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now();
+  const renderUpdate = () => onUpdate?.({
+    content: [{ type: "text", text: renderProgressLog({ entries: progressEntries, startedAt, now: Date.now(), profile, cognitiveRole }) }],
+    details: { executionId, profile, cognitiveRole, observations: [...observations] },
+  });
+  const heartbeat = setInterval(renderUpdate, 5_000);
+  heartbeat.unref();
   const observing = (async () => {
     for await (const observation of adapter.observe(executionId)) {
       if (detached) return;
-      observations.push({ type: observation.type, detail: observation.detail });
+      observations.push({ type: observation.type, at: observation.at, detail: observation.detail });
       if (observations.length > 30) observations.shift();
-      onUpdate?.({
-        content: [{ type: "text", text: progressText(observation) }],
-        details: { executionId, profile, cognitiveRole, observations: [...observations] },
-      });
+      recordProgress(progressEntries, observation);
+      renderUpdate();
     }
   })();
 
@@ -218,6 +228,7 @@ async function streamToResult(
     if (!options.cancelOnAbort) signal?.addEventListener("abort", () => resolve("detached"), { once: true });
   });
   const settled = await Promise.race([result.then(() => "done" as const), detachedRace]);
+  clearInterval(heartbeat);
   signal?.removeEventListener("abort", abort);
 
   if (settled === "detached") {
@@ -255,15 +266,6 @@ async function resolveBinding(cognitiveRole: string, independentOfProvider?: str
 
 function failure(outcome: string, diagnostic: string) {
   return { content: [{ type: "text" as const, text: `${outcome}: ${diagnostic}` }], details: { outcome, diagnostic }, isError: true };
-}
-
-function progressText(observation: { type: string; detail?: any }): string {
-  if (observation.type.startsWith("tool_")) return `${observation.type.replaceAll("_", " ")}: ${String(observation.detail?.toolName ?? "tool")}`;
-  if (observation.type === "assistant_progress") return "Child Pi is responding…";
-  if (observation.type === "quota_degraded") return `Quota telemetry ${String(observation.detail?.telemetryStatus ?? "unavailable")}; attempting verified model launch.`;
-  if (observation.type === "binding_verified") return `Binding verified: ${String(observation.detail?.provider)}/${String(observation.detail?.model)}:${String(observation.detail?.effort)}`;
-  if (observation.type === "terminal") return `Child ${String(observation.detail?.outcome ?? "finished")}.`;
-  return observation.type.replaceAll("_", " ");
 }
 
 function bounded(value: string, max: number): string {

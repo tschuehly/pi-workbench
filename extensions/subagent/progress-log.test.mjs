@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { recordProgress, renderProgressLog } from "./progress-log.mjs";
+
+const startedAt = Date.parse("2026-08-07T20:00:00.000Z");
+
+test("renders a bounded rolling subagent activity log with elapsed and idle time", () => {
+  const entries = [];
+  recordProgress(entries, { type: "launch", at: "2026-08-07T20:00:00.000Z" }, 3);
+  recordProgress(entries, { type: "binding_verified", at: "2026-08-07T20:00:01.000Z", detail: { provider: "openai-codex", model: "gpt-test", effort: "medium" } }, 3);
+  recordProgress(entries, { type: "tool_start", at: "2026-08-07T20:00:04.000Z", detail: { toolCallId: "call-1", toolName: "bash" } }, 3);
+  recordProgress(entries, { type: "tool_end", at: "2026-08-07T20:00:06.000Z", detail: { toolCallId: "call-1", toolName: "bash" } }, 3);
+
+  assert.equal(renderProgressLog({ entries, startedAt, now: startedAt + 21_000, profile: "reviewer", cognitiveRole: "independent-review" }), [
+    "Subagent reviewer · independent-review · running 21s",
+    "    1s  Binding verified: openai-codex/gpt-test:medium",
+    "    4s  tool start: bash",
+    "    6s  tool end: bash",
+    "Still running · last activity 15s ago",
+  ].join("\n"));
+});
+
+test("collapses noisy repeated assistant and tool progress updates", () => {
+  const entries = [];
+  recordProgress(entries, { type: "assistant_progress", at: "2026-08-07T20:00:01.000Z" });
+  recordProgress(entries, { type: "assistant_progress", at: "2026-08-07T20:00:02.000Z" });
+  recordProgress(entries, { type: "tool_progress", at: "2026-08-07T20:00:03.000Z", detail: { toolCallId: "call-1", toolName: "bash" } });
+  recordProgress(entries, { type: "tool_progress", at: "2026-08-07T20:00:05.000Z", detail: { toolCallId: "call-1", toolName: "bash" } });
+
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].at, "2026-08-07T20:00:02.000Z");
+  assert.equal(entries[1].at, "2026-08-07T20:00:05.000Z");
+});
