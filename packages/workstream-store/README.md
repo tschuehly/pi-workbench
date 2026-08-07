@@ -31,13 +31,25 @@ ledger database in a caller-selected user-local directory. `createUserLocalWorks
 ## Records
 
 The accepted semantic records cover pending/confirmed/failed session associations, checkpoint
-replacement/failure, unresolved human-task changes, and relevant link changes. Raw transcripts and
-routine activity are intentionally not accepted. Closure is available only through `close`.
+replacement/failure/staleness, durable Human Task changes and answers, and relevant link changes.
+Raw transcripts and routine activity are intentionally not accepted. Closure is available only
+through `close`.
 
-Every accepted replacement checkpoint carries `nextSessionPrompt` separately from its owner-facing
-`next` action. The prompt is required, non-empty, and limited to 2,000 characters so clients can
-present a paste-ready continuation without parsing prose. Projection rebuilds expose `null` for
-checkpoints accepted before the field existed; they never derive a prompt from `next`.
+Failed launches remain as `failed` sessions with their association anchor and a provenance-bearing
+`launchFailure`. `checkpoint.stale` must name the latest confirmed checkpoint; it creates a
+provenance-bearing `checkpointStaleness` value that only a later `checkpoint.replaced` clears.
+Neither state is inferred from Chat or tool activity. Every accepted replacement checkpoint carries
+`nextSessionPrompt` separately from its owner-facing `next` action. The prompt is required,
+non-empty, and limited to 2,000 characters so clients can present a paste-ready continuation without
+parsing prose. Projection rebuilds expose `null` for checkpoints accepted before the field existed;
+they never derive a prompt from `next`.
+
+A typed Human Task declares `answerKind` (`yes-no`, `choice`, or `free-text`), explicit `options`,
+and `materiality` (`material` or `non-material`). The projection preserves the task's
+`sourceSessionId`, status, answer, and durable answer receipt. `human-task.answered` is a separate
+revision-checked mutation; its exact retry returns the original Workstream receipt. Legacy
+`title`/`detail` tasks remain accepted as non-answerable tasks with null typing fields and retain
+their prior remove-on-resolution projection behavior.
 
 Exact idempotent retries return the first receipt. Changed input under the same key, stale revisions,
 illegal session transitions, unknown fields or records, and oversized mutations are rejected with a

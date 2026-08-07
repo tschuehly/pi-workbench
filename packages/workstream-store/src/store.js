@@ -146,8 +146,20 @@ export class WorkstreamStore {
 }
 
 function validateTransitions(database, workstreamId, before, records) {
-  const sessions = new Map(before.sessions.map((session) => [session.id, session.status]));
-  const pendingByAssociation = new Map(before.sessions.filter((session) => session.status === "pending").map((session) => [session.associationKey, session.id]));
+  const sessions = new Map(before.sessions.map((session) => [session.id, {
+    status: session.status,
+    associationKey: session.associationKey,
+    checkpointId: session.latestCheckpoint?.id,
+  }]));
+  const pendingByAssociation = new Map(before.sessions
+    .filter((session) => session.status === "pending")
+    .map((session) => [session.associationKey, session.id]));
+  const tasks = new Map(before.humanTasks.map((task) => [task.id, {
+    status: task.status,
+    answerKind: task.answerKind,
+    optionIds: new Set(task.options.map((option) => option.id)),
+  }]));
+  const answerIds = new Set(before.humanTasks.flatMap((task) => task.answerReceipt === null ? [] : [task.answerReceipt.answerId]));
   const historicalSessionIds = new Set();
   for (const entry of Object.values(database.workstreams)) {
     for (const record of entry.ledger) {
@@ -164,30 +176,77 @@ function validateTransitions(database, workstreamId, before, records) {
         const pendingId = sessionId ?? `pending:${associationKey}`;
         if (sessionId !== undefined && historicalSessionIds.has(sessionId)) fail("SESSION_ASSIGNED_ELSEWHERE", `session ${sessionId} belongs to another workstream`);
         if (sessions.has(pendingId) || pendingByAssociation.has(associationKey)) fail("INVALID_TRANSITION", `association ${associationKey} is already pending`);
-        sessions.set(pendingId, "pending");
+        sessions.set(pendingId, { status: "pending", associationKey, checkpointId: undefined });
         pendingByAssociation.set(associationKey, pendingId);
         break;
       }
       case "session.confirmed": {
         if (historicalSessionIds.has(sessionId)) fail("SESSION_ASSIGNED_ELSEWHERE", `session ${sessionId} belongs to another workstream`);
         const pendingId = associationKey === undefined ? sessionId : pendingByAssociation.get(associationKey);
-        if (pendingId === undefined || sessions.get(pendingId) !== "pending") fail("INVALID_TRANSITION", `session ${sessionId} has no matching pending association`);
+        if (pendingId === undefined || sessions.get(pendingId)?.status !== "pending") fail("INVALID_TRANSITION", `session ${sessionId} has no matching pending association`);
+        const pending = sessions.get(pendingId);
+        if (pendingId !== sessionId && sessions.has(sessionId)) fail("INVALID_TRANSITION", `session ${sessionId} already exists in this workstream`);
         sessions.delete(pendingId);
-        pendingByAssociation.delete(associationKey);
-        sessions.set(sessionId, "active");
+        pendingByAssociation.delete(pending.associationKey);
+        sessions.set(sessionId, { ...pending, status: "active", associationKey: associationKey ?? pending.associationKey });
         break;
       }
       case "session.failed": {
         const pendingId = associationKey === undefined ? sessionId : pendingByAssociation.get(associationKey);
-        if (pendingId === undefined || sessions.get(pendingId) !== "pending") fail("INVALID_TRANSITION", `session association is not pending`);
+        if (pendingId === undefined || sessions.get(pendingId)?.status !== "pending") fail("INVALID_TRANSITION", "session association is not pending");
+        const pending = sessions.get(pendingId);
+        const failedId = sessionId ?? pendingId;
+        if (pendingId !== failedId && sessions.has(failedId)) fail("INVALID_TRANSITION", `session ${failedId} already exists in this workstream`);
         sessions.delete(pendingId);
-        pendingByAssociation.delete(associationKey);
+        pendingByAssociation.delete(pending.associationKey);
+        sessions.set(failedId, { ...pending, status: "failed", associationKey: associationKey ?? pending.associationKey });
         break;
       }
-      case "checkpoint.replaced":
-      case "checkpoint.failed":
-        if (sessions.get(sessionId) !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
+      case "checkpoint.replaced": {
+        if (sessions.get(sessionId)?.status !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
+        sessions.get(sessionId).checkpointId = record.payload.checkpoint.id;
         break;
+      }
+      case "checkpoint.failed":
+        if (sessions.get(sessionId)?.status !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
+        break;
+      case "checkpoint.stale": {
+        const session = sessions.get(sessionId);
+        if (session?.status !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
+        if (session.checkpointId !== record.payload.checkpointId) fail("INVALID_TRANSITION", `checkpoint ${record.payload.checkpointId} is not the latest confirmed checkpoint for session ${sessionId}`);
+        break;
+      }
+      case "human-task.upsert": {
+        const task = record.payload.task;
+        if (tasks.has(task.id) && tasks.get(task.id).status !== "pending") fail("INVALID_TRANSITION", `human task ${task.id} is not pending`);
+        tasks.set(task.id, {
+          status: "pending",
+          answerKind: task.answerKind ?? null,
+          optionIds: new Set((task.options ?? []).map((option) => option.id)),
+        });
+        break;
+      }
+      case "human-task.answered": {
+        const task = tasks.get(record.payload.taskId);
+        if (!task) fail("INVALID_TRANSITION", `human task ${record.payload.taskId} does not exist`);
+        if (task.status !== "pending") fail("INVALID_TRANSITION", `human task ${record.payload.taskId} is not pending`);
+        if (answerIds.has(record.payload.answerId)) fail("INVALID_TRANSITION", `human task answer ${record.payload.answerId} already exists`);
+        const answer = record.payload.answer;
+        if (task.answerKind === null) fail("INVALID_TRANSITION", `human task ${record.payload.taskId} is not answerable`);
+        if (answer.kind !== task.answerKind) fail("INVALID_TRANSITION", `answer kind does not match human task ${record.payload.taskId}`);
+        if (answer.kind !== "free-text" && !task.optionIds.has(answer.optionId)) fail("INVALID_TRANSITION", `answer option ${answer.optionId} is not available for human task ${record.payload.taskId}`);
+        task.status = "answered";
+        answerIds.add(record.payload.answerId);
+        break;
+      }
+      case "human-task.resolved": {
+        const task = tasks.get(record.payload.taskId);
+        if (!task) fail("INVALID_TRANSITION", `human task ${record.payload.taskId} does not exist`);
+        if (task.status === "resolved") fail("INVALID_TRANSITION", `human task ${record.payload.taskId} is already resolved`);
+        if (task.answerKind === null) tasks.delete(record.payload.taskId);
+        else task.status = "resolved";
+        break;
+      }
     }
   }
 }
@@ -248,7 +307,8 @@ function toSummary(snapshot) {
     updatedAt: snapshot.updatedAt,
     activeSessionCount: snapshot.sessions.filter((session) => session.status === "active").length,
     pendingSessionCount: snapshot.sessions.filter((session) => session.status === "pending").length,
-    unresolvedHumanTaskCount: snapshot.humanTasks.length,
+    failedSessionCount: snapshot.sessions.filter((session) => session.status === "failed").length,
+    unresolvedHumanTaskCount: snapshot.humanTasks.filter((task) => task.status === "pending").length,
     closed: snapshot.closed,
   };
 }
