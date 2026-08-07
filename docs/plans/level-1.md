@@ -1,6 +1,6 @@
 # Pi Workbench Level 1 Plan
 
-Status: approved implementation plan.
+Status: implemented V1; acceptance evidence is maintained with the implementation.
 
 ## Outcome
 
@@ -111,6 +111,16 @@ agreed-before execution-plan gate, contract-driven multi-agent execution, durabl
 independent acceptance authority, unattended execution, or controller-managed Runs. Levels 2–4 are
 concepts, not scheduled implementation. Any expansion beyond Level 1 requires a new decision and
 implementation plan based on evidence from sustained V1 use.
+
+## Implementation
+
+- Workstream protocol and persistence: `packages/workstream-store/`
+- PI WEB typed service, Workstreams surface, and attended launch coordinator: `packages/pi-web-integration/`
+- PI WEB host contribution APIs: sibling `../pi-web` fork branch `pi-workbench`
+- Attended child process mechanics: `packages/pi-execution-adapter/`
+- Level 1 child tool: `extensions/subagent/`
+- Live workflow evidence: `packages/pi-web-integration/level-1-acceptance-evidence.md`
+- Real child launch/cancellation evidence: `packages/pi-execution-adapter/real-smoke-evidence.md`
 
 ## Evidence
 

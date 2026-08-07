@@ -1120,7 +1120,10 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   for (const session of checkpoints) {
     const item = document.createElement("div");
     item.className = "drawer-checkpoint";
-    item.append(strong(session.latestCheckpoint.next), message(`${sessionAnchor(session)} · ${session.latestCheckpoint.whatChanged}`, "muted"));
+    item.append(
+      strong(session.latestCheckpoint.next),
+      message(`${sessionAnchor(session)} · ${session.latestCheckpoint.whatChanged}`, "muted"),
+    );
     if (session.latestCheckpoint.nextSessionPrompt === null) {
       item.append(message("Next-session prompt unavailable for this earlier checkpoint.", "next-session-prompt muted"));
     } else item.append(
@@ -1281,10 +1284,6 @@ function readLocalPreference(name, fallback, allowed) {
   }
 }
 
-function readLocalBoolean(name, fallback) {
-  return readLocalPreference(name, String(fallback), ["true", "false"]) === "true";
-}
-
 function writeLocalPreference(name, value) {
   try {
     window.localStorage.setItem(`pi-workbench.workstreams.${name}`, value);
@@ -1355,6 +1354,8 @@ function workstreamsStyleElement() {
     .drawer-section { min-width: 0; align-content: start; gap: 8px; padding: 14px; border-right: 1px solid var(--pi-border-muted); }
     .drawer-section:last-child { border-right: 0; }
     .drawer-checkpoint { display: grid; gap: 4px; }
+    .next-session-prompt { white-space: pre-wrap; user-select: text; }
+    .drawer-checkpoint > button { width: max-content; }
     .pane-edge { min-width: 0; min-height: 0; display: grid; place-items: center; background: var(--pi-border-muted); }
     .sessions-pane + .pane-edge { grid-column: 2; }
     .pane-edge .icon-button { width: 22px; height: 52px; min-height: 52px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0; border: 1px solid var(--pi-border-muted); border-radius: 999px; background: var(--pi-bg); color: var(--pi-muted); }
@@ -1377,10 +1378,6 @@ function workstreamsStyleElement() {
     .session-anchor { color: var(--pi-text-secondary, var(--pi-text)); font-size: 12px; line-height: 1.35; }
     .diagnostic { color: var(--pi-muted); font-size: 10px; }
     .inline-error { padding: 6px; font-size: 11px; }
-    .dedicated-checkpoints { display: grid; gap: 10px; padding: 12px; border-bottom: 1px solid var(--pi-border-muted); }
-    .dedicated-checkpoint { display: grid; gap: 5px; }
-    .dedicated-checkpoint button { justify-self: start; }
-    .next-session-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
     .dedicated-task { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border-muted); }
     .dedicated-task > div { min-width: 0; display: grid; gap: 5px; }
     .task-answer-actions { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }

@@ -21,7 +21,13 @@ List active Workstreams first:
 node "$SKILL_DIR/scripts/workstreams.mjs" list '{}'
 ```
 
-Use `{"includeClosed":true}` only when the user asks about history. Inspect the intended Workstream before changing it. If none fits, ask for or derive a short stable id and title, then create it with a unique idempotency key:
+This returns every open Workstream as a summary. When the user asks to check all current Workstreams in full, inspect every returned id:
+
+```bash
+node "$SKILL_DIR/scripts/workstreams.mjs" inspect '{"workstreamId":"ws-example"}'
+```
+
+Use `{"includeClosed":true}` only when the user asks about history. Before changing one Workstream, inspect its full snapshot. If none fits, ask for or derive a short stable id and title, then create it with a unique idempotency key:
 
 ```json
 {"workstreamId":"ws-example","idempotencyKey":"create-ws-example","title":"Example","producer":"owner"}
@@ -29,7 +35,7 @@ Use `{"includeClosed":true}` only when the user asks about history. Inspect the 
 
 Pass JSON inline, as `@file`, or as stdin. Keep temporary request files outside the repository.
 
-**Complete when:** one open Workstream is selected and its current snapshot and revision are known.
+**Complete when:** every Workstream the user asked to check has been inspected, or one open Workstream is selected and its current snapshot and revision are known.
 
 ## 2. Associate this session when needed
 

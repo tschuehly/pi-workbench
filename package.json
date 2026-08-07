@@ -17,8 +17,9 @@
     "typebox": "*"
   },
   "scripts": {
-    "test": "npm run test:model-routing && npm run test:pi-execution-adapter && npm run test:workstream-store && npm run test:pi-web-integration",
+    "test": "npm run test:model-routing && npm run test:quota-startup && npm run test:pi-execution-adapter && npm run test:workstream-store && npm run test:pi-web-integration",
     "test:model-routing": "node skills/model-orchestration/scripts/resolve-runtime-binding.test.mjs",
+    "test:quota-startup": "node --test extensions/quota-startup/check.test.mjs",
     "test:pi-execution-adapter": "npm --prefix packages/pi-execution-adapter test",
     "test:workstream-store": "npm --prefix packages/workstream-store test",
     "test:pi-web-integration": "npm --prefix packages/pi-web-integration test"

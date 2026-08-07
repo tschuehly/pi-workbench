@@ -7,7 +7,7 @@ A live PI WEB development client exercised the Level 1 workflow against the real
 1. Created a Workstream from the first-class Workstreams destination.
 2. Verified PI WEB's ordinary new-session button was disabled by the Workstream-home guard.
 3. Started one attended session from the Workstream. The ledger recorded `session.pending` before `session.confirmed`, with one runtime session id and its machine/project/workspace location.
-4. Requested a checkpoint proposal in the associated conversation, returned to Workstreams, reviewed/corrected all three fields, and explicitly confirmed persistence.
+4. Requested a checkpoint proposal in the associated conversation, returned to Workstreams, reviewed/corrected all three fields then supported by the checkpoint schema, and explicitly confirmed persistence. Current replacement checkpoints additionally require a separately confirmed `nextSessionPrompt` and `references`; this dated evidence records the earlier schema.
 5. Added an unresolved human task.
 6. Closed the browser and opened a fresh browser process. The Workstream projection restored the confirmed checkpoint and unresolved task without using chat history.
 7. Selected **Resume** and PI WEB reopened the exact recorded project, workspace, and session with its transcript.

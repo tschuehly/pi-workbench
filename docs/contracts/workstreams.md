@@ -54,21 +54,16 @@ concise checkpoint stating what changed, what remains, the next useful continuat
 prompt for starting the next session. The owner may correct every field before confirming
 persistence. Only the confirmed checkpoint replaces the session's previous checkpoint.
 
-Each field leads with its point, uses plain concrete language, names the concrete artifacts it refers
-to, and lets the owner resume without rereading the session. `whatChanged` states what now exists or
-works, `remains` separates what is blocked or still owed, and `next` gives one obvious owner-facing
-action. The required `nextSessionPrompt` is a separate, paste-ready prompt for a fresh attended Pi
-session. It carries only the context, constraints, starting action, and references needed to continue
-safely; it does not restate the conversation or expand into an execution plan. The prompt is
-owner-confirmed with the rest of the checkpoint and is limited to 2,000 characters. Checkpoints
-accepted before this field existed project `nextSessionPrompt: null` rather than inventing a prompt;
-every newly accepted replacement requires the field.
-
 The proposing session writes the checkpoint for the owner who will read it later, following the
 `write-for-humans` skill. Each field leads with its point, uses plain concrete language, names the
 concrete artifacts it refers to, and lets the owner resume without rereading the session. `whatChanged`
-states what now exists or works, `remains` separates what is blocked or still owed, and `next` ends with
-one obvious action the owner can start now.
+states what now exists or works, `remains` separates what is blocked or still owed, and `next` gives
+one obvious owner-facing action. The required `nextSessionPrompt` is a separate, paste-ready prompt
+for a fresh attended Pi session. It carries only the context, constraints, starting action, and
+references needed to continue safely; it does not restate the conversation or expand into an
+execution plan. The prompt is owner-confirmed with the rest of the checkpoint and is limited to
+2,000 characters. Checkpoints accepted before this field existed project `nextSessionPrompt: null`
+rather than inventing a prompt; every newly accepted replacement requires the field.
 
 A failed, rejected, or abandoned proposal remains visible as a checkpoint failure when applicable
 and does not invent continuation state or replace the latest confirmed checkpoint. Staleness changes

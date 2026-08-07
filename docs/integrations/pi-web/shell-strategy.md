@@ -59,7 +59,7 @@ The client boundary also requires browser-safe runtime-validated messages, stabl
 1. Use the documented PI WEB plugin API for read-oriented projections.
 2. Contribute generic navigation and primary-view seams for Workstreams.
 3. Add typed mutations only through Workbench clients.
-4. Add observation, focus-restoration, and hosting seams only when a proven interaction needs them.
+4. Use the generic session-attention snapshot/watch/focus seam for cross-session pending asks, the namespaced preference host for browser-local place memory, and `surfaceHost` for Chat, Files, Git, and Terminal composition.
 5. Keep Workbench semantics in the adapter rather than PI WEB core.
 6. Keep fork changes bounded and reviewable so generic improvements can be proposed upstream later without coupling them to Workbench semantics.
 

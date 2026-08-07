@@ -75,8 +75,7 @@ terminal output as current state.
 
 PI WEB satisfies this contract when the shared recorded Workstream fixture proves:
 
-1. The owner can identify where to resume and copy the confirmed next-session prompt without
-   reading raw logs or chat history.
+1. The owner can identify where to resume and copy the confirmed next-session prompt without reading raw logs or chat history.
 2. Current, closed, empty, loading, failure, reconnect, and checkpoint-failure states are distinct.
 3. Re-entry restores the Workstreams destination and reconciles from canonical revisions.
 4. A failed or abandoned checkpoint cannot appear current or replace confirmed continuation state.

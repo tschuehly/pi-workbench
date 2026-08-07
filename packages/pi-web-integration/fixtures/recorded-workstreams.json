@@ -38,7 +38,7 @@
             "whatChanged": "The first interface probe was recorded.",
             "remains": "Retry the interrupted checkpoint.",
             "next": "Review the prior continuation before retrying.",
-            "nextSessionPrompt": null
+            "nextSessionPrompt": "Resume the interface probe. Review the prior confirmed continuation and retry the attended checkpoint only after reconciling the interruption."
           },
           "checkpointFailure": "The latest checkpoint attempt failed; the prior confirmed checkpoint remains available.",
           "checkpointStaleness": null,
