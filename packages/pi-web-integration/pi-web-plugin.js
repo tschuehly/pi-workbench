@@ -1,23 +1,24 @@
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams } from "./workstream-client.js";
 import { WorkstreamSessionCoordinator } from "./workstream-session-coordinator.js";
-import { projectWorkstreamBrief, selectWorkstreamSession } from "./workstream-brief-projection.js";
-import { completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, reduceUnifiedNavigation, serializeDestinationPreference } from "./unified-navigation-state.js";
-import { attentionForWorkstreamSession, contextHostIdentityChanges, formatModifiedTime, NAVIGATOR_MAX_WIDTH, NAVIGATOR_MIN_WIDTH, NAVIGATOR_MODE_PREFERENCE, NAVIGATOR_WIDTH_PREFERENCE, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, workstreamNavigatorItem } from "./unified-navigation-view-model.js";
+import { projectSessionContext, projectWorkstreamBrief, selectWorkstreamSession } from "./workstream-brief-projection.js";
+import { completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, reduceUnifiedNavigation, rememberedSessionSurface, serializeDestinationPreference, sessionSurfacePreferenceName } from "./unified-navigation-state.js";
+import { attentionForWorkstreamSession, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, expandedSessionListRenderKey, formatDateTime, formatModifiedTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, NAVIGATOR_MAX_WIDTH, NAVIGATOR_MIN_WIDTH, NAVIGATOR_MODE_PREFERENCE, NAVIGATOR_WIDTH_PREFERENCE, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, unifiedChatBannerRenderKey, unifiedNavigatorRenderKey, workstreamNavigatorItem } from "./unified-navigation-view-model.js";
 
 const PROJECTION_PATH = ".pi-workbench/projection.json";
 const PANEL_ID = "pi-workbench:run.panel";
+const INCOMPLETE_START_MESSAGE = "Select a complete machine, project, and workspace in Projects/checkouts before starting a Workstream session.";
 const projectionCache = new Map();
 const recordedWorkstreamState = { status: "idle", snapshots: [], sequence: 0, error: "", notice: "", selectedWorkstreamId: undefined, focusKey: undefined, promise: undefined };
 let workstreamClient;
 let connectedWorkstreamsElement;
 
-export function dedicatedWorkstreamLayout({ tool, sessionsPaneOpen, tasksPaneOpen }) {
-  const surface = tool === "files" || tool === "git" ? tool : "chat";
+export function dedicatedWorkstreamLayout({ tool, sessionsPaneOpen }) {
+  const surface = ["chat", "context", "files", "git"].includes(tool) ? tool : "chat";
   return {
     sessionsPaneVisible: sessionsPaneOpen === true,
-    tasksPaneVisible: tasksPaneOpen === true,
     surface,
-    scope: surface === "git" ? "selected-session-checkout-observed-unattributed" : "selected-session-checkout",
+    scope: surface === "context" ? "canonical-selected-session-context"
+      : surface === "git" ? "selected-session-checkout-observed-unattributed" : "selected-session-checkout",
   };
 }
 
@@ -30,9 +31,6 @@ export function normalizeDedicatedMobilePane(value) {
 }
 
 export function dedicatedMobileControlState(state, control) {
-  if (control === "context") {
-    return { pressed: state.tasksPaneOpen === true, expanded: state.tasksPaneOpen === true, controls: "workstream-context-drawer" };
-  }
   return { pressed: normalizeDedicatedMobilePane(state.mobilePane) === control };
 }
 
@@ -44,7 +42,6 @@ export function transitionDedicatedWorkstreamUi(state, action) {
         : { ...state, tool: action.surface, mobilePane: "workspace" };
     case "select-mobile-pane": return { ...state, mobilePane: normalizeDedicatedMobilePane(action.pane) };
     case "toggle-sessions": return { ...state, sessionsPaneOpen: !state.sessionsPaneOpen };
-    case "toggle-tasks": return { ...state, tasksPaneOpen: !state.tasksPaneOpen };
     case "toggle-terminal": return { ...state, terminalOpen: !state.terminalOpen };
     default: return state;
   }
@@ -140,6 +137,18 @@ function sameRepairCandidate(left, right) {
 
 function completeSessionLocation(value) {
   return [value?.machineId, value?.projectId, value?.workspaceId].every(isString);
+}
+
+export function startLocationRecoveryVisible(active, location, reset = false) {
+  return !reset && active === true && !completeSessionLocation(location);
+}
+
+export function currentSessionLocationResult(sessions) {
+  try {
+    return { ok: true, location: sessions?.currentLocation?.() };
+  } catch (error) {
+    return { ok: false, error: typedHostError(error, "CURRENT_LOCATION_FAILED") };
+  }
 }
 
 export async function selectWorkstreamSessionLocation(context, session, requireSessionNavigation = false) {
@@ -264,7 +273,6 @@ function installWorkstreamsElement() {
     #selectedSessionId;
     #tool = "chat";
     #sessionsPaneOpen = true;
-    #tasksPaneOpen = true;
     #terminalOpen = false;
     #mobilePane = "workspace";
     #surfaceSelectionRelease;
@@ -281,6 +289,8 @@ function installWorkstreamsElement() {
     #selectedChat;
     #anchorRepair;
     #navigationRefreshError;
+    #startLocationIncomplete = false;
+    #lastHostActivationKey;
     #main;
     #dedicatedView;
     #chatView;
@@ -294,6 +304,7 @@ function installWorkstreamsElement() {
     }
 
     set context(value) {
+      if (this.#context?.surfaceHost !== value?.surfaceHost) this.#lastHostActivationKey = undefined;
       this.#context = value;
       this.#bindContextHosts(value);
       this.#restoreNavigationPreference();
@@ -375,44 +386,76 @@ function installWorkstreamsElement() {
       }
       if (this.#surfaceSelectionRelease !== undefined) return;
       this.#surfaceSelectionRelease = this.#context?.surfaceHost?.registerSelectionHandler?.((surface) => {
-        this.#selectSurface(surface);
+        this.#selectSurface(surface, false);
       });
     }
 
-    #selectSurface(surface) {
-      this.#context?.surfaceHost?.activate?.(surface);
+    #selectSurface(surface, activateHost = true) {
+      if (surface === "context" && this.#unifiedState.destination.type !== "workstream-session") return;
+      if (surface !== "terminal" && ["chat", "context", "files", "git"].includes(surface)) {
+        this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "select-surface", surface });
+      }
+      this.#transition({ type: "select-surface", surface });
+      if (activateHost) this.#activateHostSurface(surface);
+      else {
+        const activeKey = hostSurfaceActivationKey(this.#destinationSessionKey(), surface);
+        if (activeKey !== undefined) this.#lastHostActivationKey = activeKey;
+      }
       const focusTarget = surface === "terminal"
         ? this.#dedicatedView?.terminalToggle
         : this.#selectedChat === undefined ? this.#dedicatedView?.toolButtons.get(surface) : this.#chatView?.toolButtons.get(surface);
       focusTarget?.focus({ preventScroll: true });
-      if (surface !== "terminal" && ["chat", "files", "git"].includes(surface)) {
-        this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "select-surface", surface });
+    }
+
+    #activateHostSurface(surface, force = false) {
+      const key = hostSurfaceActivationKey(this.#destinationSessionKey(), surface);
+      if (key === undefined || !force && key === this.#lastHostActivationKey) return;
+      this.#lastHostActivationKey = key;
+      this.#context?.surfaceHost?.activate?.(surface);
+    }
+
+    #clearStartLocationRecovery(reset = false) {
+      let location;
+      if (!reset) {
+        try { location = this.#context?.sessions?.currentLocation?.(); } catch { location = undefined; }
       }
-      this.#transition({ type: "select-surface", surface });
+      const visible = startLocationRecoveryVisible(this.#startLocationIncomplete, location, reset);
+      this.#startLocationIncomplete = visible;
+    }
+
+    #destinationSessionKey() {
+      const destination = this.#unifiedState.destination;
+      return destination.type === "chat" ? destination.sessionKey
+        : destination.type === "workstream-session" ? completeSessionKey({ ...destination.location, sessionId: destination.sessionId }) : undefined;
     }
 
     #selectedSurface(fallback = "chat") {
-      const destination = this.#unifiedState.destination;
-      const key = destination.type === "chat" ? destination.sessionKey
-        : destination.type === "workstream-session" ? completeSessionKey({ ...destination.location, sessionId: destination.sessionId }) : undefined;
+      const key = this.#destinationSessionKey();
       return key === undefined ? fallback : this.#unifiedState.surfaceBySession[key] ?? fallback;
+    }
+
+    #restoreSessionSurface(allowContext) {
+      const key = this.#destinationSessionKey();
+      const surface = key === undefined ? "chat" : rememberedSessionSurface(this.#readPreference(sessionSurfacePreferenceName(key)), allowContext);
+      this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "select-surface", surface });
+      this.#tool = this.#selectedSurface("chat");
+      return this.#tool;
     }
 
     #transition(action) {
       const next = transitionDedicatedWorkstreamUi({
         tool: this.#tool,
         sessionsPaneOpen: this.#sessionsPaneOpen,
-        tasksPaneOpen: this.#tasksPaneOpen,
         terminalOpen: this.#terminalOpen,
         mobilePane: this.#mobilePane,
       }, action);
       this.#tool = next.tool;
       this.#sessionsPaneOpen = next.sessionsPaneOpen;
-      this.#tasksPaneOpen = next.tasksPaneOpen;
       this.#terminalOpen = next.terminalOpen;
       this.#mobilePane = next.mobilePane;
       if (action.type === "select-surface" && action.surface !== "terminal") {
-        this.#writePreference("tool", next.tool);
+        const key = this.#destinationSessionKey();
+        if (key !== undefined && this.#selectedSurface() === action.surface) this.#writePreference(sessionSurfacePreferenceName(key), action.surface);
         this.#writePreference("mobile-pane", next.mobilePane);
       } else if (action.type === "select-mobile-pane") {
         this.#writePreference("mobile-pane", next.mobilePane);
@@ -423,8 +466,7 @@ function installWorkstreamsElement() {
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "set-navigation", mode, width: this.#unifiedState.navigation.width });
         this.#writePreference(NAVIGATOR_MODE_PREFERENCE, mode);
         this.#writePreference("sessions-open", String(next.sessionsPaneOpen));
-      } else if (action.type === "toggle-tasks") this.#writePreference("drawer-open", String(next.tasksPaneOpen));
-      else if (action.type === "toggle-terminal" && this.#unifiedState.destination.type === "workstream-session") {
+      } else if (action.type === "toggle-terminal" && this.#unifiedState.destination.type === "workstream-session") {
         const remembered = this.#unifiedState.terminalBySession[completeSessionKey({ ...this.#unifiedState.destination.location, sessionId: this.#unifiedState.destination.sessionId })];
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "set-terminal", open: next.terminalOpen, height: remembered?.height });
       }
@@ -454,6 +496,7 @@ function installWorkstreamsElement() {
 
     async #mutate(operation) {
       if (workstreamClient === undefined) return;
+      this.#clearStartLocationRecovery(true);
       recordedWorkstreamState.error = "";
       try {
         const receipt = await operation(workstreamClient);
@@ -484,13 +527,13 @@ function installWorkstreamsElement() {
       this.#selectedWorkstreamId = snapshot.id;
       const rememberedSessionId = this.#readPreference(`selected-session:${snapshot.id}`);
       this.#selectedSessionId = recordedWorkstreamSelection([snapshot], snapshot.id, rememberedSessionId)?.sessionId;
-      this.#tool = this.#readPreference("tool", "chat", ["chat", "files", "git"]);
+      this.#tool = "chat";
       this.#sessionsPaneOpen = this.#readBoolean("sessions-open", true);
-      this.#tasksPaneOpen = this.#readBoolean("drawer-open", snapshot.humanTasks.some((task) => task.status === "pending"));
       this.#mobilePane = normalizeDedicatedMobilePane(this.#readPreference("mobile-pane", "workspace", ["sessions", "workspace"]));
     }
 
     #openWorkstream(snapshot) {
+      this.#clearStartLocationRecovery(true);
       recordedWorkstreamState.focusKey = "dedicated:title";
       this.#anchorRepair = undefined;
       this.#selectedChat = undefined;
@@ -507,6 +550,7 @@ function installWorkstreamsElement() {
     }
 
     #returnToPortfolio() {
+      this.#clearStartLocationRecovery(true);
       recordedWorkstreamState.focusKey = this.#selectedChat === undefined
         ? navigatorFocusKey({ type: "workstream", workstreamId: this.#selectedWorkstreamId })
         : navigatorFocusKey({ type: "chat", sessionKey: completeSessionKey(this.#selectedChat) });
@@ -528,6 +572,7 @@ function installWorkstreamsElement() {
     }
 
     async #selectSession(session, requestedWorkstreamId = this.#selectedWorkstreamId, requireSessionNavigation = false) {
+      this.#clearStartLocationRecovery(true);
       if (session.status !== "active") return;
       const workstreamId = requestedWorkstreamId;
       if (workstreamId === undefined) return;
@@ -563,11 +608,12 @@ function installWorkstreamsElement() {
         if (this.#anchorRepair?.sessionId !== session.id) this.#anchorRepair = undefined;
         this.#writePreference(`selected-session:${workstreamId}`, completeSessionKey(location));
         this.#writeDestinationPreference();
-        this.#tool = this.#selectedSurface(this.#tool);
+        const restoredSurface = this.#restoreSessionSurface(true);
+        this.#activateHostSurface(restoredSurface, true);
         const terminal = this.#unifiedState.terminalBySession[completeSessionKey(location)];
         this.#terminalOpen = terminal?.open === true;
         this.#mobilePane = "workspace";
-        window.requestAnimationFrame(() => { this.#dedicatedView?.surfaces.get("chat")?.focus({ preventScroll: true }); });
+        window.requestAnimationFrame(() => { this.#dedicatedView?.surfaces.get(this.#selectedSurface("chat"))?.focus({ preventScroll: true }); });
       } catch (error) {
         if (this.#unifiedState.pendingSelection?.token !== token) return;
         this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "selection-failed", token, error: typedSelectionError(error) });
@@ -577,6 +623,7 @@ function installWorkstreamsElement() {
     }
 
     async #selectChat(chat) {
+      this.#clearStartLocationRecovery(true);
       const location = { sessionId: chat.sessionId, machineId: chat.machineId, projectId: chat.projectId, workspaceId: chat.workspaceId };
       const destination = { type: "chat", sessionKey: completeSessionKey(chat), location };
       const token = ++this.#selectionToken;
@@ -593,8 +640,9 @@ function installWorkstreamsElement() {
         this.#dedicatedView = undefined;
         this.#selectedChat = chat;
         this.#chatView = undefined;
-        this.#tool = this.#selectedSurface("chat");
+        const restoredSurface = this.#restoreSessionSurface(false);
         this.#writeDestinationPreference();
+        this.#activateHostSurface(restoredSurface, true);
         window.requestAnimationFrame(() => { this.#chatView?.surfaces.get(this.#selectedSurface("chat"))?.focus({ preventScroll: true }); });
       } catch (error) {
         if (this.#unifiedState.pendingSelection?.token !== token) return;
@@ -640,6 +688,7 @@ function installWorkstreamsElement() {
     }
 
     #confirmSessionAnchor(snapshot, session) {
+      this.#clearStartLocationRecovery(true);
       const repair = this.#anchorRepair;
       const selected = repair?.status === "found" ? repair.result : repair?.status === "ambiguous" ? repair.selected : undefined;
       if (selected === undefined) return;
@@ -661,6 +710,22 @@ function installWorkstreamsElement() {
     }
 
     #start(snapshot) {
+      const currentLocation = currentSessionLocationResult(this.#context?.sessions);
+      if (!currentLocation.ok) {
+        this.#startLocationIncomplete = false;
+        recordedWorkstreamState.error = startLocationFailureMessage(currentLocation.error);
+        this.#render();
+        return;
+      }
+      const { location } = currentLocation;
+      if (!completeSessionLocation(location)) {
+        this.#startLocationIncomplete = true;
+        this.#render();
+        return;
+      }
+      this.#startLocationIncomplete = false;
+      recordedWorkstreamState.error = "";
+      if (!window.confirm(`Start a new session for ${snapshot.title} at this checkout?\n\n${sessionAnchor(location)}`)) { this.#render(); return; }
       void this.#mutate(async () => {
         const session = await this.#coordinator().launch(snapshot);
         recordedWorkstreamState.notice = `Started session ${session.id}.`;
@@ -669,6 +734,7 @@ function installWorkstreamsElement() {
     }
 
     #resume(session) {
+      this.#clearStartLocationRecovery(true);
       recordedWorkstreamState.error = "";
       void Promise.resolve().then(() => this.#coordinator().resume(session)).catch((error) => {
         if (this.#recordSessionFailure(session, error) === undefined) recordedWorkstreamState.error = errorMessage(error);
@@ -677,6 +743,7 @@ function installWorkstreamsElement() {
     }
 
     #requestCheckpoint(session) {
+      this.#clearStartLocationRecovery(true);
       if (this.#context?.sessions === undefined) { recordedWorkstreamState.error = "Attended session controls are unavailable."; this.#render(); return; }
       const location = { sessionId: session.id, machineId: session.machineId, projectId: session.projectId, workspaceId: session.workspaceId };
       void this.#context.sessions.prompt(location, checkpointProposalPrompt())
@@ -721,32 +788,6 @@ function installWorkstreamsElement() {
           });
         }
       });
-    }
-
-    #addTask(snapshot) {
-      const title = window.prompt("Human task");
-      if (title === null || title.trim() === "") return;
-      const detail = window.prompt("Detail (optional)");
-      const kindInput = window.prompt("Answer type: yes-no, choice, free-text, or none", "yes-no")?.trim().toLowerCase();
-      if (kindInput === undefined) return;
-      let typed = {};
-      if (["yes-no", "choice", "free-text"].includes(kindInput)) {
-        let options = [];
-        if (kindInput === "yes-no") options = [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }, { id: "change", label: "Change" }];
-        else if (kindInput === "choice") {
-          const labels = window.prompt("Choice labels, separated by commas")?.split(",").map((value) => value.trim()).filter(Boolean);
-          if (!labels?.length) return;
-          options = labels.map((value, index) => ({ id: `option-${String(index + 1)}`, label: value }));
-        }
-        const materiality = window.confirm("Is this answer material to the Workstream continuation?") ? "material" : "non-material";
-        typed = { answerKind: kindInput, options, materiality };
-      } else if (kindInput !== "none") {
-        recordedWorkstreamState.error = "Answer type must be yes-no, choice, free-text, or none.";
-        this.#render();
-        return;
-      }
-      const sourceSessionId = this.#selectedSessionId;
-      void this.#mutate((client) => client.append({ workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: newId("task"), records: [{ type: "human-task.upsert", producer: "owner", ...(sourceSessionId === undefined ? {} : { sourceSessionId }), payload: { task: { id: newId("task"), title: title.trim(), ...(detail?.trim() ? { detail: detail.trim() } : {}), ...typed } } }] }));
     }
 
     #answerTask(snapshot, task, answer) {
@@ -814,6 +855,13 @@ function installWorkstreamsElement() {
 
     #syncSelectionFromDestination(joined) {
       const destination = this.#unifiedState.destination;
+      const currentDestinationKey = this.#selectedChat !== undefined ? `chat:${completeSessionKey(this.#selectedChat)}`
+        : this.#selectedWorkstreamId === undefined ? "root"
+          : this.#selectedSessionId === undefined ? `workstream:${this.#selectedWorkstreamId}` : `workstream-session:${this.#selectedWorkstreamId}:${this.#selectedSessionId}`;
+      const nextDestinationKey = destination.type === "chat" ? `chat:${destination.sessionKey}`
+        : destination.type === "workstream" ? `workstream:${destination.workstreamId}`
+          : destination.type === "workstream-session" ? `workstream-session:${destination.workstreamId}:${destination.sessionId}` : "root";
+      if (currentDestinationKey !== nextDestinationKey) this.#clearStartLocationRecovery(true);
       if (destination.type === "chat") {
         this.#selectedChat = joined.chats.find((chat) => completeSessionKey(chat) === destination.sessionKey);
         this.#selectedWorkstreamId = undefined;
@@ -872,6 +920,7 @@ function installWorkstreamsElement() {
         const snapshot = joined.workstreams.find((candidate) => candidate.id === destination.workstreamId);
         if (snapshot !== undefined) {
           this.#applyWorkstreamSelection(snapshot);
+          this.#selectedSessionId = undefined;
           recordedWorkstreamState.selectedWorkstreamId = snapshot.id;
         }
       }
@@ -931,6 +980,7 @@ function installWorkstreamsElement() {
     }
 
     #render() {
+      this.#clearStartLocationRecovery();
       const main = this.#main;
       const context = this.#context;
       const selected = recordedWorkstreamState.snapshots.find((snapshot) => snapshot.id === this.#selectedWorkstreamId);
@@ -969,9 +1019,9 @@ function installWorkstreamsElement() {
         const options = {
           context,
           selectedSessionId: this.#selectedSessionId,
+          rememberedSessionKey: this.#readPreference(`selected-session:${selected.id}`),
           tool: this.#selectedSurface(this.#tool),
           sessionsPaneOpen: this.#sessionsPaneOpen,
-          tasksPaneOpen: this.#tasksPaneOpen,
           terminalOpen: this.#unifiedState.destination.type === "workstream-session"
             ? this.#unifiedState.terminalBySession[completeSessionKey({ ...this.#unifiedState.destination.location, sessionId: this.#unifiedState.destination.sessionId })]?.open === true
             : false,
@@ -980,8 +1030,10 @@ function installWorkstreamsElement() {
           joined: this.#joinedNavigation(),
           error: recordedWorkstreamState.error,
           notice: recordedWorkstreamState.notice,
+          startLocationIncomplete: this.#startLocationIncomplete,
           onBack: () => { this.#returnToPortfolio(); },
           onOpenBrief: () => {
+            this.#clearStartLocationRecovery(true);
             this.#selectedSessionId = undefined;
             this.#unifiedState = reduceUnifiedNavigation(this.#unifiedState, { type: "select-workstream", workstreamId: selected.id });
             this.#writeDestinationPreference();
@@ -999,10 +1051,10 @@ function installWorkstreamsElement() {
           onRefresh: typeof context?.sessionNavigation?.refresh === "function" ? () => { void this.#refreshChats(); } : undefined,
           onNavigatorResize: (width) => { this.#setNavigatorWidth(width); },
           onToggleSessions: () => { this.#transition({ type: "toggle-sessions" }); },
-          onToggleTasks: () => { this.#transition({ type: "toggle-tasks" }); },
           onToggleTerminal: () => {
-            if (!this.#terminalOpen) this.#context?.surfaceHost?.activate?.("terminal");
+            const opening = !this.#terminalOpen;
             this.#transition({ type: "toggle-terminal" });
+            if (opening) this.#activateHostSurface("terminal");
           },
           onStart: () => { this.#start(selected); },
           onResume: (session) => { this.#resume(session); },
@@ -1016,7 +1068,6 @@ function installWorkstreamsElement() {
           onFocusAttention: (item) => { this.#focusAttention(item); },
           onAnswerTask: (task, answer) => { this.#answerTask(selected, task, answer); },
           onResolveTask: (task) => { this.#resolveTask(selected, task); },
-          onAddTask: () => { this.#addTask(selected); },
           onAppendLink: () => { this.#appendLink(selected); },
           onClose: () => { this.#close(selected); },
         };
@@ -1191,7 +1242,7 @@ function workstreamNavigatorRow(snapshot, options) {
   control.className = "unified-navigation-row workstream-navigation-row";
   if ((options.destination?.type === "workstream" || options.destination?.type === "workstream-session") && options.destination.workstreamId === snapshot.id) control.setAttribute("aria-current", "page");
   const copy = document.createElement("span");
-  const continuation = item.continuation.next ?? (item.sessionCount === 0 ? "No sessions yet." : "Confirmed continuation unavailable.");
+  const continuation = navigatorContinuationText(item);
   copy.append(strong(item.title), message(continuation, "muted"), message(`Revision ${String(item.revision)} · ${String(item.sessionCount)} sessions · ${humanize(item.health)} checkpoint`, "session-anchor"));
   const status = message(item.closed ? "Closed" : item.unresolvedTasks === 0 ? "Current" : `${String(item.unresolvedTasks)} need you`, item.unresolvedTasks === 0 ? "navigation-state" : "attention-action navigation-state");
   control.append(copy, status);
@@ -1274,6 +1325,9 @@ function createUnifiedChatDestination(options) {
     view.navigate.focus({ preventScroll: true });
   });
   view.overlayClose.className = "overlay-close";
+  view.navigationContent = document.createElement("div");
+  view.navigationContent.className = "unified-navigation-content";
+  view.navigation.append(view.overlayClose, view.navigationContent);
   view.separator = document.createElement("div");
   view.separator.className = "unified-navigation-separator";
   configureResizeSeparator(view.separator, "Resize Chats and Workstreams navigator", () => view.options.navigation.width, (width) => { view.options.onNavigatorResize(width); });
@@ -1321,15 +1375,9 @@ function updateUnifiedChatDestination(view, options) {
   view.element.style.setProperty("--navigator-width", `${String(options.navigation.width)}px`);
   view.title.textContent = options.chat.title;
   view.scope.textContent = `Chat · ${sessionAnchor(options.chat)}`;
-  view.banner.replaceChildren();
-  if (options.reconnecting) view.banner.append(message("Reconnecting. This Chat remains visible, but its inventory may be stale.", "connection"));
-  else if (options.joined.status === "unavailable") view.banner.append(message("Chat inventory is unavailable. This selected native session may be stale.", "connection"));
-  if (options.error !== undefined) view.banner.append(renderSelectionRecovery(options.error, options));
-  if (options.refreshError !== undefined) view.banner.append(message(selectionFailureMessage(options.refreshError), "checkpoint-error"));
+  updateRenderedRegion(view.banner, unifiedChatBannerRenderKey(options), () => renderUnifiedChatBanner(options));
   view.banner.hidden = view.banner.childElementCount === 0;
-  const focusedKey = view.element.getRootNode().activeElement?.dataset?.focusKey;
-  view.navigation.replaceChildren(view.overlayClose, renderUnifiedHierarchy(options));
-  if (focusedKey !== undefined) [...view.navigation.querySelectorAll("[data-focus-key]")].find((control) => control.dataset.focusKey === focusedKey)?.focus({ preventScroll: true });
+  updateRenderedRegion(view.navigationContent, unifiedNavigatorRenderKey(options), () => renderUnifiedHierarchy(options), view.navigation);
   const narrow = matchMedia("(max-width: 720px)").matches;
   if (!narrow) view.overlayOpen = false;
   view.navigation.hidden = narrow && !view.overlayOpen;
@@ -1353,10 +1401,32 @@ function updateUnifiedChatDestination(view, options) {
   for (const [surface, container] of view.surfaces) setSurfaceVisibility(container, surface === options.surface);
 }
 
+function renderUnifiedChatBanner(options) {
+  const content = document.createDocumentFragment();
+  if (options.reconnecting) content.append(message("Reconnecting. This Chat remains visible, but its inventory may be stale.", "connection"));
+  else if (options.joined.status === "unavailable") content.append(message("Chat inventory is unavailable. This selected native session may be stale.", "connection"));
+  if (options.error !== undefined) content.append(renderSelectionRecovery(options.error, options));
+  if (options.refreshError !== undefined) content.append(message(selectionFailureMessage(options.refreshError), "checkpoint-error"));
+  return content;
+}
+
 function selectionFailureMessage(error) {
   const code = error?.code === undefined ? "SESSION_SELECTION_FAILED" : String(error.code);
   const detail = error?.message === undefined ? "The selected location could not be opened." : String(error.message);
   return `${detail} (${code}). The previous destination remains open.`;
+}
+
+function renderStartLocationRecovery(options) {
+  const recovery = document.createElement("div");
+  recovery.className = "checkpoint-error selection-recovery";
+  recovery.append(message(INCOMPLETE_START_MESSAGE));
+  if (typeof options.context?.host?.openActions === "function") {
+    const actions = document.createElement("div");
+    actions.className = "recovery-actions";
+    actions.append(keyedButton("Open Actions / Projects", "start-recovery:open-actions", () => { options.context.host.openActions(); }));
+    recovery.append(actions);
+  }
+  return recovery;
 }
 
 function renderSelectionRecovery(error, options) {
@@ -1365,14 +1435,22 @@ function renderSelectionRecovery(error, options) {
   recovery.append(message(selectionFailureMessage(error)));
   const actions = document.createElement("div");
   actions.className = "recovery-actions";
-  actions.append(button("Retry open", options.onRetrySelection));
-  if (options.onRefresh !== undefined) actions.append(button("Refresh Chats", options.onRefresh));
+  actions.append(keyedButton("Retry open", "selection-recovery:retry", options.onRetrySelection));
+  if (options.onRefresh !== undefined) actions.append(keyedButton("Refresh Chats", "selection-recovery:refresh", options.onRefresh));
   recovery.append(actions);
   return recovery;
 }
 
+export function typedHostError(error, fallbackCode) {
+  return { code: typeof error?.code === "string" ? error.code : fallbackCode, message: errorMessage(error) };
+}
+
+export function startLocationFailureMessage(error) {
+  return `${error.message} (${error.code}). A new Workstream session was not started.`;
+}
+
 function typedSelectionError(error) {
-  return { code: typeof error?.code === "string" ? error.code : "SESSION_SELECTION_FAILED", message: errorMessage(error) };
+  return typedHostError(error, "SESSION_SELECTION_FAILED");
 }
 
 function createDedicatedWorkstream(snapshot, options) {
@@ -1415,7 +1493,7 @@ function createDedicatedWorkstream(snapshot, options) {
   tools.className = "workstream-tools";
   tools.setAttribute("aria-label", "Selected session tools");
   view.toolButtons = new Map();
-  for (const [tool, labelText] of [["chat", "Chat"], ["files", "Files"], ["git", "Git"]]) {
+  for (const [tool, labelText] of [["chat", "Chat"], ["context", "Context"], ["files", "Files"], ["git", "Git"]]) {
     const control = button(labelText, () => { view.options.onSelectTool(tool); });
     view.toolButtons.set(tool, control);
     tools.append(control);
@@ -1424,8 +1502,6 @@ function createDedicatedWorkstream(snapshot, options) {
   utilities.className = "workstream-utilities";
   view.connection = message("", "scope-label connection-state");
   utilities.append(view.connection);
-  view.drawerToggle = button("Workstream context", () => { view.options.onToggleTasks(); });
-  utilities.append(view.drawerToggle);
   if (typeof options.context?.host?.openActions === "function") utilities.append(button("Actions", () => { view.options.context.host.openActions(); }));
   topbar.append(identity, tools, utilities);
 
@@ -1437,8 +1513,8 @@ function createDedicatedWorkstream(snapshot, options) {
   mobileNavigation.className = "mobile-pane-navigation";
   mobileNavigation.setAttribute("aria-label", "Workstream destinations");
   view.mobileButtons = new Map();
-  for (const destination of ["sessions", "workspace", "context"]) {
-    const control = button("", () => { destination === "context" ? view.options.onToggleTasks() : view.options.onSelectMobilePane(destination); });
+  for (const destination of ["sessions", "workspace"]) {
+    const control = button("", () => { view.options.onSelectMobilePane(destination); });
     view.mobileButtons.set(destination, control);
     mobileNavigation.append(control);
   }
@@ -1498,23 +1574,17 @@ function createDedicatedWorkstream(snapshot, options) {
     view.surfaces.set(surface, container);
     view.surfaceStack.append(container);
   }
-  view.workspaceEmpty = message("", "empty-pane workspace-empty");
-  workspace.append(workspaceHeading, view.workspaceEmpty, view.surfaceStack);
-
-  const tasks = document.createElement("section");
-  tasks.className = "workstream-drawer";
-  tasks.id = "workstream-context-drawer";
-  tasks.setAttribute("aria-labelledby", "workstream-tasks-heading");
-  const tasksHeading = document.createElement("div");
-  tasksHeading.className = "pane-heading";
-  view.tasksTitle = document.createElement("h2");
-  view.tasksTitle.id = "workstream-tasks-heading";
-  view.contextActions = document.createElement("div");
-  view.contextActions.className = "context-actions";
-  tasksHeading.append(view.tasksTitle, view.contextActions);
-  view.tasksList = document.createElement("div");
-  view.tasksList.className = "pane-list";
-  tasks.append(tasksHeading, view.tasksList);
+  view.hostUnavailable = message("Update PI WEB to use host-owned Chat, Files, Git, and Terminal surfaces.", "empty-pane host-surface-unavailable");
+  view.surfaceStack.append(view.hostUnavailable);
+  view.contextSurface = document.createElement("section");
+  view.contextSurface.className = "adapter-context-surface";
+  view.contextSurface.dataset.surface = "context";
+  view.contextSurface.tabIndex = -1;
+  view.surfaces.set("context", view.contextSurface);
+  view.surfaceStack.append(view.contextSurface);
+  view.briefSurface = document.createElement("article");
+  view.briefSurface.className = "workstream-brief";
+  workspace.append(workspaceHeading, view.briefSurface, view.surfaceStack);
   view.scrim = button("Close navigator", () => {
     view.options.onSelectMobilePane("workspace");
     view.mobileButtons.get("sessions")?.focus({ preventScroll: true });
@@ -1549,9 +1619,54 @@ function createDedicatedWorkstream(snapshot, options) {
     event.preventDefault();
     controls[next].focus({ preventScroll: true });
   });
-  shell.append(banner, topbar, view.sessionTabs, tasks, mobileNavigation, body, terminal);
+  shell.append(banner, topbar, view.sessionTabs, mobileNavigation, body, terminal);
   updateDedicatedWorkstream(view, snapshot, options);
   return view;
+}
+
+function renderDedicatedBanner(snapshot, options) {
+  const content = document.createDocumentFragment();
+  if (options.reconnecting) content.append(message("Reconnecting. The last recorded Workstream projection remains visible.", "connection"));
+  if (options.selectionError !== undefined) content.append(renderSelectionRecovery(options.selectionError, options));
+  if (options.refreshError !== undefined) content.append(message(selectionFailureMessage(options.refreshError), "checkpoint-error"));
+  else if (options.startLocationIncomplete) content.append(renderStartLocationRecovery(options));
+  else if (options.error) content.append(message(options.error, "checkpoint-error"));
+  else if (options.notice) content.append(message(options.notice, "receipt"));
+  const repairSession = snapshot.sessions.find((session) => session.id === options.anchorRepair?.sessionId);
+  if (!snapshot.closed && repairSession?.status === "active" && !completeSessionLocation(repairSession)) {
+    content.append(renderSessionAnchorRepair(options.anchorRepair, repairSession, options));
+  }
+  return content;
+}
+
+function renderCollapsedSessionTabs(snapshot, options) {
+  const content = document.createDocumentFragment();
+  content.append(keyedButton("Expand navigator", "session-tabs:expand", () => { options.onToggleSessions(); }));
+  const briefTab = keyedButton("Brief", "session-tabs:brief", () => { options.onOpenBrief(); });
+  briefTab.setAttribute("aria-pressed", String(!options.sessionsPaneOpen && options.selectedSessionId === undefined));
+  if (options.selectedSessionId === undefined) briefTab.setAttribute("aria-current", "page");
+  content.append(briefTab);
+  for (const session of snapshot.sessions) {
+    const attention = attentionForWorkstreamSession(options.attentionItems, session);
+    const entry = document.createElement("span");
+    entry.className = "collapsed-session-entry";
+    const tabLabel = `${session.purpose ?? session.latestCheckpoint?.next ?? `${humanize(session.status)} session`}${attention === undefined ? "" : " · Needs answer"}`;
+    const tab = keyedButton(tabLabel, `session-tabs:session:${session.id}`, () => { options.onSelectSession(session); });
+    tab.disabled = session.status !== "active";
+    tab.setAttribute("aria-pressed", String(session.id === options.selectedSessionId));
+    if (session.id === options.selectedSessionId) tab.setAttribute("aria-current", "page");
+    tab.title = `${sessionAnchor(session)} · Session ${session.id}${attention === undefined ? "" : " · Needs answer"}`;
+    entry.append(tab);
+    if (attention !== undefined && session.status === "active") {
+      const focus = keyedButton("Focus pending ask", `session-tabs:attention:${session.id}`, () => { options.onFocusAttention(attention); });
+      focus.className = "attention-navigation-action";
+      focus.setAttribute("aria-label", `Focus pending ask in session ${session.id}`);
+      entry.append(focus);
+    }
+    content.append(entry);
+  }
+  if (!snapshot.closed) content.append(keyedButton("New session +", "session-tabs:new", () => { options.onStart(); }));
+  return content;
 }
 
 function updateDedicatedWorkstream(view, snapshot, options) {
@@ -1564,40 +1679,29 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   view.connection.textContent = options.reconnecting ? "Reconnecting" : "Connected";
   view.connection.classList.toggle("reconnecting", options.reconnecting);
 
-  view.banner.replaceChildren();
-  if (options.reconnecting) view.banner.append(message("Reconnecting. The last recorded Workstream projection remains visible.", "connection"));
-  if (options.selectionError !== undefined) view.banner.append(renderSelectionRecovery(options.selectionError, options));
-  if (options.refreshError !== undefined) view.banner.append(message(selectionFailureMessage(options.refreshError), "checkpoint-error"));
-  else if (options.error) view.banner.append(message(options.error, "checkpoint-error"));
-  else if (options.notice) view.banner.append(message(options.notice, "receipt"));
-  const repairSession = snapshot.sessions.find((session) => session.id === options.anchorRepair?.sessionId);
-  if (!snapshot.closed && repairSession?.status === "active" && !completeSessionLocation(repairSession)) {
-    view.banner.append(renderSessionAnchorRepair(options.anchorRepair, repairSession, options));
-  }
+  updateRenderedRegion(view.banner, dedicatedBannerRenderKey(snapshot, options), () => renderDedicatedBanner(snapshot, options));
   view.banner.hidden = view.banner.childElementCount === 0;
 
   for (const [tool, control] of view.toolButtons) {
     const selectedTool = options.selectedSessionId !== undefined && options.tool === tool;
+    control.disabled = options.selectedSessionId === undefined;
     control.setAttribute("aria-pressed", String(selectedTool));
     if (selectedTool) control.setAttribute("aria-current", "page");
     else control.removeAttribute("aria-current");
   }
   const mobileLabels = {
     sessions: `Navigate · ${String(active.length)}`,
-    workspace: "Workspace",
-    context: `Context · ${String(snapshot.humanTasks.filter((task) => task.status === "pending").length)}`,
+    workspace: options.selectedSessionId === undefined ? "Brief" : surfaceLabel(options.tool),
   };
   for (const [destination, control] of view.mobileButtons) {
     const controlState = dedicatedMobileControlState(options, destination);
     control.textContent = mobileLabels[destination];
+    control.setAttribute("aria-label", destination === "workspace"
+      ? `Open Workspace${options.selectedSessionId === undefined ? " brief" : ` · ${surfaceLabel(options.tool)}`}`
+      : "Open Workstream session navigator");
     control.setAttribute("aria-pressed", String(controlState.pressed));
-    if (controlState.expanded === undefined) {
-      control.removeAttribute("aria-expanded");
-      control.removeAttribute("aria-controls");
-    } else {
-      control.setAttribute("aria-expanded", String(controlState.expanded));
-      control.setAttribute("aria-controls", controlState.controls);
-    }
+    control.removeAttribute("aria-expanded");
+    control.removeAttribute("aria-controls");
   }
 
   const narrowNavigatorOpen = matchMedia("(max-width: 720px)").matches && options.mobilePane === "sessions";
@@ -1611,171 +1715,68 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   view.sessionsEdge.hidden = !options.sessionsPaneOpen;
   view.sessionsEdge.setAttribute("aria-valuenow", String(options.navigatorWidth));
   view.sessionsEdge.setAttribute("aria-valuetext", `${String(options.navigatorWidth)} pixels`);
-  view.drawerToggle.setAttribute("aria-expanded", String(options.tasksPaneOpen));
-  view.drawerToggle.setAttribute("aria-controls", "workstream-context-drawer");
-  view.drawerToggle.textContent = options.tasksPaneOpen ? "Hide context" : `Workstream context · ${String(snapshot.humanTasks.filter((task) => task.status === "pending").length)}`;
-  view.tasksList.parentElement.hidden = !options.tasksPaneOpen;
-
   view.sessionTabs.hidden = options.sessionsPaneOpen;
-  view.sessionTabs.replaceChildren();
-  view.sessionTabs.append(button("Expand navigator", () => { options.onToggleSessions(); }));
-  const briefTab = button("Brief", () => { options.onOpenBrief(); });
-  briefTab.setAttribute("aria-pressed", String(!options.sessionsPaneOpen && options.selectedSessionId === undefined));
-  if (options.selectedSessionId === undefined) briefTab.setAttribute("aria-current", "page");
-  view.sessionTabs.append(briefTab);
-  for (const session of snapshot.sessions) {
-    const attention = attentionForWorkstreamSession(options.attentionItems, session);
-    const entry = document.createElement("span");
-    entry.className = "collapsed-session-entry";
-    const tabLabel = `${session.purpose ?? session.latestCheckpoint?.next ?? `${humanize(session.status)} session`}${attention === undefined ? "" : " · Needs answer"}`;
-    const tab = button(tabLabel, () => { options.onSelectSession(session); });
-    tab.disabled = session.status !== "active";
-    tab.setAttribute("aria-pressed", String(session.id === options.selectedSessionId));
-    if (session.id === options.selectedSessionId) tab.setAttribute("aria-current", "page");
-    tab.title = `${sessionAnchor(session)} · Session ${session.id}${attention === undefined ? "" : " · Needs answer"}`;
-    entry.append(tab);
-    if (attention !== undefined && session.status === "active") {
-      const focus = button("Focus pending ask", () => { options.onFocusAttention(attention); });
-      focus.className = "attention-navigation-action";
-      focus.setAttribute("aria-label", `Focus pending ask in session ${session.id}`);
-      entry.append(focus);
-    }
-    view.sessionTabs.append(entry);
-  }
-  if (!snapshot.closed) view.sessionTabs.append(button("New session +", () => { options.onStart(); }));
+  updateRenderedRegion(view.sessionTabs, collapsedSessionTabsRenderKey(snapshot, options), () => renderCollapsedSessionTabs(snapshot, options));
 
-  const focusedSessionKey = view.element.getRootNode().activeElement?.dataset?.focusKey;
-  view.navigationNotice.replaceChildren();
   const inventoryNotice = unifiedInventoryNotice(options.joined, options.onRefresh);
-  if (inventoryNotice !== undefined) view.navigationNotice.append(inventoryNotice);
+  updateRenderedRegion(
+    view.navigationNotice,
+    inventoryNoticeRenderKey(options.joined, options.onRefresh !== undefined),
+    () => inventoryNotice ?? document.createDocumentFragment(),
+  );
   view.navigationNotice.hidden = inventoryNotice === undefined;
-  view.sessionsList.replaceChildren();
-  if (snapshot.sessions.length === 0) view.sessionsList.append(message("No sessions yet. Start one from an explicitly selected PI WEB checkout.", "empty-pane"));
-  for (const session of snapshot.sessions) {
-    const attention = attentionForWorkstreamSession(options.attentionItems, session);
-    const entry = document.createElement("div");
-    entry.className = "dedicated-session-entry";
-    const row = keyedButton("", `session:${snapshot.id}:${session.id}`, () => { options.onSelectSession(session); });
-    row.className = `dedicated-session${session.id === options.selectedSessionId ? " selected" : ""}`;
-    row.setAttribute("aria-pressed", String(session.id === options.selectedSessionId));
-    if (session.id === options.selectedSessionId) row.setAttribute("aria-current", "page");
-    row.disabled = session.status !== "active" || options.selectionPending;
-    const copy = document.createElement("span");
-    const purpose = session.purpose ?? session.latestCheckpoint?.next ?? `${humanize(session.status)} session`;
-    copy.append(strong(purpose), message(`${sessionAnchor(session)} · ${humanize(session.status)}`, "session-anchor"), message(`Session ${session.id}`, "diagnostic"));
-    if (session.launchFailure !== null) copy.append(message(`Launch failed: ${session.launchFailure.reason}`, "checkpoint-error inline-error"));
-    if (session.checkpointFailure !== null) copy.append(message(session.checkpointFailure, "checkpoint-error inline-error"));
-    if (session.checkpointStaleness !== null) copy.append(message(`Checkpoint stale: ${session.checkpointStaleness.reason}`, "checkpoint-error inline-error"));
-    row.append(copy);
-    entry.append(row);
-    if (attention !== undefined) {
-      const focus = button("Focus pending ask", () => { options.onFocusAttention(attention); });
-      focus.className = "attention-navigation-action";
-      entry.append(focus);
-    }
-    view.sessionsList.append(entry);
-  }
-  if (focusedSessionKey !== undefined) [...view.sessionsList.querySelectorAll("[data-focus-key]")].find((control) => control.dataset.focusKey === focusedSessionKey)?.focus({ preventScroll: true });
+  updateRenderedRegion(
+    view.sessionsList,
+    expandedSessionListRenderKey(snapshot, options),
+    () => renderExpandedSessionList(snapshot, options),
+    view.sessionsPane,
+  );
 
   const selected = snapshot.sessions.find((session) => session.id === options.selectedSessionId);
   const layout = dedicatedWorkstreamLayout(options);
   const toolName = selected === undefined ? "Workstream brief" : surfaceLabel(layout.surface);
   view.toolName.textContent = toolName;
-  const scope = selected === undefined ? `Canonical Workstream · revision ${String(snapshot.revision)}` : layout.scope === "selected-session-checkout-observed-unattributed"
-    ? "Selected checkout · current observed changes, unattributed"
-    : "Selected session checkout";
+  const scope = selected === undefined ? `Canonical Workstream · revision ${String(snapshot.revision)}`
+    : layout.scope === "canonical-selected-session-context" ? "Canonical selected-session context"
+      : layout.scope === "selected-session-checkout-observed-unattributed"
+        ? "Selected checkout · current observed changes, unattributed"
+        : "Selected session checkout";
   view.scope.textContent = `${scope}${selected === undefined ? "" : ` · ${sessionAnchor(selected)}`}`;
-  view.checkpointActions.replaceChildren();
-  if (selected?.status === "active" && !snapshot.closed) {
-    view.checkpointActions.append(
-      button("Resume", () => { options.onResume(selected); }),
-      button("Ask Pi", () => { options.onRequestCheckpoint(selected); }),
-      button("Confirm checkpoint", () => { options.onSaveCheckpoint(selected); }),
-    );
+  const actionRenderKey = `actions:${String(snapshot.revision)}:${selected?.id ?? "brief"}:${snapshot.closed ? "closed" : "open"}`;
+  if (view.checkpointActions.dataset.renderKey !== actionRenderKey) {
+    const focusedAction = focusedDescendantKey(view.checkpointActions);
+    view.checkpointActions.replaceChildren();
+    view.checkpointActions.dataset.renderKey = actionRenderKey;
+    if (selected?.status === "active" && !snapshot.closed) {
+      view.checkpointActions.append(
+        keyedButton("Resume", `session:${selected.id}:resume`, () => { view.options.onResume(selected); }),
+        keyedButton("Ask Pi", `session:${selected.id}:ask`, () => { view.options.onRequestCheckpoint(selected); }),
+        keyedButton("Confirm checkpoint", `session:${selected.id}:checkpoint`, () => { view.options.onSaveCheckpoint(selected); }),
+      );
+    } else if (selected === undefined && !snapshot.closed) {
+      view.checkpointActions.append(
+        keyedButton("Add reference link", "brief:add-reference", () => { view.options.onAppendLink(); }),
+        keyedButton("Close Workstream", "brief:close", () => { view.options.onClose(); }),
+      );
+    }
+    restoreDescendantFocus(view.checkpointActions, focusedAction);
   }
 
   const surfacesAvailable = options.context?.surfaceHost !== undefined;
-  view.workspaceEmpty.hidden = selected !== undefined && surfacesAvailable;
-  const brief = projectWorkstreamBrief(snapshot, options.context?.preferences?.get?.(`selected-session:${snapshot.id}`));
-  view.workspaceEmpty.textContent = selected === undefined
-    ? brief.continuation.next === undefined
-      ? "This Workstream has no confirmed continuation. Select a session to open its Chat."
-      : `Next from session ${brief.continuation.sessionId}: ${brief.continuation.next} (${brief.continuation.status}). Select a session to open its Chat.`
-    : "Update PI WEB to use host-owned Chat, Files, Git, and Terminal surfaces.";
-  view.surfaceStack.hidden = selected === undefined || !surfacesAvailable;
-  for (const [surface, container] of view.surfaces) setSurfaceVisibility(container, selected !== undefined && surface === options.tool);
-
-  const unresolvedTasks = snapshot.humanTasks.filter((task) => task.status === "pending");
-  const openTasks = snapshot.humanTasks.filter((task) => task.status === "pending" || task.status === "answered");
-  view.tasksTitle.textContent = `Workstream context · revision ${String(snapshot.revision)}`;
-  view.contextActions.replaceChildren();
-  if (!snapshot.closed) view.contextActions.append(
-    button("Add task", () => { options.onAddTask(); }),
-    button("Add link", () => { options.onAppendLink(); }),
-    button("Close Workstream", () => { options.onClose(); }),
-  );
-  view.tasksList.replaceChildren();
-  const continuation = document.createElement("section");
-  continuation.className = "drawer-section";
-  continuation.append(label("Confirmed continuation"));
-  const checkpoints = snapshot.sessions.filter((session) => session.latestCheckpoint !== null);
-  if (checkpoints.length === 0) continuation.append(message("No confirmed checkpoints yet.", "muted"));
-  for (const session of checkpoints) {
-    const item = document.createElement("div");
-    item.className = "drawer-checkpoint";
-    item.append(
-      strong(session.latestCheckpoint.next),
-      message(`${sessionAnchor(session)} · ${session.latestCheckpoint.whatChanged}`, "muted"),
-    );
-    if (session.latestCheckpoint.nextSessionPrompt === null) {
-      item.append(message("Next-session prompt unavailable for this earlier checkpoint.", "next-session-prompt muted"));
-    } else item.append(
-      message(session.latestCheckpoint.nextSessionPrompt, "next-session-prompt"),
-      button("Copy next-session prompt", () => { void copyNextSessionPrompt(session.latestCheckpoint.nextSessionPrompt); }),
-    );
-    if (session.checkpointStaleness !== null) item.append(message(`Stale: ${session.checkpointStaleness.reason}`, "checkpoint-error inline-error"));
-    continuation.append(item);
+  const brief = projectWorkstreamBrief(snapshot, options.rememberedSessionKey);
+  view.briefSurface.hidden = selected !== undefined;
+  if (selected === undefined) {
+    updateCanonicalSurface(view.briefSurface, canonicalSurfaceRenderKey(snapshot, undefined, options.rememberedSessionKey), () => renderWorkstreamBrief(brief, snapshot, view));
   }
-  view.tasksList.append(continuation);
-
-  const tasksSection = document.createElement("section");
-  tasksSection.className = "drawer-section";
-  tasksSection.append(label(`Human Tasks · ${String(unresolvedTasks.length)}`));
-  if (unresolvedTasks.length === 0) tasksSection.append(message("Nothing needs your attention right now.", "muted"));
-  for (const task of openTasks) {
-    const row = document.createElement("div");
-    row.className = "dedicated-task";
-    const copy = document.createElement("div");
-    copy.append(strong(task.title));
-    if (task.detail) copy.append(message(task.detail, "muted"));
-    copy.append(message(task.sourceSessionId ? `From session ${task.sourceSessionId}` : "Source session not recorded", "task-source"));
-    if (task.status === "answered" && task.answer !== null) {
-      const answerText = task.answer.kind === "free-text" ? task.answer.text : task.options.find((option) => option.id === task.answer.optionId)?.label ?? task.answer.optionId;
-      copy.append(message(`Answered: ${answerText}`, "receipt inline-answer"));
-    }
-    row.append(copy);
-    const taskActions = document.createElement("div");
-    taskActions.className = "task-answer-actions";
-    if (!snapshot.closed && task.status === "pending" && task.answerKind === "free-text") taskActions.append(button("Answer", () => {
-      const text = window.prompt(task.title, task.answer?.text ?? "");
-      if (text?.trim()) options.onAnswerTask(task, { kind: "free-text", text: text.trim() });
-    }));
-    else if (!snapshot.closed && task.status === "pending" && (task.answerKind === "yes-no" || task.answerKind === "choice")) {
-      for (const option of task.options) taskActions.append(button(option.label, () => { options.onAnswerTask(task, { kind: task.answerKind, optionId: option.id }); }));
-    }
-    if (!snapshot.closed && (task.answerKind === null || task.status === "answered")) taskActions.append(button("Resolve", () => { options.onResolveTask(task); }));
-    row.append(taskActions);
-    tasksSection.append(row);
+  view.surfaceStack.hidden = selected === undefined;
+  for (const [surface, container] of view.surfaces) {
+    const available = surface === "context" || surfacesAvailable;
+    setSurfaceVisibility(container, selected !== undefined && available && surface === options.tool);
   }
-  view.tasksList.append(tasksSection);
-
-  if (snapshot.links.length > 0) {
-    const linksSection = document.createElement("section");
-    linksSection.className = "drawer-section";
-    linksSection.append(label(`Links · ${String(snapshot.links.length)}`));
-    for (const link of snapshot.links) linksSection.append(message(link.label ?? link.reference, "links"));
-    view.tasksList.append(linksSection);
+  if (selected !== undefined && options.tool === "context") {
+    updateCanonicalSurface(view.contextSurface, canonicalSurfaceRenderKey(snapshot, selected.id), () => renderSessionContext(projectSessionContext(snapshot, selected.id), snapshot, view));
   }
+  view.hostUnavailable.hidden = selected === undefined || options.tool === "context" || surfacesAvailable;
 
   view.terminal.classList.toggle("open", options.terminalOpen);
   view.terminalToggle.textContent = options.terminalOpen ? "Hide Terminal ↓" : "Terminal ↑";
@@ -1791,6 +1792,216 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   }
 }
 
+function renderExpandedSessionList(snapshot, options) {
+  const content = document.createDocumentFragment();
+  if (snapshot.sessions.length === 0) content.append(message("No sessions yet. Start one from an explicitly selected PI WEB checkout.", "empty-pane"));
+  for (const session of snapshot.sessions) {
+    const attention = attentionForWorkstreamSession(options.attentionItems, session);
+    const entry = document.createElement("div");
+    entry.className = "dedicated-session-entry";
+    const row = keyedButton("", `session:${snapshot.id}:${session.id}`, () => { options.onSelectSession(session); });
+    row.className = `dedicated-session${session.id === options.selectedSessionId ? " selected" : ""}`;
+    row.setAttribute("aria-pressed", String(session.id === options.selectedSessionId));
+    if (session.id === options.selectedSessionId) row.setAttribute("aria-current", "page");
+    row.disabled = session.status !== "active" || options.selectionPending;
+    const copy = document.createElement("span");
+    const purpose = session.purpose ?? session.latestCheckpoint?.next ?? `${humanize(session.status)} session`;
+    copy.append(strong(purpose), message(`${sessionAnchor(session)} · ${humanize(session.status)}`, "session-anchor"), message(`Session ${session.id}`, "diagnostic"));
+    if (session.launchFailure != null) copy.append(message(`Launch failed: ${typeof session.launchFailure === "string" ? session.launchFailure : session.launchFailure.reason}`, "checkpoint-error inline-error"));
+    if (session.checkpointFailure != null) copy.append(message(`Checkpoint failed: ${typeof session.checkpointFailure === "string" ? session.checkpointFailure : session.checkpointFailure.reason}`, "checkpoint-error inline-error"));
+    if (session.checkpointStaleness != null) copy.append(message(`Checkpoint stale: ${session.checkpointStaleness.reason}`, "checkpoint-error inline-error"));
+    row.append(copy);
+    entry.append(row);
+    if (attention !== undefined) {
+      const focus = keyedButton("Focus pending ask", `session:${snapshot.id}:${session.id}:attention`, () => { options.onFocusAttention(attention); });
+      focus.className = "attention-navigation-action";
+      entry.append(focus);
+    }
+    content.append(entry);
+  }
+  return content;
+}
+
+function updateCanonicalSurface(container, renderKey, render) {
+  updateRenderedRegion(container, renderKey, render);
+}
+
+function updateRenderedRegion(container, renderKey, render, scrollContainer = container) {
+  if (container.dataset.renderKey === renderKey) return;
+  const scrollTop = scrollContainer.scrollTop;
+  const scrollLeft = scrollContainer.scrollLeft;
+  const focusedKey = focusedDescendantKey(container);
+  container.replaceChildren(render());
+  container.dataset.renderKey = renderKey;
+  scrollContainer.scrollTop = scrollTop;
+  scrollContainer.scrollLeft = scrollLeft;
+  restoreDescendantFocus(container, focusedKey);
+}
+
+function focusedDescendantKey(container) {
+  const active = container.getRootNode().activeElement;
+  return active !== null && container.contains(active) ? active.dataset?.focusKey : undefined;
+}
+
+function restoreDescendantFocus(container, focusKey) {
+  if (focusKey === undefined) return;
+  const target = [...container.querySelectorAll("[data-focus-key]")].find((control) => control.dataset.focusKey === focusKey);
+  target?.focus({ preventScroll: true });
+}
+
+function renderWorkstreamBrief(brief, snapshot, view) {
+  const content = document.createDocumentFragment();
+
+  const identity = briefSection("Workstream");
+  identity.append(strong(brief.title ?? brief.id ?? "Untitled Workstream"));
+  identity.append(message(`Revision ${String(brief.revision)} · ${brief.closed ? "Closed" : "Open"}${brief.closedAt === null ? "" : ` · closed ${formatDateTime(brief.closedAt)}`}`, "brief-state"));
+  const health = document.createElement("div");
+  health.className = "brief-health-list";
+  if (brief.checkpointHealth.length === 0) health.append(message("No sessions; checkpoint health is missing.", "muted"));
+  for (const item of brief.checkpointHealth) health.append(message(`Session ${item.sessionId}: ${humanize(item.status)} checkpoint`, `checkpoint-health ${item.status}`));
+  identity.append(health);
+  content.append(identity);
+
+  const continuation = briefSection("Next resumable session");
+  if (!brief.continuation.resumable) {
+    continuation.append(strong("No resumable session"));
+    if (brief.continuation.sessionId !== undefined) continuation.append(message(`Session ${brief.continuation.sessionId} · ${humanize(brief.continuation.sessionStatus)} · ${humanize(brief.continuation.status)}`, `checkpoint-health ${brief.continuation.status}`));
+    continuation.append(message(brief.continuation.reason, "checkpoint-error inline-error"));
+  } else {
+    continuation.append(strong(`Session ${brief.continuation.sessionId} · active · complete anchor`));
+    continuation.append(message(`${humanize(brief.continuation.status)} checkpoint`, `checkpoint-health ${brief.continuation.status}`));
+    if (brief.continuation.next !== undefined) continuation.append(message(brief.continuation.next, "next"));
+    if (brief.continuation.status !== "current") continuation.append(message(brief.continuation.reason ?? "Confirmed continuation is unavailable.", "checkpoint-error inline-error"));
+  }
+  content.append(continuation);
+
+  const tasks = briefSection(`Unresolved Human Tasks · ${String(brief.unresolvedHumanTasks.length)}`);
+  appendHumanTasks(tasks, brief.unresolvedHumanTasks, snapshot, view);
+  content.append(tasks);
+
+  const updates = briefSection("Per-session confirmed updates");
+  if (brief.sessions.length === 0) updates.append(message("No sessions have been recorded.", "muted"));
+  for (const session of brief.sessions) updates.append(renderConfirmedUpdate(session));
+  content.append(updates);
+
+  const index = briefSection("Session index");
+  if (brief.sessions.length === 0) index.append(message("No sessions.", "muted"));
+  for (const session of brief.sessions) {
+    const row = document.createElement("div");
+    row.className = "brief-index-row";
+    row.append(strong(`Session ${session.id}`), message(humanize(session.status), `session-status ${session.status}`));
+    row.append(message(session.anchor.complete ? sessionAnchor(session.anchor) : "Complete checkout anchor missing", session.anchor.complete ? "session-anchor" : "checkpoint-error inline-error"));
+    index.append(row);
+  }
+  content.append(index);
+
+  const links = briefSection(`Links · ${String(brief.links.length)}`);
+  appendLinks(links, brief.links);
+  content.append(links);
+  return content;
+}
+
+function renderSessionContext(context, snapshot, view) {
+  const content = document.createDocumentFragment();
+  if (context === undefined) {
+    content.append(message("Selected session context is unavailable.", "checkpoint-error"));
+    return content;
+  }
+  const actions = document.createElement("div");
+  actions.className = "context-actions";
+  actions.append(keyedButton("Open full brief", "context:open-brief", () => { view.options.onOpenBrief(); }));
+  content.append(actions);
+
+  const checkpoint = briefSection(`Selected checkpoint · ${humanize(context.session.checkpointStatus)}`);
+  checkpoint.append(message(`Session ${context.session.id}`, "diagnostic"));
+  checkpoint.append(message(context.session.anchor.complete ? sessionAnchor(context.session.anchor) : "Complete checkout anchor missing", context.session.anchor.complete ? "session-anchor" : "checkpoint-error inline-error"));
+  checkpoint.append(renderConfirmedUpdate(context.session));
+  content.append(checkpoint);
+
+  const tasks = briefSection(`Relevant Human Tasks · ${String(context.humanTasks.length)}`);
+  appendHumanTasks(tasks, context.humanTasks, snapshot, view);
+  content.append(tasks);
+  const links = briefSection(`Relevant links · ${String(context.links.length)}`);
+  appendLinks(links, context.links);
+  content.append(links);
+  return content;
+}
+
+function renderConfirmedUpdate(session) {
+  const item = document.createElement("article");
+  item.className = "confirmed-update";
+  item.append(strong(`Session ${session.id} · ${humanize(session.checkpointStatus)}`));
+  if (session.launchFailure !== null && session.launchFailure !== undefined) item.append(message(`Session launch failed: ${typeof session.launchFailure === "string" ? session.launchFailure : session.launchFailure.reason}`, "checkpoint-error inline-error"));
+  if (session.checkpointFailure !== null && session.checkpointFailure !== undefined) {
+    item.append(message(`Checkpoint failed: ${typeof session.checkpointFailure === "string" ? session.checkpointFailure : session.checkpointFailure.reason}`, "checkpoint-error inline-error"));
+    if (session.priorCheckpointAvailable) item.append(message("The fields below are from the prior confirmed checkpoint retained after that failure.", "prior-confirmed-checkpoint"));
+  }
+  if (session.checkpointStaleness !== null && session.checkpointStaleness !== undefined) item.append(message(`Checkpoint stale: ${session.checkpointStaleness.reason}`, "checkpoint-error inline-error"));
+  if (!session.confirmedCheckpointAvailable) {
+    item.append(message("No confirmed checkpoint fields are available.", "muted"));
+    return item;
+  }
+  item.append(field("What changed", session.whatChanged), field("What remains", session.remains), field("Next useful action", session.next));
+  const prompt = field("Next-session prompt", session.nextSessionPrompt ?? "Unavailable for this confirmed checkpoint");
+  if (typeof session.nextSessionPrompt === "string") prompt.append(keyedButton("Copy exact prompt", `checkpoint:${session.id}:copy-prompt`, () => { void copyNextSessionPrompt(session.nextSessionPrompt); }));
+  item.append(prompt);
+  const references = field("References", session.references.length === 0 ? "None recorded" : session.references.join("\n"));
+  references.classList.add("checkpoint-references");
+  item.append(references);
+  return item;
+}
+
+function appendHumanTasks(container, tasks, snapshot, view) {
+  if (tasks.length === 0) container.append(message("Nothing unresolved needs owner attention.", "muted"));
+  for (const task of tasks) {
+    const row = document.createElement("div");
+    row.className = "dedicated-task";
+    const copy = document.createElement("div");
+    copy.append(strong(task.title));
+    if (task.detail) copy.append(message(task.detail, "muted"));
+    copy.append(message(`Materiality: ${task.materiality ?? "not recorded"}`, "task-source"));
+    copy.append(message(task.sourceSessionId ? `Source: session ${task.sourceSessionId}` : "Source session not recorded", "task-source"));
+    if (task.status === "answered" && task.answer !== null) {
+      const answerText = task.answer.kind === "free-text" ? task.answer.text : task.options.find((option) => option.id === task.answer.optionId)?.label ?? task.answer.optionId;
+      copy.append(message(`Answered: ${answerText}`, "receipt inline-answer"));
+    }
+    row.append(copy);
+    const taskActions = document.createElement("div");
+    taskActions.className = "task-answer-actions";
+    if (!snapshot.closed && task.status === "pending" && task.answerKind === "free-text") taskActions.append(keyedButton("Answer", `task:${task.id}:answer`, () => {
+      const text = window.prompt(task.title, task.answer?.text ?? "");
+      if (text?.trim()) view.options.onAnswerTask(task, { kind: "free-text", text: text.trim() });
+    }));
+    else if (!snapshot.closed && task.status === "pending" && (task.answerKind === "yes-no" || task.answerKind === "choice")) {
+      for (const choice of task.options) taskActions.append(keyedButton(`Answer: ${choice.label}`, `task:${task.id}:answer:${choice.id}`, () => { view.options.onAnswerTask(task, { kind: task.answerKind, optionId: choice.id }); }));
+    }
+    if (!snapshot.closed && (task.answerKind == null || task.status === "answered")) taskActions.append(keyedButton("Resolve", `task:${task.id}:resolve`, () => { view.options.onResolveTask(task); }));
+    row.append(taskActions);
+    container.append(row);
+  }
+}
+
+function appendLinks(container, links) {
+  if (links.length === 0) container.append(message("No ordinary Workstream links recorded.", "muted"));
+  for (const link of links) container.append(message(link.label == null || link.label === "" ? link.reference : `${link.label} · ${link.reference}`, "links"));
+}
+
+function briefSection(titleText) {
+  const container = document.createElement("section");
+  container.className = "brief-section";
+  const heading = document.createElement("h3");
+  heading.textContent = titleText;
+  container.append(heading);
+  return container;
+}
+
+function field(name, value) {
+  const container = document.createElement("div");
+  container.className = "checkpoint-field";
+  container.append(label(name), message(value ?? "Not recorded", "checkpoint-field-value"));
+  return container;
+}
+
 function renderSessionAnchorRepair(repair, session, options) {
   const presentation = sessionAnchorRepairPresentation(repair);
   const panel = document.createElement("section");
@@ -1803,15 +2014,15 @@ function renderSessionAnchorRepair(repair, session, options) {
     actions.append(message(presentation.candidates[0].label, "session-anchor"));
   } else if (repair.status === "ambiguous") {
     repair.result.locations.forEach((candidate, index) => {
-      const choice = button(presentation.candidates[index].label, () => { options.onSelectAnchorRepairCandidate(candidate); });
+      const choice = keyedButton(presentation.candidates[index].label, `anchor-repair:candidate:${String(index)}`, () => { options.onSelectAnchorRepairCandidate(candidate); });
       choice.setAttribute("aria-pressed", String(presentation.candidates[index].selected));
       actions.append(choice);
     });
   }
-  if (presentation.confirmEnabled) actions.append(button("Confirm session location", () => { options.onConfirmSessionAnchor(session); }));
+  if (presentation.confirmEnabled) actions.append(keyedButton("Confirm session location", "anchor-repair:confirm", () => { options.onConfirmSessionAnchor(session); }));
   if (presentation.retryEnabled) {
     const machineName = repair.machine.name === repair.machine.id ? repair.machine.id : `${repair.machine.name} (${repair.machine.id})`;
-    actions.append(button(`Scan ${machineName}`, () => { options.onResolveSessionAnchor(session); }));
+    actions.append(keyedButton(`Scan ${machineName}`, "anchor-repair:scan", () => { options.onResolveSessionAnchor(session); }));
   }
   panel.append(actions);
   return panel;
@@ -1925,7 +2136,7 @@ function workstreamsStyleElement() {
     :host { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; display: block; color: var(--pi-text); background: var(--pi-bg); font: 14px system-ui, sans-serif; }
     main { box-sizing: border-box; width: min(100%, 1280px); min-height: 100%; display: grid; align-content: start; gap: 0; margin: 0 auto; padding: clamp(68px, 7vw, 92px) clamp(20px, 5vw, 72px) 40px; }
     main.dedicated-workstream { width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; display: flex; overflow: hidden; }
-    header, .workstream-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--pi-toolbar-gap, 8px); }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--pi-toolbar-gap, 8px); }
     .portfolio-header { align-items: end; gap: 28px; padding-bottom: 24px; border-bottom: 1px solid var(--pi-border); }
     .portfolio-header > div:first-child { max-width: 720px; }
     .portfolio-header > div:first-child > strong, .portfolio-header h1 { margin: 0; color: var(--pi-text-bright); font-size: clamp(28px, 3vw, 38px); letter-spacing: -.025em; line-height: 1.05; }
@@ -1989,14 +2200,21 @@ function workstreamsStyleElement() {
     .sessions-pane { min-width: 0; min-height: 0; overflow: auto; background: var(--pi-surface); grid-column: 1; }
     .workspace-pane { grid-column: 3; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--pi-bg); }
     .sessions-collapsed .sessions-pane { visibility: hidden; overflow: hidden; }
-    .workstream-drawer { flex: 0 0 auto; max-height: min(42vh, 390px); overflow: auto; display: block; border-bottom: 1px solid var(--pi-border); background: var(--pi-surface); box-shadow: 0 12px 28px var(--pi-shadow-soft); }
-    .workstream-drawer .pane-heading { position: sticky; top: 0; z-index: 2; background: var(--pi-surface); }
-    .workstream-drawer .pane-list { width: min(100%, 1100px); margin: 0 auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
-    .drawer-section { min-width: 0; align-content: start; gap: 8px; padding: 14px; border-right: 1px solid var(--pi-border-muted); }
-    .drawer-section:last-child { border-right: 0; }
-    .drawer-checkpoint { display: grid; gap: 4px; }
-    .next-session-prompt { white-space: pre-wrap; user-select: text; }
-    .drawer-checkpoint > button { width: max-content; }
+    .workstream-brief, .adapter-context-surface { min-width: 0; min-height: 0; overflow: auto; align-content: start; }
+    .workstream-brief { flex: 1 1 auto; width: min(100%, 980px); box-sizing: border-box; margin: 0 auto; padding: clamp(16px, 3vw, 34px); }
+    .adapter-context-surface { flex: 1 1 auto; padding: clamp(14px, 2vw, 24px); }
+    .brief-section { min-width: 0; gap: 9px; padding: 18px 0; border-bottom: 1px solid var(--pi-border-muted); }
+    .brief-section:last-child { border-bottom: 0; }
+    .brief-section h3 { margin: 0; color: var(--pi-text-bright); font-size: 13px; }
+    .brief-health-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .checkpoint-health, .session-status { width: max-content; border-radius: 999px; background: var(--pi-surface); padding: 3px 7px; font-size: 11px; }
+    .checkpoint-health.stale, .checkpoint-health.failed, .checkpoint-health.missing { background: var(--pi-warning-surface); color: var(--pi-warning); }
+    .confirmed-update { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--pi-border-muted); border-radius: 8px; }
+    .checkpoint-field { display: grid; gap: 3px; }
+    .checkpoint-field-value, .checkpoint-references { white-space: pre-wrap; user-select: text; }
+    .checkpoint-field > button { width: max-content; }
+    .brief-index-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; padding: 10px 0; border-bottom: 1px solid var(--pi-border-muted); }
+    .brief-index-row .session-anchor, .brief-index-row .checkpoint-error { grid-column: 1 / -1; }
     .pane-edge { min-width: 0; min-height: 0; background: var(--pi-border-muted); cursor: col-resize; touch-action: none; }
     .pane-edge:focus-visible { position: relative; z-index: 3; outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     .sessions-pane + .pane-edge { grid-column: 2; }
@@ -2007,7 +2225,7 @@ function workstreamsStyleElement() {
     .pane-heading, .workspace-heading { min-height: 49px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--pi-border); }
     .context-actions { display: flex; align-items: center; gap: 5px; }
     .context-actions button { min-height: 30px; padding-block: 4px; font-size: 11px; }
-    .pane-heading h2, .workspace-heading h2 { margin: 0; }
+    .pane-heading h2, .workspace-heading h2 { margin: 0; font-size: 16px; }
     .workspace-heading { flex: 0 0 auto; }
     .workspace-heading > div:first-child { min-width: 0; display: grid; gap: 3px; }
     .checkpoint-actions { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
@@ -2030,7 +2248,6 @@ function workstreamsStyleElement() {
     .surface-stack { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
     .host-surface { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
     .host-surface > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
-    .workspace-empty { flex: 1 1 auto; }
     .terminal-drawer { flex: 0 0 auto; display: grid; justify-items: center; border-top: 1px solid var(--pi-border); background: var(--pi-bg); }
     .terminal-drawer > button { min-width: 130px; min-height: 24px; padding-block: 2px; border-radius: 8px 8px 0 0; }
     .terminal-drawer.open { height: min(280px, 38vh); grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); justify-items: stretch; }
@@ -2039,7 +2256,7 @@ function workstreamsStyleElement() {
     .terminal-content { min-width: 0; min-height: 0; display: flex; overflow: hidden; }
     .terminal-drawer .host-surface { width: 100%; }
     .icon-button { flex: 0 0 auto; }
-    header > div, .workstream-heading > div { min-width: 0; display: grid; gap: 5px; }
+    header > div { min-width: 0; display: grid; gap: 5px; }
     .header-actions, .workstream-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--pi-toolbar-gap, 8px); }
     section { display: grid; gap: var(--pi-message-gap, 10px); }
     h2 { margin: 0; color: var(--pi-text-bright); font-size: 13px; }
@@ -2071,7 +2288,6 @@ function workstreamsStyleElement() {
     @media (max-width: 980px) {
       .workstream-body { grid-template-columns: min(var(--navigator-width, 320px), 42vw) 22px minmax(320px, 1fr); }
       .workstream-body.sessions-collapsed { grid-template-columns: 0 0 minmax(320px, 1fr); }
-      .workstream-drawer .pane-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 720px) {
       .workstream-actions { flex-wrap: wrap; justify-content: flex-start; }
@@ -2094,9 +2310,6 @@ function workstreamsStyleElement() {
       .workspace-pane { display: flex; grid-column: 1; visibility: visible; }
       .sessions-pane { display: none; }
       .workstream-body.mobile-sessions .sessions-pane { position: absolute; inset: 0 auto 0 0; z-index: 8; width: min(88vw, 360px); display: flex; flex-direction: column; visibility: visible; border-right: 1px solid var(--pi-border); box-shadow: 16px 0 36px var(--pi-shadow-soft); }
-      .workstream-drawer { max-height: 48vh; }
-      .workstream-drawer .pane-list { grid-template-columns: minmax(0, 1fr); }
-      .drawer-section { border-right: 0; border-bottom: 1px solid var(--pi-border-muted); }
       .workspace-heading { align-items: flex-start; }
       .checkpoint-actions { max-width: 48%; }
     }

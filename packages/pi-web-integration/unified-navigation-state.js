@@ -13,6 +13,16 @@ export function completeSessionKey(session) {
   return `${nativeSessionIdentity(session)}\u0000${session.projectId}\u0000${session.workspaceId}`;
 }
 
+export function sessionSurfacePreferenceName(sessionOrKey) {
+  const key = typeof sessionOrKey === "string" ? sessionOrKey : completeSessionKey(sessionOrKey);
+  return `surface.${encodeURIComponent(key)}`;
+}
+
+export function rememberedSessionSurface(value, allowContext = true) {
+  const allowed = allowContext ? VALID_SURFACES : new Set(["chat", "files", "git"]);
+  return allowed.has(value) ? value : "chat";
+}
+
 export function serializeDestinationPreference(destination) {
   return validDestination(destination) ? JSON.stringify(destination) : "";
 }

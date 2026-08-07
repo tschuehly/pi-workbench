@@ -305,6 +305,13 @@ Workstream list or simultaneous vertical/horizontal session navigation.
 
 ### Phase 4 — Move canonical Workstream context into the middle pane
 
+Status: complete in the adapter. The canonical, non-aggregated Workstream brief now occupies the
+middle pane in the required order; each Workstream session has a session-scoped Context peer while
+native Chats do not. Typed answer/resolve, checkpoint, link, close, launch, and anchor-repair actions
+remain distinct, session surfaces use complete-identity preferences, and retained regions preserve
+focus and scroll across polling. Adapter checks pass with 64 tests and independent Phase 4 review
+passed. Browser interaction evidence remains Phase 7 work.
+
 Replace the overlay/top Workstream drawer with a full middle-pane brief selected by Workstream
 identity. Arrange canonical content in this order:
 

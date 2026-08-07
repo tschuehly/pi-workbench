@@ -98,6 +98,109 @@ export function navigatorKeyboardDelta(key, shiftKey = false) {
   return undefined;
 }
 
+export function canonicalSurfaceRenderKey(snapshot, sessionId, rememberedSessionKey) {
+  const identity = nonEmpty(snapshot?.id) ? snapshot.id : "missing";
+  const revision = Number.isSafeInteger(snapshot?.revision) ? snapshot.revision : "invalid";
+  return sessionId === undefined
+    ? `brief:${identity}:${String(revision)}:${rememberedSessionKey ?? ""}`
+    : `context:${identity}:${String(revision)}:${sessionId}`;
+}
+
+export function navigatorContinuationText(item) {
+  if (nonEmpty(item?.continuation?.next)) return item.continuation.next;
+  if (item?.sessionCount === 0) return "No sessions yet.";
+  if (nonEmpty(item?.continuation?.reason)) return item.continuation.reason;
+  return "Confirmed continuation unavailable.";
+}
+
+export function unifiedNavigatorRenderKey(options) {
+  return `unified-navigator:${stableValueKey({
+    status: options?.joined?.status,
+    reason: options?.joined?.reason,
+    chats: options?.joined?.chats,
+    retainedNativeSessions: options?.joined?.retainedNativeSessions,
+    workstreams: options?.joined?.workstreams,
+    machine: options?.machine,
+    navigationMode: options?.navigation?.mode,
+    destination: options?.destination,
+    pending: options?.pending === true,
+    attentionItems: options?.attentionItems,
+    refreshAvailable: typeof options?.onRefresh === "function",
+  })}`;
+}
+
+export function expandedSessionListRenderKey(snapshot, options) {
+  const attention = (snapshot?.sessions ?? []).map((session) => [session.id, attentionForWorkstreamSession(options?.attentionItems, session)]);
+  return `expanded-sessions:${stableValueKey({
+    workstreamId: snapshot?.id,
+    sessions: snapshot?.sessions,
+    selectedSessionId: options?.selectedSessionId,
+    selectionPending: options?.selectionPending === true,
+    attention,
+  })}`;
+}
+
+export function inventoryNoticeRenderKey(joined, refreshAvailable) {
+  return `inventory-notice:${stableValueKey({
+    status: joined?.status,
+    reason: joined?.reason,
+    retainedNativeSessionCount: joined?.retainedNativeSessions?.length ?? 0,
+    refreshAvailable: refreshAvailable === true,
+  })}`;
+}
+
+export function unifiedChatBannerRenderKey(options) {
+  return `chat-banner:${stableValueKey({
+    reconnecting: options?.reconnecting === true,
+    inventoryStatus: options?.joined?.status,
+    selectionError: options?.error,
+    refreshError: options?.refreshError,
+    refreshAvailable: typeof options?.onRefresh === "function",
+  })}`;
+}
+
+export function dedicatedBannerRenderKey(snapshot, options) {
+  const repairSession = (snapshot?.sessions ?? []).find((session) => session.id === options?.anchorRepair?.sessionId);
+  return `banner:${stableValueKey({
+    workstreamId: snapshot?.id,
+    revision: snapshot?.revision,
+    closed: snapshot?.closed === true,
+    reconnecting: options?.reconnecting === true,
+    selectionError: options?.selectionError,
+    refreshError: options?.refreshError,
+    startLocationIncomplete: options?.startLocationIncomplete === true,
+    startRecoveryActionAvailable: typeof options?.context?.host?.openActions === "function",
+    refreshAvailable: typeof options?.onRefresh === "function",
+    error: options?.error,
+    notice: options?.notice,
+    anchorRepair: options?.anchorRepair,
+    repairSession: repairSession === undefined ? undefined : {
+      id: repairSession.id,
+      status: repairSession.status,
+      machineId: repairSession.machineId,
+      projectId: repairSession.projectId,
+      workspaceId: repairSession.workspaceId,
+    },
+  })}`;
+}
+
+export function collapsedSessionTabsRenderKey(snapshot, options) {
+  const attention = (snapshot?.sessions ?? []).map((session) => [session.id, attentionForWorkstreamSession(options?.attentionItems, session)]);
+  return `session-tabs:${stableValueKey({
+    workstreamId: snapshot?.id,
+    revision: snapshot?.revision,
+    closed: snapshot?.closed === true,
+    selectedSessionId: options?.selectedSessionId,
+    sessionsPaneOpen: options?.sessionsPaneOpen === true,
+    attention,
+  })}`;
+}
+
+export function hostSurfaceActivationKey(sessionKey, surface) {
+  if (!nonEmpty(sessionKey) || !["chat", "files", "git", "terminal"].includes(surface)) return undefined;
+  return `${sessionKey}:${surface}`;
+}
+
 export function navigatorFocusKey(destination) {
   if (destination?.type === "chat" && nonEmpty(destination.sessionKey)) return `chat:${destination.sessionKey}`;
   if ((destination?.type === "workstream" || destination?.type === "workstream-session") && nonEmpty(destination.workstreamId)) return `workstream:${destination.workstreamId}`;
@@ -111,10 +214,14 @@ export function narrowOverlayKeyboardAction({ narrow, open, focusInside, key }) 
   return "ignore";
 }
 
-export function formatModifiedTime(value) {
+export function formatDateTime(value, unavailable = "Time unavailable") {
   const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return "Modified time unavailable";
+  if (Number.isNaN(date.valueOf())) return unavailable;
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+export function formatModifiedTime(value) {
+  return formatDateTime(value, "Modified time unavailable");
 }
 
 export function attentionForWorkstreamSession(items, session) {
@@ -134,6 +241,12 @@ function sessionLocation(session) {
 function worseHealth(left, right) {
   const order = { current: 0, missing: 1, stale: 2, failed: 3 };
   return (order[right] ?? 3) > (order[left] ?? 3) ? right : left;
+}
+
+function stableValueKey(value) {
+  if (Array.isArray(value)) return `[${value.map(stableValueKey).join(",")}]`;
+  if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableValueKey(value[key])}`).join(",")}}`;
+  return JSON.stringify(value) ?? "undefined";
 }
 
 function isRecord(value) {

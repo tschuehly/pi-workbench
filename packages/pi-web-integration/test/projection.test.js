@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { checkpointProposalPrompt, copyNextSessionPrompt, dedicatedMobileControlState, dedicatedWorkstreamLayout, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
+import { checkpointProposalPrompt, copyNextSessionPrompt, currentSessionLocationResult, dedicatedMobileControlState, dedicatedWorkstreamLayout, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, startLocationFailureMessage, startLocationRecoveryVisible, transitionDedicatedWorkstreamUi, typedHostError } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
 import { WorkstreamSessionCoordinator, workstreamPrompt } from "../workstream-session-coordinator.js";
 
@@ -23,55 +23,62 @@ test("restores the recorded Workstream and remembered active session after the h
   assert.equal(recordedWorkstreamSelection(snapshots, "missing", "session-remembered"), undefined);
 });
 
-test("dedicated Workstream tools preserve Sessions and Human Tasks with truthful scope", () => {
-  assert.deepEqual(dedicatedWorkstreamLayout({ tool: "files", sessionsPaneOpen: true, tasksPaneOpen: true }), {
+test("dedicated Workstream surfaces give Context canonical selected-session scope", () => {
+  assert.deepEqual(dedicatedWorkstreamLayout({ tool: "files", sessionsPaneOpen: true }), {
     sessionsPaneVisible: true,
-    tasksPaneVisible: true,
     surface: "files",
     scope: "selected-session-checkout",
   });
-  assert.deepEqual(dedicatedWorkstreamLayout({ tool: "git", sessionsPaneOpen: true, tasksPaneOpen: true }), {
+  assert.deepEqual(dedicatedWorkstreamLayout({ tool: "context", sessionsPaneOpen: true }), {
     sessionsPaneVisible: true,
-    tasksPaneVisible: true,
-    surface: "git",
-    scope: "selected-session-checkout-observed-unattributed",
+    surface: "context",
+    scope: "canonical-selected-session-context",
   });
 });
 
-test("dedicated Workstream UI transitions preserve pane state and checkout-scoped tool state", () => {
-  const initial = { tool: "chat", sessionsPaneOpen: true, tasksPaneOpen: true, terminalOpen: false, mobilePane: "sessions" };
-  const files = transitionDedicatedWorkstreamUi(initial, { type: "select-surface", surface: "files" });
-  assert.deepEqual(files, { ...initial, tool: "files", mobilePane: "workspace" });
+test("dedicated Workstream UI transitions select Context as a peer surface", () => {
+  const initial = { tool: "chat", sessionsPaneOpen: true, terminalOpen: false, mobilePane: "sessions" };
+  const context = transitionDedicatedWorkstreamUi(initial, { type: "select-surface", surface: "context" });
+  assert.deepEqual(context, { ...initial, tool: "context", mobilePane: "workspace" });
 
-  const terminal = transitionDedicatedWorkstreamUi(files, { type: "select-surface", surface: "terminal" });
-  assert.deepEqual(terminal, { ...files, terminalOpen: true });
-  assert.equal(terminal.tool, "files");
-
-  const collapsed = transitionDedicatedWorkstreamUi(terminal, { type: "toggle-tasks" });
-  assert.equal(collapsed.tasksPaneOpen, false);
-  assert.equal(collapsed.sessionsPaneOpen, true);
-  assert.equal(collapsed.tool, "files");
+  const terminal = transitionDedicatedWorkstreamUi(context, { type: "select-surface", surface: "terminal" });
+  assert.deepEqual(terminal, { ...context, terminalOpen: true });
+  assert.equal(terminal.tool, "context");
 });
 
-test("legacy mobile Context panes coerce to Workspace and Context state follows the drawer", () => {
+test("narrow navigation remains a one-pane Sessions or Workspace choice", () => {
   assert.equal(normalizeDedicatedMobilePane("tasks"), "workspace");
   assert.equal(transitionDedicatedWorkstreamUi({ mobilePane: "sessions" }, { type: "select-mobile-pane", pane: "tasks" }).mobilePane, "workspace");
-  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: true }, "context"), {
-    pressed: true,
-    expanded: true,
-    controls: "workstream-context-drawer",
-  });
-  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: false }, "context"), {
-    pressed: false,
-    expanded: false,
-    controls: "workstream-context-drawer",
-  });
-  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: true }, "workspace"), { pressed: true });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace" }, "workspace"), { pressed: true });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace" }, "sessions"), { pressed: false });
 });
 
 test("checkout scope follows the selected Workstream session anchor", () => {
   assert.equal(sessionAnchor({ projectId: "pi-web", workspaceId: "feature/workstreams", machineId: "studio" }), "pi-web · feature/workstreams · studio");
   assert.equal(sessionAnchor({ projectId: "workbench", workspaceId: "main", machineId: "laptop" }), "workbench · main · laptop");
+});
+
+test("incomplete-start recovery clears for a complete checkout or destination reset", () => {
+  const incomplete = { machineId: "studio", workspaceId: "main" };
+  const complete = { ...incomplete, projectId: "workbench" };
+  assert.equal(startLocationRecoveryVisible(true, incomplete), true);
+  assert.equal(startLocationRecoveryVisible(true, complete), false);
+  assert.equal(startLocationRecoveryVisible(true, incomplete, true), false);
+});
+
+test("current-location host failures retain typed codes and receive a typed fallback", () => {
+  assert.deepEqual(currentSessionLocationResult({ currentLocation() { throw Object.assign(new Error("catalog offline"), { code: "CATALOG_OFFLINE" }); } }), {
+    ok: false,
+    error: { code: "CATALOG_OFFLINE", message: "catalog offline" },
+  });
+  const failed = currentSessionLocationResult({ currentLocation() { throw new Error("host threw"); } });
+  assert.deepEqual(failed, { ok: false, error: { code: "CURRENT_LOCATION_FAILED", message: "host threw" } });
+  assert.equal(startLocationFailureMessage(failed.error), "host threw (CURRENT_LOCATION_FAILED). A new Workstream session was not started.");
+  assert.deepEqual(currentSessionLocationResult({ currentLocation: () => ({ machineId: "studio", projectId: "workbench", workspaceId: "main" }) }), {
+    ok: true,
+    location: { machineId: "studio", projectId: "workbench", workspaceId: "main" },
+  });
+  assert.deepEqual(typedHostError("host string", "CURRENT_LOCATION_FAILED"), { code: "CURRENT_LOCATION_FAILED", message: "host string" });
 });
 
 test("accepts the deterministic recorded projection", async () => {

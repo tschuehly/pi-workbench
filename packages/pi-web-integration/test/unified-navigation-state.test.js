@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, reduceUnifiedNavigation, serializeDestinationPreference } from "../unified-navigation-state.js";
-import { projectWorkstreamBrief, selectWorkstreamSession, workstreamSessionKey } from "../workstream-brief-projection.js";
+import { completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, reduceUnifiedNavigation, rememberedSessionSurface, serializeDestinationPreference, sessionSurfacePreferenceName } from "../unified-navigation-state.js";
+import { projectSessionContext, projectWorkstreamBrief, selectWorkstreamSession, workstreamSessionKey } from "../workstream-brief-projection.js";
 
 const fixture = JSON.parse(await readFile(new URL("../fixtures/unified-navigation.json", import.meta.url), "utf8"));
 const joined = joinChatsAndWorkstreams(fixture.native, fixture.workstreams);
@@ -107,6 +107,16 @@ test("selection races and typed failures leave the prior destination visible", (
   assert.equal(state.selectionError.code, "SESSION_WORKSPACE_UNAVAILABLE");
 });
 
+test("persisted surface preference names use the complete session identity without global fallback", () => {
+  const first = { machineId: "studio", sessionId: "same", projectId: "project-a", workspaceId: "main" };
+  const second = { ...first, projectId: "project-b" };
+  assert.notEqual(sessionSurfacePreferenceName(first), sessionSurfacePreferenceName(second));
+  assert.match(decodeURIComponent(sessionSurfacePreferenceName(first)), /studio\u0000same\u0000project-a\u0000main/);
+  assert.equal(rememberedSessionSurface(undefined), "chat");
+  assert.equal(rememberedSessionSurface("context", false), "chat");
+  assert.equal(rememberedSessionSurface("context", true), "context");
+});
+
 test("surface and Terminal memory is session-scoped and Context is unavailable to native Chats", () => {
   const chat = joined.chats[0];
   let state = createUnifiedNavigationState({ destination: { type: "chat", sessionKey: completeSessionKey(chat), location: chat } });
@@ -182,17 +192,62 @@ test("malformed reducer state fails closed", () => {
 
 test("brief projection preserves sourced per-session fields and checkpoint truth without aggregation", () => {
   const workstream = fixture.workstreams.snapshots[0];
-  const remembered = projectWorkstreamBrief(workstream, "session-b");
-  assert.deepEqual(remembered.continuation, { status: "stale", sessionId: "session-b", next: "Run host tests." });
+  const remembered = projectWorkstreamBrief(workstream, workstreamSessionKey(workstream.sessions[1]));
+  assert.deepEqual(remembered.continuation, { resumable: true, status: "stale", sessionStatus: "active", sessionId: "session-b", next: "Run host tests.", reason: "The catalog changed." });
   assert.deepEqual(remembered.unresolvedHumanTasks.map((task) => task.status), ["pending", "answered"]);
   assert.equal(remembered.unresolvedHumanTasks.some((task) => task.id === "task-resolved"), false);
   assert.equal(remembered.sessions.find((session) => session.id === "session-a").whatChanged, "The destination model is fixed.");
   assert.equal(remembered.sessions.find((session) => session.id === "session-c").checkpointStatus, "failed");
+  assert.equal(remembered.sessions.find((session) => session.id === "session-c").confirmedCheckpointAvailable, true);
   assert.equal(remembered.sessions.find((session) => session.id === "session-c").priorCheckpointAvailable, true);
   assert.equal(remembered.sessions.find((session) => session.id === "pending:launch").checkpointStatus, "missing");
   assert.equal(Object.hasOwn(remembered, "whatChanged"), false);
+  assert.deepEqual(remembered.checkpointHealth.slice(0, 3), [
+    { sessionId: "session-a", status: "current" },
+    { sessionId: "session-b", status: "stale" },
+    { sessionId: "session-c", status: "failed" },
+  ]);
+  assert.match(projectWorkstreamBrief(workstream, workstreamSessionKey(workstream.sessions[2])).continuation.reason, /rejected/);
+  assert.deepEqual(projectWorkstreamBrief(fixture.workstreams.snapshots[1]).continuation, {
+    resumable: false,
+    status: "missing-anchor",
+    sessionStatus: "active",
+    sessionId: "session-anchorless",
+    next: undefined,
+    reason: "An active session exists, but its complete machine, project, and workspace anchor is missing.",
+  });
   const closed = projectWorkstreamBrief(fixture.workstreams.snapshots.find((workstream) => workstream.id === "ws-closed"));
   assert.equal(closed.closedAt, "2026-08-01T10:00:00.000Z");
   const malformed = projectWorkstreamBrief({ id: "malformed", title: "Malformed" });
   assert.deepEqual(malformed.sessions, []);
+});
+
+test("continuation reports pending, failed, and missing without claiming those sessions are resumable", () => {
+  const base = { id: "ws", title: "States", revision: 1, closed: false, humanTasks: [], links: [] };
+  const pending = projectWorkstreamBrief({ ...base, sessions: [{ id: "pending", status: "pending", machineId: "m", projectId: "p", workspaceId: "w" }] }).continuation;
+  assert.deepEqual({ resumable: pending.resumable, status: pending.status, sessionStatus: pending.sessionStatus }, { resumable: false, status: "pending", sessionStatus: "pending" });
+  const failedBrief = projectWorkstreamBrief({ ...base, sessions: [{ id: "failed", status: "failed", machineId: "m", projectId: "p", workspaceId: "w", launchFailure: { reason: "quota denied" } }] });
+  const failed = failedBrief.continuation;
+  assert.equal(failed.resumable, false);
+  assert.equal(failed.status, "missing");
+  assert.equal(failed.sessionStatus, "failed");
+  assert.equal(failed.reason, "Session launch failed: quota denied");
+  assert.deepEqual(failedBrief.checkpointHealth, [{ sessionId: "failed", status: "missing" }]);
+  assert.equal(failedBrief.sessions[0].launchFailure.reason, "quota denied");
+  const missing = projectWorkstreamBrief({ ...base, sessions: [] }).continuation;
+  assert.deepEqual({ resumable: missing.resumable, status: missing.status, sessionId: missing.sessionId }, { resumable: false, status: "missing", sessionId: undefined });
+});
+
+test("selected-session Context switches checkpoint and task scope without leaking peer-session tasks", () => {
+  const workstream = fixture.workstreams.snapshots[0];
+  const first = projectSessionContext(workstream, "session-a");
+  const second = projectSessionContext(workstream, "session-b");
+
+  assert.equal(first.session.whatChanged, "The destination model is fixed.");
+  assert.equal(first.session.anchor.complete, true);
+  assert.deepEqual(first.humanTasks.map((task) => task.id), ["task-pending"]);
+  assert.equal(second.session.checkpointStatus, "stale");
+  assert.deepEqual(second.humanTasks.map((task) => task.id), ["task-answered"]);
+  assert.equal(second.links[0].id, "link-plan");
+  assert.equal(projectSessionContext(workstream, "not-a-session"), undefined);
 });
