@@ -30,6 +30,7 @@ export function progressText(observation) {
   if (observation.type.startsWith("tool_")) {
     return `${observation.type.replaceAll("_", " ")}: ${String(observation.detail?.toolName ?? "tool")}`;
   }
+  if (observation.type === "thinking_progress") return "Child Pi is thinking…";
   if (observation.type === "assistant_progress") return "Child Pi is responding…";
   if (observation.type === "quota_degraded") return `Quota telemetry ${String(observation.detail?.telemetryStatus ?? "unavailable")}; attempting verified model launch.`;
   if (observation.type === "binding_verified") return `Binding verified: ${String(observation.detail?.provider)}/${String(observation.detail?.model)}:${String(observation.detail?.effort)}`;
@@ -39,7 +40,7 @@ export function progressText(observation) {
 }
 
 function progressKey(observation) {
-  if (observation.type === "assistant_progress") return observation.type;
+  if (observation.type === "thinking_progress" || observation.type === "assistant_progress") return observation.type;
   if (observation.type === "tool_progress") return `${observation.type}:${String(observation.detail?.toolCallId ?? observation.detail?.toolName ?? "tool")}`;
   return `${observation.type}:${String(observation.detail?.toolCallId ?? "")}`;
 }

@@ -144,6 +144,7 @@ export class PiRpcExecutionAdapter {
     if (event.type === "message_update") {
       const delta = event.assistantMessageEvent;
       if (delta?.type === "text_delta") this.#emit(state, "assistant_progress", { characters: String(delta.delta ?? "").length });
+      else if (delta?.type === "thinking_start" || delta?.type === "thinking_delta") this.#emit(state, "thinking_progress", { characters: String(delta.delta ?? "").length });
       return;
     }
     if (event.type === "message_end" && event.message?.role === "assistant") {

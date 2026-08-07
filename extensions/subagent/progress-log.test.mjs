@@ -22,12 +22,16 @@ test("renders a bounded rolling subagent activity log with elapsed and idle time
 
 test("collapses noisy repeated assistant and tool progress updates", () => {
   const entries = [];
+  recordProgress(entries, { type: "thinking_progress", at: "2026-08-07T20:00:00.000Z" });
+  recordProgress(entries, { type: "thinking_progress", at: "2026-08-07T20:00:01.000Z" });
   recordProgress(entries, { type: "assistant_progress", at: "2026-08-07T20:00:01.000Z" });
   recordProgress(entries, { type: "assistant_progress", at: "2026-08-07T20:00:02.000Z" });
   recordProgress(entries, { type: "tool_progress", at: "2026-08-07T20:00:03.000Z", detail: { toolCallId: "call-1", toolName: "bash" } });
   recordProgress(entries, { type: "tool_progress", at: "2026-08-07T20:00:05.000Z", detail: { toolCallId: "call-1", toolName: "bash" } });
 
-  assert.equal(entries.length, 2);
-  assert.equal(entries[0].at, "2026-08-07T20:00:02.000Z");
-  assert.equal(entries[1].at, "2026-08-07T20:00:05.000Z");
+  assert.equal(entries.length, 3);
+  assert.equal(entries[0].at, "2026-08-07T20:00:01.000Z");
+  assert.equal(entries[0].text, "Child Pi is thinking…");
+  assert.equal(entries[1].at, "2026-08-07T20:00:02.000Z");
+  assert.equal(entries[2].at, "2026-08-07T20:00:05.000Z");
 });

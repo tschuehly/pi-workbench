@@ -72,6 +72,7 @@ test("launches one persistent RPC child, verifies binding, and returns compact m
   assert.equal(result.outcome, "success");
   assert.equal(result.text, "Compact result");
   assert.equal(result.sessionId, "child-session");
+  assert.equal(observations.some((value) => value.type === "thinking_progress"), true);
   assert.equal(observations.some((value) => JSON.stringify(value).includes("secret reasoning")), false);
 });
 
