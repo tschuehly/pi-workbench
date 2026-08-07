@@ -9,7 +9,7 @@ export class WorkstreamClientError extends Error {
 
 export function createWorkbenchWorkstreamClient(service) {
   if (service === undefined) throw new WorkstreamClientError("HOST_UNAVAILABLE", "This PI WEB host does not expose the plugin service transport.");
-  const call = async (operation, input) => unwrap(await service.request(operation, input));
+  const call = async (operation, input) => validateCheckpointProjection(operation, unwrap(await service.request(operation, input)));
   return {
     create: (request) => call("create", request),
     append: (request) => call("append", request),
@@ -44,6 +44,31 @@ function unwrap(response) {
   const error = response.error;
   if (!isRecord(error) || typeof error.code !== "string" || typeof error.message !== "string") throw new WorkstreamClientError("INVALID_RESPONSE", "Workstream service returned an invalid error response.");
   throw new WorkstreamClientError(error.code, error.message, error.details);
+}
+
+function validateCheckpointProjection(operation, value) {
+  const snapshots = operation === "inspect"
+    ? [value]
+    : operation === "watch" && isRecord(value) && value.mode === "snapshot"
+      ? value.snapshots
+      : undefined;
+  if (snapshots === undefined) return value;
+  if (!Array.isArray(snapshots) || snapshots.some((snapshot) =>
+    !isRecord(snapshot)
+      || !Array.isArray(snapshot.sessions)
+      || snapshot.sessions.some((session) => !isRecord(session) || !isCheckpointPromptProjection(session.latestCheckpoint)))) {
+    throw new WorkstreamClientError("INVALID_RESPONSE", "Workstream service returned a checkpoint projection without a canonical next-session prompt.");
+  }
+  return value;
+}
+
+function isCheckpointPromptProjection(checkpoint) {
+  return checkpoint === null
+    || isRecord(checkpoint)
+      && (checkpoint.nextSessionPrompt === null
+        || typeof checkpoint.nextSessionPrompt === "string"
+          && checkpoint.nextSessionPrompt.trim() !== ""
+          && checkpoint.nextSessionPrompt.length <= 2_000);
 }
 
 function sortSnapshots(snapshots) {

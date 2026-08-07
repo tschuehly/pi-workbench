@@ -6,6 +6,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   maxRecordsPerAppend: 32,
   maxTitleLength: 200,
   maxTextLength: 4_000,
+  maxCheckpointPromptLength: 2_000,
   maxIdLength: 128,
   maxWatchBatch: 200,
 });
@@ -144,11 +145,12 @@ function validateRecord(record, limits, field) {
       keys(record.payload, ["sessionId", "checkpoint"], `${field}.payload`);
       id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
       const checkpoint = object(record.payload.checkpoint, `${field}.payload.checkpoint`);
-      keys(checkpoint, ["id", "whatChanged", "remains", "next", "references"], `${field}.payload.checkpoint`);
+      keys(checkpoint, ["id", "whatChanged", "remains", "next", "nextSessionPrompt", "references"], `${field}.payload.checkpoint`);
       id(checkpoint.id, `${field}.payload.checkpoint.id`, limits);
       string(checkpoint.whatChanged, `${field}.payload.checkpoint.whatChanged`, limits.maxTextLength);
       string(checkpoint.remains, `${field}.payload.checkpoint.remains`, limits.maxTextLength);
       string(checkpoint.next, `${field}.payload.checkpoint.next`, limits.maxTextLength);
+      string(checkpoint.nextSessionPrompt, `${field}.payload.checkpoint.nextSessionPrompt`, limits.maxCheckpointPromptLength);
       if (checkpoint.references !== undefined) {
         if (!Array.isArray(checkpoint.references) || checkpoint.references.length > 20) fail("INVALID_RECORD", `${field}.payload.checkpoint.references must be an array of at most 20 strings`);
         checkpoint.references.forEach((reference, index) => string(reference, `${field}.payload.checkpoint.references[${index}]`, limits.maxTextLength));
@@ -237,7 +239,11 @@ export function rebuildSnapshot(ledger) {
       }
       case "checkpoint.replaced": {
         const session = sessions.get(payload.sessionId);
-        if (session) sessions.set(payload.sessionId, { ...session, latestCheckpoint: clone(payload.checkpoint), checkpointFailure: null });
+        if (session) sessions.set(payload.sessionId, {
+          ...session,
+          latestCheckpoint: { ...clone(payload.checkpoint), nextSessionPrompt: payload.checkpoint.nextSessionPrompt ?? null },
+          checkpointFailure: null,
+        });
         break;
       }
       case "checkpoint.failed": {

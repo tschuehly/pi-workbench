@@ -46,7 +46,7 @@ test("rebuilds an identical deterministic projection from semantic ledger record
       type: "checkpoint.replaced",
       producer: "checkpoint-worker",
       sourceSessionId: "session-1",
-      payload: { sessionId: "session-1", checkpoint: { id: "cp-1", whatChanged: "Store implemented", remains: "Connect UI", next: "Run contract tests", references: ["packages/workstream-store"] } },
+      payload: { sessionId: "session-1", checkpoint: { id: "cp-1", whatChanged: "Store implemented", remains: "Connect UI", next: "Run contract tests", nextSessionPrompt: "Continue the Workstream store integration. Start by running the contract tests in packages/workstream-store.", references: ["packages/workstream-store"] } },
     }],
   });
 
@@ -56,15 +56,46 @@ test("rebuilds an identical deterministic projection from semantic ledger record
   assert.equal(snapshot.revision, 3);
   assert.equal(snapshot.sessions[0].status, "active");
   assert.equal(snapshot.sessions[0].latestCheckpoint.id, "cp-1");
+  assert.equal(snapshot.sessions[0].latestCheckpoint.nextSessionPrompt, "Continue the Workstream store integration. Start by running the contract tests in packages/workstream-store.");
   assert.equal(snapshot.humanTasks[0].id, "task-1");
   assert.equal(snapshot.links[0].id, "link-1");
+});
+
+test("requires a concise explicit next-session prompt for every confirmed checkpoint", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate-for-prompt", records: associationRecords.slice(0, 2) });
+
+  const checkpoint = { id: "cp-prompt", whatChanged: "Implemented", remains: "Review", next: "Run tests" };
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-without-prompt", records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint } }] }),
+    (error) => error.code === "INVALID_REQUEST" && error.message.includes("nextSessionPrompt"),
+  );
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-long-prompt", records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { ...checkpoint, nextSessionPrompt: "x".repeat(2_001) } } }] }),
+    (error) => error.code === "INVALID_REQUEST" && error.message.includes("at most 2000 characters"),
+  );
+  assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint, null);
+
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-max-prompt", records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { ...checkpoint, nextSessionPrompt: "x".repeat(2_000) } } }] });
+  assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint.nextSessionPrompt.length, 2_000);
+});
+
+test("projects a null prompt for checkpoints accepted before the field existed", () => {
+  const legacy = rebuildSnapshot([
+    { type: "workstream.created", workstreamId: "ws-legacy", title: "Legacy", producer: "owner", revision: 1, recordedAt: "2025-01-01T00:00:00.000Z" },
+    { type: "session.pending", producer: "pi-web", revision: 2, recordedAt: "2025-01-01T00:00:01.000Z", payload: { sessionId: "session-legacy", associationKey: "legacy" } },
+    { type: "session.confirmed", producer: "pi-web", revision: 3, recordedAt: "2025-01-01T00:00:02.000Z", payload: { sessionId: "session-legacy" } },
+    { type: "checkpoint.replaced", producer: "owner", revision: 4, recordedAt: "2025-01-01T00:00:03.000Z", payload: { sessionId: "session-legacy", checkpoint: { id: "cp-legacy", whatChanged: "Implemented", remains: "Review", next: "Continue" } } },
+  ]);
+  assert.equal(legacy.sessions[0].latestCheckpoint.nextSessionPrompt, null);
 });
 
 test("keeps the previous confirmed checkpoint when a later checkpoint fails", async () => {
   const { store } = memoryStore();
   await store.create(createRequest);
   await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate", records: associationRecords.slice(0, 2) });
-  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-good", records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: "session-1", payload: { sessionId: "session-1", checkpoint: { id: "cp-good", whatChanged: "Implemented", remains: "Review", next: "Run tests" } } }] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-good", records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: "session-1", payload: { sessionId: "session-1", checkpoint: { id: "cp-good", whatChanged: "Implemented", remains: "Review", next: "Run tests", nextSessionPrompt: "Review the implementation, then run the focused tests." } } }] });
   await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "checkpoint-failed", records: [{ type: "checkpoint.failed", producer: "pi-web", sourceSessionId: "session-1", payload: { sessionId: "session-1", reason: "Persistence interrupted" } }] });
   const snapshot = await store.inspect("ws-1");
   assert.equal(snapshot.sessions[0].latestCheckpoint.id, "cp-good");

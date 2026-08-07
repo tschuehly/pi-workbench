@@ -71,14 +71,15 @@ On `STALE_REVISION`, inspect again, reconcile the intervening change, and submit
 
 ## 4. Checkpoint only after attended confirmation
 
-When the user asks to checkpoint, first propose—not persist—four values:
+When the user asks to checkpoint, first propose—not persist—five values:
 
 - `whatChanged`: what now exists or works, naming concrete artifacts;
 - `remains`: what is blocked or still owed;
-- `next`: one obvious action the owner can start now;
+- `next`: one obvious owner-facing action;
+- `nextSessionPrompt`: the exact prompt to paste into a fresh attended Pi session;
 - `references`: only the concrete paths or identifiers needed to resume.
 
-Lead with the point and make the checkpoint sufficient to resume without rereading chat. Ask the user to confirm or correct it. After explicit confirmation, append `checkpoint.replaced` for the current active session with a unique checkpoint id. A failed, rejected, or abandoned proposal leaves the latest confirmed checkpoint unchanged.
+Lead with the point and make the checkpoint sufficient to resume without rereading chat. Keep `nextSessionPrompt` under 2,000 characters and include only the context, constraints, starting action, and references needed to continue safely; do not turn it into a transcript or execution plan. Ask the user to confirm or correct all five values. After explicit confirmation, append `checkpoint.replaced` for the current active session with a unique checkpoint id. A failed, rejected, or abandoned proposal leaves the latest confirmed checkpoint unchanged.
 
 **Complete when:** the user-approved text appears as the session's latest checkpoint, or the proposal remains unpersisted.
 

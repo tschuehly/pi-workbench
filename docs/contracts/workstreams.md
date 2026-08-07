@@ -46,9 +46,19 @@ Current state is a separate mechanical projection over accepted records. It incl
 ## Checkpointing
 
 Checkpointing is explicit and attended in V1. The owner asks the active Pi session to propose a
-concise checkpoint stating what changed, what remains, and the next useful continuation. The owner
-may correct the proposal before confirming persistence. Only the confirmed checkpoint replaces the
-session's previous checkpoint.
+concise checkpoint stating what changed, what remains, the next useful continuation, and an exact
+prompt for starting the next session. The owner may correct every field before confirming
+persistence. Only the confirmed checkpoint replaces the session's previous checkpoint.
+
+Each field leads with its point, uses plain concrete language, names the concrete artifacts it refers
+to, and lets the owner resume without rereading the session. `whatChanged` states what now exists or
+works, `remains` separates what is blocked or still owed, and `next` gives one obvious owner-facing
+action. The required `nextSessionPrompt` is a separate, paste-ready prompt for a fresh attended Pi
+session. It carries only the context, constraints, starting action, and references needed to continue
+safely; it does not restate the conversation or expand into an execution plan. The prompt is
+owner-confirmed with the rest of the checkpoint and is limited to 2,000 characters. Checkpoints
+accepted before this field existed project `nextSessionPrompt: null` rather than inventing a prompt;
+every newly accepted replacement requires the field.
 
 A failed, rejected, or abandoned proposal remains visible as a checkpoint failure when applicable
 and does not invent continuation state or replace the latest confirmed checkpoint. V1 does not use

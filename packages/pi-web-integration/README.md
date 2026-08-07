@@ -17,8 +17,9 @@ browser plugin with a small trusted web-process service, not a Run Controller an
   Git currently shows the selected checkout's observed, unattributed state; historical cross-repository
   commits remain deferred to PI WEB's upstream Git-plugin integration. The view also preserves current
   and closed Workstreams, revision, loading, empty, failure, and reconnect states; creates Workstreams;
-  launches, reconciles, and resumes attended sessions; requests and confirms checkpoints; manages
-  human tasks and links; closes Workstreams; renders accepted receipts; and reconciles ordered watch
+  launches, reconciles, and resumes attended sessions; requests and confirms checkpoints; presents
+  and copies their distinct next-session prompts; manages human tasks and links; closes Workstreams;
+  renders accepted receipts; and reconciles ordered watch
   batches.
 - **Workspace label:** current Run state or pending Human Attention count.
 - **Action:** opens the qualified `pi-workbench:run.panel` workspace panel.
@@ -41,7 +42,10 @@ Session launch uses PI WEB's attended plugin-session helper and `workstream-sess
 The coordinator records a launch-key pending association before starting PI, confirms the returned
 runtime session identity, records launch failure, and reconciles browser-local startup-token
 associations on reconnect without launching a duplicate session. The initial prompt carries the
-Workstream identity and Level 1 boundary into a fresh session.
+Workstream identity, Level 1 boundary, and complete five-field attended checkpoint guidance into a
+fresh session. New checkpoints require a separate non-empty `nextSessionPrompt` of at most 2,000
+characters; checkpoints created before that field existed present it as unavailable rather than
+constructing it from `next`.
 
 The plugin never infers a Run from a PI WEB session, calls a private PI WEB route, transports a
 mutation through workspace files or terminal text, or injects global CSS. It polls only the typed

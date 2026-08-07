@@ -42,11 +42,15 @@ broker model or raw transcript, supports the owner's choice of what to resume.
 ## Attended checkpoint surface
 
 Checkpointing begins with an explicit owner action in the active session. Pi proposes what changed,
-what remains, and the next useful continuation. The interface lets the owner review and correct the
-proposal before confirmation.
+what remains, the next useful continuation, and a concise paste-ready prompt for a fresh attended
+session. The interface lets the owner review and correct every field before confirmation.
 
-Only confirmed content becomes the latest checkpoint. Failure, rejection, or abandonment preserves
-the previous confirmed checkpoint and makes the missing, failed, or stale state visible.
+Only confirmed content becomes the latest checkpoint. The interface presents the confirmed
+next-session prompt distinctly from the owner-facing next action and lets the owner copy it without
+reconstructing context from Chat. Failure, rejection, or abandonment preserves the previous
+confirmed checkpoint and makes the missing, failed, or stale state visible. For a checkpoint accepted
+before next-session prompts existed, the interface identifies the prompt as unavailable instead of
+constructing one from `next`.
 
 ## Re-entry and place preservation
 
@@ -71,7 +75,8 @@ terminal output as current state.
 
 PI WEB satisfies this contract when the shared recorded Workstream fixture proves:
 
-1. The owner can identify where to resume without reading raw logs or chat history.
+1. The owner can identify where to resume and copy the confirmed next-session prompt without
+   reading raw logs or chat history.
 2. Current, closed, empty, loading, failure, reconnect, and checkpoint-failure states are distinct.
 3. Re-entry restores the Workstreams destination and reconciles from canonical revisions.
 4. A failed or abandoned checkpoint cannot appear current or replace confirmed continuation state.

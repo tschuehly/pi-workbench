@@ -46,6 +46,16 @@ export interface Checkpoint {
   whatChanged: string;
   remains: string;
   next: string;
+  nextSessionPrompt: string;
+  references?: string[];
+}
+
+export interface ProjectedCheckpoint {
+  id: string;
+  whatChanged: string;
+  remains: string;
+  next: string;
+  nextSessionPrompt: string | null;
   references?: string[];
 }
 
@@ -68,7 +78,7 @@ export interface WorkstreamSession {
   machineId?: string;
   projectId?: string;
   workspaceId?: string;
-  latestCheckpoint: Checkpoint | null;
+  latestCheckpoint: ProjectedCheckpoint | null;
   checkpointFailure: string | null;
 }
 

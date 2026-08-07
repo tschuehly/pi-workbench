@@ -113,7 +113,11 @@ function applyFakeRecord(snapshot, record) {
     case "session.pending": snapshot.sessions.push({ id: record.payload.sessionId, status: "pending", associationKey: record.payload.associationKey, latestCheckpoint: null, checkpointFailure: null }); break;
     case "session.confirmed": session(snapshot, record.payload.sessionId).status = "active"; break;
     case "session.failed": snapshot.sessions = snapshot.sessions.filter((candidate) => candidate.id !== record.payload.sessionId); break;
-    case "checkpoint.replaced": Object.assign(session(snapshot, record.payload.sessionId), { latestCheckpoint: structuredClone(record.payload.checkpoint), checkpointFailure: null }); break;
+    case "checkpoint.replaced": {
+      if (!isReplacementCheckpoint(record.payload.checkpoint)) throw new Error("Replacement checkpoint requires a next-session prompt of at most 2,000 characters.");
+      Object.assign(session(snapshot, record.payload.sessionId), { latestCheckpoint: structuredClone(record.payload.checkpoint), checkpointFailure: null });
+      break;
+    }
     case "checkpoint.failed": session(snapshot, record.payload.sessionId).checkpointFailure = record.payload.reason; break;
     default: throw new Error(`Unsupported fake Workstream record: ${String(record.type)}`);
   }
@@ -166,7 +170,12 @@ function isCheckpoint(value) {
     && isString(value.whatChanged)
     && isString(value.remains)
     && isString(value.next)
+    && (value.nextSessionPrompt === null || (isString(value.nextSessionPrompt) && value.nextSessionPrompt.length <= 2_000))
     && (value.references === undefined || (Array.isArray(value.references) && value.references.every(isString)));
+}
+
+function isReplacementCheckpoint(value) {
+  return isCheckpoint(value) && typeof value.nextSessionPrompt === "string";
 }
 
 function isRecord(value) {

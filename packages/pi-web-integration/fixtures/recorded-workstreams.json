@@ -20,6 +20,7 @@
             "whatChanged": "The typed store and both persistence adapters pass their contract tests.",
             "remains": "Connect the store through the browser-safe Workstream client.",
             "next": "Define the smallest stable host transport.",
+            "nextSessionPrompt": "Continue connecting the Workstream Store to PI WEB. Inspect packages/workstream-store and define the smallest stable browser-safe host transport before changing implementation.",
             "references": ["packages/workstream-store"]
           },
           "checkpointFailure": null
@@ -30,8 +31,14 @@
           "machineId": "studio-mac",
           "projectId": "pi-web",
           "workspaceId": "pi-workbench",
-          "latestCheckpoint": null,
-          "checkpointFailure": "The latest checkpoint attempt failed; the previous continuation is not current."
+          "latestCheckpoint": {
+            "id": "checkpoint-interface-legacy",
+            "whatChanged": "The first interface probe was recorded.",
+            "remains": "Retry the interrupted checkpoint.",
+            "next": "Review the prior continuation before retrying.",
+            "nextSessionPrompt": null
+          },
+          "checkpointFailure": "The latest checkpoint attempt failed; the prior confirmed checkpoint remains available."
         }
       ],
       "humanTasks": [

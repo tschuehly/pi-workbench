@@ -34,6 +34,11 @@ The accepted semantic records cover pending/confirmed/failed session association
 replacement/failure, unresolved human-task changes, and relevant link changes. Raw transcripts and
 routine activity are intentionally not accepted. Closure is available only through `close`.
 
+Every accepted replacement checkpoint carries `nextSessionPrompt` separately from its owner-facing
+`next` action. The prompt is required, non-empty, and limited to 2,000 characters so clients can
+present a paste-ready continuation without parsing prose. Projection rebuilds expose `null` for
+checkpoints accepted before the field existed; they never derive a prompt from `next`.
+
 Exact idempotent retries return the first receipt. Changed input under the same key, stale revisions,
 illegal session transitions, unknown fields or records, and oversized mutations are rejected with a
 `WorkstreamStoreError` carrying a stable `code`.

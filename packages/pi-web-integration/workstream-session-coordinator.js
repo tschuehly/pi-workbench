@@ -118,7 +118,7 @@ export function workstreamPrompt(snapshot, associationKey) {
     `You are pairing in Pi Workbench Workstream “${snapshot.title}” (${snapshot.id}).`,
     `The attended session association key is ${associationKey}.`,
     "Remain in Level 1 Pair posture: work with the attending user, reconcile any bounded child work yourself, and do not claim background execution or managed Run authority.",
-    "When asked for a checkpoint, propose concise values for: what changed, what remains, and the next useful action. The user must review and confirm before persistence.",
+    "When asked for a checkpoint, propose concise values for: what changed, what remains, the next useful action, an exact paste-ready prompt for a fresh attended session, and only the concrete references needed to resume. The user must review and confirm every field before persistence.",
   ].join("\n\n");
 }
 

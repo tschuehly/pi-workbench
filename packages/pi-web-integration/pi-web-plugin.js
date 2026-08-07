@@ -18,6 +18,10 @@ export function dedicatedWorkstreamLayout({ tool, sessionsPaneOpen, tasksPaneOpe
   };
 }
 
+export function checkpointProposalPrompt() {
+  return "Propose a concise attended Workstream checkpoint with exactly five labeled parts: What changed, What remains, Next useful action, Next-session prompt, and References. Make the next-session prompt exact and paste-ready for a fresh attended Pi session; list only concrete paths or identifiers under References. Do not persist it; I will review and confirm it in the Workstreams view.";
+}
+
 export function transitionDedicatedWorkstreamUi(state, action) {
   switch (action.type) {
     case "select-surface":
@@ -336,7 +340,7 @@ function installWorkstreamsElement() {
     #requestCheckpoint(session) {
       if (this.#context?.sessions === undefined) { recordedWorkstreamState.error = "Attended session controls are unavailable."; this.#render(); return; }
       const location = { sessionId: session.id, machineId: session.machineId, projectId: session.projectId, workspaceId: session.workspaceId };
-      void this.#context.sessions.prompt(location, "Propose a concise attended Workstream checkpoint with exactly three labeled parts: What changed, What remains, and Next useful action. Do not persist it; I will review and confirm it in the Workstreams view.")
+      void this.#context.sessions.prompt(location, checkpointProposalPrompt())
         .catch((error) => { recordedWorkstreamState.error = errorMessage(error); this.#render(); });
     }
 
@@ -348,14 +352,25 @@ function installWorkstreamsElement() {
       if (remains === null || remains.trim() === "") return;
       const next = window.prompt("Next useful action?", prior?.next ?? "");
       if (next === null || next.trim() === "") return;
-      if (!window.confirm(`Save this checkpoint?\n\nChanged: ${whatChanged}\n\nRemains: ${remains}\n\nNext: ${next}`)) return;
+      const nextSessionPromptInput = window.prompt("Exact prompt to paste into the next attended session (maximum 2,000 characters)", prior?.nextSessionPrompt ?? "");
+      if (nextSessionPromptInput === null) return;
+      const nextSessionPrompt = nextSessionPromptInput.trim();
+      if (nextSessionPrompt === "" || nextSessionPrompt.length > 2_000) {
+        recordedWorkstreamState.error = "The next-session prompt must contain 1 to 2,000 characters.";
+        this.#render();
+        return;
+      }
+      const referencesInput = window.prompt("References (optional; one path or identifier per line)", prior?.references?.join("\n") ?? "");
+      if (referencesInput === null) return;
+      const references = referencesInput.split("\n").map((value) => value.trim()).filter(Boolean);
+      if (!window.confirm(`Save this checkpoint?\n\nChanged: ${whatChanged}\n\nRemains: ${remains}\n\nNext: ${next}\n\nNext-session prompt: ${nextSessionPrompt}\n\nReferences: ${references.join(", ") || "None"}`)) return;
       void this.#mutate(async (client) => {
         try {
           return await client.append({
             workstreamId: snapshot.id,
             expectedRevision: snapshot.revision,
             idempotencyKey: newId("checkpoint"),
-            records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: session.id, payload: { sessionId: session.id, checkpoint: { id: newId("cp"), whatChanged: whatChanged.trim(), remains: remains.trim(), next: next.trim() } } }],
+            records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: session.id, payload: { sessionId: session.id, checkpoint: { id: newId("cp"), whatChanged: whatChanged.trim(), remains: remains.trim(), next: next.trim(), nextSessionPrompt, ...(references.length === 0 ? {} : { references }) } } }],
           });
         } catch (error) {
           const current = await client.inspect(snapshot.id);
@@ -812,8 +827,29 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   view.surfaceStack.hidden = selected === undefined || !surfacesAvailable;
   for (const [surface, container] of view.surfaces) setSurfaceVisibility(container, selected !== undefined && surface === options.tool);
 
-  view.tasksTitle.textContent = `Human Tasks · ${String(snapshot.humanTasks.length)}`;
+  view.tasksTitle.textContent = `Continuation & Human Tasks · ${String(snapshot.humanTasks.length)}`;
   view.tasksList.replaceChildren();
+  const continuation = document.createElement("section");
+  continuation.className = "dedicated-checkpoints";
+  continuation.append(label("Confirmed continuation"));
+  const checkpoints = snapshot.sessions.filter((session) => session.latestCheckpoint !== null);
+  if (checkpoints.length === 0) continuation.append(message("No confirmed checkpoints yet.", "muted"));
+  for (const session of checkpoints) {
+    const item = document.createElement("div");
+    item.className = "dedicated-checkpoint";
+    item.append(
+      strong(session.latestCheckpoint.next),
+      message(`${sessionAnchor(session)} · ${session.latestCheckpoint.whatChanged}`, "muted"),
+    );
+    if (session.latestCheckpoint.nextSessionPrompt === null) {
+      item.append(message("Next-session prompt unavailable for this earlier checkpoint.", "next-session-prompt muted"));
+    } else item.append(
+      message(session.latestCheckpoint.nextSessionPrompt, "next-session-prompt"),
+      button("Copy next-session prompt", () => { void copyNextSessionPrompt(session.latestCheckpoint.nextSessionPrompt); }),
+    );
+    continuation.append(item);
+  }
+  view.tasksList.append(continuation);
   if (snapshot.humanTasks.length === 0) view.tasksList.append(message("Nothing needs your attention right now.", "empty-pane"));
   for (const task of snapshot.humanTasks) {
     const row = document.createElement("div");
@@ -990,6 +1026,10 @@ function workstreamsStyleElement() {
     .session-anchor { color: var(--pi-text-secondary, var(--pi-text)); font-size: 12px; line-height: 1.35; }
     .diagnostic { color: var(--pi-muted); font-size: 10px; }
     .inline-error { padding: 6px; font-size: 11px; }
+    .dedicated-checkpoints { display: grid; gap: 10px; padding: 12px; border-bottom: 1px solid var(--pi-border-muted); }
+    .dedicated-checkpoint { display: grid; gap: 5px; }
+    .dedicated-checkpoint button { justify-self: start; }
+    .next-session-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
     .dedicated-task { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border-muted); }
     .dedicated-task > div { min-width: 0; display: grid; gap: 5px; }
     .task-source { color: var(--pi-muted); font-size: 11px; }
@@ -1288,6 +1328,22 @@ function isMissingFileError(error) {
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+export async function copyNextSessionPrompt(value, {
+  clipboard = globalThis.navigator?.clipboard,
+  fallback = (prompt) => { window.prompt("Copy next-session prompt", prompt); },
+} = {}) {
+  if (clipboard?.writeText !== undefined) {
+    try {
+      await clipboard.writeText(value);
+      return "clipboard";
+    } catch {
+      // Fall through to a selectable prompt when clipboard access is unavailable.
+    }
+  }
+  fallback(value);
+  return "fallback";
 }
 
 function newId(prefix) {
