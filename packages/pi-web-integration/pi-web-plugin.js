@@ -411,6 +411,7 @@ function installWorkstreamsElement() {
       recordedWorkstreamState.focusKey = "dedicated:title";
       this.#anchorRepair = undefined;
       recordedWorkstreamState.selectedWorkstreamId = snapshot.id;
+      this.#writePreference("selected-workstream", snapshot.id);
       this.#applyWorkstreamSelection(snapshot);
       this.#context?.host?.requestRender();
       this.#render();
@@ -423,6 +424,7 @@ function installWorkstreamsElement() {
       recordedWorkstreamState.focusKey = `${this.#selectedWorkstreamId}:open`;
       this.#selectedWorkstreamId = undefined;
       recordedWorkstreamState.selectedWorkstreamId = undefined;
+      this.#writePreference("selected-workstream", "");
       this.#selectedSessionId = undefined;
       this.#anchorRepair = undefined;
       this.#terminalOpen = false;
@@ -643,10 +645,14 @@ function installWorkstreamsElement() {
     #render() {
       const main = this.#main;
       const context = this.#context;
-      if (this.#selectedWorkstreamId === undefined && recordedWorkstreamState.selectedWorkstreamId !== undefined) {
-        const remembered = this.#readPreference(`selected-session:${recordedWorkstreamState.selectedWorkstreamId}`);
-        const restored = recordedWorkstreamSelection(recordedWorkstreamState.snapshots, recordedWorkstreamState.selectedWorkstreamId, remembered);
-        if (restored !== undefined) this.#applyWorkstreamSelection(restored.snapshot);
+      if (this.#selectedWorkstreamId === undefined) {
+        const workstreamId = recordedWorkstreamState.selectedWorkstreamId ?? this.#readPreference("selected-workstream");
+        const remembered = workstreamId === undefined ? undefined : this.#readPreference(`selected-session:${workstreamId}`);
+        const restored = workstreamId === undefined ? undefined : recordedWorkstreamSelection(recordedWorkstreamState.snapshots, workstreamId, remembered);
+        if (restored !== undefined) {
+          recordedWorkstreamState.selectedWorkstreamId = restored.snapshot.id;
+          this.#applyWorkstreamSelection(restored.snapshot);
+        }
       }
       const selected = recordedWorkstreamState.snapshots.find((snapshot) => snapshot.id === this.#selectedWorkstreamId);
       this.#syncSurfaceSelection(selected !== undefined);
