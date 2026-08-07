@@ -9,7 +9,7 @@
 
 ## Preserved
 
-- Cognitive-role vocabulary and the initial role-to-model policy.
+- Cognitive-role purposes and the initial role-to-model policy; labels were normalized to provider-neutral task names.
 - Fresh raw quota as an eligibility gate.
 - Explicit refusal instead of silent model-family substitution.
 - Model and Model Effort selection per bounded assignment.
@@ -18,7 +18,7 @@
 ## Adapted for Pi
 
 - Provider identifiers are Pi catalog identifiers (`openai-codex`, `anthropic`).
-- Runtime resolution checks Pi's model catalog directly.
+- Runtime resolution checks Pi's model catalog directly and resolves independent roles away from the recorded author provider family.
 - `pi-role` replaces the Claudex launcher for unmanaged interactive lead sessions.
 - Managed work passes a proposed binding through the Workbench controller's Dispatch interface.
 

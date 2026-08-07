@@ -42,7 +42,7 @@ Two failure states are reported as lived evidence, not hypotheticals:
 | Shaped feedback (hook + `/test` skill parses JUnit XML) | Deterministic verification without flooding context | **Episode** (compact, provenance-bearing); **Review Surface** |
 | AGENTS.md router + path-scoped rules + on-demand skills | Concise always-on context; progressive disclosure | harness contract; this repo's AGENTS.md router pattern; **Model Context** |
 | Failures → deterministic build guardrails (shift-left) | Stop known failures recurring; only then add autonomy | "deterministic modules own transitions and side effects"; **Watcher** |
-| Reviewer board with model diversity (Opus/Fable/GPT) | Different models expose different blind spots | **Independence**, **Cognitive Role**, cross-family judgment, `gpt-adversary` |
+| Reviewer board with model diversity (Opus/Fable/GPT) | Different models expose different blind spots | **Independence**, **Cognitive Role**, cross-family judgment, `challenge` |
 | Verification report = contract + linked test + screenshots | Make behavior reviewable; focus human judgment | **Review Surface** + **Primary Evidence** + **Acceptance** |
 | "Match judgment and verification to the task" (2×2) | Choose depth by human-judgment × agent-verification need | **Working Mode** dimensions (independently adjustable) |
 

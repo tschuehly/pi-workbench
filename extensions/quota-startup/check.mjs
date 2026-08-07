@@ -1,8 +1,12 @@
-const QUOTA_ARGS = ["--provider", "claude", "--json"];
-const KEYCHAIN_ARGS = ["--allow-keychain-prompt", ...QUOTA_ARGS];
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const QUOTA_CACHE_SCRIPT = path.resolve(here, "../../skills/model-orchestration/scripts/quota-snapshot-cache.mjs");
+const KEYCHAIN_REFRESH_ARGS = [QUOTA_CACHE_SCRIPT, "--refresh-keychain"];
 
 export async function checkClaudeQuota(run) {
-  return runAndClassify(run, "quota-axi", QUOTA_ARGS);
+  return runAndClassify(run, process.execPath, [QUOTA_CACHE_SCRIPT]);
 }
 
 export function noticeForQuotaCheck(check, manual) {
@@ -11,13 +15,13 @@ export function noticeForQuotaCheck(check, manual) {
   }
   if (check.status === "rate-limited") {
     return manual
-      ? { level: "warning", message: "Claude quota endpoint is rate limited. Child launches can proceed with degraded telemetry; retry /quota-check later." }
+      ? { level: "warning", message: "Claude quota endpoint is rate limited. Child launches can proceed with degraded telemetry; retry /quota-check after the ten-minute cache expires." }
       : undefined;
   }
   if (check.status === "unavailable") {
     return {
       level: "warning",
-      message: `Claude quota startup check could not inspect telemetry: ${check.diagnostic ?? "unknown error"}\nRun /quota-check to retry.`,
+      message: `Claude quota startup check could not inspect telemetry: ${check.diagnostic ?? "unknown error"}\nRun /quota-check after the ten-minute cache expires to retry.`,
     };
   }
   return undefined;
@@ -39,7 +43,7 @@ export async function repairClaudeQuota(run, status) {
     return unavailable(`No automatic repair is available for quota status '${status}'.`);
   }
 
-  return runAndClassify(run, "quota-axi", KEYCHAIN_ARGS);
+  return runAndClassify(run, process.execPath, KEYCHAIN_REFRESH_ARGS);
 }
 
 async function runAndClassify(run, command, args) {

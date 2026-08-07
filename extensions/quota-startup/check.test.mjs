@@ -40,7 +40,7 @@ test("keeps endpoint rate limits silent at startup and reports them on manual ch
   assert.equal(noticeForQuotaCheck(result, false), undefined);
   assert.deepEqual(noticeForQuotaCheck(result, true), {
     level: "warning",
-    message: "Claude quota endpoint is rate limited. Child launches can proceed with degraded telemetry; retry /quota-check later.",
+    message: "Claude quota endpoint is rate limited. Child launches can proceed with degraded telemetry; retry /quota-check after the ten-minute cache expires.",
   });
 });
 
@@ -66,7 +66,9 @@ test("repairs keychain access without launching Claude login", async () => {
   ]);
   const result = await repairClaudeQuota(fake.run, "keychain-required");
   assert.equal(result.status, "fresh");
-  assert.deepEqual(fake.calls, [["quota-axi", ["--allow-keychain-prompt", "--provider", "claude", "--json"]]]);
+  assert.equal(fake.calls[0][0], process.execPath);
+  assert.match(fake.calls[0][1][0], /quota-snapshot-cache\.mjs$/);
+  assert.equal(fake.calls[0][1][1], "--refresh-keychain");
 });
 
 test("repairs expired sign-in before requesting persistent Keychain access", async () => {
@@ -76,8 +78,8 @@ test("repairs expired sign-in before requesting persistent Keychain access", asy
   ]);
   const result = await repairClaudeQuota(fake.run, "sign-in-required");
   assert.equal(result.status, "fresh");
-  assert.deepEqual(fake.calls, [
-    ["claude", ["auth", "login"]],
-    ["quota-axi", ["--allow-keychain-prompt", "--provider", "claude", "--json"]],
-  ]);
+  assert.deepEqual(fake.calls[0], ["claude", ["auth", "login"]]);
+  assert.equal(fake.calls[1][0], process.execPath);
+  assert.match(fake.calls[1][1][0], /quota-snapshot-cache\.mjs$/);
+  assert.equal(fake.calls[1][1][1], "--refresh-keychain");
 });

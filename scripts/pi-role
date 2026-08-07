@@ -14,23 +14,30 @@ ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 RESOLVER="$ROOT/skills/model-orchestration/scripts/resolve-runtime-binding.mjs"
 
 usage() {
-  printf '%s\n' 'usage: ./scripts/pi-role <cognitive-role> [--dry-run] [-- <pi arguments>]' >&2
+  printf '%s\n' 'usage: ./scripts/pi-role <cognitive-role> [--independent-of <provider>] [--dry-run] [-- <pi arguments>]' >&2
 }
 
 [ $# -ge 1 ] || { usage; exit 2; }
 ROLE="$1"
 shift
 DRY_RUN=false
-if [ "${1:-}" = "--dry-run" ]; then
-  DRY_RUN=true
-  shift
-fi
-if [ $# -gt 0 ]; then
-  [ "$1" = "--" ] || { usage; exit 2; }
-  shift
-fi
+INDEPENDENT_OF=""
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --independent-of)
+      [ $# -ge 2 ] || { usage; exit 2; }
+      INDEPENDENT_OF="$2"
+      shift 2
+      ;;
+    *) usage; exit 2 ;;
+  esac
+done
+if [ $# -gt 0 ]; then shift; fi
 
-CONTRACT="$(node "$RESOLVER" "$ROLE" --format env)"
+RESOLVER_ARGS=("$RESOLVER" "$ROLE")
+if [ -n "$INDEPENDENT_OF" ]; then RESOLVER_ARGS+=(--independent-of "$INDEPENDENT_OF"); fi
+CONTRACT="$(node "${RESOLVER_ARGS[@]}" --format env)"
 PROVIDER=""
 MODEL=""
 THINKING=""

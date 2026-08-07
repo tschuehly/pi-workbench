@@ -17,18 +17,18 @@ Assign exactly one role:
 
 | Cognitive Role | Use for |
 |---|---|
-| `routine-execution` | Routine implementation, tests, and fixes |
-| `hard-execution` | Difficult implementation or bounded technical review |
-| `consequential-deliberation` | Novel decomposition or consequential design |
-| `exceptional-escalation` | Important work unresolved by the ordinary ladder |
-| `wide-evidence-gathering` | Broad repository reads and mechanical evidence collection |
-| `bounded-advice` | One compact independent judgment |
-| `gpt-adversary` | Challenge a distilled GPT-authored judgment |
-| `system-comprehension` | Build a faithful system model from gathered evidence |
-| `gpt-diff-review` | Fresh review of a bounded, high-risk GPT-written diff |
-| `background-mechanics` | Cheap mechanical work that saves meaningful lead context |
+| `implementation` | Routine implementation, tests, and fixes |
+| `problem-solving` | Difficult implementation or bounded technical analysis |
+| `design` | Novel decomposition or consequential design |
+| `escalation` | Important work unresolved by the ordinary ladder |
+| `investigation` | Broad repository reads and mechanical evidence collection |
+| `independent-judgment` | One compact independent judgment |
+| `challenge` | Challenge a distilled judgment from another model family |
+| `synthesis` | Build a faithful system model from gathered evidence |
+| `independent-review` | Fresh review of a bounded, high-risk diff from another model family |
+| `mechanics` | Cheap mechanical work that saves meaningful lead context |
 
-Include bounded scope, task risk, required Independence, and the author family when review independence matters.
+Include bounded scope, task risk, required Independence, and the author provider when Independence matters. `independent-judgment`, `challenge`, and `independent-review` require cross-family routing; their model binding is selected dynamically from the author provider rather than fixed to one family.
 
 **Complete when:** every proposed Dispatch has one distinct Cognitive Role.
 
@@ -37,12 +37,12 @@ Include bounded scope, task risk, required Independence, and the author family w
 Run:
 
 ```bash
-node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role>
+node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--independent-of <author-provider>]
 ```
 
-The resolver checks the vendored policy, the current Pi model catalog, and `quota-axi --json`. Fresh quota telemetry with an exhausted relevant window blocks routing. Stale, unavailable, or unreadable quota telemetry produces a `degraded-quota-telemetry` admission instead: the child launch proceeds and Pi's runtime binding verification remains authoritative. An unknown role or absent model still fails closed. Routing never silently substitutes the requested role.
+The resolver checks the vendored policy, the current Pi model catalog, and a machine-local `quota-axi --json` snapshot cached for ten minutes. Concurrent and repeated resolutions share that snapshot, including telemetry failures; the first resolution after the cache expires refreshes it. Fresh quota telemetry with an exhausted relevant window blocks routing. Stale, unavailable, or unreadable quota telemetry produces a `degraded-quota-telemetry` admission instead: the child launch proceeds and Pi's runtime binding verification remains authoritative. An unknown role or absent model still fails closed. Routing never silently substitutes the requested role. Independent roles fail closed without a recognized author provider or a configured binding from another family.
 
-Refresh before a major fan-out, scarce Claude call, exceptional escalation, or later major phase. Identify windows by `windowSeconds` and `resetsAt`; labels are secondary. A model-scoped window applies only to that model. Compare percentages only within one provider.
+Resolve before a major fan-out, scarce Claude call, escalation, or later major phase; resolutions inside the ten-minute window reuse the cached quota snapshot. Identify windows by `windowSeconds` and `resetsAt`; labels are secondary. A model-scoped window applies only to that model. Compare percentages only within one provider.
 
 **Complete when:** every role has one resolver-produced `provider`, `model`, `effort`, quota admission, and quota snapshot, or the unavailable role is explicit. Disclose degraded telemetry; do not describe it as fresh quota evidence.
 

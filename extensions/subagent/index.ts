@@ -28,15 +28,16 @@ const PROFILES = {
 } as const;
 
 const COGNITIVE_ROLES = [
-  "routine-execution", "hard-execution", "consequential-deliberation", "exceptional-escalation",
-  "wide-evidence-gathering", "bounded-advice", "gpt-adversary", "system-comprehension",
-  "gpt-diff-review", "background-mechanics",
+  "implementation", "problem-solving", "design", "escalation", "investigation",
+  "independent-judgment", "challenge", "synthesis", "independent-review", "mechanics",
 ] as const;
+const INDEPENDENT_ROLES = new Set<string>(["independent-judgment", "challenge", "independent-review"]);
 
 const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output" }),
   profile: StringEnum(Object.keys(PROFILES) as (keyof typeof PROFILES)[], { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
+  independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Defaults to the active parent model provider; set it explicitly for child-authored work." })),
   background: Type.Optional(Type.Boolean({ description: "Launch and return a handle immediately instead of blocking. Reconcile later with subagent_collect. The child still dies when the attended session ends." })),
 });
 
@@ -74,9 +75,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
         return failure("preflight_failed", `Unknown child profile: ${params.profile}.`);
       }
 
+      const needsIndependence = INDEPENDENT_ROLES.has(params.cognitiveRole);
+      if (!needsIndependence && params.independentOfProvider !== undefined) {
+        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' does not use independentOfProvider.`);
+      }
+      const independentOfProvider = needsIndependence ? (params.independentOfProvider ?? ctx.model?.provider) : undefined;
+      if (needsIndependence && independentOfProvider === undefined) {
+        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' requires an author provider for independent routing.`);
+      }
+
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole);
+        binding = await resolveBinding(params.cognitiveRole, independentOfProvider);
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
       }
@@ -229,9 +239,10 @@ async function streamToResult(
   };
 }
 
-async function resolveBinding(cognitiveRole: string): Promise<any> {
+async function resolveBinding(cognitiveRole: string, independentOfProvider?: string): Promise<any> {
+  const args = [resolver, cognitiveRole, ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider])];
   const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(process.execPath, [resolver, cognitiveRole], { encoding: "utf8", maxBuffer: 1024 * 1024 }, (error, output, stderr) => {
+    execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024 }, (error, output, stderr) => {
       if (error !== null) reject(new Error(String(stderr || output || error.message).trim()));
       else resolve(output);
     });

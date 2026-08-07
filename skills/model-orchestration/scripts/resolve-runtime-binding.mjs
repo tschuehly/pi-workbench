@@ -4,37 +4,65 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readCachedQuotaSnapshot } from "./quota-snapshot-cache.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const policy = JSON.parse(fs.readFileSync(path.join(here, "..", "references", "routing-policy.json"), "utf8"));
 
 function usage() {
-  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--quota <path|->] [--catalog <path>] [--format json|env]");
+  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--independent-of <provider>] [--quota <path|->] [--catalog <path>] [--format json|env]");
   process.exit(2);
 }
 
 const args = process.argv.slice(2);
 const role = args.shift();
 if (!role) usage();
+let independentOfProvider;
 let quotaInput;
 let catalogInput;
 let format = "json";
 while (args.length) {
   const option = args.shift();
-  if (option === "--quota") quotaInput = args.shift();
+  if (option === "--independent-of") independentOfProvider = args.shift();
+  else if (option === "--quota") quotaInput = args.shift();
   else if (option === "--catalog") catalogInput = args.shift();
   else if (option === "--format") format = args.shift();
   else usage();
 }
-if ((quotaInput === undefined && process.argv.includes("--quota")) ||
+if ((independentOfProvider === undefined && process.argv.includes("--independent-of")) ||
+    (quotaInput === undefined && process.argv.includes("--quota")) ||
     (catalogInput === undefined && process.argv.includes("--catalog")) ||
     !["json", "env"].includes(format)) usage();
 
-const binding = policy.bindings[role];
-if (!binding) {
+const rolePolicy = policy.bindings[role];
+if (!rolePolicy) {
   console.error(`Unknown cognitive role: ${role}`);
   console.error(`Valid roles: ${Object.keys(policy.bindings).join(", ")}`);
   process.exit(1);
+}
+
+let binding = rolePolicy;
+let independence;
+if (rolePolicy.independentBindings !== undefined) {
+  if (independentOfProvider === undefined) {
+    console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Role '${role}' requires --independent-of <provider>`);
+    process.exit(3);
+  }
+  const independentOfFamily = policy.providerFamilies[independentOfProvider];
+  binding = rolePolicy.independentBindings[independentOfFamily];
+  if (binding === undefined) {
+    console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=No independent binding is configured for provider '${independentOfProvider}'`);
+    process.exit(3);
+  }
+  const selectedFamily = policy.providerFamilies[binding.provider];
+  if (selectedFamily === independentOfFamily) {
+    console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Resolved provider family is not independent`);
+    process.exit(3);
+  }
+  independence = { independentOfProvider, independentOfFamily, selectedFamily };
+} else if (independentOfProvider !== undefined) {
+  console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Role '${role}' does not use an independence constraint`);
+  process.exit(3);
 }
 
 let rawQuota;
@@ -42,7 +70,11 @@ let quotaError;
 try {
   if (quotaInput === "-") rawQuota = fs.readFileSync(0, "utf8");
   else if (quotaInput) rawQuota = fs.readFileSync(quotaInput, "utf8");
-  else rawQuota = execFileSync("quota-axi", ["--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  else {
+    const cached = readCachedQuotaSnapshot();
+    rawQuota = cached.stdout.trim() !== "" ? cached.stdout : undefined;
+    if (cached.status !== 0) quotaError = `quota snapshot unavailable: ${cached.stderr || `quota-axi exited with status ${cached.status}`}`;
+  }
 } catch (error) {
   rawQuota = typeof error.stdout === "string" && error.stdout.trim() !== "" ? error.stdout : undefined;
   quotaError = `quota snapshot unavailable: ${error.message}`;
@@ -105,6 +137,7 @@ const result = {
     provider: binding.provider,
     model: binding.model,
     effort: binding.effort,
+    ...(independence === undefined ? {} : { independence }),
     admission: telemetryStatus === "fresh" ? "fresh-quota" : "degraded-quota-telemetry",
     quotaSnapshot: {
       generatedAt: snapshot?.generatedAt ?? null,
@@ -129,6 +162,7 @@ if (format === "env") {
   console.log(`PI_PROVIDER=${binding.provider}`);
   console.log(`PI_MODEL=${binding.model}`);
   console.log(`PI_THINKING=${binding.effort}`);
+  if (independence !== undefined) console.log(`INDEPENDENT_OF_PROVIDER=${independence.independentOfProvider}`);
   console.log(`QUOTA_ADMISSION=${result.modelBinding.admission}`);
   console.log(`QUOTA_TELEMETRY_STATUS=${telemetryStatus}`);
   console.log(`QUOTA_GENERATED_AT=${snapshot?.generatedAt ?? ""}`);

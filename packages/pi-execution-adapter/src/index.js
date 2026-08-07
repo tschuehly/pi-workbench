@@ -3,12 +3,13 @@ import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 
 const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out", "outcome_unknown"]);
+const INDEPENDENT_ROLES = new Set(["independent-judgment", "challenge", "independent-review"]);
 
 export class PiRpcExecutionAdapter {
   constructor(options = {}) {
     this.command = options.command ?? "pi";
     this.defaultTimeoutMs = options.timeoutMs ?? 20 * 60_000;
-    this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 5 * 60_000;
+    this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 10 * 60_000;
     this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write"]);
     this.clock = options.clock ?? (() => new Date());
     this.spawn = options.spawn ?? nodeSpawn;
@@ -309,6 +310,16 @@ function validateSpec(spec, hostTools, now, maxAgeMs) {
   if (!Array.isArray(spec.tools) || spec.tools.some((tool) => !hostTools.has(tool))) throw typedError("CAPABILITY_EXCEEDED", "Requested tools exceed the host capability ceiling.");
   const binding = spec.binding;
   if (!binding || binding.cognitiveRole !== spec.cognitiveRole || !binding.provider || !binding.model || !binding.effort) throw typedError("INVALID_BINDING", "Resolved binding does not match the requested Cognitive Role.");
+  if (INDEPENDENT_ROLES.has(spec.cognitiveRole)) {
+    const independence = binding.independence;
+    const selectedFamily = providerFamily(binding.provider);
+    const independentOfFamily = providerFamily(independence?.independentOfProvider);
+    if (!independence || independentOfFamily === undefined || independence.independentOfFamily !== independentOfFamily || independence.independentOfFamily === independence.selectedFamily || independence.selectedFamily !== selectedFamily) {
+      throw typedError("INVALID_BINDING", "Independent Cognitive Roles require a verified cross-family binding.");
+    }
+  } else if (binding.independence !== undefined) {
+    throw typedError("INVALID_BINDING", "Independence metadata is valid only for an independent Cognitive Role.");
+  }
   if (!["fresh-quota", "degraded-quota-telemetry"].includes(binding.admission)) throw typedError("INVALID_BINDING", "Binding quota admission is invalid.");
   const quota = binding.quotaSnapshot;
   if (!quota || !["fresh", "stale", "unavailable"].includes(quota.telemetryStatus) || !Array.isArray(quota.relevantWindows)) throw typedError("INVALID_BINDING", "Binding quota telemetry is invalid.");
@@ -325,6 +336,11 @@ function validateSpec(spec, hostTools, now, maxAgeMs) {
 }
 
 function resultFor(state, outcome, text = "", diagnostic) { const b = state.spec.binding; return { outcome, text: bounded(text, 50_000), profile: state.spec.profile, cognitiveRole: state.spec.cognitiveRole, provider: b.provider, model: b.model, effort: b.effort, quotaAdmission: state.quotaAdmission, quotaTelemetryStatus: state.quotaTelemetryStatus, ...(state.sessionId ? { sessionId: state.sessionId } : {}), ...(diagnostic ? { diagnostic: bounded(diagnostic, 8_000) } : {}) }; }
+function providerFamily(provider) {
+  if (provider === "anthropic") return "anthropic";
+  if (provider === "openai" || provider === "openai-codex") return "openai";
+  return undefined;
+}
 function assistantText(message) { return Array.isArray(message.content) ? message.content.filter((part) => part?.type === "text").map((part) => part.text).join("\n") : ""; }
 function typedError(code, message) { const error = new Error(message); error.code = code; return error; }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }

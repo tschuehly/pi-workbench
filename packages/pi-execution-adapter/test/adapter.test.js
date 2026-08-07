@@ -7,9 +7,9 @@ import { PiRpcExecutionAdapter } from "../src/index.js";
 const now = new Date("2026-03-20T12:00:00.000Z");
 function spec(overrides = {}) {
   return {
-    task: "Inspect src and report.", profile: "scout", cognitiveRole: "wide-evidence-gathering", cwd: "/tmp", tools: ["read", "bash"],
+    task: "Inspect src and report.", profile: "scout", cognitiveRole: "investigation", cwd: "/tmp", tools: ["read", "bash"],
     binding: {
-      cognitiveRole: "wide-evidence-gathering",
+      cognitiveRole: "investigation",
       provider: "anthropic",
       model: "claude-test",
       effort: "high",
@@ -150,6 +150,26 @@ test("treats fresh quota evidence that aged before dispatch as degraded telemetr
   assert.equal(result.quotaTelemetryStatus, "stale");
   await collecting;
   assert.equal(observations.some((value) => value.type === "quota_degraded" && value.detail?.telemetryStatus === "stale"), true);
+});
+
+test("enforces cross-family bindings for independent roles", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  const reviewBinding = {
+    ...spec().binding,
+    cognitiveRole: "independent-review",
+    independence: { independentOfProvider: "openai-codex", independentOfFamily: "openai", selectedFamily: "anthropic" },
+  };
+  const receipt = await adapter.dispatch(spec({ cognitiveRole: "independent-review", binding: reviewBinding }));
+  assert.equal((await adapter.result(receipt.executionId)).outcome, "success");
+
+  await assert.rejects(
+    adapter.dispatch(spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: undefined } })),
+    (error) => error.code === "INVALID_BINDING",
+  );
+  await assert.rejects(
+    adapter.dispatch(spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: { ...reviewBinding.independence, independentOfFamily: "anthropic" } } })),
+    (error) => error.code === "INVALID_BINDING",
+  );
 });
 
 test("fails closed on inconsistent admission, capability expansion, fresh exhaustion, and runtime binding mismatch", async () => {

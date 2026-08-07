@@ -22,13 +22,14 @@ This is unmanaged Level 1 execution. The method may be named `dispatch`, but its
 
 ## Level 1 behavior
 
-Each parent tool invocation launches one child with three semantic inputs:
+Each parent tool invocation launches one child with these semantic inputs:
 
 ```ts
 {
   task: string;
   profile: "scout" | "planner" | "reviewer" | "implementer";
   cognitiveRole: CognitiveRole;
+  independentOfProvider?: string;
   background?: boolean;
 }
 ```
@@ -36,8 +37,9 @@ Each parent tool invocation launches one child with three semantic inputs:
 - `task` is a self-contained assignment that names relevant repository paths, constraints, and expected output.
 - `profile` selects Workbench-owned child behavior and requested Pi tools. These lowercase Level 1 child profiles are neither managed Execution Profiles nor authority shapes; in particular, `scout` does not grant managed Scout authority. `implementer` avoids overloading the canonical Worker term.
 - `cognitiveRole` selects the required kind of thinking. It never names a provider or model.
+- `independentOfProvider` optionally identifies the provider that authored the work under judgment. Independent roles default it to the active parent provider and use an explicit value for child-authored work.
 
-The extension supplies the validated current working directory and host capability ceiling. The parent cannot provide a model, provider, Model Effort, executable, environment, session directory, arbitrary tools, or sandbox policy.
+The extension supplies the validated current working directory and host capability ceiling. The parent may identify an author provider as an Independence constraint but cannot choose the target provider, model, Model Effort, executable, environment, session directory, arbitrary tools, or sandbox policy.
 
 One invocation maps to one execution request. When `background` is true the tool returns a handle immediately instead of blocking; the lead reconciles it within the same session through the companion `subagent_collect`, `subagent_status`, and `subagent_cancel` tools. This in-session non-blocking launch lets a lead keep several children in flight, but the extension still performs no batches, chains, retries, review loops, or result synthesis, and no child outlives the attended session. The attended lead remains accountable for deciding what to delegate and for reconciling each result.
 
@@ -45,7 +47,7 @@ One invocation maps to one execution request. When `background` is true the tool
 
 V1 loads only the four bundled child profiles. Project and user profile discovery is disabled until a trust and validation model exists. Profiles and Cognitive Roles are validated independently: a profile selects child behavior and requested tools, while a Cognitive Role selects the required kind of thinking and its runtime binding. Any known Cognitive Role may be paired with any bundled profile; an unknown profile or unknown Cognitive Role fails preflight.
 
-The extension invokes the package-relative `skills/model-orchestration/scripts/resolve-runtime-binding.mjs` for every child launch and validates its JSON response. The resolved binding contains a Cognitive Role, provider-qualified model, Model Effort, quota admission, and quota telemetry. Fresh confirmed exhaustion, an unknown role, and an unavailable catalog model stop before Pi Execution. Stale, unavailable, or unreadable quota telemetry is admitted explicitly as `degraded-quota-telemetry`; it is visible in observations and does not prevent a verified launch.
+The extension invokes the package-relative `skills/model-orchestration/scripts/resolve-runtime-binding.mjs` for every child launch and validates its JSON response. Independent roles pass the actual author provider so the resolver selects a different configured provider family; missing, unknown, or same-family independence fails preflight. The resolved binding contains a Cognitive Role, provider-qualified model, Model Effort, optional Independence metadata, quota admission, and quota telemetry. Quota telemetry is shared through a ten-minute machine-local cache, so repeated and concurrent child launches do not repeatedly query provider endpoints. Fresh confirmed exhaustion, an unknown role, and an unavailable catalog model stop before Pi Execution. Stale, unavailable, or unreadable quota telemetry is admitted explicitly as `degraded-quota-telemetry`; it is visible in observations and does not prevent a verified launch.
 
 The execution adapter accepts only the resulting `ResolvedExecutionSpec`. It rejects malformed or internally inconsistent bindings and fresh confirmed exhaustion, while a fresh binding that ages before dispatch becomes visible degraded telemetry rather than a blocker. It fails closed when launch-time model availability or runtime binding verification fails. Quota-collector authentication is telemetry health, not proof that Pi's provider authentication is unusable; the Pi launch is authoritative. The adapter never selects a fallback. A parent may request a new resolution and start another execution after a typed failure. After Pi starts, the adapter verifies that the reported provider, model, and effort match the resolved binding before prompting the child.
 

@@ -12,7 +12,9 @@ External executables and services are represented as versioned capabilities with
 
 The V1 harness supports Level 1 human–Pi pairing. Its Pi package, prompts, skills, adapters, and
 configuration are versioned resources; provider credentials, quota state, active sessions, and
-local PI WEB configuration are not. An interactive Pi startup check may inspect local Claude quota
+local PI WEB configuration are not. Runtime routing and the interactive startup check share a
+machine-local quota snapshot for ten minutes, including unavailable telemetry, so repeated child launches do not query
+provider endpoints again inside that window. The startup check may inspect local Claude quota
 telemetry and offer an attended sign-in or macOS Keychain repair when needed. It never stores
 credentials, never prompts in non-interactive modes, and never turns telemetry failure into provider
 authority or a child-launch blocker.
