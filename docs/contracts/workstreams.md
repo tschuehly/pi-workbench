@@ -35,13 +35,17 @@ close(CloseWorkstream) -> WorkstreamReceipt
 
 Mutation requests carry an idempotency key and, after creation, the expected Workstream revision. An exact retry returns the original receipt; reuse of the key with different input is rejected. Each receipt records the accepted revision and resulting snapshot reference. `watch` resumes ordered observation after a sequence and falls back to snapshot reconciliation when replay is unavailable. Pi sessions and PI WEB use this interface rather than writing Workstream storage directly. The exact wire schemas remain subject to trial validation.
 
+A newly confirmed session association must include a complete machine, project, and workspace location. Projection rebuilding remains compatible with older ledgers whose confirmed records predate that requirement. An incomplete active legacy association may be repaired only by appending `session.anchor.repaired`; no caller rewrites its earlier records.
+
 ## Ledger and current state
 
 Each Workstream has a concise append-only ledger. Agents append only at meaningful attention changes; routine tool activity, repeated summaries, raw transcripts, and verbose model output do not belong in the ledger. Files and large artifacts remain in their owning stores and are linked by reference.
 
-The ledger may record session association and checkpoint replacement, human-task changes, relevant links, and closure. Records identify their producer and source session. Size limits and validation prevent a session from turning the ledger into standing model context.
+The ledger may record session association, append-only session-anchor repair, checkpoint replacement, human-task changes, relevant links, and closure. Records identify their producer and source session. Size limits and validation prevent a session from turning the ledger into standing model context.
 
-Current state is a separate mechanical projection over accepted records. It includes pending, active, and failed session associations; each session's latest confirmed checkpoint plus explicit failure or staleness; durable Human Tasks and answer receipts; relevant links; and closure state. Pi Workbench does not persist a second combined narrative across sessions.
+`session.anchor.repaired` names an active session and a complete `machineId`, `projectId`, and `workspaceId`. Its bounded resolution receipt records the PI WEB complete-machine scan method, evidence identity, matched catalog working directory, scanned-scope count, and verification time. The receipt is provenance evidence supplied by PI WEB, not Store-owned truth about the external session catalog. Immediately before append, trusted PI WEB plugin code must repeat the exact-identity catalog resolution and confirm the owner-selected location. The Store enforces only ledger-visible invariants: the Workstream is open, the session is active in this Workstream, its projected anchor is incomplete, the revision and idempotency key are current and fresh, and the session has no other Workstream home. Closed Workstreams and complete anchors cannot be repaired.
+
+Current state is a separate mechanical projection over accepted records. It includes pending, active, and failed session associations and their latest projected anchors; each session's latest confirmed checkpoint plus explicit failure or staleness; durable Human Tasks and answer receipts; relevant links; and closure state. Anchor repair updates only the existing session's projected location and never creates another association. Pi Workbench does not persist a second combined narrative across sessions.
 
 ## Checkpointing
 

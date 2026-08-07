@@ -43,6 +43,92 @@ export function transitionDedicatedWorkstreamUi(state, action) {
   }
 }
 
+export function sessionAnchorRepairOffer(snapshot, session, error, machine) {
+  const machineId = isString(session?.machineId) ? session.machineId : machine?.id;
+  if (error?.code !== "SESSION_ANCHOR_MISSING"
+      || snapshot?.closed === true
+      || session?.status !== "active"
+      || completeSessionLocation(session)
+      || !isString(machineId)) return undefined;
+  const machineName = machine?.id === machineId && isString(machine.name) ? machine.name : machineId;
+  return {
+    status: "offered",
+    sessionId: session.id,
+    machine: { id: machineId, name: machineName },
+    failureMessage: errorMessage(error),
+  };
+}
+
+export function sessionAnchorRepairPresentation(state) {
+  const machineName = state.machine.name === state.machine.id ? state.machine.id : `${state.machine.name} (${state.machine.id})`;
+  if (state.status === "offered") return {
+    title: "Session location is missing",
+    guidance: `${state.failureMessage} Search every registered ${machineName} workspace by exact session identity before choosing a repair.`,
+    candidates: [],
+    confirmEnabled: false,
+    retryEnabled: true,
+  };
+  if (state.status === "resolving" || state.status === "repairing") return {
+    title: state.status === "resolving" ? "Scanning session locations" : "Repairing session location",
+    guidance: state.status === "resolving" ? `Checking every registered ${machineName} workspace.` : "Rechecking the selected catalog evidence before saving the append-only repair.",
+    candidates: [],
+    confirmEnabled: false,
+    retryEnabled: false,
+  };
+  if (state.status === "found") return {
+    title: "Confirm session location",
+    guidance: `PI WEB found one exact session match after scanning all registered ${machineName} workspaces. Confirm this checkout before repairing the Workstream.`,
+    candidates: [presentRepairCandidate(state.result, true)],
+    confirmEnabled: true,
+    retryEnabled: false,
+  };
+  if (state.status === "ambiguous") return {
+    title: "Choose the session location",
+    guidance: `PI WEB found multiple exact matches on ${machineName}. Select one checkout explicitly, then confirm it.`,
+    candidates: state.result.locations.map((candidate) => presentRepairCandidate(candidate, sameRepairCandidate(candidate, state.selected))),
+    confirmEnabled: state.selected !== undefined,
+    retryEnabled: false,
+  };
+  if (state.status === "missing") return {
+    title: "Session was not found",
+    guidance: `No exact session match exists in the registered ${machineName} workspaces. Check whether the session belongs to another machine or whether its workspace must be registered.`,
+    candidates: [],
+    confirmEnabled: false,
+    retryEnabled: true,
+  };
+  if (state.status === "unavailable") return {
+    title: "Session scan is unavailable",
+    guidance: `${String(state.result.failedScopes.length)} registered ${machineName} ${state.result.failedScopes.length === 1 ? "scope could" : "scopes could"} not be checked. Restore access, then try the scan again; no missing result has been inferred.`,
+    candidates: [],
+    confirmEnabled: false,
+    retryEnabled: true,
+  };
+  return {
+    title: "Session location was not repaired",
+    guidance: state.failureMessage ?? "The resolver result changed. Scan again before confirming.",
+    candidates: [],
+    confirmEnabled: false,
+    retryEnabled: true,
+  };
+}
+
+function presentRepairCandidate(candidate, selected) {
+  return { key: repairCandidateKey(candidate), label: sessionAnchor(candidate.location), selected };
+}
+
+function repairCandidateKey(candidate) {
+  const location = candidate.location;
+  return `${location.machineId}\u0000${location.projectId}\u0000${location.workspaceId}`;
+}
+
+function sameRepairCandidate(left, right) {
+  return right !== undefined && repairCandidateKey(left) === repairCandidateKey(right) && left.evidence.evidenceId === right.evidence.evidenceId;
+}
+
+function completeSessionLocation(value) {
+  return [value?.machineId, value?.projectId, value?.workspaceId].every(isString);
+}
+
 export function parseWorkbenchProjection(value) {
   if (!isRecord(value) || value.version !== 1 || !isRecord(value.run)) return undefined;
   const run = value.run;
@@ -156,6 +242,7 @@ function installWorkstreamsElement() {
     #surfaceSelectionRelease;
     #attentionRelease;
     #attentionItems = [];
+    #anchorRepair;
     #main;
     #dedicatedView;
 
@@ -303,6 +390,7 @@ function installWorkstreamsElement() {
 
     #openWorkstream(snapshot) {
       recordedWorkstreamState.focusKey = "dedicated:title";
+      this.#anchorRepair = undefined;
       this.#selectedWorkstreamId = snapshot.id;
       recordedWorkstreamState.selectedWorkstreamId = snapshot.id;
       const rememberedSessionId = this.#readPreference(`selected-session:${snapshot.id}`);
@@ -325,6 +413,7 @@ function installWorkstreamsElement() {
       this.#selectedWorkstreamId = undefined;
       recordedWorkstreamState.selectedWorkstreamId = undefined;
       this.#selectedSessionId = undefined;
+      this.#anchorRepair = undefined;
       this.#terminalOpen = false;
       this.#dedicatedView = undefined;
       this.#releaseSurfaceSelection();
@@ -335,6 +424,7 @@ function installWorkstreamsElement() {
 
     async #selectSession(session) {
       this.#selectedSessionId = session.id;
+      if (this.#anchorRepair?.sessionId !== session.id) this.#anchorRepair = undefined;
       if (this.#selectedWorkstreamId !== undefined) this.#writePreference(`selected-session:${this.#selectedWorkstreamId}`, session.id);
       this.#mobilePane = "workspace";
       this.#render();
@@ -346,9 +436,70 @@ function installWorkstreamsElement() {
           throw new Error("This PI WEB version cannot preserve the Workstream shell while selecting a session.");
         }
       } catch (error) {
-        recordedWorkstreamState.error = errorMessage(error);
+        if (this.#selectedSessionId === session.id) this.#recordSessionFailure(session, error);
       }
       this.#render();
+    }
+
+    #recordSessionFailure(session, error) {
+      const snapshot = recordedWorkstreamState.snapshots.find((candidate) => candidate.id === this.#selectedWorkstreamId);
+      const offer = sessionAnchorRepairOffer(snapshot, session, error, this.#context?.machine);
+      if (offer === undefined) {
+        this.#anchorRepair = undefined;
+        recordedWorkstreamState.error = errorMessage(error);
+      } else {
+        this.#anchorRepair = offer;
+        recordedWorkstreamState.error = "";
+      }
+    }
+
+    #resolveSessionAnchor(session) {
+      const machine = this.#anchorRepair?.machine;
+      if (machine === undefined) return;
+      const resolving = { status: "resolving", sessionId: session.id, machine };
+      this.#anchorRepair = resolving;
+      this.#render();
+      void this.#coordinator().resolveSessionAnchor(session, machine.id)
+        .then((result) => {
+          if (this.#anchorRepair !== resolving) return;
+          this.#anchorRepair = {
+            status: result.status,
+            sessionId: session.id,
+            machine,
+            result,
+            ...(result.status === "found" ? { selected: result } : {}),
+          };
+        })
+        .catch((error) => {
+          if (this.#anchorRepair === resolving) this.#anchorRepair = { status: "error", sessionId: session.id, machine, failureMessage: errorMessage(error) };
+        })
+        .finally(() => { this.#render(); });
+    }
+
+    #selectAnchorRepairCandidate(candidate) {
+      if (this.#anchorRepair?.status !== "ambiguous") return;
+      this.#anchorRepair = { ...this.#anchorRepair, selected: candidate };
+      this.#render();
+    }
+
+    #confirmSessionAnchor(snapshot, session) {
+      const repair = this.#anchorRepair;
+      const selected = repair?.status === "found" ? repair.result : repair?.status === "ambiguous" ? repair.selected : undefined;
+      if (selected === undefined) return;
+      const repairing = { ...repair, status: "repairing" };
+      this.#anchorRepair = repairing;
+      this.#render();
+      void this.#coordinator().repairSessionAnchor(snapshot, session, selected)
+        .then(async (receipt) => {
+          recordedWorkstreamState.notice = `Repaired session ${session.id} at revision ${String(receipt.acceptedRevision)}.`;
+          recordedWorkstreamState.error = "";
+          if (this.#anchorRepair === repairing) this.#anchorRepair = undefined;
+          await loadRecordedWorkstreams(this.#context, true);
+        })
+        .catch((error) => {
+          if (this.#anchorRepair === repairing) this.#anchorRepair = { status: "error", sessionId: session.id, machine: repair.machine, failureMessage: errorMessage(error) };
+        })
+        .finally(() => { this.#render(); });
     }
 
     #start(snapshot) {
@@ -360,7 +511,7 @@ function installWorkstreamsElement() {
     }
 
     #resume(session) {
-      void this.#coordinator().resume(session).catch((error) => { recordedWorkstreamState.error = errorMessage(error); this.#render(); });
+      void this.#coordinator().resume(session).catch((error) => { this.#recordSessionFailure(session, error); this.#render(); });
     }
 
     #requestCheckpoint(session) {
@@ -508,6 +659,10 @@ function installWorkstreamsElement() {
           },
           onStart: () => { this.#start(selected); },
           onResume: (session) => { this.#resume(session); },
+          anchorRepair: this.#anchorRepair,
+          onResolveSessionAnchor: (session) => { this.#resolveSessionAnchor(session); },
+          onSelectAnchorRepairCandidate: (candidate) => { this.#selectAnchorRepairCandidate(candidate); },
+          onConfirmSessionAnchor: (session) => { this.#confirmSessionAnchor(selected, session); },
           onRequestCheckpoint: (session) => { this.#requestCheckpoint(session); },
           onSaveCheckpoint: (session) => { this.#saveCheckpoint(selected, session); },
           attentionItems: this.#attentionItems,
@@ -823,6 +978,10 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   if (options.reconnecting) view.banner.append(message("Reconnecting. The last recorded Workstream projection remains visible.", "connection"));
   if (options.error) view.banner.append(message(options.error, "checkpoint-error"));
   else if (options.notice) view.banner.append(message(options.notice, "receipt"));
+  const repairSession = snapshot.sessions.find((session) => session.id === options.anchorRepair?.sessionId);
+  if (!snapshot.closed && repairSession?.status === "active" && !completeSessionLocation(repairSession)) {
+    view.banner.append(renderSessionAnchorRepair(options.anchorRepair, repairSession, options));
+  }
   view.banner.hidden = view.banner.childElementCount === 0;
 
   for (const [tool, control] of view.toolButtons) control.setAttribute("aria-pressed", String(options.tool === tool));
@@ -981,6 +1140,32 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   }
 }
 
+function renderSessionAnchorRepair(repair, session, options) {
+  const presentation = sessionAnchorRepairPresentation(repair);
+  const panel = document.createElement("section");
+  panel.className = "anchor-repair";
+  panel.setAttribute("aria-live", "polite");
+  panel.append(strong(presentation.title), message(presentation.guidance, "muted"));
+  const actions = document.createElement("div");
+  actions.className = "anchor-repair-actions";
+  if (repair.status === "found") {
+    actions.append(message(presentation.candidates[0].label, "session-anchor"));
+  } else if (repair.status === "ambiguous") {
+    repair.result.locations.forEach((candidate, index) => {
+      const choice = button(presentation.candidates[index].label, () => { options.onSelectAnchorRepairCandidate(candidate); });
+      choice.setAttribute("aria-pressed", String(presentation.candidates[index].selected));
+      actions.append(choice);
+    });
+  }
+  if (presentation.confirmEnabled) actions.append(button("Confirm session location", () => { options.onConfirmSessionAnchor(session); }));
+  if (presentation.retryEnabled) {
+    const machineName = repair.machine.name === repair.machine.id ? repair.machine.id : `${repair.machine.name} (${repair.machine.id})`;
+    actions.append(button(`Scan ${machineName}`, () => { options.onResolveSessionAnchor(session); }));
+  }
+  panel.append(actions);
+  return panel;
+}
+
 function setSurfaceVisibility(container, visible) {
   container.hidden = !visible;
   container.inert = !visible;
@@ -1099,6 +1284,9 @@ function workstreamsStyleElement() {
     [hidden] { display: none !important; }
     .workstream-shell { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--pi-bg); }
     .shell-banner { flex: 0 0 auto; display: grid; }
+    .anchor-repair { display: grid; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--pi-border); background: var(--pi-warning-surface, var(--pi-surface)); }
+    .anchor-repair-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .anchor-repair-actions button[aria-pressed="true"] { background: var(--pi-selection-bg); color: var(--pi-text-bright); font-weight: 700; }
     .workstream-topbar { min-height: 52px; flex: 0 0 auto; align-items: center; padding: 0 var(--pi-panel-padding, 12px) 0 66px; border-bottom: 1px solid var(--pi-border); box-shadow: inset 0 3px var(--workstream-color); background: color-mix(in srgb, var(--workstream-color) 8%, var(--pi-bg)); }
     .workstream-identity { min-width: 0; display: flex; align-items: center; gap: var(--pi-toolbar-gap, 8px); }
     .workstream-identity > div { min-width: 0; display: grid; gap: 2px; }

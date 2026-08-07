@@ -198,8 +198,8 @@ test("confirmation response loss reconciles the accepted association without fai
     },
   };
   const host = {
-    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
-    start: async () => { starts += 1; return { id: "runtime-1", location: { machineId: "local", workspaceId: "workspace-1" } }; },
+    currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
+    start: async () => { starts += 1; return { id: "runtime-1", location: { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" } }; },
     open: async () => {}, findByStartupToken: async () => undefined,
   };
   const result = await new WorkstreamSessionCoordinator(client, host).launch(snapshot);
@@ -222,8 +222,8 @@ test("confirmation failure leaves the created session pending for reconnect reco
     },
   };
   const host = {
-    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
-    start: async () => ({ id: "runtime-1", location: { machineId: "local", workspaceId: "workspace-1" } }),
+    currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
+    start: async () => ({ id: "runtime-1", location: { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" } }),
     open: async () => {}, findByStartupToken: async () => undefined,
   };
   await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch(snapshot), /store temporarily unavailable/);
@@ -239,7 +239,7 @@ test("session launch failure records failure and does not retry the host start",
     append: async (request) => { records.push(request.records[0].type); revision += 1; return { acceptedRevision: revision, sequence: revision }; },
   };
   const host = {
-    currentLocation: () => ({ machineId: "local", workspaceId: "workspace-1" }),
+    currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
     start: async () => { starts += 1; throw new Error("launch exploded"); },
     open: async () => {},
     findByStartupToken: async () => undefined,
@@ -252,6 +252,58 @@ test("session launch failure records failure and does not retry the host start",
 test("typed Workstream client rejects malformed canonical success values", async () => {
   const client = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: { id: "incomplete" } }) });
   await assert.rejects(client.inspect("ws-1"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
+});
+
+test("typed Workstream client structurally validates optional projected session anchors", async () => {
+  const fixtureUrl = new URL("../fixtures/anchorless-active-session.json", import.meta.url);
+  const fixture = JSON.parse(await readFile(fixtureUrl, "utf8"));
+  fixture.snapshots[0].sessions[0].machineId = 42;
+  assert.equal(parseRecordedWorkstreams(fixture), undefined);
+  const client = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: fixture.snapshots[0] }) });
+  await assert.rejects(client.inspect("ws-anchorless-session"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
+});
+
+test("fake client requires complete new confirmations and validated append-only repairs", async () => {
+  const fixtureUrl = new URL("../fixtures/anchorless-active-session.json", import.meta.url);
+  const fixture = parseRecordedWorkstreams(JSON.parse(await readFile(fixtureUrl, "utf8")));
+  const client = new DeterministicFakeWorkstreamClient(fixture);
+  await client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 1,
+    idempotencyKey: "pending-new",
+    records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "launch-new" } }],
+  });
+  await assert.rejects(client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 2,
+    idempotencyKey: "confirm-incomplete",
+    records: [{ type: "session.confirmed", producer: "pi-web", payload: { associationKey: "launch-new", sessionId: "session-new" } }],
+  }), /complete machineId, projectId, and workspaceId/);
+  await assert.rejects(client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 2,
+    idempotencyKey: "repair-invalid",
+    records: [{ type: "session.anchor.repaired", producer: "pi-web", payload: { sessionId: "session-photoquest-anchorless", machineId: "studio", projectId: "photoquest", workspaceId: "main", resolution: {} } }],
+  }), /complete-machine-scan resolution evidence/);
+
+  await client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 2,
+    idempotencyKey: "repair-valid",
+    records: [{ type: "session.anchor.repaired", producer: "pi-web", payload: { sessionId: "session-photoquest-anchorless", machineId: "studio", projectId: "photoquest", workspaceId: "main", resolution: { method: "complete-machine-scan", evidenceId: "catalog-1", matchedCwd: "/PhotoQuest", scannedScopeCount: 2, verifiedAt: "2026-08-01T09:00:01.000Z" } } }],
+  });
+  assert.equal((await client.inspect("ws-anchorless-session")).sessions[0].workspaceId, "main");
+});
+
+test("session launch refuses an incomplete selected location before writing a new association", async () => {
+  let appends = 0;
+  const client = { append: async () => { appends += 1; }, inspect: async () => ({}) };
+  const host = { currentLocation: () => ({ machineId: "local", workspaceId: "main" }) };
+  await assert.rejects(
+    new WorkstreamSessionCoordinator(client, host).launch({ id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false }),
+    /complete machine, project, and workspace location/,
+  );
+  assert.equal(appends, 0);
 });
 
 test("typed Workstream client preserves semantic service errors", async () => {

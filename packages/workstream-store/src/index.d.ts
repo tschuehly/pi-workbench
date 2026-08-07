@@ -25,7 +25,8 @@ export interface CloseWorkstream {
 
 export type WorkstreamRecord =
   | SemanticRecord<"session.pending", { sessionId?: string; associationKey: string; machineId?: string; projectId?: string; workspaceId?: string }>
-  | SemanticRecord<"session.confirmed", { sessionId: string; associationKey?: string; machineId?: string; projectId?: string; workspaceId?: string }>
+  | SemanticRecord<"session.confirmed", { sessionId: string; associationKey?: string; machineId: string; projectId: string; workspaceId: string }>
+  | SemanticRecord<"session.anchor.repaired", { sessionId: string; machineId: string; projectId: string; workspaceId: string; resolution: SessionAnchorResolutionReceipt }>
   | SemanticRecord<"session.failed", { sessionId?: string; associationKey?: string; reason: string }>
   | SemanticRecord<"checkpoint.replaced", { sessionId: string; checkpoint: Checkpoint }>
   | SemanticRecord<"checkpoint.failed", { sessionId: string; reason: string }>
@@ -41,6 +42,14 @@ export interface SemanticRecord<T extends string, P> {
   producer: string;
   sourceSessionId?: string;
   payload: P;
+}
+
+export interface SessionAnchorResolutionReceipt {
+  method: "complete-machine-scan";
+  evidenceId: string;
+  matchedCwd: string;
+  scannedScopeCount: number;
+  verifiedAt: string;
 }
 
 export interface Checkpoint {

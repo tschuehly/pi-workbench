@@ -28,6 +28,7 @@ export class DeterministicFakeWorkstreamClient {
     return this.mutate(request, () => {
       const snapshot = this.mutableSnapshot(request.workstreamId, request.expectedRevision);
       const metadata = { revision: snapshot.revision + 1, recordedAt: fakeTimestamp(this.projection.sequence + 1) };
+      for (const record of request.records) validateFakeRecord(record);
       for (const record of request.records) applyFakeRecord(snapshot, record, metadata);
       snapshot.revision += 1;
       snapshot.updatedAt = metadata.recordedAt;
@@ -106,6 +107,30 @@ export async function loadDeterministicFakeWorkstreamClient(fetcher = fetch) {
   return new DeterministicFakeWorkstreamClient(await response.json());
 }
 
+function validateFakeRecord(record) {
+  if (!isRecord(record) || !isRecord(record.payload)) throw new Error("Fake Workstream records require an object payload.");
+  if (record.type === "session.confirmed" && !completeLocation(record.payload)) {
+    throw new Error("session.confirmed requires complete machineId, projectId, and workspaceId values.");
+  }
+  if (record.type === "session.anchor.repaired") {
+    if (!completeLocation(record.payload)) throw new Error("session.anchor.repaired requires complete machineId, projectId, and workspaceId values.");
+    const resolution = record.payload.resolution;
+    if (!isRecord(resolution)
+        || resolution.method !== "complete-machine-scan"
+        || !isString(resolution.evidenceId)
+        || !isString(resolution.matchedCwd)
+        || !Number.isSafeInteger(resolution.scannedScopeCount)
+        || resolution.scannedScopeCount < 1
+        || !isString(resolution.verifiedAt)) {
+      throw new Error("session.anchor.repaired requires complete-machine-scan resolution evidence.");
+    }
+  }
+}
+
+function completeLocation(value) {
+  return [value.machineId, value.projectId, value.workspaceId].every(isString);
+}
+
 function applyFakeRecord(snapshot, record, metadata) {
   switch (record.type) {
     case "link.upsert": upsert(snapshot.links, record.payload.link); break;
@@ -156,6 +181,17 @@ function applyFakeRecord(snapshot, record, metadata) {
         projectId: record.payload.projectId ?? pending.projectId,
         workspaceId: record.payload.workspaceId ?? pending.workspaceId,
         launchFailure: null,
+      });
+      break;
+    }
+    case "session.anchor.repaired": {
+      const active = session(snapshot, record.payload.sessionId);
+      if (active.status !== "active") throw new Error(`Session ${record.payload.sessionId} is not active.`);
+      if ([active.machineId, active.projectId, active.workspaceId].every((value) => typeof value === "string" && value.length > 0)) throw new Error(`Session ${record.payload.sessionId} already has a complete anchor.`);
+      Object.assign(active, {
+        machineId: record.payload.machineId,
+        projectId: record.payload.projectId,
+        workspaceId: record.payload.workspaceId,
       });
       break;
     }
@@ -246,6 +282,7 @@ function isSession(value) {
   if (!isRecord(value)
       || !isString(value.id)
       || !["active", "pending", "failed"].includes(value.status)
+      || ![value.machineId, value.projectId, value.workspaceId].every((part) => part === undefined || isString(part))
       || !(value.latestCheckpoint === null || isCheckpoint(value.latestCheckpoint))
       || !(value.checkpointFailure === null || isString(value.checkpointFailure))
       || !(value.checkpointStaleness === null || isCheckpointStaleness(value.checkpointStaleness))

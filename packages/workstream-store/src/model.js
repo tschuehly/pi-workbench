@@ -17,6 +17,7 @@ const MATERIALITIES = new Set(["material", "non-material"]);
 const RECORD_TYPES = new Set([
   "session.pending",
   "session.confirmed",
+  "session.anchor.repaired",
   "session.failed",
   "checkpoint.replaced",
   "checkpoint.failed",
@@ -135,9 +136,23 @@ function validateRecord(record, limits, field) {
       keys(record.payload, ["sessionId", "associationKey", "machineId", "projectId", "workspaceId"], `${field}.payload`);
       id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
       if (record.payload.associationKey !== undefined) id(record.payload.associationKey, `${field}.payload.associationKey`, limits);
-      if (record.payload.machineId !== undefined) string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
-      if (record.payload.projectId !== undefined) string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
-      if (record.payload.workspaceId !== undefined) string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
+      string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
+      string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
+      string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
+    },
+    "session.anchor.repaired": () => {
+      keys(record.payload, ["sessionId", "machineId", "projectId", "workspaceId", "resolution"], `${field}.payload`);
+      id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
+      string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
+      string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
+      string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
+      const resolution = object(record.payload.resolution, `${field}.payload.resolution`);
+      keys(resolution, ["method", "evidenceId", "matchedCwd", "scannedScopeCount", "verifiedAt"], `${field}.payload.resolution`);
+      if (resolution.method !== "complete-machine-scan") fail("INVALID_RECORD", `${field}.payload.resolution.method is not supported`);
+      id(resolution.evidenceId, `${field}.payload.resolution.evidenceId`, limits);
+      string(resolution.matchedCwd, `${field}.payload.resolution.matchedCwd`, limits.maxTextLength);
+      if (!Number.isSafeInteger(resolution.scannedScopeCount) || resolution.scannedScopeCount < 1) fail("INVALID_RECORD", `${field}.payload.resolution.scannedScopeCount must be a positive safe integer`);
+      string(resolution.verifiedAt, `${field}.payload.resolution.verifiedAt`, limits.maxTextLength);
     },
     "session.failed": () => {
       keys(record.payload, ["sessionId", "associationKey", "reason"], `${field}.payload`);
@@ -331,6 +346,16 @@ export function rebuildSnapshot(ledger) {
           projectId: payload.projectId ?? session.projectId,
           workspaceId: payload.workspaceId ?? session.workspaceId,
           launchFailure: null,
+        });
+        break;
+      }
+      case "session.anchor.repaired": {
+        const session = sessions.get(payload.sessionId);
+        if (session) sessions.set(payload.sessionId, {
+          ...session,
+          machineId: payload.machineId,
+          projectId: payload.projectId,
+          workspaceId: payload.workspaceId,
         });
         break;
       }

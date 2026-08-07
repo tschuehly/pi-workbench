@@ -58,6 +58,42 @@ owner may correct it, and only owner-confirmed content is persisted. The interfa
 failed, or stale checkpoints instead of presenting old context as current. Several sessions and
 Workstreams may remain active concurrently.
 
+Session selection and opening fail with typed causes for a missing anchor, unavailable machine,
+unavailable project, unavailable workspace, missing session, or transport failure. The missing-anchor
+code is `SESSION_ANCHOR_MISSING`; only that anchor-specific failure offers **Repair session location**.
+Resolution always targets one explicit
+machine and completes its registered-workspace scan before reporting a unique result. The interface
+shows a unique catalog match for owner confirmation, requires owner selection among multiple exact
+matches, and gives different recovery guidance for a missing result and an unavailable or partial
+scan. Trusted PI WEB code rechecks the selected evidence immediately before the append-only repair.
+Closed Workstreams and sessions that already have a complete anchor do not offer repair.
+
+The generic PI WEB session host exposes the following discriminated resolver boundary. Every returned
+location is complete. Evidence belongs to the exact match, including each ambiguous candidate, so a
+caller can recheck the owner-selected identity without broadening the search. `failedScopes` is
+structured PI WEB diagnostic data; Workbench treats its entries as opaque except for their count.
+
+```text
+resolveSessionLocation({ machineId, sessionId })
+  -> { type: "found", location, evidence }
+   | { type: "ambiguous", locations: [{ location, evidence }, ...] }
+   | { type: "missing" }
+   | { type: "unavailable", failedScopes: [...] }
+
+location = { machineId, projectId, workspaceId }
+evidence = { machineId, sessionId, location, catalogCwd, evidenceId, matchedCwd, scannedScopeCount, verifiedAt }
+```
+
+`evidenceId` is the opaque stable identity of that exact catalog match, while `verifiedAt` records the
+current complete scan. A recheck may update its scan time or scope count; changing the match identity
+or complete location invalidates the pending confirmation.
+
+`machineId` is mandatory and every `found` or `ambiguous` match must name that same machine. A
+`missing` result means the complete registered-workspace scan succeeded with no exact identity match.
+An `unavailable` result means one or more scopes could not be checked and therefore cannot be treated
+as missing. Workbench ignores unknown additive result fields but rejects malformed discriminants,
+incomplete or cross-machine locations, incomplete evidence, and empty unavailable scope lists.
+
 ## Project Surfaces
 
 A Review Surface is the task-shaped human judgment interface over the current Run. It selects the relevant altitude and medium for the decision—such as a concise evidence summary, diff, rendered behavior, recording, prototype, architecture view, or operational result—and lets feedback attach to the exact outcome, claim, evidence, or behavior revision it addresses.
@@ -116,9 +152,11 @@ PI WEB provides every V1 Workstream action. Controls cover listing, creating, in
 or resuming a session, proposing and confirming a checkpoint, adding human tasks and links, and
 closing.
 
-Every mutation crosses the typed protocol with revision checks and idempotency. Mechanical status,
-checkpoint state, and unresolved human tasks remain inspectable without launching another model
-turn. Managed Run controls belong only to a future approved Level 4 implementation.
+Every mutation crosses the typed protocol with revision checks and idempotency. Session-anchor
+repair additionally crosses PI WEB's typed resolver boundary, receives explicit owner confirmation,
+and appends the bounded catalog-resolution receipt only after an immediate evidence recheck.
+Mechanical status, checkpoint state, and unresolved human tasks remain inspectable without launching
+another model turn. Managed Run controls belong only to a future approved Level 4 implementation.
 
 ## External Adapters
 

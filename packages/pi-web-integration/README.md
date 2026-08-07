@@ -39,9 +39,16 @@ intentional alternate user-local location. The deterministic `fake-workstream-cl
 
 Session launch uses PI WEB's attended plugin-session helper and `workstream-session-coordinator.js`.
 The coordinator records a launch-key pending association before starting PI, confirms the returned
-runtime session identity, records launch failure, and reconciles browser-local startup-token
-associations on reconnect without launching a duplicate session. The initial prompt carries the
-Workstream identity and Level 1 boundary into a fresh session.
+runtime session identity with a complete location, records launch failure, and reconciles
+browser-local startup-token associations on reconnect without launching a duplicate session. The
+initial prompt carries the Workstream identity and Level 1 boundary into a fresh session.
+
+After a typed `SESSION_ANCHOR_MISSING` selection or resume failure, the Workstreams view can call PI
+WEB's explicit-machine `resolveSessionLocation({ machineId, sessionId })` host boundary. A unique
+match requires confirmation; ambiguous matches require an explicit choice; missing and unavailable
+scans remain distinct. Confirmation re-runs the resolver, checks the selected evidence identity, and
+only then appends `session.anchor.repaired` with bounded complete-scan evidence. No repair is offered
+for closed Workstreams, complete anchors, or unrelated session failures.
 
 The plugin never infers a Run from a PI WEB session, calls a private PI WEB route, transports a
 mutation through workspace files or terminal text, or injects global CSS. It polls only the typed

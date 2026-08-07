@@ -150,6 +150,7 @@ function validateTransitions(database, workstreamId, before, records) {
     status: session.status,
     associationKey: session.associationKey,
     checkpointId: session.latestCheckpoint?.id,
+    anchorComplete: completeSessionAnchor(session),
   }]));
   const pendingByAssociation = new Map(before.sessions
     .filter((session) => session.status === "pending")
@@ -176,7 +177,7 @@ function validateTransitions(database, workstreamId, before, records) {
         const pendingId = sessionId ?? `pending:${associationKey}`;
         if (sessionId !== undefined && historicalSessionIds.has(sessionId)) fail("SESSION_ASSIGNED_ELSEWHERE", `session ${sessionId} belongs to another workstream`);
         if (sessions.has(pendingId) || pendingByAssociation.has(associationKey)) fail("INVALID_TRANSITION", `association ${associationKey} is already pending`);
-        sessions.set(pendingId, { status: "pending", associationKey, checkpointId: undefined });
+        sessions.set(pendingId, { status: "pending", associationKey, checkpointId: undefined, anchorComplete: completeSessionAnchor(record.payload) });
         pendingByAssociation.set(associationKey, pendingId);
         break;
       }
@@ -188,7 +189,15 @@ function validateTransitions(database, workstreamId, before, records) {
         if (pendingId !== sessionId && sessions.has(sessionId)) fail("INVALID_TRANSITION", `session ${sessionId} already exists in this workstream`);
         sessions.delete(pendingId);
         pendingByAssociation.delete(pending.associationKey);
-        sessions.set(sessionId, { ...pending, status: "active", associationKey: associationKey ?? pending.associationKey });
+        sessions.set(sessionId, { ...pending, status: "active", associationKey: associationKey ?? pending.associationKey, anchorComplete: true });
+        break;
+      }
+      case "session.anchor.repaired": {
+        if (historicalSessionIds.has(sessionId)) fail("SESSION_ASSIGNED_ELSEWHERE", `session ${sessionId} belongs to another workstream`);
+        const session = sessions.get(sessionId);
+        if (session?.status !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
+        if (session.anchorComplete) fail("INVALID_TRANSITION", `session ${sessionId} already has a complete anchor`);
+        session.anchorComplete = true;
         break;
       }
       case "session.failed": {
@@ -249,6 +258,12 @@ function validateTransitions(database, workstreamId, before, records) {
       }
     }
   }
+}
+
+function completeSessionAnchor(session) {
+  return typeof session.machineId === "string" && session.machineId.trim().length > 0
+    && typeof session.projectId === "string" && session.projectId.trim().length > 0
+    && typeof session.workspaceId === "string" && session.workspaceId.trim().length > 0;
 }
 
 function addEventAndReceipt(database, request, workstreamId, revision, records, recordedAt, limits) {
