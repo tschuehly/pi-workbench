@@ -44,7 +44,7 @@ Follow any nearer `AGENTS.md` before changing files in its directory.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
 - Commit each coherent unit of work once it is complete and no further human input is required.
 - Before changing the sibling PI WEB checkout, fetch both `upstream` and the `origin` fork; develop on a fork branch and never push directly to upstream.
-- Keep sibling PI WEB `main` as a clean fast-forward mirror of `upstream/main`. Continue the existing fork branch for its scope; create another branch only for distinct work.
+- Keep sibling PI WEB `main` as a clean fast-forward mirror of `upstream/main`; use `pi-workbench` as the canonical Workbench integration branch and create another branch only for distinct work.
 - Challenge instructions or designs that violate these boundaries or create unnecessary ownership.
 
 ## Keep this router current

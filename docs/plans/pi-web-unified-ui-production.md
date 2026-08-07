@@ -139,8 +139,8 @@ Human Tasks, links, revision, closure, and anchor repair. No UI state is appende
 
 ## Rebased integrated baseline
 
-The production baseline is `feat/unified-workbench-ui` in the sibling PI WEB fork. It is a clean,
-linear stack on the freshly fetched `upstream/main` and is not yet pushed. The safety ref
+The production baseline is `pi-workbench` in the sibling PI WEB fork. It is a clean, linear stack
+on the freshly fetched `upstream/main` and tracks `origin/pi-workbench`. The safety ref
 `safety/unified-ui-before-upstream-rebase` preserves the pre-rebase tip.
 
 The baseline separates and preserves:
@@ -158,9 +158,9 @@ side wholesale. Removed upstream compatibility controls were not reintroduced. T
 passes `npm run verify` (2,542 tests passed, 3 skipped), `npm run build`, and the complete Workbench
 test suite. `upstream` remains fetch-only.
 
-Before pushing, inspect the final range from `upstream/main`, retain the safety ref until browser
-verification completes, and push only `feat/unified-workbench-ui` to `origin`. Generic PI WEB
-commits and Workbench adapter commits remain separable for later upstream review.
+Before further pushes, inspect the final range from `upstream/main` and retain the safety ref until
+browser verification completes. Push Workbench fork integration only through `origin/pi-workbench`.
+Generic PI WEB commits and Workbench adapter commits remain separable for later upstream review.
 
 **Baseline exit:** complete. New unified-navigation work starts from this verified branch.
 
