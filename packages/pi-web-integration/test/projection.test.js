@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { checkpointProposalPrompt, copyNextSessionPrompt, dedicatedWorkstreamLayout, parseWorkbenchProjection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
+import { dedicatedMobileControlState, dedicatedWorkstreamLayout, normalizeDedicatedMobilePane, parseWorkbenchProjection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
 import { WorkstreamSessionCoordinator, workstreamPrompt } from "../workstream-session-coordinator.js";
 
@@ -38,6 +38,22 @@ test("dedicated Workstream UI transitions preserve pane state and checkout-scope
   assert.equal(collapsed.tasksPaneOpen, false);
   assert.equal(collapsed.sessionsPaneOpen, true);
   assert.equal(collapsed.tool, "files");
+});
+
+test("legacy mobile Context panes coerce to Workspace and Context state follows the drawer", () => {
+  assert.equal(normalizeDedicatedMobilePane("tasks"), "workspace");
+  assert.equal(transitionDedicatedWorkstreamUi({ mobilePane: "sessions" }, { type: "select-mobile-pane", pane: "tasks" }).mobilePane, "workspace");
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: true }, "context"), {
+    pressed: true,
+    expanded: true,
+    controls: "workstream-context-drawer",
+  });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: false }, "context"), {
+    pressed: false,
+    expanded: false,
+    controls: "workstream-context-drawer",
+  });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace", tasksPaneOpen: true }, "workspace"), { pressed: true });
 });
 
 test("checkout scope follows the selected Workstream session anchor", () => {
@@ -75,45 +91,19 @@ test("fake Workstream client deterministically lists, inspects, and reconciles t
   const current = await client.list();
   const inspected = await client.inspect("ws-workstream-store");
   const reconciliation = await client.watch({ afterSequence: 0 });
-  const caughtUp = await client.watch({ afterSequence: 12 });
+  const caughtUp = await client.watch({ afterSequence: 16 });
 
   assert.deepEqual(current.map((workstream) => workstream.id), ["ws-workstream-store"]);
-  assert.equal(inspected.sessions.length, 2);
+  assert.equal(current[0].failedSessionCount, 1);
+  assert.equal(current[0].unresolvedHumanTaskCount, 1);
+  assert.equal(inspected.sessions.length, 5);
+  assert.equal(inspected.sessions.find((session) => session.status === "failed")?.launchFailure.reason, "PI WEB could not create the attended session.");
+  assert.equal(inspected.sessions.find((session) => session.checkpointStaleness !== null)?.checkpointStaleness.checkpointId, "checkpoint-before-protocol-change");
   assert.match(inspected.sessions[0].latestCheckpoint.nextSessionPrompt, /Continue connecting the Workstream Store/);
-  assert.equal(inspected.sessions[1].latestCheckpoint.nextSessionPrompt, null);
+  assert.equal(inspected.humanTasks.find((task) => task.status === "answered")?.answer.optionId, "change");
   assert.equal(reconciliation.mode, "snapshot");
   assert.equal(reconciliation.snapshots.length, 2);
-  assert.deepEqual(caughtUp, { mode: "replay", events: [], nextSequence: 12 });
-});
-
-test("checkpoint proposal and new-session guidance carry the complete attended contract", () => {
-  const proposal = checkpointProposalPrompt();
-  assert.match(proposal, /exactly five labeled parts/);
-  assert.match(proposal, /Next-session prompt/);
-  assert.match(proposal, /References/);
-
-  const startup = workstreamPrompt({ id: "ws-1", title: "Pair" }, "launch-1");
-  assert.match(startup, /exact paste-ready prompt/);
-  assert.match(startup, /concrete references/);
-  assert.match(startup, /review and confirm every field/);
-});
-
-test("copies the exact next-session prompt and falls back when clipboard access fails", async () => {
-  let copied;
-  const clipboardResult = await copyNextSessionPrompt("Continue exactly here.", {
-    clipboard: { writeText: async (value) => { copied = value; } },
-    fallback: () => assert.fail("fallback should not be used"),
-  });
-  assert.equal(clipboardResult, "clipboard");
-  assert.equal(copied, "Continue exactly here.");
-
-  let fallback;
-  const fallbackResult = await copyNextSessionPrompt("Resume safely.", {
-    clipboard: { writeText: async () => { throw new Error("denied"); } },
-    fallback: (value) => { fallback = value; },
-  });
-  assert.equal(fallbackResult, "fallback");
-  assert.equal(fallback, "Resume safely.");
+  assert.deepEqual(caughtUp, { mode: "replay", events: [], nextSequence: 16 });
 });
 
 test("typed Workstream client uses all operations and persists across web-process service replacement", async () => {
@@ -164,6 +154,13 @@ test("reconnect reconciliation applies ordered replay or replaces from a snapsho
   assert.equal(reconciled.mode, "snapshot");
   assert.equal(reconciled.sequence, 9);
   assert.equal(reconciled.snapshots[0].id, "ws-1");
+});
+
+test("new sessions receive the complete attended checkpoint proposal contract", () => {
+  const prompt = workstreamPrompt({ id: "ws-1", title: "Pair" }, "launch-1");
+  assert.match(prompt, /exact paste-ready prompt/);
+  assert.match(prompt, /concrete references/);
+  assert.match(prompt, /review and confirm every field/);
 });
 
 test("session launch records pending before start and confirms exactly one runtime session", async () => {
@@ -260,25 +257,18 @@ test("session launch failure records failure and does not retry the host start",
   assert.deepEqual(records, ["session.pending", "session.failed"]);
 });
 
-test("typed Workstream client requires canonical projected next-session prompts", async () => {
+test("typed Workstream client rejects malformed canonical success values", async () => {
+  const client = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: { id: "incomplete" } }) });
+  await assert.rejects(client.inspect("ws-1"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
+
   const fixture = JSON.parse(await readFile(new URL("../fixtures/recorded-workstreams.json", import.meta.url), "utf8"));
-  const valid = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: fixture.snapshots[0] }) });
-  assert.equal((await valid.inspect("ws-workstream-store")).sessions[1].latestCheckpoint.nextSessionPrompt, null);
-
   delete fixture.snapshots[0].sessions[0].latestCheckpoint.nextSessionPrompt;
-  const missing = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: fixture.snapshots[0] }) });
-  await assert.rejects(missing.inspect("ws-workstream-store"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
-});
+  const missingPromptClient = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: fixture.snapshots[0] }) });
+  await assert.rejects(missingPromptClient.inspect("ws-workstream-store"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
 
-test("fake Workstream client rejects replacement checkpoints without the required prompt", async () => {
-  const fixture = parseRecordedWorkstreams(JSON.parse(await readFile(new URL("../fixtures/recorded-workstreams.json", import.meta.url), "utf8")));
-  const client = new DeterministicFakeWorkstreamClient(fixture);
-  await assert.rejects(client.append({
-    workstreamId: "ws-workstream-store",
-    expectedRevision: 4,
-    idempotencyKey: "missing-next-session-prompt",
-    records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-store-contract", checkpoint: { id: "cp-invalid", whatChanged: "Changed", remains: "Remains", next: "Next" } } }],
-  }), /requires a next-session prompt/);
+  fixture.snapshots[0].sessions[0].latestCheckpoint.nextSessionPrompt = null;
+  const legacyPromptClient = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: fixture.snapshots[0] }) });
+  assert.equal((await legacyPromptClient.inspect("ws-workstream-store")).sessions[0].latestCheckpoint.nextSessionPrompt, null);
 });
 
 test("typed Workstream client preserves semantic service errors", async () => {

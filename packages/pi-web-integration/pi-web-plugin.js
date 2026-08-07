@@ -18,8 +18,15 @@ export function dedicatedWorkstreamLayout({ tool, sessionsPaneOpen, tasksPaneOpe
   };
 }
 
-export function checkpointProposalPrompt() {
-  return "Propose a concise attended Workstream checkpoint with exactly five labeled parts: What changed, What remains, Next useful action, Next-session prompt, and References. Make the next-session prompt exact and paste-ready for a fresh attended Pi session; list only concrete paths or identifiers under References. Do not persist it; I will review and confirm it in the Workstreams view.";
+export function normalizeDedicatedMobilePane(value) {
+  return value === "sessions" ? "sessions" : "workspace";
+}
+
+export function dedicatedMobileControlState(state, control) {
+  if (control === "context") {
+    return { pressed: state.tasksPaneOpen === true, expanded: state.tasksPaneOpen === true, controls: "workstream-context-drawer" };
+  }
+  return { pressed: normalizeDedicatedMobilePane(state.mobilePane) === control };
 }
 
 export function transitionDedicatedWorkstreamUi(state, action) {
@@ -28,7 +35,7 @@ export function transitionDedicatedWorkstreamUi(state, action) {
       return action.surface === "terminal"
         ? { ...state, terminalOpen: true }
         : { ...state, tool: action.surface, mobilePane: "workspace" };
-    case "select-mobile-pane": return { ...state, mobilePane: action.pane };
+    case "select-mobile-pane": return { ...state, mobilePane: normalizeDedicatedMobilePane(action.pane) };
     case "toggle-sessions": return { ...state, sessionsPaneOpen: !state.sessionsPaneOpen };
     case "toggle-tasks": return { ...state, tasksPaneOpen: !state.tasksPaneOpen };
     case "toggle-terminal": return { ...state, terminalOpen: !state.terminalOpen };
@@ -63,7 +70,13 @@ export default {
             primaryView: "workstreams.view",
             order: 10,
             icon: svg`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"></path><circle cx="18" cy="18" r="2"></circle></svg>`,
-            badge: () => recordedWorkstreamState.status === "ready" ? recordedWorkstreamState.snapshots.filter((snapshot) => !snapshot.closed).length : undefined,
+            badge: (context) => {
+              const liveAsks = context.attention?.snapshot?.().items.length ?? 0;
+              const durableTasks = recordedWorkstreamState.status === "ready"
+                ? recordedWorkstreamState.snapshots.flatMap((snapshot) => snapshot.humanTasks).filter((task) => task.status === "pending").length
+                : 0;
+              return liveAsks + durableTasks || undefined;
+            },
           },
         ],
         sessionStartGuards: [
@@ -77,7 +90,7 @@ export default {
             id: "workstreams.view",
             title: "Workstreams",
             ariaLabel: "Workstreams",
-            layout: () => recordedWorkstreamState.selectedWorkstreamId === undefined ? "default" : "dedicated",
+            layout: "dedicated",
             order: 10,
             render: (context) => html`<pi-workbench-workstreams .context=${context}></pi-workbench-workstreams>`,
           },
@@ -141,6 +154,8 @@ function installWorkstreamsElement() {
     #terminalOpen = false;
     #mobilePane = "workspace";
     #surfaceSelectionRelease;
+    #attentionRelease;
+    #attentionItems = [];
     #main;
     #dedicatedView;
 
@@ -154,6 +169,11 @@ function installWorkstreamsElement() {
 
     set context(value) {
       this.#context = value;
+      this.#attentionRelease?.();
+      this.#attentionRelease = value.attention?.watch?.((snapshot) => {
+        this.#attentionItems = [...snapshot.items];
+        this.#render();
+      });
       void loadRecordedWorkstreams(value).finally(() => { this.#render(); });
       this.#render();
     }
@@ -170,6 +190,8 @@ function installWorkstreamsElement() {
       this.#watchTimer = undefined;
       if (connectedWorkstreamsElement === this) connectedWorkstreamsElement = undefined;
       this.#releaseSurfaceSelection();
+      this.#attentionRelease?.();
+      this.#attentionRelease = undefined;
     }
 
     #restoreFocusAfterHostRender(focusKey) {
@@ -223,11 +245,11 @@ function installWorkstreamsElement() {
       this.#terminalOpen = next.terminalOpen;
       this.#mobilePane = next.mobilePane;
       if (action.type === "select-surface" && action.surface !== "terminal") {
-        writeLocalPreference("tool", next.tool);
-        writeLocalPreference("mobile-pane", next.mobilePane);
-      } else if (action.type === "select-mobile-pane") writeLocalPreference("mobile-pane", next.mobilePane);
-      else if (action.type === "toggle-sessions") writeLocalPreference("sessions-open", String(next.sessionsPaneOpen));
-      else if (action.type === "toggle-tasks") writeLocalPreference("tasks-open", String(next.tasksPaneOpen));
+        this.#writePreference("tool", next.tool);
+        this.#writePreference("mobile-pane", next.mobilePane);
+      } else if (action.type === "select-mobile-pane") this.#writePreference("mobile-pane", next.mobilePane);
+      else if (action.type === "toggle-sessions") this.#writePreference("sessions-open", String(next.sessionsPaneOpen));
+      else if (action.type === "toggle-tasks") this.#writePreference("drawer-open", String(next.tasksPaneOpen));
       this.#render();
     }
 
@@ -283,11 +305,14 @@ function installWorkstreamsElement() {
       recordedWorkstreamState.focusKey = "dedicated:title";
       this.#selectedWorkstreamId = snapshot.id;
       recordedWorkstreamState.selectedWorkstreamId = snapshot.id;
-      this.#selectedSessionId = snapshot.sessions.find((session) => session.status === "active")?.id;
-      this.#tool = readLocalPreference("tool", "chat", ["chat", "files", "git"]);
-      this.#sessionsPaneOpen = readLocalBoolean("sessions-open", true);
-      this.#tasksPaneOpen = readLocalBoolean("tasks-open", snapshot.humanTasks.length > 0);
-      this.#mobilePane = readLocalPreference("mobile-pane", "workspace", ["sessions", "workspace", "tasks"]);
+      const rememberedSessionId = this.#readPreference(`selected-session:${snapshot.id}`);
+      this.#selectedSessionId = snapshot.sessions.find((session) => session.status === "active" && session.id === rememberedSessionId)?.id
+        ?? snapshot.sessions.find((session) => session.status === "active")?.id
+        ?? snapshot.sessions[0]?.id;
+      this.#tool = this.#readPreference("tool", "chat", ["chat", "files", "git"]);
+      this.#sessionsPaneOpen = this.#readBoolean("sessions-open", true);
+      this.#tasksPaneOpen = this.#readBoolean("drawer-open", snapshot.humanTasks.some((task) => task.status === "pending"));
+      this.#mobilePane = normalizeDedicatedMobilePane(this.#readPreference("mobile-pane", "workspace", ["sessions", "workspace"]));
       this.#context?.host?.requestRender();
       this.#render();
       this.#restoreFocusAfterHostRender("dedicated:title");
@@ -310,6 +335,7 @@ function installWorkstreamsElement() {
 
     async #selectSession(session) {
       this.#selectedSessionId = session.id;
+      if (this.#selectedWorkstreamId !== undefined) this.#writePreference(`selected-session:${this.#selectedWorkstreamId}`, session.id);
       this.#mobilePane = "workspace";
       this.#render();
       if (session.status !== "active" || this.#context?.sessions === undefined) return;
@@ -340,7 +366,7 @@ function installWorkstreamsElement() {
     #requestCheckpoint(session) {
       if (this.#context?.sessions === undefined) { recordedWorkstreamState.error = "Attended session controls are unavailable."; this.#render(); return; }
       const location = { sessionId: session.id, machineId: session.machineId, projectId: session.projectId, workspaceId: session.workspaceId };
-      void this.#context.sessions.prompt(location, checkpointProposalPrompt())
+      void this.#context.sessions.prompt(location, "Propose a concise attended Workstream checkpoint with exactly five labeled parts: What changed, What remains, Next useful action, Next-session prompt, and References. Make the next-session prompt exact and paste-ready for a fresh attended Pi session; list only concrete paths or identifiers under References. Do not persist it; I will review and confirm it in the Workstreams view.")
         .catch((error) => { recordedWorkstreamState.error = errorMessage(error); this.#render(); });
     }
 
@@ -388,11 +414,61 @@ function installWorkstreamsElement() {
       const title = window.prompt("Human task");
       if (title === null || title.trim() === "") return;
       const detail = window.prompt("Detail (optional)");
-      void this.#mutate((client) => client.append({ workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: newId("task"), records: [{ type: "human-task.upsert", producer: "owner", payload: { task: { id: newId("task"), title: title.trim(), ...(detail?.trim() ? { detail: detail.trim() } : {}) } } }] }));
+      const kindInput = window.prompt("Answer type: yes-no, choice, free-text, or none", "yes-no")?.trim().toLowerCase();
+      if (kindInput === undefined) return;
+      let typed = {};
+      if (["yes-no", "choice", "free-text"].includes(kindInput)) {
+        let options = [];
+        if (kindInput === "yes-no") options = [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }, { id: "change", label: "Change" }];
+        else if (kindInput === "choice") {
+          const labels = window.prompt("Choice labels, separated by commas")?.split(",").map((value) => value.trim()).filter(Boolean);
+          if (!labels?.length) return;
+          options = labels.map((value, index) => ({ id: `option-${String(index + 1)}`, label: value }));
+        }
+        const materiality = window.confirm("Is this answer material to the Workstream continuation?") ? "material" : "non-material";
+        typed = { answerKind: kindInput, options, materiality };
+      } else if (kindInput !== "none") {
+        recordedWorkstreamState.error = "Answer type must be yes-no, choice, free-text, or none.";
+        this.#render();
+        return;
+      }
+      const sourceSessionId = this.#selectedSessionId;
+      void this.#mutate((client) => client.append({ workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: newId("task"), records: [{ type: "human-task.upsert", producer: "owner", ...(sourceSessionId === undefined ? {} : { sourceSessionId }), payload: { task: { id: newId("task"), title: title.trim(), ...(detail?.trim() ? { detail: detail.trim() } : {}), ...typed } } }] }));
+    }
+
+    #answerTask(snapshot, task, answer) {
+      void this.#mutate((client) => client.append({
+        workstreamId: snapshot.id,
+        expectedRevision: snapshot.revision,
+        idempotencyKey: newId("task-answer"),
+        records: [{ type: "human-task.answered", producer: "owner", sourceSessionId: task.sourceSessionId ?? undefined, payload: { taskId: task.id, answerId: newId("answer"), answer } }],
+      }));
     }
 
     #resolveTask(snapshot, task) {
       void this.#mutate((client) => client.append({ workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: newId("task-resolved"), records: [{ type: "human-task.resolved", producer: "owner", payload: { taskId: task.id } }] }));
+    }
+
+    #focusAttention(item) {
+      void this.#context?.attention?.focus?.(item).catch((error) => {
+        recordedWorkstreamState.error = errorMessage(error);
+        this.#render();
+      });
+    }
+
+    #readPreference(name, fallback, allowed) {
+      const hosted = this.#context?.preferences?.get?.(name);
+      if (hosted !== undefined) return allowed === undefined || allowed.includes(hosted) ? hosted : fallback;
+      return readLocalPreference(name, fallback, allowed);
+    }
+
+    #readBoolean(name, fallback) {
+      return this.#readPreference(name, String(fallback), ["true", "false"]) === "true";
+    }
+
+    #writePreference(name, value) {
+      if (this.#context?.preferences?.set !== undefined) this.#context.preferences.set(name, value);
+      else writeLocalPreference(name, value);
     }
 
     #appendLink(snapshot) {
@@ -445,7 +521,13 @@ function installWorkstreamsElement() {
           onResume: (session) => { this.#resume(session); },
           onRequestCheckpoint: (session) => { this.#requestCheckpoint(session); },
           onSaveCheckpoint: (session) => { this.#saveCheckpoint(selected, session); },
+          attentionItems: this.#attentionItems,
+          onFocusAttention: (item) => { this.#focusAttention(item); },
+          onAnswerTask: (task, answer) => { this.#answerTask(selected, task, answer); },
           onResolveTask: (task) => { this.#resolveTask(selected, task); },
+          onAddTask: () => { this.#addTask(selected); },
+          onAppendLink: () => { this.#appendLink(selected); },
+          onClose: () => { this.#close(selected); },
         };
         if (this.#dedicatedView?.workstreamId !== selected.id) {
           this.#dedicatedView = createDedicatedWorkstream(selected, options);
@@ -481,14 +563,6 @@ function installWorkstreamsElement() {
           recordedWorkstreamState.snapshots,
           recordedWorkstreamState.sequence,
           () => { this.#create(); },
-          (snapshot) => { this.#start(snapshot); },
-          (session) => { this.#resume(session); },
-          (session) => { this.#requestCheckpoint(session); },
-          (snapshot, session) => { this.#saveCheckpoint(snapshot, session); },
-          (snapshot) => { this.#addTask(snapshot); },
-          (snapshot, task) => { this.#resolveTask(snapshot, task); },
-          (snapshot) => { this.#appendLink(snapshot); },
-          (snapshot) => { this.#close(snapshot); },
           (snapshot) => { this.#openWorkstream(snapshot); },
         ));
       }
@@ -540,22 +614,25 @@ async function loadRecordedWorkstreams(context, force = false) {
   return recordedWorkstreamState.promise;
 }
 
-function renderWorkstreams(snapshots, sequence, onCreate, onStart, onResume, onRequestCheckpoint, onSaveCheckpoint, onAddTask, onResolveTask, onAppendLink, onClose, onOpen) {
+function renderWorkstreams(snapshots, sequence, onCreate, onOpen) {
   const fragment = document.createDocumentFragment();
   const header = document.createElement("header");
+  header.className = "portfolio-header";
   const heading = document.createElement("div");
-  heading.append(strong("Workstreams"), message("Pick up the next useful continuation without reconstructing it from chat history.", "muted portfolio-intro"));
+  const returnNote = message("Canonical projection · ready to resume", "return-note");
+  returnNote.title = `Projection sequence ${String(sequence)}`;
+  heading.append(returnNote, strong("Workstreams"), message("Continue durable work across sessions, repositories, and pending decisions.", "portfolio-intro"));
   const actions = document.createElement("div");
   actions.className = "header-actions";
-  actions.append(message(`Projection sequence ${String(sequence)}`, "sequence"), keyedButton("Create Workstream", "portfolio:create", onCreate));
+  actions.append(keyedButton("New Workstream", "portfolio:create", onCreate));
   header.append(heading, actions);
   fragment.append(header);
 
   const current = snapshots.filter((snapshot) => !snapshot.closed);
   const closed = snapshots.filter((snapshot) => snapshot.closed);
   const currentSection = section("Current Workstreams", current.length === 0 ? "No current Workstreams." : undefined);
-  currentSection.classList.add("portfolio-list");
-  for (const snapshot of current) currentSection.append(workstreamArticle(snapshot, onStart, onResume, onRequestCheckpoint, onSaveCheckpoint, onAddTask, onResolveTask, onAppendLink, onClose, onOpen));
+  currentSection.classList.add("portfolio-list", "current-workstreams");
+  for (const snapshot of current) currentSection.append(workstreamRow(snapshot, onOpen));
   fragment.append(currentSection);
   if (closed.length > 0) {
     const history = document.createElement("details");
@@ -565,68 +642,49 @@ function renderWorkstreams(snapshots, sequence, onCreate, onStart, onResume, onR
     history.append(summary);
     const closedSection = section("Closed history");
     closedSection.classList.add("portfolio-list", "closed-section");
-    for (const snapshot of closed) closedSection.append(workstreamArticle(snapshot, onStart, onResume, onRequestCheckpoint, onSaveCheckpoint, onAddTask, onResolveTask, onAppendLink, onClose, onOpen));
+    for (const snapshot of closed) closedSection.append(workstreamRow(snapshot, onOpen));
     history.append(closedSection);
     fragment.append(history);
   }
   return fragment;
 }
 
-function workstreamArticle(snapshot, onStart, onResume, onRequestCheckpoint, onSaveCheckpoint, onAddTask, onResolveTask, onAppendLink, onClose, onOpen) {
-  const article = document.createElement("article");
-  article.className = `workstream portfolio-row${snapshot.closed ? " closed" : ""}`;
-  article.style.setProperty("--workstream-color", workstreamColor(snapshot.id));
-
-  const marker = document.createElement("span");
-  marker.className = "portfolio-marker";
-  marker.setAttribute("aria-hidden", "true");
-  const content = document.createElement("div");
-  content.className = "portfolio-content";
-  const heading = document.createElement("div");
-  heading.className = "workstream-heading";
-  const title = document.createElement("div");
-  title.append(strong(snapshot.title), message(`${snapshot.closed ? "Closed" : "Current"} · revision ${String(snapshot.revision)}`, "diagnostic"));
-  heading.append(title);
-  if (snapshot.humanTasks.length > 0) heading.append(message(`${String(snapshot.humanTasks.length)} needs you`, "task-count"));
-  content.append(heading);
-
+function workstreamRow(snapshot, onOpen) {
+  const control = keyedButton("", `${snapshot.id}:open`, () => { onOpen(snapshot); });
+  control.className = `portfolio-row${snapshot.closed ? " closed" : ""}`;
+  control.style.setProperty("--workstream-color", workstreamColor(snapshot.id));
   const active = snapshot.sessions.filter((session) => session.status === "active");
-  const continuation = active.find((session) => session.latestCheckpoint?.next)?.latestCheckpoint?.next;
-  const focal = document.createElement("div");
-  focal.className = "portfolio-continuation";
-  focal.append(label("Next useful continuation"), strong(continuation ?? (active.length > 0 ? "Review the active sessions and confirm a checkpoint." : "Start a session from an explicit checkout.")));
-  content.append(focal);
+  const pendingTasks = snapshot.humanTasks.filter((task) => task.status === "pending");
+  const stale = snapshot.sessions.some((session) => session.checkpointStaleness !== null);
+  const failed = snapshot.sessions.some((session) => session.status === "failed" || session.checkpointFailure !== null);
+  const hasCheckpoint = active.some((session) => session.latestCheckpoint !== null);
+  const continuation = active.find((session) => session.latestCheckpoint?.next)?.latestCheckpoint?.next
+    ?? (active.length > 0 ? "Review the active sessions and confirm a checkpoint." : "Select an explicit checkout before starting the first session.");
+  const anchors = new Set(snapshot.sessions.map((session) => [session.projectId, session.workspaceId].filter(Boolean).join(":"))).size;
 
-  if (snapshot.humanTasks.length > 0) {
-    const attention = document.createElement("div");
-    attention.className = "portfolio-attention";
-    attention.append(label("Human Attention"), message(snapshot.humanTasks.map((task) => task.title).join(" · "), "message"));
-    content.append(attention);
-  }
+  const identity = document.createElement("span");
+  identity.className = "portfolio-cell portfolio-identity";
+  const title = strong(snapshot.title);
+  const status = document.createElement("span");
+  status.className = `portfolio-status ${stale || failed ? "warning" : hasCheckpoint ? "current" : "missing"}`;
+  status.textContent = snapshot.closed ? "Closed" : stale ? "Checkpoint stale" : failed ? "Needs recovery" : hasCheckpoint ? "Current" : "No checkpoint";
+  identity.append(title, status);
 
-  if (active.length > 0) {
-    const purposes = document.createElement("div");
-    purposes.className = "portfolio-sessions";
-    for (const session of active) {
-      const row = document.createElement("div");
-      row.className = "portfolio-session";
-      row.append(strong(session.purpose ?? session.latestCheckpoint?.next ?? "Active Pi session"), message(sessionAnchor(session), "session-anchor"), message(`Session ${session.id}`, "diagnostic"));
-      purposes.append(row);
-    }
-    content.append(purposes);
-  }
+  const next = document.createElement("span");
+  next.className = "portfolio-cell portfolio-next";
+  next.append(label("Next useful continuation"), strong(continuation));
 
-  const actions = document.createElement("div");
-  actions.className = "workstream-actions";
-  actions.append(keyedButton(snapshot.closed ? "Open history" : active.length > 0 ? "Resume" : "Open", `${snapshot.id}:open`, () => { onOpen(snapshot); }));
-  if (!snapshot.closed) actions.append(
-    keyedButton("Start session", `${snapshot.id}:start`, () => { onStart(snapshot); }),
-    keyedButton("Add task", `${snapshot.id}:task`, () => { onAddTask(snapshot); }),
-    keyedButton("Add link", `${snapshot.id}:link`, () => { onAppendLink(snapshot); }),
-    keyedButton("Close", `${snapshot.id}:close`, () => { onClose(snapshot); }),
-  );
-  article.append(marker, content, actions);
-  return article;
+  const anchor = document.createElement("span");
+  anchor.className = "portfolio-cell portfolio-anchor";
+  anchor.append(label("Anchors"), document.createTextNode(active.length === 1 ? sessionAnchor(active[0]) : `${String(anchors)} ${anchors === 1 ? "checkout" : "checkouts"} · ${String(snapshot.sessions.length)} sessions`));
+
+  const attention = document.createElement("span");
+  attention.className = "portfolio-cell portfolio-needs";
+  attention.append(label("Needs you"), document.createTextNode(`${String(pendingTasks.length)} ${pendingTasks.length === 1 ? "task" : "tasks"}`));
+
+  control.append(identity, next, anchor, attention);
+  control.setAttribute("aria-label", `${snapshot.title}. ${status.textContent}. ${continuation}. ${String(pendingTasks.length)} tasks need you.`);
+  return control;
 }
 
 function createDedicatedWorkstream(snapshot, options) {
@@ -669,16 +727,22 @@ function createDedicatedWorkstream(snapshot, options) {
   utilities.className = "workstream-utilities";
   view.connection = message("", "scope-label connection-state");
   utilities.append(view.connection);
+  view.drawerToggle = button("Workstream context", () => { view.options.onToggleTasks(); });
+  utilities.append(view.drawerToggle);
   if (typeof options.context?.host?.openActions === "function") utilities.append(button("Actions", () => { view.options.context.host.openActions(); }));
   topbar.append(identity, tools, utilities);
+
+  view.sessionTabs = document.createElement("nav");
+  view.sessionTabs.className = "session-tabs";
+  view.sessionTabs.setAttribute("aria-label", "Workstream session tabs");
 
   const mobileNavigation = document.createElement("nav");
   mobileNavigation.className = "mobile-pane-navigation";
   mobileNavigation.setAttribute("aria-label", "Workstream destinations");
   view.mobileButtons = new Map();
-  for (const pane of ["sessions", "workspace", "tasks"]) {
-    const control = button("", () => { view.options.onSelectMobilePane(pane); });
-    view.mobileButtons.set(pane, control);
+  for (const destination of ["sessions", "workspace", "context"]) {
+    const control = button("", () => { destination === "context" ? view.options.onToggleTasks() : view.options.onSelectMobilePane(destination); });
+    view.mobileButtons.set(destination, control);
     mobileNavigation.append(control);
   }
 
@@ -726,21 +790,21 @@ function createDedicatedWorkstream(snapshot, options) {
   view.workspaceEmpty = message("", "empty-pane workspace-empty");
   workspace.append(workspaceHeading, view.workspaceEmpty, view.surfaceStack);
 
-  view.tasksEdge = edgeButton("Human Tasks", true, "right", () => { view.options.onToggleTasks(); });
-
-  const tasks = document.createElement("aside");
-  tasks.className = "tasks-pane";
-  tasks.id = "workstream-tasks-pane";
+  const tasks = document.createElement("section");
+  tasks.className = "workstream-drawer";
+  tasks.id = "workstream-context-drawer";
   tasks.setAttribute("aria-labelledby", "workstream-tasks-heading");
   const tasksHeading = document.createElement("div");
   tasksHeading.className = "pane-heading";
   view.tasksTitle = document.createElement("h2");
   view.tasksTitle.id = "workstream-tasks-heading";
-  tasksHeading.append(view.tasksTitle);
+  view.contextActions = document.createElement("div");
+  view.contextActions.className = "context-actions";
+  tasksHeading.append(view.tasksTitle, view.contextActions);
   view.tasksList = document.createElement("div");
   view.tasksList.className = "pane-list";
   tasks.append(tasksHeading, view.tasksList);
-  body.append(sessions, view.sessionsEdge, workspace, view.tasksEdge, tasks);
+  body.append(sessions, view.sessionsEdge, workspace);
 
   const terminal = document.createElement("section");
   terminal.className = "terminal-drawer";
@@ -752,7 +816,7 @@ function createDedicatedWorkstream(snapshot, options) {
   view.terminalContent.className = "terminal-content";
   terminal.append(view.terminalToggle, view.terminalScope, view.terminalContent);
 
-  shell.append(banner, topbar, mobileNavigation, body, terminal);
+  shell.append(banner, topbar, view.sessionTabs, tasks, mobileNavigation, body, terminal);
   updateDedicatedWorkstream(view, snapshot, options);
   return view;
 }
@@ -776,28 +840,54 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   const mobileLabels = {
     sessions: `Sessions · ${String(active.length)}`,
     workspace: "Workspace",
-    tasks: `Human Tasks · ${String(snapshot.humanTasks.length)}`,
+    context: `Context · ${String(snapshot.humanTasks.filter((task) => task.status === "pending").length)}`,
   };
-  for (const [pane, control] of view.mobileButtons) {
-    control.textContent = mobileLabels[pane];
-    control.setAttribute("aria-pressed", String(options.mobilePane === pane));
+  for (const [destination, control] of view.mobileButtons) {
+    const controlState = dedicatedMobileControlState(options, destination);
+    control.textContent = mobileLabels[destination];
+    control.setAttribute("aria-pressed", String(controlState.pressed));
+    if (controlState.expanded === undefined) {
+      control.removeAttribute("aria-expanded");
+      control.removeAttribute("aria-controls");
+    } else {
+      control.setAttribute("aria-expanded", String(controlState.expanded));
+      control.setAttribute("aria-controls", controlState.controls);
+    }
   }
 
-  view.body.className = `workstream-body mobile-${options.mobilePane}${options.sessionsPaneOpen ? "" : " sessions-collapsed"}${options.tasksPaneOpen ? "" : " tasks-collapsed"}`;
+  view.body.className = `workstream-body mobile-${options.mobilePane}${options.sessionsPaneOpen ? "" : " sessions-collapsed"}`;
   updateEdgeButton(view.sessionsEdge, "Sessions", options.sessionsPaneOpen, "left", active.length);
-  updateEdgeButton(view.tasksEdge, "Human Tasks", options.tasksPaneOpen, "right", snapshot.humanTasks.length);
+  view.drawerToggle.setAttribute("aria-expanded", String(options.tasksPaneOpen));
+  view.drawerToggle.setAttribute("aria-controls", "workstream-context-drawer");
+  view.drawerToggle.textContent = options.tasksPaneOpen ? "Hide context" : `Workstream context · ${String(snapshot.humanTasks.filter((task) => task.status === "pending").length)}`;
+  view.tasksList.parentElement.hidden = !options.tasksPaneOpen;
+
+  view.sessionTabs.hidden = options.sessionsPaneOpen;
+  view.sessionTabs.replaceChildren();
+  for (const session of snapshot.sessions) {
+    const tab = button(session.purpose ?? session.latestCheckpoint?.next ?? `${humanize(session.status)} session`, () => { options.onSelectSession(session); });
+    tab.disabled = session.status !== "active";
+    tab.setAttribute("aria-pressed", String(session.id === options.selectedSessionId));
+    tab.title = `${sessionAnchor(session)} · Session ${session.id}`;
+    view.sessionTabs.append(tab);
+  }
+  if (!snapshot.closed) view.sessionTabs.append(button("New session +", () => { options.onStart(); }));
 
   view.sessionsList.replaceChildren();
   if (snapshot.sessions.length === 0) view.sessionsList.append(message("No sessions yet. Start one from an explicitly selected PI WEB checkout.", "empty-pane"));
   for (const session of snapshot.sessions) {
-    const row = button("", () => { options.onSelectSession(session); });
+    const attention = options.attentionItems.find((item) => item.sessionId === session.id);
+    const row = button("", () => { attention === undefined ? options.onSelectSession(session) : options.onFocusAttention(attention); });
     row.className = `dedicated-session${session.id === options.selectedSessionId ? " selected" : ""}`;
     row.setAttribute("aria-pressed", String(session.id === options.selectedSessionId));
     row.disabled = session.status !== "active";
     const copy = document.createElement("span");
     const purpose = session.purpose ?? session.latestCheckpoint?.next ?? `${humanize(session.status)} session`;
     copy.append(strong(purpose), message(`${sessionAnchor(session)} · ${humanize(session.status)}`, "session-anchor"), message(`Session ${session.id}`, "diagnostic"));
+    if (session.launchFailure !== null) copy.append(message(`Launch failed: ${session.launchFailure.reason}`, "checkpoint-error inline-error"));
     if (session.checkpointFailure !== null) copy.append(message(session.checkpointFailure, "checkpoint-error inline-error"));
+    if (session.checkpointStaleness !== null) copy.append(message(`Checkpoint stale: ${session.checkpointStaleness.reason}`, "checkpoint-error inline-error"));
+    if (attention !== undefined) copy.append(message("Needs answer · open decision", "attention-action"));
     row.append(copy);
     view.sessionsList.append(row);
   }
@@ -827,16 +917,24 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   view.surfaceStack.hidden = selected === undefined || !surfacesAvailable;
   for (const [surface, container] of view.surfaces) setSurfaceVisibility(container, selected !== undefined && surface === options.tool);
 
-  view.tasksTitle.textContent = `Continuation & Human Tasks · ${String(snapshot.humanTasks.length)}`;
+  const unresolvedTasks = snapshot.humanTasks.filter((task) => task.status === "pending");
+  const openTasks = snapshot.humanTasks.filter((task) => task.status === "pending" || task.status === "answered");
+  view.tasksTitle.textContent = `Workstream context · revision ${String(snapshot.revision)}`;
+  view.contextActions.replaceChildren();
+  if (!snapshot.closed) view.contextActions.append(
+    button("Add task", () => { options.onAddTask(); }),
+    button("Add link", () => { options.onAppendLink(); }),
+    button("Close Workstream", () => { options.onClose(); }),
+  );
   view.tasksList.replaceChildren();
   const continuation = document.createElement("section");
-  continuation.className = "dedicated-checkpoints";
+  continuation.className = "drawer-section";
   continuation.append(label("Confirmed continuation"));
   const checkpoints = snapshot.sessions.filter((session) => session.latestCheckpoint !== null);
   if (checkpoints.length === 0) continuation.append(message("No confirmed checkpoints yet.", "muted"));
   for (const session of checkpoints) {
     const item = document.createElement("div");
-    item.className = "dedicated-checkpoint";
+    item.className = "drawer-checkpoint";
     item.append(
       strong(session.latestCheckpoint.next),
       message(`${sessionAnchor(session)} · ${session.latestCheckpoint.whatChanged}`, "muted"),
@@ -845,22 +943,50 @@ function updateDedicatedWorkstream(view, snapshot, options) {
       item.append(message("Next-session prompt unavailable for this earlier checkpoint.", "next-session-prompt muted"));
     } else item.append(
       message(session.latestCheckpoint.nextSessionPrompt, "next-session-prompt"),
-      button("Copy next-session prompt", () => { void copyNextSessionPrompt(session.latestCheckpoint.nextSessionPrompt); }),
+      button("Copy next-session prompt", () => { copyText(session.latestCheckpoint.nextSessionPrompt); }),
     );
+    if (session.checkpointStaleness !== null) item.append(message(`Stale: ${session.checkpointStaleness.reason}`, "checkpoint-error inline-error"));
     continuation.append(item);
   }
   view.tasksList.append(continuation);
-  if (snapshot.humanTasks.length === 0) view.tasksList.append(message("Nothing needs your attention right now.", "empty-pane"));
-  for (const task of snapshot.humanTasks) {
+
+  const tasksSection = document.createElement("section");
+  tasksSection.className = "drawer-section";
+  tasksSection.append(label(`Human Tasks · ${String(unresolvedTasks.length)}`));
+  if (unresolvedTasks.length === 0) tasksSection.append(message("Nothing needs your attention right now.", "muted"));
+  for (const task of openTasks) {
     const row = document.createElement("div");
     row.className = "dedicated-task";
     const copy = document.createElement("div");
     copy.append(strong(task.title));
     if (task.detail) copy.append(message(task.detail, "muted"));
     copy.append(message(task.sourceSessionId ? `From session ${task.sourceSessionId}` : "Source session not recorded", "task-source"));
+    if (task.status === "answered" && task.answer !== null) {
+      const answerText = task.answer.kind === "free-text" ? task.answer.text : task.options.find((option) => option.id === task.answer.optionId)?.label ?? task.answer.optionId;
+      copy.append(message(`Answered: ${answerText}`, "receipt inline-answer"));
+    }
     row.append(copy);
-    if (!snapshot.closed) row.append(button("Resolve", () => { options.onResolveTask(task); }));
-    view.tasksList.append(row);
+    const taskActions = document.createElement("div");
+    taskActions.className = "task-answer-actions";
+    if (!snapshot.closed && task.status === "pending" && task.answerKind === "free-text") taskActions.append(button("Answer", () => {
+      const text = window.prompt(task.title, task.answer?.text ?? "");
+      if (text?.trim()) options.onAnswerTask(task, { kind: "free-text", text: text.trim() });
+    }));
+    else if (!snapshot.closed && task.status === "pending" && (task.answerKind === "yes-no" || task.answerKind === "choice")) {
+      for (const option of task.options) taskActions.append(button(option.label, () => { options.onAnswerTask(task, { kind: task.answerKind, optionId: option.id }); }));
+    }
+    if (!snapshot.closed && (task.answerKind === null || task.status === "answered")) taskActions.append(button("Resolve", () => { options.onResolveTask(task); }));
+    row.append(taskActions);
+    tasksSection.append(row);
+  }
+  view.tasksList.append(tasksSection);
+
+  if (snapshot.links.length > 0) {
+    const linksSection = document.createElement("section");
+    linksSection.className = "drawer-section";
+    linksSection.append(label(`Links · ${String(snapshot.links.length)}`));
+    for (const link of snapshot.links) linksSection.append(message(link.label ?? link.reference, "links"));
+    view.tasksList.append(linksSection);
   }
 
   view.terminal.classList.toggle("open", options.terminalOpen);
@@ -913,7 +1039,7 @@ function updateEdgeButton(edge, name, open, side, count) {
   control.title = labelText;
   control.setAttribute("aria-label", labelText);
   control.setAttribute("aria-expanded", String(open));
-  control.setAttribute("aria-controls", name === "Sessions" ? "workstream-sessions-pane" : "workstream-tasks-pane");
+  control.setAttribute("aria-controls", "workstream-sessions-pane");
   const edgeIcon = control.querySelector(".edge-icon");
   if (edgeIcon !== null) edgeIcon.textContent = side === "left" ? (open ? "‹" : "›") : (open ? "›" : "‹");
   const railLabel = control.querySelector(".rail-label");
@@ -941,14 +1067,10 @@ function surfaceLabel(surface) {
 function readLocalPreference(name, fallback, allowed) {
   try {
     const value = window.localStorage.getItem(`pi-workbench.workstreams.${name}`);
-    return value !== null && allowed.includes(value) ? value : fallback;
+    return value !== null && (allowed === undefined || allowed.includes(value)) ? value : fallback;
   } catch {
     return fallback;
   }
-}
-
-function readLocalBoolean(name, fallback) {
-  return readLocalPreference(name, String(fallback), ["true", "false"]) === "true";
 }
 
 function writeLocalPreference(name, value) {
@@ -980,13 +1102,20 @@ function workstreamsStyleElement() {
   const style = document.createElement("style");
   style.textContent = `
     :host { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; display: block; color: var(--pi-text); background: var(--pi-bg); font: 14px system-ui, sans-serif; }
-    main { box-sizing: border-box; width: min(100%, var(--pi-content-max-width, 1100px)); min-height: 100%; display: grid; align-content: start; gap: calc(var(--pi-panel-padding, 12px) * 1.5); margin: 0 auto; padding: clamp(16px, 3vw, 36px); }
+    main { box-sizing: border-box; width: min(100%, 1280px); min-height: 100%; display: grid; align-content: start; gap: 0; margin: 0 auto; padding: clamp(68px, 7vw, 92px) clamp(20px, 5vw, 72px) 40px; }
     main.dedicated-workstream { width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; display: flex; overflow: hidden; }
     header, .workstream-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--pi-toolbar-gap, 8px); }
+    .portfolio-header { align-items: end; gap: 28px; padding-bottom: 24px; border-bottom: 1px solid var(--pi-border); }
+    .portfolio-header > div:first-child { max-width: 720px; }
+    .portfolio-header > div:first-child > strong { color: var(--pi-text-bright); font-size: clamp(28px, 3vw, 38px); letter-spacing: -.025em; line-height: 1.05; }
+    .portfolio-header .header-actions { padding-bottom: 1px; }
+    .portfolio-header .header-actions button { background: var(--pi-accent); color: var(--pi-accent-contrast, white); font-weight: 700; }
+    .return-note { width: max-content; margin-bottom: 10px; border-radius: 999px; background: var(--pi-success-surface); color: var(--pi-success); padding: 3px 8px; font-size: 11px; }
+    .portfolio-intro { max-width: 68ch; margin-top: 8px; color: var(--pi-muted); font-size: 15px; line-height: 1.3; }
     [hidden] { display: none !important; }
     .workstream-shell { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--pi-bg); }
     .shell-banner { flex: 0 0 auto; display: grid; }
-    .workstream-topbar { min-height: 52px; flex: 0 0 auto; align-items: center; padding: 0 var(--pi-panel-padding, 12px); border-bottom: 1px solid var(--pi-border); box-shadow: inset 0 3px var(--workstream-color); background: color-mix(in srgb, var(--workstream-color) 8%, var(--pi-bg)); }
+    .workstream-topbar { min-height: 52px; flex: 0 0 auto; align-items: center; padding: 0 var(--pi-panel-padding, 12px) 0 66px; border-bottom: 1px solid var(--pi-border); box-shadow: inset 0 3px var(--workstream-color); background: color-mix(in srgb, var(--workstream-color) 8%, var(--pi-bg)); }
     .workstream-identity { min-width: 0; display: flex; align-items: center; gap: var(--pi-toolbar-gap, 8px); }
     .workstream-identity > div { min-width: 0; display: grid; gap: 2px; }
     .workstream-identity .shell-title, .workstream-identity p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -994,26 +1123,34 @@ function workstreamsStyleElement() {
     .workstream-swatch { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 3px; background: var(--workstream-color); }
     .workstream-tools, .workstream-utilities, .mobile-pane-navigation, .checkpoint-actions { display: flex; align-items: center; gap: 3px; }
     .mobile-pane-navigation { display: none; }
+    .session-tabs { flex: 0 0 auto; min-width: 0; overflow-x: auto; display: flex; align-items: center; gap: 4px; padding: 6px 10px 6px 66px; border-bottom: 1px solid var(--pi-border); background: var(--pi-surface); }
+    .session-tabs button { flex: 0 0 auto; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-tabs button[aria-pressed="true"] { background: var(--pi-selection-bg); color: var(--pi-text-bright); font-weight: 700; }
     .workstream-tools button { background: transparent; color: var(--pi-muted); }
     .workstream-tools button[aria-pressed="true"] { background: var(--pi-selection-bg); color: var(--pi-text); font-weight: 700; }
     .scope-label { color: var(--pi-muted); font-size: 11px; }
-    .workstream-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 280px 22px minmax(360px, 1fr) 22px 320px; overflow: hidden; }
-    .workstream-body.sessions-collapsed { grid-template-columns: 0 42px minmax(360px, 1fr) 22px 320px; }
-    .workstream-body.tasks-collapsed { grid-template-columns: 280px 22px minmax(360px, 1fr) 42px 0; }
-    .workstream-body.sessions-collapsed.tasks-collapsed { grid-template-columns: 0 42px minmax(360px, 1fr) 42px 0; }
-    .sessions-pane, .tasks-pane { min-width: 0; min-height: 0; overflow: auto; background: var(--pi-surface); }
-    .sessions-pane { grid-column: 1; }
+    .workstream-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 280px 22px minmax(360px, 1fr); overflow: hidden; }
+    .workstream-body.sessions-collapsed { grid-template-columns: 0 42px minmax(360px, 1fr); }
+    .sessions-pane { min-width: 0; min-height: 0; overflow: auto; background: var(--pi-surface); grid-column: 1; }
     .workspace-pane { grid-column: 3; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--pi-bg); }
-    .tasks-pane { grid-column: 5; }
-    .sessions-collapsed .sessions-pane, .tasks-collapsed .tasks-pane { visibility: hidden; overflow: hidden; }
+    .sessions-collapsed .sessions-pane { visibility: hidden; overflow: hidden; }
+    .workstream-drawer { flex: 0 0 auto; max-height: min(42vh, 390px); overflow: auto; display: block; border-bottom: 1px solid var(--pi-border); background: var(--pi-surface); box-shadow: 0 12px 28px var(--pi-shadow-soft); }
+    .workstream-drawer .pane-heading { position: sticky; top: 0; z-index: 2; background: var(--pi-surface); }
+    .workstream-drawer .pane-list { width: min(100%, 1100px); margin: 0 auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+    .drawer-section { min-width: 0; align-content: start; gap: 8px; padding: 14px; border-right: 1px solid var(--pi-border-muted); }
+    .drawer-section:last-child { border-right: 0; }
+    .drawer-checkpoint { display: grid; gap: 4px; }
+    .next-session-prompt { white-space: pre-wrap; user-select: text; }
+    .drawer-checkpoint > button { width: max-content; }
     .pane-edge { min-width: 0; min-height: 0; display: grid; place-items: center; background: var(--pi-border-muted); }
     .sessions-pane + .pane-edge { grid-column: 2; }
-    .workspace-pane + .pane-edge { grid-column: 4; }
     .pane-edge .icon-button { width: 22px; height: 52px; min-height: 52px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0; border: 1px solid var(--pi-border-muted); border-radius: 999px; background: var(--pi-bg); color: var(--pi-muted); }
     .pane-edge.collapsed .icon-button { width: 42px; height: 100%; min-height: 0; flex-direction: column; border: 0; border-radius: 0; background: var(--pi-surface); }
     .rail-label { display: none; writing-mode: vertical-rl; transform: rotate(180deg); color: var(--pi-text-secondary, var(--pi-muted)); font-size: 11px; font-weight: 650; white-space: nowrap; }
     .pane-edge.collapsed .rail-label { display: inline; }
     .pane-heading, .workspace-heading { min-height: 49px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--pi-border); }
+    .context-actions { display: flex; align-items: center; gap: 5px; }
+    .context-actions button { min-height: 30px; padding-block: 4px; font-size: 11px; }
     .pane-heading h2, .workspace-heading h2 { margin: 0; }
     .workspace-heading { flex: 0 0 auto; }
     .workspace-heading > div:first-child { min-width: 0; display: grid; gap: 3px; }
@@ -1022,16 +1159,15 @@ function workstreamsStyleElement() {
     .pane-list { min-height: 0; display: flex; flex-direction: column; }
     .dedicated-session { width: 100%; min-height: auto; display: block; border-radius: 0; background: transparent; padding: 10px 12px; text-align: left; }
     .dedicated-session > span { min-width: 0; display: grid; gap: 4px; }
+    .attention-action { color: var(--pi-warning); font-size: 11px; font-weight: 700; }
     .dedicated-session.selected { background: var(--pi-selection-bg); }
     .session-anchor { color: var(--pi-text-secondary, var(--pi-text)); font-size: 12px; line-height: 1.35; }
     .diagnostic { color: var(--pi-muted); font-size: 10px; }
     .inline-error { padding: 6px; font-size: 11px; }
-    .dedicated-checkpoints { display: grid; gap: 10px; padding: 12px; border-bottom: 1px solid var(--pi-border-muted); }
-    .dedicated-checkpoint { display: grid; gap: 5px; }
-    .dedicated-checkpoint button { justify-self: start; }
-    .next-session-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
     .dedicated-task { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border-muted); }
     .dedicated-task > div { min-width: 0; display: grid; gap: 5px; }
+    .task-answer-actions { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+    .task-answer-actions button { min-height: 30px; padding-block: 4px; font-size: 11px; }
     .task-source { color: var(--pi-muted); font-size: 11px; }
     .empty-pane { padding: 18px 12px; color: var(--pi-muted); }
     .surface-stack { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
@@ -1048,23 +1184,22 @@ function workstreamsStyleElement() {
     .icon-button { flex: 0 0 auto; }
     header > div, .workstream-heading > div { min-width: 0; display: grid; gap: 5px; }
     .header-actions, .workstream-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--pi-toolbar-gap, 8px); }
-    main:not(.dedicated-workstream) > header strong { font-size: clamp(22px, 3vw, 34px); letter-spacing: -.025em; }
     section { display: grid; gap: var(--pi-message-gap, 10px); }
-    h2 { margin: 0 0 4px; color: var(--pi-text-bright); font-size: 13px; }
-    .workstream { display: grid; gap: var(--pi-message-gap, 10px); padding: var(--pi-message-padding, 14px) 0; border-top: 1px solid var(--pi-border); }
-    .workstream.closed { color: var(--pi-muted); }
+    h2 { margin: 0; color: var(--pi-text-bright); font-size: 13px; }
     .portfolio-list { gap: 0; }
-    .portfolio-row { grid-template-columns: 4px minmax(0, 1fr) auto; gap: 16px; padding: 18px 0; }
-    .portfolio-marker { width: 4px; min-height: 100%; border-radius: 4px; background: var(--workstream-color); }
-    .portfolio-content { min-width: 0; display: grid; gap: 12px; }
-    .portfolio-continuation { display: grid; gap: 4px; }
-    .portfolio-continuation > strong { color: var(--pi-text-bright); font-size: 16px; line-height: 1.35; }
-    .portfolio-attention { display: grid; gap: 3px; padding: 9px 10px; background: var(--pi-warning-surface); color: var(--pi-warning); }
-    .portfolio-sessions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 18px; }
-    .portfolio-session { min-width: 0; display: grid; gap: 3px; }
-    .portfolio-row > .workstream-actions { align-self: center; max-width: 180px; flex-wrap: wrap; }
-    .portfolio-intro { max-width: 65ch; }
-    .closed-history { border-top: 1px solid var(--pi-border); padding-top: 12px; }
+    .portfolio-list > h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    .portfolio-row { box-sizing: border-box; width: 100%; min-height: 98px; display: grid; grid-template-columns: minmax(220px, 1.25fr) minmax(320px, 1.8fr) minmax(170px, .7fr) minmax(90px, .45fr); align-items: start; gap: 22px; border: 0; border-bottom: 1px solid var(--pi-border); border-radius: 0; background: transparent; color: var(--pi-text); padding: 18px 8px; text-align: left; }
+    .portfolio-row:hover { background: var(--pi-surface-hover); }
+    .portfolio-row:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+    .portfolio-row.closed { color: var(--pi-muted); }
+    .portfolio-cell { min-width: 0; display: grid; gap: 6px; white-space: normal; }
+    .portfolio-cell > strong { color: var(--pi-text-bright); font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+    .portfolio-identity > strong { font-size: 16px; }
+    .portfolio-status { width: max-content; max-width: 100%; border-radius: 999px; padding: 2px 7px; font-size: 11px; line-height: 1.3; }
+    .portfolio-status.current { background: var(--pi-success-surface); color: var(--pi-success); }
+    .portfolio-status.warning, .portfolio-status.missing { background: var(--pi-warning-surface); color: var(--pi-warning); }
+    .portfolio-anchor, .portfolio-needs { line-height: 1.35; overflow-wrap: anywhere; }
+    .closed-history { border-bottom: 1px solid var(--pi-border); padding-top: 12px; }
     .closed-history summary { color: var(--pi-muted); cursor: pointer; font-weight: 650; }
     .workstream strong { overflow-wrap: anywhere; }
     .message { margin: 0; line-height: 1.45; overflow-wrap: anywhere; }
@@ -1077,21 +1212,24 @@ function workstreamsStyleElement() {
     .task-row { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
     .task-row > div { display: grid; gap: 3px; min-width: 0; }
     @media (max-width: 980px) {
-      .workstream-body { grid-template-columns: 230px 22px minmax(320px, 1fr) 22px 250px; }
-      .workstream-body.sessions-collapsed { grid-template-columns: 0 42px minmax(320px, 1fr) 22px 250px; }
-      .workstream-body.tasks-collapsed { grid-template-columns: 230px 22px minmax(320px, 1fr) 42px 0; }
-      .workstream-body.sessions-collapsed.tasks-collapsed { grid-template-columns: 0 42px minmax(320px, 1fr) 42px 0; }
+      .workstream-body { grid-template-columns: 230px 22px minmax(320px, 1fr); }
+      .workstream-body.sessions-collapsed { grid-template-columns: 0 42px minmax(320px, 1fr); }
+      .workstream-drawer .pane-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 720px) {
       .workstream-actions { flex-wrap: wrap; justify-content: flex-start; }
-      .workstream-topbar { flex-wrap: wrap; align-content: center; padding-block: 6px; }
+      .workstream-topbar { flex-wrap: wrap; align-content: center; padding: 6px 8px 6px 58px; }
       .workstream-utilities > .scope-label { display: none; }
+      .session-tabs { display: none; }
       .mobile-pane-navigation { display: flex; flex: 0 0 auto; justify-content: center; padding: 6px; border-bottom: 1px solid var(--pi-border); background: var(--pi-surface); }
       .mobile-pane-navigation button[aria-pressed="true"] { background: var(--pi-selection-bg); font-weight: 700; }
-      .workstream-body, .workstream-body.sessions-collapsed, .workstream-body.tasks-collapsed, .workstream-body.sessions-collapsed.tasks-collapsed { grid-template-columns: minmax(0, 1fr); }
-      .sessions-pane, .tasks-pane, .workspace-pane, .pane-edge { display: none; }
-      .workstream-body.mobile-sessions .sessions-pane, .workstream-body.mobile-workspace .workspace-pane, .workstream-body.mobile-tasks .tasks-pane { display: flex; grid-column: 1; visibility: visible; }
-      .workstream-body.mobile-sessions .sessions-pane, .workstream-body.mobile-tasks .tasks-pane { flex-direction: column; }
+      .workstream-body, .workstream-body.sessions-collapsed { grid-template-columns: minmax(0, 1fr); }
+      .sessions-pane, .workspace-pane, .pane-edge { display: none; }
+      .workstream-body.mobile-sessions .sessions-pane, .workstream-body.mobile-workspace .workspace-pane { display: flex; grid-column: 1; visibility: visible; }
+      .workstream-body.mobile-sessions .sessions-pane { flex-direction: column; }
+      .workstream-drawer { max-height: 48vh; }
+      .workstream-drawer .pane-list { grid-template-columns: minmax(0, 1fr); }
+      .drawer-section { border-right: 0; border-bottom: 1px solid var(--pi-border-muted); }
       .workspace-heading { align-items: flex-start; }
       .checkpoint-actions { max-width: 48%; }
     }
@@ -1105,7 +1243,21 @@ function workstreamsStyleElement() {
     button:hover:not(:disabled) { background: var(--pi-surface-hover, var(--pi-selection-bg)); }
     button:disabled { cursor: not-allowed; opacity: .58; }
     button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
-    @media (max-width: 520px) { main { padding: var(--pi-panel-padding, 12px); } header { align-items: flex-start; } main:not(.dedicated-workstream) > header strong { font-size: 24px; } .sequence { display: none; } .portfolio-row { grid-template-columns: 4px minmax(0, 1fr); } .portfolio-row > .workstream-actions { grid-column: 2; max-width: none; justify-content: flex-start; } }
+    @media (max-width: 760px) {
+      main { padding: 70px 14px 28px; }
+      .portfolio-header { align-items: flex-start; }
+      .portfolio-header .header-actions { flex: 0 0 auto; }
+      .portfolio-row { grid-template-columns: minmax(0, 1fr) auto; gap: 12px 16px; padding: 16px 6px; }
+      .portfolio-next { grid-column: 1 / -1; grid-row: 2; }
+      .portfolio-anchor { grid-column: 1; grid-row: 3; }
+      .portfolio-needs { grid-column: 2; grid-row: 1; text-align: right; }
+    }
+    @media (max-width: 520px) {
+      .portfolio-header { display: grid; }
+      .portfolio-header .header-actions { justify-content: flex-start; }
+      .portfolio-header > div:first-child > strong { font-size: 28px; }
+      .portfolio-intro { font-size: 14px; }
+    }
     @media (pointer: coarse) { button { min-height: 44px; } }
   `;
   return style;
@@ -1330,20 +1482,10 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function copyNextSessionPrompt(value, {
-  clipboard = globalThis.navigator?.clipboard,
-  fallback = (prompt) => { window.prompt("Copy next-session prompt", prompt); },
-} = {}) {
-  if (clipboard?.writeText !== undefined) {
-    try {
-      await clipboard.writeText(value);
-      return "clipboard";
-    } catch {
-      // Fall through to a selectable prompt when clipboard access is unavailable.
-    }
-  }
-  fallback(value);
-  return "fallback";
+function copyText(value) {
+  if (globalThis.navigator?.clipboard?.writeText !== undefined) {
+    void globalThis.navigator.clipboard.writeText(value).catch(() => { window.prompt("Copy next-session prompt", value); });
+  } else window.prompt("Copy next-session prompt", value);
 }
 
 function newId(prefix) {

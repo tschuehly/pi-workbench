@@ -29,6 +29,7 @@ When documents disagree, follow the highest applicable authority and repair the 
 
 - [`plans/level-1.md`](plans/level-1.md) — approved Level 1 human–Pi pair-programming implementation plan.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — approved attended child Pi execution plan.
+- [`plans/pi-web-workbench-ui.md`](plans/pi-web-workbench-ui.md) — implemented desktop-first sequence for the selected Workbench hierarchy and concise current exchange.
 - [`plans/pi-web-message-tree.md`](plans/pi-web-message-tree.md) — implementation sequence for compact session-history navigation, continue-from-entry, and correlated Workstream forks.
 - [`integrations/pi-web/evaluation.md`](integrations/pi-web/evaluation.md) and [`shell-strategy.md`](integrations/pi-web/shell-strategy.md) — PI WEB evidence and shell boundary.
 - [`integrations/pi-web/customization-plan.md`](integrations/pi-web/customization-plan.md) and [`principles.md`](integrations/pi-web/principles.md) — upstream delivery sequence and integration-specific development principles.
@@ -36,7 +37,7 @@ When documents disagree, follow the highest applicable authority and repair the 
 ## Research
 
 - [`research/sources/`](research/sources/) — curated evidence and source analyses, including the [subagent implementation comparison](research/sources/subagent-implementations.md).
-- [`research/reports/`](research/reports/) — derived design reports.
+- [`research/reports/`](research/reports/) — derived design reports. The [unified Chats and Workstreams artifact](research/reports/pi-web-unified-chat-workstream-prototype.html) is the canonical working interaction prototype; the earlier [Workbench UX report](research/reports/pi-web-workbench-ux-prototype.md), [structural artifact](research/reports/pi-web-workbench-ux-prototype.html), and [current-exchange artifact](research/reports/pi-web-current-exchange-prototype.html) remain supporting references.
 - [`research/generated/`](research/generated/) — reproducible generated indexes; do not treat them as standing context.
 
 Operational documentation remains beside the module it describes under `packages/`, `apps/`, `skills/`, or `scripts/`.
