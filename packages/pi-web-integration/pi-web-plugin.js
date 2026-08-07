@@ -43,6 +43,15 @@ export function transitionDedicatedWorkstreamUi(state, action) {
   }
 }
 
+export function recordedWorkstreamSelection(snapshots, workstreamId, rememberedSessionId) {
+  const snapshot = snapshots.find((candidate) => candidate.id === workstreamId);
+  if (snapshot === undefined) return undefined;
+  const sessionId = snapshot.sessions.find((session) => session.status === "active" && session.id === rememberedSessionId)?.id
+    ?? snapshot.sessions.find((session) => session.status === "active")?.id
+    ?? snapshot.sessions[0]?.id;
+  return { snapshot, sessionId };
+}
+
 export function sessionAnchorRepairOffer(snapshot, session, error, machine) {
   const machineId = isString(session?.machineId) ? session.machineId : machine?.id;
   if (error?.code !== "SESSION_ANCHOR_MISSING"
@@ -388,19 +397,21 @@ function installWorkstreamsElement() {
       return new WorkstreamSessionCoordinator(workstreamClient, this.#context.sessions);
     }
 
-    #openWorkstream(snapshot) {
-      recordedWorkstreamState.focusKey = "dedicated:title";
-      this.#anchorRepair = undefined;
+    #applyWorkstreamSelection(snapshot) {
       this.#selectedWorkstreamId = snapshot.id;
-      recordedWorkstreamState.selectedWorkstreamId = snapshot.id;
       const rememberedSessionId = this.#readPreference(`selected-session:${snapshot.id}`);
-      this.#selectedSessionId = snapshot.sessions.find((session) => session.status === "active" && session.id === rememberedSessionId)?.id
-        ?? snapshot.sessions.find((session) => session.status === "active")?.id
-        ?? snapshot.sessions[0]?.id;
+      this.#selectedSessionId = recordedWorkstreamSelection([snapshot], snapshot.id, rememberedSessionId)?.sessionId;
       this.#tool = this.#readPreference("tool", "chat", ["chat", "files", "git"]);
       this.#sessionsPaneOpen = this.#readBoolean("sessions-open", true);
       this.#tasksPaneOpen = this.#readBoolean("drawer-open", snapshot.humanTasks.some((task) => task.status === "pending"));
       this.#mobilePane = normalizeDedicatedMobilePane(this.#readPreference("mobile-pane", "workspace", ["sessions", "workspace"]));
+    }
+
+    #openWorkstream(snapshot) {
+      recordedWorkstreamState.focusKey = "dedicated:title";
+      this.#anchorRepair = undefined;
+      recordedWorkstreamState.selectedWorkstreamId = snapshot.id;
+      this.#applyWorkstreamSelection(snapshot);
       this.#context?.host?.requestRender();
       this.#render();
       this.#restoreFocusAfterHostRender("dedicated:title");
@@ -632,6 +643,11 @@ function installWorkstreamsElement() {
     #render() {
       const main = this.#main;
       const context = this.#context;
+      if (this.#selectedWorkstreamId === undefined && recordedWorkstreamState.selectedWorkstreamId !== undefined) {
+        const remembered = this.#readPreference(`selected-session:${recordedWorkstreamState.selectedWorkstreamId}`);
+        const restored = recordedWorkstreamSelection(recordedWorkstreamState.snapshots, recordedWorkstreamState.selectedWorkstreamId, remembered);
+        if (restored !== undefined) this.#applyWorkstreamSelection(restored.snapshot);
+      }
       const selected = recordedWorkstreamState.snapshots.find((snapshot) => snapshot.id === this.#selectedWorkstreamId);
       this.#syncSurfaceSelection(selected !== undefined);
 

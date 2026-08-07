@@ -4,11 +4,24 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { dedicatedMobileControlState, dedicatedWorkstreamLayout, normalizeDedicatedMobilePane, parseWorkbenchProjection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
+import { dedicatedMobileControlState, dedicatedWorkstreamLayout, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, transitionDedicatedWorkstreamUi } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
 import { WorkstreamSessionCoordinator } from "../workstream-session-coordinator.js";
 
 const fixtureUrl = new URL("../fixtures/recorded-projection.json", import.meta.url);
+
+test("restores the recorded Workstream and remembered active session after the host reconstructs the plugin element", () => {
+  const snapshots = [{ id: "ws-other", sessions: [] }, { id: "ws-selected", sessions: [
+    { id: "session-first", status: "active" },
+    { id: "session-remembered", status: "active" },
+  ] }];
+
+  assert.deepEqual(recordedWorkstreamSelection(snapshots, "ws-selected", "session-remembered"), {
+    snapshot: snapshots[1],
+    sessionId: "session-remembered",
+  });
+  assert.equal(recordedWorkstreamSelection(snapshots, "missing", "session-remembered"), undefined);
+});
 
 test("dedicated Workstream tools preserve Sessions and Human Tasks with truthful scope", () => {
   assert.deepEqual(dedicatedWorkstreamLayout({ tool: "files", sessionsPaneOpen: true, tasksPaneOpen: true }), {
