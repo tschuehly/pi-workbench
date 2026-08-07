@@ -13,10 +13,24 @@ export function completeSessionKey(session) {
   return `${nativeSessionIdentity(session)}\u0000${session.projectId}\u0000${session.workspaceId}`;
 }
 
+export function serializeDestinationPreference(destination) {
+  return validDestination(destination) ? JSON.stringify(destination) : "";
+}
+
+export function parseDestinationPreference(value) {
+  if (typeof value !== "string" || value === "") return ROOT_DESTINATION;
+  try {
+    const destination = JSON.parse(value);
+    return validDestination(destination) ? destination : ROOT_DESTINATION;
+  } catch {
+    return ROOT_DESTINATION;
+  }
+}
+
 export function joinChatsAndWorkstreams(nativeSnapshot, workstreamProjection) {
   if (nativeSnapshot === undefined || workstreamProjection === undefined
       || nativeSnapshot?.available === false || workstreamProjection?.available === false) {
-    return joinFailure("unavailable", workstreamProjection);
+    return joinFailure("unavailable", workstreamProjection, undefined, nativeSnapshot);
   }
   if (!isRecord(nativeSnapshot) || !isRecord(workstreamProjection)
       || !Array.isArray(nativeSnapshot.sessions) || !Array.isArray(workstreamProjection.snapshots)
@@ -26,7 +40,9 @@ export function joinChatsAndWorkstreams(nativeSnapshot, workstreamProjection) {
   }
   if (nativeSnapshot.complete !== true || workstreamProjection.complete !== true) {
     return {
-      status: nativeSnapshot.reconnecting === true || workstreamProjection.reconnecting === true ? "reconnecting" : "loading",
+      status: nativeSnapshot.scopeUnavailable === true || workstreamProjection.scopeUnavailable === true
+        ? "unavailable"
+        : nativeSnapshot.reconnecting === true || workstreamProjection.reconnecting === true ? "reconnecting" : "loading",
       chats: [],
       workstreams: workstreamProjection.snapshots,
       retainedNativeSessions: nativeSnapshot.sessions,
@@ -105,7 +121,11 @@ export function reduceUnifiedNavigation(inputState, action) {
       };
     }
     case "selection-failed":
-      return state.pendingSelection?.token !== action.token ? state : { ...state, pendingSelection: undefined, selectionError: action.error };
+      return state.pendingSelection?.token !== action.token ? state : {
+        ...state,
+        pendingSelection: undefined,
+        selectionError: { ...action.error, destination: state.pendingSelection.destination },
+      };
     case "back":
       if (state.destination.type === "workstream-session") return { ...state, destination: { type: "workstream", workstreamId: state.destination.workstreamId }, pendingSelection: undefined, selectionError: undefined };
       return { ...state, destination: ROOT_DESTINATION, pendingSelection: undefined, selectionError: undefined };
@@ -127,12 +147,18 @@ export function reduceUnifiedNavigation(inputState, action) {
     }
     case "inventories-reconciled": return reconcileDestination(state, action.joined);
     case "restore": {
-      if (action.joined?.status !== "ready") return { ...state, destination: ROOT_DESTINATION, pendingSelection: undefined, selectionError: undefined };
-      if (destinationExists(action.destination, action.joined)) return { ...state, destination: action.destination, pendingSelection: undefined, selectionError: undefined };
-      const workstreamId = action.destination?.type === "workstream-session" ? action.destination.workstreamId : undefined;
-      const fallback = workstreamId !== undefined && action.joined.workstreams.some((candidate) => candidate.id === workstreamId)
-        ? { type: "workstream", workstreamId }
-        : ROOT_DESTINATION;
+      const workstreams = Array.isArray(action.joined?.workstreams) ? action.joined.workstreams : [];
+      const workstreamId = action.destination?.type === "workstream" || action.destination?.type === "workstream-session"
+        ? action.destination.workstreamId
+        : undefined;
+      const workstreamExists = workstreamId !== undefined && workstreams.some((candidate) => candidate.id === workstreamId);
+      if (action.destination?.type === "workstream" && workstreamExists) {
+        return { ...state, destination: action.destination, pendingSelection: undefined, selectionError: undefined };
+      }
+      if (action.joined?.status === "ready" && destinationExists(action.destination, action.joined)) {
+        return { ...state, destination: action.destination, pendingSelection: undefined, selectionError: undefined };
+      }
+      const fallback = workstreamExists ? { type: "workstream", workstreamId } : ROOT_DESTINATION;
       return { ...state, destination: fallback, pendingSelection: undefined, selectionError: undefined };
     }
     default: return state;
@@ -157,9 +183,9 @@ function reconcileDestination(state, joined) {
   if (joined?.status !== "ready") return state;
   const pendingSelection = state.pendingSelection !== undefined && !destinationExists(state.pendingSelection.destination, joined) ? undefined : state.pendingSelection;
   if (destinationExists(state.destination, joined)) {
-    return pendingSelection === state.pendingSelection && state.selectionError === undefined
+    return pendingSelection === state.pendingSelection
       ? state
-      : { ...state, pendingSelection, selectionError: undefined };
+      : { ...state, pendingSelection, selectionError: state.pendingSelection === undefined ? state.selectionError : undefined };
   }
   if (state.destination.type === "workstream-session" && joined.workstreams.some((candidate) => candidate.id === state.destination.workstreamId)) {
     return { ...state, destination: { type: "workstream", workstreamId: state.destination.workstreamId }, pendingSelection: undefined, selectionError: undefined };
@@ -175,9 +201,12 @@ function destinationSessionKey(destination) {
   return undefined;
 }
 
-function joinFailure(status, projection, reason) {
-  const workstreams = status !== "invalid" && Array.isArray(projection?.snapshots) ? projection.snapshots : [];
-  return { status, ...(reason === undefined ? {} : { reason }), chats: [], workstreams, retainedNativeSessions: [], nativeSessions: [] };
+function joinFailure(status, projection, reason, nativeSnapshot) {
+  const workstreams = Array.isArray(projection?.snapshots) && projection.snapshots.every(isWorkstreamSnapshot) ? projection.snapshots : [];
+  const retainedNativeSessions = Array.isArray(nativeSnapshot?.sessions) && nativeSnapshot.sessions.every(isCompleteNativeSession)
+    ? nativeSnapshot.sessions
+    : [];
+  return { status, ...(reason === undefined ? {} : { reason }), chats: [], workstreams, retainedNativeSessions, nativeSessions: [] };
 }
 
 function isWorkstreamSnapshot(value) {

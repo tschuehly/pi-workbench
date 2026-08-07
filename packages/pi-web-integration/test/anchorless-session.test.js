@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
 import { WorkstreamSessionCoordinator } from "../workstream-session-coordinator.js";
-import { sessionAnchorRepairOffer, sessionAnchorRepairPresentation } from "../pi-web-plugin.js";
+import { selectWorkstreamSessionLocation, sessionAnchorRepairOffer, sessionAnchorRepairPresentation } from "../pi-web-plugin.js";
 
 const fixtureUrl = new URL("../fixtures/anchorless-active-session.json", import.meta.url);
 const unavailableMessage = "Session session-photoquest-anchorless is not available in the selected workspace.";
@@ -44,6 +44,20 @@ test("an anchorless active Workstream session reports the exact unavailable symp
       repairEligible: true,
     },
   );
+});
+
+test("anchorless selection attempts the legacy host and never treats an incomplete destination as selected", async () => {
+  const session = { id: "session-anchorless", status: "active" };
+  const legacyCalls = [];
+  let nativeCalls = 0;
+  const context = {
+    sessionNavigation: { select: async () => { nativeCalls += 1; } },
+    sessions: { select: async (location) => { legacyCalls.push(location); } },
+  };
+
+  await assert.rejects(selectWorkstreamSessionLocation(context, session), (error) => error?.code === "SESSION_ANCHOR_MISSING");
+  assert.deepEqual(legacyCalls, [{ sessionId: "session-anchorless", machineId: undefined, projectId: undefined, workspaceId: undefined }]);
+  assert.equal(nativeCalls, 0);
 });
 
 const machine = { id: "studio", name: "Studio" };

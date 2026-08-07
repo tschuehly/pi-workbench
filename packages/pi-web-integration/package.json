@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check pi-web-plugin.js && node --check fake-workstream-client.js && node --check unified-navigation-state.js && node --check workstream-brief-projection.js && node --check workstream-client.js && node --check workstream-service.js && npm test"
+    "check": "node --check pi-web-plugin.js && node --check fake-workstream-client.js && node --check unified-navigation-state.js && node --check unified-navigation-view-model.js && node --check workstream-brief-projection.js && node --check workstream-client.js && node --check workstream-service.js && npm test"
   },
   "piWeb": {
     "plugins": [

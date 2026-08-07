@@ -8,12 +8,17 @@ browser plugin with a small trusted web-process service, not a Run Controller an
 
 - **Workstreams navigation entry:** opens a first-class primary view through PI WEB's qualified
   navigation and primary-view interfaces.
-- **Workstreams primary view:** presents a portfolio and a dedicated, pane-preserving Workstream
-  shell over the typed projection. The shell keeps flat Sessions and Human Tasks panes visible while
-  switching among host-owned Chat, Files, and Git surfaces, and opens host-owned Terminal as a
-  selected-session checkout drawer. Host actions and shortcuts stay contextual to those surfaces,
-  while mobile pane navigation retains access to Sessions, Workspace, and Human Tasks. Checkpoints
-  remain contract-compatible per-session checkpoints.
+- **Unified Chats + Workstreams primary view:** joins PI WEB's optional public
+  `context.sessionNavigation` inventory to complete canonical Workstream snapshots. Chats are scoped
+  to the selected PI WEB machine and are classified only after both inventories reconcile. A
+  Workstream row opens its brief; a session row awaits selection of its complete host location before
+  opening the host-owned Chat surface. Typed selection failure leaves the prior destination visible.
+  Wide layouts render either an expanded, bounded and resizable hierarchy or its horizontal collapsed
+  strip—never both. Narrow layouts keep the destination full width and expose Workstream navigation as
+  an Escape-dismissable focused overlay. Browser-local mode and width values use PI WEB's namespaced
+  preferences host. Older hosts retain the canonical Workstreams-only fallback without private APIs.
+  Existing typed Workstream actions, Chat/Files/Git surfaces, and checkout-scoped Terminal remain
+  available in the Workstream shell. Checkpoints remain contract-compatible per-session checkpoints.
   Git currently shows the selected checkout's observed, unattributed state; historical cross-repository
   commits remain deferred to PI WEB's upstream Git-plugin integration. The view also preserves current
   and closed Workstreams, revision, loading, empty, failure, and reconnect states; creates Workstreams;
@@ -38,7 +43,7 @@ operations to `@pi-workbench/workstream-store`, which persists user-local ledger
 intentional alternate user-local location. The deterministic `fake-workstream-client.js` and
 [`recorded-workstreams.json`](fixtures/recorded-workstreams.json) remain available for PI WEB tests.
 
-The unified-navigation Phase 2 seam is intentionally pure and UI-independent:
+The unified-navigation state and Phase 3 view-model seams are intentionally pure and UI-independent:
 
 - `unified-navigation-state.js` joins only complete native and canonical inventories, keeps every
   positive canonical association (including an anchorless legacy association) out of Chats, and
@@ -46,6 +51,8 @@ The unified-navigation Phase 2 seam is intentionally pure and UI-independent:
   memory.
 - `workstream-brief-projection.js` mechanically projects sourced checkpoint and Human Task fields
   and exports the one deterministic remembered-active/first-active/first-session selection rule.
+- `unified-navigation-view-model.js` normalizes only the public immutable native-session snapshot,
+  computes mechanical navigator labels, and shares bounded pointer/keyboard resize behavior.
 - `fixtures/unified-navigation.json` pairs canonically valid current and closed Workstreams with
   native sessions and separate attention state. It covers archived and unmatched Chats, anchor
   repair, pending/failed associations, answered/resolved tasks, retained checkpoint failure and

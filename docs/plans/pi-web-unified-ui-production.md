@@ -266,6 +266,12 @@ DOM or spending model tokens.
 
 ### Phase 3 — Build the unified navigator and shell frame
 
+Status: complete in the adapter and PI WEB commit `d8701d5`. The unified machine-scoped Chats and
+portfolio-wide Workstreams hierarchy, select-before-commit destinations, exact restoration,
+expanded/collapsed/narrow modes, bounded resize separator, focus-safe overlay, legacy-host fallback,
+and Pi-menu default-shell escape are implemented. Adapter checks pass with 53 tests; focused PI WEB
+menu tests, typecheck, and lint pass. Browser acceptance remains Phase 7 evidence.
+
 Replace the current portfolio-to-three-pane transition with the accepted hierarchy:
 
 1. The root navigator lists **Chats** and **Workstreams**. The Chats heading names the selected
