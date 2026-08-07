@@ -33,7 +33,7 @@ The middle pane has three destination states:
 2. **Workstream Brief** — continuation, changes, remaining work, Human Tasks, session updates, and session index.
 3. **Workstream Session** — the selected Workstream session’s conversation and live decisions.
 
-A Workstream row opens state 2. A session row or horizontal session tab opens state 3. Chat, Context, Files, and Git are peer middle surfaces; switching surfaces does not change the selected standalone or Workstream session. Terminal is a checkout-labelled bottom dock scoped to the explicit session anchor.
+A Workstream row opens state 2. A session row or horizontal session tab opens state 3. Chat, Context, Files, and Git are peer middle surfaces; switching surfaces does not change the selected standalone or Workstream session. Terminal is a checkout-labelled bottom dock scoped to the explicit session anchor. Do not add a second status/navigation bar beneath the global toolbar: anchor and checkpoint state remain available in session navigation, Context, the Session menu, and Terminal.
 
 ## Delivery sequence
 
@@ -74,7 +74,7 @@ Render illustrative durable Human Tasks in the Workstream Context tab with answe
 
 ### 5. Rebuild Context, tools, history, and Terminal
 
-Standalone Chat exposes Chat, Files, and Git as peer middle surfaces. A Workstream session also exposes Context. Context contains the brief summary, durable Human Tasks, selected-session checkpoint, links, and anchor. Files, Git, and the Terminal dock remain scoped to the selected session. Remember the selected surface and Terminal state per session in prototype memory.
+Standalone Chat exposes Chat, Files, and Git as peer middle surfaces. A Workstream session also exposes Context. Context contains the brief summary, durable Human Tasks, selected-session checkpoint, links, and anchor. Files, Git, and the Terminal dock remain scoped to the selected session. Remember the selected surface and Terminal state per session in prototype memory. Show selected-session context-window consumption beside the composer as used tokens, capacity, percentage, and a compact meter; warn visually at high usage.
 
 Keep message history out of the permanent navbar. Double Escape opens earlier conversation points, and the Session menu provides a discoverable entry. Continuing from an earlier point returns to Chat and branches from that point.
 
@@ -106,6 +106,7 @@ Browser-test the final working prototype at desktop and narrow widths. Required 
 - answer a durable Human Task, inspect its receipt, resolve it separately, and open its source session;
 - request a checkpoint, correct the proposal, confirm it, and inspect a failed proposal without losing the latest confirmation;
 - switch surfaces and the Terminal dock across differently anchored sessions;
+- confirm the redundant status bar is absent and context-window usage changes with the selected session, including the high-usage warning;
 - open history with Double Escape and continue from an earlier point as a branch;
 - promote a Chat without changing its transcript;
 - operate every menu by pointer and keyboard;
