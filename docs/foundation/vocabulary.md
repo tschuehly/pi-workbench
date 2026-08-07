@@ -99,7 +99,7 @@ and Human Attention cadence resolved from the desired outcome, repository capabi
 uncertainty, impact, reversibility, and available Human Attention. Presets may provide useful
 starting points, but these dimensions remain independently adjustable for the Run rather than
 forming a universal maturity ladder.
-_Avoid_: Entry Preset, workflow profile, autonomy level, agent tier
+_Avoid_: Entry Preset, workflow profile, autonomy level, agent tier, intensity
 
 **Autonomy Envelope:**
 The authority granted for autonomous work, bounded by permissions, impact, budget, stopping
