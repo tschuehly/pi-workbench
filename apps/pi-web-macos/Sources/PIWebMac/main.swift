@@ -306,6 +306,33 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
 
     func webView(
         _ webView: WKWebView,
+        runJavaScriptTextInputPanelWithPrompt prompt: String,
+        defaultText: String?,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (String?) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = prompt
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+
+        let input = NSTextField(string: defaultText ?? "")
+        input.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+        alert.accessoryView = input
+
+        let complete: (NSApplication.ModalResponse) -> Void = { response in
+            completionHandler(response == .alertFirstButtonReturn ? input.stringValue : nil)
+        }
+        guard let window = webView.window else {
+            complete(alert.runModal())
+            return
+        }
+        alert.beginSheetModal(for: window, completionHandler: complete)
+    }
+
+    func webView(
+        _ webView: WKWebView,
         runJavaScriptConfirmPanelWithMessage message: String,
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping (Bool) -> Void
