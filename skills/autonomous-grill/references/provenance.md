@@ -18,13 +18,15 @@
 ## Adapted for Pi Workbench
 
 - Provider-specific Claude/GPT language became provider-neutral cross-family Independence.
-- The Workbench `challenge` Cognitive Role and Level 1 `subagent` tool replace Claudex routing and agent orchestration.
-- One logical advisor role is reconstructed in fresh bounded Subagents through a compact advisor ledger because Level 1 does not provide persistent child continuity.
-- Primary Evidence, Cognitive Role, Subagent, and Independence use canonical Workbench language.
+- A durable attended Worker with Cognitive Role `design` retains recurring advisor context across bounded dispatches; a fresh `challenge` Subagent performs the closing audit.
+- Worker continuity replaces the former per-round advisor ledger. Only a compact dissent summary crosses into the fresh closing audit.
+- The worker advisor trades fresh-context Independence for continuity, so its output is never presented as independent judgment.
+- Primary Evidence, Cognitive Role, Worker, Subagent, and Independence use canonical Workbench language.
 
 ## Rejected as unsupported
 
-- A child process presented as persistent across multiple calls.
+- An idle child process presented as a persistent Worker; continuity comes from durable identity and resumed Pi sessions.
+- Independence roles on a continued worker session.
 - Durable shared state, managed Dispatches, Episodes, or Run authority in an attended Level 1 skill.
 
-The port preserves the deliberation method without claiming lifecycle or continuity guarantees that the Level 1 harness does not provide.
+The port preserves the deliberation method without claiming lifecycle, authority, or Independence guarantees that the Level 1 harness does not provide.
