@@ -1,0 +1,6 @@
+interface:
+  display_name: "Autonomous Grill"
+  short_description: "Cross-model grilling with human verdicts"
+  default_prompt: "Use $autonomous-grill to stress-test this plan across model families, then give me the proposed decisions to review."
+policy:
+  allow_implicit_invocation: false
