@@ -177,6 +177,27 @@ export function parseWorkbenchProjection(value) {
   return value;
 }
 
+export const WORKBENCH_SHELL_PROFILE = {
+  id: "shell.workbench",
+  title: "Pi Workbench",
+  description: "Use the existing Workbench primary view as the starting composition while PI WEB keeps protected recovery available.",
+  recommended: true,
+  defaultPrimaryView: "workstreams.view",
+  navigationEntries: ["workstreams.navigation"],
+  surfaceContributions: ["core:workspace.files", "core:workspace.git", "core:workspace.terminal", "run.panel"],
+  regions: {
+    "context-bar": [],
+    status: [],
+    "surface-strip": [],
+    "contextual-actions": [],
+  },
+  initialPanels: {
+    navigation: { visible: false, size: 320 },
+    workspace: { visible: false, size: 480 },
+  },
+  presentationProfile: "compact",
+};
+
 export default {
   apiVersion: 1,
   name: "Pi Workbench",
@@ -186,6 +207,7 @@ export default {
     installWorkstreamsElement();
     return {
       contributions: {
+        shellProfiles: [WORKBENCH_SHELL_PROFILE],
         navigationEntries: [
           {
             id: "workstreams.navigation",

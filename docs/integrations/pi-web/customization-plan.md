@@ -148,7 +148,7 @@ core primary view rather than an unreplaceable assumption or a plugin-reimplemen
 ### 3. Shell profiles
 
 A shell profile composes qualified contribution identifiers and presentation defaults without
-containing arbitrary markup. Its eventual interface should express:
+containing arbitrary markup. The isolated unified-shell candidate implements a bounded interface for:
 
 - Default primary view.
 - Ordered navigation sections and workspace tools.
@@ -310,17 +310,23 @@ the hosting seam, not arbitrary navigation replacement or broader shell composit
 
 ### Phase 7 — Shell profiles
 
-Begin only after primary views and at least two genuinely different shell compositions are useful.
+The isolated unified-shell candidate now supplies this seam after the default and Workbench
+compositions proved the need. It is not released or owner-accepted.
 
-1. Represent the current PI WEB composition as the immutable default profile.
-2. Add profile registration and validation over qualified contribution identifiers.
-3. Add explicit user selection, preview, reset, persistence, and missing-plugin fallback.
-4. Prevent profiles from suppressing protected shell controls.
-5. Make profile activation transactional so an invalid profile cannot strand the user.
-6. Express the proven Workbench composition entirely through registered contributions.
+1. The current PI WEB composition is the protected default profile.
+2. Registration validates qualified contribution identifiers and quarantines an invalid profile
+   without dropping the plugin's other contributions.
+3. Settings provides explicit selection, transactional preview, apply, reset, versioned persistence,
+   and temporary missing-plugin fallback without erasing user intent.
+4. PI WEB owns fixed regions, overflow, error isolation, and the protected profile-reset control.
+5. A default-view render failure returns to the last valid profile and quarantines that profile for
+   the tab until an explicit retry or reset.
+6. The Workbench composition is declared through registered contributions while its existing inner
+   shell remains for the subsequent migration phase.
 
-**Exit:** users can switch between default and Workbench compositions and always recover to the PI
-WEB default.
+**Candidate exit:** controlled browser evidence switches from default to Workbench through Settings,
+opens Workbench from a root URL with no explicit view, and returns to PI WEB through the protected
+reset. Owner Acceptance and the one-shell migration remain separate.
 
 ## Upstream change structure
 

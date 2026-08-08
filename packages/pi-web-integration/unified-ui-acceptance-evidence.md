@@ -1,6 +1,6 @@
 # Unified PI WEB interface acceptance evidence
 
-Status: **experimental controlled-session candidate is red-capable; release browser gate remains blocked.**
+Status: **experimental shell-seam candidate is red-capable; composition migration and release browser gate remain blocked.**
 
 This record covers the unified Chats + Workstreams interface implemented through PI WEB commits
 `f655413`, `d8701d5`, `9e113ce`, and `75442b9`, and Workbench commits `7006271`, `e0af015`, `3550267`,
@@ -103,6 +103,56 @@ short owned root passed, so no product failure was hidden.
 
 The experiment deliberately remains red/partial until later governing-plan phases remove the
 composition mismatch and provide approved no-model seams for pending ask and active context truth.
+
+## Phase 2 shell-profile seam candidate
+
+PI WEB candidate commit `32269d9e7536101aa2f31b59171a50f44f40cbc9` adds a generic public
+shell-profile seam with qualified contribution selection, four PI WEB-owned fixed regions, bounded
+initial panel state, presentation recommendations, provenance, Settings preview/apply/reset,
+versioned browser persistence, missing-plugin fallback, and tab-local quarantine after deterministic
+default-view failure. Invalid profile metadata is reported without dropping the plugin's unrelated
+contributions. A valid preview survives background reconciliation; an invalid preview cancels back
+to its saved composition. Initial panel state applies only on an actual profile transition. The core
+profile retains PI WEB's narrow-navigation URL behavior.
+
+The Workbench plugin declares a recommended profile over its existing primary view and includes its
+Run panel alongside PI WEB Files, Git, and Terminal. This phase does not remove the existing inner
+Workbench shell; that remains the expected Phase 3 red assertion.
+
+The final controlled browser run used Settings to preview and apply the Workbench profile, reloaded a
+root URL with no explicit `view`, observed `pi-workbench:workstreams.view` as the selected default,
+verified the protected profile toolbar stayed in normal layout flow, and reset to
+`core:shell.default` through the Pi menu. The check
+`shell-profile-workbench-select-default-reset` passed. The aggregate command intentionally returned
+`partial` because `CURRENT_COMPOSITION_MISMATCH`, `LIVE_ASK_UNREACHABLE`, and
+`CONTEXT_USAGE_UNREACHABLE` belong to later phases. Cleanup again reported all three owned processes
+exited and removed the runtime root.
+
+Final isolated checks:
+
+- PI WEB `npm run verify`: 2,596 passed and 3 documented skips across 290 files; typecheck, lint, and
+  Knip passed.
+- PI WEB `npm run build`: passed with the existing large-chunk advisory.
+- Workbench `npm --prefix packages/pi-web-integration run check`: 88 passed.
+- Generic and Workbench composition tests cover qualification, ordering, registration-error
+  quarantine, transactional profile selection, explicit-route preservation, no-view defaults,
+  mobile navigation decoding, preview restoration, missing-plugin intent retention, panel-state
+  reconciliation, render-failure quarantine, fixed-region overflow, disabled reasons, and protected
+  reset.
+- PI WEB core and public profile types contain no Workstream terminology.
+
+Anthropic cross-family review iteratively found route clobbering, partial plugin registration,
+persisted-intent loss, a missing Workbench panel, a default-view gap, tautological browser evidence,
+initial-panel replay, mobile navigation regression, preview teardown, stale browser evidence, and
+render-failure rearming. Each finding received a focused reproduction and repair. A final raw
+Anthropic rerun was unavailable because that CLI reported exhausted extra usage; this is recorded as
+a provider degradation rather than a fresh independent pass. The final render-failure finding was
+reconciled with a tab-local quarantine test, full verification, a rebuilt client, and a fresh
+controlled browser run.
+
+Design judgment keeps region callback failures isolated after activation, treats initial panel sizes
+as defaults below explicit user widths, keeps presentation recommendations opt-in, and requires an
+explicit user retry or reset before a default view that threw can re-enter the tab.
 
 ## Release blockers and deviations
 

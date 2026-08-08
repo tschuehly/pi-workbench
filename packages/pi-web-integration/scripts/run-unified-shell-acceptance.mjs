@@ -141,6 +141,49 @@ async function runBrowserAcceptance(cdp, webPort, controlledFixture) {
   await waitForDeepText(cdp, "Controlled associated sessions", 15_000);
   process.stdout.write(`${JSON.stringify({ type: "ACCEPTANCE_PROGRESS", phase: "app-mounted" })}\n`);
   process.stdout.write(`${JSON.stringify({ type: "ACCEPTANCE_PROGRESS", phase: "workbench-visible" })}\n`);
+
+  await clickDeepSelector(cdp, `summary[aria-label="Open Pi menu"]`);
+  await clickDeepText(cdp, "Settings");
+  await waitForDeepText(cdp, "Appearance", 5_000);
+  await clickDeepText(cdp, "Appearance");
+  await waitForDeepText(cdp, "Shell profile", 5_000);
+  await clickDeepSelector(cdp, `input[name="shell-profile"][value="pi-workbench:shell.workbench"]`);
+  const previewDiagnostic = await evaluate(cdp, `(() => { const app = document.querySelector("pi-web-app"); const dialog = app?.shadowRoot?.querySelector("settings-dialog"); return { settingsSection: app?.settingsSection, previewShellProfileId: app?.previewShellProfileId, settingsDialog: dialog !== null, shellProfileError: app?.shellProfileError }; })()`);
+  process.stdout.write(`${JSON.stringify({ type: "ACCEPTANCE_PROGRESS", phase: "shell-profile-preview", detail: previewDiagnostic })}\n`);
+  await clickDeepText(cdp, "Apply shell");
+  await waitForBrowserExpression(cdp, `JSON.parse(localStorage.getItem("pi-web:shell-profile:v1") ?? "{}").profileId === "pi-workbench:shell.workbench"`, 5_000);
+  await clickDeepSelector(cdp, `button[aria-label="Close settings"]`);
+
+  await navigate(cdp, baseUrl, 20_000);
+  await waitForDeepText(cdp, "Shell profile · Pi Workbench", 15_000);
+  await waitForDeepText(cdp, "Controlled associated sessions", 15_000);
+  const selectedProfile = await evaluate(cdp, `(() => {
+    const app = document.querySelector("pi-web-app")?.shadowRoot;
+    const toolbar = app?.querySelector(".shell-profile-toolbar");
+    const menu = toolbar?.querySelector("app-pi-menu")?.shadowRoot;
+    const reset = [...(menu?.querySelectorAll("button") ?? [])].find((button) => button.textContent?.trim() === "Use default PI WEB profile");
+    const toolbarRect = toolbar?.getBoundingClientRect();
+    const triggerRect = menu?.querySelector("summary")?.getBoundingClientRect();
+    return {
+      routeView: new URL(location.href).searchParams.get("view"),
+      primaryView: app?.querySelector("app-primary-view")?.contribution?.id,
+      toolbarInline: toolbar instanceof HTMLElement && toolbar.parentElement?.tagName === "MAIN",
+      triggerInsideToolbar: toolbarRect !== undefined && triggerRect !== undefined && triggerRect.top >= toolbarRect.top && triggerRect.bottom <= toolbarRect.bottom,
+      resetAvailable: reset instanceof HTMLButtonElement,
+    };
+  })()`);
+  await clickDeepSelector(cdp, `summary[aria-label="Open Pi menu"]`);
+  const resetInvoked = await clickDeepText(cdp, "Use default PI WEB profile");
+  await waitForBrowserExpression(cdp, `JSON.parse(localStorage.getItem("pi-web:shell-profile:v1") ?? "{}").profileId === "core:shell.default"`, 5_000);
+  const resetProfileId = await evaluate(cdp, `JSON.parse(localStorage.getItem("pi-web:shell-profile:v1") ?? "{}").profileId`);
+  checks.push({
+    id: "shell-profile-workbench-select-default-reset",
+    passed: previewDiagnostic.settingsSection === "appearance" && previewDiagnostic.previewShellProfileId === "pi-workbench:shell.workbench" && previewDiagnostic.settingsDialog === true && previewDiagnostic.shellProfileError === "" && selectedProfile.routeView === null && selectedProfile.primaryView === "pi-workbench:workstreams.view" && selectedProfile.toolbarInline && selectedProfile.triggerInsideToolbar && selectedProfile.resetAvailable && resetInvoked === true && resetProfileId === "core:shell.default",
+    detail: JSON.stringify({ previewDiagnostic, ...selectedProfile, resetInvoked, resetProfileId }),
+  });
+  await navigate(cdp, firstUrl.href, 20_000);
+  await waitForDeepText(cdp, "Controlled associated sessions", 15_000);
+
   const duplicateComposition = await evaluate(cdp, `(() => {
     const find = (root, selector) => {
       const direct = root.querySelector?.(selector);
@@ -268,6 +311,45 @@ async function requestJson(url, options = {}) {
     if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${url.pathname}: ${text.slice(0, 500)}`);
     return JSON.parse(text);
   } finally { clearTimeout(timer); }
+}
+
+async function clickDeepSelector(cdp, selector) {
+  return evaluate(cdp, `(() => {
+    const find = (root) => {
+      const direct = root.querySelector?.(${JSON.stringify(selector)});
+      if (direct) return direct;
+      for (const node of root.querySelectorAll?.("*") ?? []) if (node.shadowRoot) { const nested = find(node.shadowRoot); if (nested) return nested; }
+      return undefined;
+    };
+    const target = find(document);
+    if (!(target instanceof HTMLElement)) throw new Error("Deep selector not found: " + ${JSON.stringify(selector)});
+    target.click();
+    return true;
+  })()`);
+}
+
+async function clickDeepText(cdp, text) {
+  return evaluate(cdp, `(() => {
+    const candidates = [];
+    const visit = (root) => {
+      for (const node of root.querySelectorAll?.("button, summary") ?? []) candidates.push(node);
+      for (const node of root.querySelectorAll?.("*") ?? []) if (node.shadowRoot) visit(node.shadowRoot);
+    };
+    visit(document);
+    const target = candidates.find((node) => node.textContent?.trim() === ${JSON.stringify(text)} || [...node.querySelectorAll("*")].some((child) => child.children.length === 0 && child.textContent?.trim() === ${JSON.stringify(text)}));
+    if (!(target instanceof HTMLElement)) throw new Error("Deep control not found: " + ${JSON.stringify(text)});
+    target.click();
+    return true;
+  })()`);
+}
+
+async function waitForBrowserExpression(cdp, expression, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await evaluate(cdp, expression)) return;
+    await delay(100);
+  }
+  throw new Error(`Browser expression timed out: ${expression}`);
 }
 
 async function waitForDeepText(cdp, text, timeoutMs) {
