@@ -4,6 +4,9 @@
 
 Investigates how Pi Workbench should become more prompt-cache-aware, and whether it is cheaper
 to compact context more often or to send cache-renewal ("keepalive") pings during idle gaps.
+Extended on 2026-08-08 with the attended child-execution question: whether long subagent and
+worker dispatches should block the lead in the foreground, run in the background under
+monitoring, or report back periodically.
 Checked against Anthropic, OpenAI, and Google Gemini first-party documentation (fetched
 2026 vintage docs directly, not summaries) and against Pi's own source
 (`@earendil-works/pi-coding-agent` installed at
@@ -124,6 +127,51 @@ Adjust the right side for expected cache misses and account for stable system/to
 | Gemini (implicit) | Not documented at all; no TTL, no renewal knob | Pings cannot be reasoned about — **unknown/unsupported claim space**. |
 | Gemini (explicit) | Not applicable — TTL is set/updated explicitly, not touch-renewed | Sending traffic does not extend TTL per the docs; only `caches.update()` changes it, and that continues to accrue the hourly storage fee for whatever TTL you set. |
 
+## Child execution: foreground blocking vs. background monitoring (2026-08-08)
+
+Motivating observation from attended use: a foreground subagent or worker dispatch can run 10+
+minutes, after which the lead's next request re-bills its whole prefix. Verified against
+`extensions/subagent/index.ts` in this repository.
+
+### Verified mechanics
+
+- While a foreground `subagent` or `worker_dispatch` tool call blocks, the parent model issues
+  **no provider requests**. `streamToResult` renders child observations through the tool-call
+  `onUpdate` channel on a 5-second heartbeat, which is TUI presentation only; nothing reaches the
+  model until the call returns. Anthropic's TTL is measured from request start (cited above), so
+  any foreground child that outlives the active TTL guarantees one idle-driven miss on return:
+  `miss_cost(P) ≈ 1.15 × P × r_in` at short retention.
+  - Source: `extensions/subagent/index.ts` (`streamToResult`, heartbeat `setInterval(renderUpdate, 5_000)`).
+- Mid-call "recap" reporting **cannot** refresh the cache. Tool content enters the model
+  conversation only when the call returns, so a recap cadence requires ending the call early
+  every interval and forcing a full model turn on the interim result. That is polling by
+  construction, with a narrative recap appended to the prefix each interval instead of a status
+  one-liner.
+- `subagent_status` is already the cheap poll primitive: one real request returning a compact
+  state-plus-latest-observation line. Each poll costs ≈ `P × r_read` plus a small prefix append,
+  and renews the TTL as a side effect.
+  - Source: `extensions/subagent/index.ts` (`subagent_status` handler).
+- Children cannot share the parent's cache regardless of strategy: caching is per-conversation
+  prefix, and Level 1 children receive fresh self-contained assignments rather than transcript
+  forks (Decision 88). A fresh subagent always pays its own first prefix write. Long retention
+  does, however, protect a durable worker's own resumed session across dispatches spaced under
+  the retention TTL.
+
+### Strategies compared (Anthropic pricing, parent prefix `P`, child duration `D`)
+
+| Strategy | Keep-warm cost over one child | Notes |
+|---|---|---|
+| Foreground, short retention (today's default) | `1.15 × P × r_in` miss per dispatch with `D` > 5m | The observed pain; guaranteed miss. |
+| Background + `subagent_status` poll each <5m | `⌈D/4.5m⌉ × 0.10 × P × r_in` | Beats one miss while polls ≤ ~11 → `D` under roughly 50 minutes; appends a poll turn per interval; pure sleep-polling is agentic busy-waiting and gives the model repeated chances to meddle mid-child. |
+| Foreground with forced periodic returns ("recaps") | Same request cadence as polling | Strictly dominated: identical TTL effect, larger appended content, added adapter complexity, same steering risk. Rejected. |
+| Long retention (`cacheRetention: "long"` / `PI_CACHE_RETENTION=long`) | One-time write premium `+0.75 × r_in` per token written once | Children up to 1h block in the foreground and resume as a 0.10× read; no polls, no appended turns; consistent with the 8-renewal break-even above. Dominant for the common 10–60-minute case. |
+| Dispatch after checkpoint/compaction | `C_compact` once; the eventual miss re-bills only the shrunken prefix `S` | The prefix-size lever; the right complement for children expected to exceed the active retention TTL. |
+| Background + end the attended turn | Zero | When the parent is truly idle and a human is present, the human's return is the wake event; the inter-turn miss is already the interactive baseline that Pi's cache-miss notice tracks. |
+
+Backgrounding is genuinely better than foreground blocking only when the parent has real parallel
+work — then cache renewal is a side effect of useful requests rather than a cost. As a pure
+cache workaround it is a worse-dressed ping scheduler.
+
 ## Implications for Pi Workbench
 
 - Treat "cache-aware" as two separable levers, matching the break-even analysis: **(a) prefix-size management** (compaction, summarization cadence, what goes in the system prompt/tools) and **(b) idle-gap management** (pings/keepalives, model-switch avoidance). Conflating them in a single "compact more" or "ping more" answer is a category error the sources make clear providers themselves separate (Anthropic ties TTL to *time*, not to prompt size; compaction changes *size*, not time).
@@ -134,6 +182,17 @@ Adjust the right side for expected cache misses and account for stable system/to
 - Recommendation 4 — do not treat OpenAI the same as Anthropic for pings: OpenAI has never published a no-op-ping endorsement, and its read discount for the currently-relevant model families beyond `gpt-4o` was not directly verified here (marked uncertain above). Before extending any Anthropic-style ping/retention scheduler to OpenAI-backed Workstreams, re-verify the GPT-5.6+ cache-read discount and TTL-refresh semantics directly against the live pricing page and caching guide, since `prompt_cache_options.ttl` is described as a minimum, not a hard boundary, and OpenAI may already be retaining longer than assumed.
 - Recommendation 5 — add GPT-5.6+ explicit stable-prefix breakpoint support upstream in Pi. The current installed OpenAI Responses transport supplies a stable `prompt_cache_key`, but does not emit `prompt_cache_breakpoint` markers for tools/system or set explicit-only mode during normal cached operation. OpenAI now warns that its implicit latest-message breakpoint can repeatedly write a changing prefix; stable tool/system breakpoints are therefore likely a larger win than synthetic traffic.
 - Recommendation 6 — compaction cadence should remain correctness-first and phase-aware, but cache-read economics should be measured too. Earlier compaction does not fix idle expiry; it pays only when its one-time summarization plus cold-start cost is lower than expected savings from a smaller prefix across later cache reads and writes. Evaluate that inequality from session usage rather than compacting on a fixed, more aggressive schedule.
+- Recommendation 7 — child-execution launch policy, in preference order (adoption deferred; see
+  Deferred Design Decision 19 in `docs/foundation/decisions.md`): (a) long cache retention as the
+  lead-session posture whenever child dispatches or human pauses regularly exceed 5 minutes;
+  (b) foreground blocking stays the default control flow for a single child — with long retention
+  it resumes as a cache read for any child under an hour; (c) background dispatch is for fan-out
+  or genuinely parallel lead work, not cache management; (d) children expected to outlast the
+  active retention TTL are dispatched immediately after a phase checkpoint so the unavoidable
+  miss hits a small prefix; (e) an idle attended lead backgrounds the child and ends its turn
+  instead of keep-warming. Do not add mid-call recap returns or an automatic ping scheduler at
+  Level 1 (Recommendation 2 stands). Subscription-metered sessions swap dollars for quota with
+  the same ordering.
 
 ## Confidence
 
@@ -141,4 +200,9 @@ Adjust the right side for expected cache misses and account for stable system/to
 - OpenAI figures (min prefix, TTL semantics, gpt-4o cache-read discount): **high** for what was quoted; **explicitly flagged uncertain** where noted (GPT-5.6+ read discount, whether OpenAI TTL truly never resets on reuse, no-op ping safety).
 - Gemini figures (implicit min tokens, explicit TTL default/no-bounds, storage-fee structure, Gemini 2.5 Flash sample pricing): **high** — quoted directly from `ai.google.dev/gemini-api/docs/generate-content/caching` and `ai.google.dev/gemini-api/docs/pricing`; implicit-cache TTL is **explicitly unknown** (not published anywhere found).
 - Pi source claims (default retention, cache_control application, cost formulas, cache-waste instrumentation, compaction cache-write disabling, absence of keepalive logic): **high** — read directly from the installed `@earendil-works/pi-coding-agent` distribution and its own docs; version-specific, so re-verify after any Pi upgrade since these are implementation details, not documented public API guarantees.
+- Child-execution mechanics (blocking `streamToResult` issues no parent requests, `onUpdate` is
+  presentation-only, `subagent_status` output shape): **high** — read directly from
+  `extensions/subagent/index.ts` in this repository on 2026-08-08; re-verify if the extension's
+  streaming or status contract changes. The strategy table's arithmetic derives from the cited
+  provider numbers and has not been validated against live billing data.
 - Break-even formulas in this document are **original derivations** from the cited provider numbers and Pi's own `cache-stats.js` miss-cost formula; they are algebraically straightforward but have not been empirically validated against live billing data. Include real output overhead, user-turn timing, and observed provider usage before making routing policy load-bearing.
