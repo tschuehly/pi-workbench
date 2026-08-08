@@ -37,8 +37,10 @@ V1 implements Level 1 human–Pi pairing and does not use managed Dispatches, Ep
 Subagents. While the human attends the session, the active interactive lead may launch bounded
 ephemeral child Pi processes through the harness's subagent tool and remains accountable for their
 assignments and reconciliation. Those children are ordinary Pi processes: their output remains
-session material and grants no durable actor identity, workspace lease, Run authority, or recovery
-guarantee. The [Operating Levels specification](../foundation/operating-levels.md) defines prior plan
+session material and grants no workspace lease, Run authority, or recovery guarantee. A durable
+attended worker may additionally retain a recorded machine-local identity and resume its persisted
+child session across bounded attended dispatches; that identity is unmanaged, executes only while
+the lead attends, and still grants no Run authority, workspace lease, or managed recovery. The [Operating Levels specification](../foundation/operating-levels.md) defines prior plan
 agreement, contract-governed work, and controller-managed execution as Levels 2–4 concepts without
 making them implementation commitments.
 

@@ -59,7 +59,7 @@ Every child starts with fresh Model Context. The extension does not fork or copy
 
 Each child uses Pi's standard machine-local persistent session storage. The adapter captures the Pi session identifier in result metadata so a failed execution can be inspected. It does not copy session state into the repository, create a second ledger, reopen a failed session automatically, or claim that the child is recoverable.
 
-Persisting a child session is evidence and a future continuity primitive, not Worker continuity. Durable Workers remain deferred. When implemented, each Worker action will still be a bounded execution request carrying validated Logical Actor and continuity references; an idle subprocess will not define Worker identity.
+Persisting a child session is evidence and the continuity primitive reused by the [Level 1 durable worker plan](level-1-durable-workers.md). Each attended worker action is still a bounded execution request carrying a validated identity and continuation reference; an idle subprocess never defines Worker identity, and managed Worker authority remains deferred.
 
 ## Capabilities and mutation
 
@@ -150,8 +150,8 @@ Use a fake RPC process for deterministic lifecycle and failure tests. Keep one r
 
 Do not implement these features as part of this plan:
 
-- durable Worker continuity or Logical Actor recovery;
-- durable or unattended background execution that survives the attended parent lifetime (in-session non-blocking launch is supported; a child still dies with the session);
+- managed Worker continuity or Logical Actor recovery beyond the attended durable workers in the [Level 1 durable worker plan](level-1-durable-workers.md);
+- durable or unattended background execution that survives the attended parent lifetime (in-session non-blocking launch is supported; a child still dies with the session, and a durable worker persists only identity and a session reference);
 - parent-transcript forks;
 - project or user-authored child profiles;
 - structured result schemas and correction turns;

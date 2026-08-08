@@ -5,6 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
+import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
 import { progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -33,6 +34,7 @@ const COGNITIVE_ROLES = [
   "independent-judgment", "challenge", "synthesis", "independent-review", "mechanics",
 ] as const;
 const INDEPENDENT_ROLES = new Set<string>(["independent-judgment", "challenge", "independent-review"]);
+const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
 
 const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output" }),
@@ -46,16 +48,38 @@ const IdParam = Type.Object({ executionId: Type.String({ minLength: 1, descripti
 const StatusParams = Type.Object({ executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect; omit to list every child launched this session" })) });
 const CancelParams = Type.Object({ executionId: Type.String({ minLength: 1 }), reason: Type.Optional(Type.String({ description: "Why the child is being cancelled" })) });
 
+const WorkerCreateParams = Type.Object({
+  name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),
+  scope: Type.String({ minLength: 1, description: "One semantic scope statement this worker retains context for" }),
+  profile: StringEnum(Object.keys(PROFILES) as (keyof typeof PROFILES)[], { description: "Bundled Level 1 child behavior profile" }),
+});
+const WorkerDispatchParams = Type.Object({
+  workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
+  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
+  cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
+  background: Type.Optional(Type.Boolean({ description: "Launch and return a handle immediately instead of blocking. Reconcile later with subagent_collect." })),
+  acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
+});
+const WorkerStatusParams = Type.Object({ workerId: Type.Optional(Type.String({ minLength: 1, description: "One worker to inspect; omit to list every durable worker for this machine" })) });
+const WorkerRetireParams = Type.Object({
+  workerId: Type.String({ minLength: 1 }),
+  reason: Type.String({ minLength: 1, description: "Why the worker's scope is finished or its context is no longer trustworthy" }),
+});
+
 type Observation = { type: string; at: string; detail?: unknown };
 type ProgressEntry = { at: string; key: string; text: string };
-type LaunchMeta = { profile: string; cognitiveRole: string; taskPreview: string; launchedAt: string };
+type LaunchMeta = { profile: string; cognitiveRole: string; taskPreview: string; launchedAt: string; workerId?: string; workerName?: string };
 
 export default function subagentExtension(pi: ExtensionAPI) {
   const adapter = new PiRpcExecutionAdapter();
   const launched = new Map<string, LaunchMeta>();
+  const registry = createUserLocalWorkerRegistry();
+  const workerExecutions = new Map<string, string>();
+  const pendingWorkerCompletions = new Set<Promise<unknown>>();
 
   pi.on("session_shutdown", async () => {
     await adapter.cancelAll("Attended parent session ended.");
+    await Promise.allSettled([...pendingWorkerCompletions]);
   });
 
   pi.registerTool({
@@ -160,7 +184,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       const lines = summaries.map((s) => {
         const meta = launched.get(s.executionId);
         const state = s.running ? "running" : (s.outcome ?? "finished");
-        return `- ${s.executionId} [${state}] ${s.profile} · ${s.cognitiveRole}${meta ? ` — ${meta.taskPreview}` : ""}`;
+        return `- ${s.executionId} [${state}] ${s.profile} · ${s.cognitiveRole}${meta?.workerName !== undefined ? ` · worker \"${meta.workerName}\"` : ""}${meta ? ` — ${meta.taskPreview}` : ""}`;
       });
       return { content: [{ type: "text", text: lines.join("\n") }], details: { children: summaries } };
     },
@@ -178,6 +202,183 @@ export default function subagentExtension(pi: ExtensionAPI) {
         return { content: [{ type: "text", text: `${params.executionId}: ${receipt.outcome}.` }], details: receipt, ...(receipt.outcome === "outcome_unknown" ? { isError: true } : {}) };
       } catch (error) {
         return failure("outcome_unknown", errorMessage(error));
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "worker_create",
+    label: "Worker create",
+    description: "Create one durable attended worker: a machine-local identity bound to one semantic scope and this repository root. Creation writes a record and starts no process. Prefer fresh subagents; create a worker only when repeated bounded actions in one scope benefit from preserved context.",
+    promptSnippet: "Create one durable attended worker for one semantic scope",
+    parameters: WorkerCreateParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      try {
+        const record = await registry.create({ name: params.name, scope: params.scope, profile: params.profile, repositoryRoot: ctx.cwd });
+        return {
+          content: [{ type: "text", text: `Created worker ${record.workerId} \"${record.name}\" (${record.profile}) for scope \"${record.scope}\", bound to ${record.repositoryRoot}. Dispatch bounded assignments with worker_dispatch.` }],
+          details: record,
+        };
+      } catch (error) {
+        return failure("preflight_failed", errorMessage(error));
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "worker_dispatch",
+    label: "Worker dispatch",
+    description: "Dispatch one bounded attended assignment to a durable worker, resuming its persisted Pi session for continuity within its scope. Same lifecycle as subagent: streams progress and blocks by default, background:true returns a handle for subagent_collect. One dispatch at a time per worker; no execution survives the attended session.",
+    promptSnippet: "Dispatch one bounded assignment to a durable attended worker",
+    promptGuidelines: [
+      "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
+      "Keep every worker task self-contained with paths, constraints, and expected output; continuity supplements explicit tasking.",
+      "Independence roles are subagent-only: never present worker output as independent judgment or review.",
+      "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
+      "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
+    ],
+    parameters: WorkerDispatchParams,
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      if (INDEPENDENT_ROLES.has(params.cognitiveRole)) {
+        return failure("preflight_failed", `Independence requires fresh context; Cognitive Role '${params.cognitiveRole}' is subagent-only.`);
+      }
+      let begin;
+      try {
+        begin = await registry.beginDispatch(params.workerId, { pid: process.pid, repositoryRoot: ctx.cwd, acknowledgeInspection: params.acknowledgeInspection === true });
+      } catch (error) {
+        return failure("preflight_failed", errorMessage(error));
+      }
+      const abandon = async (diagnostic: string) => {
+        try { await registry.completeDispatch(params.workerId, begin.lockToken, { outcome: "preflight_failed", cognitiveRole: params.cognitiveRole, diagnostic }); } catch {}
+      };
+      const profile = PROFILES[begin.profile as keyof typeof PROFILES];
+      if (profile === undefined) {
+        await abandon(`Worker profile '${begin.profile}' is not a bundled profile.`);
+        return failure("preflight_failed", `Worker profile '${begin.profile}' is not a bundled profile.`);
+      }
+      let binding;
+      try {
+        binding = await resolveBinding(params.cognitiveRole);
+      } catch (error) {
+        await abandon(errorMessage(error));
+        return failure("preflight_failed", errorMessage(error));
+      }
+      const continuing = begin.continuationSessionId !== null;
+      const preamble = `You are the durable attended worker \"${begin.name}\" with the semantic scope \"${begin.scope}\".${continuing ? " This dispatch resumes your persisted session; the earlier conversation above is your own prior work in this scope." : " This is your first dispatch in this scope."}`;
+      let receipt;
+      try {
+        receipt = await adapter.dispatch({
+          task: `${profile.instruction}\n\n${preamble}\n\nAssignment:\n${params.task}`,
+          profile: begin.profile,
+          cognitiveRole: params.cognitiveRole,
+          cwd: ctx.cwd,
+          tools: [...profile.tools],
+          binding,
+          ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
+        });
+      } catch (error) {
+        await abandon(errorMessage(error));
+        return failure("preflight_failed", errorMessage(error));
+      }
+      workerExecutions.set(params.workerId, receipt.executionId);
+      launched.set(receipt.executionId, {
+        profile: begin.profile,
+        cognitiveRole: params.cognitiveRole,
+        taskPreview: bounded(params.task, 200),
+        launchedAt: receipt.acceptedAt,
+        workerId: params.workerId,
+        workerName: begin.name,
+      });
+      const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
+      heartbeat.unref();
+      const completion = (async () => {
+        let usage: unknown;
+        const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
+        const final = await adapter.result(receipt.executionId);
+        await usageWatch;
+        clearInterval(heartbeat);
+        await registry.completeDispatch(params.workerId, begin.lockToken, {
+          executionId: receipt.executionId,
+          outcome: final.outcome,
+          cognitiveRole: params.cognitiveRole,
+          provider: final.provider,
+          model: final.model,
+          effort: final.effort,
+          sessionId: final.sessionId,
+          acceptedAt: receipt.acceptedAt,
+          endedAt: new Date().toISOString(),
+          usage,
+          diagnostic: final.diagnostic,
+        });
+      })();
+      const tracked = completion.catch(() => { clearInterval(heartbeat); });
+      pendingWorkerCompletions.add(tracked);
+      void tracked.then(() => pendingWorkerCompletions.delete(tracked));
+
+      if (params.background === true) {
+        return {
+          content: [{ type: "text", text: `Dispatched worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). Reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
+          details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, continuing, acceptedAt: receipt.acceptedAt },
+        };
+      }
+
+      const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true });
+      await tracked;
+      return result;
+    },
+  });
+
+  pi.registerTool({
+    name: "worker_status",
+    label: "Worker status",
+    description: "Inspect one durable worker's record and any live dispatch, or list every durable worker recorded for this machine.",
+    promptSnippet: "Inspect durable attended workers",
+    parameters: WorkerStatusParams,
+    async execute(_toolCallId, params) {
+      try {
+        if (params.workerId !== undefined) {
+          const record = await registry.inspect(params.workerId);
+          const latest = record.receipts[record.receipts.length - 1];
+          const lines = [
+            `${record.workerId} \"${record.name}\" (${record.profile})${record.retired !== null ? ` [retired ${record.retired.at}: ${record.retired.reason}]` : ""}`,
+            `Scope: ${record.scope}`,
+            `Root: ${record.repositoryRoot} · created ${record.createdAt} · ${record.receipts.length} recorded dispatch(es) · latest session ${record.sessionLineage[record.sessionLineage.length - 1] ?? "none"}`,
+          ];
+          if (record.lock !== null) lines.push(`Locked by pid ${record.lock.pid} since ${record.lock.acquiredAt} (last heartbeat ${record.lock.heartbeatAt}).`);
+          if (record.requiresInspection !== null) lines.push(`Requires inspection since ${record.requiresInspection.at}: ${record.requiresInspection.diagnostic ?? "unknown outcome"}. Dispatch again only with acknowledgeInspection:true.`);
+          if (latest !== undefined) lines.push(`Last dispatch: ${latest.outcome} · ${latest.provider ?? "?"}/${latest.model ?? "?"}:${latest.effort ?? "?"} · ended ${latest.endedAt}${latest.usage !== null ? ` · usage ${bounded(JSON.stringify(latest.usage), 200)}` : ""}`);
+          const executionId = workerExecutions.get(params.workerId);
+          let live;
+          if (executionId !== undefined) {
+            try {
+              const status = adapter.status(executionId);
+              if (status.running) { live = status; lines.push(`Live dispatch ${executionId}: ${status.latestObservation === undefined ? "no activity yet" : progressText(status.latestObservation)}`); }
+            } catch {}
+          }
+          return { content: [{ type: "text", text: lines.join("\n") }], details: { record, live } };
+        }
+        const summaries = await registry.list();
+        if (summaries.length === 0) return { content: [{ type: "text", text: "No durable workers are recorded on this machine." }], details: { workers: [] } };
+        const lines = summaries.map((s) => `- ${s.workerId} \"${s.name}\" (${s.profile}) [${s.retired ? "retired" : s.locked ? "dispatching" : s.requiresInspection ? "needs inspection" : "idle"}] ${s.dispatchCount} dispatch(es), last ${s.latestOutcome ?? "none"} — ${s.scope}`);
+        return { content: [{ type: "text", text: lines.join("\n") }], details: { workers: summaries } };
+      } catch (error) {
+        return failure("preflight_failed", errorMessage(error));
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "worker_retire",
+    label: "Worker retire",
+    description: "Immutably retire a durable worker whose scope is finished or whose accumulated context is no longer trustworthy. A retired worker cannot be dispatched again; start a fresh worker or subagent instead.",
+    promptSnippet: "Retire one durable attended worker",
+    parameters: WorkerRetireParams,
+    async execute(_toolCallId, params) {
+      try {
+        const retired = await registry.retire(params.workerId, params.reason);
+        return { content: [{ type: "text", text: `Retired worker ${params.workerId} at ${retired.at}: ${retired.reason}` }], details: { workerId: params.workerId, ...retired } };
+      } catch (error) {
+        return failure("preflight_failed", errorMessage(error));
       }
     },
   });

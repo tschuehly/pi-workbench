@@ -101,7 +101,9 @@ export class PiRpcExecutionAdapter {
 
   #launch(state) {
     const { spec } = state;
-    const args = ["--mode", "rpc", "--provider", spec.binding.provider, "--model", spec.binding.model, "--thinking", spec.binding.effort, "--tools", spec.tools.join(","), "--name", `workbench-${spec.profile}-${state.executionId.slice(0, 8)}`];
+    const args = ["--mode", "rpc", "--provider", spec.binding.provider, "--model", spec.binding.model, "--thinking", spec.binding.effort, "--tools", spec.tools.join(",")];
+    if (spec.continuation === undefined) args.push("--name", `workbench-${spec.profile}-${state.executionId.slice(0, 8)}`);
+    else args.push("--session", spec.continuation.sessionId);
     let child;
     try {
       child = this.spawn(this.command, args, { cwd: spec.cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] });
@@ -244,9 +246,16 @@ export class PiRpcExecutionAdapter {
           void this.#terminate(state, "binding mismatch");
           return;
         }
+        const continuation = state.spec.continuation;
+        if (continuation !== undefined && data?.sessionId !== continuation.sessionId) {
+          reject(new Error(`Resumed session ${String(data?.sessionId)} does not match the requested continuation session.`));
+          void this.#terminate(state, "continuation mismatch");
+          return;
+        }
         state.prompted = true;
         state.sessionId = data?.sessionId;
         this.#emit(state, "binding_verified", { provider: model.provider, model: model.id, effort: data.thinkingLevel });
+        if (continuation !== undefined) this.#emit(state, "continuation_verified", { sessionId: continuation.sessionId });
         queueMicrotask(() => { if (!state.done) this.#sendPrompt(state); });
         resolve(data);
       };
@@ -309,6 +318,9 @@ function validateSpec(spec, hostTools, now, maxAgeMs) {
   if (!spec || typeof spec !== "object") throw typedError("INVALID_SPEC", "ResolvedExecutionSpec is required.");
   for (const field of ["task", "profile", "cognitiveRole", "cwd"]) if (typeof spec[field] !== "string" || spec[field].trim() === "") throw typedError("INVALID_SPEC", `${field} is required.`);
   if (!Array.isArray(spec.tools) || spec.tools.some((tool) => !hostTools.has(tool))) throw typedError("CAPABILITY_EXCEEDED", "Requested tools exceed the host capability ceiling.");
+  if (spec.continuation !== undefined && (typeof spec.continuation !== "object" || spec.continuation === null || typeof spec.continuation.sessionId !== "string" || spec.continuation.sessionId.trim() === "")) {
+    throw typedError("INVALID_SPEC", "continuation.sessionId must be a non-empty string when continuation is present.");
+  }
   const binding = spec.binding;
   if (!binding || binding.cognitiveRole !== spec.cognitiveRole || !binding.provider || !binding.model || !binding.effort) throw typedError("INVALID_BINDING", "Resolved binding does not match the requested Cognitive Role.");
   if (INDEPENDENT_ROLES.has(spec.cognitiveRole)) {

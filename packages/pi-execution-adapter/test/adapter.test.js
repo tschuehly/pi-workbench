@@ -41,7 +41,7 @@ function fakeRpc(options = {}) {
     for (;;) {
       const index = input.indexOf("\n"); if (index < 0) return;
       const command = JSON.parse(input.slice(0, index)); input = input.slice(index + 1); child.commands.push(command);
-      if (command.type === "get_state") send({ id: command.id, type: "response", command: "get_state", success: true, data: { model: { provider: options.provider ?? "anthropic", id: options.model ?? "claude-test" }, thinkingLevel: options.effort ?? "high", sessionId: "child-session", isStreaming: false, isCompacting: false, pendingMessageCount: 0 } });
+      if (command.type === "get_state") send({ id: command.id, type: "response", command: "get_state", success: true, data: { model: { provider: options.provider ?? "anthropic", id: options.model ?? "claude-test" }, thinkingLevel: options.effort ?? "high", sessionId: options.sessionId ?? "child-session", isStreaming: false, isCompacting: false, pendingMessageCount: 0 } });
       if (command.type === "abort" && options.settleOnAbort) queueMicrotask(() => send({ type: "agent_settled" }));
       if (command.type === "prompt") {
         send({ id: command.id, type: "response", command: "prompt", success: true });
@@ -74,6 +74,39 @@ test("launches one persistent RPC child, verifies binding, and returns compact m
   assert.equal(result.sessionId, "child-session");
   assert.equal(observations.some((value) => value.type === "thinking_progress"), true);
   assert.equal(observations.some((value) => JSON.stringify(value).includes("secret reasoning")), false);
+});
+
+test("resumes a recorded session, verifies its identity, and keeps fresh launches unnamed by session", async () => {
+  const children = [];
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, args) => { const child = fakeRpc({ sessionId: "worker-session-1" }); children.push({ child, args }); return child; } });
+  const receipt = await adapter.dispatch(spec({ continuation: { sessionId: "worker-session-1" } }));
+  const observations = [];
+  const collecting = (async () => { for await (const observation of adapter.observe(receipt.executionId)) observations.push(observation); })();
+  const result = await adapter.result(receipt.executionId);
+  await collecting;
+  const args = children[0].args;
+  assert.equal(args[args.indexOf("--session") + 1], "worker-session-1");
+  assert.equal(args.includes("--name"), false);
+  assert.equal(result.outcome, "success");
+  assert.equal(result.sessionId, "worker-session-1");
+  assert.equal(observations.some((value) => value.type === "continuation_verified" && value.detail?.sessionId === "worker-session-1"), true);
+});
+
+test("fails closed when the resumed session does not match the requested continuation", async () => {
+  const child = fakeRpc({ sessionId: "unexpected-fresh-session" });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec({ continuation: { sessionId: "worker-session-1" } }));
+  const result = await adapter.result(receipt.executionId);
+  assert.equal(result.outcome, "launch_failed");
+  assert.match(result.diagnostic ?? "", /does not match the requested continuation/);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(child.commands.some((command) => command.type === "prompt"), false);
+});
+
+test("rejects a malformed continuation before launch", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  await assert.rejects(adapter.dispatch(spec({ continuation: { sessionId: "" } })), (error) => error.code === "INVALID_SPEC");
+  await assert.rejects(adapter.dispatch(spec({ continuation: "worker-session-1" })), (error) => error.code === "INVALID_SPEC");
 });
 
 test("launches with degraded quota telemetry and makes the degradation observable", async () => {

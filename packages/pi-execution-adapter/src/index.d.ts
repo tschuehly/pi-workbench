@@ -4,7 +4,8 @@ export type QuotaTelemetryStatus = "fresh" | "stale" | "unavailable";
 export interface QuotaSnapshot { generatedAt: string | null; refreshedAt: string | null; telemetryStatus: QuotaTelemetryStatus; stale: boolean; error: string | null; relevantWindows: unknown[] }
 export interface IndependenceBinding { independentOfProvider: string; independentOfFamily: string; selectedFamily: string }
 export interface ModelBinding { cognitiveRole: string; provider: string; model: string; effort: string; independence?: IndependenceBinding; admission: QuotaAdmission; quotaSnapshot: QuotaSnapshot }
-export interface ResolvedExecutionSpec { task: string; profile: string; cognitiveRole: string; cwd: string; tools: string[]; binding: ModelBinding; timeoutMs?: number }
+export interface ExecutionContinuation { sessionId: string }
+export interface ResolvedExecutionSpec { task: string; profile: string; cognitiveRole: string; cwd: string; tools: string[]; binding: ModelBinding; timeoutMs?: number; continuation?: ExecutionContinuation }
 export interface ExecutionReceipt { executionId: string; acceptedAt: string }
 export interface ExecutionObservation { executionId: string; sequence: number; at: string; type: string; detail?: unknown }
 export interface ExecutionResult { outcome: ExecutionOutcome; text: string; profile: string; cognitiveRole: string; provider: string; model: string; effort: string; quotaAdmission: QuotaAdmission; quotaTelemetryStatus: QuotaTelemetryStatus; sessionId?: string; diagnostic?: string }

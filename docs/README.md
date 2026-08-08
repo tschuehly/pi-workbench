@@ -29,7 +29,7 @@ When documents disagree, follow the highest applicable authority and repair the 
 
 - [`plans/level-1.md`](plans/level-1.md) — approved Level 1 human–Pi pair-programming implementation plan.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — approved attended child Pi execution plan.
-- [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — proposed durable attended worker identity and resumable bounded dispatch beside ephemeral subagents.
+- [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — implemented durable attended worker identity and resumable bounded dispatch beside ephemeral subagents.
 - [`plans/pi-web-subagent-conversation-cards.md`](plans/pi-web-subagent-conversation-cards.md) — selected conversation-native PI WEB child-execution presentation direction; implementation awaits confirmation.
 - [`plans/subagent-details-envelope-experiment.md`](plans/subagent-details-envelope-experiment.md) — proposed producer-side experiment for bounded, versioned child-execution presentation details.
 - [`plans/workstream-continuation-extension.md`](plans/workstream-continuation-extension.md) — shared attended-session coordination and checkpoint continuation through PI WEB and a Pi terminal extension.

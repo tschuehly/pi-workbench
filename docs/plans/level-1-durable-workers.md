@@ -1,8 +1,10 @@
 # Level 1 Durable Worker Plan
 
-Status: proposed. Extends the implemented [Level 1 child Pi execution plan](level-1-subagents.md)
-with durable attended workers; it does not change the managed Level 4 contracts in
-[`docs/contracts/execution.md`](../contracts/execution.md).
+Status: implemented V1; deterministic evidence is maintained in `packages/worker-registry/` and
+`packages/pi-execution-adapter/`, with real resume evidence in
+`packages/worker-registry/real-smoke-evidence.md`. Extends the implemented
+[Level 1 child Pi execution plan](level-1-subagents.md) with durable attended workers; it does not
+change the managed Level 4 contracts in [`docs/contracts/execution.md`](../contracts/execution.md).
 
 ## Outcome
 
@@ -107,7 +109,7 @@ objective, relevant paths, constraints, and expected output rather than assuming
 remembers everything relevant.
 
 Context growth is bounded pragmatically in V1: `worker_status` surfaces the latest observed usage
-and session size so the lead can judge staleness, Pi's own compaction applies inside the child
+(a context-size proxy) so the lead can judge staleness, Pi's own compaction applies inside the child
 session, and the supported remedy for a degraded worker is retirement plus a fresh worker or
 subagent. Continuation Artifacts, Context Curator rotation, and automatic staleness thresholds
 remain deferred (deferred design decision 14).
@@ -149,9 +151,8 @@ additionally marks the worker as requiring inspection before the next dispatch.
    lineage and receipt recording, dispatch locking, and dead-owner recovery.
 3. **Extension tools.** Add the four worker tools to `extensions/subagent/`, wire routing,
    Independence rejection, and reconciliation through the existing companion tools.
-4. **Documentation repair.** On approval and implementation, update
-   [`level-1-subagents.md`](level-1-subagents.md) (narrow its "durable Worker continuity" deferral
-   to unattended execution), the V1 paragraph of
+4. **Documentation repair.** Update [`level-1-subagents.md`](level-1-subagents.md) (narrow its
+   "durable Worker continuity" deferral to unattended execution), the V1 paragraph of
    [`contracts/execution.md`](../contracts/execution.md), the extension and package READMEs,
    `docs/README.md`, the `AGENTS.md` router, and record the settled decision in
    [`foundation/decisions.md`](../foundation/decisions.md).
