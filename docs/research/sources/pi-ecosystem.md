@@ -35,6 +35,11 @@ Current Pi, pi-gui, provider integration, multi-model orchestration, and dynamic
     - Source: [Pi AI stream options](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/types.ts)
 15. The current `skill-incubator` repository already separates native and vendored skills, records vendored provenance, and links skills into multiple runtimes. Its declared purpose is experimentation and publication, and its active launcher and agent formats are coupled to Claude, Codex, and `claudex`.
     - Source: [skill-incubator README](/Users/tschuehly/IdeaProjects/skill-incubator/README.md)
+16. PI WEB currently binds its in-process Pi extension runtime as RPC and implements `confirm`, `select`, and `input`; editor, status, widgets, and arbitrary `custom` components remain unavailable. The browser therefore cannot truthfully claim the complete TUI contract today.
+    - Sources: sibling `pi-web` `src/server/sessions/piSessionService.ts`, `docs/plugins.md`
+17. `@narumitw/pi-tui-kit` already separates typed menu definitions from rendering and adapts its standard screens to either Pi custom TUI components or RPC `select`/`input` dialogs. `pi-goal` nevertheless gates its full manager on `ctx.mode === "tui"` and deliberately falls back to status outside the TUI.
+    - Sources: installed `@narumitw/pi-tui-kit` README and runtime; installed `@narumitw/pi-goal` `src/menu.ts`, `src/settings-ui.ts`, and README
+18. A PI WEB virtual-TUI bridge is technically plausible: retain the extension-created component in the daemon, render width-bounded ANSI lines for the browser, translate browser keys into terminal input, and relay render requests, completion, resizing, cancellation, and nested dialogs. Setting `ctx.mode` to `tui` would also select TUI-only branches in unrelated extensions, so such a claim is safe only after the advertised TUI capabilities and lifecycle semantics are actually emulated or tightly scoped.
 
 ## Implications
 
@@ -49,6 +54,7 @@ Current Pi, pi-gui, provider integration, multi-model orchestration, and dynamic
 - Use one Pi package repository as the cloneable distribution unit for extensions, curated skills, prompts, adapters, and project-independent configuration; keep project overlays in target repositories.
 - Preserve incubation and stable distribution as distinct trust levels so experimental skills do not silently enter every cloned harness.
 - Expose enhanced skill interactions through a harness-owned semantic boundary with terminal fallback instead of coupling skills directly to a graphical shell or terminal-only custom components.
+- Treat a browser-hosted virtual TUI as a compatibility experiment, not an established extension contract. Do not globally report `ctx.mode === "tui"` until the supported component, input, nesting, resize, reconnect, cancellation, and disposal semantics are explicit and verified against more than one extension.
 
 ## Confidence
 
