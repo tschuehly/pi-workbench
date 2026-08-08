@@ -1,10 +1,8 @@
 # PI WEB message-tree implementation plan
 
 Status: implementation plan for the approved message-tree prototype. The existing
-[Workbench UI plan](pi-web-workbench-ui.md) records the implemented baseline. The proposed
-[unified-shell fidelity plan](pi-web-unified-shell-prototype-fidelity.md) governs future shell
-remediation after owner approval. This plan owns generic PI WEB conversation-branch navigation; the
-prototype's Double-Escape entry must be added here before full release acceptance.
+[Workbench UI plan](pi-web-workbench-ui.md) records the implemented baseline. The approved
+[unified-shell fidelity plan](pi-web-unified-shell-prototype-fidelity.md) governs the owner-approved shell candidate experiment. This plan owns generic PI WEB conversation-branch navigation, including the prototype's Double-Escape entry.
 
 ## Outcome
 
@@ -28,7 +26,7 @@ Baselines:
 
 ## Non-goals
 
-Session-derivation coordination is shared with the [Workstream continuation extension plan](workstream-continuation-extension.md). This plan remains authoritative for fork-from-entry semantics, `session.cancelled`, derivation correlation, and the server-owned operation-token journal; `packages/workstream-session-coordination/` owns the common pending/confirmed/cancelled/failed handshake used by fork, blank launch, and checkpoint continuation. Do not implement a second Workstream coordinator behind the PI WEB contribution described below.
+Session-derivation coordination is shared with the [Workstream continuation extension plan](workstream-continuation-extension.md). This plan remains authoritative for fork-from-entry semantics, `session.cancelled`, derivation correlation, and the server-owned operation-token journal; `packages/workstream-session-coordination/` owns the common pending/confirmed/cancelled/known-failed/unknown handshake used by fork, blank launch, checkpoint continuation, and the approved no-launch promotion operation. Do not implement a second Workstream coordinator behind the PI WEB contribution described below.
 
 This work does not change Workstream checkpoints, Human Tasks, concise current-exchange grouping,
 transcript paging, Git history, child-Pi relationships, or repository undo behavior. It does not
@@ -147,19 +145,14 @@ PI WEB rejects more than one active coordinator. When none is registered, ordina
 the generic fork directly. When the Workbench plugin is installed, the coordinator applies in both
 ordinary and mounted Chat, regardless of which primary view is currently visible.
 
-The Workbench adapter resolves the source session against canonical snapshots before `prepare`.
-For fork and checkpoint continuation, exactly one open home Workstream must contain the active source session. No home, multiple homes, a closed
-home, pending/failed source state, or mismatched location blocks creation with a precise recovery
-message. `prepare` appends `session.pending` with the operation token and the corresponding optional `derivationKind`,
+The Workbench adapter resolves the source session against complete native and canonical snapshots before `prepare`. For checkpoint continuation, exactly one open home Workstream must contain the source. For fork-from-entry, one open home uses Workstream coordination; a positively classified standalone Chat uses PI WEB's generic fork and remains standalone with no Store mutation. Multiple homes, partial classification, a closed/pending/failed home, or mismatched location blocks creation with a precise recovery message. `prepare` appends `session.pending` with the operation token and the corresponding optional `derivationKind`,
 source-session provenance, and location. The projected pending association retains enough typed data
 to reconstruct the reconciliation request after process replacement. `confirm`, `cancel`, and known
 `fail` append the corresponding record idempotently. Plugin activation, reconnect completion, and
 observed pending derived associations trigger `reconcile`; reconciliation asks PI WEB's server-backed
 token lookup, never transcript or session-list inference.
 
-Exit: tests prove pending-before-create ordering, confirmation, cancellation, known failure, unknown
-outcome, browser replacement, reconnect reconciliation, duplicate delivery, closed/missing/multiple
-home rejection, and rejection of a session already assigned to another Workstream.
+Exit: tests prove pending-before-create ordering, confirmation, cancellation, known failure, unknown outcome, browser replacement, reconnect reconciliation, duplicate delivery, closed/multiple/partial-home rejection, standalone generic fork without Store records, and rejection of cross-assignment.
 
 ### 3. Add a direct History tree entry point
 
@@ -170,8 +163,7 @@ ordinary Chat and host-mounted Chat.
 own a `treeOpening` state beside `treeDialog`. It applies a tree result, turns unsupported results
 into a local actionable error, and always clears loading state; it does not insert `/tree` into the
 transcript or prompt draft. Disable the button for archived, pending-start, empty, or actively
-working sessions and explain the reason through accessible help text. Keep `/tree` available for
-keyboard-oriented command use.
+working sessions and explain the reason through accessible help text. Keep `/tree` available for keyboard-oriented command use. When a Chat destination is selected and no dialog, menu, overlay, or child inspector is active, a first Escape announces “Press Esc again to open message history”; a second Escape within 600 ms opens the same History surface. Active dismissible UI consumes Escape and resets the sequence. Workstream briefs never open History through this shortcut.
 
 Opening, closing, and successful navigation must restore focus predictably: active tree leaf on
 open, invoking button on cancel, and the composer after a successful continue. Session changes close

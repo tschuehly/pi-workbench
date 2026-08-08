@@ -1,6 +1,6 @@
 # Workstream continuation extension and shared session coordination plan
 
-Status: selected implementation direction; implementation not started.
+Status: owner-approved implementation direction for the isolated unified-shell candidate; implementation not started.
 
 ## Outcome
 
@@ -47,7 +47,7 @@ The implementation must preserve these meanings:
 - Closed Workstreams cannot continue. Later work starts in a new Workstream and may link the closed one.
 - **Pending** is not **failed**. Any launch with an unknown runtime outcome or a created session whose confirmation cannot be recorded remains pending for reconciliation.
 
-The first cut includes the session-derivation protocol already required by `pi-web-message-tree.md`: add `session.cancelled` and an optional `derivationKind` on `session.pending`. Checkpoint continuation uses `derivationKind: "checkpoint"`; message-tree fork uses `"fork"`; blank launch may omit the field for compatibility. The source checkpoint remains in the same Workstream ledger, and the fresh session's initial transcript records its identifier and prompt. Add durable `continuedFromCheckpoint` provenance only after a concrete projection or audit requirement justifies it.
+The first cut includes the session-derivation protocol already required by `pi-web-message-tree.md`: add `session.cancelled` and optional `derivationKind` on `session.pending`. Checkpoint continuation uses `"checkpoint"`, message-tree fork uses `"fork"`, and blank launch may omit it. The approved Phase 6 amendment later adds coordination `operationKind: "promotion"` without misclassifying promotion as session derivation. The source checkpoint remains in the same Workstream ledger, and the fresh session's initial transcript records its identifier and prompt. Add durable `continuedFromCheckpoint` provenance only after a concrete projection or audit requirement justifies it.
 
 ## Shared module seam
 
@@ -219,15 +219,14 @@ Add **Continue in new session** beside each eligible checkpoint. This requires a
 - selects the fresh session after confirmation;
 - keeps **Resume** as the action for opening the existing session.
 
-Place **Continue in new session** in the per-session checkpoint actions of the current Workbench composition. Preserve that action while the proposed
-[`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md) migrates the
-composition after owner approval; do not create a parallel Workstream surface.
+Place **Continue in new session** in the per-session checkpoint actions of the current Workbench composition. Preserve that action while the approved
+[`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md) migrates the composition; do not create a parallel Workstream surface.
 
 PI WEB must continue to use typed plugin transport. The shared module must contain no DOM, Lit, PI WEB route, TUI, Node filesystem, or machine-local path assumptions.
 
 ## Relationship to message-tree derivation
 
-`pi-web-message-tree.md` remains authoritative for fork-from-entry semantics, the server-owned derivation journal, and truthful cancellation outcomes. This plan owns the shared module placement. Fork, blank launch, and checkpoint continuation must not ship separate Workstream coordinators: they become launch kinds behind `packages/workstream-session-coordination/` and use the same operation-token journal in PI WEB.
+`pi-web-message-tree.md` remains authoritative for fork-from-entry semantics, the server-owned derivation journal, and truthful cancellation outcomes. This plan owns the shared module placement. Fork, blank launch, checkpoint continuation, and promotion must not ship separate coordinators. The first three are launch kinds; promotion is a no-launch operation kind over the existing native session. All use one operation-token journal and shared pending/confirmed/cancelled/known-failed/unknown reconciliation vocabulary.
 
 The common outcome table is:
 
@@ -260,13 +259,13 @@ If the terminal cannot flush the initialized replacement session before `withSes
 
 ### 1. Align authority, protocol, and the shared module
 
-1. Reconcile this plan with `pi-web-message-tree.md`: make `packages/workstream-session-coordination/` own blank launch, checkpoint continuation, and fork derivation; use `operationId` only for caller-local duplicate suppression, one durable `operationToken` as the Store association key and server/session correlation token, and one server-owned PI WEB derivation journal for new operations. Update both plans together when this shared interface changes.
-2. Add `session.cancelled` and optional `session.pending.derivationKind` (`checkpoint` or `fork`) to Store declarations, validation, reducer, fixtures, fake client, and conformance tests.
+1. Reconcile this plan with `pi-web-message-tree.md`: make `packages/workstream-session-coordination/` own blank launch, checkpoint continuation, fork derivation, and the approved promotion handshake; use `operationId` only for caller-local duplicate suppression, one durable `operationToken` as the Store association key and server/session correlation token, and one server-owned PI WEB derivation journal for new operations. Update both plans together when this shared interface changes.
+2. Add `session.cancelled` and optional `session.pending.derivationKind` (`checkpoint` or `fork`) to Store declarations, validation, reducer, fixtures, fake client, and conformance tests. Reserve promotion's distinct no-launch operation kind for the Phase 6 atomic-create amendment.
 3. Update `docs/contracts/workstreams.md` to define owner-initiated fresh-session continuation without clearing staleness; make launch and reconciliation host-neutral; define operation-token ownership and legacy-key migration; add `pi-web` and `pi-extension` to—not instead of—`owner` and `session` producers; and specify exact record-level source-session rules while launch-time payload `sessionId` remains absent.
 4. Update `docs/contracts/interfaces.md` to add continuation, its blocked causes, stale-checkpoint confirmation, and placement in the existing Workstream surface and PI WEB controls.
 5. Record the shared host-neutral session-derivation decision and its relationship to PI WEB in `docs/foundation/decisions.md`.
 6. Update `docs/contracts/harness.md` and `AGENTS.md` while preserving PI WEB as the complete supported graphical surface. In the harness contract, define the terminal extension as an additional attended interface. Route Workstream work through `packages/workstream-store/`, `packages/workstream-session-coordination/`, `extensions/workstreams/`, and `skills/workstreams/`.
-7. Harden `FileWorkstreamAdapter` before adding a second process writer: persist an owner token, process identity, and acquisition time; permit bounded takeover only after proving the owner is gone and the lock stale; ensure an old owner's `finally` cannot remove a successor lock.
+7. Consume the reviewed `workstream-store-lock-recovery-experiment.md` commit before adding a second writer: use its permanent legacy-exclusion marker plus non-blocking OS-released transaction coordinator; do not add PID/age takeover or a second lock protocol.
 8. Add package metadata, declarations, typed errors/outcomes, and in-memory tests.
 9. Implement candidate inspection and guarded checkpoint selection.
 10. Implement blank and checkpoint prompt construction.

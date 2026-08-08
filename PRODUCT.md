@@ -20,7 +20,9 @@ A Workstream is a finite, cross-project attention container whose sparse, author
 
 ## Operating Context
 
-The supported V1 experience runs in PI WEB. Workstreams are portfolio-wide and may span machines, projects, repositories, branches, worktrees, and several concurrent sessions. Each interactive session has exactly one home Workstream and one explicit machine/project/workspace anchor. The owner pairs with Pi while attending the session, explicitly reviews checkpoints, leaves or restarts PI WEB, and later resumes or closes the Workstream.
+The supported V1 experience runs in PI WEB. Workstreams are portfolio-wide and may span machines, projects, repositories, branches, worktrees, and several concurrent sessions. Each currently supported interactive session has exactly one home Workstream and one explicit machine/project/workspace anchor. The owner pairs with Pi while attending the session, explicitly reviews checkpoints, leaves or restarts PI WEB, and later resumes or closes the Workstream.
+
+The owner-approved unified-shell candidate will add explicitly located PI WEB-native standalone Chats plus typed promotion, reference linking, and rename. Decision 94 and the governing fidelity plan define that pending amendment; it is not supported current behavior until its contract, schema, Store, PI WEB implementation, and Acceptance evidence land.
 
 ## Capabilities and Constraints
 

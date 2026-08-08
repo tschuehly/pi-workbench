@@ -1,7 +1,6 @@
 # PI WEB Workbench UI implementation plan
 
-Status: phases 0–5 implemented in the Workbench repository and PI WEB fork. Phase 6 is resolved
-for V1 by the explicit deferrals below.
+Status: phases 0–5 implemented as the historical UI baseline. The approved [`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md) plan supersedes its shell composition and governs the isolated replacement candidate; the explicit V1 deferrals below remain baseline evidence, not current shell scope.
 
 Implemented surfaces use the canonical Workstream protocol, generic PI WEB Pi-menu and
 session-attention host seams, concise current-exchange presentation, namespaced place memory, and

@@ -35,6 +35,8 @@ Each parent tool invocation launches one child with these semantic inputs:
 ```
 
 - `task` is a self-contained assignment that names relevant repository paths, constraints, and expected output.
+
+Approved candidate amendment, not yet implemented: cap `task` at 20,000 characters and reject larger input before routing or child launch. The subagent-details implementation must land the schema/preflight check, tests, this plan's current-behavior wording, and extension README together.
 - `profile` selects Workbench-owned child behavior and requested Pi tools. These lowercase Level 1 child profiles are neither managed Execution Profiles nor authority shapes; in particular, `scout` does not grant managed Scout authority. `implementer` avoids overloading the canonical Worker term.
 - `cognitiveRole` selects the required kind of thinking. It never names a provider or model.
 - `independentOfProvider` optionally identifies the provider that authored the work under judgment. Independent roles default it to the active parent provider and use an explicit value for child-authored work.

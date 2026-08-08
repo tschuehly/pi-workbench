@@ -1,6 +1,6 @@
 # PI WEB subagent conversation-card implementation plan
 
-Status: selected UX direction; implementation not started.
+Status: owner-approved UX direction for the isolated unified-shell candidate; implementation not started.
 
 ## Outcome
 

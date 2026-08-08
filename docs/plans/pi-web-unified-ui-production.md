@@ -2,9 +2,7 @@
 
 Status: superseded for release completion by
 [`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md). This plan
-records the implemented UI-only baseline and its incomplete acceptance evidence. It is frozen for
-further release work; no replacement release execution is approved until the owner approves the
-proposed fidelity plan.
+records the implemented UI-only baseline and its incomplete acceptance evidence. It is frozen for further release work; the approved fidelity plan now governs the isolated replacement candidate.
 
 This plan sequenced a narrowed interaction slice from
 [`pi-web-unified-chat-workstream-prototype.html`](../research/reports/pi-web-unified-chat-workstream-prototype.html)

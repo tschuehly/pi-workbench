@@ -7,8 +7,7 @@ This document preserves the product outcomes and system-level validation matrix 
 
 ## User outcomes
 
-1. As a developer, I want every interactive Pi session to start in an explicitly selected
-   Workstream, so that the session has one durable home for attention continuity.
+1. For the approved unified-shell candidate, as a developer I want each interactive Pi session to start either as an explicitly located standalone Chat or in an explicitly selected Workstream, so lightweight conversation stays lightweight while every associated session has one durable home. Current V1 keeps one home until the candidate amendment lands.
 2. As a PI WEB user, I want every V1 Workstream operation available in the shell, so that I do not
    need a terminal client.
 3. As a developer, I want to pair directly with one lead Pi while I am attending the session and
@@ -47,8 +46,8 @@ This document preserves the product outcomes and system-level validation matrix 
   assert deterministic rejection without prompt interpretation.
 - Reconnect observation after retained and expired sequences; assert ordered replay or canonical
   snapshot reconciliation without duplicate current state.
-- Start several human-initiated sessions in one Workstream and Workstreams across repositories;
-  assert one home Workstream per session and no cross-assignment.
+- Start several human-initiated sessions in one Workstream and Workstreams across repositories; assert the current V1 invariant of one home Workstream per session and no cross-assignment.
+- **Candidate validation (Decision 94; not active current behavior):** create a standalone Chat at an explicit complete location, link/unlink it by typed reference, promote it atomically with response-loss retry, and rename its Workstream; assert identity preservation, one home after promotion, append-only history, and no inferred ownership.
 - Interrupt session launch before and after PI WEB returns a session identifier; assert pending
   association reconciliation, no duplicate launch, and visible failure without an orphaned session.
 - Ask the active attended Pi session to propose a checkpoint, edit it, and confirm it; assert only the

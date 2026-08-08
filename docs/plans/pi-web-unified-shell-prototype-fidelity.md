@@ -1,7 +1,12 @@
 # Unified PI WEB shell prototype-fidelity release plan
 
-Status: proposed governing remediation plan. The superseded UI-only plan is frozen as historical
-baseline evidence; no further release mutation is approved until the owner approves this plan.
+Status: approved for an isolated candidate experiment; owner Acceptance and release remain pending. The superseded UI-only plan is frozen as historical baseline evidence.
+
+## AFK experiment overlay
+
+The owner approved every phase and the six Phase 6 Material Question outcomes for this isolated run. Exact amendments may be implemented when they stay within those outcomes; new semantic choices require Human Attention.
+
+The active user-authored Goal outside this plan owns the experiment terminal predicate. It permits `goal_complete` only after every phase has a committed candidate or evidenced inapplicability, all checks pass, final reviews have no blocker/high, worktrees are clean, and evidence is labelled **experimental candidate ready for owner Acceptance**. It may use only owned worktrees and temporary runtime/install roots. Publication, credentials, normal PI WEB/Pi/Workbench data, the installed live app, and live services are outside its authority. Phase 4 produces the full side-by-side board and cross-family fidelity judgment, labels proposed screenshot baselines experimental, and defers the owner's visual judgment to the single final Acceptance item; its candidate exit does not require mid-run owner attendance. The experiment matrix may use **evidenced inapplicable to isolated candidate** only for physical-device, publication, live-install replacement, credential, or owner-comparison actions outside the Goal's authority; each becomes a named Human Attention item. Technical or prototype-interaction gaps cannot use that disposition. Phase 9 runs installer, status/doctor, update, disable, rollback, uninstall, built-app launch, and sessiond-continuity drills only against a copied app and fake `HOME`/LaunchAgents/config/data/session roots owned by the run. It never invokes `launchctl`/`systemctl`, registers a service, restarts the normal daemon, opens the installed app, or writes `~/Library`; those live-registration/Finder/Dock/native-PID checks and final owner comparison are evidenced-inapplicable Human Attention items. Phase 10's installed-app exit means the isolated copied candidate for this experiment. No document changes to `released` before owner Acceptance.
 
 ## Why this plan exists
 
@@ -134,11 +139,8 @@ standalone ownership semantics.
 
 ### Phase 0 — Reset release truth and lock conformance
 
-1. Retain the previous production plan as the frozen historical baseline and state that no approved
-   release plan governs further mutation until the owner approves this proposal.
-2. Reconcile `AGENTS.md`, `docs/README.md`, the implemented Workbench UI plan, the message-tree plan,
-   and the continuation-extension plan so each routes future shell work here without pretending this
-   proposal is already approved.
+1. Retain the previous production plan as the frozen historical baseline and record that this plan now governs the approved isolated candidate while release remains pending Acceptance.
+2. Reconcile `AGENTS.md`, `docs/README.md`, the implemented Workbench UI plan, the message-tree plan, and the continuation-extension plan so each routes future shell work here with the same approved-candidate status.
 3. Fetch both `upstream` and `origin` in PI WEB. Keep `upstream` fetch-only, develop only on the fork's
    `pi-workbench` branch or a review branch derived from it, and publish only to `origin`.
 4. Record exact starting commits for both repositories and create safety refs before implementation.
@@ -148,16 +150,14 @@ standalone ownership semantics.
 7. Record the current live failures: separate Conversation/Workstreams entry, centered root landing,
    real-data list overflow, broken or absent controlled native-session evidence, and installation
    dependence on a mutable symlink.
-8. Obtain owner approval for the remediation direction and intent to design protocol expansion. The
-   exact contract amendment receives a separate Principal Judgment in Phase 6 before semantic code.
+8. Record the owner's approval for the remediation direction and all six Phase 6 semantic outcomes. Exact amendments must remain within those outcomes and receive fresh cross-family safety and fidelity review before semantic code.
 9. Confirm the approval/prerequisite state of the message-tree, child-execution, and Workstream
    continuation plans; full release cannot silently defer a prototype row or strand a selected
    continuation control during shell migration.
 
 **Exit:** the matrix has no unclassified prototype behavior, cross-document routing is coherent,
 repository remotes and branches satisfy policy, the old release is visibly not ready, and the owner
-has approved this plan's direction. Standalone-Chat protocol mutation remains blocked until the
-Phase 6 amendment text is separately approved; continuation keeps its own approval and contract path.
+has approved this plan's direction. Standalone-Chat protocol mutation remains blocked until the Phase 6 amendments are written into the authoritative decision/contract/schema surfaces and pass fresh cross-family review; the owner-approved outcomes bound those amendments. Continuation keeps its own contract path.
 
 ### Phase 1 — Build the no-model acceptance harness first
 
@@ -264,16 +264,14 @@ Required corrections include:
 - one contextual action area and one Terminal dock;
 - long-title, many-session, empty, loading, reconnect, and partial-inventory fixtures.
 
-Add semantic browser assertions and accepted screenshot baselines. Pixel comparison protects the
-accepted production baseline after owner judgment; it supplements interaction assertions rather
+Add semantic browser assertions and proposed screenshot baselines labelled experimental. Pixel comparison protects a production baseline only after owner judgment; it supplements interaction assertions rather
 than replacing them.
 
 Treat 900/901 pixels as the canonical responsive handoff from the prototype. Also test 760, 390,
 and 320 pixels as stress widths; changing the handoff requires an explicit owner-approved
 conformance-matrix divergence.
 
-**Exit:** an owner-reviewed comparison board shows the same hierarchy, density, placement, toolbar
-handoff, and attention order as the prototype at desktop, tiled, 901, 900, 760, 390, and 320 pixels.
+**Candidate exit:** the captured comparison board and cross-family fidelity review show the same hierarchy, density, placement, toolbar handoff, and attention order at desktop, tiled, 901, 900, 760, 390, and 320 pixels; owner visual Acceptance remains pending.
 
 ### Phase 5 — Complete currently authorized destination behavior
 
@@ -302,14 +300,12 @@ browser Primary Evidence.
 
 ### Phase 6 — Approve and implement prototype-required protocol expansion
 
-Phase 0 approves only the intent to design this expansion. Before this phase, complete the approved
+Phase 0 records owner approval of the six semantic outcomes; this phase writes their exact authoritative and schema amendments before implementation. Before this phase, complete the approved
 continuation plan's separately reviewed host probes and contract/shared-module extraction that
 creates `packages/workstream-session-coordination/`. Those prerequisite commits retain their owning
 plan and must not be folded into this phase.
 
-Then present the exact standalone decision, Workstream contract, schema, Store-interface, and PI
-WEB-interface amendments for a separate owner Principal Judgment. Coordinate overlapping contract
-text with the continuation amendment rather than replacing it. The standalone amendment must settle
+Then write the exact standalone decision, Workstream contract, schema, Store-interface, and PI WEB-interface amendments within the approved outcomes and obtain fresh cross-family safety and fidelity review. Coordinate overlapping contract text with the continuation amendment rather than replacing it. The standalone amendment must settle
 these Material Questions:
 
 1. A standalone Chat is PI WEB-native state, not automatically a Workstream or managed Run.
@@ -343,17 +339,15 @@ Use the existing plans rather than inventing competing semantics:
 
 - Amend [`pi-web-message-tree.md`](pi-web-message-tree.md) so it explicitly owns the prototype's
   Double-Escape entry in addition to its History button, continue-from-entry, fork correlation, and
-  Workstream coordination. Today it owns the tree but not that shortcut.
+  Workstream coordination. The amended plan owns both entry points.
 - [`pi-web-subagent-conversation-cards.md`](pi-web-subagent-conversation-cards.md) owns structured
   bounded child-execution presentation.
 
-Obtain any still-missing approval for these plans, land or complete their prerequisites, then
-integrate their accepted surfaces into the Workbench profile. Also preserve the continuation plan's
+Record the owner's approval for these dependent plans, land or complete their prerequisites, then integrate their accepted surfaces into the Workbench profile. Also preserve the continuation plan's
 **Continue in new session** control in the selected session's checkpoint actions; it is a dependent
 contract interaction rather than a prototype conformance row. Child executions remain subordinate
 evidence under the parent session, never peer Workstream sessions. History remains an overlay/route
-from Chat, not permanent global navigation. If the owner rejects either interaction, record that
-explicit rejection in the conformance matrix; an unstarted plan is not a release deferral.
+from Chat, not permanent global navigation. A future owner reversal is recorded explicitly; an unstarted plan is never treated as release evidence.
 
 **Exit:** the prototype’s history and child-inspection scenarios pass without changing Workstream
 home semantics or duplicating session navigation.
@@ -426,8 +420,7 @@ Obtain two independent final judgments:
 2. architecture, protocol, lifecycle, and regression safety.
 
 Resolve every blocker/high finding. Present the comparison board and residual risks for owner
-Acceptance. Only then change this plan and the status header in
-`packages/pi-web-integration/unified-ui-acceptance-evidence.md` from blocked to released.
+Acceptance. For the isolated experiment, retain this plan and `packages/pi-web-integration/unified-ui-acceptance-evidence.md` as candidate/blocked until the owner reviews the comparison board and grants Acceptance.
 
 **Exit:** every conformance row is implemented or explicitly rejected by owner decision, all checks
 pass, the installed app opens the verified Workbench profile, both repositories are clean, and the
