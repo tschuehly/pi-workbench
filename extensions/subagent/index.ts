@@ -220,7 +220,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
           details: record,
         };
       } catch (error) {
-        return failure("preflight_failed", errorMessage(error));
+        return registryFailure(error);
       }
     },
   });
@@ -246,7 +246,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       try {
         begin = await registry.beginDispatch(params.workerId, { pid: process.pid, repositoryRoot: ctx.cwd, acknowledgeInspection: params.acknowledgeInspection === true });
       } catch (error) {
-        return failure("preflight_failed", errorMessage(error));
+        return registryFailure(error);
       }
       const abandon = async (diagnostic: string) => {
         try { await registry.completeDispatch(params.workerId, begin.lockToken, { outcome: "preflight_failed", cognitiveRole: params.cognitiveRole, diagnostic }); } catch {}
@@ -362,7 +362,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
         const lines = summaries.map((s) => `- ${s.workerId} \"${s.name}\" (${s.profile}) [${s.retired ? "retired" : s.locked ? "dispatching" : s.requiresInspection ? "needs inspection" : "idle"}] ${s.dispatchCount} dispatch(es), last ${s.latestOutcome ?? "none"} — ${s.scope}`);
         return { content: [{ type: "text", text: lines.join("\n") }], details: { workers: summaries } };
       } catch (error) {
-        return failure("preflight_failed", errorMessage(error));
+        return registryFailure(error);
       }
     },
   });
@@ -378,7 +378,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
         const retired = await registry.retire(params.workerId, params.reason);
         return { content: [{ type: "text", text: `Retired worker ${params.workerId} at ${retired.at}: ${retired.reason}` }], details: { workerId: params.workerId, ...retired } };
       } catch (error) {
-        return failure("preflight_failed", errorMessage(error));
+        return registryFailure(error);
       }
     },
   });
@@ -467,6 +467,13 @@ async function resolveBinding(cognitiveRole: string, independentOfProvider?: str
 
 function failure(outcome: string, diagnostic: string) {
   return { content: [{ type: "text" as const, text: `${outcome}: ${diagnostic}` }], details: { outcome, diagnostic }, isError: true };
+}
+
+function registryFailure(error: unknown) {
+  const code = (error as { code?: unknown })?.code;
+  const diagnostic = errorMessage(error);
+  const coded = typeof code === "string" ? `[${code}] ${diagnostic}` : diagnostic;
+  return { content: [{ type: "text" as const, text: `preflight_failed: ${coded}` }], details: { outcome: "preflight_failed", ...(typeof code === "string" ? { code } : {}), diagnostic }, isError: true };
 }
 
 function bounded(value: string, max: number): string {
