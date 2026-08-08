@@ -16,7 +16,20 @@ browser plugin with a small trusted web-process service, not a Run Controller an
   Wide layouts render either an expanded, bounded and resizable hierarchy or its horizontal collapsed
   strip—never both. Narrow layouts keep the destination full width and expose Workstream navigation as
   an Escape-dismissable focused overlay. Browser-local mode and width values use PI WEB's namespaced
-  preferences host. Older hosts retain the canonical Workstreams-only fallback without private APIs.
+  preferences host. Phase 6 uses one 760-pixel transition for the narrow overlay (including 390- and
+  320-pixel layouts), keeps the destination inert while that overlay owns focus, bounds long and
+  crowded navigation and disables adapter animation under reduced-motion preferences. It applies the
+  configured control-size token to every coarse-pointer target, reserves coarse separator hit
+  columns instead of overlaying adjacent panes, and clamps both Chat and Workstream desktop panes
+  between 761 and 980 pixels. A lifecycle-owned media-query listener immediately reconciles the
+  overlay, one-pane state, scrim, and background accessibility state across zoom, resize, disconnect,
+  and reconnect without leaking listeners. Older hosts without the public
+  session-navigation host show an explicit **Update PI WEB** Workstreams-only fallback, distinct from
+  transient inventory unavailability, and never use private APIs. Selectable surfaces and collapsed
+  sessions remain navigation landmarks with ordinary buttons, `aria-current`, and `aria-expanded`
+  where applicable rather than claiming an incomplete tab pattern. Fixed polite-status and assertive-
+  alert regions announce explicitly classified changes without nested alerts or rebuilds during
+  unchanged watch polls.
   Existing typed Workstream actions and the host-owned Chat/Files/Git surfaces remain available;
   Workstream sessions additionally expose the canonical selected-session **Context** surface. Phase 5
   keeps the core Chat composition (including inline live asks) mounted intact and requests the public
@@ -80,7 +93,9 @@ Neither an incomplete nor malformed inventory may classify a Chat. Reconnect kee
 snapshots available but labels them non-ready; restoration and selection are validated only after a
 complete reconciliation. Canonical brief and Context DOM is retained across unchanged watch polls.
 A canonical revision change rebuilds it under a deterministic render key while preserving its scroll
-position and any focused keyed action.
+position and any focused keyed action. Root and subregion render keys use bounded-output, cycle-safe
+stable digests over all input so cyclic or unexpectedly large host Attention data cannot abort
+rendering or collapse ordinary large inventories into one key.
 
 Session launch uses PI WEB's attended plugin-session helper and `workstream-session-coordinator.js`.
 The coordinator records a launch-key pending association before starting PI, confirms the returned

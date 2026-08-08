@@ -375,6 +375,17 @@ shows data from the previously selected session.
 
 ### Phase 6 — Harden desktop, narrow, failure, and compatibility behavior
 
+Status: complete in PI WEB and the adapter. PI WEB now isolates throwing plugin actions, guards,
+badges, labels, and workspace panels without stranding core controls; its panel-edge controls reserve
+coarse-pointer space and shell transitions honor reduced motion. The adapter uses one lifecycle-owned
+760-pixel transition, synchronous modal background inertness, viewport-reactive one-pane navigation,
+explicit older-host fallback, fixed status/alert regions, bounded-output complete-input render-key
+digests, token-sized coarse controls, reserved resize columns, and clamped desktop panes. Automated
+fixtures cover current, stale, failed, missing, reconnect, closed, invalid, empty, and unavailable
+truth. PI WEB verification passed with 2,573 tests (3 skipped), production build passed, and adapter
+checks passed with 82 tests. Independent review findings were resolved; real-browser geometry, zoom,
+coarse-pointer, reduced-motion, focus, and assistive-technology evidence remains Phase 7.
+
 Cover loading, empty, reconnect, session-selection race, unavailable machine/project/workspace,
 missing session, typed missing anchor, closed Workstream, plugin-host absence, malformed fixture,
 and failed Workstream mutation. Keep the last known canonical projection visible during reconnect

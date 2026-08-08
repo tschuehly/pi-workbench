@@ -2,7 +2,7 @@ import { createWorkbenchWorkstreamClient, reconcileWorkstreams } from "./workstr
 import { WorkstreamSessionCoordinator } from "./workstream-session-coordinator.js";
 import { projectSessionContext, projectWorkstreamBrief, selectWorkstreamSession } from "./workstream-brief-projection.js";
 import { completeSessionKey, createUnifiedNavigationState, joinChatsAndWorkstreams, parseDestinationPreference, parseTerminalPreference, reduceUnifiedNavigation, rememberedSessionSurface, renderedTerminalHeightBounds, serializeDestinationPreference, serializeTerminalPreference, sessionSurfacePreferenceName, sessionTerminalPreferenceName, terminalKeyboardDelta, TERMINAL_DEFAULT_HEIGHT } from "./unified-navigation-state.js";
-import { attentionDestinationFromItem, attentionForWorkstreamSession, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, destinationsMatch, expandedSessionListRenderKey, formatDateTime, formatModifiedTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, NAVIGATOR_MAX_WIDTH, NAVIGATOR_MIN_WIDTH, NAVIGATOR_MODE_PREFERENCE, NAVIGATOR_WIDTH_PREFERENCE, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, unifiedChatBannerRenderKey, unifiedNavigatorRenderKey, workstreamNavigatorItem } from "./unified-navigation-view-model.js";
+import { attentionDestinationFromItem, attentionForWorkstreamSession, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, destinationsMatch, expandedSessionListRenderKey, formatDateTime, formatModifiedTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, NARROW_VIEWPORT_MEDIA_QUERY, NAVIGATOR_MAX_WIDTH, NAVIGATOR_MIN_WIDTH, NAVIGATOR_MODE_PREFERENCE, NAVIGATOR_WIDTH_PREFERENCE, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, narrowViewportMatches, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, sessionNavigationCompatibility, unifiedChatBannerRenderKey, unifiedNavigatorRenderKey, workstreamsRootRenderKey, workstreamNavigatorItem } from "./unified-navigation-view-model.js";
 
 const PROJECTION_PATH = ".pi-workbench/projection.json";
 const PANEL_ID = "pi-workbench:run.panel";
@@ -31,7 +31,7 @@ export function normalizeDedicatedMobilePane(value) {
 }
 
 export function dedicatedMobileControlState(state, control) {
-  return { pressed: normalizeDedicatedMobilePane(state.mobilePane) === control };
+  return { selected: normalizeDedicatedMobilePane(state.mobilePane) === control };
 }
 
 export function transitionDedicatedWorkstreamUi(state, action) {
@@ -291,15 +291,23 @@ function installWorkstreamsElement() {
     #startLocationIncomplete = false;
     #lastHostActivationKey;
     #main;
+    #statusRegion;
+    #alertRegion;
     #dedicatedView;
     #chatView;
+    #narrowViewportQuery;
+    #narrowViewportChange = (event) => {
+      if (event.matches !== true) this.#mobilePane = "workspace";
+      this.#render();
+    };
 
     constructor() {
       super();
       const root = this.attachShadow({ mode: "open" });
       root.append(workstreamsStyleElement());
+      ({ status: this.#statusRegion, alert: this.#alertRegion } = createLiveRegions());
       this.#main = document.createElement("main");
-      root.append(this.#main);
+      root.append(this.#statusRegion, this.#alertRegion, this.#main);
     }
 
     set context(value) {
@@ -339,6 +347,7 @@ function installWorkstreamsElement() {
 
     connectedCallback() {
       connectedWorkstreamsElement = this;
+      this.#bindNarrowViewport();
       if (this.#context !== undefined) {
         this.#bindContextHosts(this.#context);
         void loadRecordedWorkstreams(this.#context).finally(() => { this.#reconcileUnifiedState(); this.#render(); });
@@ -349,6 +358,7 @@ function installWorkstreamsElement() {
 
     disconnectedCallback() {
       if (this.#watchTimer !== undefined) window.clearTimeout(this.#watchTimer);
+      this.#releaseNarrowViewport();
       this.#watchTimer = undefined;
       if (connectedWorkstreamsElement === this) connectedWorkstreamsElement = undefined;
       this.#releaseSurfaceSelection();
@@ -357,6 +367,17 @@ function installWorkstreamsElement() {
       this.#sessionNavigationRelease?.();
       this.#sessionNavigationRelease = undefined;
       this.#contextHostsBound = false;
+    }
+
+    #bindNarrowViewport() {
+      this.#releaseNarrowViewport();
+      this.#narrowViewportQuery = globalThis.matchMedia?.(NARROW_VIEWPORT_MEDIA_QUERY);
+      this.#narrowViewportQuery?.addEventListener?.("change", this.#narrowViewportChange);
+    }
+
+    #releaseNarrowViewport() {
+      this.#narrowViewportQuery?.removeEventListener?.("change", this.#narrowViewportChange);
+      this.#narrowViewportQuery = undefined;
     }
 
     #restoreFocusAfterHostRender(focusKey) {
@@ -1031,10 +1052,28 @@ function installWorkstreamsElement() {
       void this.#mutate((client) => client.close({ workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: key, producer: "owner" }));
     }
 
+    #updateLiveRegion(announcement) {
+      updateLiveRegions({ status: this.#statusRegion, alert: this.#alertRegion }, announcement);
+    }
+
     #render() {
       this.#clearStartLocationRecovery();
       const main = this.#main;
       const context = this.#context;
+      const joined = this.#joinedNavigation();
+      this.#updateLiveRegion(workstreamsAnnouncement({
+        connectionStatus: context?.connection?.status,
+        connectionMessage: context?.connection?.message,
+        workstreamStatus: recordedWorkstreamState.status,
+        error: recordedWorkstreamState.error,
+        notice: recordedWorkstreamState.notice,
+        selectionError: this.#unifiedState.selectionError,
+        refreshError: this.#navigationRefreshError,
+        inventoryStatus: joined.status,
+        inventoryReason: joined.reason,
+        startLocationIncomplete: this.#startLocationIncomplete,
+        anchorRepair: this.#anchorRepair,
+      }));
       const selected = recordedWorkstreamState.snapshots.find((snapshot) => snapshot.id === this.#selectedWorkstreamId);
       this.#syncSurfaceSelection(selected !== undefined || this.#selectedChat !== undefined);
 
@@ -1042,13 +1081,14 @@ function installWorkstreamsElement() {
         const chatOptions = {
           context, chat: this.#selectedChat, error: this.#unifiedState.selectionError,
           refreshError: this.#navigationRefreshError,
-          reconnecting: context?.connection?.status === "reconnecting" || this.#joinedNavigation().status === "reconnecting",
-          joined: this.#joinedNavigation(), machine: this.#nativeNavigation.machine ?? context?.machine,
+          reconnecting: context?.connection?.status === "reconnecting" || joined.status === "reconnecting",
+          joined, machine: this.#nativeNavigation.machine ?? context?.machine,
           attentionItems: this.#attentionItems, navigation: this.#unifiedState.navigation,
           destination: this.#unifiedState.destination, surface: this.#selectedSurface("chat"),
           terminalOpen: this.#unifiedState.terminalBySession[this.#destinationSessionKey()]?.open === true,
           terminalHeight: this.#unifiedState.terminalBySession[this.#destinationSessionKey()]?.height,
           pending: this.#unifiedState.pendingSelection !== undefined,
+          sessionNavigationCompatibility: sessionNavigationCompatibility(context?.sessionNavigation),
           onBack: () => { this.#returnToPortfolio(); },
           onOpenChat: (chat) => { void this.#selectChat(chat); },
           onOpenWorkstream: (snapshot) => { this.#openWorkstream(snapshot); },
@@ -1072,6 +1112,7 @@ function installWorkstreamsElement() {
           main.replaceChildren(this.#chatView.element);
         }
         main.className = "dedicated-workstream";
+        main.removeAttribute("data-render-key");
         updateUnifiedChatDestination(this.#chatView, chatOptions);
         return;
       }
@@ -1091,7 +1132,8 @@ function installWorkstreamsElement() {
             : undefined,
           mobilePane: this.#mobilePane,
           reconnecting: context?.connection?.status === "reconnecting",
-          joined: this.#joinedNavigation(),
+          joined,
+          sessionNavigationCompatibility: sessionNavigationCompatibility(context?.sessionNavigation),
           error: recordedWorkstreamState.error,
           notice: recordedWorkstreamState.notice,
           startLocationIncomplete: this.#startLocationIncomplete,
@@ -1141,6 +1183,7 @@ function installWorkstreamsElement() {
           main.replaceChildren(this.#dedicatedView.element);
         }
         main.className = "dedicated-workstream";
+        main.removeAttribute("data-render-key");
         updateDedicatedWorkstream(this.#dedicatedView, selected, options);
         if (recordedWorkstreamState.focusKey === "dedicated:title") settleFocus(this.#dedicatedView.title, "dedicated:title");
         return;
@@ -1149,6 +1192,25 @@ function installWorkstreamsElement() {
       this.#dedicatedView = undefined;
       this.#chatView = undefined;
       const focusedKey = this.shadowRoot?.activeElement?.dataset?.focusKey ?? recordedWorkstreamState.focusKey;
+      const rootRenderKey = workstreamsRootRenderKey({
+        connectionStatus: context?.connection?.status,
+        connectionMessage: context?.connection?.message,
+        workstreamStatus: recordedWorkstreamState.status,
+        error: recordedWorkstreamState.error,
+        notice: recordedWorkstreamState.notice,
+        selectionError: this.#unifiedState.selectionError,
+        refreshError: this.#navigationRefreshError,
+        joined,
+        machine: this.#nativeNavigation.machine ?? context?.machine,
+        attentionItems: this.#attentionItems,
+        navigation: this.#unifiedState.navigation,
+        destination: this.#unifiedState.destination,
+        pending: this.#unifiedState.pendingSelection !== undefined,
+        sessionNavigationSupported: context?.sessionNavigation !== undefined,
+        sessionNavigationRefreshAvailable: typeof context?.sessionNavigation?.refresh === "function",
+      });
+      if (main.dataset.renderKey === rootRenderKey) return;
+      main.dataset.renderKey = rootRenderKey;
       main.className = "";
       main.replaceChildren();
       if (context?.connection?.status === "reconnecting") {
@@ -1169,12 +1231,13 @@ function installWorkstreamsElement() {
         }));
         if (this.#navigationRefreshError !== undefined) main.append(message(selectionFailureMessage(this.#navigationRefreshError), "checkpoint-error"));
         main.append(renderUnifiedNavigator({
-          joined: this.#joinedNavigation(),
+          joined,
           machine: this.#nativeNavigation.machine ?? context?.machine,
           attentionItems: this.#attentionItems,
           navigation: this.#unifiedState.navigation,
           destination: this.#unifiedState.destination,
           pending: this.#unifiedState.pendingSelection !== undefined,
+          sessionNavigationCompatibility: sessionNavigationCompatibility(context?.sessionNavigation),
           onCreate: () => { this.#create(); },
           onFocusAttention: (item) => { this.#focusAttention(item); },
           onOpenChat: (chat) => { void this.#selectChat(chat); },
@@ -1260,7 +1323,7 @@ function renderUnifiedHierarchy(options) {
   const root = document.createElement("div");
   root.id = "unified-navigation-hierarchy";
   root.className = `unified-root-navigation ${navigation.mode}`;
-  const inventoryNotice = unifiedInventoryNotice(joined, options.onRefresh);
+  const inventoryNotice = unifiedInventoryNotice(joined, options.onRefresh, options.sessionNavigationCompatibility);
   if (inventoryNotice !== undefined) root.append(inventoryNotice);
   const chats = section(`Chats · ${machine?.name ?? machine?.id ?? "selected machine"}`,
     joined.status === "ready" && joined.chats.length === 0 ? "No unmatched Chats on this machine." : undefined);
@@ -1315,17 +1378,19 @@ function workstreamNavigatorRow(snapshot, options) {
   return control;
 }
 
-function unifiedInventoryNotice(joined, onRefresh) {
+function unifiedInventoryNotice(joined, onRefresh, compatibility = { supported: true }) {
   if (joined.status === "ready") return undefined;
-  const detail = joined.status === "unavailable"
-    ? "Chat inventory is unavailable. Retained native sessions remain unclassified; canonical Workstreams remain available."
-    : joined.status === "invalid" ? `${joined.reason ?? "Chat inventory is invalid."} Retained native sessions remain unclassified; canonical Workstreams remain available.`
-      : joined.status === "reconnecting" ? "Reconnecting Chat inventory. Retained native sessions remain unclassified until reconciliation completes."
-        : "Loading and reconciling Chat inventory with canonical Workstream associations.";
+  const detail = !compatibility.supported
+    ? compatibility.message
+    : joined.status === "unavailable"
+      ? "Chat inventory is temporarily unavailable. Retained native sessions remain unclassified; canonical Workstreams remain available."
+      : joined.status === "invalid" ? `${joined.reason ?? "Chat inventory is invalid."} Retained native sessions remain unclassified; canonical Workstreams remain available.`
+        : joined.status === "reconnecting" ? "Reconnecting Chat inventory. Retained native sessions remain unclassified until reconciliation completes."
+          : "Loading and reconciling Chat inventory with canonical Workstream associations.";
   const notice = document.createElement("div");
   notice.className = "connection unified-inventory-state";
   notice.append(message(detail));
-  if ((joined.status === "unavailable" || joined.status === "reconnecting") && onRefresh !== undefined) notice.append(button("Refresh Chats", onRefresh));
+  if (compatibility.supported && (joined.status === "unavailable" || joined.status === "reconnecting") && onRefresh !== undefined) notice.append(button("Refresh Chats", onRefresh));
   return notice;
 }
 
@@ -1343,20 +1408,12 @@ function createUnifiedChatDestination(options) {
   identity.className = "workstream-identity";
   view.closeOverlay = () => {
     view.overlayOpen = false;
-    view.navigation.hidden = true;
-    view.navigation.setAttribute("role", "navigation");
-    view.navigation.removeAttribute("aria-modal");
-    if (view.scrim !== undefined) view.scrim.hidden = true;
-    view.navigate.setAttribute("aria-expanded", "false");
+    syncUnifiedChatOverlay(view, narrowViewportMatches());
   };
   view.navigate = button("Navigate", () => {
-    if (!matchMedia("(max-width: 720px)").matches) return;
+    if (!narrowViewportMatches()) return;
     view.overlayOpen = true;
-    view.navigation.hidden = false;
-    view.navigation.setAttribute("role", "dialog");
-    view.navigation.setAttribute("aria-modal", "true");
-    view.scrim.hidden = false;
-    view.navigate.setAttribute("aria-expanded", "true");
+    syncUnifiedChatOverlay(view, true);
     view.overlayClose.focus({ preventScroll: true });
   });
   view.navigate.className = "narrow-navigate";
@@ -1375,12 +1432,13 @@ function createUnifiedChatDestination(options) {
   view.tools.setAttribute("aria-label", "Chat checkout surfaces");
   view.navigatorToggle = button("Collapse navigator", () => { view.options.onToggleMode(); });
   view.navigatorToggle.setAttribute("aria-controls", "unified-destination-navigator");
-  view.tools.append(view.navigatorToggle);
+  view.surfaceTabs = document.createElement("div");
+  view.tools.append(view.navigatorToggle, view.surfaceTabs);
   view.toolButtons = new Map();
   for (const [surface, labelText] of [["chat", "Chat"], ["files", "Files"], ["git", "Git"]]) {
     const control = button(labelText, () => { view.options.onSelectSurface(surface); });
     view.toolButtons.set(surface, control);
-    view.tools.append(control);
+    view.surfaceTabs.append(control);
   }
   header.append(identity, view.tools);
   view.banner = document.createElement("div");
@@ -1419,7 +1477,7 @@ function createUnifiedChatDestination(options) {
   installTerminalDock(view);
   view.navigation.addEventListener("keydown", (event) => {
     const active = view.element.getRootNode().activeElement;
-    const action = narrowOverlayKeyboardAction({ narrow: matchMedia("(max-width: 720px)").matches, open: view.overlayOpen, focusInside: view.navigation.contains(active), key: event.key });
+    const action = narrowOverlayKeyboardAction({ narrow: narrowViewportMatches(), open: view.overlayOpen, focusInside: view.navigation.contains(active), key: event.key });
     if (action === "close") {
       event.preventDefault();
       view.closeOverlay();
@@ -1434,6 +1492,7 @@ function createUnifiedChatDestination(options) {
     event.preventDefault();
     controls[next].focus({ preventScroll: true });
   });
+  view.backgroundElements = [view.banner, header, view.separator, view.content, view.terminal];
   shell.append(view.banner, header, view.body, view.terminal);
   view.element = shell;
   view.options = options;
@@ -1450,14 +1509,7 @@ function updateUnifiedChatDestination(view, options) {
   updateRenderedRegion(view.banner, unifiedChatBannerRenderKey(options), () => renderUnifiedChatBanner(options));
   view.banner.hidden = view.banner.childElementCount === 0;
   updateRenderedRegion(view.navigationContent, unifiedNavigatorRenderKey(options), () => renderUnifiedHierarchy(options), view.navigation);
-  const narrow = matchMedia("(max-width: 720px)").matches;
-  if (!narrow) view.overlayOpen = false;
-  view.navigation.hidden = narrow && !view.overlayOpen;
-  view.navigation.setAttribute("role", narrow && view.overlayOpen ? "dialog" : "navigation");
-  if (narrow && view.overlayOpen) view.navigation.setAttribute("aria-modal", "true");
-  else view.navigation.removeAttribute("aria-modal");
-  view.navigate.setAttribute("aria-expanded", String(narrow && view.overlayOpen));
-  view.scrim.hidden = !narrow || !view.overlayOpen;
+  syncUnifiedChatOverlay(view, narrowViewportMatches());
   view.navigatorToggle.textContent = options.navigation.mode === "collapsed" ? "Expand navigator" : "Collapse navigator";
   view.navigatorToggle.setAttribute("aria-expanded", String(options.navigation.mode !== "collapsed"));
   view.body.className = `unified-destination-body ${options.navigation.mode}`;
@@ -1466,12 +1518,25 @@ function updateUnifiedChatDestination(view, options) {
   view.separator.setAttribute("aria-valuetext", `${String(options.navigation.width)} pixels`);
   for (const [surface, control] of view.toolButtons) {
     const active = surface === options.surface;
-    control.setAttribute("aria-pressed", String(active));
     if (active) control.setAttribute("aria-current", "page");
     else control.removeAttribute("aria-current");
   }
   for (const [surface, container] of view.surfaces) setSurfaceVisibility(container, surface === options.surface);
   updateTerminalDock(view, options, true, options.anchor);
+}
+
+function syncUnifiedChatOverlay(view, narrow) {
+  if (!narrow) view.overlayOpen = false;
+  const open = narrow && view.overlayOpen;
+  view.navigation.hidden = narrow && !open;
+  view.navigation.setAttribute("role", open ? "dialog" : "navigation");
+  if (open) view.navigation.setAttribute("aria-modal", "true");
+  else view.navigation.removeAttribute("aria-modal");
+  view.navigate.setAttribute("aria-expanded", String(open));
+  view.scrim.hidden = !open;
+  view.scrim.inert = !open;
+  view.scrim.setAttribute("aria-hidden", String(!open));
+  setOverlayBackgroundInert(view.backgroundElements, open);
 }
 
 function renderUnifiedChatBanner(options) {
@@ -1540,7 +1605,6 @@ function createDedicatedWorkstream(snapshot, options) {
 
   const banner = document.createElement("div");
   banner.className = "shell-banner";
-  banner.setAttribute("aria-live", "polite");
   view.banner = banner;
 
   const topbar = document.createElement("header");
@@ -1634,6 +1698,7 @@ function createDedicatedWorkstream(snapshot, options) {
 
   const workspace = document.createElement("section");
   workspace.className = "workspace-pane";
+  view.workspace = workspace;
   workspace.setAttribute("aria-labelledby", "workstream-workspace-heading");
   const workspaceHeading = document.createElement("div");
   workspaceHeading.className = "workspace-heading";
@@ -1675,7 +1740,7 @@ function createDedicatedWorkstream(snapshot, options) {
 
   sessions.addEventListener("keydown", (event) => {
     const active = view.element.getRootNode().activeElement;
-    if (!matchMedia("(max-width: 720px)").matches || view.options.mobilePane !== "sessions" || !sessions.contains(active)) return;
+    if (!narrowViewportMatches() || view.options.mobilePane !== "sessions" || !sessions.contains(active)) return;
     if (event.key === "Escape") {
       event.preventDefault();
       view.options.onSelectMobilePane("workspace");
@@ -1690,6 +1755,7 @@ function createDedicatedWorkstream(snapshot, options) {
     event.preventDefault();
     controls[next].focus({ preventScroll: true });
   });
+  view.backgroundElements = [banner, topbar, view.sessionTabs, mobileNavigation, view.sessionsEdge, workspace, view.terminal];
   shell.append(banner, topbar, view.sessionTabs, mobileNavigation, body, view.terminal);
   updateDedicatedWorkstream(view, snapshot, options);
   return view;
@@ -1713,18 +1779,18 @@ function renderDedicatedBanner(snapshot, options) {
 function renderCollapsedSessionTabs(snapshot, options) {
   const content = document.createDocumentFragment();
   content.append(keyedButton("Expand navigator", "session-tabs:expand", () => { options.onToggleSessions(); }));
+  const destinations = document.createElement("div");
+  destinations.className = "collapsed-session-destinations";
   const briefTab = keyedButton("Brief", "session-tabs:brief", () => { options.onOpenBrief(); });
-  briefTab.setAttribute("aria-pressed", String(!options.sessionsPaneOpen && options.selectedSessionId === undefined));
   if (options.selectedSessionId === undefined) briefTab.setAttribute("aria-current", "page");
-  content.append(briefTab);
+  destinations.append(briefTab);
   for (const session of snapshot.sessions) {
     const attention = attentionForWorkstreamSession(options.attentionItems, session);
-    const entry = document.createElement("span");
+    const entry = document.createElement("div");
     entry.className = "collapsed-session-entry";
     const tabLabel = `${session.purpose ?? session.latestCheckpoint?.next ?? `${humanize(session.status)} session`}${attention === undefined ? "" : " · Needs answer"}`;
     const tab = keyedButton(tabLabel, `session-tabs:session:${session.id}`, () => { options.onSelectSession(session); });
     tab.disabled = session.status !== "active";
-    tab.setAttribute("aria-pressed", String(session.id === options.selectedSessionId));
     if (session.id === options.selectedSessionId) tab.setAttribute("aria-current", "page");
     tab.title = `${sessionAnchor(session)} · Session ${session.id}${attention === undefined ? "" : " · Needs answer"}`;
     entry.append(tab);
@@ -1734,8 +1800,9 @@ function renderCollapsedSessionTabs(snapshot, options) {
       focus.setAttribute("aria-label", `Focus pending ask in session ${session.id}`);
       entry.append(focus);
     }
-    content.append(entry);
+    destinations.append(entry);
   }
+  content.append(destinations);
   if (!snapshot.closed) content.append(keyedButton("New session +", "session-tabs:new", () => { options.onStart(); }));
   return content;
 }
@@ -1756,7 +1823,6 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   for (const [tool, control] of view.toolButtons) {
     const selectedTool = options.selectedSessionId !== undefined && options.tool === tool;
     control.disabled = options.selectedSessionId === undefined;
-    control.setAttribute("aria-pressed", String(selectedTool));
     if (selectedTool) control.setAttribute("aria-current", "page");
     else control.removeAttribute("aria-current");
   }
@@ -1770,14 +1836,23 @@ function updateDedicatedWorkstream(view, snapshot, options) {
     control.setAttribute("aria-label", destination === "workspace"
       ? `Open Workspace${options.selectedSessionId === undefined ? " brief" : ` · ${surfaceLabel(options.tool)}`}`
       : "Open Workstream session navigator");
-    control.setAttribute("aria-pressed", String(controlState.pressed));
-    control.removeAttribute("aria-expanded");
-    control.removeAttribute("aria-controls");
+    if (controlState.selected) control.setAttribute("aria-current", "page");
+    else control.removeAttribute("aria-current");
+    if (destination === "sessions") {
+      control.setAttribute("aria-expanded", String(controlState.selected));
+      control.setAttribute("aria-controls", "workstream-sessions-pane");
+    } else {
+      control.removeAttribute("aria-expanded");
+      control.removeAttribute("aria-controls");
+    }
   }
 
-  const narrowNavigatorOpen = matchMedia("(max-width: 720px)").matches && options.mobilePane === "sessions";
+  const narrowNavigatorOpen = narrowViewportMatches() && options.mobilePane === "sessions";
   view.body.className = `workstream-body mobile-${options.mobilePane}${options.sessionsPaneOpen ? "" : " sessions-collapsed"}`;
   view.scrim.hidden = !narrowNavigatorOpen;
+  view.scrim.inert = !narrowNavigatorOpen;
+  view.scrim.setAttribute("aria-hidden", String(!narrowNavigatorOpen));
+  setOverlayBackgroundInert(view.backgroundElements, narrowNavigatorOpen);
   view.sessionsPane = view.sessionsPane ?? view.element.querySelector(".sessions-pane");
   view.sessionsPane.setAttribute("role", narrowNavigatorOpen ? "dialog" : "navigation");
   if (narrowNavigatorOpen) view.sessionsPane.setAttribute("aria-modal", "true");
@@ -1789,10 +1864,10 @@ function updateDedicatedWorkstream(view, snapshot, options) {
   view.sessionTabs.hidden = options.sessionsPaneOpen;
   updateRenderedRegion(view.sessionTabs, collapsedSessionTabsRenderKey(snapshot, options), () => renderCollapsedSessionTabs(snapshot, options));
 
-  const inventoryNotice = unifiedInventoryNotice(options.joined, options.onRefresh);
+  const inventoryNotice = unifiedInventoryNotice(options.joined, options.onRefresh, options.sessionNavigationCompatibility);
   updateRenderedRegion(
     view.navigationNotice,
-    inventoryNoticeRenderKey(options.joined, options.onRefresh !== undefined),
+    inventoryNoticeRenderKey(options.joined, options.onRefresh !== undefined, options.sessionNavigationCompatibility?.supported !== false),
     () => inventoryNotice ?? document.createDocumentFragment(),
   );
   view.navigationNotice.hidden = inventoryNotice === undefined;
@@ -1861,7 +1936,6 @@ function renderExpandedSessionList(snapshot, options) {
     entry.className = "dedicated-session-entry";
     const row = keyedButton("", `session:${snapshot.id}:${session.id}`, () => { options.onSelectSession(session); });
     row.className = `dedicated-session${session.id === options.selectedSessionId ? " selected" : ""}`;
-    row.setAttribute("aria-pressed", String(session.id === options.selectedSessionId));
     if (session.id === options.selectedSessionId) row.setAttribute("aria-current", "page");
     row.disabled = session.status !== "active" || options.selectionPending;
     const copy = document.createElement("span");
@@ -2066,7 +2140,6 @@ function renderSessionAnchorRepair(repair, session, options) {
   const presentation = sessionAnchorRepairPresentation(repair);
   const panel = document.createElement("section");
   panel.className = "anchor-repair";
-  panel.setAttribute("aria-live", "polite");
   panel.append(strong(presentation.title), message(presentation.guidance, "muted"));
   const actions = document.createElement("div");
   actions.className = "anchor-repair-actions";
@@ -2086,6 +2159,13 @@ function renderSessionAnchorRepair(repair, session, options) {
   }
   panel.append(actions);
   return panel;
+}
+
+function setOverlayBackgroundInert(elements, inert) {
+  for (const element of elements) {
+    element.inert = inert;
+    element.setAttribute("aria-hidden", String(inert));
+  }
 }
 
 function setSurfaceVisibility(container, visible) {
@@ -2262,10 +2342,48 @@ function workstreamColor(id) {
   return palette[hash % palette.length];
 }
 
+function createLiveRegions() {
+  const status = document.createElement("div");
+  status.className = "live-region";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.setAttribute("aria-atomic", "true");
+  const alert = document.createElement("div");
+  alert.className = "live-region";
+  alert.setAttribute("role", "alert");
+  alert.setAttribute("aria-live", "assertive");
+  alert.setAttribute("aria-atomic", "true");
+  return { status, alert };
+}
+
+function updateLiveRegions(regions, announcement) {
+  const key = `${announcement?.severity ?? "off"}:${announcement?.text ?? ""}`;
+  if (regions.status.dataset.announcementKey === key) return;
+  regions.status.dataset.announcementKey = key;
+  regions.alert.dataset.announcementKey = key;
+  const statusText = announcement?.severity === "status" ? announcement.text : "";
+  const alertText = announcement?.severity === "alert" ? announcement.text : "";
+  if (regions.status.textContent !== statusText) regions.status.textContent = statusText;
+  if (regions.alert.textContent !== alertText) regions.alert.textContent = alertText;
+}
+
+function workstreamsAnnouncement(state) {
+  if (state.workstreamStatus === "error" || state.error !== "") return { severity: "alert", text: state.error || "Workstreams could not be loaded." };
+  if (state.selectionError !== undefined) return { severity: "alert", text: selectionFailureMessage(state.selectionError) };
+  if (state.refreshError !== undefined) return { severity: "alert", text: selectionFailureMessage(state.refreshError) };
+  if (state.startLocationIncomplete) return { severity: "alert", text: INCOMPLETE_START_MESSAGE };
+  if (state.connectionStatus === "reconnecting") return { severity: "status", text: `PI WEB is reconnecting${state.connectionMessage ? `: ${state.connectionMessage}` : "."}` };
+  if (state.notice !== "") return { severity: "status", text: state.notice };
+  if (state.inventoryStatus === "reconnecting") return { severity: "status", text: "Reconnecting Chat inventory." };
+  if (state.inventoryStatus === "unavailable") return { severity: "status", text: "Chat inventory is unavailable." };
+  if (state.inventoryStatus === "invalid") return { severity: "alert", text: state.inventoryReason ?? "Chat inventory is invalid." };
+  if (state.anchorRepair !== undefined) return { severity: "status", text: sessionAnchorRepairPresentation(state.anchorRepair).title };
+  return undefined;
+}
+
 function workstreamState(title, detail) {
   const state = document.createElement("section");
   state.className = "workstream-state";
-  state.setAttribute("role", "status");
   const heading = document.createElement("h1");
   heading.textContent = title;
   state.append(heading, message(detail, "muted"));
@@ -2275,12 +2393,13 @@ function workstreamState(title, detail) {
 function workstreamsStyleElement() {
   const style = document.createElement("style");
   style.textContent = `
-    :host { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; display: block; color: var(--pi-text); background: var(--pi-bg); font: 14px system-ui, sans-serif; }
+    :host { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; display: block; overflow-x: hidden; color: var(--pi-text); background: var(--pi-bg); font: 14px system-ui, sans-serif; }
+    .live-region { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     main { box-sizing: border-box; width: min(100%, 1280px); min-height: 100%; display: grid; align-content: start; gap: 0; margin: 0 auto; padding: clamp(68px, 7vw, 92px) clamp(20px, 5vw, 72px) 40px; }
     main.dedicated-workstream { width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; display: flex; overflow: hidden; }
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--pi-toolbar-gap, 8px); }
     .portfolio-header { align-items: end; gap: 28px; padding-bottom: 24px; border-bottom: 1px solid var(--pi-border); }
-    .portfolio-header > div:first-child { max-width: 720px; }
+    .portfolio-header > div:first-child { max-width: 760px; }
     .portfolio-header > div:first-child > strong, .portfolio-header h1 { margin: 0; color: var(--pi-text-bright); font-size: clamp(28px, 3vw, 38px); letter-spacing: -.025em; line-height: 1.05; }
     .unified-inventory-state { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0 0; }
     .unified-root-navigation { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(24px, 4vw, 56px); padding-top: 26px; }
@@ -2328,14 +2447,16 @@ function workstreamsStyleElement() {
     .workstream-identity .shell-title, .workstream-identity p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .workstream-identity .shell-title { margin: 0; color: var(--pi-text-bright); font-size: 14px; letter-spacing: 0; }
     .workstream-swatch { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 3px; background: var(--workstream-color); }
-    .workstream-tools, .workstream-utilities, .mobile-pane-navigation, .checkpoint-actions { display: flex; align-items: center; gap: 3px; }
+    .workstream-tools, .workstream-tools > div, .workstream-utilities, .mobile-pane-navigation, .checkpoint-actions { display: flex; align-items: center; gap: 3px; }
     .mobile-pane-navigation { display: none; }
     .session-tabs { flex: 0 0 auto; min-width: 0; overflow-x: auto; display: flex; align-items: center; gap: 4px; padding: 6px 10px 6px 66px; border-bottom: 1px solid var(--pi-border); background: var(--pi-surface); }
-    .collapsed-session-entry { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+    .collapsed-session-destinations { min-width: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+    .collapsed-session-entry { min-width: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+    .collapsed-session-entry .attention-navigation-action { position: static; }
     .session-tabs button { flex: 0 0 auto; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .session-tabs button[aria-pressed="true"] { background: var(--pi-selection-bg); color: var(--pi-text-bright); font-weight: 700; }
+    .session-tabs button[aria-current="page"] { background: var(--pi-selection-bg); color: var(--pi-text-bright); font-weight: 700; }
     .workstream-tools button { background: transparent; color: var(--pi-muted); }
-    .workstream-tools button[aria-pressed="true"] { background: var(--pi-selection-bg); color: var(--pi-text); font-weight: 700; }
+    .workstream-tools button[aria-current="page"] { background: var(--pi-selection-bg); color: var(--pi-text); font-weight: 700; }
     .scope-label { color: var(--pi-muted); font-size: 11px; }
     .workstream-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: var(--navigator-width, 320px) 22px minmax(360px, 1fr); overflow: hidden; }
     .workstream-body.sessions-collapsed { grid-template-columns: 0 0 minmax(360px, 1fr); }
@@ -2431,16 +2552,17 @@ function workstreamsStyleElement() {
     .task-row { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
     .task-row > div { display: grid; gap: 3px; min-width: 0; }
     @media (max-width: 980px) {
+      .unified-destination-body:not(.collapsed) { grid-template-columns: min(var(--navigator-width, 320px), 42vw) 12px minmax(320px, 1fr); }
       .workstream-body { grid-template-columns: min(var(--navigator-width, 320px), 42vw) 22px minmax(320px, 1fr); }
       .workstream-body.sessions-collapsed { grid-template-columns: 0 0 minmax(320px, 1fr); }
     }
-    @media (max-width: 720px) {
+    @media (max-width: 760px) {
       .workstream-actions { flex-wrap: wrap; justify-content: flex-start; }
       .workstream-topbar { flex-wrap: wrap; align-content: center; padding: 6px 8px 6px 58px; }
       .workstream-utilities > .scope-label { display: none; }
       .session-tabs { display: none; }
       .mobile-pane-navigation { display: flex; flex: 0 0 auto; justify-content: center; padding: 6px; border-bottom: 1px solid var(--pi-border); background: var(--pi-surface); }
-      .mobile-pane-navigation button[aria-pressed="true"] { background: var(--pi-selection-bg); font-weight: 700; }
+      .mobile-pane-navigation button[aria-current="page"] { background: var(--pi-selection-bg); font-weight: 700; }
       .narrow-navigate { display: inline-flex; }
       .unified-destination-body, .unified-destination-body.collapsed { position: relative; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); overflow: visible; }
       .unified-destination-navigation { position: absolute; inset: 0 auto 0 0; z-index: 9; width: min(88vw, 360px); border-right: 1px solid var(--pi-border); box-shadow: 16px 0 36px var(--pi-shadow-soft); }
@@ -2457,18 +2579,6 @@ function workstreamsStyleElement() {
       .workstream-body.mobile-sessions .sessions-pane { position: absolute; inset: 0 auto 0 0; z-index: 8; width: min(88vw, 360px); display: flex; flex-direction: column; visibility: visible; border-right: 1px solid var(--pi-border); box-shadow: 16px 0 36px var(--pi-shadow-soft); }
       .workspace-heading { align-items: flex-start; }
       .checkpoint-actions { max-width: 48%; }
-    }
-    .checkpoint-error, .connection { padding: var(--pi-message-padding, 12px); background: var(--pi-warning-surface); color: var(--pi-warning); }
-    .connection { border-radius: 8px; }
-    .receipt { padding: var(--pi-message-padding, 12px); border-radius: 8px; background: var(--pi-success-surface); color: var(--pi-success); }
-    .closed-section { opacity: .78; }
-    .workstream-state { width: min(100%, 520px); align-self: center; justify-self: center; padding: clamp(24px, 6vw, 64px); text-align: center; }
-    .workstream-state h1 { margin: 0; color: var(--pi-text); font-size: 20px; }
-    button { justify-self: center; min-height: var(--pi-control-min-size, 34px); border: 0; border-radius: 6px; background: var(--pi-selection-bg); color: var(--pi-text); padding: var(--pi-control-padding-block, 7px) var(--pi-control-padding-inline, 9px); cursor: pointer; }
-    button:hover:not(:disabled) { background: var(--pi-surface-hover, var(--pi-selection-bg)); }
-    button:disabled { cursor: not-allowed; opacity: .58; }
-    button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
-    @media (max-width: 760px) {
       main { padding: 70px 14px 28px; }
       .unified-root-navigation, .unified-root-navigation.collapsed { display: grid; grid-template-columns: minmax(0, 1fr); overflow: visible; gap: 24px; }
       .unified-root-navigation.collapsed .unified-list { display: grid; }
@@ -2481,13 +2591,34 @@ function workstreamsStyleElement() {
       .portfolio-anchor { grid-column: 1; grid-row: 3; }
       .portfolio-needs { grid-column: 2; grid-row: 1; text-align: right; }
     }
+    .checkpoint-error, .connection { padding: var(--pi-message-padding, 12px); background: var(--pi-warning-surface); color: var(--pi-warning); }
+    .connection { border-radius: 8px; }
+    .receipt { padding: var(--pi-message-padding, 12px); border-radius: 8px; background: var(--pi-success-surface); color: var(--pi-success); }
+    .closed-section { opacity: .78; }
+    .workstream-state { width: min(100%, 520px); align-self: center; justify-self: center; padding: clamp(24px, 6vw, 64px); text-align: center; }
+    .workstream-state h1 { margin: 0; color: var(--pi-text); font-size: 20px; }
+    button { justify-self: center; min-height: var(--pi-control-min-size, 34px); border: 0; border-radius: 6px; background: var(--pi-selection-bg); color: var(--pi-text); padding: var(--pi-control-padding-block, 7px) var(--pi-control-padding-inline, 9px); cursor: pointer; }
+    button:hover:not(:disabled) { background: var(--pi-surface-hover, var(--pi-selection-bg)); }
+    button:disabled { cursor: not-allowed; opacity: .58; }
+    button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
     @media (max-width: 520px) {
       .portfolio-header { display: grid; }
       .portfolio-header .header-actions { justify-content: flex-start; }
       .portfolio-header > div:first-child > strong { font-size: 28px; }
       .portfolio-intro { font-size: 14px; }
     }
-    @media (pointer: coarse) { button:not(.unified-navigation-row):not(.dedicated-session):not(.overlay-scrim) { min-height: 44px; } }
+    @media (pointer: coarse) {
+      :host button, .dedicated-session, .attention-navigation-action, .context-actions button, .task-answer-actions button, .terminal-drawer > button { min-height: max(44px, var(--pi-control-min-size, 44px)); }
+      .unified-navigation-entry:has(.attention-navigation-action) .unified-navigation-row,
+      .dedicated-session-entry:has(.attention-navigation-action) .dedicated-session { padding-bottom: calc(max(44px, var(--pi-control-min-size, 44px)) + 14px); }
+    }
+    @media (pointer: coarse) and (min-width: 761px) {
+      .unified-destination-body:not(.collapsed) { grid-template-columns: min(var(--navigator-width, 320px), 42vw) max(44px, var(--pi-control-min-size, 44px)) minmax(320px, 1fr); }
+      .workstream-body:not(.sessions-collapsed) { grid-template-columns: min(var(--navigator-width, 320px), 42vw) max(44px, var(--pi-control-min-size, 44px)) minmax(320px, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; }
+    }
   `;
   return style;
 }
@@ -2502,10 +2633,16 @@ function installRunStatusElement() {
     #error = "";
     #loading = false;
     #evidencePreview = "";
+    #main;
+    #statusRegion;
+    #alertRegion;
 
     constructor() {
       super();
-      this.attachShadow({ mode: "open" });
+      const root = this.attachShadow({ mode: "open" });
+      ({ status: this.#statusRegion, alert: this.#alertRegion } = createLiveRegions());
+      this.#main = document.createElement("main");
+      root.append(styleElement(), this.#statusRegion, this.#alertRegion, this.#main);
     }
 
     set context(value) {
@@ -2563,12 +2700,14 @@ function installRunStatusElement() {
     }
 
     #render() {
-      const root = this.shadowRoot;
-      if (root === null) return;
-      root.replaceChildren();
-      root.append(styleElement());
-      const main = document.createElement("main");
-      main.setAttribute("aria-live", "polite");
+      const main = this.#main;
+      main.replaceChildren();
+      const announcement = this.#loading
+        ? { severity: "status", text: "Loading Workbench projection." }
+        : this.#projection === undefined
+          ? { severity: "alert", text: this.#error || "Run projection is unavailable." }
+          : this.#error !== "" ? { severity: "status", text: this.#error } : undefined;
+      updateLiveRegions({ status: this.#statusRegion, alert: this.#alertRegion }, announcement);
       if (this.#loading) {
         main.append(message("Loading Workbench projection…", "muted"));
       } else if (this.#projection === undefined) {
@@ -2576,7 +2715,6 @@ function installRunStatusElement() {
       } else {
         main.append(this.#renderProjection(this.#projection));
       }
-      root.append(main);
     }
 
     #renderProjection(projection) {
@@ -2746,6 +2884,7 @@ function styleElement() {
   const style = document.createElement("style");
   style.textContent = `
     :host { display: block; color: var(--pi-text); font: 13px system-ui, sans-serif; }
+    .live-region { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     main { display: grid; gap: var(--pi-toolbar-gap, 8px); padding: var(--pi-panel-padding, 12px); }
     header, .evidence-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--pi-toolbar-gap, 8px); }
     header > div, .evidence-row > div { min-width: 0; display: grid; gap: 4px; }
@@ -2813,7 +2952,7 @@ function settleFocus(element, focusKey) {
   });
 }
 
-function message(text, className) {
+function message(text, className = "") {
   const element = document.createElement("p");
   element.className = `message ${className}`;
   element.textContent = text;

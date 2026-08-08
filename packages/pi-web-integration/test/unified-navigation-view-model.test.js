@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { attentionDestinationFromItem, attentionForWorkstreamSession, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, destinationsMatch, expandedSessionListRenderKey, formatDateTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, unifiedNavigatorRenderKey, workstreamNavigatorItem } from "../unified-navigation-view-model.js";
+import { attentionDestinationFromItem, attentionForWorkstreamSession, boundedStableValueKey, canonicalSurfaceRenderKey, collapsedSessionTabsRenderKey, contextHostIdentityChanges, dedicatedBannerRenderKey, destinationsMatch, expandedSessionListRenderKey, formatDateTime, hostSurfaceActivationKey, inventoryNoticeRenderKey, navigatorContinuationText, navigatorFocusKey, navigatorKeyboardDelta, narrowOverlayKeyboardAction, normalizeSessionNavigationSnapshot, resizeNavigatorWidth, selectedDestinationFromIdentity, unifiedNavigatorRenderKey, workstreamsRootRenderKey, workstreamNavigatorItem } from "../unified-navigation-view-model.js";
 
 const hostSnapshot = {
   sequence: 3,
@@ -147,6 +148,44 @@ test("unified navigator keys cover contents, pending, current destination, inven
   assert.notEqual(key, unifiedNavigatorRenderKey({ ...options, joined: { ...options.joined, status: "invalid", reason: "Malformed inventory" } }));
   assert.notEqual(key, unifiedNavigatorRenderKey({ ...options, joined: { ...options.joined, status: "reconnecting" } }));
   assert.notEqual(inventoryNoticeRenderKey({ status: "invalid", reason: "first", retainedNativeSessions: [] }, false), inventoryNoticeRenderKey({ status: "invalid", reason: "second", retainedNativeSessions: [] }, false));
+});
+
+test("render-key digests consume fixture-sized Workstreams beyond the former bounds", async () => {
+  const fixture = JSON.parse(await readFile(new URL("../fixtures/recorded-workstreams.json", import.meta.url), "utf8"));
+  const workstream = fixture.snapshots[0];
+  const repeated = (count) => Array.from({ length: count }, (_, index) => ({
+    ...structuredClone(workstream),
+    id: `${workstream.id}-${index}`,
+    sessions: workstream.sessions.map((session) => ({ ...structuredClone(session), id: `${session.id}-${index}` })),
+  }));
+
+  const five = repeated(5);
+  const six = repeated(6);
+  assert.notEqual(boundedStableValueKey(five), boundedStableValueKey(six));
+
+  const forty = repeated(40);
+  const changedLast = structuredClone(forty);
+  changedLast[39].updatedAt = "Changed after every former length and node limit.";
+  assert.ok(JSON.stringify(forty).length > 16_384);
+  assert.notEqual(boundedStableValueKey(forty), boundedStableValueKey(changedLast));
+});
+
+test("render-key digests are stable for cycles, sorted by object key, and bounded", () => {
+  const first = { b: 2, a: 1, large: `prefix-${"x".repeat(30_000)}-first` };
+  first.self = first;
+  const second = { large: `prefix-${"x".repeat(30_000)}-first`, a: 1, b: 2 };
+  second.self = second;
+
+  const key = boundedStableValueKey(first);
+  assert.equal(key, boundedStableValueKey(second));
+  assert.notEqual(key, boundedStableValueKey({ ...second, large: `prefix-${"x".repeat(30_000)}-second` }));
+  assert.match(key, /^digest-v1:[0-9a-f]{64}$/);
+  assert.equal(key.length, 74);
+  assert.equal(boundedStableValueKey({ b: 2, a: 1 }), boundedStableValueKey({ a: 1, b: 2 }));
+  assert.notEqual(
+    workstreamsRootRenderKey({ sessionNavigationSupported: true, sessionNavigationRefreshAvailable: false }),
+    workstreamsRootRenderKey({ sessionNavigationSupported: true, sessionNavigationRefreshAvailable: true }),
+  );
 });
 
 test("canonical surfaces use deterministic revision, session, and remembered-continuation keys", () => {

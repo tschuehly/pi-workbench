@@ -4,6 +4,25 @@ export const NAVIGATOR_MIN_WIDTH = 240;
 export const NAVIGATOR_MAX_WIDTH = 520;
 export const NAVIGATOR_WIDTH_PREFERENCE = "unified-navigation.width";
 export const NAVIGATOR_MODE_PREFERENCE = "unified-navigation.mode";
+export const NARROW_VIEWPORT_MAX_WIDTH = 760;
+export const NARROW_VIEWPORT_MEDIA_QUERY = `(max-width: ${String(NARROW_VIEWPORT_MAX_WIDTH)}px)`;
+const RENDER_KEY_DIGEST_LANES = Object.freeze([
+  0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35,
+  0x27d4eb2f, 0x165667b1, 0xd3a2646c, 0xfd7046c5,
+]);
+
+export function narrowViewportMatches(matchMedia = (query) => globalThis.matchMedia?.(query)) {
+  return matchMedia(NARROW_VIEWPORT_MEDIA_QUERY)?.matches === true;
+}
+
+export function sessionNavigationCompatibility(sessionNavigation) {
+  return sessionNavigation === undefined
+    ? {
+        supported: false,
+        message: "Update PI WEB to enable Chats + Workstreams. This older host does not provide session navigation; Workstreams-only mode remains available.",
+      }
+    : { supported: true, message: undefined };
+}
 
 export function contextHostIdentityChanges(previous, next) {
   return {
@@ -164,6 +183,10 @@ export function navigatorContinuationText(item) {
   return "Confirmed continuation unavailable.";
 }
 
+export function workstreamsRootRenderKey(options) {
+  return `workstreams-root:${boundedStableValueKey(options)}`;
+}
+
 export function unifiedNavigatorRenderKey(options) {
   return `unified-navigator:${stableValueKey({
     status: options?.joined?.status,
@@ -177,6 +200,7 @@ export function unifiedNavigatorRenderKey(options) {
     pending: options?.pending === true,
     attentionItems: options?.attentionItems,
     refreshAvailable: typeof options?.onRefresh === "function",
+    sessionNavigationSupported: options?.sessionNavigationCompatibility?.supported !== false,
   })}`;
 }
 
@@ -191,12 +215,13 @@ export function expandedSessionListRenderKey(snapshot, options) {
   })}`;
 }
 
-export function inventoryNoticeRenderKey(joined, refreshAvailable) {
+export function inventoryNoticeRenderKey(joined, refreshAvailable, sessionNavigationSupported = true) {
   return `inventory-notice:${stableValueKey({
     status: joined?.status,
     reason: joined?.reason,
     retainedNativeSessionCount: joined?.retainedNativeSessions?.length ?? 0,
     refreshAvailable: refreshAvailable === true,
+    sessionNavigationSupported,
   })}`;
 }
 
@@ -303,10 +328,173 @@ function worseHealth(left, right) {
   return (order[right] ?? 3) > (order[left] ?? 3) ? right : left;
 }
 
+export function boundedStableValueKey(value) {
+  const digest = stableDigest();
+  const seen = new WeakMap();
+  const symbols = new Map();
+  const stack = [{ kind: "value", value }];
+  let nextObjectId = 0;
+  let nextSymbolId = 0;
+
+  while (stack.length > 0) {
+    const task = stack.pop();
+    if (task.kind === "token") {
+      digest.add(task.tag, task.value);
+      continue;
+    }
+    if (task.kind === "property") {
+      let propertyValue;
+      try { propertyValue = task.owner[task.key]; }
+      catch {
+        digest.add("unreadable", task.key);
+        continue;
+      }
+      stack.push({ kind: "value", value: propertyValue });
+      continue;
+    }
+
+    const candidate = task.value;
+    if ((typeof candidate !== "object" && typeof candidate !== "function") || candidate === null) {
+      addPrimitiveToDigest(digest, candidate, symbols, () => nextSymbolId++);
+      continue;
+    }
+
+    const priorId = seen.get(candidate);
+    if (priorId !== undefined) {
+      digest.add("reference", priorId);
+      continue;
+    }
+    const objectId = nextObjectId++;
+    seen.set(candidate, objectId);
+
+    const type = safeObjectType(candidate);
+    digest.add("object", `${objectId}:${type}`);
+    addIntrinsicValueToDigest(digest, candidate, type);
+
+    let keys;
+    try { keys = Object.keys(candidate).sort(); }
+    catch {
+      digest.add("keys", "unreadable");
+      continue;
+    }
+    const intrinsicChildren = safeIntrinsicChildren(digest, candidate, type);
+    digest.add("intrinsic-children", intrinsicChildren.length);
+    digest.add("keys", keys.length);
+    stack.push({ kind: "token", tag: "end", value: objectId });
+    for (let index = keys.length - 1; index >= 0; index -= 1) {
+      const key = keys[index];
+      stack.push({ kind: "property", owner: candidate, key });
+      stack.push({ kind: "token", tag: "key", value: key });
+    }
+    for (let index = intrinsicChildren.length - 1; index >= 0; index -= 1) {
+      const child = intrinsicChildren[index];
+      stack.push({ kind: "value", value: child.value });
+      stack.push({ kind: "token", tag: child.tag, value: child.index });
+    }
+  }
+
+  return `digest-v1:${digest.hex()}`;
+}
+
 function stableValueKey(value) {
-  if (Array.isArray(value)) return `[${value.map(stableValueKey).join(",")}]`;
-  if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableValueKey(value[key])}`).join(",")}}`;
-  return JSON.stringify(value) ?? "undefined";
+  return boundedStableValueKey(value);
+}
+
+function addPrimitiveToDigest(digest, value, symbols, allocateSymbolId) {
+  const type = value === null ? "null" : typeof value;
+  if (type === "number") {
+    const representation = Number.isNaN(value) ? "NaN"
+      : value === Infinity ? "+Infinity"
+        : value === -Infinity ? "-Infinity"
+          : Object.is(value, -0) ? "-0" : String(value);
+    digest.add(type, representation);
+    return;
+  }
+  if (type === "symbol") {
+    let id = symbols.get(value);
+    if (id === undefined) {
+      id = allocateSymbolId();
+      symbols.set(value, id);
+    }
+    digest.add(type, `${id}:${Symbol.keyFor(value) ?? ""}:${value.description ?? ""}`);
+    return;
+  }
+  if (type === "function") {
+    let source;
+    try { source = Function.prototype.toString.call(value); }
+    catch { source = "unreadable"; }
+    digest.add(type, source);
+    return;
+  }
+  digest.add(type, type === "undefined" || type === "null" ? "" : String(value));
+}
+
+function safeObjectType(value) {
+  try { return Object.prototype.toString.call(value); }
+  catch { return "[object Unreadable]"; }
+}
+
+function addIntrinsicValueToDigest(digest, value, type) {
+  try {
+    if (type === "[object Function]" || type === "[object AsyncFunction]" || type === "[object GeneratorFunction]") {
+      digest.add("function", Function.prototype.toString.call(value));
+    } else if (type === "[object Date]") digest.add("date", Date.prototype.getTime.call(value));
+    else if (type === "[object RegExp]") {
+      const source = Object.getOwnPropertyDescriptor(RegExp.prototype, "source").get.call(value);
+      const flags = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags").get.call(value);
+      digest.add("regexp-source", source);
+      digest.add("regexp-flags", flags);
+    } else if (type === "[object ArrayBuffer]") {
+      const bytes = new Uint8Array(value);
+      digest.add("array-buffer", Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""));
+    }
+  } catch {
+    digest.add("intrinsic", "unreadable");
+  }
+}
+
+function safeIntrinsicChildren(digest, value, type) {
+  try {
+    if (type === "[object Map]") {
+      return Array.from(Map.prototype.entries.call(value)).flatMap(([key, item], index) => [
+        { tag: "map-key", index, value: key },
+        { tag: "map-value", index, value: item },
+      ]);
+    }
+    if (type === "[object Set]") {
+      return Array.from(Set.prototype.values.call(value), (item, index) => ({ tag: "set-value", index, value: item }));
+    }
+  } catch {
+    digest.add("intrinsic-children", "unreadable");
+  }
+  return [];
+}
+
+function stableDigest() {
+  const lanes = RENDER_KEY_DIGEST_LANES.slice();
+  const write = (input) => {
+    for (let index = 0; index < input.length; index += 1) {
+      const code = input.charCodeAt(index);
+      for (let lane = 0; lane < lanes.length; lane += 1) {
+        lanes[lane] = Math.imul(lanes[lane] ^ code ^ lane, 0x01000193) >>> 0;
+      }
+    }
+  };
+  return {
+    add(tag, value) {
+      const text = String(value);
+      write(`${tag.length}:${tag}:${text.length}:`);
+      write(text);
+    },
+    hex() {
+      return lanes.map((lane, index) => {
+        let mixed = lane ^ (lane >>> 16) ^ Math.imul(index + 1, 0x9e3779b9);
+        mixed = Math.imul(mixed ^ (mixed >>> 15), 0x85ebca6b);
+        mixed = Math.imul(mixed ^ (mixed >>> 13), 0xc2b2ae35);
+        return ((mixed ^ (mixed >>> 16)) >>> 0).toString(16).padStart(8, "0");
+      }).join("");
+    },
+  };
 }
 
 function isRecord(value) {

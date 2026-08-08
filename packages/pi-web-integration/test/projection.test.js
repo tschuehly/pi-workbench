@@ -73,8 +73,8 @@ test("dedicated Workstream UI transitions select Context as a peer surface", () 
 test("narrow navigation remains a one-pane Sessions or Workspace choice", () => {
   assert.equal(normalizeDedicatedMobilePane("tasks"), "workspace");
   assert.equal(transitionDedicatedWorkstreamUi({ mobilePane: "sessions" }, { type: "select-mobile-pane", pane: "tasks" }).mobilePane, "workspace");
-  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace" }, "workspace"), { pressed: true });
-  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace" }, "sessions"), { pressed: false });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace" }, "workspace"), { selected: true });
+  assert.deepEqual(dedicatedMobileControlState({ mobilePane: "workspace" }, "sessions"), { selected: false });
 });
 
 test("checkout scope follows the selected Workstream session anchor", () => {
