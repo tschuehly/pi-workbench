@@ -88,6 +88,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
     description: "Launch one fresh attended child Pi for one bounded assignment. By default progress is streamed and the tool blocks until the child finishes; with background:true it returns a handle immediately. The lead must reconcile the compact result.",
     promptSnippet: "Delegate one bounded attended assignment to a fresh child Pi",
     promptGuidelines: [
+      "Delegate proactively when it protects your context or the result: bulk reading, parallelizable investigation, mechanical batches, and judgment that must be independent of the author. Work inline when the task needs continuous steering or is smaller than a handoff brief.",
+      "When you expect several sequential bounded assignments in one semantic scope, create or reuse a durable worker (worker_create, worker_dispatch) instead of re-briefing fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
       "Use background:true to launch several children and keep working; reconcile each with subagent_collect and cancel with subagent_cancel.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
