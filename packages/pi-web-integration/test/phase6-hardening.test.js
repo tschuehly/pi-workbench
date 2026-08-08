@@ -30,6 +30,7 @@ test("the single runtime and CSS narrow transition includes 760, 390, and 320 pi
   assert.match(pluginSource, /setOverlayBackgroundInert\(view\.backgroundElements, open\)/);
   assert.match(pluginSource, /setOverlayBackgroundInert\(view\.backgroundElements, narrowNavigatorOpen\)/);
   assert.match(pluginSource, /view\.scrim\.setAttribute\("aria-hidden", String\(!open\)\)/);
+  assert.match(pluginSource, /retainModalFocus\(view\.navigation, view\.overlayClose, narrowViewportMatches\(\) && view\.overlayOpen\)/);
   assert.match(pluginSource, /retainModalFocus\(view\.sessionsPane, view\.sessionsClose, narrowNavigatorOpen\)/);
 });
 
@@ -39,6 +40,9 @@ test("narrow and crowded CSS bounds overflow, long titles, many sessions, and mo
   assert.match(pluginSource, /\.unified-navigation-row > span:first-child > strong \{[^}]*overflow-wrap: anywhere/);
   assert.match(pluginSource, /\.session-tabs \{[^}]*overflow-x: auto/);
   assert.match(pluginSource, /\.session-tabs button \{[^}]*max-width: 260px;[^}]*text-overflow: ellipsis/);
+  assert.match(pluginSource, /@media \(max-width: 520px\) \{[\s\S]*\.workstream-body\.mobile-sessions \.sessions-pane \{ width: 100%/);
+  assert.match(pluginSource, /\.pane-heading-actions \{ width: 100%; display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(pluginSource, /\.shell-banner:not\(:empty\) \{ margin-left: 66px; \}/);
   assert.match(pluginSource, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?animation: none !important;[\s\S]*?transition: none !important;/);
 });
 

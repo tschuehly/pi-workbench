@@ -156,3 +156,5 @@ framework-neutral Run client while retaining this deterministic fixture.
 See [`level-1-acceptance-evidence.md`](level-1-acceptance-evidence.md) for the live create, launch,
 checkpoint, browser-restart, resume, task-preservation, and closure workflow. Earlier contribution
 probe evidence and upstream interface gaps remain in [`v1-probe-evidence.md`](v1-probe-evidence.md).
+The unified navigation release gates, deterministic seed command, screenshots, and remaining browser
+blockers are recorded in [`unified-ui-acceptance-evidence.md`](unified-ui-acceptance-evidence.md).

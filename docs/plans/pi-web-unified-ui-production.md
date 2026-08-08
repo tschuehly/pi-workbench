@@ -406,6 +406,16 @@ horizontal overflow. A narrow layout must show one focused pane, not compressed 
 
 ### Phase 7 — Verify, evidence, and release
 
+Status: automated release gates pass and bounded browser evidence is recorded in
+`packages/pi-web-integration/unified-ui-acceptance-evidence.md`, but release remains blocked. The
+isolated browser environment proved root/brief navigation, Pi-menu recovery, 760/390/320 layouts,
+Escape focus restoration, durable Human Task separation, failed-checkpoint retention, reduced motion,
+and older-host fallback. It did not provide controlled non-user native sessions, so live asks,
+anchored Chat/Context/Files/Git/Terminal switching, draft/scroll/Terminal retention, explicit launch,
+coarse-pointer geometry, native 200% zoom, reconnect, and anchor-repair browser evidence remain. Do
+not mark the release exit complete until a no-model isolated session fixture or equivalent Electron
+harness closes those evidence gaps.
+
 Run the narrowest suites first, then the complete affected checks:
 
 ```sh
