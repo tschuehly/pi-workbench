@@ -23,6 +23,7 @@ Create a Pi-based project workbench that allocates Human Attention across concur
 - [Brigade](../research/sources/brigade.md)
 - [T3 Code](../research/sources/t3code.md)
 - [Multidimensional Working Mode proposal](../research/reports/multidimensional-working-mode-proposal.md) — proposed direction awaiting challenge, not authoritative behavior
+- [Model evaluation campaign proposal](../research/reports/model-evaluation-campaign-proposal.md) — proposed controlled model, effort, skill, and harness comparisons; not authoritative behavior
 
 ## Agreed Decisions
 
