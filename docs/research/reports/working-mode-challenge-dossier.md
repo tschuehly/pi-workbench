@@ -19,6 +19,10 @@ The grilling session must produce:
    `task-phase-boundary-tree` (phase-boundary decision tree), both of which overlap the agenda;
 4. if adopt or revise: a migration outline honoring the proposal's rule that contracts change
    coherently, never piecemeal. No document edits during the grilling itself.
+5. owner-added scope: the verdicts required by the companion
+   [default-context challenge dossier](default-context-challenge-dossier.md)
+   (`task-challenge-default-context`) — the standing system-prompt and default-context additions
+   are challenged in the same session.
 
 ## Subject under challenge
 
@@ -67,7 +71,8 @@ External watched sources: [kunchenguid/firstmate](https://github.com/kunchenguid
   primitives, Ship contract), D87–89 (Level 1 child execution); open question 17 registers this
   challenge.
 - [principles.md](../../foundation/principles.md) — Principle 3 grounds attention-scaling without
-  authority transfer; the two-altitude structure is separately pending as Decision 93.
+  authority transfer; the two-altitude structure is separately pending as its own numbered
+  decision (`task-decision-93` predates Decisions 93–94 landing; the next free number applies).
 - Contracts: [workstreams.md](../../contracts/workstreams.md) ("no background model turn writes the
   ledger" constrains mate C4 and every discontinuous-attention mode),
   [graphical-attention.md](../../contracts/graphical-attention.md) and
