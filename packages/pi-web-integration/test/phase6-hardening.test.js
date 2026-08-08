@@ -30,6 +30,7 @@ test("the single runtime and CSS narrow transition includes 760, 390, and 320 pi
   assert.match(pluginSource, /setOverlayBackgroundInert\(view\.backgroundElements, open\)/);
   assert.match(pluginSource, /setOverlayBackgroundInert\(view\.backgroundElements, narrowNavigatorOpen\)/);
   assert.match(pluginSource, /view\.scrim\.setAttribute\("aria-hidden", String\(!open\)\)/);
+  assert.match(pluginSource, /retainModalFocus\(view\.sessionsPane, view\.sessionsClose, narrowNavigatorOpen\)/);
 });
 
 test("narrow and crowded CSS bounds overflow, long titles, many sessions, and motion", () => {

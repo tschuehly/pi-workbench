@@ -1510,6 +1510,7 @@ function updateUnifiedChatDestination(view, options) {
   view.banner.hidden = view.banner.childElementCount === 0;
   updateRenderedRegion(view.navigationContent, unifiedNavigatorRenderKey(options), () => renderUnifiedHierarchy(options), view.navigation);
   syncUnifiedChatOverlay(view, narrowViewportMatches());
+  retainModalFocus(view.navigation, view.overlayClose, narrowViewportMatches() && view.overlayOpen);
   view.navigatorToggle.textContent = options.navigation.mode === "collapsed" ? "Expand navigator" : "Collapse navigator";
   view.navigatorToggle.setAttribute("aria-expanded", String(options.navigation.mode !== "collapsed"));
   view.body.className = `unified-destination-body ${options.navigation.mode}`;
@@ -1877,6 +1878,7 @@ function updateDedicatedWorkstream(view, snapshot, options) {
     () => renderExpandedSessionList(snapshot, options),
     view.sessionsPane,
   );
+  retainModalFocus(view.sessionsPane, view.sessionsClose, narrowNavigatorOpen);
 
   const selected = snapshot.sessions.find((session) => session.id === options.selectedSessionId);
   const layout = dedicatedWorkstreamLayout(options);
@@ -2159,6 +2161,12 @@ function renderSessionAnchorRepair(repair, session, options) {
   }
   panel.append(actions);
   return panel;
+}
+
+function retainModalFocus(modal, fallback, open) {
+  if (!open || !modal.isConnected) return;
+  const active = modal.getRootNode().activeElement;
+  if (!modal.contains(active)) fallback.focus({ preventScroll: true });
 }
 
 function setOverlayBackgroundInert(elements, inert) {
