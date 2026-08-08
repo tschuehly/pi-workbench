@@ -7,6 +7,10 @@ that the [system overview](../foundation/system-overview.md) currently bundles u
 FirstMate." Until that decision is recorded in [`decisions.md`](../foundation/decisions.md), treat this
 as design exploration, not a commitment.
 
+The durable commitment belongs to [Principle 3](../foundation/principles.md#3-discovery-and-review-are-bounded):
+coordination scales Human Attention across concurrent work without transferring execution authority.
+This document keeps only the concrete capability design and its unresolved policy questions.
+
 Evidence for the policy question is the throwaway logic prototype at
 [`packages/pi-web-integration/firstmate-decision-prototype.html`](../../packages/pi-web-integration/firstmate-decision-prototype.html).
 

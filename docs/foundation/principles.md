@@ -48,6 +48,8 @@ it affects.
   review activity.
 - Attention requests pause only affected work when dependencies and authority allow independent
   work to continue.
+- Coordination scales Human Attention across concurrent work without transferring execution
+  authority to the coordinator.
 
 ### 4. Work shape follows context, not rank
 
