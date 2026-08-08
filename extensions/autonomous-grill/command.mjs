@@ -3,7 +3,7 @@ import { buildAutonomousGrillPrompt } from "./prompt.mjs";
 
 export function registerAutonomousGrillCommand(pi, skillPath) {
   pi.registerCommand("autonomous-grill", {
-    description: "Cross-model grill a plan or decision, then return proposals for human judgment",
+    description: "Cross-model grill a plan or decision, then walk the human through the settled design tree",
     handler: async (args, ctx) => {
       let target = args.trim();
 

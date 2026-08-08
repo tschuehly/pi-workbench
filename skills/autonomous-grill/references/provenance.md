@@ -30,3 +30,7 @@
 - Durable shared state, managed Dispatches, Episodes, or Run authority in an attended Level 1 skill.
 
 The port preserves the deliberation method without claiming lifecycle, authority, or Independence guarantees that the Level 1 harness does not provide.
+
+## Changed after port
+
+- 2026-08-08: Advisor rounds batch the whole settled frontier per dispatch instead of one branch per dispatch, matching `/grilling` frontier rounds, and the closing report became a frontier walk of the design tree with the human. Model-facing assignments follow `/writing-for-agents`; the human walk follows `/write-for-humans`.
