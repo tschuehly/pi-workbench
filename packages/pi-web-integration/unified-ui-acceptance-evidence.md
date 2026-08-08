@@ -1,6 +1,6 @@
 # Unified PI WEB interface acceptance evidence
 
-Status: **automated gates pass; release browser gate remains blocked by missing controlled session fixtures.**
+Status: **experimental controlled-session candidate is red-capable; release browser gate remains blocked.**
 
 This record covers the unified Chats + Workstreams interface implemented through PI WEB commits
 `f655413`, `d8701d5`, `9e113ce`, and `75442b9`, and Workbench commits `7006271`, `e0af015`, `3550267`,
@@ -70,27 +70,46 @@ Sessions header clipped **New session**. The release-evidence change makes the m
 520 pixels, wraps its three actions, and reserves the PI launcher gutter for non-empty status banners
 at every width; replacement screenshots verify the visible results.
 
+## Controlled-session experiment candidate
+
+The Phase 1 experiment now supplies a test-only PI WEB server at candidate commit `7be6e24` and a
+Workbench-owned isolated runner.
+The runner uses a temporary `HOME`, data/config/session roots, Unix socket, ports, browser profile,
+repositories, and Workstream Store; it strips provider, credential, proxy, and normal-daemon inputs.
+The production server does not import the fixture entry point.
+
+The owned Chromium run selected five opaque sessions at five complete anchors and passed catalog,
+transcript paging, Files, Git, Terminal command/output, paired Chats/Workstreams classification, and
+responsive-emulation checks. It reproduced the expected red composition check: Workbench still owns
+an inner destination navigator beneath PI WEB's global shell. The command returned `partial`, not
+pass, with typed `LIVE_ASK_UNREACHABLE` and `CONTEXT_USAGE_UNREACHABLE` blockers. The final
+receipt reported the session daemon, fixture web server, and Chromium exited and the runtime root
+removed. A process/path recheck found no owned residual process.
+
+Reproduce from owned worktrees and an absent owned runtime root:
+
+```sh
+node packages/pi-web-integration/scripts/run-unified-shell-acceptance.mjs \
+  --pi-web-root <owned-pi-web-worktree> \
+  --root <owned-empty-runtime-root>
+```
+
+Verification used owned `HOME`, config, cache, and temporary roots. Workbench
+`npm --prefix packages/pi-web-integration run check` passed 87 tests. PI WEB `npm run verify`
+passed typecheck, lint, knip, 2,576 tests, and 3 documented skips across 287 files; `npm run build`
+passed with only the existing large-chunk advisory. A first aggregate attempt used an owned but
+overlong macOS socket path and failed five socket tests with `EINVAL`; rerunning from the dedicated
+short owned root passed, so no product failure was hidden.
+
+The experiment deliberately remains red/partial until later governing-plan phases remove the
+composition mismatch and provide approved no-model seams for pending ask and active context truth.
+
 ## Release blockers and deviations
 
-The release browser gate is not complete. The isolated environment can seed canonical Workstream
-ledgers, but PI WEB does not yet expose a deterministic browser fixture for controlled native
-sessions and host-owned Chat/Files/Git/Terminal surfaces. Registering a real project discovered
-existing user sessions; those sessions were not used for screenshots or interaction evidence.
-Consequently this pass did **not** claim or record:
-
-- a root containing both a controlled Chat and Workstream, or selection of every Chat/Workstream/session;
-- a synthetic standalone Chat with a live ask;
-- a successfully anchored Workstream session Chat and Context switch;
-- differently anchored Files, Git, and Terminal surfaces;
-- live-ask answering, draft/scroll/paging retention, or Terminal process retention after switching;
-- expanded-to-collapsed desktop navigator interaction;
-- opening the closed Workstream;
-- explicit-anchor launch confirmation;
-- browser screenshots for reconnect and typed anchor repair;
-- physical coarse-pointer geometry or native 200% browser zoom.
-
-Those behaviors retain automated coverage where listed above, but the production plan requires both
-automation and browser evidence. Release remains blocked until PI WEB supplies a no-model,
-non-user-data session fixture (or an equivalent isolated Electron harness), followed by the missing
-interaction pass at 200% zoom and with coarse-pointer emulation. No production credentials, user
-session data, or generated Run data were added to this record.
+The release browser gate is not complete. This candidate does **not** yet claim live-ask answering,
+active context usage, draft/scroll retention, reconnect and typed-repair browser sequences,
+expanded/collapsed navigator interactions, closed-Workstream behavior, explicit-anchor launch,
+physical coarse-pointer geometry, native zoom, or accepted visual baselines. The older screenshot pass
+also did not use the new fixture. Those gaps remain assigned to later governing-plan phases and owner
+Acceptance. No production credentials, user sessions, normal PI WEB/Pi/Workbench data, or generated
+Run data are committed by this experiment.
