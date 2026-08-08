@@ -1,0 +1,7 @@
+{
+  "retry": {
+    "enabled": true,
+    "maxRetries": 8,
+    "baseDelayMs": 2000
+  }
+}
