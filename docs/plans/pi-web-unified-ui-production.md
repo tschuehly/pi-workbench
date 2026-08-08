@@ -1,6 +1,12 @@
 # Unified Chats and Workstreams UI production plan
 
-Status: proposed UI-only release plan. This plan sequences the accepted interaction direction in
+Status: superseded for release completion by
+[`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md). This plan
+records the implemented UI-only baseline and its incomplete acceptance evidence. It is frozen for
+further release work; no replacement release execution is approved until the owner approves the
+proposed fidelity plan.
+
+This plan sequenced a narrowed interaction slice from
 [`pi-web-unified-chat-workstream-prototype.html`](../research/reports/pi-web-unified-chat-workstream-prototype.html)
 without changing Workstream protocol meaning.
 

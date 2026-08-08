@@ -1,9 +1,10 @@
 # PI WEB message-tree implementation plan
 
 Status: implementation plan for the approved message-tree prototype. The existing
-[Workbench UI plan](pi-web-workbench-ui.md) remains implemented and authoritative for the shell,
-Workstream hierarchy, current exchange, and attention behavior. This plan adds generic PI WEB
-conversation-branch navigation without reopening those decisions.
+[Workbench UI plan](pi-web-workbench-ui.md) records the implemented baseline. The proposed
+[unified-shell fidelity plan](pi-web-unified-shell-prototype-fidelity.md) governs future shell
+remediation after owner approval. This plan owns generic PI WEB conversation-branch navigation; the
+prototype's Double-Escape entry must be added here before full release acceptance.
 
 ## Outcome
 

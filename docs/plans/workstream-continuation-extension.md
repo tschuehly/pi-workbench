@@ -219,7 +219,9 @@ Add **Continue in new session** beside each eligible checkpoint. This requires a
 - selects the fresh session after confirmation;
 - keeps **Resume** as the action for opening the existing session.
 
-Place **Continue in new session** in the per-session checkpoint actions of the active `pi-web-unified-ui-production.md` composition; do not create a parallel Workstream surface.
+Place **Continue in new session** in the per-session checkpoint actions of the current Workbench composition. Preserve that action while the proposed
+[`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md) migrates the
+composition after owner approval; do not create a parallel Workstream surface.
 
 PI WEB must continue to use typed plugin transport. The shared module must contain no DOM, Lit, PI WEB route, TUI, Node filesystem, or machine-local path assumptions.
 
