@@ -1,6 +1,6 @@
 # Disposable AFK autopilot validation campaign — 2026-08-08
 
-**Status:** Complete disposable validation evidence; production authority remains unchanged.
+**Status:** Complete disposable validation evidence; production authority remains unchanged. The compaction-race repair, post-fix matrix, and later production attempt are recorded in the [successor report](afk-compaction-race-and-production-attempt-03-2026-08-08.md); its results supersede this report's open compaction-fix decision.
 
 Related evidence:
 
