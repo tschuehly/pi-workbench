@@ -24,10 +24,11 @@ export interface CloseWorkstream {
 }
 
 export type WorkstreamRecord =
-  | SemanticRecord<"session.pending", { sessionId?: string; associationKey: string; machineId?: string; projectId?: string; workspaceId?: string }>
+  | SemanticRecord<"session.pending", { sessionId?: string; associationKey: string; machineId?: string; projectId?: string; workspaceId?: string; derivationKind?: "checkpoint" | "fork" }>
   | SemanticRecord<"session.confirmed", { sessionId: string; associationKey?: string; machineId: string; projectId: string; workspaceId: string }>
   | SemanticRecord<"session.anchor.repaired", { sessionId: string; machineId: string; projectId: string; workspaceId: string; resolution: SessionAnchorResolutionReceipt }>
   | SemanticRecord<"session.failed", { sessionId?: string; associationKey?: string; reason: string }>
+  | SemanticRecord<"session.cancelled", { sessionId?: string; associationKey?: string; reason: string }>
   | SemanticRecord<"checkpoint.replaced", { sessionId: string; checkpoint: Checkpoint }>
   | SemanticRecord<"checkpoint.failed", { sessionId: string; reason: string }>
   | SemanticRecord<"checkpoint.stale", { sessionId: string; checkpointId: string; reason: string }>
@@ -125,6 +126,7 @@ export interface WorkstreamSession {
   machineId?: string;
   projectId?: string;
   workspaceId?: string;
+  derivationKind?: "checkpoint" | "fork";
   latestCheckpoint: ProjectedCheckpoint | null;
   checkpointFailure: string | null;
   checkpointStaleness: (WorkstreamRecordProvenance & { checkpointId: string; reason: string }) | null;

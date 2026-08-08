@@ -184,6 +184,50 @@ test("reconciles a launch-key pending association to the runtime session without
   assert.equal(confirmed.sessions[0].workspaceId, "workspace-1");
 });
 
+test("projects derivation kinds and cancellation removes only the current pending association", async () => {
+  const { adapter, store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({
+    workstreamId: "ws-1",
+    expectedRevision: 1,
+    idempotencyKey: "pending-fork",
+    records: [{
+      type: "session.pending",
+      producer: "pi-web",
+      sourceSessionId: "source-1",
+      payload: { associationKey: "pi-web:fork-1", machineId: "studio", projectId: "pi-web", workspaceId: "main", derivationKind: "fork" },
+    }],
+  });
+  assert.equal((await store.inspect("ws-1")).sessions[0].derivationKind, "fork");
+
+  await store.append({
+    workstreamId: "ws-1",
+    expectedRevision: 2,
+    idempotencyKey: "cancel-fork",
+    records: [{ type: "session.cancelled", producer: "pi-web", sourceSessionId: "source-1", payload: { associationKey: "pi-web:fork-1", reason: "Owner cancelled before creation" } }],
+  });
+  assert.deepEqual((await store.inspect("ws-1")).sessions, []);
+  assert.equal((await store.list())[0].pendingSessionCount, 0);
+  const state = await adapter.exportState();
+  assert.deepEqual(state.workstreams["ws-1"].ledger.slice(-2).map((record) => record.type), ["session.pending", "session.cancelled"]);
+
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "cancel-again", records: [{ type: "session.cancelled", producer: "pi-web", payload: { associationKey: "pi-web:fork-1", reason: "Duplicate" } }] }),
+    (error) => error.code === "INVALID_TRANSITION",
+  );
+});
+
+test("accepts only checkpoint or fork as pending derivation kinds", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  for (const derivationKind of ["blank", "promotion", ""]) {
+    await assert.rejects(
+      store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: `invalid-${derivationKind || "empty"}`, records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: `launch-${derivationKind || "empty"}`, derivationKind } }] }),
+      (error) => error.code === "INVALID_RECORD",
+    );
+  }
+});
+
 test("repairs only an incomplete active session anchor and projects bounded evidence without another association", async () => {
   const createdAt = "2025-12-31T23:59:58.000Z";
   const associatedAt = "2025-12-31T23:59:59.000Z";

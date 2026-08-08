@@ -151,6 +151,36 @@ test("fake Workstream client deterministically lists, inspects, and reconciles t
   assert.deepEqual(caughtUp, { mode: "replay", events: [], nextSequence: 16 });
 });
 
+test("fake and typed clients project pending derivation and remove cancelled associations", async () => {
+  const client = new DeterministicFakeWorkstreamClient({ version: 1, sequence: 0, snapshots: [] });
+  await client.create({ workstreamId: "ws-derived", idempotencyKey: "create-derived", title: "Derived", producer: "owner" });
+  await client.append({
+    workstreamId: "ws-derived",
+    expectedRevision: 1,
+    idempotencyKey: "pending-derived",
+    records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "pi-web:fork-1", machineId: "studio", projectId: "pi-web", workspaceId: "main", derivationKind: "fork" } }],
+  });
+  const pending = await client.inspect("ws-derived");
+  assert.equal(pending.sessions[0].derivationKind, "fork");
+
+  const typed = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: pending }) });
+  assert.equal((await typed.inspect("ws-derived")).sessions[0].derivationKind, "fork");
+
+  await client.append({
+    workstreamId: "ws-derived",
+    expectedRevision: 2,
+    idempotencyKey: "cancel-derived",
+    records: [{ type: "session.cancelled", producer: "pi-web", payload: { associationKey: "pi-web:fork-1", reason: "Owner cancelled" } }],
+  });
+  assert.deepEqual((await client.inspect("ws-derived")).sessions, []);
+
+  const malformed = structuredClone(pending);
+  malformed.sessions[0].derivationKind = "blank";
+  assert.equal(parseRecordedWorkstreams({ version: 1, sequence: 2, snapshots: [malformed] }), undefined);
+  const malformedTyped = createWorkbenchWorkstreamClient({ request: async () => ({ ok: true, value: malformed }) });
+  await assert.rejects(malformedTyped.inspect("ws-derived"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
+});
+
 test("checkpoint proposal and new-session guidance carry the complete attended contract", () => {
   const proposal = checkpointProposalPrompt();
   assert.match(proposal, /exactly five labeled parts/);

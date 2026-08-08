@@ -109,6 +109,17 @@ export async function loadDeterministicFakeWorkstreamClient(fetcher = fetch) {
 
 function validateFakeRecord(record) {
   if (!isRecord(record) || !isRecord(record.payload)) throw new Error("Fake Workstream records require an object payload.");
+  if (record.type === "session.pending"
+      && (record.payload.derivationKind !== undefined && !["checkpoint", "fork"].includes(record.payload.derivationKind))) {
+    throw new Error("session.pending derivationKind must be checkpoint or fork.");
+  }
+  if (record.type === "session.cancelled"
+      && (!isString(record.payload.reason)
+        || record.payload.sessionId === undefined && record.payload.associationKey === undefined
+        || record.payload.sessionId !== undefined && !isString(record.payload.sessionId)
+        || record.payload.associationKey !== undefined && !isString(record.payload.associationKey))) {
+    throw new Error("session.cancelled requires a pending association selector and reason.");
+  }
   if (record.type === "session.confirmed" && !completeLocation(record.payload)) {
     throw new Error("session.confirmed requires complete machineId, projectId, and workspaceId values.");
   }
@@ -165,6 +176,7 @@ function applyFakeRecord(snapshot, record, metadata) {
       machineId: record.payload.machineId,
       projectId: record.payload.projectId,
       workspaceId: record.payload.workspaceId,
+      ...(record.payload.derivationKind === undefined ? {} : { derivationKind: record.payload.derivationKind }),
       latestCheckpoint: null,
       checkpointFailure: null,
       checkpointStaleness: null,
@@ -210,6 +222,12 @@ function applyFakeRecord(snapshot, record, metadata) {
           sourceSessionId: record.sourceSessionId ?? null,
         },
       });
+      break;
+    }
+    case "session.cancelled": {
+      const pending = snapshot.sessions.find((candidate) => candidate.status === "pending" && (candidate.id === record.payload.sessionId || (record.payload.associationKey !== undefined && candidate.associationKey === record.payload.associationKey)));
+      if (pending === undefined) throw new Error("Pending session association was not found.");
+      snapshot.sessions = snapshot.sessions.filter((candidate) => candidate !== pending);
       break;
     }
     case "checkpoint.replaced": {
@@ -286,6 +304,7 @@ function isSession(value) {
   if (!isRecord(value)
       || !isString(value.id)
       || !["active", "pending", "failed"].includes(value.status)
+      || !(value.derivationKind === undefined || ["checkpoint", "fork"].includes(value.derivationKind))
       || ![value.machineId, value.projectId, value.workspaceId].every((part) => part === undefined || isString(part))
       || !(value.latestCheckpoint === null || isCheckpoint(value.latestCheckpoint))
       || !(value.checkpointFailure === null || isString(value.checkpointFailure))

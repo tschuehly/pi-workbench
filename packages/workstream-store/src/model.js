@@ -20,6 +20,7 @@ const RECORD_TYPES = new Set([
   "session.confirmed",
   "session.anchor.repaired",
   "session.failed",
+  "session.cancelled",
   "checkpoint.replaced",
   "checkpoint.failed",
   "checkpoint.stale",
@@ -126,12 +127,13 @@ function validateRecord(record, limits, field) {
 
   const validators = {
     "session.pending": () => {
-      keys(record.payload, ["sessionId", "associationKey", "machineId", "projectId", "workspaceId"], `${field}.payload`);
+      keys(record.payload, ["sessionId", "associationKey", "machineId", "projectId", "workspaceId", "derivationKind"], `${field}.payload`);
       if (record.payload.sessionId !== undefined) id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
       id(record.payload.associationKey, `${field}.payload.associationKey`, limits);
       if (record.payload.machineId !== undefined) string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
       if (record.payload.projectId !== undefined) string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
       if (record.payload.workspaceId !== undefined) string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
+      if (record.payload.derivationKind !== undefined && !["checkpoint", "fork"].includes(record.payload.derivationKind)) fail("INVALID_RECORD", `${field}.payload.derivationKind is not supported`);
     },
     "session.confirmed": () => {
       keys(record.payload, ["sessionId", "associationKey", "machineId", "projectId", "workspaceId"], `${field}.payload`);
@@ -155,13 +157,8 @@ function validateRecord(record, limits, field) {
       if (!Number.isSafeInteger(resolution.scannedScopeCount) || resolution.scannedScopeCount < 1) fail("INVALID_RECORD", `${field}.payload.resolution.scannedScopeCount must be a positive safe integer`);
       string(resolution.verifiedAt, `${field}.payload.resolution.verifiedAt`, limits.maxTextLength);
     },
-    "session.failed": () => {
-      keys(record.payload, ["sessionId", "associationKey", "reason"], `${field}.payload`);
-      if (record.payload.sessionId !== undefined) id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
-      if (record.payload.associationKey !== undefined) id(record.payload.associationKey, `${field}.payload.associationKey`, limits);
-      if (record.payload.sessionId === undefined && record.payload.associationKey === undefined) fail("INVALID_RECORD", `${field}.payload requires sessionId or associationKey`);
-      string(record.payload.reason, `${field}.payload.reason`, limits.maxTextLength);
-    },
+    "session.failed": () => validateSessionTerminal(record.payload, limits, `${field}.payload`),
+    "session.cancelled": () => validateSessionTerminal(record.payload, limits, `${field}.payload`),
     "checkpoint.replaced": () => {
       keys(record.payload, ["sessionId", "checkpoint"], `${field}.payload`);
       id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
@@ -218,6 +215,14 @@ function validateRecord(record, limits, field) {
   };
   validators[record.type]();
   if (byteSize(record) > limits.maxRecordBytes) fail("RECORD_TOO_LARGE", `${field} exceeds ${limits.maxRecordBytes} bytes`);
+}
+
+function validateSessionTerminal(payload, limits, field) {
+  keys(payload, ["sessionId", "associationKey", "reason"], field);
+  if (payload.sessionId !== undefined) id(payload.sessionId, `${field}.sessionId`, limits);
+  if (payload.associationKey !== undefined) id(payload.associationKey, `${field}.associationKey`, limits);
+  if (payload.sessionId === undefined && payload.associationKey === undefined) fail("INVALID_RECORD", `${field} requires sessionId or associationKey`);
+  string(payload.reason, `${field}.reason`, limits.maxTextLength);
 }
 
 function validateHumanTaskInput(value, limits, field) {
@@ -321,6 +326,7 @@ export function rebuildSnapshot(ledger) {
           machineId: payload.machineId,
           projectId: payload.projectId,
           workspaceId: payload.workspaceId,
+          ...(payload.derivationKind === undefined ? {} : { derivationKind: payload.derivationKind }),
           latestCheckpoint: null,
           checkpointFailure: null,
           checkpointStaleness: null,
@@ -382,6 +388,12 @@ export function rebuildSnapshot(ledger) {
             },
           });
         }
+        break;
+      }
+      case "session.cancelled": {
+        const cancelledEntry = [...sessions.entries()].find(([id, session]) =>
+          id === payload.sessionId || (payload.associationKey !== undefined && session.associationKey === payload.associationKey));
+        if (cancelledEntry?.[1].status === "pending") sessions.delete(cancelledEntry[0]);
         break;
       }
       case "checkpoint.replaced": {

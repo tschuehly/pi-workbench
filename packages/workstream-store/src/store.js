@@ -211,6 +211,14 @@ function validateTransitions(database, workstreamId, before, records) {
         sessions.set(failedId, { ...pending, status: "failed", associationKey: associationKey ?? pending.associationKey });
         break;
       }
+      case "session.cancelled": {
+        const pendingId = associationKey === undefined ? sessionId : pendingByAssociation.get(associationKey);
+        if (pendingId === undefined || sessions.get(pendingId)?.status !== "pending") fail("INVALID_TRANSITION", "session association is not pending");
+        const pending = sessions.get(pendingId);
+        sessions.delete(pendingId);
+        pendingByAssociation.delete(pending.associationKey);
+        break;
+      }
       case "checkpoint.replaced": {
         if (sessions.get(sessionId)?.status !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
         sessions.get(sessionId).checkpointId = record.payload.checkpoint.id;

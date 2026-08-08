@@ -36,8 +36,8 @@ test("operates on the configured user-local Workstream Store", async () => {
       expectedRevision: 1,
       idempotencyKey: "associate-cli",
       records: [
-        { type: "session.pending", producer: "session", sourceSessionId: "session-cli", payload: { sessionId: "session-cli", associationKey: "manual-session-cli" } },
-        { type: "session.confirmed", producer: "session", sourceSessionId: "session-cli", payload: { sessionId: "session-cli", associationKey: "manual-session-cli" } },
+        { type: "session.pending", producer: "session", sourceSessionId: "session-cli", payload: { sessionId: "session-cli", associationKey: "manual-session-cli", machineId: "local", projectId: "pi-workbench", workspaceId: "main" } },
+        { type: "session.confirmed", producer: "session", sourceSessionId: "session-cli", payload: { sessionId: "session-cli", associationKey: "manual-session-cli", machineId: "local", projectId: "pi-workbench", workspaceId: "main" } },
       ],
     });
     assert.equal(appended.status, 0);

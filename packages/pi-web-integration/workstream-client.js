@@ -118,6 +118,7 @@ function isSession(value) {
   if (!isRecord(value)
       || !isString(value.id)
       || !["active", "pending", "failed"].includes(value.status)
+      || !(value.derivationKind === undefined || ["checkpoint", "fork"].includes(value.derivationKind))
       || ![value.machineId, value.projectId, value.workspaceId].every((part) => part === undefined || isString(part))
       || !(value.latestCheckpoint === null || isCheckpoint(value.latestCheckpoint))
       || !(value.checkpointFailure === null || isString(value.checkpointFailure))
