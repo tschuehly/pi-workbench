@@ -4,7 +4,8 @@ Status: **automated gates pass; release browser gate remains blocked by missing 
 
 This record covers the unified Chats + Workstreams interface implemented through PI WEB commits
 `f655413`, `d8701d5`, `9e113ce`, and `75442b9`, and Workbench commits `7006271`, `e0af015`, `3550267`,
-`d780c19`, and `b5f2dec`. The browser pass used an isolated PI WEB data directory, the production
+`d780c19`, and `b5f2dec`. The 320-pixel correction, reproducible seed, and captured evidence are in
+Workbench commit `292986e`. The browser pass used an isolated PI WEB data directory, the production
 Workbench plugin and service, and the synthetic ledger produced by
 `evidence/seed-unified-ui.mjs`. It made no model calls and recorded no credentials or real session
 identifiers.
