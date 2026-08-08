@@ -28,7 +28,7 @@ The experiment passes only if consumers can derive lifecycle, runtime, progress,
 
 Use one Workbench worktree:
 
-The governing unified-shell AFK overlay supplies this experiment's owned branch, worktree, and temporary roots. The standalone attended path may use `exp/subagent-details-v1` only after the plan commit; neither path may use `main` or another run's state. Limit implementation to:
+Execution is attended in an `exp/subagent-details-v1` worktree created after the plan commit; never work on `main` or consume another run's state. Limit implementation to:
 
 - `packages/pi-execution-adapter/`;
 - `extensions/subagent/`;
@@ -114,7 +114,7 @@ Exit: every known extension failure with schema-valid input produces a valid V1 
 
 1. Run adapter and extension tests, including concurrent children and cancellation, then run the unconditional no-model Pi RPC load check for `index.ts`.
 2. Verify old stored tool records remain ordinary data; do not add a migration that rewrites sessions.
-3. Resolve current quota/runtime bindings through `skills/model-orchestration/`. In an attended standalone run, execute one real child success and cancellation in an explicitly approved isolated session root. The AFK candidate records real smoke as unavailable rather than importing credentials or writing normal Pi session storage.
+3. Resolve current quota/runtime bindings through `skills/model-orchestration/`. Execute one real child success and cancellation in an explicitly approved isolated session root. When no isolated session root is available, record real smoke as unavailable rather than importing credentials or writing normal Pi session storage.
 4. Inspect the persisted parent tool result and prove rich details did not enter model-facing text.
 5. Confirm the child transcript contains no leaked parent transcript and that the envelope contains no raw thinking.
 
@@ -148,7 +148,7 @@ npm run test:subagent-extension
 npm test
 ```
 
-Use a fake RPC process for deterministic failure paths. Real smoke is supplementary and must use an owner-approved isolated Pi configuration/session root; it never writes normal session storage during the AFK candidate.
+Use a fake RPC process for deterministic failure paths. Real smoke is supplementary and must use an owner-approved isolated Pi configuration/session root; it never writes normal session storage.
 
 ## Pi worker assignment and supervision
 

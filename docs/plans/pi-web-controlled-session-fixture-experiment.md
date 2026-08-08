@@ -1,6 +1,6 @@
 # Controlled PI WEB session fixture experiment
 
-Status: approved experiment plan; implementation not started. This is the detailed execution companion for Phase 1 of the approved governing [`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md) plan. It does not change Workstream or session protocol meaning.
+Status: approved and implemented. The Phase 1 harness landed attended on 2026-08-08 as Workbench commit `bc792c9` and PI WEB commit `05dc04a`; this document remains the rerun and extension reference for the approved governing [`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md) plan. It does not change Workstream or session protocol meaning.
 
 ## Outcome
 
@@ -34,7 +34,7 @@ The experiment passes only if the browser sees the same public session-navigatio
 
 ## Isolated workspace
 
-The governing AFK overlay supplies one coordinated pair of owned Workbench/PI WEB branches, worktrees, and runtime roots. Standalone attended execution may create `exp/controlled-session-fixture` worktrees only after the plan commit. Neither path uses `main` or another run's state. Use the resulting Workbench evidence commit as base and PI WEB commit `75442b9` unless Phase 0 records a newer fork baseline. Before creating it, fetch both `upstream` and `origin`, keep `upstream` fetch-only, and retain `safety/unified-ui-before-upstream-rebase` until the governing plan's browser verification completes.
+Execution is attended. The landed harness runs from the normal integration branches; further harness experiments may create `exp/controlled-session-fixture` worktrees from those landed commits. No execution uses another run's state, a normal Store, or normal user data. Before creating a PI WEB worktree, fetch both `upstream` and `origin`, keep `upstream` fetch-only, and retain `safety/unified-ui-before-upstream-rebase` until the governing plan's browser verification completes. Every rerun allocates a fresh short temporary runtime root (`--root`) and relies on the runner's cleanup receipt.
 
 All runtime state lives under a fresh owned root. Workbench owns one reusable guard/process module at `packages/pi-web-integration/scripts/lib/isolated-pi-web-stack.mjs`; this runner creates it and continuation probes consume it rather than implementing another guard. It builds an allowlisted environment from scratch; pins `HOME`, `XDG_CONFIG_HOME`, `PI_WEB_DATA_DIR`, `PI_WEB_CONFIG`, `PI_WEB_PROJECTS_FILE`, `PI_WEB_MACHINES_FILE`, `PI_WEB_SESSIOND_SOCKET`, `PI_WEB_PORT`, `PI_WEB_AGENT_DIR`, `PI_CODING_AGENT_DIR`, `PI_WEB_AGENT_SESSION_DIR`, and `PI_CODING_AGENT_SESSION_DIR`; sets `PI_WEB_OFFLINE=1`, `PI_OFFLINE=1`, and `PI_WEB_SKIP_VERSION_CHECK=1`; and removes `PI_WEB_SESSIOND_URL`, `PI_WEB_SESSIOND_PORT`, and proxy/provider/auth variables. Preflight requires `os.homedir()` and every resolved data/config/session/service path plus ports to belong to the experiment.
 

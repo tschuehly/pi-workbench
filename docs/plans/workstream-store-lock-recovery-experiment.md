@@ -15,7 +15,7 @@ Change only:
 - `packages/workstream-store/` implementation, declarations, tests, and package documentation;
 - `docs/plans/workstream-store-lock-recovery-experiment.md` for verified findings.
 
-The governing unified-shell AFK overlay owns the experiment worktree and temporary roots. Standalone attended use may allocate a separate worktree, but no execution may use `main`, a normal Store, or another run's workspace. Commit `packages/workstream-store/test/fixtures/lock-owner-child.mjs` for continuation probes to consume by exact commit.
+Execution is attended in a dedicated experiment worktree (for example `exp/workstream-store-lock-recovery`); no execution may use `main`, a normal Store, or another run's workspace. Commit `packages/workstream-store/test/fixtures/lock-owner-child.mjs` for continuation probes to consume by exact commit.
 
 ## Current failure and rejected approach
 
@@ -53,7 +53,7 @@ Preserve cross-process exclusion for reads and writes. Do not move Workstream co
 
 ### Legacy attended repair
 
-An unmarked legacy directory returns `STORE_BUSY` with attended-migration guidance. The package-local command requires explicit confirmation that PI WEB and terminal writers are stopped, verifies directory shape (not liveness), writes `initializing.json`, then atomically installs `protocol.json` inside the same directory. It does not rename or remove the directory. An idle old writer cannot be disproved mechanically; authority comes from attended stop confirmation. The AFK experiment exercises this only in temporary fixtures.
+An unmarked legacy directory returns `STORE_BUSY` with attended-migration guidance. The package-local command requires explicit confirmation that PI WEB and terminal writers are stopped, verifies directory shape (not liveness), writes `initializing.json`, then atomically installs `protocol.json` inside the same directory. It does not rename or remove the directory. An idle old writer cannot be disproved mechanically; authority comes from attended stop confirmation. The experiment exercises this only in temporary fixtures.
 
 ## Delivery sequence
 

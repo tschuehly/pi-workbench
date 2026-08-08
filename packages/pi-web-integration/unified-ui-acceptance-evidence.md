@@ -163,3 +163,23 @@ physical coarse-pointer geometry, native zoom, or accepted visual baselines. The
 also did not use the new fixture. Those gaps remain assigned to later governing-plan phases and owner
 Acceptance. No production credentials, user sessions, normal PI WEB/Pi/Workbench data, or generated
 Run data are committed by this experiment.
+
+## Attended adoption and re-verification (2026-08-08)
+
+The unattended run that produced the Phase 1 and Phase 2 candidates ended mid-Phase 3 and its
+worktrees were lost. The committed candidates were adopted attended onto the normal integration
+branches: PI WEB `05dc04a` (fixture) and `8644d99` (shell profiles) on `pi-workbench`; Workbench
+`bc792c9` (harness) and `73a59da` (profile declaration) on `main`. All checks were re-run against
+those adopted commits:
+
+- PI WEB `npm run verify`: 2,596 passed and 3 documented skips across 290 files.
+- PI WEB `npm run build`: passed with the existing large-chunk advisory.
+- Workbench `npm --prefix packages/pi-web-integration run check`: 88 passed.
+- Fresh controlled browser acceptance (isolated root, cleanup passed): 9 of 10 checks passed with
+  truthful aggregate `partial`; `CURRENT_COMPOSITION_MISMATCH` remains the expected Phase 3 red
+  assertion, and `LIVE_ASK_UNREACHABLE`/`CONTEXT_USAGE_UNREACHABLE` remain later-phase fixture
+  blockers.
+
+The uncommitted Phase 3 work was not recovered. Its scope and unresolved independent-review findings
+are archived in
+[`../../docs/research/reports/pi-web-unified-shell-afk-phase3-handoff-2026-08-08.md`](../../docs/research/reports/pi-web-unified-shell-afk-phase3-handoff-2026-08-08.md).
