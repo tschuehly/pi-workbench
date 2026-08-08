@@ -29,9 +29,15 @@ When documents disagree, follow the highest applicable authority and repair the 
 
 - [`plans/level-1.md`](plans/level-1.md) — approved Level 1 human–Pi pair-programming implementation plan.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — approved attended child Pi execution plan.
+- [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — proposed durable attended worker identity and resumable bounded dispatch beside ephemeral subagents.
+- [`plans/pi-web-subagent-conversation-cards.md`](plans/pi-web-subagent-conversation-cards.md) — selected conversation-native PI WEB child-execution presentation direction; implementation awaits confirmation.
+- [`plans/subagent-details-envelope-experiment.md`](plans/subagent-details-envelope-experiment.md) — proposed producer-side experiment for bounded, versioned child-execution presentation details.
 - [`plans/workstream-continuation-extension.md`](plans/workstream-continuation-extension.md) — shared attended-session coordination and checkpoint continuation through PI WEB and a Pi terminal extension.
+- [`plans/workstream-continuation-runtime-probes.md`](plans/workstream-continuation-runtime-probes.md) — proposed host-neutral probes for continuation identity, persistence, cancellation, location, and contention assumptions.
+- [`plans/workstream-store-lock-recovery-experiment.md`](plans/workstream-store-lock-recovery-experiment.md) — proposed local file-lock ownership and dead-owner recovery experiment.
 - [`plans/pi-web-workbench-ui.md`](plans/pi-web-workbench-ui.md) — implemented desktop-first sequence for the selected Workbench hierarchy and concise current exchange.
 - [`plans/pi-web-unified-shell-prototype-fidelity.md`](plans/pi-web-unified-shell-prototype-fidelity.md) — proposed remediation and full-release sequence for realizing the canonical prototype as one coherent PI WEB shell.
+- [`plans/pi-web-controlled-session-fixture-experiment.md`](plans/pi-web-controlled-session-fixture-experiment.md) — proposed detailed Phase 1 experiment for the governing shell plan's isolated no-model acceptance harness.
 - [`plans/pi-web-unified-ui-production.md`](plans/pi-web-unified-ui-production.md) — superseded UI-only baseline plan and incomplete release evidence.
 - [`plans/pi-web-message-tree.md`](plans/pi-web-message-tree.md) — implementation sequence for compact session-history navigation, continue-from-entry, and correlated Workstream forks.
 - [`integrations/pi-web/evaluation.md`](integrations/pi-web/evaluation.md) and [`shell-strategy.md`](integrations/pi-web/shell-strategy.md) — PI WEB evidence and shell boundary.
