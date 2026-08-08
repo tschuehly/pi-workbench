@@ -101,11 +101,14 @@ async function main() {
 }
 
 async function prepareFixture(stack) {
-  const pluginsRoot = join(stack.paths.data, "plugins");
-  await mkdir(pluginsRoot, { recursive: true });
+  const pluginRoot = join(stack.paths.data, "plugins", "pi-workbench");
+  const packageRoot = pluginRoot;
+  await mkdir(pluginRoot, { recursive: true });
   await Promise.all([
-    cp(join(WORKBENCH_ROOT, "packages/pi-web-integration"), join(pluginsRoot, "pi-web-integration"), { recursive: true, filter: (source) => !source.includes("/evidence/unified-ui/") }),
-    cp(join(WORKBENCH_ROOT, "packages/workstream-store"), join(pluginsRoot, "workstream-store"), { recursive: true }),
+    cp(join(WORKBENCH_ROOT, "packages/package.json"), join(pluginRoot, "package.json")),
+    cp(join(WORKBENCH_ROOT, "packages/pi-web-integration"), join(packageRoot, "pi-web-integration"), { recursive: true, filter: (source) => !source.includes("/evidence/unified-ui/") }),
+    cp(join(WORKBENCH_ROOT, "packages/workstream-store"), join(packageRoot, "workstream-store"), { recursive: true }),
+    cp(join(WORKBENCH_ROOT, "packages/workstream-session-coordination"), join(packageRoot, "workstream-session-coordination"), { recursive: true }),
   ]);
   await writeFile(stack.paths.config, `${JSON.stringify({
     host: "127.0.0.1", port: stack.ports.web, allowedHosts: true, spawnSessions: false, subsessions: false, askUser: true,

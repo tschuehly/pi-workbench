@@ -39,7 +39,9 @@ Pass JSON inline, as `@file`, or as stdin. Keep temporary request files outside 
 
 ## 2. Associate this session when needed
 
-Check `PI_SESSION_ID`, then inspect the selected Workstream. If this session is already active there, preserve that association. If it appears in another Workstream, stop and report the conflict. Otherwise append `session.pending` and `session.confirmed` together using one association key:
+Check `PI_SESSION_ID`, then inspect the selected Workstream. If this session is already active there, preserve that association. If it appears in another Workstream, stop and report the conflict. A new association also requires the attended host's complete `machineId`, `projectId`, and `workspaceId`. Use trusted host context when it exposes all three; otherwise ask the owner for the exact catalog identifiers and do not infer them from `cwd`, repository names, or branch names. If any identifier remains unknown, stop without appending.
+
+Append `session.pending` and `session.confirmed` together using one association key and the actual identifiers:
 
 ```json
 {
@@ -47,13 +49,13 @@ Check `PI_SESSION_ID`, then inspect the selected Workstream. If this session is 
   "expectedRevision":1,
   "idempotencyKey":"associate-SESSION_ID",
   "records":[
-    {"type":"session.pending","producer":"session","sourceSessionId":"SESSION_ID","payload":{"sessionId":"SESSION_ID","associationKey":"manual-SESSION_ID"}},
-    {"type":"session.confirmed","producer":"session","sourceSessionId":"SESSION_ID","payload":{"sessionId":"SESSION_ID","associationKey":"manual-SESSION_ID"}}
+    {"type":"session.pending","producer":"session","sourceSessionId":"SESSION_ID","payload":{"sessionId":"SESSION_ID","associationKey":"manual-SESSION_ID","machineId":"MACHINE_ID","projectId":"PROJECT_ID","workspaceId":"WORKSPACE_ID"}},
+    {"type":"session.confirmed","producer":"session","sourceSessionId":"SESSION_ID","payload":{"sessionId":"SESSION_ID","associationKey":"manual-SESSION_ID","machineId":"MACHINE_ID","projectId":"PROJECT_ID","workspaceId":"WORKSPACE_ID"}}
   ]
 }
 ```
 
-Use the actual session id throughout. A session has exactly one home Workstream.
+Replace every uppercase placeholder with the exact trusted value. Use the actual session id throughout. A session has exactly one home Workstream.
 
 **Complete when:** the inspected projection shows this session as active in exactly one Workstream.
 

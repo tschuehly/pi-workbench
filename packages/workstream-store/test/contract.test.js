@@ -215,6 +215,44 @@ test("projects derivation kinds and cancellation removes only the current pendin
     store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "cancel-again", records: [{ type: "session.cancelled", producer: "pi-web", payload: { associationKey: "pi-web:fork-1", reason: "Duplicate" } }] }),
     (error) => error.code === "INVALID_TRANSITION",
   );
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "reuse-cancelled-token", records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "pi-web:fork-1", machineId: "studio", projectId: "pi-web", workspaceId: "main", derivationKind: "fork" } }] }),
+    (error) => error.code === "INVALID_TRANSITION" && error.message.includes("already used"),
+  );
+  await store.create({ workstreamId: "ws-2", idempotencyKey: "create-ws-2", title: "Another Workstream", producer: "owner" });
+  await assert.rejects(
+    store.append({ workstreamId: "ws-2", expectedRevision: 1, idempotencyKey: "reuse-cancelled-token-elsewhere", records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "pi-web:fork-1", machineId: "studio", projectId: "pi-web", workspaceId: "main", derivationKind: "fork" } }] }),
+    (error) => error.code === "INVALID_TRANSITION" && error.message.includes("already used"),
+  );
+});
+
+test("rejects reused confirmed operation tokens and mismatched terminal selectors", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({
+    workstreamId: "ws-1",
+    expectedRevision: 1,
+    idempotencyKey: "two-associations",
+    records: [
+      { type: "session.pending", producer: "pi-web", payload: { sessionId: "active-1", associationKey: "pi-web:active-1", machineId: "studio", projectId: "pi-web", workspaceId: "main", derivationKind: "checkpoint" } },
+      { type: "session.confirmed", producer: "pi-web", payload: { sessionId: "active-1", associationKey: "pi-web:active-1", machineId: "studio", projectId: "pi-web", workspaceId: "main" } },
+      { type: "session.pending", producer: "pi-web", payload: { associationKey: "pi-web:pending-2", machineId: "studio", projectId: "pi-web", workspaceId: "main", derivationKind: "checkpoint" } },
+    ],
+  });
+  assert.equal((await store.inspect("ws-1")).sessions.find((session) => session.id === "active-1").derivationKind, undefined);
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "reuse-confirmed-token", records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "pi-web:active-1" } }] }),
+    (error) => error.code === "INVALID_TRANSITION" && error.message.includes("already used"),
+  );
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "mixed-cancel-selectors", records: [{ type: "session.cancelled", producer: "pi-web", payload: { sessionId: "active-1", associationKey: "pi-web:pending-2", reason: "Selectors disagree" } }] }),
+    (error) => error.code === "INVALID_TRANSITION" && error.message.includes("selectors"),
+  );
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "mixed-failure-selectors", records: [{ type: "session.failed", producer: "pi-web", payload: { sessionId: "unused-session-id", associationKey: "pi-web:pending-2", reason: "Selectors disagree" } }] }),
+    (error) => error.code === "INVALID_TRANSITION" && error.message.includes("selectors"),
+  );
+  assert.equal((await store.inspect("ws-1")).sessions.find((session) => session.associationKey === "pi-web:pending-2").status, "pending");
 });
 
 test("accepts only checkpoint or fork as pending derivation kinds", async () => {

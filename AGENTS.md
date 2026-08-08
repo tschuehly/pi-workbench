@@ -27,9 +27,9 @@ PI WEB is the user-facing client of its typed protocols.
 | Pi dispatch and actors | `docs/contracts/execution.md`, `packages/pi-execution/` |
 | Workspaces and delivery | `docs/contracts/controller.md`, `packages/repository-workspace/` |
 | Evidence and immutable objects | `docs/contracts/controller.md`, `packages/artifact-store/` |
-| Cross-session Workstreams and attended checkpoints | `docs/contracts/workstreams.md` |
+| Cross-session Workstreams, attended checkpoints, and session coordination | `docs/contracts/workstreams.md`, `packages/workstream-store/`, `packages/workstream-session-coordination/`, `packages/pi-web-integration/`, `skills/workstreams/` |
 | Attention and PI WEB interfaces | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
-| PI WEB integration, unified-shell remediation, and fork customization | `packages/pi-web-integration/`, `docs/integrations/pi-web/`, `docs/plans/pi-web-unified-shell-prototype-fidelity.md`, sibling `../pi-web` checkout |
+| PI WEB integration, unified-shell remediation, and fork customization | `packages/package.json`, `packages/pi-web-integration/`, `docs/integrations/pi-web/`, `docs/plans/pi-web-unified-shell-prototype-fidelity.md`, sibling `../pi-web` checkout |
 | macOS PI WEB wrapper | `apps/pi-web-macos/` |
 | Workflow or repository policy | `docs/contracts/workflow.md`, `workflows/`, `repositories/` |
 | Decision evidence | `docs/research/sources/` |

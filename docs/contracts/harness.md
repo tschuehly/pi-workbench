@@ -54,10 +54,7 @@ interactive lead Pi under continuous Human Attention. The lead may launch bounde
 Pi processes as attended tool activity and remains accountable for their assignments and results.
 The harness does not launch background model turns or managed Runs.
 
-The Workstream preserves cross-session attention but grants no workspace lease, enforced path
-scope, durable Run identity, managed authority, or recovery guarantee. Model selection may resolve
-the interactive lead and child processes' concrete providers, models, and Model Effort, but those
-bindings do not change the Level 1 posture. Level 1 does not require an agreed execution plan before
+The Workstream preserves cross-session attention but grants no workspace lease, enforced path scope, durable Run identity, managed authority, or recovery guarantee. Attended-session hosts coordinate Workstream association through the shared host-neutral session-coordination module rather than embedding lifecycle logic in a skill or interface adapter. Model selection may resolve the interactive lead and child processes' concrete providers, models, and Model Effort, but those bindings do not change the Level 1 posture. Level 1 does not require an agreed execution plan before
 implementation begins. Levels 2–4 have no V1 package or preset resources.
 
 ## Repository Package

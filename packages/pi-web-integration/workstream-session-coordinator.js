@@ -1,55 +1,56 @@
+import { WorkstreamSessionCoordination } from "../workstream-session-coordination/src/index.js";
+
 const PRODUCER = "pi-web";
 
 /**
- * Coordinates the non-atomic Workstream/PI WEB session launch handshake.
- * The Workstream Store remains authoritative for the association; the host only
- * owns session creation and navigation.
+ * PI WEB adapter around host-neutral attended-session coordination. Existing-session
+ * navigation and anchor repair remain PI WEB-specific.
  */
 export class WorkstreamSessionCoordinator {
   constructor(client, host) {
     if (client === undefined || host === undefined) throw new TypeError("client and host are required");
     this.client = client;
     this.host = host;
+    this.coordination = new WorkstreamSessionCoordination({
+      withWorkstreamClient: (callback) => callback(this.client),
+      attendedSession: piWebAttendedSessionAdapter(this.host),
+      producer: "pi-web",
+      ownsAssociationKey: (associationKey) => associationKey.startsWith("pi-web:") || associationKey.startsWith("launch-"),
+    });
+  }
+
+  async inspectContinuation(workstreamId) {
+    return this.coordination.inspectContinuation(workstreamId);
   }
 
   async launch(snapshot) {
-    if (snapshot.closed) throw new Error("Closed Workstreams cannot start sessions.");
     const location = this.host.currentLocation();
     if (!completeLocation(location)) throw new Error("Select a complete machine, project, and workspace location before starting a Workstream session.");
-    const associationKey = newId("launch");
-    await this.#appendFresh(snapshot.id, associationKey, [{
-      type: "session.pending",
-      producer: PRODUCER,
-      payload: { associationKey, ...location },
-    }]);
-
-    let session;
-    try {
-      session = await this.host.start({
-        startupToken: associationKey,
-        initialPrompt: workstreamPrompt(snapshot, associationKey),
-      });
-    } catch (error) {
-      await this.#failPending(snapshot.id, associationKey, error);
-      throw error;
+    const outcome = await this.coordination.launch({
+      kind: "blank",
+      workstreamId: snapshot.id,
+      operationId: newId("launch"),
+      location,
+    });
+    if (outcome.type === "confirmed") return outcome.session;
+    if (outcome.type === "unconfirmed" || (outcome.type === "conflict" && outcome.session !== undefined)) {
+      return {
+        ...outcome.session,
+        workstreamAssociation: outcome.type === "unconfirmed" ? "pending" : "conflict",
+        workstreamAssociationReason: outcome.reason,
+      };
     }
+    throw outcomeError(outcome);
+  }
 
-    try {
-      if (!completeLocation(session.location)) throw new Error("PI WEB returned a session without a complete machine, project, and workspace location.");
-      await this.#appendFresh(snapshot.id, `${associationKey}:confirmed`, [{
-        type: "session.confirmed",
-        producer: PRODUCER,
-        sourceSessionId: session.id,
-        payload: { sessionId: session.id, associationKey, ...session.location },
-      }]);
-      return session;
-    } catch (error) {
-      const current = await this.client.inspect(snapshot.id);
-      if (current.sessions.some((candidate) => candidate.status === "active" && candidate.id === session.id && candidate.associationKey === associationKey)) return session;
-      // The runtime session exists. Keep the durable association pending so reconnect
-      // can confirm this same startup token instead of launching a duplicate child.
-      throw error;
-    }
+  async continueCheckpoint(workstreamId, operationId, selection, acceptStaleCheckpointId) {
+    return this.coordination.launch({
+      kind: "checkpoint",
+      workstreamId,
+      operationId,
+      selection,
+      ...(acceptStaleCheckpointId === undefined ? {} : { acceptStaleCheckpointId }),
+    });
   }
 
   async resume(session) {
@@ -103,60 +104,7 @@ export class WorkstreamSessionCoordinator {
   }
 
   async reconcile(snapshot) {
-    const pending = snapshot.sessions.filter((session) => session.status === "pending");
-    const results = [];
-    for (const association of pending) {
-      const found = await this.host.findByStartupToken(association.associationKey, {
-        machineId: association.machineId,
-        projectId: association.projectId,
-        workspaceId: association.workspaceId,
-      });
-      if (found === undefined) {
-        results.push({ associationKey: association.associationKey, status: "pending" });
-        continue;
-      }
-      if (!completeLocation(found.location)) throw new Error(`PI WEB found session ${found.id} without a complete machine, project, and workspace location.`);
-      const current = await this.client.inspect(snapshot.id);
-      if (!current.sessions.some((candidate) => candidate.status === "active" && candidate.id === found.id && candidate.associationKey === association.associationKey)) {
-        try {
-          await this.#appendFresh(snapshot.id, `${association.associationKey}:reconciled`, [{
-            type: "session.confirmed",
-            producer: PRODUCER,
-            sourceSessionId: found.id,
-            payload: { sessionId: found.id, associationKey: association.associationKey, ...found.location },
-          }]);
-        } catch (error) {
-          const reconciled = await this.client.inspect(snapshot.id);
-          if (!reconciled.sessions.some((candidate) => candidate.status === "active" && candidate.id === found.id && candidate.associationKey === association.associationKey)) throw error;
-        }
-      }
-      results.push({ associationKey: association.associationKey, status: "confirmed", sessionId: found.id });
-    }
-    return results;
-  }
-
-  async #failPending(workstreamId, associationKey, error) {
-    try {
-      await this.#appendFresh(workstreamId, `${associationKey}:failed`, [{
-        type: "session.failed",
-        producer: PRODUCER,
-        payload: { associationKey, reason: errorMessage(error) },
-      }]);
-    } catch (recordError) {
-      throw new AggregateError([error, recordError], "Session launch failed and its pending association could not be reconciled.");
-    }
-  }
-
-  async #appendFresh(workstreamId, idempotencyKey, records) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const snapshot = await this.client.inspect(workstreamId);
-      try {
-        return await this.client.append({ workstreamId, expectedRevision: snapshot.revision, idempotencyKey, records });
-      } catch (error) {
-        if (error?.code !== "STALE_REVISION" || attempt === 2) throw error;
-      }
-    }
-    throw new Error("Unreachable append retry state.");
+    return this.coordination.reconcile(snapshot.id, snapshot);
   }
 }
 
@@ -249,13 +197,66 @@ function nonEmpty(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
-export function workstreamPrompt(snapshot, associationKey) {
-  return [
-    `You are pairing in Pi Workbench Workstream “${snapshot.title}” (${snapshot.id}).`,
-    `The attended session association key is ${associationKey}.`,
-    "Remain in Level 1 Pair posture: work with the attending user, reconcile any bounded child work yourself, and do not claim background execution or managed Run authority.",
-    "When asked for a checkpoint, propose concise values for: what changed, what remains, the next useful action, an exact paste-ready prompt for a fresh attended session, and only the concrete references needed to resume. The user must review and confirm every field before persistence.",
-  ].join("\n\n");
+function piWebAttendedSessionAdapter(host) {
+  return {
+    async checkLocation({ location }) {
+      let current;
+      try {
+        current = host.currentLocation();
+      } catch (error) {
+        return { type: "blocked", cause: "HOST_LOCATION_UNAVAILABLE", reason: errorMessage(error) };
+      }
+      if (!completeLocation(current)) {
+        return { type: "blocked", cause: "HOST_LOCATION_UNAVAILABLE", reason: "Select a complete machine, project, and workspace location before starting a Workstream session." };
+      }
+      if (!sameLocation(current, location)) {
+        return { type: "blocked", cause: "HOST_LOCATION_MISMATCH", reason: "Select the checkpoint's recorded machine, project, and workspace before continuing." };
+      }
+      return { type: "ready" };
+    },
+
+    async launch(request, hooks) {
+      let session;
+      try {
+        const current = host.currentLocation();
+        if (!completeLocation(current) || !sameLocation(current, request.location)) {
+          return { type: "failed", reason: "The selected host location changed before session creation." };
+        }
+        session = await host.start({ startupToken: request.associationKey, initialPrompt: request.initialPrompt, location: structuredClone(request.location) });
+      } catch (error) {
+        return knownNonCreation(error)
+          ? { type: "failed", reason: errorMessage(error) }
+          : { type: "unknown", reason: errorMessage(error) };
+      }
+      try {
+        await hooks.created(session);
+      } catch (error) {
+        return { type: "unknown", reason: errorMessage(error) };
+      }
+      return { type: "completed" };
+    },
+
+    async lookup({ associationKey, location }) {
+      if (!(associationKey.startsWith("pi-web:") || associationKey.startsWith("launch-"))) return { type: "unknown" };
+      try {
+        const found = await host.findByStartupToken(associationKey, location);
+        return found === undefined ? { type: "unknown" } : { type: "found", session: found };
+      } catch {
+        return { type: "unknown" };
+      }
+    },
+  };
+}
+
+function knownNonCreation(error) {
+  return error?.nonCreationProven === true || error?.code === "SESSION_START_REJECTED";
+}
+
+function outcomeError(outcome) {
+  const error = new Error(outcome.reason);
+  error.code = outcome.cause ?? `SESSION_LAUNCH_${outcome.type.toUpperCase()}`;
+  if (outcome.operationToken !== undefined) error.operationToken = outcome.operationToken;
+  return error;
 }
 
 function newId(prefix) {

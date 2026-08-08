@@ -35,8 +35,7 @@ replacement/failure/staleness, durable Human Task changes and answers, and relev
 Raw transcripts and routine activity are intentionally not accepted. Closure is available only
 through `close`.
 
-Failed launches remain as `failed` sessions with their association anchor and a provenance-bearing
-`launchFailure`. `checkpoint.stale` must name the latest confirmed checkpoint; it creates a
+Failed launches remain as `failed` sessions with their association anchor and a provenance-bearing `launchFailure`. Explicit pre-creation cancellation uses `session.cancelled`, which removes the pending association from current projection while retaining a ledger tombstone; an association key accepted by any `session.pending` record is permanently occupied and cannot be reused after cancellation, failure, or confirmation. Pending checkpoint and fork derivations may carry their typed `derivationKind` for owning-host reconciliation. `checkpoint.stale` must name the latest confirmed checkpoint; it creates a
 provenance-bearing `checkpointStaleness` value that only a later `checkpoint.replaced` clears.
 Neither state is inferred from Chat or tool activity.
 

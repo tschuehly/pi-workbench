@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
 import { checkpointProposalPrompt, copyNextSessionPrompt, currentSessionLocationResult, dedicatedMobileControlState, dedicatedWorkstreamLayout, hostedChatViewRequiresRemount, hostedSurfaceMountOptions, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, startLocationFailureMessage, startLocationRecoveryVisible, transitionDedicatedWorkstreamUi, typedHostError } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
-import { WorkstreamSessionCoordinator, workstreamPrompt } from "../workstream-session-coordinator.js";
+import { WorkstreamSessionCoordinator } from "../workstream-session-coordinator.js";
 
 const fixtureUrl = new URL("../fixtures/recorded-projection.json", import.meta.url);
 const pluginSource = await readFile(new URL("../pi-web-plugin.js", import.meta.url), "utf8");
@@ -173,6 +173,25 @@ test("fake and typed clients project pending derivation and remove cancelled ass
     records: [{ type: "session.cancelled", producer: "pi-web", payload: { associationKey: "pi-web:fork-1", reason: "Owner cancelled" } }],
   });
   assert.deepEqual((await client.inspect("ws-derived")).sessions, []);
+  await assert.rejects(client.append({
+    workstreamId: "ws-derived",
+    expectedRevision: 3,
+    idempotencyKey: "reuse-cancelled-derived",
+    records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "pi-web:fork-1", machineId: "studio", projectId: "pi-web", workspaceId: "main", derivationKind: "fork" } }],
+  }), /already used/);
+  await client.append({
+    workstreamId: "ws-derived",
+    expectedRevision: 3,
+    idempotencyKey: "pending-checkpoint-derived",
+    records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "pi-web:checkpoint-2", machineId: "studio", projectId: "pi-web", workspaceId: "main", derivationKind: "checkpoint" } }],
+  });
+  await client.append({
+    workstreamId: "ws-derived",
+    expectedRevision: 4,
+    idempotencyKey: "confirm-checkpoint-derived",
+    records: [{ type: "session.confirmed", producer: "pi-web", payload: { sessionId: "derived-active", associationKey: "pi-web:checkpoint-2", machineId: "studio", projectId: "pi-web", workspaceId: "main" } }],
+  });
+  assert.equal((await client.inspect("ws-derived")).sessions[0].derivationKind, undefined);
 
   const malformed = structuredClone(pending);
   malformed.sessions[0].derivationKind = "blank";
@@ -181,16 +200,11 @@ test("fake and typed clients project pending derivation and remove cancelled ass
   await assert.rejects(malformedTyped.inspect("ws-derived"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
 });
 
-test("checkpoint proposal and new-session guidance carry the complete attended contract", () => {
+test("checkpoint proposal guidance carries the complete attended contract", () => {
   const proposal = checkpointProposalPrompt();
   assert.match(proposal, /exactly five labeled parts/);
   assert.match(proposal, /Next-session prompt/);
   assert.match(proposal, /References/);
-
-  const startup = workstreamPrompt({ id: "ws-1", title: "Pair" }, "launch-1");
-  assert.match(startup, /exact paste-ready prompt/);
-  assert.match(startup, /concrete references/);
-  assert.match(startup, /review and confirm every field/);
 });
 
 test("copies the exact next-session prompt and falls back when clipboard access fails", async () => {
@@ -261,13 +275,6 @@ test("reconnect reconciliation applies ordered replay or replaces from a snapsho
   assert.equal(reconciled.snapshots[0].id, "ws-1");
 });
 
-test("new sessions receive the complete attended checkpoint proposal contract", () => {
-  const prompt = workstreamPrompt({ id: "ws-1", title: "Pair" }, "launch-1");
-  assert.match(prompt, /exact paste-ready prompt/);
-  assert.match(prompt, /concrete references/);
-  assert.match(prompt, /review and confirm every field/);
-});
-
 test("session launch records pending before start and confirms exactly one runtime session", async () => {
   const calls = [];
   let snapshot = { id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false };
@@ -284,6 +291,9 @@ test("session launch records pending before start and confirms exactly one runti
     start: async ({ startupToken, initialPrompt }) => {
       assert.equal(calls[0], "session.pending");
       assert.match(initialPrompt, /Workstream “Pair”/);
+      assert.match(initialPrompt, /Level 1 Pair posture/);
+      assert.match(initialPrompt, /exact paste-ready prompt/);
+      assert.match(initialPrompt, /review and confirm every field before persistence/);
       return { id: "session-runtime", location: { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" } };
     },
     open: async () => {},
@@ -304,7 +314,7 @@ test("confirmation response loss reconciles the accepted association without fai
       snapshot = { ...snapshot, revision: snapshot.revision + 1 };
       if (record.type === "session.pending") snapshot.sessions = [{ id: `pending:${record.payload.associationKey}`, status: "pending", associationKey: record.payload.associationKey }];
       if (record.type === "session.confirmed") {
-        snapshot.sessions = [{ id: record.payload.sessionId, status: "active", associationKey: record.payload.associationKey }];
+        snapshot.sessions = [{ id: record.payload.sessionId, status: "active", associationKey: record.payload.associationKey, machineId: record.payload.machineId, projectId: record.payload.projectId, workspaceId: record.payload.workspaceId }];
         throw new Error("response lost after commit");
       }
       return { acceptedRevision: snapshot.revision, sequence: snapshot.revision };
@@ -339,26 +349,96 @@ test("confirmation failure leaves the created session pending for reconnect reco
     start: async () => ({ id: "runtime-1", location: { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" } }),
     open: async () => {}, findByStartupToken: async () => undefined,
   };
-  await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch(snapshot), /store temporarily unavailable/);
+  const result = await new WorkstreamSessionCoordinator(client, host).launch(snapshot);
+  assert.equal(result.id, "runtime-1");
+  assert.equal(result.workstreamAssociation, "pending");
+  assert.match(result.workstreamAssociationReason, /store temporarily unavailable/);
   assert.equal(snapshot.sessions[0].status, "pending");
 });
 
-test("session launch failure records failure and does not retry the host start", async () => {
+test("an unproven launch exception remains pending and does not retry the host start", async () => {
   const records = [];
   let revision = 1;
   let starts = 0;
+  let sessions = [];
   const client = {
-    inspect: async () => ({ id: "ws-1", title: "Pair", revision, sessions: [], closed: false }),
-    append: async (request) => { records.push(request.records[0].type); revision += 1; return { acceptedRevision: revision, sequence: revision }; },
+    inspect: async () => ({ id: "ws-1", title: "Pair", revision, sessions, closed: false }),
+    append: async (request) => {
+      const record = request.records[0];
+      records.push(record.type);
+      revision += 1;
+      if (record.type === "session.pending") sessions = [{ id: `pending:${record.payload.associationKey}`, status: "pending", associationKey: record.payload.associationKey, machineId: record.payload.machineId, projectId: record.payload.projectId, workspaceId: record.payload.workspaceId }];
+      return { acceptedRevision: revision, sequence: revision };
+    },
   };
   const host = {
     currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
-    start: async () => { starts += 1; throw new Error("launch exploded"); },
+    start: async () => { starts += 1; throw new Error("launch transport dropped"); },
     open: async () => {},
     findByStartupToken: async () => undefined,
   };
-  await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch({ id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false }), /launch exploded/);
+  await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch({ id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false }), (error) => error.code === "SESSION_LAUNCH_PENDING");
   assert.equal(starts, 1);
+  assert.deepEqual(records, ["session.pending"]);
+  assert.equal(sessions[0].status, "pending");
+});
+
+test("a checked pre-creation rejection records session failure", async () => {
+  const records = [];
+  let revision = 1;
+  let sessions = [];
+  const client = {
+    inspect: async () => ({ id: "ws-1", title: "Pair", revision, sessions, closed: false }),
+    append: async (request) => {
+      const record = request.records[0];
+      records.push(record.type);
+      revision += 1;
+      if (record.type === "session.pending") sessions = [{ id: `pending:${record.payload.associationKey}`, status: "pending", associationKey: record.payload.associationKey, machineId: record.payload.machineId, projectId: record.payload.projectId, workspaceId: record.payload.workspaceId }];
+      if (record.type === "session.failed") sessions = [{ ...sessions[0], status: "failed" }];
+      return { acceptedRevision: revision, sequence: revision };
+    },
+  };
+  const rejection = Object.assign(new Error("location rejected before creation"), { code: "SESSION_START_REJECTED" });
+  const host = {
+    currentLocation: () => ({ machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }),
+    start: async () => { throw rejection; },
+    open: async () => {},
+    findByStartupToken: async () => undefined,
+  };
+  await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch({ id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false }), (error) => error.code === "SESSION_LAUNCH_FAILED");
+  assert.deepEqual(records, ["session.pending", "session.failed"]);
+});
+
+test("a host location change after readiness fails before creating a session", async () => {
+  const records = [];
+  let revision = 1;
+  let sessions = [];
+  const client = {
+    inspect: async () => ({ id: "ws-1", title: "Pair", revision, sessions, closed: false }),
+    append: async (request) => {
+      const record = request.records[0];
+      records.push(record.type);
+      revision += 1;
+      if (record.type === "session.pending") sessions = [{ id: `pending:${record.payload.associationKey}`, status: "pending", associationKey: record.payload.associationKey, machineId: record.payload.machineId, projectId: record.payload.projectId, workspaceId: record.payload.workspaceId }];
+      if (record.type === "session.failed") sessions = [{ ...sessions[0], status: "failed" }];
+      return { acceptedRevision: revision, sequence: revision };
+    },
+  };
+  let locationReads = 0;
+  let starts = 0;
+  const host = {
+    currentLocation: () => {
+      locationReads += 1;
+      return locationReads < 3
+        ? { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" }
+        : { machineId: "local", projectId: "project-1", workspaceId: "other" };
+    },
+    start: async () => { starts += 1; return { id: "must-not-start" }; },
+    open: async () => {},
+    findByStartupToken: async () => undefined,
+  };
+  await assert.rejects(new WorkstreamSessionCoordinator(client, host).launch({ id: "ws-1", title: "Pair", revision: 1, sessions: [], closed: false }), (error) => error.code === "SESSION_LAUNCH_FAILED");
+  assert.equal(starts, 0);
   assert.deepEqual(records, ["session.pending", "session.failed"]);
 });
 

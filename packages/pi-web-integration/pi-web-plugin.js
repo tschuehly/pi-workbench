@@ -8,6 +8,8 @@ const PROJECTION_PATH = ".pi-workbench/projection.json";
 const PANEL_ID = "pi-workbench:run.panel";
 const INCOMPLETE_START_MESSAGE = "Select a complete machine, project, and workspace in Projects/checkouts before starting a Workstream session.";
 const projectionCache = new Map();
+const workstreamReconciliationConflicts = new Map();
+const workstreamStartsInFlight = new Set();
 const recordedWorkstreamState = { status: "idle", snapshots: [], sequence: 0, error: "", notice: "", selectedWorkstreamId: undefined, focusKey: undefined, promise: undefined };
 let workstreamClient;
 let connectedWorkstreamsElement;
@@ -572,7 +574,9 @@ function installWorkstreamsElement() {
       recordedWorkstreamState.error = "";
       try {
         const receipt = await operation(workstreamClient);
-        recordedWorkstreamState.notice = `Accepted revision ${String(receipt.acceptedRevision)} at sequence ${String(receipt.sequence)}.`;
+        recordedWorkstreamState.notice = typeof receipt.notice === "string"
+          ? receipt.notice
+          : `Accepted revision ${String(receipt.acceptedRevision)} at sequence ${String(receipt.sequence)}.`;
         if (recordedWorkstreamState.promise !== undefined) await recordedWorkstreamState.promise;
         await loadRecordedWorkstreams(this.#context, true);
       } catch (error) {
@@ -786,6 +790,11 @@ function installWorkstreamsElement() {
     }
 
     #start(snapshot) {
+      if (workstreamStartsInFlight.has(snapshot.id)) {
+        recordedWorkstreamState.notice = `A new session for ${snapshot.title} is already being started.`;
+        this.#render();
+        return;
+      }
       const currentLocation = currentSessionLocationResult(this.#context?.sessions);
       if (!currentLocation.ok) {
         this.#startLocationIncomplete = false;
@@ -802,10 +811,18 @@ function installWorkstreamsElement() {
       this.#startLocationIncomplete = false;
       recordedWorkstreamState.error = "";
       if (!window.confirm(`Start a new session for ${snapshot.title} at this checkout?\n\n${sessionAnchor(location)}`)) { this.#render(); return; }
+      workstreamStartsInFlight.add(snapshot.id);
       void this.#mutate(async () => {
         const session = await this.#coordinator().launch(snapshot);
-        recordedWorkstreamState.notice = `Started session ${session.id}.`;
-        return { acceptedRevision: (await workstreamClient.inspect(snapshot.id)).revision, sequence: recordedWorkstreamState.sequence };
+        const notice = session.workstreamAssociation === "pending"
+          ? `Started session ${session.id}; its Workstream association is pending reconciliation.`
+          : session.workstreamAssociation === "conflict"
+            ? `Started session ${session.id}, but its Workstream association has a conflict requiring attention.`
+            : `Started session ${session.id}.`;
+        return { acceptedRevision: snapshot.revision, sequence: recordedWorkstreamState.sequence, notice };
+      }).finally(() => {
+        workstreamStartsInFlight.delete(snapshot.id);
+        this.#render();
       });
     }
 
@@ -1293,17 +1310,27 @@ async function loadRecordedWorkstreams(context, force = false) {
     sequence: recordedWorkstreamState.sequence,
   })
     .then(async (projection) => {
+      let reconciliationError = "";
       if (context.sessions !== undefined) {
         const coordinator = new WorkstreamSessionCoordinator(workstreamClient, context.sessions);
-        const reconciled = (await Promise.all(projection.snapshots.map((snapshot) => coordinator.reconcile(snapshot)))).flat();
-        if (reconciled.some((result) => result.status === "confirmed")) {
+        const currentPending = new Set(projection.snapshots.filter((snapshot) => !snapshot.closed).flatMap((snapshot) => snapshot.sessions.filter((session) => session.status === "pending" && typeof session.associationKey === "string").map((session) => session.associationKey)));
+        for (const associationKey of workstreamReconciliationConflicts.keys()) if (!currentPending.has(associationKey)) workstreamReconciliationConflicts.delete(associationKey);
+        const candidates = projection.snapshots.filter((snapshot) => !snapshot.closed && snapshot.sessions.some((session) => session.status === "pending" && typeof session.associationKey === "string"
+          && (session.associationKey.startsWith("pi-web:") || session.associationKey.startsWith("launch-"))
+          && !workstreamReconciliationConflicts.has(session.associationKey)));
+        const reconciled = (await Promise.all(candidates.map((snapshot) => coordinator.reconcile(snapshot)))).flat();
+        for (const result of reconciled) if (result.status === "conflict" && result.associationKey !== undefined) workstreamReconciliationConflicts.set(result.associationKey, result.reason);
+        const conflict = reconciled.find((result) => result.status === "conflict");
+        if (conflict !== undefined) reconciliationError = conflict.reason;
+        else if (workstreamReconciliationConflicts.size > 0) reconciliationError = workstreamReconciliationConflicts.values().next().value;
+        if (reconciled.some((result) => ["confirmed", "cancelled", "failed"].includes(result.status))) {
           projection = await reconcileWorkstreams(workstreamClient, projection);
         }
       }
       recordedWorkstreamState.status = "ready";
       recordedWorkstreamState.snapshots = projection.snapshots;
       recordedWorkstreamState.sequence = projection.sequence;
-      recordedWorkstreamState.error = "";
+      recordedWorkstreamState.error = reconciliationError;
     })
     .catch((error) => {
       recordedWorkstreamState.status = "error";

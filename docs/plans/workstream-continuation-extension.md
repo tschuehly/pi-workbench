@@ -1,6 +1,6 @@
 # Workstream continuation extension and shared session coordination plan
 
-Status: owner-approved implementation direction for the isolated unified-shell candidate; implementation not started.
+Status: owner-approved implementation direction for the isolated unified-shell candidate. The Store records, shared coordinator, and PI WEB compatibility adapter for existing blank launches are implemented; the server journal, explicit-location host contribution, PI WEB continuation action, terminal adapter, and terminal command remain prerequisites.
 
 ## Outcome
 
@@ -168,7 +168,7 @@ Operation tokens stored as association keys are host-namespaced (`pi-web:` and `
 
 Prompt persistence is adapter-owned and precedes confirmation. PI WEB may preserve its existing behavior of putting the initial prompt into the session during `sessions.start`. The Pi extension uses `newSession.setup` to append the exact kickoff as the replacement session's initial user message plus a non-context operation marker before `withSession` runs. After confirmation, `withSession` sends a hidden Workstream trigger message to start the turn without duplicating the owner prompt. Recovery inspects session entries: it triggers only when the kickoff exists and no assistant turn follows it. A created but unconfirmed terminal session therefore already contains its prompt and enough local evidence to reconcile, rather than becoming an untraceable empty session.
 
-The PI WEB adapter uses the server-owned operation-token journal and lookup specified by `pi-web-message-tree.md` as the single reconciliation source for new starts and forks. Journal mapping is exact: `created → found`, `cancelled → cancelled`, `failed → failed`, and `absent` after reconnect completion `→ failed`; `prepared`, pre-reconnect `absent`, and journal/header disagreement remain `unknown`. Its `checkLocation` implementation verifies explicit target-location launch support and returns a typed blocked result before any pending append when support is absent. `findByStartupToken` remains only as a migration adapter for legacy unprefixed blank-launch keys. The Pi extension adapter wraps `ctx.newSession()`. Inside `withSession`, it uses only the fresh `ReplacedSessionContext`, obtains the replacement session identity, lets the module reacquire a user-local Store through `withWorkstreamClient`, invokes `hooks.created`, and then triggers the persisted kickoff. It never reuses the old `pi`, command context, `SessionManager`, or Store handle after replacement.
+The completed PI WEB adapter must use the server-owned operation-token journal and lookup specified by `pi-web-message-tree.md` as the single reconciliation source for new starts and forks. The current compatibility adapter still uses the legacy startup-token lookup and therefore does not satisfy this target for new continuation or fork surfaces. Journal mapping is exact: `created → found`, `cancelled → cancelled`, `failed → failed`, and `absent` after reconnect completion `→ failed`; `prepared`, pre-reconnect `absent`, and journal/header disagreement remain `unknown`. Its `checkLocation` implementation verifies explicit target-location launch support and returns a typed blocked result before any pending append when support is absent. `findByStartupToken` remains only as a migration adapter for legacy unprefixed blank-launch keys. The Pi extension adapter wraps `ctx.newSession()`. Inside `withSession`, it uses only the fresh `ReplacedSessionContext`, obtains the replacement session identity, lets the module reacquire a user-local Store through `withWorkstreamClient`, invokes `hooks.created`, and then triggers the persisted kickoff. It never reuses the old `pi`, command context, `SessionManager`, or Store handle after replacement.
 
 ## Terminal extension
 
@@ -237,7 +237,7 @@ The common outcome table is:
 | Checked rejection, or authoritative `absent` after reconnect completion, proves non-creation | `session.pending` → `session.failed` |
 | Response loss, Store contention, transport failure, or unknown runtime outcome | remain `session.pending` |
 
-The server-owned journal is the reconciliation source for new PI WEB derivations. `findByStartupToken` is migration-only for legacy blank-launch pendings. The terminal adapter uses its durable session marker and exact location instead of claiming access to the PI WEB journal.
+The server-owned journal will be the reconciliation source for new PI WEB derivations. `findByStartupToken` is retained only for legacy blank-launch pendings. A future terminal adapter must use its durable session marker and exact location instead of claiming access to the PI WEB journal.
 
 ## Delivery sequence
 

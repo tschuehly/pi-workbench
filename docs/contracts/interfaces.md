@@ -152,11 +152,7 @@ PI WEB provides every V1 Workstream action. Controls cover listing, creating, in
 or resuming a session, proposing and confirming a checkpoint, adding human tasks and links, and
 closing.
 
-Every mutation crosses the typed protocol with revision checks and idempotency. Session-anchor
-repair additionally crosses PI WEB's typed resolver boundary, receives explicit owner confirmation,
-and appends the bounded catalog-resolution receipt only after an immediate evidence recheck.
-Mechanical status, checkpoint state, and unresolved human tasks remain inspectable without launching
-another model turn. Managed Run controls belong only to a future approved Level 4 implementation.
+Every mutation crosses the typed protocol with revision checks and idempotency. Attended-session creation uses the shared Workstream session-coordination module, which records pending before host creation and preserves unknown outcomes for reconciliation. Session-anchor repair additionally crosses PI WEB's typed resolver boundary, receives explicit owner confirmation, and appends the bounded catalog-resolution receipt only after an immediate evidence recheck. Mechanical status, checkpoint state, and unresolved human tasks remain inspectable without launching another model turn. Managed Run controls belong only to a future approved Level 4 implementation.
 
 ## External Adapters
 

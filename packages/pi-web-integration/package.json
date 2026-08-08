@@ -4,15 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check pi-web-plugin.js && node --check fake-workstream-client.js && node --check unified-navigation-state.js && node --check unified-navigation-view-model.js && node --check workstream-brief-projection.js && node --check workstream-client.js && node --check workstream-service.js && node --check scripts/lib/isolated-pi-web-stack.mjs && node --check scripts/run-unified-shell-acceptance.mjs && npm test"
-  },
-  "piWeb": {
-    "plugins": [
-      {
-        "id": "pi-workbench",
-        "module": "pi-web-plugin.js",
-        "service": "workstream-service.js"
-      }
-    ]
+    "check": "node --check pi-web-plugin.js && node --check fake-workstream-client.js && node --check workstream-session-coordinator.js && node --check unified-navigation-state.js && node --check unified-navigation-view-model.js && node --check workstream-brief-projection.js && node --check workstream-client.js && node --check workstream-service.js && node --check scripts/lib/isolated-pi-web-stack.mjs && node --check scripts/run-unified-shell-acceptance.mjs && npm test"
   }
 }

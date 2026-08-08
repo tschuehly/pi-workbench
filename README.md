@@ -34,6 +34,7 @@ Run deterministic Level 1 checks with:
 npm run test:model-routing
 npm run test:pi-execution-adapter
 npm run test:workstream-store
+npm run test:workstream-session-coordination
 npm run test:pi-web-integration
 (cd ../pi-web && npm run typecheck && npm test)
 ```

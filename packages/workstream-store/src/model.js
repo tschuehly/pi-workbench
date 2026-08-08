@@ -345,7 +345,7 @@ export function rebuildSnapshot(ledger) {
           launchFailure: null,
         }];
         sessions.delete(pendingKey);
-        sessions.set(payload.sessionId, {
+        const confirmed = {
           ...session,
           id: payload.sessionId,
           status: "active",
@@ -354,7 +354,9 @@ export function rebuildSnapshot(ledger) {
           projectId: payload.projectId ?? session.projectId,
           workspaceId: payload.workspaceId ?? session.workspaceId,
           launchFailure: null,
-        });
+        };
+        delete confirmed.derivationKind;
+        sessions.set(payload.sessionId, confirmed);
         break;
       }
       case "session.anchor.repaired": {
@@ -368,8 +370,9 @@ export function rebuildSnapshot(ledger) {
         break;
       }
       case "session.failed": {
-        const failedEntry = [...sessions.entries()].find(([id, session]) =>
-          id === payload.sessionId || (payload.associationKey !== undefined && session.associationKey === payload.associationKey));
+        const failedEntry = [...sessions.entries()].find(([id, session]) => payload.associationKey !== undefined
+          ? session.associationKey === payload.associationKey
+          : id === payload.sessionId);
         if (failedEntry) {
           const [pendingKey, session] = failedEntry;
           const failedId = payload.sessionId ?? pendingKey;
@@ -391,8 +394,9 @@ export function rebuildSnapshot(ledger) {
         break;
       }
       case "session.cancelled": {
-        const cancelledEntry = [...sessions.entries()].find(([id, session]) =>
-          id === payload.sessionId || (payload.associationKey !== undefined && session.associationKey === payload.associationKey));
+        const cancelledEntry = [...sessions.entries()].find(([id, session]) => payload.associationKey !== undefined
+          ? session.associationKey === payload.associationKey
+          : id === payload.sessionId);
         if (cancelledEntry?.[1].status === "pending") sessions.delete(cancelledEntry[0]);
         break;
       }

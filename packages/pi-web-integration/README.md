@@ -69,6 +69,8 @@ operations to `@pi-workbench/workstream-store`, which persists user-local ledger
 `~/.pi-workbench/workstreams`. Set `PI_WORKBENCH_WORKSTREAM_DIR` only for isolated tests or an
 intentional alternate user-local location. The deterministic `fake-workstream-client.js` and
 [`recorded-workstreams.json`](fixtures/recorded-workstreams.json) remain available for PI WEB tests.
+Because the projection format omits cancelled associations, a fake reconstructed from projection
+alone cannot recover their occupied operation tokens; durable tombstone conformance belongs to the Store tests.
 
 The unified-navigation state and Phase 4 projection/view-model seams are intentionally pure and UI-independent:
 
@@ -97,14 +99,11 @@ position and any focused keyed action. Root and subregion render keys use bounde
 stable digests over all input so cyclic or unexpectedly large host Attention data cannot abort
 rendering or collapse ordinary large inventories into one key.
 
-Session launch uses PI WEB's attended plugin-session helper and `workstream-session-coordinator.js`.
-The coordinator records a launch-key pending association before starting PI, confirms the returned
-runtime session identity with a complete location, records launch failure, and reconciles
-browser-local startup-token associations on reconnect without launching a duplicate session. The
-initial prompt carries the Workstream identity, Level 1 boundary, and complete five-field attended
-checkpoint guidance into a fresh session. New checkpoints require a separate non-empty
+Session launch uses PI WEB's attended plugin-session helper through `workstream-session-coordinator.js`, which adapts the host to `packages/workstream-session-coordination/`. The shared module records a host-namespaced pending association before starting Pi, confirms the returned runtime identity with a complete location, and reconciles owned startup-token associations without launching a duplicate session. Checked pre-creation rejection records failure; transport loss or another unproven outcome remains pending. The initial prompt carries the Workstream identity, Level 1 boundary, and complete five-field attended checkpoint guidance into a fresh session. New checkpoints require a separate non-empty
 `nextSessionPrompt` of at most 2,000 characters; checkpoints created before that field existed
-present it as unavailable rather than constructing it from `next`.
+present it as unavailable rather than constructing it from `next`. The coordinator exposes guarded
+checkpoint inspection and launch methods for the future host contribution, but this package does not
+yet claim the server journal, explicit target-location start, or **Continue in new session** UI.
 
 After a typed `SESSION_ANCHOR_MISSING` selection or resume failure, the Workstreams view can call PI
 WEB's explicit-machine `resolveSessionLocation({ machineId, sessionId })` host boundary. A unique
@@ -121,15 +120,19 @@ persistence remain in Pi Workbench.
 
 ## Develop locally
 
-Link this package into PI WEB's local plugin directory:
+Link the Workbench `packages/` directory into PI WEB's local plugin directory. `packages/` is the
+declared plugin root so browser modules in `pi-web-integration/` can import the sibling shared
+coordination package while repository metadata, skills, prompts, and machine-local files remain
+outside PI WEB's static asset root.
 
 ```sh
 mkdir -p ~/.pi-web/plugins
-ln -s /path/to/pi-workbench/packages/pi-web-integration ~/.pi-web/plugins/pi-workbench
+ln -s /path/to/pi-workbench/packages ~/.pi-web/plugins/pi-workbench
 ```
 
-Reload the PI WEB browser tab. The plugin manifest entry should include both `module` and `service`.
-Workstreams are portfolio-wide and do not require a selected workspace. Run the deterministic checks with:
+Reload the PI WEB browser tab. `packages/package.json` should declare both `module` and `service`.
+PI WEB can asset-serve files beneath this linked root, so never place credentials, generated user data,
+or local `node_modules/` trees under `packages/`. Workstreams are portfolio-wide and do not require a selected workspace. Run the deterministic checks with:
 
 ```sh
 cd packages/pi-web-integration

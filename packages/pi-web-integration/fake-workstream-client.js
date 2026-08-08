@@ -28,7 +28,17 @@ export class DeterministicFakeWorkstreamClient {
     return this.mutate(request, () => {
       const snapshot = this.mutableSnapshot(request.workstreamId, request.expectedRevision);
       const metadata = { revision: snapshot.revision + 1, recordedAt: fakeTimestamp(this.projection.sequence + 1) };
-      for (const record of request.records) validateFakeRecord(record);
+      const associationKeys = new Set([
+        ...this.projection.snapshots.flatMap((candidate) => candidate.sessions.map((session) => session.associationKey).filter(isString)),
+        ...this.events.flatMap((event) => event.records.filter((record) => record.type === "session.pending").map((record) => record.payload.associationKey)),
+      ]);
+      for (const record of request.records) {
+        validateFakeRecord(record);
+        if (record.type === "session.pending") {
+          if (associationKeys.has(record.payload.associationKey)) throw new Error(`Association ${record.payload.associationKey} was already used.`);
+          associationKeys.add(record.payload.associationKey);
+        }
+      }
       for (const record of request.records) applyFakeRecord(snapshot, record, metadata);
       snapshot.revision += 1;
       snapshot.updatedAt = metadata.recordedAt;
@@ -194,6 +204,7 @@ function applyFakeRecord(snapshot, record, metadata) {
         workspaceId: record.payload.workspaceId ?? pending.workspaceId,
         launchFailure: null,
       });
+      delete pending.derivationKind;
       break;
     }
     case "session.anchor.repaired": {
@@ -208,8 +219,11 @@ function applyFakeRecord(snapshot, record, metadata) {
       break;
     }
     case "session.failed": {
-      const pending = snapshot.sessions.find((candidate) => candidate.id === record.payload.sessionId || (record.payload.associationKey !== undefined && candidate.associationKey === record.payload.associationKey));
+      const pending = snapshot.sessions.find((candidate) => record.payload.associationKey !== undefined
+        ? candidate.associationKey === record.payload.associationKey
+        : candidate.id === record.payload.sessionId);
       if (pending === undefined) throw new Error("Pending session association was not found.");
+      if (record.payload.sessionId !== undefined && record.payload.associationKey !== undefined && pending.id !== record.payload.sessionId) throw new Error("Session failure selectors do not identify the same pending association.");
       Object.assign(pending, {
         id: record.payload.sessionId ?? pending.id,
         status: "failed",
@@ -225,8 +239,11 @@ function applyFakeRecord(snapshot, record, metadata) {
       break;
     }
     case "session.cancelled": {
-      const pending = snapshot.sessions.find((candidate) => candidate.status === "pending" && (candidate.id === record.payload.sessionId || (record.payload.associationKey !== undefined && candidate.associationKey === record.payload.associationKey)));
+      const pending = snapshot.sessions.find((candidate) => candidate.status === "pending" && (record.payload.associationKey !== undefined
+        ? candidate.associationKey === record.payload.associationKey
+        : candidate.id === record.payload.sessionId));
       if (pending === undefined) throw new Error("Pending session association was not found.");
+      if (record.payload.sessionId !== undefined && record.payload.associationKey !== undefined && pending.id !== record.payload.sessionId) throw new Error("Session cancellation selectors do not identify the same pending association.");
       snapshot.sessions = snapshot.sessions.filter((candidate) => candidate !== pending);
       break;
     }
