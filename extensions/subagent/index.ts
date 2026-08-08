@@ -211,6 +211,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
     label: "Worker create",
     description: "Create one durable attended worker: a machine-local identity bound to one semantic scope and this repository root. Creation writes a record and starts no process. Prefer fresh subagents; create a worker only when repeated bounded actions in one scope benefit from preserved context.",
     promptSnippet: "Create one durable attended worker for one semantic scope",
+    promptGuidelines: [
+      "Worker identity is durable across sessions: check worker_status for an existing worker covering the scope and reuse or retire it before creating another.",
+    ],
     parameters: WorkerCreateParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
