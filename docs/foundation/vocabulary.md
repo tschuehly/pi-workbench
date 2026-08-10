@@ -147,6 +147,11 @@ _Avoid_: Model strength, cost tier, context length
 One bounded assignment that reaches a synchronization point and returns an Episode.
 _Avoid_: Iteration, entire agent session, graph node, prompt
 
+**Direct Completion:**
+One bounded, stateless model inference through Pi's model runtime without an AgentSession, tools, or
+Continuity. It returns content and usage but creates no Pi actor, Dispatch, Episode, or authority.
+_Avoid_: Session, Subagent, Worker, Dispatch
+
 **Work Packet:**
 The self-contained objective, authority, source-backed context, constraints, risks, and evidence
 obligations supplied to a Dispatch.

@@ -1,4 +1,4 @@
-# Subagent/worker monitoring and inter-session communication: evidence from pi-peer, pi-intercom, and pi-subagents (edxeth)
+# Subagent/worker monitoring and communication: external extensions and the installed Pi SDK
 
 ## Verdict
 
@@ -19,11 +19,14 @@ the same file have no cross-process lock, no optimistic conflict check, and no A
 is verified directly from the installed `@earendil-works/pi-agent-core` 0.84.1 source (below), and
 none of the three reviewed packages closes this gap either.
 
-The clearest adoptable mechanisms, in source-faithful order of fit, are: (1) `pi-subagents`'
-deterministic, non-LLM tool-batch classifier and its quiet-window provider-error recovery ladder
-(wait → model nudge → kill) as a template for deterministic recovery decisions after eligible errors; (2) its direct parsing of a
-child's own session JSONL to derive message/tool/token counts without a model call, as a template
-for richer `subagent_status` output; and (3) `pi-peer`'s and `pi-intercom`'s `InboundGuard`/broker
+The clearest adoptable mechanisms, in source-faithful order of fit, are: (1) Pi's
+`ModelRuntime.completeSimple()` path for one out-of-process inference without an AgentSession;
+direct in-session `ModelRegistry.complete()` remains deferred because it lacks the simple path's
+Model Effort mapping; (2) `pi-subagents`' deterministic, non-LLM tool-batch classifier and quiet-window
+provider-error recovery ladder (wait → model nudge → kill) as a template for deterministic recovery
+decisions after eligible errors; (3) its direct parsing of a child's own session JSONL to derive
+message/tool/token counts without a model call, as a template for richer `subagent_status` output;
+and (4) `pi-peer`'s and `pi-intercom`'s `InboundGuard`/broker
 rate-and-backlog limits as a template if Workbench ever adds any child-initiated wake channel. Direct
 peer-to-peer mailboxes and child-initiated mid-task escalation (`caller_ping`, `contact_supervisor`)
 are the most capable mechanisms reviewed, but Decision 50 and the system-overview's out-of-scope list
@@ -43,10 +46,10 @@ needing a newer HEAD:
 | [`edxeth/pi-subagents`](https://github.com/edxeth/pi-subagents) | `4c4545da9053c95e921f0620519000972d8babae` | 2026-08-08 | MIT (HazAT, edxeth) |
 
 All three were cloned directly (`git clone` + `git log -1`) and read from disk, not summarized from
-READMEs alone; source citations below name the exact file. Pi's own installed edit/write concurrency
-claim was verified by reading `@earendil-works/pi-agent-core` 0.84.1 as vendored under the installed
-`@earendil-works/pi-coding-agent` 0.84.1 at
-`/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent`.
+READMEs alone; source citations below name the exact file. The local Pi baseline is installed
+`@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai` 0.84.1 under
+`/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent`. Its declarations and SDK/extension
+documentation were read directly for the edit/write and Direct Completion claims below.
 
 Prior context loaded and not repeated here: `AGENTS.md` (root and `docs/`), the complete
 [`vocabulary.md`](../../foundation/vocabulary.md) and [`system-overview.md`](../../foundation/system-overview.md),
@@ -232,18 +235,37 @@ Workbench's current `adapter.status()`/`ExecutionStatus` (in `packages/pi-execut
 underlying child Pi session file already exists (Decision 89 keeps it inspectable) but nothing parses
 it for a compact status line today.
 
-### Low-cost model queries/classification without a durable Pi session
+### Direct Completion without an AgentSession
 
-No reviewed source implements a purpose-built "cheap classifier" tool. The closest verified mechanism
-is `edxeth/pi-subagents`' own background-launch shape: `mode: background` always launches the child
-with Pi's own `-p` (print/one-shot) flag (`src/launch/background.ts:65`, `src/launch/resume.ts:129`),
-and `no-session: true` gives the child "a temporary session file and deletes it after completion"
-(README, "`no-session: true`"). Combining both frontmatter fields is, by construction, a one-shot `pi
--p` process with no durable session artifact — the generic building block for a cheap, disposable model
-query, though the package does not name or ship a dedicated "classifier" agent profile built from it.
-Treat this as an inferred composition of two documented, independently-verified fields, not as a
-demonstrated "low-cost classification" feature; no README or test in any of the three repositories
-describes deliberately using this composition for cheap classification.
+Pi itself exposes the mechanism more directly than any reviewed extension. In installed
+`@earendil-works/pi-coding-agent` 0.84.1, `ModelRuntime` implements the `@earendil-works/pi-ai`
+`Models` interface and publicly exposes `complete()` and `completeSimple()`. Calling either method
+does not require `createAgentSession()`, `AgentSession`, or `SessionManager`. Source:
+`dist/core/model-runtime.d.ts` and `docs/sdk.md`.
+
+Pi exposes its existing in-session runtime to extensions through the `ctx.modelRegistry`
+compatibility facade, whose public `complete()` method accepts a model, context, and API-specific
+options. Constructing another `ModelRuntime` in the same process would duplicate credential,
+catalog, and availability-refresh state. An out-of-process SDK host can own or receive one
+`ModelRuntime`.
+Source: `dist/core/model-registry.d.ts` ("Synchronous compatibility facade exposed to extensions")
+and `docs/extensions.md` (`ctx.modelRegistry`). `ModelRegistry` does not expose `completeSimple()`;
+its `complete()` accepts raw API-specific options, while Pi's ThinkingLevel-to-provider mapping occurs
+on the simple-stream path.
+
+The `pi-ai` `Context` type requires only `messages`; `systemPrompt` and `tools` are optional. The
+returned `AssistantMessage` contains provider, model, stop reason, and usage, but does not echo Model
+Effort; a wrapper would have to carry effort from its requested binding. Calling the completion API
+alone creates no Pi conversation or session file. This is distinct from `pi --no-session` or
+`SessionManager.inMemory()`, which suppress persistence but still create a full in-memory
+AgentSession. Session-free is not cache-free: request options can still carry cache retention and
+provider affinity.
+
+These primitives demonstrate a technically smaller path for one bounded semantic classification or
+summary than launching a child process. They provide no tool loop, actor identity, Continuity,
+message tree, or authority by themselves. `edxeth/pi-subagents`' `mode: background` (`src/launch/background.ts:65`,
+`src/launch/resume.ts:129`) plus `no-session: true` (README) remains a separately evidenced,
+process-based one-shot composition rather than the same mechanism.
 
 ### Idle Worker routing
 
@@ -403,10 +425,15 @@ or Decision 89's "no child outlives the attended parent" invariant.
   `@earendil-works/pi-coding-agent` 0.84.1. It is an implementation detail, not a documented public
   guarantee, and should be re-verified after any Pi upgrade, consistent with the same caveat already
   recorded in `prompt-cache-economics.md` for other installed-Pi-source claims.
-- The "low-cost model query without a durable session" finding is explicitly flagged as an inferred
-  composition of two independently verified `edxeth/pi-subagents` fields (`mode: background` + `pi -p`,
-  and `no-session: true`), not a demonstrated dedicated feature; treat it as weaker evidence than the
-  other findings in this report.
+- The Direct Completion finding is **high confidence** from the installed 0.84.1 declarations and
+  implementation: `ModelRuntime.completeSimple()` delegates directly to the model provider path and
+  references no `AgentSession`, `SessionManager`, or session-file writer. `Context` and
+  `AssistantMessage` establish optional tools/system prompt and returned provider/model/usage. This is
+  installed implementation evidence rather than a documented promise and must be re-verified after
+  Pi upgrades.
+- The `edxeth/pi-subagents` process-based one-shot alternative remains weaker evidence: combining
+  `mode: background`/`pi -p` with `no-session: true` is an inferred composition of independently
+  verified fields, not a demonstrated dedicated classification feature.
 - This report does not re-verify mechanisms already covered in `subagent-implementations.md`,
   `prompt-cache-economics.md`, `firstmate.md`, or `afk-supervision-packages.md` (the RPC-subprocess
   baseline, cache-miss/keepalive economics, and FirstMate's deterministic watcher); it references them

@@ -43,6 +43,7 @@ An **Evaluation Question** is one stable, identified question whose answer could
 - **Q8 — Shared-file risk:** Did parallel mutation touch overlapping files, lose work, or require reconciliation given the absence of cross-process write protection?
 - **Q9 — Human visibility:** Did the user receive material timing, failure, uncertainty, and confidence changes without routine execution telemetry?
 - **Q10 — Prompt usefulness:** Which persistent instruction measurably changed behavior, and which instruction was ignored, redundant, or misleading?
+- **Q11 — Direct Completion value:** Did a session-free semantic summary or classification save lead context and Human Attention without hiding material evidence or displacing a deterministic check?
 
 For each question, `/skill:compound` records `supports`, `contradicts`, or `inconclusive`. These labels classify one session's evidence. They are not scores: a session can support one hypothesis, contradict another, and leave most questions inconclusive.
 
@@ -106,6 +107,41 @@ Run one experiment at a time. Each later experiment depends on evidence from the
 Use existing `background:true`, `subagent_status`, and `subagent_collect` in real attended work. Measure useful parallel work, monitoring-turn value, cache behavior, missed completions, and reconciliation cost.
 
 **Advance when:** repeated sessions show a clear problem that automatic terminal wakeup or richer status would solve.
+
+### Experiment 1a — Direct Completion for bounded semantic summaries
+
+Run this only when Experiment 1 produces a bounded observation batch whose semantic summary would
+reduce lead context; otherwise leave Q11 inconclusive. Build a small Workbench-owned `completeOnce` utility in a new `packages/pi-direct-completion/`
+package plus an out-of-process host entry point. The host owns and injects one `ModelRuntime`; the
+utility calls `completeSimple()` so Pi maps Model Effort consistently. Do not construct another
+runtime inside a Pi session. Defer direct `ctx.modelRegistry.complete()` use until Pi exposes
+`completeSimple()` on that facade or a separately tested Workbench mapper fails closed for every
+admitted API.
+
+Resolve the `mechanics` Cognitive Role through
+`skills/model-orchestration/scripts/resolve-runtime-binding.mjs` immediately before every completion;
+do not reuse a binding across calls. Accept only a passing binding and quota admission, reject fresh
+exhaustion and returned provider/model mismatch, and carry Model Effort from the requested binding
+because the response does not echo it. Reject tools and deferred responses, set retries to zero,
+bound messages and output, own an abort deadline, and normalize terminal errors.
+
+Return content plus a bounded receipt containing input-evidence references, resolved and returned
+binding metadata, quota admission, outcome, and usage. The first attended caller must expose this
+receipt in its tool-result `details` so `/skill:compound` can evaluate Q11 from the lead session
+without persisting a separate completion ledger.
+
+Use the utility only after the Level 1 deterministic observation/status path has gathered evidence
+and a small semantic summary or classification could reduce lead context—for example, summarizing a
+bounded batch of child progress observations. Lifecycle state, wake conditions, message counts,
+unresolved-result detection, and other mechanically decidable facts remain deterministic. The
+completion content is optional presentation evidence and may be discarded or regenerated; its
+receipt remains in the attended tool result.
+
+**Advance when:** tests prove one provider dispatch with retries disabled, per-call binding and quota
+resolution, exact response binding, timeout/cancellation, tools/deferred rejection, usage and receipt
+capture, no AgentSession or session file, no in-session duplicate runtime, and no state mutation;
+attended evaluations then show that the summary saves Human Attention without hiding material
+evidence.
 
 ### Experiment 2 — deterministic wakeup and retained result
 
