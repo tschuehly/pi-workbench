@@ -21,6 +21,7 @@ PI WEB is the user-facing client of its typed protocols.
 | Pi agent and PI WEB configuration templates | `config/` |
 | V1 human–Pi pair programming | `docs/plans/level-1.md` |
 | V1 attended child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |
+| Session evaluation and iterative Subagent/Worker improvement | `docs/plans/subagent-worker-iterative-improvement.md`, `skills/compound/` |
 | Operating-level concepts | `docs/foundation/operating-levels.md` |
 | Model routing and unmanaged Pi lead launch | `skills/model-orchestration/`, `scripts/pi-role` |
 | Controller lifecycle and protocol | `docs/contracts/controller.md`, `packages/controller/`, `schemas/` |

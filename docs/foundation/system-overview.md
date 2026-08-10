@@ -21,9 +21,10 @@ V1 implements [Operating Level 1: Pair](operating-levels.md): one human works di
 interactive lead Pi while Human Attention is continuous. The lead may use bounded ephemeral child
 Pi processes as attended tool activity and remains accountable for their assignments and results.
 Interactive sessions start inside a user-local Workstream so the owner can leave and resume without
-treating chat history as current state. V1 provides no agreed-before execution gate, background
-semantic work, unattended execution, managed Run authority, enforced workspace isolation, or
-controller-mediated recovery.
+treating chat history as current state. A child may run non-blocking only within its attended lead
+session; no child execution survives session shutdown. V1 provides no agreed-before execution gate,
+unattended execution, managed Run authority, enforced workspace isolation, or controller-mediated
+recovery.
 
 The Operating Levels specification separately defines Levels 2–4 as concepts. They are not V1
 features or roadmap commitments. The managed Run architecture below describes the Level 4 authority

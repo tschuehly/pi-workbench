@@ -30,6 +30,7 @@ When documents disagree, follow the highest applicable authority and repair the 
 - [`plans/level-1.md`](plans/level-1.md) — approved Level 1 human–Pi pair-programming implementation plan.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — approved attended child Pi execution plan.
 - [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — implemented durable attended worker identity and resumable bounded dispatch beside ephemeral subagents.
+- [`plans/subagent-worker-iterative-improvement.md`](plans/subagent-worker-iterative-improvement.md) — attended-use loop for evaluating and improving Subagent and Worker behavior through the user-invoked [`compound`](../skills/compound/SKILL.md) skill.
 - [`plans/pi-web-subagent-conversation-cards.md`](plans/pi-web-subagent-conversation-cards.md) — owner-approved conversation-native child-execution presentation for the isolated unified-shell candidate.
 - [`plans/subagent-details-envelope-experiment.md`](plans/subagent-details-envelope-experiment.md) — approved producer-side experiment for bounded, versioned child-execution presentation details.
 - [`plans/workstream-continuation-extension.md`](plans/workstream-continuation-extension.md) — shared attended-session coordination and checkpoint continuation through PI WEB and a Pi terminal extension.
@@ -45,7 +46,7 @@ When documents disagree, follow the highest applicable authority and repair the 
 
 ## Research
 
-- [`research/sources/`](research/sources/) — curated evidence and source analyses, including the [subagent implementation comparison](research/sources/subagent-implementations.md).
+- [`research/sources/`](research/sources/) — curated evidence and source analyses, including the [subagent implementation comparison](research/sources/subagent-implementations.md) and [monitoring and communication evidence](research/sources/subagent-worker-monitoring-and-communication.md).
 - [`research/reports/`](research/reports/) — derived design reports. The [AFK compaction repair and production attempt 03 report](research/reports/afk-compaction-race-and-production-attempt-03-2026-08-08.md) is the current authority for the repaired AFK checkpoint lifecycle, its post-fix matrix, and the terminal production attempt; the earlier [AFK autopilot production failure report](research/reports/afk-autopilot-production-failure-2026-08-08.md) preserves the originating failure evidence. The [multidimensional Working Mode proposal](research/reports/multidimensional-working-mode-proposal.md) is explicitly challenge-pending and non-authoritative. The [unified Chats and Workstreams artifact](research/reports/pi-web-unified-chat-workstream-prototype.html) is the canonical working interaction prototype; the earlier [Workbench UX report](research/reports/pi-web-workbench-ux-prototype.md), [structural artifact](research/reports/pi-web-workbench-ux-prototype.html), and [current-exchange artifact](research/reports/pi-web-current-exchange-prototype.html) remain supporting references.
 - [`research/generated/`](research/generated/) — reproducible generated indexes; do not treat them as standing context.
 

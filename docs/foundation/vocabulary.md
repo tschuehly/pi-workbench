@@ -225,6 +225,11 @@ A source-backed proposal to promote a lesson from a Run into durable project kno
 policy at the narrowest useful scope.
 _Avoid_: Memory, automatic rule, retrospective note
 
+**Evaluation Question:**
+A stable, identified empirical question whose answer could change guidance, implementation, or an
+experiment. It accumulates observations without presuming the desired answer.
+_Avoid_: Task, acceptance criterion, generic score
+
 ## Context
 
 **Model Context:**

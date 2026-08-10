@@ -37,8 +37,9 @@ association, asks PI WEB to start the session with that Workstream identity, and
 fails the association. Reconnect reconciles pending associations instead of creating another
 session.
 
-Several Workstreams and human-initiated sessions may remain open. Pi performs semantic work only in
-the interactive session while the user is attending it.
+Several Workstreams and human-initiated sessions may remain open. Pi performs semantic work only
+while the user is attending the lead session. Bounded child work may run non-blocking inside that
+session but does not survive its shutdown.
 
 ## V1 capabilities
 
@@ -55,8 +56,9 @@ the user. The lead may launch bounded ephemeral child Pi processes for investiga
 implementation, or review while the user remains engaged. Child work is visible and cancellable,
 and the lead reconciles it into the attended session. Correcting an assignment requires cancelling
 it and launching a new child. It creates no managed Run,
-workspace-isolation, or recovery guarantee. V1 has no background semantic work or unattended
-execution, and implementation does not wait for a separately agreed execution plan.
+workspace-isolation, or recovery guarantee. A child may run non-blocking only inside the attended
+lead session and is cancelled at session shutdown. V1 has no unattended execution beyond that
+session, and implementation does not wait for a separately agreed execution plan.
 
 ### Optional phase-boundary compaction trial
 
@@ -106,9 +108,9 @@ process restarts, including:
 
 ## Non-goals
 
-V1 does not include automatic checkpointing, background semantic model work, FirstMate, an
-agreed-before execution-plan gate, contract-driven multi-agent execution, durable child identity,
-independent acceptance authority, unattended execution, or controller-managed Runs. Levels 2–4 are
+V1 does not include automatic checkpointing, FirstMate, an agreed-before execution-plan gate,
+contract-driven multi-agent execution, durable child identity, independent acceptance authority,
+unattended execution beyond the lead session, or controller-managed Runs. Levels 2–4 are
 concepts, not scheduled implementation. Any expansion beyond Level 1 requires a new decision and
 implementation plan based on evidence from sustained V1 use.
 
