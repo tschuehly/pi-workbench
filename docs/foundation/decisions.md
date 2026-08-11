@@ -18,6 +18,7 @@ Create a Pi-based project workbench that allocates Human Attention across concur
 - [Recent repositories](../research/sources/recent-repositories.md)
 - [Model-routing field notes](../research/sources/model-routing-x.md)
 - [Prompt-cache economics](../research/sources/prompt-cache-economics.md)
+- [DODOREACH Pi tool-shaping](../research/sources/dodo-reach-pi-tool-shaping.md)
 - [Current Quality Loop](../research/sources/current-quality-loop.md)
 - [Skill interface](../research/sources/skill-interface.md)
 - [Slate](../research/sources/slate.md)
