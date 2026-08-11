@@ -6,6 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
 import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
+import { createCompletionWakeup, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
 import { progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,7 @@ const COGNITIVE_ROLES = [
 ] as const;
 const INDEPENDENT_ROLES = new Set<string>(["independent-judgment", "challenge", "independent-review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
+const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out", "outcome_unknown"]);
 
 const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output" }),
@@ -76,10 +78,15 @@ export default function subagentExtension(pi: ExtensionAPI) {
   const registry = createUserLocalWorkerRegistry();
   const workerExecutions = new Map<string, string>();
   const pendingWorkerCompletions = new Set<Promise<unknown>>();
+  const pendingSubagentCompletions = new Set<Promise<unknown>>();
+  const completionWakeup = createCompletionWakeup({
+    sendMessage: (message: any, options: any) => pi.sendMessage(message, options),
+  });
 
   pi.on("session_shutdown", async () => {
+    completionWakeup.shutdown();
     await adapter.cancelAll("Attended parent session ended.");
-    await Promise.allSettled([...pendingWorkerCompletions]);
+    await Promise.allSettled([...pendingWorkerCompletions, ...pendingSubagentCompletions]);
   });
 
   pi.registerTool({
@@ -141,8 +148,19 @@ export default function subagentExtension(pi: ExtensionAPI) {
       });
 
       if (params.background === true) {
+        const completion = adapter.result(receipt.executionId).then((final) => {
+          completionWakeup.notify({
+            executionId: receipt.executionId,
+            outcome: final.outcome,
+            profile: params.profile,
+            cognitiveRole: params.cognitiveRole,
+          });
+        });
+        const tracked = completion.catch(() => {});
+        pendingSubagentCompletions.add(tracked);
+        void tracked.then(() => pendingSubagentCompletions.delete(tracked));
         return {
-          content: [{ type: "text", text: `Launched background subagent ${receipt.executionId} (${params.profile} · ${params.cognitiveRole}). Reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
+          content: [{ type: "text", text: `Launched background subagent ${receipt.executionId} (${params.profile} · ${params.cognitiveRole}). Its terminal outcome will wake this lead once; reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
           details: { outcome: "launched", executionId: receipt.executionId, profile: params.profile, cognitiveRole: params.cognitiveRole, acceptedAt: receipt.acceptedAt },
         };
       }
@@ -158,8 +176,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
     promptSnippet: "Reconcile one backgrounded child Pi",
     parameters: IdParam,
     async execute(_toolCallId, params, signal, onUpdate) {
+      completionWakeup.beginReconciliation(params.executionId);
       const meta = launched.get(params.executionId);
-      return streamToResult(adapter, params.executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", meta?.launchedAt ?? new Date().toISOString(), signal, onUpdate, { cancelOnAbort: false });
+      const result = await streamToResult(adapter, params.executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", meta?.launchedAt ?? new Date().toISOString(), signal, onUpdate, { cancelOnAbort: false });
+      const outcome = (result as { details?: { outcome?: unknown } }).details?.outcome;
+      completionWakeup.finishReconciliation(params.executionId, typeof outcome === "string" && TERMINAL_OUTCOMES.has(outcome));
+      return result;
     },
   });
 
@@ -199,6 +221,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     promptSnippet: "Cancel one child Pi",
     parameters: CancelParams,
     async execute(_toolCallId, params) {
+      completionWakeup.markHandled(params.executionId);
       try {
         const receipt = await adapter.cancel(params.executionId, params.reason ?? "Cancelled by the attended lead.");
         return { content: [{ type: "text", text: `${params.executionId}: ${receipt.outcome}.` }], details: receipt, ...(receipt.outcome === "outcome_unknown" ? { isError: true } : {}) };
@@ -296,39 +319,56 @@ export default function subagentExtension(pi: ExtensionAPI) {
       });
       const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
       heartbeat.unref();
+      let workerReceiptError: unknown;
       const completion = (async () => {
         let usage: unknown;
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
         const final = await adapter.result(receipt.executionId);
         await usageWatch;
         clearInterval(heartbeat);
-        await registry.completeDispatch(params.workerId, begin.lockToken, {
-          executionId: receipt.executionId,
-          outcome: final.outcome,
-          cognitiveRole: params.cognitiveRole,
-          provider: final.provider,
-          model: final.model,
-          effort: final.effort,
-          sessionId: final.sessionId,
-          acceptedAt: receipt.acceptedAt,
-          endedAt: new Date().toISOString(),
-          usage,
-          diagnostic: final.diagnostic,
+        await settleWorkerReceipt({
+          settle: () => registry.completeDispatch(params.workerId, begin.lockToken, {
+            executionId: receipt.executionId,
+            outcome: final.outcome,
+            cognitiveRole: params.cognitiveRole,
+            provider: final.provider,
+            model: final.model,
+            effort: final.effort,
+            sessionId: final.sessionId,
+            acceptedAt: receipt.acceptedAt,
+            endedAt: new Date().toISOString(),
+            usage,
+            diagnostic: final.diagnostic,
+          }),
+          wakeup: completionWakeup,
+          background: params.background === true,
+          completion: {
+            executionId: receipt.executionId,
+            outcome: final.outcome,
+            profile: begin.profile,
+            cognitiveRole: params.cognitiveRole,
+            workerId: params.workerId,
+            workerName: begin.name,
+          },
         });
       })();
-      const tracked = completion.catch(() => { clearInterval(heartbeat); });
+      const tracked = completion.catch((error) => {
+        workerReceiptError = error;
+        clearInterval(heartbeat);
+      });
       pendingWorkerCompletions.add(tracked);
       void tracked.then(() => pendingWorkerCompletions.delete(tracked));
 
       if (params.background === true) {
         return {
-          content: [{ type: "text", text: `Dispatched worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). Reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
+          content: [{ type: "text", text: `Dispatched worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). Its terminal outcome will wake this lead once after the Worker receipt settles; a receipt failure wakes bounded outcome_unknown attention instead. Reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
           details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, continuing, acceptedAt: receipt.acceptedAt },
         };
       }
 
       const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true });
       await tracked;
+      if (workerReceiptError !== undefined) return workerReceiptFailureResult(result, receipt.executionId, params.workerId, workerReceiptError);
       return result;
     },
   });

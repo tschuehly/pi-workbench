@@ -43,7 +43,7 @@ Approved candidate amendment, not yet implemented: cap `task` at 20,000 characte
 
 The extension supplies the validated current working directory and host capability ceiling. The parent may identify an author provider as an Independence constraint but cannot choose the target provider, model, Model Effort, executable, environment, session directory, arbitrary tools, or sandbox policy.
 
-One invocation maps to one execution request. When `background` is true the tool returns a handle immediately instead of blocking; the lead reconciles it within the same session through the companion `subagent_collect`, `subagent_status`, and `subagent_cancel` tools. This in-session non-blocking launch lets a lead keep several children in flight, but the extension still performs no batches, chains, retries, review loops, or result synthesis, and no child outlives the attended session. The attended lead remains accountable for deciding what to delegate and for reconciling each result.
+One invocation maps to one execution request. When `background` is true the tool returns a handle immediately instead of blocking; the lead reconciles it within the same session through the companion `subagent_collect`, `subagent_status`, and `subagent_cancel` tools. A terminal background outcome sends one session-local, deduplicated `followUp` wakeup with `triggerTurn: true`; it identifies the execution and outcome, retains result content behind `subagent_collect`, and asks the lead to collect and reconcile exactly once. An active collection suppresses a not-yet-sent wakeup, re-arms it if collection detaches before terminal, and permanently handles it after terminal reconciliation. Worker completion wakeup occurs only after its durable receipt settles and dispatch lock releases. A background receipt failure produces separately deduplicated bounded `outcome_unknown` attention without claiming release; a foreground failure returns an `outcome_unknown` tool result with the child result marked inspection-only. Explicit cancellation and session shutdown suppress late wakeups while cancelling live children. This in-session non-blocking launch lets a lead keep several children in flight, but the extension still performs no batches, chains, retries, review loops, or result synthesis, and no child outlives the attended session. The attended lead remains accountable for deciding what to delegate and for reconciling each result; the synthetic completion turn grants no additional authority.
 
 ## Profiles and routing
 
@@ -142,7 +142,7 @@ Replace the temporary official-example implementation only after tests prove:
 9. child sessions persist in Pi's standard machine-local store but are never reopened automatically;
 10. cancellation, timeout, forced termination, and unknown outcomes are distinguishable;
 11. concurrent invocations launch independently and remain cancellable;
-12. a background launch returns a handle immediately, and `status`, `list`, and `collect` reconcile the child within the session without ever letting it outlive the attended parent;
+12. a background launch returns a handle immediately; one bounded terminal wakeup triggers collection without duplicate terminal notifications; and `status`, `list`, and `collect` reconcile the child within the session without ever letting it outlive the attended parent;
 13. parent termination cleans up every active child; and
 14. existing Level 1 Workstream launch, checkpoint, restart, resume, and closure behavior remains intact.
 
