@@ -22,6 +22,65 @@ The current ladder couples prior plan agreement, Human Attention cadence, delega
 
 Dimensions are not unrestricted toggles. A deterministic resolver proposes a Working Mode from desired outcome, repository capabilities, uncertainty, impact, reversibility, and available Human Attention. A validator rejects combinations whose requested attention or authority exceeds their governance, durability, isolation, evidence, or bounds. Presentation must expose both the selected posture and any unsupported guarantee rather than compressing them into one number.
 
+## Owner control hypothesis
+
+The interface should make the multidimensional model easy to steer without presenting nine independent controls by default. Expose two prominent, independently adjustable controls:
+
+1. **Working Mode preset:** `Sprint`, `Pair`, or `Thorough`.
+2. **Human Attention cadence:** `Interactive`, `Phase boundaries`, `Material questions`, or `Outcome`.
+
+The preset is a convenient starting point, not an authority grant or quality rank. It expands into a visible resolved posture whose dimensions may be inspected or adjusted. Human Attention cadence remains separate so the owner can begin in `Thorough + Outcome`, return during the same Run, and switch prospectively to `Sprint + Interactive` for a fast feedback loop.
+
+A change applies to future semantic work and Dispatches. It does not silently alter an active child assignment, invalidate completed evidence, lower repository safety floors, expand authority, or claim governance and recovery that the runtime does not provide. The interface should state whether active work will finish under the previous posture and offer explicit cancellation when immediate change is necessary.
+
+### Candidate preset behavior
+
+| Behavior | Sprint | Pair | Thorough |
+| --- | --- | --- | --- |
+| Initial alignment | Infer and ask only Material Questions | Brief outcome and evidence confirmation | Explicit framing; autonomous grill when the decision is consequential |
+| Delegation | Quick bounded background scouts and mechanics | Selective role-based delegation | Deliberate role separation across evidence, implementation, and review |
+| Implementation | Lead or one bounded implementer | Task-dependent authoring | Evidence-first; separate author when Independence adds value |
+| Independent review | Repository or risk triggered only | One bounded review for a meaningful completed change | Cross-family review at evidence-bearing phase boundaries |
+| Correction | No routine review loop | At most one justified remediation pass | A finite review/remediation ladder, initially at most two passes |
+| Human presentation | Concise outcome and Primary Evidence | Structured evidence summary | Deep task-shaped Review Surface |
+
+`Evidence-first` is broader and more accurate than universally requiring tests first. Test-first development fits behavior with a stable test seam; browser evidence fits interface behavior; discriminating probes fit experiments; static checks or direct inspection may fit documentation and configuration. The preset selects a default evidence strategy, while repository policy and the task determine the valid proof.
+
+### Delegation and review constraints
+
+Fast work should reduce lead latency by launching non-overlapping, bounded children with cheaper Execution Profiles in the background. Read-only investigation, scouting, and mechanics may run concurrently. In a shared Level 1 checkout, only one mutating implementer should run at a time; parallel mutation requires isolated workspaces or controller-managed workspace leases.
+
+Independent review should occur at evidence-bearing synchronization points rather than continuously after each edit. Every review declares the material claim or risk, required Primary Evidence, finding disposition, attempt bound, and stopping condition. `Sprint` omits habitual heavy review but cannot bypass repository safety floors. `Thorough` increases review depth and model-family Independence without creating an unbounded loop that continues until models stop finding improvements.
+
+### Review Surface depth
+
+A richer preset increases result-packaging depth, not the use of one universal format. The final medium remains task-shaped:
+
+- interface work may use a live page, screenshots, contextual annotations, or an interactive HTML artifact;
+- architecture work may use a decision tree and diagrams;
+- backend work may use behavior examples, an evidence matrix, and the relevant diff; and
+- experiments may use a comparison surface showing representative successes, failures, contradictions, and remaining uncertainty.
+
+A detailed HTML Atelier is therefore a useful `Thorough` outcome when direct human experience or visual judgment benefits from it, not a mandatory artifact for every task.
+
+### Resolution seam
+
+The candidate deep module should keep presentation and orchestration policy separate:
+
+```ts
+resolveWorkingMode({
+  ownerPreference,
+  attentionCadence,
+  desiredOutcome,
+  repositoryCapabilities,
+  uncertainty,
+  impact,
+  reversibility
+}) -> ResolvedWorkingMode
+```
+
+The resolved result governs alignment depth, delegation shape, Execution Profiles and Model Effort, verification and Independence requirements, attempt bounds, stopping conditions, and Review Surface depth. PI WEB selects and displays owner preference and the effective posture; it does not own resolution, execution policy, or authoritative Run state. The model-routing target becomes `Cognitive Role + Entry Preset -> Execution Profile -> model binding`, while the current role-only resolver remains truthful as the pre-preset implementation.
+
 ## AFK Experiment example
 
 An AFK Experiment is a budgeted, unattended pursuit of a hypothesis or measurable outcome. A Trial is one isolated change-and-evaluate iteration. The experiment orchestrator sequences Trials; a deterministic Watcher detects lifecycle and no-progress conditions; model judges assess evidence and direction; FirstMate routes Human Attention without gaining execution authority.
