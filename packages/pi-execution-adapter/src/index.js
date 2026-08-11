@@ -9,6 +9,7 @@ export class PiRpcExecutionAdapter {
   constructor(options = {}) {
     this.command = options.command ?? "pi";
     this.defaultTimeoutMs = options.timeoutMs ?? 20 * 60_000;
+    this.defaultStartupTimeoutMs = options.startupTimeoutMs ?? 15_000;
     this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 10 * 60_000;
     this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write"]);
     this.clock = options.clock ?? (() => new Date());
@@ -112,7 +113,15 @@ export class PiRpcExecutionAdapter {
       this.#finish(state, resultFor(state, "launch_failed", "", errorMessage(error)));
       return;
     }
-    state.timeout = setTimeout(() => { state.cancelKind = "timed_out"; this.#emit(state, "timeout"); void this.#terminate(state); }, spec.timeoutMs ?? this.defaultTimeoutMs);
+    const startupTimeoutMs = this.defaultStartupTimeoutMs;
+    state.startupTimeout = setTimeout(() => {
+      if (state.done || state.phase !== "starting") return;
+      state.phase = "startup_failed";
+      state.cancelKind = "launch_failed";
+      state.cancelDiagnostic = `startup_timeout: Pi RPC did not answer get_state within ${startupTimeoutMs} ms; process terminated before prompt.`;
+      this.#emit(state, "startup_timeout", { timeoutMs: startupTimeoutMs });
+      void this.#terminate(state);
+    }, startupTimeoutMs);
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr = bounded(`${stderr}${String(chunk)}`, 8_000); });
     attachJsonl(child.stdout, (event) => { this.#event(state, event); }, (error) => { this.#emit(state, "diagnostic", { message: errorMessage(error) }); });
@@ -124,7 +133,8 @@ export class PiRpcExecutionAdapter {
       state.closeResolve?.();
       if (!state.done) {
         const outcome = state.cancelKind ?? (state.prompted ? (code === 0 ? "outcome_unknown" : "execution_failed") : "launch_failed");
-        this.#finish(state, resultFor(state, outcome, state.finalText, stderr || `Pi RPC exited (${String(code ?? signal)}).`));
+        const diagnostic = state.cancelDiagnostic ?? (stderr || `Pi RPC exited (${String(code ?? signal)}).`);
+        this.#finish(state, resultFor(state, outcome, state.finalText, diagnostic));
       }
     });
     void this.#command(state, "get_state").catch((error) => {
@@ -240,19 +250,24 @@ export class PiRpcExecutionAdapter {
     const id = `${state.executionId}:${String(++state.commandSequence)}`;
     return new Promise((resolve, reject) => {
       const verifyInitialState = (data) => {
+        if (state.done || state.phase !== "starting") return;
+        clearTimeout(state.startupTimeout);
+        state.startupTimeout = undefined;
         const model = data?.model;
         if (model?.provider !== state.spec.binding.provider || model?.id !== state.spec.binding.model || data?.thinkingLevel !== state.spec.binding.effort) {
+          state.phase = "startup_failed";
           reject(new Error("Runtime binding does not match the resolved binding."));
           void this.#terminate(state, "binding mismatch");
           return;
         }
         const continuation = state.spec.continuation;
         if (continuation !== undefined && data?.sessionId !== continuation.sessionId) {
+          state.phase = "startup_failed";
           reject(new Error(`Resumed session ${String(data?.sessionId)} does not match the requested continuation session.`));
           void this.#terminate(state, "continuation mismatch");
           return;
         }
-        state.prompted = true;
+        state.phase = "ready";
         state.sessionId = data?.sessionId;
         this.#emit(state, "binding_verified", { provider: model.provider, model: model.id, effort: data.thinkingLevel });
         if (continuation !== undefined) this.#emit(state, "continuation_verified", { sessionId: continuation.sessionId });
@@ -267,6 +282,10 @@ export class PiRpcExecutionAdapter {
   }
 
   #sendPrompt(state) {
+    if (state.done || state.phase !== "ready" || state.cancelKind !== undefined) return;
+    state.phase = "prompt_submitted";
+    state.prompted = true;
+    state.timeout = setTimeout(() => { state.cancelKind = "timed_out"; this.#emit(state, "timeout"); void this.#terminate(state); }, state.spec.timeoutMs ?? this.defaultTimeoutMs);
     const id = `${state.executionId}:${String(++state.commandSequence)}`;
     state.commands.set(id, { command: "prompt", resolve: () => {}, reject: (error) => { if (!state.done) this.#finish(state, resultFor(state, "execution_failed", "", errorMessage(error))); } });
     state.child.stdin.write(`${JSON.stringify({ id, type: "prompt", message: state.spec.task })}\n`);
@@ -298,6 +317,7 @@ export class PiRpcExecutionAdapter {
     state.done = true;
     state.result = result;
     clearTimeout(state.timeout);
+    clearTimeout(state.startupTimeout);
     clearTimeout(state.settlementTimer);
     state.settlementTimer = undefined;
     this.#emit(state, "terminal", { outcome: result.outcome });
@@ -311,7 +331,7 @@ export class PiRpcExecutionAdapter {
 function createState(executionId, spec, acceptedAt) {
   let resultResolve;
   let closeResolve;
-  return { executionId, spec: structuredClone(spec), acceptedAt, observations: [], observationSequence: 0, waiters: new Set(), commands: new Map(), commandSequence: 0, done: false, closed: false, prompted: false, completing: false, finalText: "", resultPromise: new Promise((resolve) => { resultResolve = resolve; }), resultResolve, closePromise: new Promise((resolve) => { closeResolve = resolve; }), closeResolve };
+  return { executionId, spec: structuredClone(spec), acceptedAt, observations: [], observationSequence: 0, waiters: new Set(), commands: new Map(), commandSequence: 0, done: false, closed: false, prompted: false, phase: "starting", completing: false, finalText: "", resultPromise: new Promise((resolve) => { resultResolve = resolve; }), resultResolve, closePromise: new Promise((resolve) => { closeResolve = resolve; }), closeResolve };
 }
 
 function validateSpec(spec, hostTools, now, maxAgeMs) {

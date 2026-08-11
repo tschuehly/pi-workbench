@@ -8,6 +8,7 @@ import { readCachedQuotaSnapshot } from "./quota-snapshot-cache.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const policy = JSON.parse(fs.readFileSync(path.join(here, "..", "references", "routing-policy.json"), "utf8"));
+const ROUTING_COMMAND_TIMEOUT_MS = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
 
 function usage() {
   console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--independent-of <provider>] [--quota <path|->] [--catalog <path>] [--format json|env]");
@@ -93,7 +94,7 @@ let rawCatalog;
 try {
   rawCatalog = catalogInput
     ? fs.readFileSync(catalogInput, "utf8")
-    : execFileSync("pi", ["--list-models"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    : execFileSync("pi", ["--list-models"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: ROUTING_COMMAND_TIMEOUT_MS });
 } catch (error) {
   console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Pi model catalog unavailable: ${error.message}`);
   process.exit(3);
@@ -155,6 +156,11 @@ const result = {
     },
   },
 };
+
+function positiveTimeout(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
 
 if (format === "env") {
   console.log("ROUTING=PASS");

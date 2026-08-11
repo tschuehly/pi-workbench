@@ -37,11 +37,18 @@ function fakeRpc(options = {}) {
   child.kills = [];
   child.commands = [];
   const send = (value) => child.stdout.write(`${JSON.stringify(value)}\n`);
+  const stateResponse = (command) => ({ id: command.id, type: "response", command: "get_state", success: true, data: { model: { provider: options.provider ?? "anthropic", id: options.model ?? "claude-test" }, thinkingLevel: options.effort ?? "high", sessionId: options.sessionId ?? "child-session", isStreaming: false, isCompacting: false, pendingMessageCount: 0 } });
+  let pendingGetState;
   function drain() {
     for (;;) {
       const index = input.indexOf("\n"); if (index < 0) return;
       const command = JSON.parse(input.slice(0, index)); input = input.slice(index + 1); child.commands.push(command);
-      if (command.type === "get_state") send({ id: command.id, type: "response", command: "get_state", success: true, data: { model: { provider: options.provider ?? "anthropic", id: options.model ?? "claude-test" }, thinkingLevel: options.effort ?? "high", sessionId: options.sessionId ?? "child-session", isStreaming: false, isCompacting: false, pendingMessageCount: 0 } });
+      if (command.type === "get_state") {
+        if (options.hangOnGetState) pendingGetState = command;
+        else if (options.stateDelayMs !== undefined) setTimeout(() => send(stateResponse(command)), options.stateDelayMs);
+        else send(stateResponse(command));
+      }
+      if (command.type === "abort" && options.respondStateOnAbort && pendingGetState !== undefined) send(stateResponse(pendingGetState));
       if (command.type === "abort" && options.settleOnAbort) queueMicrotask(() => send({ type: "agent_settled" }));
       if (command.type === "prompt") {
         send({ id: command.id, type: "response", command: "prompt", success: true });
@@ -215,6 +222,77 @@ test("fails closed on inconsistent admission, capability expansion, fresh exhaus
   await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, quotaSnapshot: { ...spec().binding.quotaSnapshot, relevantWindows: [{ percentRemaining: 0 }] } } })), (error) => error.code === "QUOTA_EXHAUSTED");
   const receipt = await adapter.dispatch(spec());
   assert.notEqual((await adapter.result(receipt.executionId)).outcome, "success");
+});
+
+test("fails launch quickly when Pi RPC never answers the initial state request", async () => {
+  const child = fakeRpc({ hangOnGetState: true });
+  const adapter = new PiRpcExecutionAdapter({
+    clock: () => now,
+    spawn: () => child,
+    startupTimeoutMs: 5,
+    timeoutMs: 1_000,
+    killGraceMs: 1,
+  });
+  const receipt = await adapter.dispatch(spec());
+  const observations = [];
+  const collecting = (async () => { for await (const observation of adapter.observe(receipt.executionId)) observations.push(observation); })();
+  const result = await adapter.result(receipt.executionId);
+  await collecting;
+
+  assert.equal(result.outcome, "launch_failed");
+  assert.match(result.diagnostic ?? "", /startup_timeout: Pi RPC.*5 ms/i);
+  assert.equal(child.commands.some((command) => command.type === "prompt"), false);
+  assert.equal(child.kills.includes("SIGTERM"), true);
+  assert.equal(observations.some((value) => value.type === "startup_timeout"), true);
+  assert.equal(observations.some((value) => value.type === "timeout"), false);
+});
+
+test("ignores a late initial state response after startup termination begins", async () => {
+  const child = fakeRpc({ hangOnGetState: true, respondStateOnAbort: true });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, startupTimeoutMs: 5, timeoutMs: 1_000, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec());
+  const observations = [];
+  const collecting = (async () => { for await (const observation of adapter.observe(receipt.executionId)) observations.push(observation); })();
+  const result = await adapter.result(receipt.executionId);
+  await collecting;
+
+  assert.equal(result.outcome, "launch_failed");
+  assert.equal(result.sessionId, undefined);
+  assert.equal(child.commands.some((command) => command.type === "prompt"), false);
+  assert.equal(observations.some((value) => value.type === "binding_verified"), false);
+});
+
+test("reports unknown outcome when startup termination cannot be confirmed", async () => {
+  const adapter = new PiRpcExecutionAdapter({
+    clock: () => now,
+    spawn: () => fakeRpc({ hangOnGetState: true, confirmKill: false }),
+    startupTimeoutMs: 2,
+    timeoutMs: 1_000,
+    killGraceMs: 1,
+  });
+  const receipt = await adapter.dispatch(spec());
+  assert.equal((await adapter.result(receipt.executionId)).outcome, "outcome_unknown");
+});
+
+test("starts the task timeout only after the initial RPC handshake", async () => {
+  const child = fakeRpc({ stateDelayMs: 10, hang: true });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, startupTimeoutMs: 50, timeoutMs: 5, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec());
+  const result = await adapter.result(receipt.executionId);
+
+  assert.equal(result.outcome, "timed_out");
+  assert.equal(child.commands.some((command) => command.type === "prompt"), true);
+});
+
+test("clears the startup deadline while retaining the task deadline", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }), startupTimeoutMs: 2, timeoutMs: 8, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec());
+  const observations = [];
+  const collecting = (async () => { for await (const observation of adapter.observe(receipt.executionId)) observations.push(observation); })();
+  assert.equal((await adapter.result(receipt.executionId)).outcome, "timed_out");
+  await collecting;
+  assert.equal(observations.some((value) => value.type === "startup_timeout"), false);
+  assert.equal(observations.some((value) => value.type === "timeout"), true);
 });
 
 test("distinguishes confirmed timeout from an unknown termination outcome", async () => {

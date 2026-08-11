@@ -20,6 +20,12 @@ test("renders a bounded rolling subagent activity log with elapsed and idle time
   ].join("\n"));
 });
 
+test("identifies a pre-prompt RPC startup timeout", () => {
+  const entries = [];
+  recordProgress(entries, { type: "startup_timeout", at: "2026-08-07T20:00:15.000Z", detail: { timeoutMs: 15_000 } });
+  assert.equal(entries[0].text, "Pi RPC startup timed out after 15s before prompt submission.");
+});
+
 test("collapses noisy repeated assistant and tool progress updates", () => {
   const entries = [];
   recordProgress(entries, { type: "thinking_progress", at: "2026-08-07T20:00:00.000Z" });

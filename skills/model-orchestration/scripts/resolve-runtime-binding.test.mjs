@@ -129,6 +129,23 @@ try {
   assert.equal(absent.status, 3);
   assert.match(absent.stderr, /Pi model .* unavailable/);
 
+  fs.writeFileSync(catalogPath, catalog);
+  fs.writeFileSync(path.join(fakeBin, "quota-axi"), `#!/usr/bin/env node\nsetTimeout(() => process.stdout.write(${JSON.stringify(JSON.stringify(quota))}), 1000);\n`, { mode: 0o755 });
+  const slowQuota = JSON.parse(execFileSync(process.execPath, [resolver, "investigation", "--catalog", catalogPath], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`, PI_WORKBENCH_QUOTA_CACHE: path.join(temp, "slow-quota-cache.json"), PI_WORKBENCH_ROUTING_TIMEOUT_MS: "20" },
+  }));
+  assert.equal(slowQuota.modelBinding.admission, "degraded-quota-telemetry");
+  assert.match(slowQuota.modelBinding.quotaSnapshot.error, /timed out|ETIMEDOUT/i);
+
+  fs.writeFileSync(path.join(fakeBin, "pi"), "#!/usr/bin/env node\nsetTimeout(() => process.stdout.write('anthropic claude-sonnet-5\\n'), 1000);\n", { mode: 0o755 });
+  const slowCatalog = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`, PI_WORKBENCH_ROUTING_TIMEOUT_MS: "20" },
+  });
+  assert.equal(slowCatalog.status, 3);
+  assert.match(slowCatalog.stderr, /model catalog unavailable/i);
+
   const cachePath = path.join(temp, "quota-cache.json");
   const callCountPath = path.join(temp, "quota-call-count");
   fs.writeFileSync(path.join(fakeBin, "quota-axi"), `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst countPath = ${JSON.stringify(callCountPath)};\nconst count = Number(fs.existsSync(countPath) ? fs.readFileSync(countPath, "utf8") : "0") + 1;\nfs.writeFileSync(countPath, String(count));\nprocess.stdout.write(${JSON.stringify(JSON.stringify(quota))});\n`, { mode: 0o755 });

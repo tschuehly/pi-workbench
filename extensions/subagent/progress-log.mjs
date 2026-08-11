@@ -33,6 +33,7 @@ export function progressText(observation) {
   if (observation.type === "thinking_progress") return "Child Pi is thinking…";
   if (observation.type === "assistant_progress") return "Child Pi is responding…";
   if (observation.type === "quota_degraded") return `Quota telemetry ${String(observation.detail?.telemetryStatus ?? "unavailable")}; attempting verified model launch.`;
+  if (observation.type === "startup_timeout") return `Pi RPC startup timed out after ${formatDuration(Number(observation.detail?.timeoutMs ?? 0))} before prompt submission.`;
   if (observation.type === "binding_verified") return `Binding verified: ${String(observation.detail?.provider)}/${String(observation.detail?.model)}:${String(observation.detail?.effort)}`;
   if (observation.type === "terminal") return `Child ${String(observation.detail?.outcome ?? "finished")}.`;
   if (observation.type === "settlement_reconciled") return "Terminal output reconciled from idle RPC state.";

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 export const QUOTA_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 50;
+const QUOTA_COMMAND_TIMEOUT_MS = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
 
 export function readCachedQuotaSnapshot(options = {}) {
   const cachePath = options.cachePath ?? process.env.PI_WORKBENCH_QUOTA_CACHE ?? defaultCachePath();
@@ -41,12 +42,17 @@ function defaultCachePath() {
 }
 
 function runQuotaAxi(args) {
-  const result = spawnSync("quota-axi", args, { encoding: "utf8" });
+  const result = spawnSync("quota-axi", args, { encoding: "utf8", timeout: QUOTA_COMMAND_TIMEOUT_MS });
   return {
     status: Number.isInteger(result.status) ? result.status : 1,
     stdout: result.stdout ?? "",
     stderr: result.stderr || result.error?.message || "",
   };
+}
+
+function positiveTimeout(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 function normalizeResult(result) {

@@ -97,7 +97,7 @@ The module keeps only bounded live process state: execution identifier, process 
 
 Level 1 imposes no local child concurrency cap and provides no scheduler. Each invocation still represents one bounded child execution; future managed admission and scheduling remain controller-owned.
 
-Each execution also has a configurable timeout. Timeout follows the same termination sequence as user cancellation; the initial default is an implementation constant rather than a new product-level budget policy.
+Each execution has separate startup and task timeouts. Pi RPC must answer the initial state handshake within 15 seconds; a stall terminates before prompting as `launch_failed` with explicit startup evidence. The 20-minute task timeout remains separate. Both follow the same confirmed termination sequence as user cancellation and remain implementation constants rather than product-level budget policy.
 
 ## Observations, results, and cancellation
 
@@ -107,8 +107,8 @@ The adapter normalizes Pi RPC activity into bounded observations for:
 - assistant progress without raw thinking content;
 - tool start, progress, and completion;
 - usage;
-- diagnostics;
-- cancellation and timeout; and
+- diagnostics and RPC startup timeout;
+- cancellation and task timeout; and
 - terminal outcome.
 
 Detailed observations drive the tool UI but do not enter parent Model Context. The parent receives only terminal status, final text, child profile, Cognitive Role, resolved provider/model/effort, effective quota admission and telemetry status, and Pi session identifier. V1 does not expose arbitrary JSON Schema or automatic correction turns. Usage is observed, but custom token and cost enforcement remains deferred.
@@ -140,7 +140,7 @@ Replace the temporary official-example implementation only after tests prove:
 7. progress streams through normalized observations without raw thinking content entering the public contract;
 8. terminal parent context is compact and includes the Pi session identifier;
 9. child sessions persist in Pi's standard machine-local store but are never reopened automatically;
-10. cancellation, timeout, forced termination, and unknown outcomes are distinguishable;
+10. pre-prompt startup timeout, task timeout, cancellation, forced termination, and unknown outcomes are distinguishable;
 11. concurrent invocations launch independently and remain cancellable;
 12. a background launch returns a handle immediately; one bounded terminal wakeup triggers collection without duplicate terminal notifications; and `status`, `list`, and `collect` reconcile the child within the session without ever letting it outlive the attended parent;
 13. parent termination cleans up every active child; and

@@ -500,7 +500,7 @@ async function streamToResult(
 async function resolveBinding(cognitiveRole: string, independentOfProvider?: string): Promise<any> {
   const args = [resolver, cognitiveRole, ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider])];
   const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024 }, (error, output, stderr) => {
+    execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 15_000 }, (error, output, stderr) => {
       if (error !== null) reject(new Error(String(stderr || output || error.message).trim()));
       else resolve(output);
     });
