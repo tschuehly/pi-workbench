@@ -1,6 +1,6 @@
 # Subagent and Worker Iterative Improvement Plan
 
-Status: Step 1 owner-approved, implemented, and smoke-verified on 2026-08-11. Steps 2–6 remain proposals for owner review.
+Status: Step 1 and background-first system guidance owner-approved and implemented on 2026-08-11; completion wakeup is smoke-verified. Steps 2–6 remain proposals for owner review.
 
 ## Decision requested
 
@@ -10,7 +10,7 @@ The remaining review questions are:
 
 1. **Resolved:** the owner approved one terminal completion turn without a new human message; Decision 98 records the scoped Level 1 clarification and its authority limits.
 2. May we run an opt-in, Anthropic-only cache-ping pilot as a scoped extension of that exception—up to seven additional synthetic lead turns—and as an exception to the current recommendation against an automatic Level 1 ping scheduler?
-3. During the pilot, should `background: true` remain explicit? The recommendation is yes. The alternative—automatically backgrounding work based on expected duration—needs separate evidence and is not proposed now.
+3. **Resolved:** Decision 99 makes explicit `background: true` the system-prompt preference for most delegated work. It remains guidance rather than a mechanical default; foreground blocking is the immediate-dependency exception.
 
 If the owner accepts question 2, record the bounded experiment in [`decisions.md`](../foundation/decisions.md), without changing the global cache default or persistent launch guidance.
 
@@ -114,7 +114,7 @@ A child that runs longer than the provider's short prompt-cache lifetime can mak
 
 There is no free cache refresh in Pi. A cache ping is a real lead model request: it reads the cached prefix, adds a small message and response to the session, consumes quota, and may trigger model behavior.
 
-The standing evidence-backed recommendation is to use long retention with foreground blocking for a single 10–60-minute child, and to background only for fan-out or genuinely useful parallel lead work—not for cache management. It also recommends against an automatic Level 1 ping scheduler. This plan does not replace that default before evidence. Step 1 improves an explicitly chosen background path; it does not make background execution automatic.
+The earlier evidence-backed cache recommendation paired long retention with foreground blocking for a single 10–60-minute child, reserved backgrounding for fan-out or useful parallel lead work, and rejected an automatic Level 1 ping scheduler. Decision 99 now prioritizes Human Attention by making explicit background execution the system-prompt preference while retaining foreground blocking for immediate dependencies. This does not settle cache economics or make background execution a mechanical default.
 
 For Anthropic short retention, one renewal costs roughly one cache read. Long retention becomes cheaper than short retention after about eight synthetic renewals, before output overhead; pings remain cheaper than accepting one later miss until roughly eleven renewals. The first ping experiment uses the tighter seven-renewal cap. Pi's `PI_CACHE_RETENTION=long` / `cacheRetention: "long"` setting maps to a one-hour cache only for an Anthropic model whose compatibility flags support long retention, so every observation must record the actual provider, model, and compatibility result.
 
@@ -130,7 +130,7 @@ Use at least three comparable meaningful sessions per posture before changing po
 
 **Stage A — establish foreground and background baselines**
 
-1. **Foreground + short retention:** today's default baseline.
+1. **Foreground + short retention:** the mechanical omitted-`background` baseline, now an exception to Decision 99's prompt guidance.
 2. **Foreground + long retention:** the standing recommendation for one 10–60-minute child.
 3. **Background + short retention:** explicit backgrounding plus the Step 1 completion wakeup.
 4. **Background + long retention:** explicit backgrounding plus the completion wakeup on an eligible Anthropic model.
@@ -172,14 +172,14 @@ For each posture, record:
 Keep current defaults when evidence is inconclusive. Otherwise:
 
 - retain completion wakeup only if at least three comparable sessions eliminate polling without duplicate, premature, or unrelated lead actions;
-- change foreground-versus-background guidance only if at least three comparable sessions show a repeatable Human Attention benefit without greater reconciliation risk;
+- retain, narrow, or revise the background-first guidance after at least three comparable sessions show whether its Human Attention benefit outweighs cache and reconciliation costs;
 - retain a ping option only if at least three comparable Stage B sessions use less total lead quota than background + long retention, produce no unintended lead action, and are preferred by the owner; otherwise remove it; and
 - prefer a retention posture only when comparable sessions show lower measured cache waste without a compensating usage or reliability regression.
 
 Then resolve every part of Deferred Design Decision 19 explicitly:
 
 - whether long retention becomes the default lead posture;
-- when explicit backgrounding with status checks or useful parallel lead work replaces foreground blocking;
+- which immediate-dependency cases should remain foreground exceptions to Decision 99's background-first guidance;
 - whether children expected to outlast the chosen retention window should start immediately after a checkpoint or compaction; and
 - whether the resulting policy belongs in environment defaults, `extensions/subagent/` guidance, the model-orchestration skill, or nowhere persistently.
 
@@ -287,7 +287,7 @@ The following are invariants for this roadmap, not options this plan may relax:
 
 ## Recommended next implementation slice
 
-Step 1 is complete. Before Step 2, implement the programmatic cache observation and gather the foreground/background and short/long-retention baselines without changing launch guidance. Add the automatic ping posture only after the owner separately approves that scoped experiment. Do not implement lead-to-child messaging, peer collaboration, automatic retries, or a global cache default in this slice.
+Step 1 and background-first prompt guidance are complete. Before Step 2, implement the programmatic cache observation and gather the foreground/background and short/long-retention baselines without changing launch guidance. Add the automatic ping posture only after the owner separately approves that scoped experiment. Do not implement lead-to-child messaging, peer collaboration, automatic retries, or a global cache default in this slice.
 
 ## Evidence basis
 

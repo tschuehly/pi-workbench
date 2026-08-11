@@ -67,9 +67,12 @@ worker_status   { workerId?: string }                                    // regi
 worker_retire   { workerId: string; reason: string }                     // immutable retirement
 ```
 
-`worker_dispatch` behaves exactly like `subagent`: blocking by default with streamed progress, or
-`background: true` returning a handle reconciled through the existing `subagent_status`,
-`subagent_collect`, and `subagent_cancel` tools. The extension performs no batches, chains,
+`worker_dispatch` behaves exactly like `subagent`: omitting `background` blocks with streamed
+progress, while `background: true` returns a handle reconciled through the existing
+`subagent_status`, `subagent_collect`, and `subagent_cancel` tools. Decision 99 makes
+`background: true` the system-prompt preference for most Worker dispatches; foreground blocking is
+reserved for an immediate dependency when no useful lead work or attended response can continue.
+The extension performs no batches, chains,
 retries, or synthesis; the attended lead remains accountable for what it delegates to a worker and
 for reconciling every result.
 

@@ -43,7 +43,7 @@ const Params = Type.Object({
   profile: StringEnum(Object.keys(PROFILES) as (keyof typeof PROFILES)[], { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
   independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Defaults to the active parent model provider; set it explicitly for child-authored work." })),
-  background: Type.Optional(Type.Boolean({ description: "Launch and return a handle immediately instead of blocking. Reconcile later with subagent_collect. The child still dies when the attended session ends." })),
+  background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the terminal wakeup with subagent_collect. The child still dies when the attended session ends." })),
 });
 
 const IdParam = Type.Object({ executionId: Type.String({ minLength: 1, description: "Execution identifier returned by a background subagent launch" }) });
@@ -59,7 +59,7 @@ const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
-  background: Type.Optional(Type.Boolean({ description: "Launch and return a handle immediately instead of blocking. Reconcile later with subagent_collect." })),
+  background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the terminal wakeup with subagent_collect." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
 });
 const WorkerStatusParams = Type.Object({ workerId: Type.Optional(Type.String({ minLength: 1, description: "One worker to inspect; omit to list every durable worker for this machine" })) });
@@ -92,13 +92,13 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Launch one fresh attended child Pi for one bounded assignment. By default progress is streamed and the tool blocks until the child finishes; with background:true it returns a handle immediately. The lead must reconcile the compact result.",
+    description: "Launch one fresh attended child Pi for one bounded assignment. Prefer background:true so the lead stays available and receives a terminal wakeup; omit it only when the child result is the immediate dependency. The lead must reconcile the compact result.",
     promptSnippet: "Delegate one bounded attended assignment to a fresh child Pi",
     promptGuidelines: [
       "Delegate proactively when it protects your context or the result: bulk reading, parallelizable investigation, mechanical batches, and judgment that must be independent of the author. Work inline when the task needs continuous steering or is smaller than a handoff brief.",
       "When you expect several sequential bounded assignments in one semantic scope, create or reuse a durable worker (worker_create, worker_dispatch) instead of re-briefing fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
-      "Use background:true to launch several children and keep working; reconcile each with subagent_collect and cancel with subagent_cancel.",
+      "Prefer background:true for delegated Subagents so the attended lead remains available and terminal completion wakes it automatically. Use foreground blocking only when the child result is the immediate dependency and no useful lead work or attended response can continue before it returns. Reconcile every background result with subagent_collect and cancel with subagent_cancel.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
     ],
@@ -256,11 +256,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "worker_dispatch",
     label: "Worker dispatch",
-    description: "Dispatch one bounded attended assignment to a durable worker, resuming its persisted Pi session for continuity within its scope. Same lifecycle as subagent: streams progress and blocks by default, background:true returns a handle for subagent_collect. One dispatch at a time per worker; no execution survives the attended session.",
+    description: "Dispatch one bounded attended assignment to a durable worker, resuming its persisted Pi session for continuity within its scope. Prefer background:true so the lead stays available and receives a terminal wakeup; omit it only when the Worker result is the immediate dependency. One dispatch at a time per worker; no execution survives the attended session.",
     promptSnippet: "Dispatch one bounded assignment to a durable attended worker",
     promptGuidelines: [
       "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
       "Keep every worker task self-contained with paths, constraints, and expected output; continuity supplements explicit tasking.",
+      "Prefer background:true for Worker dispatches so the attended lead remains available and terminal completion wakes it automatically. Use foreground blocking only when the Worker result is the immediate dependency and no useful lead work or attended response can continue before it returns. Reconcile every background result with subagent_collect.",
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
       "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
