@@ -49,7 +49,7 @@ All three were cloned directly (`git clone` + `git log -1`) and read from disk, 
 READMEs alone; source citations below name the exact file. The local Pi baseline is installed
 `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai` 0.84.1 under
 `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent`. Its declarations and SDK/extension
-documentation were read directly for the edit/write and Direct Completion claims below.
+documentation were read directly for the edit/write and Stateless Model Call claims below.
 
 Prior context loaded and not repeated here: `AGENTS.md` (root and `docs/`), the complete
 [`vocabulary.md`](../../foundation/vocabulary.md) and [`system-overview.md`](../../foundation/system-overview.md),
@@ -235,7 +235,7 @@ Workbench's current `adapter.status()`/`ExecutionStatus` (in `packages/pi-execut
 underlying child Pi session file already exists (Decision 89 keeps it inspectable) but nothing parses
 it for a compact status line today.
 
-### Direct Completion without an AgentSession
+### Stateless Model Call without an AgentSession
 
 Pi itself exposes the mechanism more directly than any reviewed extension. In installed
 `@earendil-works/pi-coding-agent` 0.84.1, `ModelRuntime` implements the `@earendil-works/pi-ai`
@@ -425,7 +425,7 @@ or Decision 89's "no child outlives the attended parent" invariant.
   `@earendil-works/pi-coding-agent` 0.84.1. It is an implementation detail, not a documented public
   guarantee, and should be re-verified after any Pi upgrade, consistent with the same caveat already
   recorded in `prompt-cache-economics.md` for other installed-Pi-source claims.
-- The Direct Completion finding is **high confidence** from the installed 0.84.1 declarations and
+- The Stateless Model Call finding is **high confidence** from the installed 0.84.1 declarations and
   implementation: `ModelRuntime.completeSimple()` delegates directly to the model provider path and
   references no `AgentSession`, `SessionManager`, or session-file writer. `Context` and
   `AssistantMessage` establish optional tools/system prompt and returned provider/model/usage. This is
