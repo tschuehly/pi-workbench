@@ -93,6 +93,13 @@ The 2026-08-12 final audit graded concept 38 as passed because it settled termin
 motion failed and exact frame review was not reached. The canary requirement was partial. The immutable AFK
 receipt remains historical evidence and is not rewritten; this retrospective records the corrected judgment.
 
+### Blocked concepts are recreated, not promoted for review
+
+The owner declined a separate local review surface for concepts 38–40. Their blocked state remains historical
+evidence; neither the existing MP4 bytes nor a missing final artifact become Review Studio candidates. Future
+concept generation may revisit the underlying marketing ideas only as new concept IDs and fresh locked briefs
+that pass the full current pipeline. It must not reopen, relabel, or retroactively accept the blocked runs.
+
 ## Minimal AFK objective
 
 An unattended objective contains only:
