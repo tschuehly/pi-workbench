@@ -15,8 +15,9 @@ non-success outcomes, and a second finalization turn are outside the minimal des
 
 ## Evidence set
 
-The machine-local PhotoQuest session archive contained 18 Goal sessions and two production-scale sessions
-owned by `execute-plan-afk-goal`:
+The machine-local PhotoQuest session archive contained 18 Goal sessions. Twelve were owned by
+`execute-plan-afk-goal`; the table compares its two production-scale sessions with the plain production
+comparator:
 
 | Posture | Session | Relevant window | Outcome evidence |
 | --- | --- | ---: | --- |
@@ -42,7 +43,8 @@ checkpoints and reviews duplicated lifecycle concerns without strengthening thos
 
 The risk-based wrapped session called `afk_phase_checkpoint` nine times and compacted eight times. One phase
 checkpoint was attempted three times around stale completion wakes. Natural compaction in the plain comparator
-occurred twice.
+occurred twice. The plain session accepted six videos during the measured window; one had begun before that
+window, while another acceptance completed shortly after the owner returned and is excluded from the count.
 
 ### Lead-level review serialized production
 
@@ -78,7 +80,7 @@ Each process failed before prompt submission:
 
 > `startup_timeout: Pi RPC did not answer get_state within 15000 ms; process terminated before prompt.`
 
-Each permitted retry failed identically. Minimal health probes failed at 03:41–03:42Z and again after a wait
+Each permitted retry failed identically. Minimal health probes failed at 03:42–03:43Z and again after a wait
 at 04:02–04:03Z. The resolver also reported degraded quota telemetry with `Claude sign-in required`, but the
 execution adapter explicitly permits degraded telemetry and later Anthropic children launched successfully.
 The evidence therefore proves a startup-handshake timeout, not an authentication root cause.
@@ -89,9 +91,10 @@ response timing. Measure real startup latency, then choose a threshold or backof
 
 ### Historical audit correction
 
-The 2026-08-12 final audit graded concept 38 as passed because it settled terminally. Its own evidence says
-motion failed and exact frame review was not reached. The canary requirement was partial. The immutable AFK
-receipt remains historical evidence and is not rewritten; this retrospective records the corrected judgment.
+The 2026-08-12 final audit marked the requirement “concept 38 terminal through integrated flow” as passed
+because the blocked run settled terminally. Its own evidence says motion failed and exact frame review was not
+reached. The canary proof was therefore partial, never an acceptance. The immutable AFK receipt remains
+historical evidence and is not rewritten; this retrospective records the corrected judgment.
 
 ### Blocked concepts are recreated, not promoted for review
 

@@ -1,6 +1,6 @@
 ---
 name: define-goal
-description: Define or refine a concrete, verifiable objective before goal-backed work. Use when the user asks to set a goal, use `/goal`, clarify success criteria, or turn a fuzzy intention into an outcome.
+description: Define or refine a concrete, verifiable objective before goal-backed work. Use when the user asks to set a goal, use `/goal`, prepare unattended or overnight AFK work, clarify success criteria, or turn a fuzzy intention into an outcome.
 ---
 
 # Define Goal
@@ -44,7 +44,7 @@ For continuous unattended work, default to an ordinary `/goal`. Keep the objecti
 
 Reference stable controller and project policy instead of copying it. Project controllers own resumability, idempotency, concurrency, acceptance, and settlement. Do not add phase checkpoints, compaction cadence, reviewer retry loops, or a second finalization protocol to the objective. Reviewer unavailability may prevent acceptance of an artifact; it does not stop unrelated reversible work unless the project controller proves a shared safety dependency.
 
-Use `execute-plan-afk-goal` only when the owner explicitly chooses that experiment. Do not create a separate AFK preparation skill or mandatory preflight receipt without evidence that this concise branch and the project's own preflight are insufficient.
+Use `execute-plan-afk-goal` only when the owner explicitly chooses that experiment.
 
 ## Hand off to Pi Goal accurately
 
