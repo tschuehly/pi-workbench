@@ -10,7 +10,7 @@ export default function quotaStartupExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
-    if (event.reason !== "startup" || !ctx.hasUI) return;
+    if (event.reason !== "startup" || ctx.mode !== "tui") return;
     await inspectAndOfferRepair(ctx, run);
   });
 
