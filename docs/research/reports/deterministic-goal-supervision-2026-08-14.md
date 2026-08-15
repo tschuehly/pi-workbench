@@ -36,7 +36,7 @@ A contract correction after mutation begins is a new revision boundary. Pause or
 
 ### 2. Observe without inventing authority
 
-Passive observation may report:
+Mechanical observation may report:
 
 - canonical Goal state;
 - project-controller receipts and queue state;
@@ -59,7 +59,18 @@ An intervention requires one of these conditions:
 
 Routine progress causes no model turn. The same deduplicated condition causes at most one intervention until new evidence changes it. For controlled experiments, the intervention policy is identical across cells and every intervention is costed and recorded.
 
-### 4. Respect terminal state
+### 4. Recover only controller-owned project work
+
+A project controller may execute only recovery already authorized for its own queue and artifacts:
+
+1. Retry its own transient operation with the same idempotency key and attempt identity.
+2. Reconcile its own item against ledger, artifact, and terminal-state receipts before resuming; an unknown outcome is never restarted blindly.
+3. Resume controller-owned queue work from its durable item state rather than reconstructing progress from chat.
+4. Return a failed artifact validation to the same authorized correction loop and count its time, tokens, and retry.
+
+Every condition has a finite recovery ladder. Repeated failure or exhausted attempts stops affected work and requests Human Attention. A project controller does not steer or restart the enclosing Goal session. A contract defect, authority breach, unsafe external effect, or Material Question is not self-repaired: preserve evidence and require a revised run or Human Attention.
+
+### 5. Respect terminal state
 
 `complete`, `blocked`, `paused`, `usage_limited`, and `budget_limited` are distinct outcomes. A wakeup or assistant summary never proves success. Success remains unproven until the Goal state reconciles with project-controller receipts, repository state, required verification, and external effects.
 
@@ -85,7 +96,7 @@ The Watcher:
 - requests a bounded action such as continue, retry, cancel, reconcile, or seek Human Attention;
 - never edits project files, changes the Workflow Contract, accepts outcomes, or publishes.
 
-The Run Controller validates every requested action against the control lease, Workflow Contract, Autonomy Envelope, attempt budget, workspace state, and current revision. PI WEB and notifications consume the resulting canonical projection and Attention Items rather than interpreting transcripts independently.
+The Run Controller validates every requested action against the control lease, Workflow Contract, Autonomy Envelope, attempt budget, workspace state, and current revision. In this future managed shape, it may perform bounded session recovery: one source-backed recovery turn for a stalled Goal, or process/session replacement reconstructed from canonical state after unknown-outcome reconciliation. Repeated failure exhausts the ladder and creates one Attention Item instead of another restart. PI WEB and notifications consume the resulting canonical projection and Attention Items rather than interpreting transcripts independently.
 
 ## Minimum evidence record
 
@@ -108,7 +119,7 @@ Do not implement a general supervisor in V1. If managed execution becomes an app
 1. observes Pi through typed lifecycle/session events rather than Terminal rendering;
 2. applies a small deterministic rule set with no model calls;
 3. proves duplicate suppression and one-control-lease behavior;
-4. drills process loss, stale contract revision, provider exhaustion, unauthorized mutation, blocked Goal, and response loss;
+4. drills bounded recovery for process loss, transient provider failure, and stalled work while proving that stale contract revision, unauthorized mutation, blocked Goal, and unknown outcome fail closed;
 5. demonstrates that project-controller safety remains authoritative and the Watcher can be removed without changing execution semantics.
 
 Success means lower Human Attention without false completion, hidden failure, or a second controller. Until then, continuous AFK production defaults to an ordinary Goal with project-controller safety.
