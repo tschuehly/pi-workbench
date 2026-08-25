@@ -319,9 +319,15 @@ private final class LifecycleController {
     private func runCLI(_ arguments: [String]) throws -> CommandResult {
         guard let configuration else { throw LifecycleError.configuration }
         let process = Process()
-        process.executableURL = configuration.cliURL
+        if FileManager.default.isExecutableFile(atPath: configuration.cliURL.path) {
+            process.executableURL = configuration.cliURL
+            process.arguments = arguments
+        } else {
+            // ponytail: a tsc rebuild drops the exec bit on dist/cli.js, so run the script through node.
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["node", configuration.cliURL.path] + arguments
+        }
         process.currentDirectoryURL = configuration.checkoutURL
-        process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
         let executablePaths = [
             configuration.cliURL.deletingLastPathComponent().path,

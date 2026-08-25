@@ -38,11 +38,22 @@ resolve_cli() {
     candidate="${PI_WEB_CLI}"
   elif candidate="$(command -v pi-web 2>/dev/null)"; then
     :
+  elif [[ -f "${pi_web_dir}/dist/cli.js" ]]; then
+    candidate="${pi_web_dir}/dist/cli.js"
   else
     return 1
   fi
-  [[ -x "${candidate}" ]] || return 1
+  # ponytail: a tsc rebuild leaves dist/cli.js readable but not executable; the app runs it through node.
+  [[ -x "${candidate}" || ( "${candidate}" == *.js && -r "${candidate}" ) ]] || return 1
   absolute_executable "${candidate}"
+}
+
+run_cli() {
+  if [[ -x "${pi_web_cli}" ]]; then
+    (cd "${pi_web_dir}" && "${pi_web_cli}" "$@")
+  else
+    (cd "${pi_web_dir}" && node "${pi_web_cli}" "$@")
+  fi
 }
 
 validate_status_json() {
@@ -83,7 +94,7 @@ trap cleanup EXIT
 [[ -d "${pi_web_dir}" ]] || fail "PI WEB checkout not found at ${pi_web_dir}. Set PI_WEB_DIR to its location."
 pi_web_dir="$(cd "${pi_web_dir}" && pwd -P)"
 [[ -f "${pi_web_dir}/package.json" ]] || fail "${pi_web_dir} does not contain a package.json."
-pi_web_cli="$(resolve_cli)" || fail "PI WEB CLI not found. Set PI_WEB_CLI to an executable pi-web command."
+pi_web_cli="$(resolve_cli)" || fail "PI WEB CLI not found. Set PI_WEB_CLI to a pi-web command or built dist/cli.js."
 [[ -f "${app_icon}" ]] || fail "App icon not found at ${app_icon}."
 command -v swift >/dev/null 2>&1 || fail "The Swift toolchain is required. Install Xcode Command Line Tools."
 
@@ -146,12 +157,12 @@ bundle_config="${resources_dir}/PIWebConfig.plist"
 /usr/bin/plutil -lint "${contents_dir}/Info.plist" "${bundle_config}" >/dev/null
 
 status_file="${stage}/status.json"
-if ! (cd "${pi_web_dir}" && "${pi_web_cli}" status --json >"${status_file}"); then
+if ! run_cli status --json >"${status_file}"; then
   fail "PI WEB lifecycle status preflight failed; the existing app was not changed."
 fi
 validate_status_json "${status_file}" || fail "PI WEB lifecycle returned an invalid typed status; the existing app was not changed."
 rm "${status_file}"
-if ! (cd "${pi_web_dir}" && "${pi_web_cli}" install --dev); then
+if ! run_cli install --dev; then
   fail "PI WEB development service installation failed; the existing app was not changed."
 fi
 
