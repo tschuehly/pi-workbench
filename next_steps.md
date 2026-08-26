@@ -47,16 +47,24 @@ does today, not more.
    [default-context challenge](docs/research/reports/default-context-challenge-dossier.md), tracked
    as `task-challenge-default-context`.
 
-## The one technical unknown
+## Skill selection already works — use settings, not file moves
 
-**Can an extension remove context, or only add to it?**
+Pi supports per-skill exclusion through `!` negation globs in the `skills` array of
+`~/.pi/agent/settings.json`, and per-project selection through a project `.pi/settings.json`. This
+is not in `docs/skills.md`, but the existing global settings file already uses it.
 
-Pi has no per-project way to exclude a skill. There is only `--no-skills`, which turns everything
-off, and additive `--skill` paths. So the video cut required moving files.
+So **no extension is needed to choose which skills a project loads.** Prefer settings over moving
+directories.
+
+## The remaining technical unknown
+
+**Can an extension remove context that settings cannot reach** — prompt guidelines, tool
+descriptions, and `AGENTS.md` content — or only add to it?
 
 `event.systemPromptOptions` is documented as mutable and exposes `.skills`, `.selectedTools`,
 `.promptGuidelines`, and `.contextFiles`. But `before_agent_start` runs *after* the prompt is built,
-so changing `.skills` there may do nothing.
+so changing it there may do nothing. Settings already cover skills; this probe matters for
+everything else.
 
 **Probe it before designing anything.** Write one throwaway extension that drops all but three
 skills and print the resulting prompt size. Reference: `examples/extensions/prompt-customizer.ts` in
