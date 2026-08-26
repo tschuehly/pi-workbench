@@ -16,14 +16,33 @@ and runs tests for what changed. `adversarial` adds a second model from another 
 is to argue against the result. Recorded as Decision 69 and
 [operating levels](docs/foundation/operating-levels.md).
 
-**Done.** Twenty video-editing skills (1,376 words) no longer load in any project. They moved to
-`~/.agents/skills-video/`; `~/.claude/skills/` still has them. The skills index dropped from 2,807
-to 1,431 words. Restore with `mv ~/.agents/skills-video/* ~/.agents/skills/`. To use them in a video
-project, add to that project's `.pi/settings.json`:
+**Done.** Twenty video-editing skills (1,376 words) no longer load in any project. The skills index
+dropped from 2,807 to 1,431 words.
 
-```json
-{ "skills": ["/Users/tschuehly/.agents/skills-video"] }
+They were not deleted — they belong to PhotoQuest, which already managed skills with
+[skills.sh](https://skills.sh) and a tracked `skills-lock.json`. The files had gone missing from its
+`.agents/skills/`, leaving 18 broken symlinks in `.claude/skills`; the supported repair is
+`npx skills experimental_install`. PhotoQuest commits `c16d66b0e` and `9084bfb2f` restore them and
+point `SETUP.md` at skills.sh. `npx skills list` now reports them as
+`Source: heygen-com/hyperframes`, project-scoped.
+
+**One step remains.** `~/.agents/skills` still holds 19 symlinks into PhotoQuest, kept only so a
+long-running PhotoQuest session does not lose them mid-flight. Remove them once no PhotoQuest
+session is running:
+
+```sh
+for s in embedded-captions faceless-explainer general-video hyperframes hyperframes-animation \
+  hyperframes-audio hyperframes-cli hyperframes-core hyperframes-creative hyperframes-keyframes \
+  hyperframes-registry media-use motion-graphics music-to-video pr-to-video product-launch-video \
+  remotion-to-hyperframes slideshow talking-head-recut; do
+  [ -L "$HOME/.agents/skills/$s" ] && rm "$HOME/.agents/skills/$s"
+done
 ```
+
+That takes this repository's skill index from 57 skills / 2,821 words to 38 / 1,483.
+
+The pattern worth repeating: a skill belongs to the repository that uses it, installed with
+`skills add -s <name>` (project-scoped by default), never globally.
 
 **Not usable yet.** PI WEB's new Workstreams UI is still being built, so the terminal is the working
 surface. The design is sound; only the UI is unfinished.
@@ -47,14 +66,22 @@ does today, not more.
    [default-context challenge](docs/research/reports/default-context-challenge-dossier.md), tracked
    as `task-challenge-default-context`.
 
-## Skill selection already works — use settings, not file moves
+## Two ways to scope a skill, in order of preference
 
-Pi supports per-skill exclusion through `!` negation globs in the `skills` array of
-`~/.pi/agent/settings.json`, and per-project selection through a project `.pi/settings.json`. This
-is not in `docs/skills.md`, but the existing global settings file already uses it.
+1. **Vendor it into the repository that uses it.** Then no configuration is needed anywhere, a fresh
+   checkout works, and no other project pays for it. This is what PhotoQuest now does.
+2. **Exclude it in settings.** Pi supports `!` negation globs in the `skills` array of
+   `~/.pi/agent/settings.json`, and per-project additions through a project `.pi/settings.json`.
+   Neither is documented in `docs/skills.md`, but the global settings file already uses the first.
 
-So **no extension is needed to choose which skills a project loads.** Prefer settings over moving
-directories.
+**No extension is needed to choose which skills a project loads.** Prefer vendoring, then settings;
+never move files around by hand, which is what the first attempt here did.
+
+### Stale global configuration
+
+`~/.pi/agent/settings.json` still contains 18 skill paths under
+`PhotoQuest.pi-marketing-autopilot-v1/`, a worktree that no longer exists, plus a negation glob for
+video skills that are no longer installed globally. All of it is now dead and can be deleted.
 
 ## The remaining technical unknown
 
