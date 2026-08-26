@@ -27,7 +27,6 @@ When documents disagree, follow the highest applicable authority and repair the 
 
 ## Plans and integrations
 
-- [`plans/operating-level-context-loading.md`](plans/operating-level-context-loading.md) — proposed, not agreed: how an Operating Level selects what context loads, gated on a probe that can kill it.
 - [`plans/level-1.md`](plans/level-1.md) — approved Level 1 human–Pi pair-programming implementation plan.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — approved attended child Pi execution plan.
 - [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — implemented durable attended worker identity and resumable bounded dispatch beside ephemeral subagents.

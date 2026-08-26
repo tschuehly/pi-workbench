@@ -25,9 +25,10 @@ role resolves to a model and thinking budget.
 
 ## What does not work today
 
-**PI WEB is broken.** The documentation describes it as the user-facing client. That is the
-intended design, not the current state. **The terminal is the working surface.** Use the
-[`workstreams`](skills/workstreams/SKILL.md) skill to read and update Workstreams directly.
+**PI WEB is not usable yet.** The design is sound and the client is not fundamentally broken — the
+new Workstreams UI is still being built and does not work. Until it does, **the terminal is the
+working surface**. Use the [`workstreams`](skills/workstreams/SKILL.md) skill to read and update
+Workstreams directly.
 
 **Four of the nine packages are empty directories.** `controller/`, `pi-execution/`,
 `repository-workspace/`, and `artifact-store/` contain only a `.gitkeep`. Documentation that

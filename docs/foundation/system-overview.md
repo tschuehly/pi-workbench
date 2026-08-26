@@ -107,7 +107,7 @@ Every retained artifact has a promotion or expiry path. Run analysis and compoun
 
 PI WEB consumes the Run and Workstream protocols and canonical projections. It is the selected user-facing shell and remains a client, never the owner of Run or Workstream state.
 
-**Current state:** PI WEB is broken and the terminal is the working surface. This section describes the intended design. Use the [`workstreams`](../../skills/workstreams/SKILL.md) skill to operate Workstreams directly until PI WEB is repaired.
+**Current state:** PI WEB is not usable yet because the new Workstreams UI is still being built. The design below is intended state, not delivered state. Use the [`workstreams`](../../skills/workstreams/SKILL.md) skill to operate Workstreams from the terminal until that UI works.
 
 PI WEB is attention-first: required judgment leads, autonomous activity remains visible but secondary, and Review Surfaces join intent, realized behavior, evidence, deviations, and residual risks. Workstreams are the primary home for interactive sessions and provide re-entry views across repositories; Projects and managed Runs remain separate linked views.
 
