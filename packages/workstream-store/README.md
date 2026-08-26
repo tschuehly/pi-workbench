@@ -32,8 +32,10 @@ ledger database in a caller-selected user-local directory. `createUserLocalWorks
 
 The accepted semantic records cover pending/confirmed/failed session associations, checkpoint
 replacement/failure/staleness, durable Human Task changes and answers, and relevant link changes.
-Raw transcripts and routine activity are intentionally not accepted. Closure is available only
-through `close`.
+A confirmation carries either a complete machine/project/workspace anchor or no anchor; when both
+pending and confirmed records omit it, the latter supports self-association by an already-running
+attended session and remains eligible for PI WEB's append-only anchor repair. Partial confirmation anchors are rejected. Raw transcripts and routine
+activity are intentionally not accepted. Closure is available only through `close`.
 
 Failed launches remain as `failed` sessions with their association anchor and a provenance-bearing `launchFailure`. Explicit pre-creation cancellation uses `session.cancelled`, which removes the pending association from current projection while retaining a ledger tombstone; an association key accepted by any `session.pending` record is permanently occupied and cannot be reused after cancellation, failure, or confirmation. Pending checkpoint and fork derivations may carry their typed `derivationKind` for owning-host reconciliation. `checkpoint.stale` must name the latest confirmed checkpoint; it creates a
 provenance-bearing `checkpointStaleness` value that only a later `checkpoint.replaced` clears.

@@ -130,8 +130,11 @@ function validateFakeRecord(record) {
         || record.payload.associationKey !== undefined && !isString(record.payload.associationKey))) {
     throw new Error("session.cancelled requires a pending association selector and reason.");
   }
-  if (record.type === "session.confirmed" && !completeLocation(record.payload)) {
-    throw new Error("session.confirmed requires complete machineId, projectId, and workspaceId values.");
+  if (record.type === "session.confirmed") {
+    const anchor = [record.payload.machineId, record.payload.projectId, record.payload.workspaceId];
+    if (anchor.some((value) => value !== undefined) && !completeLocation(record.payload)) {
+      throw new Error("session.confirmed must provide machineId, projectId, and workspaceId together.");
+    }
   }
   if (record.type === "session.anchor.repaired") {
     if (!completeLocation(record.payload)) throw new Error("session.anchor.repaired requires complete machineId, projectId, and workspaceId values.");
@@ -194,14 +197,17 @@ function applyFakeRecord(snapshot, record, metadata) {
     }); break;
     case "session.confirmed": {
       const pending = snapshot.sessions.find((candidate) => candidate.id === record.payload.sessionId || (record.payload.associationKey !== undefined && candidate.associationKey === record.payload.associationKey));
-      if (pending === undefined) throw new Error(`Pending association for session ${record.payload.sessionId} was not found.`);
+      if (pending === undefined || pending.status !== "pending") throw new Error(`Pending association for session ${record.payload.sessionId} was not found.`);
+      if (!completeLocation(record.payload) && [pending.machineId, pending.projectId, pending.workspaceId].some((value) => value !== undefined)) {
+        throw new Error(`Session ${record.payload.sessionId} cannot discard its pending anchor.`);
+      }
       Object.assign(pending, {
         id: record.payload.sessionId,
         status: "active",
         associationKey: record.payload.associationKey ?? pending.associationKey,
-        machineId: record.payload.machineId ?? pending.machineId,
-        projectId: record.payload.projectId ?? pending.projectId,
-        workspaceId: record.payload.workspaceId ?? pending.workspaceId,
+        machineId: record.payload.machineId,
+        projectId: record.payload.projectId,
+        workspaceId: record.payload.workspaceId,
         launchFailure: null,
       });
       delete pending.derivationKind;

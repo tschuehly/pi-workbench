@@ -7,10 +7,10 @@ import test from "node:test";
 
 const cli = new URL("./workstreams.mjs", import.meta.url);
 
-function run(directory, operation, input) {
+function run(directory, operation, input, env = {}) {
   const result = spawnSync(process.execPath, [cli.pathname, operation, JSON.stringify(input)], {
     encoding: "utf8",
-    env: { ...process.env, PI_WORKBENCH_WORKSTREAM_DIR: directory },
+    env: { ...process.env, PI_WORKBENCH_WORKSTREAM_DIR: directory, ...env },
   });
   return {
     ...result,
@@ -51,6 +51,54 @@ test("operates on the configured user-local Workstream Store", async () => {
     const listed = run(directory, "list", {});
     assert.equal(listed.status, 0);
     assert.deepEqual(listed.stdoutValue.map(({ id }) => id), ["ws-cli"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("associates and checkpoints an agent-only session without host location identifiers", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workstreams-skill-"));
+  try {
+    assert.equal(run(directory, "create", {
+      workstreamId: "ws-agent-only",
+      idempotencyKey: "create-agent-only",
+      title: "Agent-only session",
+      producer: "owner",
+    }).status, 0);
+
+    const associated = run(directory, "associate", {
+      workstreamId: "ws-agent-only",
+      expectedRevision: 1,
+      idempotencyKey: "associate-agent-only",
+    }, { PI_SESSION_ID: " session-agent-only " });
+    assert.equal(associated.status, 0, associated.stderr);
+
+    const checkpointed = run(directory, "append", {
+      workstreamId: "ws-agent-only",
+      expectedRevision: 2,
+      idempotencyKey: "checkpoint-agent-only",
+      records: [{
+        type: "checkpoint.replaced",
+        producer: "session",
+        sourceSessionId: "session-agent-only",
+        payload: {
+          sessionId: "session-agent-only",
+          checkpoint: {
+            id: "cp-agent-only",
+            whatChanged: "Associated from an attended agent session",
+            remains: "PI WEB may repair the missing catalog anchor later",
+            next: "Continue the Workstream",
+            nextSessionPrompt: "Continue ws-agent-only from its latest checkpoint.",
+          },
+        },
+      }],
+    });
+    assert.equal(checkpointed.status, 0, checkpointed.stderr);
+
+    const inspected = run(directory, "inspect", { workstreamId: "ws-agent-only" });
+    assert.equal(inspected.stdoutValue.sessions[0].status, "active");
+    assert.equal(inspected.stdoutValue.sessions[0].machineId, undefined);
+    assert.equal(inspected.stdoutValue.sessions[0].latestCheckpoint.id, "cp-agent-only");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

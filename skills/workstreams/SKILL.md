@@ -39,9 +39,9 @@ Pass JSON inline, as `@file`, or as stdin. Keep temporary request files outside 
 
 ## 2. Associate this session when needed
 
-Check `PI_SESSION_ID`, then inspect the selected Workstream. If this session is already active there, preserve that association. If it appears in another Workstream, stop and report the conflict. A new association also requires the attended host's complete `machineId`, `projectId`, and `workspaceId`. Use trusted host context when it exposes all three; otherwise ask the owner for the exact catalog identifiers and do not infer them from `cwd`, repository names, or branch names. If any identifier remains unknown, stop without appending.
+Check `PI_SESSION_ID`, then inspect the selected Workstream. If this session is already active there, preserve that association. If it appears in another Workstream, stop and report the conflict. A session has exactly one home Workstream.
 
-Append `session.pending` and `session.confirmed` together using one association key and the actual identifiers:
+When trusted host context exposes complete `machineId`, `projectId`, and `workspaceId` values, append `session.pending` and `session.confirmed` together using one association key and the actual identifiers:
 
 ```json
 {
@@ -55,9 +55,17 @@ Append `session.pending` and `session.confirmed` together using one association 
 }
 ```
 
-Replace every uppercase placeholder with the exact trusted value. Use the actual session id throughout. A session has exactly one home Workstream.
+Replace every uppercase placeholder with the exact trusted value. Use the actual session id throughout.
 
-**Complete when:** the inspected projection shows this session as active in exactly one Workstream.
+When complete host context is unavailable, use the supported agent-only association instead:
+
+```bash
+node "$SKILL_DIR/scripts/workstreams.mjs" associate '{"workstreamId":"ws-example","expectedRevision":1,"idempotencyKey":"associate-SESSION_ID"}'
+```
+
+`associate` reads `PI_SESSION_ID` and records an active session with all three location fields absent. This permits checkpointing immediately; PI WEB can later resolve the exact catalog location and append `session.anchor.repaired`, which is required before PI WEB can continue that checkpoint in a new session. Never infer or copy identifiers from `cwd`, repository names, branch names, or other Workstreams. If `PI_SESSION_ID` is unavailable, stop without appending.
+
+**Complete when:** the inspected projection shows this session as active in exactly one Workstream. A missing anchor does not block completion or checkpointing.
 
 ## 3. Append one meaningful change
 

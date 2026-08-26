@@ -150,6 +150,9 @@ function validateTransitions(database, workstreamId, before, records) {
     status: session.status,
     associationKey: session.associationKey,
     checkpointId: session.latestCheckpoint?.id,
+    machineId: session.machineId,
+    projectId: session.projectId,
+    workspaceId: session.workspaceId,
     anchorComplete: completeSessionAnchor(session),
   }]));
   const pendingByAssociation = new Map(before.sessions
@@ -179,7 +182,7 @@ function validateTransitions(database, workstreamId, before, records) {
         const pendingId = sessionId ?? `pending:${associationKey}`;
         if (sessionId !== undefined && historicalSessionIds.has(sessionId)) fail("SESSION_ASSIGNED_ELSEWHERE", `session ${sessionId} belongs to another workstream`);
         if (historicalAssociationKeys.has(associationKey) || sessions.has(pendingId) || pendingByAssociation.has(associationKey)) fail("INVALID_TRANSITION", `association ${associationKey} was already used`);
-        sessions.set(pendingId, { status: "pending", associationKey, checkpointId: undefined, anchorComplete: completeSessionAnchor(record.payload) });
+        sessions.set(pendingId, { status: "pending", associationKey, checkpointId: undefined, machineId: record.payload.machineId, projectId: record.payload.projectId, workspaceId: record.payload.workspaceId, anchorComplete: completeSessionAnchor(record.payload) });
         pendingByAssociation.set(associationKey, pendingId);
         historicalAssociationKeys.add(associationKey);
         break;
@@ -192,7 +195,17 @@ function validateTransitions(database, workstreamId, before, records) {
         if (pendingId !== sessionId && sessions.has(sessionId)) fail("INVALID_TRANSITION", `session ${sessionId} already exists in this workstream`);
         sessions.delete(pendingId);
         pendingByAssociation.delete(pending.associationKey);
-        sessions.set(sessionId, { ...pending, status: "active", associationKey: associationKey ?? pending.associationKey, anchorComplete: true });
+        const anchorComplete = completeSessionAnchor(record.payload);
+        if (!anchorComplete && [pending.machineId, pending.projectId, pending.workspaceId].some((value) => value !== undefined)) {
+          fail("INVALID_TRANSITION", `session ${sessionId} cannot discard its pending anchor`);
+        }
+        const confirmed = {
+          ...pending,
+          machineId: record.payload.machineId,
+          projectId: record.payload.projectId,
+          workspaceId: record.payload.workspaceId,
+        };
+        sessions.set(sessionId, { ...confirmed, status: "active", associationKey: associationKey ?? pending.associationKey, anchorComplete });
         break;
       }
       case "session.anchor.repaired": {

@@ -9,16 +9,18 @@ import {
 
 const usage = `Usage: workstreams.mjs <operation> [input]
 
-Operations: create, append, inspect, list, watch, close
+Operations: create, associate, append, inspect, list, watch, close
 Input:      JSON object, @path/to/request.json, or - for stdin
 
 Examples:
   workstreams.mjs list '{}'
   workstreams.mjs inspect '{"workstreamId":"ws-example"}'
+  workstreams.mjs associate '{"workstreamId":"ws-example","expectedRevision":1,"idempotencyKey":"associate-session"}'
   workstreams.mjs create @/tmp/create-workstream.json
 
-The tool uses PI_WORKBENCH_WORKSTREAM_DIR when set and otherwise the
-user-local Workstream Store at ~/.pi-workbench/workstreams.
+associate reads the current session id from PI_SESSION_ID. The tool uses
+PI_WORKBENCH_WORKSTREAM_DIR when set and otherwise the user-local Workstream
+Store at ~/.pi-workbench/workstreams.
 `;
 
 async function main() {
@@ -27,8 +29,8 @@ async function main() {
     stdout.write(usage);
     return;
   }
-  if (!operation || !["create", "append", "inspect", "list", "watch", "close"].includes(operation)) {
-    throw new CliError("Choose one operation: create, append, inspect, list, watch, or close.");
+  if (!operation || !["create", "associate", "append", "inspect", "list", "watch", "close"].includes(operation)) {
+    throw new CliError("Choose one operation: create, associate, append, inspect, list, watch, or close.");
   }
 
   const input = await parseInput(inputArgument);
@@ -41,6 +43,7 @@ async function main() {
   let value;
   switch (operation) {
     case "create": value = await store.create(requireObject(input, operation)); break;
+    case "associate": value = await store.append(requireAssociation(input)); break;
     case "append": value = await store.append(requireObject(input, operation)); break;
     case "inspect": value = await store.inspect(requireWorkstreamId(input)); break;
     case "list": value = await store.list(input === undefined ? {} : requireObject(input, operation)); break;
@@ -76,6 +79,21 @@ function requireObject(value, operation) {
     throw new CliError(`${operation} requires a JSON object.`);
   }
   return value;
+}
+
+function requireAssociation(input) {
+  const value = requireObject(input, "associate");
+  const unknown = Object.keys(value).filter((key) => !["workstreamId", "expectedRevision", "idempotencyKey"].includes(key));
+  if (unknown.length) throw new CliError(`associate has unknown fields: ${unknown.join(", ")}`);
+  const sessionId = process.env.PI_SESSION_ID?.trim();
+  if (!sessionId) throw new CliError("associate requires PI_SESSION_ID.");
+  return {
+    ...value,
+    records: [
+      { type: "session.pending", producer: "session", sourceSessionId: sessionId, payload: { sessionId, associationKey: sessionId } },
+      { type: "session.confirmed", producer: "session", sourceSessionId: sessionId, payload: { sessionId, associationKey: sessionId } },
+    ],
+  };
 }
 
 function requireWorkstreamId(input) {

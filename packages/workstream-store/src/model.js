@@ -139,9 +139,9 @@ function validateRecord(record, limits, field) {
       keys(record.payload, ["sessionId", "associationKey", "machineId", "projectId", "workspaceId"], `${field}.payload`);
       id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
       if (record.payload.associationKey !== undefined) id(record.payload.associationKey, `${field}.payload.associationKey`, limits);
-      string(record.payload.machineId, `${field}.payload.machineId`, limits.maxIdLength);
-      string(record.payload.projectId, `${field}.payload.projectId`, limits.maxIdLength);
-      string(record.payload.workspaceId, `${field}.payload.workspaceId`, limits.maxIdLength);
+      const anchor = ["machineId", "projectId", "workspaceId"].filter((key) => record.payload[key] !== undefined);
+      anchor.forEach((key) => string(record.payload[key], `${field}.payload.${key}`, limits.maxIdLength));
+      if (anchor.length !== 0 && anchor.length !== 3) fail("INVALID_RECORD", `${field}.payload must provide machineId, projectId, and workspaceId together`);
     },
     "session.anchor.repaired": () => {
       keys(record.payload, ["sessionId", "machineId", "projectId", "workspaceId", "resolution"], `${field}.payload`);
@@ -350,9 +350,9 @@ export function rebuildSnapshot(ledger) {
           id: payload.sessionId,
           status: "active",
           associationKey: payload.associationKey ?? session.associationKey,
-          machineId: payload.machineId ?? session.machineId,
-          projectId: payload.projectId ?? session.projectId,
-          workspaceId: payload.workspaceId ?? session.workspaceId,
+          machineId: payload.machineId,
+          projectId: payload.projectId,
+          workspaceId: payload.workspaceId,
           launchFailure: null,
         };
         delete confirmed.derivationKind;

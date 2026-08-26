@@ -476,7 +476,7 @@ test("typed Workstream client structurally validates optional projected session 
   await assert.rejects(client.inspect("ws-anchorless-session"), (error) => error instanceof WorkstreamClientError && error.code === "INVALID_RESPONSE");
 });
 
-test("fake client requires complete new confirmations and validated append-only repairs", async () => {
+test("fake client accepts anchorless confirmations and validates partial anchors and repairs", async () => {
   const fixtureUrl = new URL("../fixtures/anchorless-active-session.json", import.meta.url);
   const fixture = parseRecordedWorkstreams(JSON.parse(await readFile(fixtureUrl, "utf8")));
   const client = new DeterministicFakeWorkstreamClient(fixture);
@@ -489,19 +489,32 @@ test("fake client requires complete new confirmations and validated append-only 
   await assert.rejects(client.append({
     workstreamId: "ws-anchorless-session",
     expectedRevision: 2,
-    idempotencyKey: "confirm-incomplete",
-    records: [{ type: "session.confirmed", producer: "pi-web", payload: { associationKey: "launch-new", sessionId: "session-new" } }],
-  }), /complete machineId, projectId, and workspaceId/);
-  await assert.rejects(client.append({
+    idempotencyKey: "confirm-partial",
+    records: [{ type: "session.confirmed", producer: "pi-web", payload: { associationKey: "launch-new", sessionId: "session-new", machineId: "studio" } }],
+  }), /provide machineId, projectId, and workspaceId together/);
+  await client.append({
     workstreamId: "ws-anchorless-session",
     expectedRevision: 2,
+    idempotencyKey: "confirm-incomplete",
+    records: [{ type: "session.confirmed", producer: "session", payload: { associationKey: "launch-new", sessionId: "session-new" } }],
+  });
+  assert.equal((await client.inspect("ws-anchorless-session")).sessions.find((session) => session.id === "session-new").machineId, undefined);
+  await assert.rejects(client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 3,
+    idempotencyKey: "confirm-active-again",
+    records: [{ type: "session.confirmed", producer: "session", payload: { associationKey: "launch-new", sessionId: "session-new" } }],
+  }), /Pending association.*was not found/);
+  await assert.rejects(client.append({
+    workstreamId: "ws-anchorless-session",
+    expectedRevision: 3,
     idempotencyKey: "repair-invalid",
     records: [{ type: "session.anchor.repaired", producer: "pi-web", payload: { sessionId: "session-photoquest-anchorless", machineId: "studio", projectId: "photoquest", workspaceId: "main", resolution: {} } }],
   }), /complete-machine-scan resolution evidence/);
 
   await client.append({
     workstreamId: "ws-anchorless-session",
-    expectedRevision: 2,
+    expectedRevision: 3,
     idempotencyKey: "repair-valid",
     records: [{ type: "session.anchor.repaired", producer: "pi-web", payload: { sessionId: "session-photoquest-anchorless", machineId: "studio", projectId: "photoquest", workspaceId: "main", resolution: { method: "complete-machine-scan", evidenceId: "catalog-1", matchedCwd: "/PhotoQuest", scannedScopeCount: 2, verifiedAt: "2026-08-01T09:00:01.000Z" } } }],
   });

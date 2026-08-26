@@ -81,13 +81,14 @@ test("requires a concise explicit next-session prompt for every confirmed checkp
   assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint.nextSessionPrompt.length, 2_000);
 });
 
-test("projects a null prompt for checkpoints accepted before the field existed", () => {
+test("projects omitted legacy confirmation fields as incomplete without inventing a checkpoint prompt", () => {
   const legacy = rebuildSnapshot([
     { type: "workstream.created", workstreamId: "ws-legacy", title: "Legacy", producer: "owner", revision: 1, recordedAt: "2025-01-01T00:00:00.000Z" },
-    { type: "session.pending", producer: "pi-web", revision: 2, recordedAt: "2025-01-01T00:00:01.000Z", payload: { sessionId: "session-legacy", associationKey: "legacy" } },
+    { type: "session.pending", producer: "pi-web", revision: 2, recordedAt: "2025-01-01T00:00:01.000Z", payload: { sessionId: "session-legacy", associationKey: "legacy", machineId: "studio", projectId: "legacy", workspaceId: "main" } },
     { type: "session.confirmed", producer: "pi-web", revision: 3, recordedAt: "2025-01-01T00:00:02.000Z", payload: { sessionId: "session-legacy" } },
     { type: "checkpoint.replaced", producer: "owner", revision: 4, recordedAt: "2025-01-01T00:00:03.000Z", payload: { sessionId: "session-legacy", checkpoint: { id: "cp-legacy", whatChanged: "Implemented", remains: "Review", next: "Continue" } } },
   ]);
+  assert.equal(legacy.sessions[0].machineId, undefined);
   assert.equal(legacy.sessions[0].latestCheckpoint.nextSessionPrompt, null);
 });
 
@@ -178,6 +179,10 @@ test("reconciles a launch-key pending association to the runtime session without
   assert.equal(pending.sessions[0].id, "pending:launch-runtime");
   assert.equal(pending.sessions[0].status, "pending");
 
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "confirm-runtime-without-anchor", records: [{ type: "session.confirmed", producer: "pi-web", sourceSessionId: "runtime-1", payload: { sessionId: "runtime-1", associationKey: "launch-runtime" } }] }),
+    (error) => error.code === "INVALID_TRANSITION" && error.message.includes("cannot discard its pending anchor"),
+  );
   await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "confirm-runtime", records: [{ type: "session.confirmed", producer: "pi-web", sourceSessionId: "runtime-1", payload: { sessionId: "runtime-1", associationKey: "launch-runtime", machineId: "remote a", projectId: "project-1", workspaceId: "workspace-1" } }] });
   const confirmed = await store.inspect("ws-1");
   assert.deepEqual(confirmed.sessions.map((session) => session.id), ["runtime-1"]);
@@ -266,21 +271,18 @@ test("accepts only checkpoint or fork as pending derivation kinds", async () => 
   }
 });
 
-test("repairs only an incomplete active session anchor and projects bounded evidence without another association", async () => {
-  const createdAt = "2025-12-31T23:59:58.000Z";
-  const associatedAt = "2025-12-31T23:59:59.000Z";
-  const { store } = memoryStore({ state: {
-    formatVersion: 1,
-    eventRetention: 1_000,
-    nextSequence: 1,
-    workstreams: { "ws-1": { ledger: [
-      { type: "workstream.created", workstreamId: "ws-1", title: createRequest.title, producer: "owner", revision: 1, recordedAt: createdAt },
-      { type: "session.pending", workstreamId: "ws-1", producer: "legacy", payload: { sessionId: "legacy-1", associationKey: "legacy-launch" }, revision: 2, position: 0, recordedAt: associatedAt },
-      { type: "session.confirmed", workstreamId: "ws-1", producer: "legacy", payload: { sessionId: "legacy-1" }, revision: 2, position: 1, recordedAt: associatedAt },
-    ] } },
-    idempotency: {},
-    events: [],
-  } });
+test("repairs an agent-associated incomplete session anchor without another association", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({
+    workstreamId: "ws-1",
+    expectedRevision: 1,
+    idempotencyKey: "associate-agent-only",
+    records: [
+      { type: "session.pending", producer: "session", sourceSessionId: "agent-1", payload: { sessionId: "agent-1", associationKey: "agent-1" } },
+      { type: "session.confirmed", producer: "session", sourceSessionId: "agent-1", payload: { sessionId: "agent-1", associationKey: "agent-1" } },
+    ],
+  });
 
   const resolution = {
     method: "complete-machine-scan",
@@ -296,17 +298,17 @@ test("repairs only an incomplete active session anchor and projects bounded evid
     records: [{
       type: "session.anchor.repaired",
       producer: "pi-web",
-      sourceSessionId: "legacy-1",
-      payload: { sessionId: "legacy-1", machineId: "studio", projectId: "photoquest", workspaceId: "main", resolution },
+      sourceSessionId: "agent-1",
+      payload: { sessionId: "agent-1", machineId: "studio", projectId: "photoquest", workspaceId: "main", resolution },
     }],
   });
 
   const snapshot = await store.inspect("ws-1");
   assert.equal(snapshot.sessions.length, 1);
   assert.deepEqual(snapshot.sessions[0], {
-    id: "legacy-1",
+    id: "agent-1",
     status: "active",
-    associationKey: "legacy-launch",
+    associationKey: "agent-1",
     machineId: "studio",
     projectId: "photoquest",
     workspaceId: "main",
@@ -317,18 +319,22 @@ test("repairs only an incomplete active session anchor and projects bounded evid
   });
 
   await assert.rejects(
-    store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "repair-again", records: [{ type: "session.anchor.repaired", producer: "pi-web", payload: { sessionId: "legacy-1", machineId: "other", projectId: "other", workspaceId: "other", resolution } }] }),
+    store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "repair-again", records: [{ type: "session.anchor.repaired", producer: "pi-web", payload: { sessionId: "agent-1", machineId: "other", projectId: "other", workspaceId: "other", resolution } }] }),
     (error) => error.code === "INVALID_TRANSITION",
   );
 });
 
-test("requires complete anchors for new confirmations and rejects repair of missing, failed, or closed sessions", async () => {
+test("rejects partial confirmation anchors and repair of missing, failed, or closed sessions", async () => {
   const { store } = memoryStore();
   await store.create(createRequest);
-  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "pending", records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "launch-new" } }] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "pending", records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "launch-new", machineId: "studio" } }] });
   await assert.rejects(
-    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "partial-confirm", records: [{ type: "session.confirmed", producer: "pi-web", payload: { sessionId: "new-1", associationKey: "launch-new" } }] }),
-    (error) => error.code === "INVALID_REQUEST" || error.code === "INVALID_RECORD",
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "partial-confirm", records: [{ type: "session.confirmed", producer: "pi-web", payload: { sessionId: "new-1", associationKey: "launch-new", machineId: "studio" } }] }),
+    (error) => error.code === "INVALID_RECORD" && error.message.includes("provide machineId, projectId, and workspaceId together"),
+  );
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "incomplete-confirm", records: [{ type: "session.confirmed", producer: "pi-web", payload: { sessionId: "new-1", associationKey: "launch-new" } }] }),
+    (error) => error.code === "INVALID_TRANSITION" && error.message.includes("cannot discard its pending anchor"),
   );
   const resolution = { method: "complete-machine-scan", evidenceId: "scan-2", matchedCwd: "/PhotoQuest", scannedScopeCount: 1, verifiedAt: "2026-01-01T00:00:04.000Z" };
   await assert.rejects(
