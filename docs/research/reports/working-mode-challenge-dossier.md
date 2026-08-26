@@ -1,6 +1,9 @@
 # Working Mode challenge dossier
 
-**Status:** session-preparation dossier for the pending challenge of the
+**Status: CLOSED 2026-08-26.** The challenge it prepared for was run and settled; the proposal was
+withdrawn. See Decision 69 and [operating levels](../../foundation/operating-levels.md).
+
+Originally a session-preparation dossier for the pending challenge of the
 [multidimensional Working Mode proposal](multidimensional-working-mode-proposal.md). It persists
 scope, sources, and stakes only and records no verdict. Every cited contract, decision, and
 vocabulary entry remains authoritative until the challenge is resolved and a decision is recorded.

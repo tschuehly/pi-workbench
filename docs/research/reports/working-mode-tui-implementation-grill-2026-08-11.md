@@ -1,9 +1,17 @@
 # TUI-first Entry Preset implementation grill — 2026-08-11
 
-**Status:** historical audited proposal. Workstream `ws-multidimensional-working-mode`, revision 6,
-records the owner's 2026-08-25 acceptance of the bounded three-value Entry Preset experiment. No
-implementation followed. On 2026-08-26 the owner requested a fresh Working Mode reassessment before
-further work; see the
+**Status: SUPERSEDED 2026-08-26.** Do not implement any part of this document.
+
+Workstream `ws-multidimensional-working-mode`, revision 6, recorded the owner's 2026-08-25
+acceptance of the bounded three-value `Optimize for: Feedback | Balanced | Assurance` experiment.
+No implementation followed. On 2026-08-26 the owner grilled the design from first principles and
+could no longer read those three value names back — the shape was right, the naming was not. The
+settled replacement names the axis by behavior (`Checking: light | tests | adversarial`) and binds
+configurations to Operating Levels: Decision 69 and
+[operating levels](../../foundation/operating-levels.md).
+
+TUI-D1–TUI-D13, the selection schema, reducer, policy module, and staged PI WEB seams below were
+never built and must not be built from this document. See the
 [owner verdict and reset history](working-mode-owner-verdict-and-reset-history-2026-08-26.md).
 The acceptance does not settle the multidimensional Working Mode proposal, prior grill items,
 Operating Levels, or standing-context policy.

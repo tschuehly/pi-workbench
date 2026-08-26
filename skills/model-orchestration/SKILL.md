@@ -7,7 +7,7 @@ description: Route Pi Cognitive Roles to quota-eligible model and Model Effort b
 
 Propose one Pi binding per Cognitive Role. The Run Controller remains authoritative for Dispatch validation and launch.
 
-For unmanaged Levels, the target contract is `Cognitive Role + Entry Preset → Execution Profile → model binding`. The current resolver still accepts only Cognitive Role and therefore represents the pre-Level default policy. Do not claim that Level-specific model or Model Effort selection is active until the resolver, launcher, policy, and tests accept an Entry Preset explicitly.
+The target contract is `Cognitive Role + Operating Level → model binding`. The current resolver accepts only Cognitive Role, so it is the Level 1 default policy. Do not claim that Level-specific model or Model Effort selection is active until the resolver, launcher, policy, and tests accept an Operating Level explicitly. See [operating levels](../../docs/foundation/operating-levels.md).
 
 Set `SKILL_DIR` to this skill's directory before using its bundled tools.
 

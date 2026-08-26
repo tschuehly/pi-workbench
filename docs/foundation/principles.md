@@ -82,10 +82,12 @@ Routine activity is reconciled mechanically, so models enter only when judgment 
 ### 6. Authority is structural, never textual
 
 Permission lives in leases, envelopes, and schemas that services enforce — not in prompt text. An
-Entry Preset cannot grant a guarantee the underlying service does not enforce.
+Operating Level cannot grant a guarantee the underlying service does not enforce. A Level
+configures behavior; permission is deferred until code enforces it.
 
-- New maxim, grounded in Decision 52 (prompt instructions are not the authority mechanism) and the
-  Entry Preset definition in [vocabulary](vocabulary.md) and [operating levels](operating-levels.md).
+- New maxim, grounded in Decision 52 (prompt instructions are not the authority mechanism), Decision
+  69, and the Operating Level definition in [vocabulary](vocabulary.md) and [operating
+  levels](operating-levels.md).
 
 ### 7. Uncertainty fails closed
 

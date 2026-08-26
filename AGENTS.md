@@ -22,7 +22,7 @@ PI WEB is the user-facing client of its typed protocols.
 | V1 human–Pi pair programming | `docs/plans/level-1.md` |
 | V1 attended child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |
 | Session evaluation and iterative Subagent/Worker improvement | `docs/plans/subagent-worker-iterative-improvement.md`, `skills/compound/` |
-| Operating-level concepts | `docs/foundation/operating-levels.md` |
+| Operating Levels and the Checking axis | `docs/foundation/operating-levels.md` |
 | Model routing and unmanaged Pi lead launch | `skills/model-orchestration/`, `scripts/pi-role` |
 | Controller lifecycle and protocol | `docs/contracts/controller.md`, `packages/controller/`, `schemas/` |
 | Pi dispatch and actors | `docs/contracts/execution.md`, `packages/pi-execution/` |
@@ -42,6 +42,8 @@ Follow any nearer `AGENTS.md` before changing files in its directory.
 - Keep the Run Controller independent from PI WEB.
 - Treat PI WEB as a Run-protocol client, never as authoritative Run state.
 - Models propose semantic work; deterministic modules own transitions and side effects.
+- An Operating Level configures behavior, never permission; a Level may not claim a guarantee no code enforces.
+- Add one axis, contract, or module at a time from observed need. Do not design a complete model before shipping part of one.
 - Documentation describes only the supported current workflow and intended state.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
 - Commit each coherent unit of work once it is complete and no further human input is required.

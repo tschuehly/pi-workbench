@@ -1,6 +1,16 @@
 # Multidimensional Working Mode proposal
 
-**Status:** proposed direction; challenge required before changing authoritative vocabulary, decisions, contracts, plans, or UI.
+**Status: WITHDRAWN 2026-08-26.** Do not implement any part of this document.
+
+The owner grilled this proposal from first principles. Its nine candidate dimensions collapsed to
+one: **Checking depth**. Three fields were already settled elsewhere, four are deferred with
+permissions until code enforces them, and two remain candidate future axes. The settled replacement
+is Decision 69 and [operating levels](../../foundation/operating-levels.md), where each of the nine
+fields is mapped to where it landed.
+
+The proposal failed because it tried to settle nine dimensions before shipping one. It is retained
+as research into that failure mode, not as a design direction. The resolver, schema, provenance
+pipeline, and preset machinery below were never built and must not be built from this document.
 
 ## Proposal
 

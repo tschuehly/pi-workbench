@@ -80,25 +80,25 @@ The versioned quality, authority, safety, evidence, and retention envelope gover
 _Avoid_: Prompt, workflow script, execution plan
 
 **Operating Level:**
-A conceptual posture describing how Human Attention, prior plan agreement, model delegation, and
-deterministic authority relate during work. Level 1 is attended human–Pi pairing with optional
-bounded delegation; Level 2 adds an execution plan iterated with and agreed by the human before
-implementation; Levels 3–4 describe contract-governed and controller-managed work. A higher number
-is a different posture, not universal maturity or quality.
-_Avoid_: Quality tier, maturity score, roadmap phase
+A named configuration across the Working Mode axes, chosen by the owner so they select one Level
+rather than tuning independent knobs. Level 1 is attended pairing with `light` checking; Level 2
+adds an agreed execution plan and `tests`; Level 3 adds acceptance criteria and `adversarial`
+review; Level 4 additionally requires deterministic management and is not selectable. A Level
+configures behavior and may carry per-role model bindings, but never grants permission. A higher
+number is a different configuration, not universal maturity or quality.
+_Avoid_: Quality tier, maturity score, roadmap phase, authority grant
 
-**Entry Preset:**
-An optional starting configuration for a supported Operating Level. It may bundle interaction,
-verification, and execution defaults, but cannot grant authority or guarantees that the underlying
-services do not enforce.
-_Avoid_: Operating Level, Working Mode, authority grant, quality tier
+**Checking:**
+The axis controlling how thoroughly Pi verifies its own work before reporting: `light` performs no
+test-writing or review pass because the attending human is the check, `tests` writes and runs tests
+for the changed behavior, and `adversarial` adds a fresh cross-family pass that argues against the
+result. Ordered by cost and delay, not by quality.
+_Avoid_: Quality level, rigor tier, autonomy level
 
 **Working Mode:**
-The Run-specific combination of alignment depth, implementation independence, verification depth,
-and Human Attention cadence resolved from the desired outcome, repository capabilities,
-uncertainty, impact, reversibility, and available Human Attention. Presets may provide useful
-starting points, but these dimensions remain independently adjustable for the Run rather than
-forming a universal maturity ladder.
+The set of axes an Operating Level configures. Today that is exactly one axis, Checking. Further
+axes are added one at a time from observed need; candidates and deferred dimensions are recorded in
+[operating levels](operating-levels.md).
 _Avoid_: Entry Preset, workflow profile, autonomy level, agent tier, intensity
 
 **Autonomy Envelope:**

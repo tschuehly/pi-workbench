@@ -1,8 +1,16 @@
 # Working Mode grill — decisions for verdict, 2026-08-08
 
-**Status:** historical grill output. The owner later supplied partial verdicts, then stopped the
-verdict walk and requested a fresh reassessment because the design had become overbuilt. No proposal
-here became a numbered decision. See the
+**Status: CLOSED 2026-08-26 without adoption.** D1–D21 are research. Do not resume this verdict
+walk.
+
+The owner supplied partial verdicts, then stopped because the design had become overbuilt. **No
+proposal here became a numbered decision**, despite the verdict tables below recommending "accept"
+for most items — read those tables as recommendations that were never ratified. D21 is recorded as
+accepted in its summary table while the body calls it the one live disagreement; the body is
+correct.
+
+On 2026-08-26 the design was reworked from first principles instead. The settled outcome is
+Decision 69 and [operating levels](../../foundation/operating-levels.md). See the
 [owner verdict and reset history](working-mode-owner-verdict-and-reset-history-2026-08-26.md).
 Every cited contract, decision, and vocabulary entry remains in force.
 

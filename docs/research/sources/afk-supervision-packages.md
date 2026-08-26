@@ -6,7 +6,7 @@ Primary-source survey of Pi coding-agent extensions/packages and one adjacent no
 AFK/overnight supervision of one or more Pi sessions — status watching, periodic wake/poll, nudging, and
 deciding interventions. Checked against npm registry metadata, package/repository READMEs, and source on
 2026-08-07. Framed against the already-approved [FirstMate coordination-mate
-plan](../plans/firstmate-coordination-mate.md) and the deep evidence already collected in
+plan](../../plans/firstmate-coordination-mate.md) and the deep evidence already collected in
 [`firstmate.md`](firstmate.md) and [`subagent-implementations.md`](subagent-implementations.md).
 
 ## Method
@@ -197,7 +197,7 @@ this is a read-only catalog and source review.
 
 ## Gaps against what V1 Firstmate needs
 
-No reviewed Pi package combines all of the capabilities [`firstmate-coordination-mate.md`](../plans/firstmate-coordination-mate.md)
+No reviewed Pi package combines all of the capabilities [`firstmate-coordination-mate.md`](../../plans/firstmate-coordination-mate.md)
 requires for C1–C4:
 
 - **Decision-point pause/resume with a reply channel** (C1/C2): no reviewed package exposes a structured
@@ -237,7 +237,7 @@ an inspectable attention surface—no package is a sufficient foundation.
    harness) would create a second lifecycle or authority system in the sense already rejected in
    [`pi-package-evaluation.md`](pi-package-evaluation.md).
 3. Build Phase 1 (C1 decision-point observation + C2 reply channel) directly on
-   [`packages/pi-execution-adapter/`](../../packages/pi-execution-adapter/) as the existing plan specifies;
+   [`packages/pi-execution-adapter/`](../../../packages/pi-execution-adapter/) as the existing plan specifies;
    no reviewed package offers this contract to adapt.
 4. Adapt narrow mechanisms, with attribution, rather than installing their packages:
    - `@monotykamary/pi-supervisor`'s separate judging session and stale-user-input race guard as the

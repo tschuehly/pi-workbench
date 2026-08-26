@@ -18,7 +18,8 @@ Pi Workbench V1 allocates Human Attention across interactive Workstreams. Pi is 
 and PI WEB is the user-facing client of the typed Workstream protocol.
 
 V1 implements [Operating Level 1: Pair](operating-levels.md): one human works directly with one
-interactive lead Pi while Human Attention is continuous. The lead may use bounded ephemeral child
+interactive lead Pi while Human Attention is continuous. Levels 2 and 3 are defined and selectable
+in principle but their prompt guidance and per-Level model bindings are not yet written. The lead may use bounded ephemeral child
 Pi processes as attended tool activity and remains accountable for their assignments and results.
 Interactive sessions start inside a user-local Workstream so the owner can leave and resume without
 treating chat history as current state. A child may run non-blocking only within its attended lead
@@ -26,9 +27,11 @@ session; no child execution survives session shutdown. V1 provides no agreed-bef
 unattended execution, managed Run authority, enforced workspace isolation, or controller-mediated
 recovery.
 
-The Operating Levels specification separately defines Levels 2–4 as concepts. They are not V1
-features or roadmap commitments. The managed Run architecture below describes the Level 4 authority
-boundary so Level 1 does not accidentally claim its guarantees.
+An Operating Level configures behavior, never permission. Level 4 stays unselectable while the Run
+Controller, workspace isolation, and durable Run state are unimplemented. The managed Run
+architecture below describes that unbuilt Level 4 boundary so Level 1 does not accidentally claim
+its guarantees; the decisions behind it are collected in [Level 4
+concepts](../research/level-4-concepts.md).
 
 ## Managed Run model
 
@@ -103,6 +106,8 @@ Every retained artifact has a promotion or expiry path. Run analysis and compoun
 ## Clients and integrations
 
 PI WEB consumes the Run and Workstream protocols and canonical projections. It is the selected user-facing shell and remains a client, never the owner of Run or Workstream state.
+
+**Current state:** PI WEB is broken and the terminal is the working surface. This section describes the intended design. Use the [`workstreams`](../../skills/workstreams/SKILL.md) skill to operate Workstreams directly until PI WEB is repaired.
 
 PI WEB is attention-first: required judgment leads, autonomous activity remains visible but secondary, and Review Surfaces join intent, realized behavior, evidence, deviations, and residual risks. Workstreams are the primary home for interactive sessions and provide re-entry views across repositories; Projects and managed Runs remain separate linked views.
 
