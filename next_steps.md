@@ -26,20 +26,9 @@ They were not deleted — they belong to PhotoQuest, which already managed skill
 point `SETUP.md` at skills.sh. `npx skills list` now reports them as
 `Source: heygen-com/hyperframes`, project-scoped.
 
-**One step remains.** `~/.agents/skills` still holds 19 symlinks into PhotoQuest, kept only so a
-long-running PhotoQuest session does not lose them mid-flight. Remove them once no PhotoQuest
-session is running:
-
-```sh
-for s in embedded-captions faceless-explainer general-video hyperframes hyperframes-animation \
-  hyperframes-audio hyperframes-cli hyperframes-core hyperframes-creative hyperframes-keyframes \
-  hyperframes-registry media-use motion-graphics music-to-video pr-to-video product-launch-video \
-  remotion-to-hyperframes slideshow talking-head-recut; do
-  [ -L "$HOME/.agents/skills/$s" ] && rm "$HOME/.agents/skills/$s"
-done
-```
-
-That takes this repository's skill index from 57 skills / 2,821 words to 38 / 1,483.
+**Done.** The 19 global symlinks into PhotoQuest were removed after its long-running Pi session
+stopped. PhotoQuest retains its project-scoped copies, taking this repository's skill index from 57
+skills / 2,821 words to 38 / 1,483.
 
 The pattern worth repeating: a skill belongs to the repository that uses it, installed with
 `skills add -s <name>` (project-scoped by default), never globally.
@@ -77,11 +66,10 @@ does today, not more.
 **No extension is needed to choose which skills a project loads.** Prefer vendoring, then settings;
 never move files around by hand, which is what the first attempt here did.
 
-### Stale global configuration
+### Global configuration cleanup
 
-`~/.pi/agent/settings.json` still contains 18 skill paths under
-`PhotoQuest.pi-marketing-autopilot-v1/`, a worktree that no longer exists, plus a negation glob for
-video skills that are no longer installed globally. All of it is now dead and can be deleted.
+**Done.** The 18 paths for the deleted `PhotoQuest.pi-marketing-autopilot-v1` worktree and the dead
+video-skill negation glob were removed from `~/.pi/agent/settings.json`.
 
 ## The remaining technical unknown
 
