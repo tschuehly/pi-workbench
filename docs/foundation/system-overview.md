@@ -93,9 +93,9 @@ Run state is durable; Model Context is disposable. The controller reducer produc
 
 Workstream continuity is separate from Run durability. Pi Workbench stores concise semantic entries
 only at meaningful attention changes and mechanically projects active sessions, their latest
-confirmed checkpoints, unresolved human tasks, links, and closure state. In V1 the active Pi session
-proposes a checkpoint only when the owner explicitly requests one, and the owner may correct it
-before confirming persistence. No combined narrative is persisted.
+checkpoints, unresolved human tasks, links, and closure state. The active Pi session writes a
+checkpoint automatically at a meaningful attention change and the owner may correct it afterwards;
+closing a Workstream requires explicit human instruction. No combined narrative is persisted.
 
 Each bounded Dispatch returns an Episode that records outcomes, claims, evidence, mutations, authority needs, and justified continuation context. Episodes carry results across context boundaries but do not replace Primary Evidence or the Judgment Dossier.
 
@@ -117,8 +117,8 @@ External systems such as GitHub, Linear, Sentry, and CI remain collaboration sur
 
 V1 is the Level 1 human–Pi pair-programming workflow defined in the
 [approved Level 1 plan](../plans/level-1.md). It covers Workstream selection, reconnect-safe attended session
-launch, explicit owner-confirmed checkpoints, restart and resume through PI WEB, human tasks and
-links, and closure.
+launch, automatically persisted correctable checkpoints, restart and resume, human tasks and links,
+and human-instructed closure.
 
 V1 does not include autonomous model-session replacement, a Run Controller, managed execution,
 unattended work, or FirstMate. Browser and PI WEB web-process restart must preserve Workstream state;

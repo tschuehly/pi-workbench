@@ -50,10 +50,9 @@ This document preserves the product outcomes and system-level validation matrix 
 - **Candidate validation (Decision 94; not active current behavior):** create a standalone Chat at an explicit complete location, link/unlink it by typed reference, promote it atomically with response-loss retry, and rename its Workstream; assert identity preservation, one home after promotion, append-only history, and no inferred ownership.
 - Interrupt session launch before and after PI WEB returns a session identifier; assert pending
   association reconciliation, no duplicate launch, and visible failure without an orphaned session.
-- Ask the active attended Pi session to propose a checkpoint, edit it, and confirm it; assert only the
-  confirmed content replaces the prior checkpoint.
-- Fail, reject, or abandon a checkpoint proposal; assert the prior confirmed checkpoint remains and
-  failure or staleness is visible.
+- Let the active Pi session write a checkpoint automatically, then correct it; assert the correction
+  replaces the prior checkpoint.
+- Fail a checkpoint write; assert the prior checkpoint remains and failure or staleness is visible.
 - Restart the browser and PI WEB web process; assert Workstreams and confirmed continuation state
   remain available from user-local storage.
 - Resume a real session from the Workstream projection; assert the user does not need to reconstruct

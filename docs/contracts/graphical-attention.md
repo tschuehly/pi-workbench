@@ -39,17 +39,17 @@ The view presents current and closed Workstreams across repositories. Each Works
 Several Workstreams and human-initiated sessions may remain active. The projection, rather than a
 broker model or raw transcript, supports the owner's choice of what to resume.
 
-## Attended checkpoint surface
+## Checkpoint surface
 
-Checkpointing begins with an explicit owner action in the active session. Pi proposes what changed,
-what remains, the next useful continuation, and a concise paste-ready prompt for a fresh attended
-session. The interface lets the owner review and correct every field before confirmation.
+Pi writes checkpoints automatically at meaningful attention changes, stating what changed, what
+remains, the next useful continuation, and a concise paste-ready prompt for a fresh session. The
+interface lets the owner correct or replace any field afterwards; a later checkpoint supersedes an
+earlier one.
 
-Only confirmed content becomes the latest checkpoint. The interface presents the confirmed
-next-session prompt distinctly from the owner-facing next action and lets the owner copy it without
-reconstructing context from Chat. Failure, rejection, or abandonment preserves the previous
-confirmed checkpoint and makes the missing, failed, or stale state visible. For a checkpoint accepted
-before next-session prompts existed, the interface identifies the prompt as unavailable instead of
+The interface presents the next-session prompt distinctly from the owner-facing next action and lets
+the owner copy it without reconstructing context from Chat. A failed write preserves the previous
+checkpoint and makes the missing, failed, or stale state visible. For a checkpoint accepted before
+next-session prompts existed, the interface identifies the prompt as unavailable instead of
 constructing one from `next`.
 
 ## Re-entry and place preservation

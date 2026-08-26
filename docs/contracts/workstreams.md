@@ -51,10 +51,13 @@ Current state is a separate mechanical projection over accepted records. It incl
 
 ## Checkpointing
 
-Checkpointing is explicit and attended in V1. The owner asks the active Pi session to propose a
-concise checkpoint stating what changed, what remains, the next useful continuation, and an exact
-prompt for starting the next session. The owner may correct every field before confirming
-persistence. Only the confirmed checkpoint replaces the session's previous checkpoint.
+Checkpoints persist automatically. The active Pi session writes a concise checkpoint at a meaningful
+attention change, stating what changed, what remains, the next useful continuation, and an exact
+prompt for starting the next session. It does not wait for the owner to confirm each field.
+
+A checkpoint is a correctable projection of where the work stands, not an authority transition. The
+owner may correct or replace one at any time, and a later checkpoint supersedes an earlier one.
+Closing the Workstream remains explicit and human-instructed.
 
 The proposing session writes the checkpoint for the owner who will read it later, following the
 `write-for-humans` skill. Each field leads with its point, uses plain concrete language, names the

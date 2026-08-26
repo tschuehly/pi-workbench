@@ -68,7 +68,7 @@ Supported records and payloads are defined in `packages/workstream-store/src/ind
 - `link.upsert` / `link.removed` for relevant file, repository, plan, Run, or artifact references;
 - `human-task.upsert` for a durable question that needs an answer;
 - `human-task.answered` and then, separately, `human-task.resolved`;
-- `checkpoint.replaced` for a user-confirmed attended checkpoint;
+- `checkpoint.replaced` for a checkpoint, written automatically at a meaningful attention change;
 - `checkpoint.failed` or `checkpoint.stale` only when that explicit state occurred.
 
 Set `producer` to `session` for agent-proposed records and `owner` for a mutation the user explicitly chose. Include `sourceSessionId` for records originating here. Keep raw conversation, routine tool activity, repeated summaries, and large artifact contents out of the ledger.
@@ -77,9 +77,10 @@ On `STALE_REVISION`, inspect again, reconcile the intervening change, and submit
 
 **Complete when:** the new snapshot contains the intended semantic change and unrelated state is unchanged.
 
-## 4. Checkpoint only after attended confirmation
+## 4. Checkpoint automatically
 
-When the user asks to checkpoint, first propose—not persist—five values:
+Write a checkpoint when meaningful attention changes, without waiting for the user to confirm each
+field. Persist five values:
 
 - `whatChanged`: what now exists or works, naming concrete artifacts;
 - `remains`: what is blocked or still owed;
@@ -87,9 +88,11 @@ When the user asks to checkpoint, first propose—not persist—five values:
 - `nextSessionPrompt`: the exact prompt to paste into a fresh attended Pi session;
 - `references`: only the concrete paths or identifiers needed to resume.
 
-Lead with the point and make the checkpoint sufficient to resume without rereading chat. Keep `nextSessionPrompt` under 2,000 characters and include only the context, constraints, starting action, and references needed to continue safely; do not turn it into a transcript or execution plan. Ask the user to confirm or correct all five values. After explicit confirmation, append `checkpoint.replaced` for the current active session with a unique checkpoint id. A failed, rejected, or abandoned proposal leaves the latest confirmed checkpoint unchanged.
+Lead with the point and make the checkpoint sufficient to resume without rereading chat. Keep `nextSessionPrompt` under 2,000 characters and include only the context, constraints, starting action, and references needed to continue safely; do not turn it into a transcript or execution plan.
 
-**Complete when:** the user-approved text appears as the session's latest checkpoint, or the proposal remains unpersisted.
+Append `checkpoint.replaced` for the current active session with a unique checkpoint id, then tell the user what you wrote so they can correct it. A checkpoint is a correctable projection, not an authority transition: a later checkpoint supersedes an earlier one, and a failed write leaves the previous checkpoint unchanged. Closing the Workstream still requires the user's explicit instruction.
+
+**Complete when:** the new checkpoint is the session's latest and the user has been told what it says.
 
 ## 5. Close deliberately
 
