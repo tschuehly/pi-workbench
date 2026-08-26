@@ -1,8 +1,10 @@
 # Working Mode grill — decisions for verdict, 2026-08-08
 
-**Status:** grill output awaiting owner verdicts. Nothing here changes authoritative state. Every
-cited contract, decision, and vocabulary entry stays in force until a verdict is recorded in
-[decisions.md](../../foundation/decisions.md).
+**Status:** historical grill output. The owner later supplied partial verdicts, then stopped the
+verdict walk and requested a fresh reassessment because the design had become overbuilt. No proposal
+here became a numbered decision. See the
+[owner verdict and reset history](working-mode-owner-verdict-and-reset-history-2026-08-26.md).
+Every cited contract, decision, and vocabulary entry remains in force.
 
 This report is the persisted result of the autonomous grill over the
 [Working Mode challenge dossier](working-mode-challenge-dossier.md), the
@@ -10,9 +12,9 @@ This report is the persisted result of the autonomous grill over the
 [principles.md](../../foundation/principles.md). Four adversarial design rounds and two
 independent closing audits produced 21 proposals. The second audit found no material gap.
 
-**What to do:** cast verdicts on the 17 round-1 items below — reply `accept D…`,
-`reject D…: reason`, or `revise D…: constraint`, in any subset. Your D1–D6 verdicts unlock
-round 2 (D7–D10). Machine-local working tree: `.scratch/grill-working-mode/decision-tree.md`.
+**Historical use:** retain the proposals, examples, and dissent as design evidence. Do not resume
+this verdict sequence unless the owner explicitly chooses it after the fresh reassessment.
+Machine-local working tree: `.scratch/grill-working-mode/decision-tree.md`.
 
 ## Verdict sheet
 

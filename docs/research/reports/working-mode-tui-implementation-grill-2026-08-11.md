@@ -1,6 +1,12 @@
 # TUI-first Entry Preset implementation grill — 2026-08-11
 
-**Status:** audited implementation proposal awaiting owner verdicts. This report authorizes no implementation and does not settle the challenge-pending multidimensional Working Mode proposal, prior Working Mode grill verdicts, Operating Levels, or standing-context policy.
+**Status:** historical audited proposal. Workstream `ws-multidimensional-working-mode`, revision 6,
+records the owner's 2026-08-25 acceptance of the bounded three-value Entry Preset experiment. No
+implementation followed. On 2026-08-26 the owner requested a fresh Working Mode reassessment before
+further work; see the
+[owner verdict and reset history](working-mode-owner-verdict-and-reset-history-2026-08-26.md).
+The acceptance does not settle the multidimensional Working Mode proposal, prior grill items,
+Operating Levels, or standing-context policy.
 
 Workstream: `ws-multidimensional-working-mode`.
 
@@ -18,7 +24,7 @@ Candidate command: `/optimize-for`.
 
 The values intentionally order one discretionary assurance-versus-feedback-latency bias. Repository safety requirements, material-claim Independence, permissions, authority, child lifetime, workspace protection, and managed-recovery guarantees do not move with the selection. `Assurance` is not a correctness guarantee, and `Feedback` is not permission to weaken fixed requirements.
 
-The strongest rejected alternative is a static **Attended Pair** disclosure with no three-value control. It preserves simpler product language but cannot satisfy the owner's need to change feedback and assurance posture during one session. Implementing three values requires an explicit owner verdict superseding the prior grill's still-pending one-preset recommendation.
+The strongest rejected alternative is a static **Attended Pair** disclosure with no three-value control. It preserves simpler product language but cannot satisfy the owner's need to change feedback and assurance posture during one session. The owner's 2026-08-25 verdict selected the three-value experiment over this alternative; the later reset pauses further design and implementation.
 
 ## Audited decision tree
 
@@ -26,7 +32,7 @@ The strongest rejected alternative is a static **Attended Pair** disclosure with
 
 Expose the control as `Optimize for`, not `Working Mode` or `Mode`. Persist selections as `workbench.entry-preset`. Keep the full Working Mode challenge separate.
 
-**Pending owner verdict:** approve the three-value experiment and final naming, or retain one static Attended Pair preset.
+**Historical owner verdict:** accept the three-value experiment. Final naming and implementation remain unsettled after the reset.
 
 ### TUI-D2 — Honest Level 1 disclosure
 
