@@ -1,6 +1,6 @@
 ---
 name: model-orchestration
-description: Route Pi Cognitive Roles to quota-eligible model and Model Effort bindings. Use when selecting a lead model, preparing a Workbench Dispatch, requiring independent cross-family judgment, or checking capacity before substantial fan-out or scarce specialist work.
+description: Route Pi Cognitive Roles to quota-eligible model and Model Effort bindings. Use when selecting a lead model, preparing a Workbench Dispatch, requiring independent cross-family judgment, sizing an adversarial checking panel, or checking capacity before substantial fan-out or scarce specialist work.
 ---
 
 # Model orchestration
@@ -30,9 +30,26 @@ Assign exactly one role:
 
 Include bounded scope, task risk, required Independence, and the author provider when Independence matters. `independent-judgment`, `challenge`, and `independent-review` require cross-family routing; their model binding is selected dynamically from the author provider rather than fixed to one family.
 
-**Complete when:** every proposed Dispatch has one distinct Cognitive Role.
+**Complete when:** every proposed Dispatch has exactly one Cognitive Role and a non-overlapping bounded responsibility.
 
-## 2. Resolve against the live Pi runtime
+## 2. Size independent checking by consequence
+
+A Cognitive Role says what one assignment does. Consequence says how many independent assignments are required when checking is selected by the Operating Level, repository policy, material risk, or the user. Judge consequence by the impact of a wrong conclusion, not by implementation difficulty.
+
+| Consequence | Minimum independent checking |
+|---|---|
+| `low` | The selected Checking floor only; at `adversarial`, one cross-family `challenge` |
+| `medium` | One `independent-judgment` or `challenge` |
+| `high` | Two parallel `challenge` assignments from distinct non-author model families |
+| `critical` | The `high` panel, then one `independent-review` at the evidence-bearing boundary and a separate `synthesis` |
+
+Give parallel challengers the same distilled claim, constraints, and Primary Evidence, but distinct challenge lenses. Keep their answers hidden from one another and collect all terminal results before synthesis. Independence follows the underlying model family, not the gateway provider; two models routed through GitHub Copilot are independent only when their underlying families differ from the author and from each other.
+
+The selected Operating Level is a floor: consequence may add checking but never remove required tests or adversarial review. Required fan-out does not degrade silently when quota or a binding is unavailable; reduce scope, defer, or return `ROUTING=BLOCKED` with the missing family. The current resolver selects one binding per invocation and has no explicit judge-family input, so a required multi-family panel remains unavailable until policy, resolver, launcher, and tests support it; repeated identical resolutions do not satisfy the panel.
+
+**Complete when:** the checking plan names its consequence, required roles, and any unavailable required binding; a panel also names its distinct underlying families, challenge lenses, and synthesis point.
+
+## 3. Resolve against the live Pi runtime
 
 Run:
 
@@ -46,7 +63,7 @@ Resolve before a major fan-out, scarce Claude call, escalation, or later major p
 
 **Complete when:** every role has one resolver-produced `provider`, `model`, `effort`, quota admission, and quota snapshot, or the unavailable role is explicit. Disclose degraded telemetry; do not describe it as fresh quota evidence.
 
-## 3. Submit the proposed binding
+## 4. Submit the proposed binding
 
 Place the complete `modelBinding` in the Work Packet without changing it. The controller resolves the named Execution Profile, checks authority, permissions, workspace, skills, budget, and expected Episode schema, then accepts or rejects the Dispatch. A child Pi process never inherits its caller's skills, permissions, evidence, or authority implicitly.
 

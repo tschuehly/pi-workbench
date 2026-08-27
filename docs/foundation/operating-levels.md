@@ -1,6 +1,6 @@
 # Pi Workbench Operating Levels
 
-Status: settled 2026-08-26. This document defines how the owner controls Pi's working behavior.
+Status: settled 2026-08-26; consequence-based checking floor revised 2026-08-27. This document defines how the owner controls Pi's working behavior.
 
 You already choose a model and a thinking budget. An Operating Level is the third control: **how
 thoroughly Pi checks its own work before showing it to you.**
@@ -19,6 +19,10 @@ Checking:  light  |  tests  |  adversarial
 
 The values are ordered by cost and by delay before you see anything. They are not quality ranks —
 `light` is the right choice when you are sitting there, and `adversarial` is wasteful when you are.
+A selected value is the checking floor: explicit owner direction, repository policy, or task
+consequence may increase independent checking but never remove the Level's required checks.
+[`model-orchestration`](../../skills/model-orchestration/SKILL.md) sizes any required adversarial
+panel and preserves model-family Independence.
 
 ## The Levels
 
