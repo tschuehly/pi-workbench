@@ -7,7 +7,10 @@ description: Route Pi Cognitive Roles to quota-eligible model and Model Effort b
 
 Propose one Pi binding per Cognitive Role. The Run Controller remains authoritative for Dispatch validation and launch.
 
-The target contract is `Cognitive Role + Operating Level → model binding`. The current resolver accepts only Cognitive Role, so it is the Level 1 default policy. Do not claim that Level-specific model or Model Effort selection is active until the resolver, launcher, policy, and tests accept an Operating Level explicitly. See [operating levels](../../docs/foundation/operating-levels.md).
+The target checking contract is `Cognitive Role + Checking + consequence → required bindings`.
+The current resolver accepts one Cognitive Role and optional author provider per invocation; it does
+not enforce the selected Checking value or assemble a panel. See [Working
+Mode](../../docs/foundation/working-mode.md).
 
 Set `SKILL_DIR` to this skill's directory before using its bundled tools.
 
@@ -34,7 +37,9 @@ Include bounded scope, task risk, required Independence, and the author provider
 
 ## 2. Size independent checking by consequence
 
-A Cognitive Role says what one assignment does. Consequence says how many independent assignments are required when checking is selected by the Operating Level, repository policy, material risk, or the user. Judge consequence by the impact of a wrong conclusion, not by implementation difficulty.
+A Cognitive Role says what one assignment does. Consequence says how many independent assignments
+are required by the owner-selected Checking value, repository policy, or material risk. Judge
+consequence by the impact of a wrong conclusion, not by implementation difficulty.
 
 | Consequence | Minimum independent checking |
 |---|---|
@@ -45,7 +50,12 @@ A Cognitive Role says what one assignment does. Consequence says how many indepe
 
 Give parallel challengers the same distilled claim, constraints, and Primary Evidence, but distinct challenge lenses. Keep their answers hidden from one another and collect all terminal results before synthesis. Independence follows the underlying model family, not the gateway provider; two models routed through GitHub Copilot are independent only when their underlying families differ from the author and from each other.
 
-The selected Operating Level is a floor: consequence may add checking but never remove required tests or adversarial review. Required fan-out does not degrade silently when quota or a binding is unavailable; reduce scope, defer, or return `ROUTING=BLOCKED` with the missing family. The current resolver selects one binding per invocation and has no explicit judge-family input, so a required multi-family panel remains unavailable until policy, resolver, launcher, and tests support it; repeated identical resolutions do not satisfy the panel.
+The owner-selected Checking value is a floor: consequence may add checking but never remove required
+tests or adversarial review. Required fan-out does not degrade silently when quota or a binding is
+unavailable; reduce scope, defer, or return `ROUTING=BLOCKED` with the missing family. The current
+resolver selects one binding per invocation and has no explicit judge-family input, so a required
+multi-family panel remains unavailable until policy, resolver, launcher, and tests support it;
+repeated identical resolutions do not satisfy the panel.
 
 **Complete when:** the checking plan names its consequence, required roles, and any unavailable required binding; a panel also names its distinct underlying families, challenge lenses, and synthesis point.
 

@@ -1,12 +1,12 @@
 # Pi Workbench Level 1 Plan
 
-Status: implemented V1; acceptance evidence is maintained with the implementation.
+Status: implemented V1; acceptance evidence is maintained with the implementation. The filename and
+title preserve the retired Operating Level terminology for historical links.
 
 ## Outcome
 
-Pi Workbench V1 implements **Level 1: Pair** from the
-[Operating Levels specification](../foundation/operating-levels.md). It supports durable,
-human-attended pair programming with one interactive Pi through PI WEB.
+Pi Workbench V1 supports durable, human-attended pair programming with one interactive Pi through
+PI WEB.
 
 A user can organize work into Workstreams, pair with Pi in an explicitly selected Workstream,
 leave, and later resume without reconstructing the state from conversation history. V1 is the
@@ -108,11 +108,11 @@ process restarts, including:
 
 ## Non-goals
 
-V1 does not include automatic checkpointing, FirstMate, an agreed-before execution-plan gate,
+V1 does not include automatic checkpointing, FirstMate, the intended Working Mode control,
 contract-driven multi-agent execution, durable child identity, independent acceptance authority,
-unattended execution beyond the lead session, or controller-managed Runs. Levels 2–4 are
-concepts, not scheduled implementation. Any expansion beyond Level 1 requires a new decision and
-implementation plan based on evidence from sustained V1 use.
+unattended execution beyond the lead session, or controller-managed Runs. The separate
+[Working Mode plan](working-mode.md) covers the evidence-backed attended extension; managed
+execution remains outside V1.
 
 ## Implementation
 
@@ -120,7 +120,7 @@ implementation plan based on evidence from sustained V1 use.
 - PI WEB typed service, Workstreams surface, and attended launch coordinator: `packages/pi-web-integration/`
 - PI WEB host contribution APIs: sibling `../pi-web` fork branch `pi-workbench`
 - Attended child process mechanics: `packages/pi-execution-adapter/`
-- Level 1 child tool: `extensions/subagent/`
+- Attended child tool: `extensions/subagent/`
 - Live workflow evidence: `packages/pi-web-integration/level-1-acceptance-evidence.md`
 - Real child launch/cancellation evidence: `packages/pi-execution-adapter/real-smoke-evidence.md`
 

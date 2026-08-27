@@ -33,18 +33,19 @@ An interactive lead is a Pi session hosted by PI WEB and bound to a Coordinator 
 
 The Pi Execution interface remains `dispatch`, `observe`, and `cancel`. Starting or continuing an interactive Worker is expressed through Dispatch fields for Logical Actor identity, Continuity, and interaction mode rather than a second worker interface. Human or Coordinator messages cannot attach directly to a child process or bypass controller validation. An unmanaged harness adapter may preserve a Pi session for local interactive use, but it does not acquire Run authority, workspace rights, durable identity, or controller-mediated status by doing so.
 
-V1 implements Level 1 human–Pi pairing and does not use managed Dispatches, Episodes, Workers, or
+V1 supports attended human–Pi pairing and does not use managed Dispatches, Episodes, Workers, or
 Subagents. While the human attends the session, the active interactive lead may launch bounded
 ephemeral child Pi processes through the harness's subagent tool and remains accountable for their
 assignments and reconciliation. Those children are ordinary Pi processes: their output remains
 session material and grants no workspace lease, Run authority, or recovery guarantee. A durable
 attended worker may additionally retain a recorded machine-local identity and resume its persisted
 child session across bounded attended dispatches; that identity is unmanaged, executes only while
-the lead attends, and still grants no Run authority, workspace lease, or managed recovery. The [Operating Levels specification](../foundation/operating-levels.md) defines prior plan
-agreement, contract-governed work, and controller-managed execution as Levels 2–4 concepts without
-making them implementation commitments.
+the lead attends, and still grants no Run authority, workspace lease, or managed recovery. The
+intended [Working Mode](../foundation/working-mode.md) changes attended alignment and checking
+behavior without converting these processes into managed actors.
 
-The remainder of this contract defines the Level 4 Pi Execution boundary. It does not expand V1.
+The remainder of this contract defines the unbuilt managed Pi Execution boundary. It does not
+expand V1.
 
 Unmanaged leads and children are ordinary Pi sessions or processes. Capitalized Run actors, Dispatches, Work Packets, Episodes, Ship authority, and workspace leases apply only after entering managed execution. The interface must show this distinction rather than converting session metadata or child output into authoritative Run state.
 
@@ -81,7 +82,7 @@ For a Ship Dispatch, the Work Packet is directly executable rather than interpre
 - Explicit exclusions, neighboring work that must remain untouched, and the acceptance criteria assigned to this Dispatch.
 - Exact validation commands, required evidence classes, and the changes that invalidate each result.
 
-## Level 4 Ship Execution Contract
+## Managed Ship Execution Contract
 
 Implementation uses one bounded inner feedback loop inside the controller's `execution` state. The loop does not own lifecycle transitions, independent Verification, Acceptance, or Publication.
 
@@ -139,7 +140,7 @@ Graph evolution is explicit and revisioned. A coordinator may request or perform
 Models and Model Effort are selected independently by Cognitive Role, task shape, context needs, Continuity, Independence, and available capacity rather than treating one model or effort level as globally strongest. A stronger model does not justify a broader Model Context, and a longer-lived session is used only when its semantic Continuity is valuable. Routing effectiveness is evaluated from run outcomes instead of being fixed from social heuristics.
 
 For V1, the router may resolve bindings for the interactive lead and bounded ephemeral children by
-Cognitive Role without changing the Level 1 posture. A future managed Run would additionally
+Cognitive Role without changing the attended posture. A future managed Run would additionally
 validate resolved bindings against its Workflow Contract, Work Packet, authority, budget, and
 repository policy.
 

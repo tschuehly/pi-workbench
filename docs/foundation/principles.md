@@ -54,7 +54,7 @@ it affects.
 ### 4. Work shape follows context, not rank
 
 Repository and task context shape Attention Allocation and the semantic work graph; Working Mode
-dimensions adjust per Run; a loop or graph is an execution shape, never a maturity level.
+axes are selected per task; a loop or graph is an execution shape, never a maturity level.
 
 - Repository and task context shape Attention Allocation and the semantic work graph.
 - A loop or graph is an execution shape selected for the outcome, not a workflow or maturity level
@@ -81,13 +81,13 @@ Routine activity is reconciled mechanically, so models enter only when judgment 
 
 ### 6. Authority is structural, never textual
 
-Permission lives in leases, envelopes, and schemas that services enforce — not in prompt text. An
-Operating Level cannot grant a guarantee the underlying service does not enforce. A Level
-configures behavior; permission is deferred until code enforces it.
+Permission lives in leases, envelopes, and schemas that services enforce—not in prompt text.
+Working Mode configures behavior and cannot grant a guarantee the underlying service does not
+enforce.
 
 - New maxim, grounded in Decision 52 (prompt instructions are not the authority mechanism), Decision
-  69, and the Operating Level definition in [vocabulary](vocabulary.md) and [operating
-  levels](operating-levels.md).
+  69, and the Working Mode definition in [vocabulary](vocabulary.md) and [Working
+  Mode](working-mode.md).
 
 ### 7. Uncertainty fails closed
 

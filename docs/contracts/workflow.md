@@ -70,7 +70,7 @@ The controller advances every run through one fixed lifecycle:
 - `judgment` produces and ratifies the pre-execution Judgment Dossier revision, including hypotheses and comparison criteria when the Run is exploratory.
 - `authority` records the approved autonomy, impact, budget, and publication envelope.
 - `execution` runs authorized Scout and Ship work in read-only, disposable scratch, or leased isolated workspaces according to authority.
-- `verification` obtains independent evidence for the material claims, behavior, and mutations required by the Working Mode.
+- `verification` obtains independent evidence for the material claims, behavior, and mutations required by the managed Run's Workflow Contract.
 - `acceptance` presents criteria, evidence, deviations, and residual risks.
 - `publication` performs an explicitly authorized idempotent external action or records that the accepted Run has no publication action.
 - `close` analyzes the run, disposes learning candidates, seals evidence, and performs approved cleanup.

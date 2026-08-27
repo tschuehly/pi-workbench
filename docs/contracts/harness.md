@@ -10,7 +10,7 @@ The harness is one cloneable Git repository containing the shared Pi package, or
 
 External executables and services are represented as versioned capabilities with supported installation and health checks. Credentials, subscription state, and machine-specific configuration remain local. Target repositories contribute overlays for project-specific knowledge, commands, safety policy, and verification.
 
-The V1 harness supports Level 1 human–Pi pairing. Its Pi package, prompts, skills, adapters, and
+The V1 harness supports attended human–Pi pairing. Its Pi package, prompts, skills, adapters, and
 configuration are versioned resources; provider credentials, quota state, active sessions, and
 local PI WEB configuration are not. Runtime routing and the interactive startup check share a
 machine-local quota snapshot for ten minutes, including unavailable telemetry, so repeated child launches do not query
@@ -48,15 +48,24 @@ The generated surface is integrated into the harness UI and remains flexible dur
 
 ## V1 Operating Posture
 
-Every interactive session starts in exactly one Workstream. V1 implements Level 1 from the
-[Operating Levels specification](../foundation/operating-levels.md): one human pairs with one
-interactive lead Pi under continuous Human Attention. The lead may launch bounded ephemeral child
-Pi processes as attended tool activity and remains accountable for their assignments and results.
-A child may run non-blocking only inside the attended lead session and is cancelled at session
-shutdown. The harness launches no unattended execution that survives the session and no managed Runs.
+Every interactive session starts in exactly one Workstream. One human pairs with one interactive
+lead Pi under continuous Human Attention. The lead may launch bounded ephemeral child Pi processes
+as attended tool activity and remains accountable for their assignments and results. A child may
+run non-blocking only inside the attended lead session and is cancelled at session shutdown. The
+harness launches no unattended execution that survives the session and no managed Runs.
 
-The Workstream preserves cross-session attention but grants no workspace lease, enforced path scope, durable Run identity, managed authority, or recovery guarantee. Attended-session hosts coordinate Workstream association through the shared host-neutral session-coordination module rather than embedding lifecycle logic in a skill or interface adapter. Model selection may resolve the interactive lead and child processes' concrete providers, models, and Model Effort, but those bindings do not change the Level 1 posture. Level 1 does not require an agreed execution plan before
-implementation begins. Levels 2–4 have no V1 package or preset resources.
+The Workstream preserves cross-session attention but grants no workspace lease, enforced path
+scope, durable Run identity, managed authority, or recovery guarantee. Attended-session hosts
+coordinate Workstream association through the shared host-neutral session-coordination module
+rather than embedding lifecycle logic in a skill or interface adapter. Model selection may resolve
+the interactive lead and child processes' concrete providers, models, and Model Effort, but those
+bindings do not change the attended posture.
+
+The intended [Working Mode](../foundation/working-mode.md) is not implemented. When it is, the
+harness must start each task in fail-closed Discovering, persist the owner-selected Alignment and
+Checking values in session state, expose them continuously, and gate mutating tools until the
+selected alignment condition is met. Availability of a mutating custom tool cannot bypass that
+gate.
 
 ## Repository Package
 
@@ -66,9 +75,9 @@ The repository package is versioned with the project and declares:
 - Required capabilities and safety gates.
 - Skills, tools, hooks, validation commands, and model roles.
 - A finite set of named execution profiles resolving model requirements, effort, continuity, permissions, workspace kind, skills, independence, and episode schema.
-- Rules for resolving a Run Working Mode from outcome, uncertainty, scope, risk, reversibility, available Human Attention, and repository capabilities.
+- Constraints and recommendations for owner selection of Working Mode from outcome, uncertainty, scope, risk, reversibility, available Human Attention, and repository capabilities.
 - Work-packet requirements, attempt ladders, attention thresholds, and allowed non-material graph mutations.
-- Alignment participants, interaction cadence, direct-experience surfaces, review responsibilities, and result-packaging requirements.
+- Shared-understanding participants, interaction cadence, direct-experience surfaces, review responsibilities, and result-packaging requirements.
 - Permission and AFK autonomy limits.
 - External adapters and publication mappings.
 - Supported PI WEB project surfaces.

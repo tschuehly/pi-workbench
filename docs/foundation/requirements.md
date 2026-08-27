@@ -2,7 +2,7 @@
 
 This document preserves the product outcomes and system-level validation matrix for V1. The
 [system overview](system-overview.md) explains the architecture, the
-[Operating Levels specification](operating-levels.md) defines the broader concepts, and the
+[Working Mode specification](working-mode.md) defines the intended behavioral control, and the
 [Workstream contract](../contracts/workstreams.md) defines supported behavior.
 
 ## User outcomes

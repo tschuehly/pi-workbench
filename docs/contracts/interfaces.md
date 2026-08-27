@@ -26,7 +26,7 @@ focused lower-scope conversation returns a bounded Episode rather than its full 
 
 Each named execution profile declares a finite attempt ladder. Failed independent review returns typed findings to the next authorized attempt. The controller pauses affected work and creates one deduplicated attention item when an attempt ladder or review-failure threshold is exhausted, a workspace becomes contaminated or unattributable, an input or approval becomes stale, an execution or external action has unknown outcome, or budget or authority is exhausted. Replanning occurs through a revisioned graph mutation rather than unbounded retry.
 
-At Level 4, the supervision loop is owned by the live controller host and does not require a model session to remain active. Loss of the coordinator session triggers bounded Pi-session replacement or a persisted attention item. These managed supervision semantics are outside V1.
+In managed execution, the supervision loop is owned by the live controller host and does not require a model session to remain active. Loss of the coordinator session triggers bounded Pi-session replacement or a persisted attention item. These managed supervision semantics are outside V1.
 
 ## Stable Workbench Shell
 
@@ -120,18 +120,20 @@ Repositories and workflows may provide:
 
 Project surfaces cannot alter shell-owned permission, identity, or recovery controls.
 
-## Operating Level Boundary
+## Working Mode Boundary
 
-V1 operates at Level 1 and does not present a level selector. PI WEB describes the attended
-human–Pi posture where sessions start: one interactive lead Pi, continuous Human Attention during
-semantic work, optional bounded child Pi work reconciled by the lead, and no agreed-before execution
-gate, unattended execution beyond the lead session, managed authority, or recovery claim.
+Current V1 sessions use the attended human–Pi posture: one interactive lead Pi, continuous Human
+Attention during semantic work, optional bounded child Pi work reconciled by the lead, and no
+unattended execution beyond the lead session, managed authority, or recovery claim. They do not yet
+implement the intended Working Mode control.
 
-The [Operating Levels specification](../foundation/operating-levels.md) defines Levels 2–4 only as
-concepts. If a later approved implementation exposes another level, PI WEB must explain its Human
-Attention, delegation, authority, and recovery boundary before launch. A selection can never grant
-permissions or guarantees by itself, and a PI WEB session identifier is never inferred to be a Run
-identifier.
+The [Working Mode specification](../foundation/working-mode.md) defines the next interface boundary.
+Every task must start visibly read-only in Discovering. After enough investigation, Pi must
+recommend Alignment and Checking with one short reason; the owner chooses before mutation. The
+current values and gate state must remain visible in a fixed session footer and survive session
+resume. Mode selection
+cannot grant permissions or guarantees, and a PI WEB session identifier is never inferred to be a
+Run identifier.
 
 ## V1 Graphical Surface
 
@@ -152,7 +154,7 @@ PI WEB provides every V1 Workstream action. Controls cover listing, creating, in
 or resuming a session, proposing and confirming a checkpoint, adding human tasks and links, and
 closing.
 
-Every mutation crosses the typed protocol with revision checks and idempotency. Attended-session creation uses the shared Workstream session-coordination module, which records pending before host creation and preserves unknown outcomes for reconciliation. Session-anchor repair additionally crosses PI WEB's typed resolver boundary, receives explicit owner confirmation, and appends the bounded catalog-resolution receipt only after an immediate evidence recheck. Mechanical status, checkpoint state, and unresolved human tasks remain inspectable without launching another model turn. Managed Run controls belong only to a future approved Level 4 implementation.
+Every mutation crosses the typed protocol with revision checks and idempotency. Attended-session creation uses the shared Workstream session-coordination module, which records pending before host creation and preserves unknown outcomes for reconciliation. Session-anchor repair additionally crosses PI WEB's typed resolver boundary, receives explicit owner confirmation, and appends the bounded catalog-resolution receipt only after an immediate evidence recheck. Mechanical status, checkpoint state, and unresolved human tasks remain inspectable without launching another model turn. Managed Run controls belong only to a future approved controller implementation.
 
 ## External Adapters
 

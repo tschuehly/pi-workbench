@@ -38,35 +38,31 @@ recovery is describing something unbuilt. Those decisions are collected in
 
 ## How you control Pi's behavior
 
-You already pick a model and a thinking budget. The third control is **how thoroughly Pi checks its
-own work before showing it to you**:
+The intended Working Mode has two independent choices:
 
+```text
+Alignment:  Vibe  |  Plan   |  Spec
+Checking:   light |  tests  |  adversarial
 ```
-Checking:  light  |  tests  |  adversarial
-```
 
-A named configuration across the axes is an **Operating Level**, so you choose a Level rather than
-tuning knobs:
+Alignment controls how much shared understanding is required before mutation. Checking controls
+verification. Every task starts read-only in Discovering; Pi recommends both values after initial
+investigation, and you choose before mutation. The current configuration stays visible and survives
+session resume.
 
-| Level | Plan agreed first? | Checking |
-| --- | --- | --- |
-| **1 — Pair** | No | `light` — you are watching, so you are the check |
-| **2 — Agree** | Yes | `tests` — Pi tests what it changed |
-| **3 — Contract** | Yes, with acceptance criteria | `adversarial` — another model family argues against the result |
-| **4 — Manage** | *not selectable — needs code that does not exist* |
-
-**A Level changes what Pi does, never what Pi is allowed to do.** Permissions need enforcement, and
-that enforcement is not built. Details in [Operating Levels](docs/foundation/operating-levels.md).
+This control is **not implemented yet**. Current sessions do not mechanically block mutation or
+show persistent mode state. Working Mode changes behavior, never permission: it cannot grant
+workspace isolation, publication authority, durable execution, or recovery. Details in
+[Working Mode](docs/foundation/working-mode.md).
 
 ## What's next
 
-Making **Level 2 real**: writing the prompt guidance and per-Level model bindings so that "here is a
-plan, execute it thoroughly" actually changes how Pi behaves. It is small, testable, and it is the
-thing you cannot do today.
+Implement the smallest truthful Working Mode extension: persisted visible configuration, a
+fail-closed read-only discovery gate, owner selection, concise Plan and Spec acceptance, and one
+inspectable Vibe slice. Checking remains an independent choice.
 
-After that, one axis at a time from observed need — not a complete model. Nine months of Working
-Mode design produced no code precisely because it tried to settle everything before shipping
-anything. Pi Workbench advocates iterative work, so its own development has to demonstrate it.
+After that, add axes only from observed need. The withdrawn nine-dimensional design remains evidence
+against settling a complete control model before shipping one justified dimension.
 
 ## Where everything else lives
 
@@ -74,7 +70,7 @@ This README is the file for a human. Everything below is context for an agent, r
 
 - [`docs/README.md`](docs/README.md) — map of all documentation and its authority order.
 - [`docs/foundation/`](docs/foundation/) — decisions that govern code, canonical vocabulary,
-  principles, Operating Levels.
+  principles, and Working Mode.
 - [`docs/contracts/`](docs/contracts/) — behavioral contracts at each module seam.
 - [`docs/plans/`](docs/plans/) — implementation sequences, some complete, some not started.
 - [`docs/research/`](docs/research/) — evidence, reports, and unbuilt concepts. Never authoritative.

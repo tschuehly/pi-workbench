@@ -1,6 +1,11 @@
 # Routing rationale and calibration
 
-The authoritative current role-to-binding mapping lives in `routing-policy.json`. These bindings graduated as a provisional Pi adapter from the skill-incubator policy; evaluate them from Workbench run evidence rather than treating them as permanent model ownership. They predate Operating Levels. The adoption target adds Operating Level as a second input while preserving Cognitive Role, so a Level may carry different bindings per role; until that is implemented, the current mapping is the Level 1 default binding.
+The authoritative current role-to-binding mapping lives in `routing-policy.json`. These bindings
+graduated as a provisional Pi adapter from the skill-incubator policy; evaluate them from Workbench
+run evidence rather than treating them as permanent model ownership. The current mapping predates
+Working Mode and resolves one binding from Cognitive Role alone. The adoption target adds the
+owner-selected Checking value and task consequence so routing can fail closed on required
+independent fan-out; Alignment remains a separate mutation boundary.
 
 The Sol ladder carries routine through consequential GPT work. Higher Model Effort follows novelty and consequence rather than code volume; maximum effort remains exceptional because marginal quality can consume disproportionate quota.
 

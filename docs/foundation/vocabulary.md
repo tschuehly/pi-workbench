@@ -23,8 +23,9 @@ _Avoid_: Decision, approval, reasoning
 
 **Shared Understanding:**
 The agreed problem model, desired outcome, constraints, language, assumptions, risks, and success
-evidence from which the Run proceeds.
-_Avoid_: Alignment, context dump, plan
+evidence from which the work proceeds. Alignment selects how much of this must be explicit before
+project mutation.
+_Avoid_: Context dump, implementation script
 
 **Human-Attention Contract:**
 The Run's agreement about which human judgments are planned, which conditions trigger additional
@@ -79,27 +80,31 @@ _Avoid_: Chat, session, job
 The versioned quality, authority, safety, evidence, and retention envelope governing a Run.
 _Avoid_: Prompt, workflow script, execution plan
 
-**Operating Level:**
-A named configuration across the Working Mode axes, chosen by the owner so they select one Level
-rather than tuning independent knobs. Level 1 is attended pairing with `light` checking; Level 2
-adds an agreed execution plan and `tests`; Level 3 adds acceptance criteria and `adversarial`
-review; Level 4 additionally requires deterministic management and is not selectable. A Level
-configures behavior and may carry per-role model bindings, but never grants permission. A higher
-number is a different configuration, not universal maturity or quality.
-_Avoid_: Quality tier, maturity score, roadmap phase, authority grant
+**Alignment:**
+The intended owner-selected axis controlling the minimum Shared Understanding required before Pi may mutate
+the project: `Vibe` permits one owner-inspectable slice before returning, `Plan` requires an
+accepted concise direction, and `Spec` requires accepted behavior, constraints, and evidence. It
+controls commitment before mutation, not Human Attention or verification.
+_Avoid_: Approval flow, planning depth, autonomy level
+
+**Discovering:**
+The intended read-only task state in which Alignment and Checking are unselected. Pi gathers enough evidence
+to recommend both values; the owner chooses before mutation.
+_Avoid_: Default mode, Scout authority, planning phase
 
 **Checking:**
-The axis controlling how thoroughly Pi verifies its own work before reporting: `light` performs no
-test-writing or review pass because the attending human is the check, `tests` writes and runs tests
-for the changed behavior, and `adversarial` adds a fresh cross-family pass that argues against the
-result. Ordered by cost and delay, not by quality.
+The owner-selected axis controlling how thoroughly Pi verifies its own work before reporting:
+`light` performs no required test-writing or review pass because the attending human is the check,
+`tests` writes and runs tests for the changed behavior, and `adversarial` adds a fresh cross-family
+pass that argues against the result. Ordered by cost and delay, not by quality.
 _Avoid_: Quality level, rigor tier, autonomy level
 
 **Working Mode:**
-The set of axes an Operating Level configures. Today that is exactly one axis, Checking. Further
-axes are added one at a time from observed need; candidates and deferred dimensions are recorded in
-[operating levels](operating-levels.md).
-_Avoid_: Entry Preset, workflow profile, autonomy level, agent tier, intensity
+The visible, owner-selected configuration of independent behavioral axes. Its current intended axes
+are Alignment (`Vibe | Plan | Spec`) and Checking (`light | tests | adversarial`). Every task begins
+Discovering with both unselected; further axes are added one at a time from observed need. Working
+Mode configures behavior and never grants permission.
+_Avoid_: Operating Level, workflow profile, authority grant, agent tier
 
 **Autonomy Envelope:**
 The authority granted for autonomous work, bounded by permissions, impact, budget, stopping

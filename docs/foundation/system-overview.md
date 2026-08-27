@@ -17,21 +17,23 @@ Pi Workbench must let models perform more bounded work without obscuring who own
 Pi Workbench V1 allocates Human Attention across interactive Workstreams. Pi is the model runtime,
 and PI WEB is the user-facing client of the typed Workstream protocol.
 
-V1 implements [Operating Level 1: Pair](operating-levels.md): one human works directly with one
-interactive lead Pi while Human Attention is continuous. Levels 2 and 3 are defined and selectable
-in principle but their prompt guidance and per-Level model bindings are not yet written. The lead may use bounded ephemeral child
-Pi processes as attended tool activity and remains accountable for their assignments and results.
-Interactive sessions start inside a user-local Workstream so the owner can leave and resume without
-treating chat history as current state. A child may run non-blocking only within its attended lead
-session; no child execution survives session shutdown. V1 provides no agreed-before execution gate,
-unattended execution, managed Run authority, enforced workspace isolation, or controller-mediated
-recovery.
+V1 supports attended human–Pi work: one human works directly with one interactive lead Pi while
+Human Attention is continuous. The lead may use bounded ephemeral child Pi processes as attended
+tool activity and remains accountable for their assignments and results. Interactive sessions
+start inside a user-local Workstream so the owner can leave and resume without treating chat history
+as current state. A child may run non-blocking only within its attended lead session; no child
+execution survives session shutdown.
 
-An Operating Level configures behavior, never permission. Level 4 stays unselectable while the Run
-Controller, workspace isolation, and durable Run state are unimplemented. The managed Run
-architecture below describes that unbuilt Level 4 boundary so Level 1 does not accidentally claim
-its guarantees; the decisions behind it are collected in [Level 4
-concepts](../research/level-4-concepts.md).
+The intended [Working Mode](working-mode.md) adds independent Alignment and Checking controls, but
+that extension is not implemented: current sessions provide no read-only Discovering gate,
+owner-selected configuration, accepted-before-mutation Plan or Spec, or persistent mode display.
+They also provide no unattended execution, managed Run authority, enforced workspace isolation, or
+controller-mediated recovery.
+
+Working Mode configures behavior, never permission. The managed Run architecture below remains
+unbuilt while the Run Controller, workspace isolation, and durable Run state are absent. It is
+included so the attended workflow does not accidentally claim those guarantees; its historical
+decisions are collected in [Level 4 concepts](../research/level-4-concepts.md).
 
 ## Managed Run model
 
@@ -50,7 +52,7 @@ A Workstream is the owner's finite cross-session attention container. It may hol
 In V1, the owner inspects Workstream projections directly in PI WEB to decide what to resume. No
 FirstMate or other model broker performs portfolio synthesis.
 
-The Level 4 concept separates three managed accountability scopes:
+The managed Run concept separates three accountability scopes:
 
 - A **Portfolio Broker** routes priorities and Human Attention across projects.
 - A **Project Broker** coordinates repository capabilities, conflicts, and concurrent Runs.
@@ -73,8 +75,8 @@ Five deep modules contain the trusted behavior:
 The [Workstream contract](../contracts/workstreams.md) owns V1 cross-session attention, sparse
 ledgers, attended checkpointing, and closure. The [interface contract](../contracts/interfaces.md)
 owns PI WEB client behavior. The [harness contract](../contracts/harness.md) owns distribution,
-skills, and repository adaptation. Workflow, controller, and execution contracts describe Level 4
-boundaries and do not expand V1.
+skills, and repository adaptation. Workflow, controller, and execution contracts describe unbuilt managed Run boundaries and do not
+expand V1.
 
 ## Execution and authority
 
@@ -115,8 +117,8 @@ External systems such as GitHub, Linear, Sentry, and CI remain collaboration sur
 
 ## V1 boundary
 
-V1 is the Level 1 human–Pi pair-programming workflow defined in the
-[approved Level 1 plan](../plans/level-1.md). It covers Workstream selection, reconnect-safe attended session
+V1 is the attended human–Pi workflow defined in the historically named
+[Level 1 plan](../plans/level-1.md). It covers Workstream selection, reconnect-safe attended session
 launch, automatically persisted correctable checkpoints, restart and resume, human tasks and links,
 and human-instructed closure.
 
@@ -134,12 +136,12 @@ The complete V1 outcomes and acceptance matrix are in [requirements.md](requirem
 - Peer worker mailboxes, open-ended worker conversations, or unbounded recursive agent hierarchies in the initial implementation.
 - Model-backed log watching, terminal-screen parsing, or maximizing worker count as a product goal.
 - A blanket autonomy switch, universal Working Mode ladder, cost tier, Scout-first rule, plan-once rule, or universal file-size limit.
-- Claiming managed authority, recovery, or workspace isolation for Level 1.
+- Claiming managed authority, recovery, or workspace isolation for the attended workflow.
 - Concurrent human control or concurrent delivery of unrelated product outcomes inside one Run.
 - Production deployment from the pilot.
 - Implicit external synchronization or publication.
 - Agent-generated ownership of authentication, permissions, recovery, workspace leases, or Run state.
 - Arbitrary graphical composition or global CSS injection.
 - A daemon, database, Run Controller, or managed execution in V1.
-- Selecting or implementing Levels 2–4 in V1.
+- Treating Working Mode selection as managed Run authority.
 - Copying credentials, subscription state, sessions, machine-local configuration, or external binaries into the harness repository.
