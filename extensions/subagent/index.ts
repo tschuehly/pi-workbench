@@ -92,13 +92,13 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Launch one fresh attended child Pi for one bounded assignment. Prefer background:true so the lead stays available and receives a terminal wakeup; omit it only when the child result is the immediate dependency. The lead must reconcile the compact result.",
+    description: "Launch one fresh attended child Pi for one bounded assignment. Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise omit it and reconcile the compact result directly.",
     promptSnippet: "Delegate one bounded attended assignment to a fresh child Pi",
     promptGuidelines: [
-      "Delegate proactively when it protects your context or the result: bulk reading, parallelizable investigation, mechanical batches, and judgment that must be independent of the author. Work inline when the task needs continuous steering or is smaller than a handoff brief.",
-      "When you expect several sequential bounded assignments in one semantic scope, create or reuse a durable worker (worker_create, worker_dispatch) instead of re-briefing fresh subagents.",
+      "Delegate execution only after the assignment's direction and verification are established. Use a subagent when context isolation, mechanical volume, parallelism, or genuinely independent judgment materially improves the result; work inline while the task needs continuous owner steering or is smaller than a handoff brief.",
+      "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
-      "Prefer background:true for delegated Subagents so the attended lead remains available and terminal completion wakes it automatically. Use foreground blocking only when the child result is the immediate dependency and no useful lead work or attended response can continue before it returns. Reconcile every background result with subagent_collect and cancel with subagent_cancel.",
+      "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Subagent in the foreground. Reconcile every background result with subagent_collect and cancel with subagent_cancel.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
     ],
@@ -256,12 +256,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "worker_dispatch",
     label: "Worker dispatch",
-    description: "Dispatch one bounded attended assignment to a durable worker, resuming its persisted Pi session for continuity within its scope. Prefer background:true so the lead stays available and receives a terminal wakeup; omit it only when the Worker result is the immediate dependency. One dispatch at a time per worker; no execution survives the attended session.",
+    description: "Dispatch one bounded attended assignment to a durable worker, resuming its persisted Pi session for continuity within its scope. Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise omit it. One dispatch at a time per worker; no execution survives the attended session.",
     promptSnippet: "Dispatch one bounded assignment to a durable attended worker",
     promptGuidelines: [
       "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
       "Keep every worker task self-contained with paths, constraints, and expected output; continuity supplements explicit tasking.",
-      "Prefer background:true for Worker dispatches so the attended lead remains available and terminal completion wakes it automatically. Use foreground blocking only when the Worker result is the immediate dependency and no useful lead work or attended response can continue before it returns. Reconcile every background result with subagent_collect.",
+      "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Worker dispatch in the foreground. Reconcile every background result with subagent_collect.",
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
       "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
