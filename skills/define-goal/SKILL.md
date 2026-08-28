@@ -1,6 +1,6 @@
 ---
 name: define-goal
-description: Define or refine a concrete, verifiable objective before goal-backed work. Use when the user asks to set a goal, use `/goal`, prepare unattended or overnight AFK work, clarify success criteria, or turn a fuzzy intention into an outcome.
+description: Define or refine a concrete, verifiable objective before goal-backed work. Use when the user asks to set a goal, use `/goal`, clarify success criteria, or turn a fuzzy intention into an outcome.
 ---
 
 # Define Goal
@@ -31,20 +31,18 @@ Replace activity goals such as “make progress” or “investigate” with an 
 
 For bugs, name reproduction and a failing-then-passing validator when possible. For research, name the decision it must enable, source scope, and evidence standard. For operations, name the healthy state, observation window, failure threshold, and escalation trigger.
 
-## Define an AFK objective
+## Define a long-running objective
 
-For continuous unattended work, default to an ordinary `/goal`. Keep the objective to one concise page or less:
+A Goal spanning many items is still an attended session that proceeds without per-item supervision; it is not managed unattended execution and Pi Goal supplies no controller safety. Keep the objective to one concise page or less:
 
 1. observable outcome and binary evidence;
 2. repository and owned scope;
 3. authority boundary and forbidden external effects;
-4. continuous loop, including how one terminal item yields to the next;
+4. how one terminal item yields to the next;
 5. stop-new-work and final-audit deadlines; and
 6. the Material Question or human-only condition that pauses work.
 
-Reference stable controller and project policy instead of copying it. Project controllers own resumability, idempotency, concurrency, acceptance, and settlement. Do not add phase checkpoints, compaction cadence, reviewer retry loops, or a second finalization protocol to the objective. Reviewer unavailability may prevent acceptance of an artifact; it does not stop unrelated reversible work unless the project controller proves a shared safety dependency.
-
-Use `execute-plan-afk-goal` only when the owner explicitly chooses that experiment.
+Reference stable project policy instead of copying it. The project's own skills and tools own resumability, idempotency, concurrency, acceptance, and settlement. Do not add phase checkpoints, compaction cadence, reviewer retry loops, or a second finalization protocol to the objective. Reviewer unavailability may prevent acceptance of an artifact; it does not stop unrelated reversible work unless the project proves a shared safety dependency.
 
 ## Hand off to Pi Goal accurately
 
