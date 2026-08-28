@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
 import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
+import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { createCompletionWakeup, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
@@ -44,6 +45,7 @@ const Params = Type.Object({
   profile: StringEnum(Object.keys(PROFILES) as (keyof typeof PROFILES)[], { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
   independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Defaults to the active parent model provider; set it explicitly for child-authored work." })),
+  telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the terminal wakeup with subagent_collect. The child still dies when the attended session ends." })),
 });
 
@@ -60,6 +62,7 @@ const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
+  telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the terminal wakeup with subagent_collect." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
 });
@@ -140,19 +143,28 @@ export default function subagentExtension(pi: ExtensionAPI) {
         return failure("preflight_failed", errorMessage(error));
       }
 
+      const parentSessionId = ctx.sessionManager.getSessionId();
+      const childTask = `${profile.instruction}\n\nAssignment:\n${params.task}`;
       let receipt;
       try {
         receipt = await adapter.dispatch({
-          task: `${profile.instruction}\n\nAssignment:\n${params.task}`,
+          task: childTask,
           profile: params.profile,
           cognitiveRole: params.cognitiveRole,
           cwd: ctx.cwd,
           tools: [...profile.tools],
           binding,
+          parentSessionId,
         });
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
       }
+      emitExecutionEvent(pi, {
+        type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
+        executionId: receipt.executionId, kind: "subagent", task: childTask,
+        profile: params.profile, cognitiveRole: params.cognitiveRole, concept: params.telemetryConcept ?? null,
+        provider: binding.provider, model: binding.model, effort: binding.effort,
+      });
 
       const meta = {
         profile: params.profile,
@@ -184,6 +196,11 @@ export default function subagentExtension(pi: ExtensionAPI) {
       // Register terminal cleanup before waiting so it wins a same-tick detach race.
       const completion = adapter.result(receipt.executionId).then((final) => {
         foreground.delete(receipt.executionId);
+        emitExecutionEvent(pi, {
+          type: "execution.settled", at: new Date().toISOString(), sessionId: parentSessionId,
+          executionId: receipt.executionId, kind: "subagent", childSessionId: final.sessionId ?? null,
+          outcome: final.outcome,
+        });
         if (backgrounded) {
           completionWakeup.notify({
             executionId: receipt.executionId,
@@ -336,21 +353,30 @@ export default function subagentExtension(pi: ExtensionAPI) {
       }
       const continuing = begin.continuationSessionId !== null;
       const preamble = `You are the durable attended worker \"${begin.name}\" with the semantic scope \"${begin.scope}\".${continuing ? " This dispatch resumes your persisted session; the earlier conversation above is your own prior work in this scope." : " This is your first dispatch in this scope."}`;
+      const parentSessionId = ctx.sessionManager.getSessionId();
+      const childTask = `${profile.instruction}\n\n${preamble}\n\nAssignment:\n${params.task}`;
       let receipt;
       try {
         receipt = await adapter.dispatch({
-          task: `${profile.instruction}\n\n${preamble}\n\nAssignment:\n${params.task}`,
+          task: childTask,
           profile: begin.profile,
           cognitiveRole: params.cognitiveRole,
           cwd: ctx.cwd,
           tools: [...profile.tools],
           binding,
+          parentSessionId,
           ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
         });
       } catch (error) {
         await abandon(errorMessage(error));
         return failure("preflight_failed", errorMessage(error));
       }
+      emitExecutionEvent(pi, {
+        type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
+        executionId: receipt.executionId, kind: "worker", workerId: params.workerId, task: childTask,
+        profile: begin.profile, cognitiveRole: params.cognitiveRole, concept: params.telemetryConcept ?? null,
+        provider: binding.provider, model: binding.model, effort: binding.effort,
+      });
       workerExecutions.set(params.workerId, receipt.executionId);
       const meta = {
         profile: begin.profile,
@@ -390,6 +416,11 @@ export default function subagentExtension(pi: ExtensionAPI) {
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
         const final = await adapter.result(receipt.executionId);
         foreground.delete(receipt.executionId);
+        emitExecutionEvent(pi, {
+          type: "execution.settled", at: new Date().toISOString(), sessionId: parentSessionId,
+          executionId: receipt.executionId, kind: "worker", workerId: params.workerId,
+          childSessionId: final.sessionId ?? null, outcome: final.outcome,
+        });
         await usageWatch;
         clearInterval(heartbeat);
         await settleWorkerReceipt({
@@ -510,6 +541,10 @@ async function watchActivity(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, e
   } finally {
     removeActivity(pi, `delegate:${executionId}`);
   }
+}
+
+export function emitExecutionEvent(pi: Pick<ExtensionAPI, "events">, event: Record<string, unknown>) {
+  pi.events.emit(EXECUTION_CHANNEL, event);
 }
 
 export async function streamToResult(
