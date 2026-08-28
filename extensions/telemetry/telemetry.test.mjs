@@ -138,6 +138,20 @@ test("joins the first delivered correction marker to the next changed draft", ()
   });
 });
 
+test("top-level signals include failed Studio builds and their next same-concept attempt", () => {
+  const events = [
+    event("session.start", "12:00:00", { sessionId: "root" }),
+    event("studio.build_start", "12:00:01", { sessionId: "root", concept: "alpha", buildId: "failed", lane: "draft" }),
+    event("studio.build_settled", "12:00:02", { sessionId: "root", concept: "alpha", buildId: "failed", lane: "draft", status: "failed", reason: "render" }),
+    event("studio.build_start", "12:00:03", { sessionId: "root", concept: "alpha", buildId: "retry", lane: "draft" }),
+    event("studio.build_settled", "12:00:04", { sessionId: "root", concept: "alpha", buildId: "retry", lane: "draft", status: "built" }),
+  ];
+
+  const report = buildReport(events, { rootSessionId: "root", concept: "alpha" });
+  assert.equal(report.failures, 1);
+  assert.equal(report.retrySignals, 1);
+});
+
 test("root reports keep same-sequence deliveries for different concepts", () => {
   const events = [
     event("session.start", "12:00:00", { sessionId: "root" }),

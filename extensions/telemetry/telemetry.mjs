@@ -49,8 +49,10 @@ export function buildReport(events, options = {}) {
     usage: usageSummary(usageEvents),
     usageByAttribution: usageAttribution(selected, usageEvents, executions),
     executions,
-    failures: executions.filter((execution) => execution.outcome != null && execution.outcome !== "success").length,
-    retrySignals: selected.filter((event) => event.type === "session.compact" && event.willRetry === true).length,
+    failures: executions.filter((execution) => execution.outcome != null && execution.outcome !== "success").length
+      + studio.builds.filter(isFailedBuild).length,
+    retrySignals: selected.filter((event) => event.type === "session.compact" && event.willRetry === true).length
+      + buildRetrySignals(studio.builds),
     studio,
   };
 }
@@ -219,6 +221,22 @@ function studioReport(events, agentActiveIntervals, executions, concept) {
     correctionCycles,
     completedCorrectionRounds: correctionCycles.filter((cycle) => cycle.draftReadyAt !== null).length,
   };
+}
+
+function isFailedBuild(build) {
+  return ["failed", "gate-failed", "error"].includes(build?.status);
+}
+
+function buildRetrySignals(builds) {
+  const previous = new Map();
+  let retries = 0;
+  for (const build of builds) {
+    if (typeof build.concept !== "string") continue;
+    const prior = previous.get(build.concept);
+    if (isFailedBuild(prior) && Date.parse(build.startedAt) >= Date.parse(prior.endedAt)) retries++;
+    previous.set(build.concept, build);
+  }
+  return retries;
 }
 
 function buildTimeline(events) {
