@@ -111,7 +111,7 @@ The adapter normalizes Pi RPC activity into bounded observations for:
 - cancellation and task timeout; and
 - terminal outcome.
 
-Detailed observations drive the tool UI but do not enter parent Model Context. The parent receives only terminal status, final text, child profile, Cognitive Role, resolved provider/model/effort, effective quota admission and telemetry status, and Pi session identifier. V1 does not expose arbitrary JSON Schema or automatic correction turns. Usage is observed, but custom token and cost enforcement remains deferred.
+Detailed observations drive the rolling tool UI and, in interactive Pi, a persistent **Delegates** widget above the editor for every active Subagent or Worker dispatch; repeated equivalent updates are collapsed, and terminal executions are removed. These presentation updates do not enter parent Model Context. The parent receives only terminal status, final text, child profile, Cognitive Role, resolved provider/model/effort, effective quota admission and telemetry status, and Pi session identifier. V1 does not expose arbitrary JSON Schema or automatic correction turns. Usage is observed, but custom token and cost enforcement remains deferred.
 
 The stable Level 1 outcome categories are:
 

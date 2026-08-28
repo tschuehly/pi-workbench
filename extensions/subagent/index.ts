@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
 import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
 import { createCompletionWakeup, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
+import { createDelegateWidget } from "./delegate-widget.mjs";
 import { progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -82,8 +83,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
   const completionWakeup = createCompletionWakeup({
     sendMessage: (message: any, options: any) => pi.sendMessage(message, options),
   });
+  const delegateWidget = createDelegateWidget();
+
+  pi.on("session_start", (_event, ctx) => {
+    if (ctx.mode === "tui") delegateWidget.attach(ctx.ui);
+  });
 
   pi.on("session_shutdown", async () => {
+    delegateWidget.dispose();
     completionWakeup.shutdown();
     await adapter.cancelAll("Attended parent session ended.");
     await Promise.allSettled([...pendingWorkerCompletions, ...pendingSubagentCompletions]);
@@ -140,12 +147,15 @@ export default function subagentExtension(pi: ExtensionAPI) {
         return failure("preflight_failed", errorMessage(error));
       }
 
-      launched.set(receipt.executionId, {
+      const meta = {
         profile: params.profile,
         cognitiveRole: params.cognitiveRole,
         taskPreview: bounded(params.task, 200),
         launchedAt: receipt.acceptedAt,
-      });
+      };
+      launched.set(receipt.executionId, meta);
+      delegateWidget.launch({ executionId: receipt.executionId, ...meta });
+      void watchDelegate(adapter, delegateWidget, receipt.executionId);
 
       if (params.background === true) {
         const completion = adapter.result(receipt.executionId).then((final) => {
@@ -310,14 +320,17 @@ export default function subagentExtension(pi: ExtensionAPI) {
         return failure("preflight_failed", errorMessage(error));
       }
       workerExecutions.set(params.workerId, receipt.executionId);
-      launched.set(receipt.executionId, {
+      const meta = {
         profile: begin.profile,
         cognitiveRole: params.cognitiveRole,
         taskPreview: bounded(params.task, 200),
         launchedAt: receipt.acceptedAt,
         workerId: params.workerId,
         workerName: begin.name,
-      });
+      };
+      launched.set(receipt.executionId, meta);
+      delegateWidget.launch({ executionId: receipt.executionId, ...meta });
+      void watchDelegate(adapter, delegateWidget, receipt.executionId);
       const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
       heartbeat.unref();
       let workerReceiptError: unknown;
@@ -428,6 +441,16 @@ export default function subagentExtension(pi: ExtensionAPI) {
       }
     },
   });
+}
+
+async function watchDelegate(adapter: PiRpcExecutionAdapter, widget: ReturnType<typeof createDelegateWidget>, executionId: string) {
+  try {
+    for await (const observation of adapter.observe(executionId)) widget.update(executionId, progressText(observation));
+  } catch {
+    // The execution result carries the diagnostic; this watcher owns presentation only.
+  } finally {
+    widget.finish(executionId);
+  }
 }
 
 async function streamToResult(
