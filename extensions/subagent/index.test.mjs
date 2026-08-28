@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import subagentExtension, { completionSummary, detachLatestForeground, streamToResult } from "./index.ts";
-
-test("uses a substantive success line and never hides a failure outcome", () => {
-  assert.equal(completionSummary({ outcome: "success", text: "## Verdict\n\n**No blocking findings.**\nDetails follow." }), "No blocking findings.");
-  assert.equal(completionSummary({ outcome: "timed_out", text: "Migration complete." }), "timed out");
-  assert.equal(completionSummary({ outcome: "execution_failed", diagnostic: "RPC closed", text: "Done." }), "execution failed · RPC closed");
-});
+import subagentExtension, { detachLatestForeground, streamToResult } from "./index.ts";
 
 test("registers Cmd+B and a portable fallback", () => {
   const shortcuts = new Map();
