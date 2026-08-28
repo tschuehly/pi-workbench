@@ -1,5 +1,5 @@
 ---
-name: compound
+name: workbench-compound
 description: Evaluate one meaningful Pi session against explicit improvement questions and accumulate source-backed learning proposals.
 disable-model-invocation: true
 ---
@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Evaluate one attended Pi session so repeated use improves the harness from evidence rather than prompt speculation. This is a manual Level 1 analogue of the Run Analysis and Compounding behavior in `docs/contracts/workflow.md`; it creates no Run authority, typed Learning Candidate, or automatic promotion.
 
-Set `SKILL_DIR` to this skill's directory and `WORKBENCH_ROOT` to `../..` from it. Resolve every Workbench reference under that root so `/skill:compound` works while the attended lead is operating in another repository.
+Set `SKILL_DIR` to this skill's directory and `WORKBENCH_ROOT` to `../..` from it. Resolve every Workbench reference under that root so `/skill:workbench-compound` works while the attended lead is operating in another repository.
 
 ## 1. Resolve the evaluation
 

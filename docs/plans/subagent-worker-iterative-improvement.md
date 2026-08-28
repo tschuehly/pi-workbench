@@ -57,7 +57,7 @@ For every step:
 1. Name the human problem and the smallest behavior that might solve it.
 2. Add deterministic lifecycle and safety tests before relying on model behavior.
 3. Use the behavior in meaningful attended sessions.
-4. Evaluate those sessions with `/skill:compound` and Primary Evidence.
+4. Evaluate those sessions with `/skill:workbench-compound` and Primary Evidence.
 5. Keep, revise, or remove the behavior before expanding the next capability.
 
 Promote a change into persistent guidance only after either:
@@ -251,7 +251,7 @@ This step requires an explicit revision to Decision 50. Stop the experiment if i
 
 ## Pilot Evaluation Questions
 
-These stable IDs remain the default question source for `/skill:compound`. Select at most three questions for any one session. IDs are append-only, and the file's SHA-256 identifies the evaluated revision.
+These stable IDs remain the default question source for `/skill:workbench-compound`. Select at most three questions for any one session. IDs are append-only, and the file's SHA-256 identifies the evaluated revision.
 
 - **Q1 — Delegation value:** Did delegation provide a concrete benefit—fresh context, Independence, parallelism, mechanical volume, or specialist capability—compared with working inline?
 - **Q2 — Worker threshold:** When at least two related assignments were expected, did Continuity reduce re-briefing or improve the outcome enough to justify a Worker?
