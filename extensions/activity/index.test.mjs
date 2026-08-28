@@ -20,4 +20,9 @@ test("projects active shell tools through the shared activity surface", () => {
   assert.deepEqual(calls.at(-1), ["pi-workbench:activity", ["Active · 1", "💻 npm test"]]);
   lifecycle.get("tool_execution_end")({ toolCallId: "bash-1", toolName: "bash" });
   assert.deepEqual(calls.at(-1), ["pi-workbench:activity", undefined]);
+
+  pi.events.emit("pi-workbench:activity", { type: "complete", item: { id: "child-1", kind: "subagent", role: "independent-review", outcome: "success", summary: "No blocking findings" } });
+  assert.deepEqual(calls.at(-1), ["pi-workbench:activity", ["Done", "✅ No blocking findings · review"]]);
+  lifecycle.get("input")({ source: "interactive" });
+  assert.deepEqual(calls.at(-1), ["pi-workbench:activity", undefined]);
 });

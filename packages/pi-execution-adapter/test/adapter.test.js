@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
-import { PiRpcExecutionAdapter } from "../src/index.js";
+import { PiRpcExecutionAdapter, summarizeToolAction } from "../src/index.js";
+
+test("summarizes child tool activity without exposing verbose arguments", () => {
+  assert.equal(summarizeToolAction("read", { path: "/repo/src/auth-service.ts" }), "reading src/auth-service.ts");
+  assert.equal(summarizeToolAction("bash", { command: "npm test -- --runInBand" }), "running npm test");
+  assert.equal(summarizeToolAction("bash", { command: "curl -u user:password https://example.test" }), "running bash");
+  assert.equal(summarizeToolAction("edit", { path: "/repo/src/index.ts" }), "editing src/index.ts");
+});
 
 const now = new Date("2026-03-20T12:00:00.000Z");
 function spec(overrides = {}) {
@@ -80,6 +87,7 @@ test("launches one persistent RPC child, verifies binding, and returns compact m
   assert.equal(result.text, "Compact result");
   assert.equal(result.sessionId, "child-session");
   assert.equal(observations.some((value) => value.type === "thinking_progress"), true);
+  assert.equal(observations.some((value) => value.type === "tool_start" && value.detail?.action === "reading src"), true);
   assert.equal(observations.some((value) => JSON.stringify(value).includes("secret reasoning")), false);
 });
 

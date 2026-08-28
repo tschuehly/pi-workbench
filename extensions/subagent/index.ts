@@ -6,7 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
 import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
-import { removeActivity, upsertActivity } from "../activity/activity.mjs";
+import { completeActivity, removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { createCompletionWakeup, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
@@ -185,6 +185,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       const completion = adapter.result(receipt.executionId).then((final) => {
         foreground.delete(receipt.executionId);
         if (backgrounded) {
+          completeActivity(pi, { ...activity, outcome: final.outcome, summary: completionSummary(final) });
           completionWakeup.notify({
             executionId: receipt.executionId,
             outcome: final.outcome,
@@ -392,31 +393,37 @@ export default function subagentExtension(pi: ExtensionAPI) {
         foreground.delete(receipt.executionId);
         await usageWatch;
         clearInterval(heartbeat);
-        await settleWorkerReceipt({
-          settle: () => registry.completeDispatch(params.workerId, begin.lockToken, {
-            executionId: receipt.executionId,
-            outcome: final.outcome,
-            cognitiveRole: params.cognitiveRole,
-            provider: final.provider,
-            model: final.model,
-            effort: final.effort,
-            sessionId: final.sessionId,
-            acceptedAt: receipt.acceptedAt,
-            endedAt: new Date().toISOString(),
-            usage,
-            diagnostic: final.diagnostic,
-          }),
-          wakeup: completionWakeup,
-          background: backgrounded,
-          completion: {
-            executionId: receipt.executionId,
-            outcome: final.outcome,
-            profile: begin.profile,
-            cognitiveRole: params.cognitiveRole,
-            workerId: params.workerId,
-            workerName: begin.name,
-          },
-        });
+        try {
+          await settleWorkerReceipt({
+            settle: () => registry.completeDispatch(params.workerId, begin.lockToken, {
+              executionId: receipt.executionId,
+              outcome: final.outcome,
+              cognitiveRole: params.cognitiveRole,
+              provider: final.provider,
+              model: final.model,
+              effort: final.effort,
+              sessionId: final.sessionId,
+              acceptedAt: receipt.acceptedAt,
+              endedAt: new Date().toISOString(),
+              usage,
+              diagnostic: final.diagnostic,
+            }),
+            wakeup: completionWakeup,
+            background: backgrounded,
+            completion: {
+              executionId: receipt.executionId,
+              outcome: final.outcome,
+              profile: begin.profile,
+              cognitiveRole: params.cognitiveRole,
+              workerId: params.workerId,
+              workerName: begin.name,
+            },
+          });
+          if (backgrounded) completeActivity(pi, { ...activity, outcome: final.outcome, summary: completionSummary(final) });
+        } catch (error) {
+          if (backgrounded) completeActivity(pi, { ...activity, outcome: "outcome_unknown", summary: "Worker receipt failed; inspect worker_status" });
+          throw error;
+        }
       })();
       const tracked = completion.catch((error) => {
         workerReceiptError = error;
@@ -501,7 +508,10 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 async function watchActivity(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, executionId: string, activity: Record<string, unknown>) {
   try {
-    for await (const observation of adapter.observe(executionId)) upsertActivity(pi, { ...activity, activity: activityText(observation) });
+    for await (const observation of adapter.observe(executionId)) {
+      const text = activityText(observation);
+      if (text !== undefined) upsertActivity(pi, { ...activity, activity: text });
+    }
   } catch {
     // The execution result carries the diagnostic; this watcher owns presentation only.
   } finally {
@@ -605,6 +615,14 @@ export function detachLatestForeground(foreground: Map<string, ForegroundDispatc
   foreground.delete(executionId);
   dispatch.detach();
   return dispatch.label;
+}
+
+export function completionSummary(result: { outcome: string; text?: string; diagnostic?: string }): string {
+  const outcome = result.outcome.replaceAll("_", " ");
+  if (result.outcome !== "success") return bounded(`${outcome}${result.diagnostic ? ` · ${result.diagnostic}` : ""}`, 160);
+  const firstLine = String(result.text ?? "").split("\n").map((line) => line.trim()).find((line) => line !== "" && !/^#{1,6}\s/.test(line));
+  const plain = firstLine?.replace(/^[-*]\s+/, "").replace(/[*_`]/g, "");
+  return bounded(plain || outcome, 160);
 }
 
 function failure(outcome: string, diagnostic: string) {

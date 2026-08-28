@@ -9,6 +9,10 @@ export default function activityExtension(pi: ExtensionAPI) {
     if (ctx.mode === "tui") surface.attach(ctx.ui);
   });
 
+  pi.on("input", (event) => {
+    if (event.source === "interactive") surface.clearCompleted();
+  });
+
   pi.on("tool_execution_start", (event) => {
     if (event.toolName !== "bash" && event.toolName !== "powershell") return;
     const command = typeof event.args?.command === "string" ? event.args.command : event.toolName;
