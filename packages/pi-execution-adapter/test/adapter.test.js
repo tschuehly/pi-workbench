@@ -83,6 +83,15 @@ test("launches one persistent RPC child, verifies binding, and returns compact m
   assert.equal(observations.some((value) => JSON.stringify(value).includes("secret reasoning")), false);
 });
 
+test("propagates deterministic parent and execution lineage to the child", async () => {
+  let spawnOptions;
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, _args, options) => { spawnOptions = options; return fakeRpc(); } });
+  const receipt = await adapter.dispatch(spec({ parentSessionId: "parent-session" }));
+  assert.equal((await adapter.result(receipt.executionId)).outcome, "success");
+  assert.equal(spawnOptions.env.PI_TELEMETRY_PARENT_SESSION_ID, "parent-session");
+  assert.equal(spawnOptions.env.PI_TELEMETRY_EXECUTION_ID, receipt.executionId);
+});
+
 test("resumes a recorded session, verifies its identity, and keeps fresh launches unnamed by session", async () => {
   const children = [];
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, args) => { const child = fakeRpc({ sessionId: "worker-session-1" }); children.push({ child, args }); return child; } });
@@ -114,6 +123,7 @@ test("rejects a malformed continuation before launch", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
   await assert.rejects(adapter.dispatch(spec({ continuation: { sessionId: "" } })), (error) => error.code === "INVALID_SPEC");
   await assert.rejects(adapter.dispatch(spec({ continuation: "worker-session-1" })), (error) => error.code === "INVALID_SPEC");
+  await assert.rejects(adapter.dispatch(spec({ parentSessionId: "" })), (error) => error.code === "INVALID_SPEC");
 });
 
 test("launches with degraded quota telemetry and makes the degradation observable", async () => {

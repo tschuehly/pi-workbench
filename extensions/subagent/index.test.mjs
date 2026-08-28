@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import subagentExtension, { detachLatestForeground, streamToResult } from "./index.ts";
+import subagentExtension, { detachLatestForeground, emitExecutionEvent, streamToResult } from "./index.ts";
 
 test("registers Cmd+B and a portable fallback", () => {
   const shortcuts = new Map();
@@ -27,6 +27,22 @@ test("Cmd+B detaches the newest foreground delegate", () => {
   assert.equal(detachLatestForeground(foreground), "Worker “Catalog”");
   assert.deepEqual(detached, ["second"]);
   assert.deepEqual([...foreground.keys()], ["first"]);
+});
+
+test("emits structured execution telemetry on the shared extension bus", () => {
+  let emitted;
+  emitExecutionEvent({ events: { emit: (...args) => { emitted = args; } } }, {
+    type: "execution.launched",
+    sessionId: "parent",
+    executionId: "exec-1",
+    task: "Review",
+  });
+  assert.deepEqual(emitted, ["pi-workbench:telemetry:execution", {
+    type: "execution.launched",
+    sessionId: "parent",
+    executionId: "exec-1",
+    task: "Review",
+  }]);
 });
 
 test("detaching a foreground wait leaves the child running", async () => {

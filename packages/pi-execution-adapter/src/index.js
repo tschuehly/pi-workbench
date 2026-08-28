@@ -105,9 +105,12 @@ export class PiRpcExecutionAdapter {
     const args = ["--mode", "rpc", "--provider", spec.binding.provider, "--model", spec.binding.model, "--thinking", spec.binding.effort, "--tools", spec.tools.join(",")];
     if (spec.continuation === undefined) args.push("--name", `workbench-${spec.profile}-${state.executionId.slice(0, 8)}`);
     else args.push("--session", spec.continuation.sessionId);
+    const env = { ...process.env, PI_TELEMETRY_EXECUTION_ID: state.executionId };
+    if (spec.parentSessionId === undefined) delete env.PI_TELEMETRY_PARENT_SESSION_ID;
+    else env.PI_TELEMETRY_PARENT_SESSION_ID = spec.parentSessionId;
     let child;
     try {
-      child = this.spawn(this.command, args, { cwd: spec.cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+      child = this.spawn(this.command, args, { cwd: spec.cwd, shell: false, stdio: ["pipe", "pipe", "pipe"], env });
       state.child = child;
     } catch (error) {
       this.#finish(state, resultFor(state, "launch_failed", "", errorMessage(error)));
@@ -340,6 +343,9 @@ function validateSpec(spec, hostTools, now, maxAgeMs) {
   if (!Array.isArray(spec.tools) || spec.tools.some((tool) => !hostTools.has(tool))) throw typedError("CAPABILITY_EXCEEDED", "Requested tools exceed the host capability ceiling.");
   if (spec.continuation !== undefined && (typeof spec.continuation !== "object" || spec.continuation === null || typeof spec.continuation.sessionId !== "string" || spec.continuation.sessionId.trim() === "")) {
     throw typedError("INVALID_SPEC", "continuation.sessionId must be a non-empty string when continuation is present.");
+  }
+  if (spec.parentSessionId !== undefined && (typeof spec.parentSessionId !== "string" || spec.parentSessionId.trim() === "")) {
+    throw typedError("INVALID_SPEC", "parentSessionId must be a non-empty string when present.");
   }
   const binding = spec.binding;
   if (!binding || binding.cognitiveRole !== spec.cognitiveRole || !binding.provider || !binding.model || !binding.effort) throw typedError("INVALID_BINDING", "Resolved binding does not match the requested Cognitive Role.");

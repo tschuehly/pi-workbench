@@ -19,6 +19,7 @@ The iterative Workbench client uses PI WEB's runtime without adopting its existi
 | --- | --- |
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
 | Pi CLI activity presentation | `extensions/activity/` |
+| Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
 | Pi agent and PI WEB configuration templates | `config/` |
 | Attended human–Pi pair programming | `docs/contracts/execution.md`, `docs/contracts/workstreams.md` |
 | V1 attended child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |
