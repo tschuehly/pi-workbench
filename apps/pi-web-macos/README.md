@@ -1,77 +1,86 @@
 # Pi Workbench for macOS
 
-Status: the native wrapper works; it still loads the legacy PI WEB client until the first slice in
-[`docs/plans/workbench-ui.md`](../../docs/plans/workbench-ui.md) replaces that web root.
+The native wrapper works today, but it still loads the legacy PI WEB client. The first
+[Workbench UI slice](../../docs/plans/workbench-ui.md) will replace that web root with one Chat per
+window: graphical text input first, then a toggleable workspace file pane.
 
-A small native macOS app that displays the fork's default web root using `WKWebView`. It provides
-native windows, shared website data, standard navigation shortcuts, and restricted same-origin
-navigation. It uses PI WEB runtime and does not own Pi sessions, Workstreams, or Run state.
+The app uses AppKit and `WKWebView` for native windows, shared website data, lifecycle status, and
+same-origin navigation. PI WEB owns sessions and runtime state. The wrapper owns neither Pi
+sessions, Workstreams, nor Runs.
 
-The installed wrapper still exposes native tabs today. Slice 1 removes every tab entry point so one
-window remains one Chat. The replacement web root, not a native route setting, selects the Chat,
-mounts the graphical composer first, and then adds its toggleable workspace file pane.
+## Install the app
 
-## Run the development environment
-
-Keep the PI WEB checkout next to this repository at `../pi-web`, install the app as described below,
-then open it from Finder, Spotlight, the Dock, or:
-
-```sh
-pi-web-mac
-```
-
-`pi-web-mac` only activates the installed bundle through macOS Launch Services. The AppKit process
-opens a window immediately, checks PI WEB's typed lifecycle status asynchronously, starts already
-installed services when needed, and loads the development UI at `http://127.0.0.1:8505` after the UI
-and session daemon are healthy. PI WEB frontend changes continue to use Vite hot module replacement.
-Re-run the app installer after changing native Swift code.
-
-The old entry point remains as a compatibility adapter:
-
-```sh
-./apps/pi-web-macos/Scripts/boot-dev.sh
-```
-
-It delegates installation and startup to `pi-web install --dev` and `pi-web start`, then activates the
-same installed app. It does not create a Workbench-owned supervisor or another session daemon.
-
-## Install a Finder launcher
-
-Install **Pi Workbench.app** in your user Applications folder:
+Keep PI WEB beside this repository. The installer prefers `../pi-web.durable-lifecycle` when present,
+then `../pi-web`; `PI_WEB_DIR` overrides both. Install PI WEB's dependencies with `npm install`, then
+run:
 
 ```sh
 ./apps/pi-web-macos/Scripts/install-app.sh
 ```
 
-The installer builds the release `PIWebMac` executable, records the resolved PI WEB checkout and CLI
-inside the bundle, preflights `pi-web status --json`, installs the split development services, and
-atomically replaces the prior app. Re-run it after moving either checkout or changing native code.
+The installer:
 
-You can then launch Pi Workbench from Finder, Spotlight, the Dock, or `pi-web-mac`. Startup failures
-appear in the visible app window with **Open logs**, **Run doctor**, and **Retry** actions.
+1. builds the release `PIWebMac` executable;
+2. records the resolved PI WEB checkout and CLI in the app bundle;
+3. checks `pi-web status --json`;
+4. installs the split development services; and
+5. atomically replaces the previous app.
 
-Pass a different `.app` path to choose another installation location:
+The default destination is your user Applications folder. To choose another location:
 
 ```sh
 ./apps/pi-web-macos/Scripts/install-app.sh "/Applications/Pi Workbench.app"
 ```
 
-Set `PI_WEB_DIR` when the PI WEB checkout is elsewhere:
+If PI WEB is not at `../pi-web`, set its location for the installer:
+
+```sh
+PI_WEB_DIR=/path/to/pi-web ./apps/pi-web-macos/Scripts/install-app.sh
+```
+
+Reinstall after moving either checkout or changing native Swift code.
+
+## Open the development app
+
+Launch **Pi Workbench.app** from Finder, Spotlight, or the Dock. From a terminal, use:
+
+```sh
+pi-web-mac
+```
+
+`pi-web-mac` activates the installed bundle through macOS Launch Services. The app opens a window
+immediately, checks PI WEB lifecycle status, starts installed services when needed, and loads
+`http://127.0.0.1:8505` after the UI and session daemon are healthy. PI WEB frontend changes continue
+to use Vite hot module replacement.
+
+Startup failures appear in the app window with **Open logs**, **Run doctor**, and **Retry** actions.
+
+## Compatibility entry point
+
+The older command still works:
+
+```sh
+./apps/pi-web-macos/Scripts/boot-dev.sh
+```
+
+It delegates installation and startup to `pi-web install --dev` and `pi-web start`, then activates
+the same app. It does not create another supervisor or session daemon.
+
+If PI WEB is not at `../pi-web`, set its location explicitly:
 
 ```sh
 PI_WEB_DIR=/path/to/pi-web ./apps/pi-web-macos/Scripts/boot-dev.sh
 ```
 
-PI WEB dependencies must already be installed with `npm install`.
+## Lifecycle safety
 
-## Lifecycle actions
+- **Reload** reloads only the current web view.
+- **Restart PI WEB UI** replaces the UI service without restarting the session daemon.
+- **Restart Session Runtime…** warns before replacing `sessiond`; in-flight turns, asks, and
+  terminals cannot migrate.
+- **Open Lifecycle Status** shows typed status and doctor reports.
 
-Use **Reload** to reload only the current web view. **Restart PI WEB UI** replaces the UI service
-without restarting the session daemon. **Restart Session Runtime…** warns before replacing sessiond
-because in-flight turns, asks, and terminals cannot migrate. **Open Lifecycle Status** shows the typed
-status and doctor reports.
-
-For terminal diagnostics, use:
+Use the same controls from a terminal:
 
 ```sh
 pi-web status --json
@@ -80,18 +89,18 @@ pi-web restart --component ui
 pi-web restart --component sessiond
 ```
 
-The wrapper keeps same-origin navigation inside the app and opens other links in the default browser.
+Same-origin links stay inside the app. Other links open in the default browser.
 
-## Current legacy shortcuts
+## Current keyboard behavior
 
-Until Slice 1 lands:
+The native wrapper still exposes tabs:
 
-- `Command-N`: new window
-- `Command-T`: new tab
-- `Command-W`: close the current tab or window
-- `Command-R`: reload
-- `Command-[` and `Command-]`: browser history
-- `Command-Shift-[` and `Command-Shift-]`: previous or next tab
+- `Command-N` — new window
+- `Command-T` — new tab
+- `Command-W` — close the current tab or window
+- `Command-R` — reload
+- `Command-[` and `Command-]` — browser history
+- `Command-Shift-[` and `Command-Shift-]` — previous or next tab
 
-Slice 1 keeps new window, close, reload, and history navigation and removes the tab commands and
-Window-menu tab operations.
+Slice 1 keeps new window, close, reload, and history navigation. It removes every tab command and
+Window-menu tab action so one native window always represents one Chat.

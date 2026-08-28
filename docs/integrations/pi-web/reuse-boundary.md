@@ -1,72 +1,89 @@
-# PI WEB reuse boundary
+# What Pi Workbench reuses from PI WEB
 
-Status: current implementation boundary for the iterative Workbench client.
+**Current boundary:** keep PI WEB's runtime and useful leaf components; replace its application shell
+and the Workbench plugin-composed shell.
 
-## Decision
+This lets the first usable client ship without rebuilding session infrastructure or preserving a UI
+that failed in daily use.
 
-Pi Workbench reuses PI WEB as its runtime and source of selected client modules. It does not use the existing PI WEB application shell or the Workbench shell-profile/plugin composition as its product structure.
+## First two checkpoints
 
-This is an intentional fork boundary:
+### 1. Graphical text input
 
-- The sibling checkout's local `main` remains a clean fast-forward mirror of `upstream/main`.
-- `pi-workbench` remains the canonical fork integration branch.
-- Workbench-specific client composition may live in the fork.
-- Generic fixes can still be contributed upstream, but upstream suitability does not shape the first usable client.
+Reuse:
 
-## Keep
+- `SessionController` for transcript and event handling;
+- `ChatView`, `FormattedText`, `ToolExecutionView`, `AskUserCard`, and extension dialogs; and
+- `PromptEditor` for drafts, attachments, completion, model and thinking controls, steer, and stop.
 
-### Runtime and transport
+### 2. Files beside Chat
 
-- PI WEB server and session daemon.
-- Session creation, persistence, streaming, cancellation, reconnect, asks, dialogs, notifications, and message paging.
-- Project, workspace, worktree, file, Git, Terminal, machine, authentication, package, and lifecycle operations.
-- Runtime-validated HTTP and WebSocket clients, parsers, and shared wire types.
+Adapt `WorkspaceFilesPanel` for a narrow file-only context. Reuse its tree, text and image viewing,
+editing, and save behavior. Leave out upload controls and its broad plugin context.
 
-### Client modules worth reusing
+Add one small runtime safeguard to the workspace-file API: save sends the version that was loaded,
+and the runtime rejects the write if the file has changed. This prevents the editor from silently
+overwriting newer agent or external work.
 
-Reuse these as implementation when they satisfy the current slice:
+`TerminalPanel` and `WorkspaceGitPanel` remain unused until later slices justify them.
 
-- `SessionController` and its transcript/event handling.
-- `ChatView`, `FormattedText`, `ToolExecutionView`, `AskUserCard`, and extension-dialog rendering.
-- `PromptEditor` and its draft, attachment, completion, model, thinking, steer, and stop behavior for the first checkpoint.
-- `WorkspaceFilesPanel` tree, text/image viewing, editing, and save behavior for the second checkpoint. Adapt it to a narrow file-only context and omit upload controls rather than mounting its broad plugin panel context unchanged.
-- The workspace-file API, with the smallest runtime-enforced conditional-save addition: accept the loaded file version as a write precondition and reject a mismatch.
-- `TerminalPanel` and `WorkspaceGitPanel` only when their later slices begin.
-- The controlled no-model session fixture and isolated acceptance runner.
+## Runtime we keep
 
-Reuse does not freeze presentation. A reused module can later be replaced when observed friction is inside that module rather than in the surrounding shell.
+PI WEB continues to own:
 
-### Workbench modules
+- the server and session daemon;
+- session creation, persistence, streaming, cancellation, reconnect, asks, dialogs, notifications,
+  and transcript paging;
+- projects, workspaces, worktrees, files, Git, terminals, machines, authentication, packaging, and
+  lifecycle operations; and
+- validated HTTP and WebSocket clients, parsers, shared wire types, the controlled no-model fixture,
+  and its isolated acceptance runner.
 
-- Workstream Store and typed client validation.
-- Host-neutral Workstream session coordination.
-- Recorded Workstream fixtures and pure projections that remain accurate.
+Pi Workbench continues to own its Workstream Store, typed client validation, host-neutral session
+coordination, recorded fixtures, and accurate pure projections.
 
-## Leave behind
+Reusing a component does not freeze its presentation. Replace it later if real use shows the problem
+is inside that component rather than in the surrounding shell.
 
-- `PiWebApp` as the Workbench root composition.
-- PI WEB's project/workspace/session navigation as the product hierarchy.
-- Shell profiles as the Workbench composition mechanism.
-- The 3,000-line Workbench browser plugin as a shell implementation.
-- Unified Chats + Workstreams navigation state and prototype-fidelity obligations.
-- Adapter-owned responsive shell geometry, duplicate tool navigation, and protected-control reconstruction.
+## UI structure we replace
 
-The legacy plugin remains in the repository until the replacement Chat path proves the service and projection code that still needs extraction. It is fallback and evidence, not the target architecture.
+The new client does not use:
 
-## Invariants extracted from prior work
+- `PiWebApp` as its root;
+- PI WEB project/workspace/session navigation as the product hierarchy;
+- shell profiles as the composition mechanism;
+- the 3,000-line Workbench browser plugin as an application shell;
+- the unified Chats-and-Workstreams navigation model or prototype-fidelity target; or
+- adapter-owned responsive geometry, duplicate tool navigation, and reconstructed protected
+  controls.
 
-The archived work established requirements that remain useful:
+The legacy plugin remains only until the replacement Chat path identifies which service and
+projection code still needs extraction. It is fallback and evidence, not the target architecture.
 
-- A session selection uses a complete machine/project/workspace/session identity.
-- Response loss and reconnect must not create a duplicate session.
-- Browser or UI replacement must not restart the session daemon.
-- Live asks and extension dialogs stay in the selected Chat.
-- Draft, scroll, transcript paging, and live events stay scoped to one session identity.
-- Failures state the cause and available recovery without manufacturing state.
-- Keyboard operation, visible focus, narrow layouts, reduced motion, and readable text remain baseline quality.
-- Deterministic fixtures replace model calls in ordinary UI tests.
-- Workstream and Run state come only from their typed protocols.
+## Safety requirements carried forward
 
-## Deferred seams
+Prior work established requirements worth keeping:
 
-Do not stabilize a separate public frontend package or duplicate PI WEB's wire protocol before the first client is useful. Extract a public seam only when a second real client or repeated fork conflicts demonstrate the need.
+- Select a session by complete machine/project/workspace/session identity.
+- Reconnect after a lost response without creating a duplicate session.
+- Replace a browser or UI without restarting the session daemon.
+- Keep asks, dialogs, drafts, scroll, paging, and live events scoped to the selected Chat.
+- Report the cause of failure and available recovery without inventing state.
+- Preserve keyboard operation, visible focus, supported narrow layouts, reduced motion, and readable
+  text.
+- Use deterministic fixtures instead of model calls in ordinary UI tests.
+- Read Workstream and Run state only from their typed protocols.
+
+## Fork rules
+
+- Keep the sibling checkout's local `main` as a clean fast-forward mirror of `upstream/main`.
+- Use `pi-workbench` as the canonical fork integration branch.
+- Workbench-specific composition may live in the fork.
+- Contribute generic fixes upstream when useful, but do not make upstream suitability a gate for the
+  first client.
+
+## What can wait
+
+Do not create a public frontend package or duplicate PI WEB's wire protocol before the client is
+useful. Extract a stable public seam only when a second real client or repeated fork conflicts prove
+that it is needed.

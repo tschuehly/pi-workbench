@@ -1,8 +1,6 @@
 # Archived: PI WEB message-tree implementation plan
 
-Status: archived on 2026-08-28. This path remains only so historical links resolve.
+**Archived on 2026-08-28.** This old path remains only to preserve historical links; it defines no current implementation scope.
 
-- Historical document: [`pi-web-message-tree.md`](../archive/pi-web-ui/plans/pi-web-message-tree.md)
-- Current direction: [`workbench-ui.md`](workbench-ui.md)
-
-This document defines no current implementation scope.
+- Read the [historical plan](../archive/pi-web-ui/plans/pi-web-message-tree.md).
+- Follow the [current Workbench UI plan](workbench-ui.md).

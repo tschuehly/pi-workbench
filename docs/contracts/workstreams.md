@@ -1,28 +1,61 @@
 # Workstream Specification
 
-Defines the supported cross-session attention, ledger, attended checkpoint, and closure behavior.
+A Workstream is the durable, user-local attention record that lets an owner resume interactive work across sessions. It records meaningful changes, pending human action, and continuation context without becoming a managed Run or an authority boundary. This contract defines Workstream association, persistence, checkpointing, Human Tasks, and closure.
 
 This document is authoritative for Workstreams. The [system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries. The [interface contract](interfaces.md) remains authoritative for PI WEB presentation.
 
-## Workstream
+## Purpose and Boundary
 
-A Workstream is a finite, user-local container for restoring and allocating Human Attention across interactive sessions. It answers what the owner was doing, what changed, what needs human action, and where work can resume after interruption or time away.
+A Workstream is a finite container for restoring and allocating Human Attention. It answers:
+
+- What was the owner doing?
+- What changed?
+- What needs human action?
+- Where can work resume after interruption or time away?
 
 A Workstream may:
 
 - contain multiple concurrent interactive Pi sessions;
 - link Runs, files, plans, artifacts, and repositories without owning them;
-- retain human tasks raised during its sessions;
-- span multiple repositories;
+- retain Human Tasks raised during its sessions;
+- span multiple repositories; and
 - revisit a topic addressed by an earlier, closed Workstream.
 
-Every associated interactive session has exactly one home Workstream. Host-coordinated launch first records a pending association under one idempotency key, then asks PI WEB to start the session with that Workstream identity and confirms or fails the association from the result. An attended session started outside PI WEB may instead self-associate before writing other ledger changes. Reconnect reconciles pending associations rather than creating another session, and the store rejects a session identifier already assigned to another Workstream. Other Workstreams may reference its checkpoint or artifacts, but the session has one home ledger. Several Workstreams and several sessions within a Workstream may remain active at the same time.
+A Workstream is not a managed Run, project, Chat folder, artifact taxonomy, or authority boundary. It grants no mutation permission, workspace lease, lifecycle transition, publication right, or recovery guarantee. A linked managed Run retains its own owner, ledger, controller lifecycle, and authority.
 
-A Workstream is not a managed Run, project, chat folder, artifact taxonomy, or authority boundary. It grants no mutation permission, workspace lease, lifecycle transition, publication right, or recovery guarantee. A linked managed Run retains its own owner, ledger, controller lifecycle, and authority.
+Several Workstreams may remain active at once, and one Workstream may contain several active sessions.
 
-## Small persistence interface
+## Session Association
 
-Pi Workbench owns Workstream state behind a small interface:
+Every associated interactive session has exactly one home Workstream. Other Workstreams may reference that session's checkpoint or artifacts, but they cannot become a second home ledger.
+
+Host-coordinated launch follows one handshake:
+
+1. Record a pending association under one idempotency key.
+2. Ask PI WEB to start the session with that Workstream identity.
+3. Confirm or fail the association from the result.
+
+An attended session started outside PI WEB may instead self-associate before writing other ledger changes. Reconnect reconciles pending associations rather than creating another session. The Store rejects a session identifier already assigned to another Workstream.
+
+`packages/workstream-session-coordination/` coordinates attended-session creation outside the Store. Its small interface:
+
+- inspects checkpoint-continuation candidates;
+- launches a blank or explicitly selected checkpoint continuation; and
+- reconciles pending associations.
+
+The module accepts Workstream and attended-session adapters. It records pending before host creation and confirms a host-created session only when the result includes its complete runtime `machineId`, `projectId`, and `workspaceId`.
+
+Explicit cancellation removes the pending association through `session.cancelled`; its ledger tombstone keeps the operation token permanently occupied. A proven pre-creation failure uses `session.failed`. Transport loss, Store contention after creation, and other unknown outcomes remain pending.
+
+PI WEB uses this module for migrated launches. Any future terminal continuation interface must also use it rather than implementing another launch handshake.
+
+The Store additionally permits an already-running attended session without host catalog context to self-associate when both its pending and confirmed records omit all three location fields. The session then becomes active and may checkpoint. Partial confirmation anchors are rejected. Projection rebuilding remains compatible with older incomplete records.
+
+An incomplete active association can be repaired only by appending `session.anchor.repaired`; no caller rewrites earlier records.
+
+## Persistence Interface
+
+Pi Workbench owns Workstream state behind this interface:
 
 ```text
 create(CreateWorkstream) -> WorkstreamReceipt
@@ -33,61 +66,97 @@ watch(WorkstreamWatch) -> WorkstreamEventBatch
 close(CloseWorkstream) -> WorkstreamReceipt
 ```
 
-Mutation requests carry an idempotency key and, after creation, the expected Workstream revision. An exact retry returns the original receipt; reuse of the key with different input is rejected. Each receipt records the accepted revision and resulting snapshot reference. `watch` resumes ordered observation after a sequence and falls back to snapshot reconciliation when replay is unavailable. Pi sessions and PI WEB use this interface rather than writing Workstream storage directly. The exact wire schemas remain subject to trial validation.
+Mutation requests carry an idempotency key and, after creation, the expected Workstream revision. An exact retry returns the original receipt. Reusing the key with different input is rejected. Each receipt records the accepted revision and resulting snapshot reference.
 
-`packages/workstream-session-coordination/` confirms a host-created session only with its complete runtime machine, project, and workspace location. The Store also permits an already-running attended session without host catalog context to self-associate when both its pending and confirmed records omit all three location fields, making it active and able to checkpoint; partial confirmation anchors are rejected. Projection rebuilding remains compatible with older incomplete records. Any incomplete active association may be repaired only by appending `session.anchor.repaired`; no caller rewrites its earlier records.
+`watch` resumes ordered observation after a sequence. If replay is unavailable, it falls back to snapshot reconciliation. Pi sessions and PI WEB use this interface instead of writing Workstream storage directly. The exact wire schemas remain subject to trial validation.
 
-Attended-session creation is coordinated outside the Store by `packages/workstream-session-coordination/`. Its small interface inspects checkpoint-continuation candidates, launches a blank or explicitly selected checkpoint continuation, and reconciles pending associations. The module accepts Workstream and attended-session adapters, records pending before host creation, and confirms only a complete runtime identity. Explicit cancellation removes the pending association through `session.cancelled`, while its ledger tombstone keeps the operation token permanently occupied; a proven pre-creation failure uses `session.failed`; transport loss, Store contention after creation, and other unknown outcomes remain pending. PI WEB uses this module for migrated launches, and any future terminal continuation interface must use it rather than implementing another launch handshake.
+## Ledger and Current State
 
-## Ledger and current state
+Each Workstream has a concise append-only ledger. Agents append only at meaningful attention changes. Routine tool activity, repeated summaries, raw transcripts, and verbose model output do not belong in the ledger. Files and large artifacts remain in their owning stores and are linked by reference.
 
-Each Workstream has a concise append-only ledger. Agents append only at meaningful attention changes; routine tool activity, repeated summaries, raw transcripts, and verbose model output do not belong in the ledger. Files and large artifacts remain in their owning stores and are linked by reference.
+The ledger may record:
 
-The ledger may record session association, explicit launch cancellation, append-only session-anchor repair, checkpoint replacement, human-task changes, relevant links, and closure. A pending derived session may identify `checkpoint` or `fork` as its derivation kind. Records identify their producer and source session. Size limits and validation prevent a session from turning the ledger into standing model context.
+- session association;
+- explicit launch cancellation;
+- append-only session-anchor repair;
+- checkpoint replacement;
+- Human Task changes;
+- relevant links; and
+- closure.
 
-`session.anchor.repaired` names an incomplete active session and a complete `machineId`, `projectId`, and `workspaceId`. Its bounded resolution receipt records the PI WEB complete-machine scan method, evidence identity, matched catalog working directory, scanned-scope count, and verification time. The receipt is provenance evidence supplied by PI WEB, not Store-owned truth about the external session catalog. Immediately before append, trusted PI WEB plugin code must repeat the exact-identity catalog resolution and confirm the owner-selected location. The Store enforces only ledger-visible invariants: the Workstream is open, the session is active in this Workstream, its projected anchor is incomplete, the revision and idempotency key are current and fresh, and the session has no other Workstream home. Closed Workstreams and complete anchors cannot be repaired.
+A pending derived session may identify `checkpoint` or `fork` as its derivation kind. Records identify their producer and source session. Size limits and validation prevent a session from turning the ledger into standing Model Context.
 
-Current state is a separate mechanical projection over accepted records. It includes pending, active, and failed session associations and their latest projected anchors; each session's latest confirmed checkpoint plus explicit failure or staleness; durable Human Tasks and answer receipts; relevant links; and closure state. Anchor repair updates only the existing session's projected location and never creates another association. Pi Workbench does not persist a second combined narrative across sessions.
+Current state is a separate mechanical projection over accepted records. It includes:
+
+- pending, active, and failed session associations and their latest projected anchors;
+- each session's latest confirmed checkpoint, plus explicit failure or staleness;
+- durable Human Tasks and answer receipts;
+- relevant links; and
+- closure state.
+
+Anchor repair updates only the existing session's projected location; it never creates another association. Pi Workbench does not persist a second combined narrative across sessions.
+
+### Session-anchor repair
+
+`session.anchor.repaired` names an incomplete active session and supplies a complete `machineId`, `projectId`, and `workspaceId`.
+
+Its bounded resolution receipt records the PI WEB complete-machine scan method, evidence identity, matched catalog working directory, scanned-scope count, and verification time. The receipt is provenance evidence supplied by PI WEB, not Store-owned truth about the external session catalog.
+
+Immediately before append, trusted PI WEB plugin code must repeat the exact-identity catalog resolution and confirm the owner-selected location. The Store enforces only ledger-visible invariants:
+
+- the Workstream is open;
+- the session is active in this Workstream;
+- its projected anchor is incomplete;
+- the revision and idempotency key are current and fresh; and
+- the session has no other Workstream home.
+
+Closed Workstreams and complete anchors cannot be repaired.
 
 ## Checkpointing
 
-Checkpoints persist automatically. The active Pi session writes a concise checkpoint at a meaningful
-attention change, stating what changed, what remains, the next useful continuation, and an exact
-prompt for starting the next session. It does not wait for the owner to confirm each field.
+The active Pi session writes a concise checkpoint automatically at a meaningful attention change. It does not wait for the owner to confirm each field. The checkpoint states:
 
-A checkpoint is a correctable projection of where the work stands, not an authority transition. The
-owner may correct or replace one at any time, and a later checkpoint supersedes an earlier one.
-Closing the Workstream remains explicit and human-instructed.
+- what changed;
+- what remains;
+- the next useful continuation; and
+- an exact prompt for starting the next session.
 
-The active session writes the checkpoint for the owner who will read it later, following the
-`write-for-humans` skill. Each field leads with its point, uses plain concrete language, names the
-concrete artifacts it refers to, and lets the owner resume without rereading the session. `whatChanged`
-states what now exists or works, `remains` separates what is blocked or still owed, and `next` gives
-one obvious owner-facing action. The required `nextSessionPrompt` is a separate, paste-ready prompt
-for a fresh attended Pi session. It carries only the context, constraints, starting action, and
-references needed to continue safely; it does not restate the conversation or expand into an
-execution plan. The prompt is persisted with the rest of the checkpoint, remains correctable by the owner, and is
-limited to 2,000 characters. Checkpoints accepted before this field existed project
-`nextSessionPrompt: null` rather than inventing a prompt; every new replacement requires the field.
+A checkpoint is a correctable projection of where the work stands, not an authority transition. The owner may correct or replace it at any time. A later checkpoint supersedes an earlier one. Closing the Workstream remains explicit and human-instructed.
 
-A failed, rejected, or abandoned proposal remains visible as a checkpoint failure when applicable
-and does not invent continuation state or replace the latest confirmed checkpoint. Staleness changes
-only through an explicit record naming the latest confirmed checkpoint; Chat and tool activity never
-imply it. A later confirmed replacement clears the stale state. V1 does not use a watcher, background
-model turn, or fresh model context to create Workstream checkpoints.
+The active session writes for the owner who will read the checkpoint later and follows the `write-for-humans` skill. Each field must:
+
+- lead with its point;
+- use plain, concrete language;
+- name the concrete artifacts it references; and
+- let the owner resume without rereading the session.
+
+`whatChanged` states what now exists or works. `remains` separates what is blocked or still owed. `next` gives one obvious owner-facing action.
+
+The required `nextSessionPrompt` is a separate, paste-ready prompt for a fresh attended Pi session. It carries only the context, constraints, starting action, and references needed to continue safely. It does not restate the conversation or expand into an execution plan. The prompt is persisted with the rest of the checkpoint, remains owner-correctable, and is limited to 2,000 characters.
+
+Checkpoints accepted before `nextSessionPrompt` existed project `nextSessionPrompt: null` rather than inventing a prompt. Every new replacement requires the field.
+
+A failed, rejected, or abandoned proposal remains visible as a checkpoint failure when applicable. It does not invent continuation state or replace the latest confirmed checkpoint.
+
+Staleness changes only through an explicit record naming the latest confirmed checkpoint; Chat and tool activity never imply staleness. A later confirmed replacement clears stale state. V1 does not use a watcher, background model turn, or fresh Model Context to create Workstream checkpoints.
 
 ## Human Tasks
 
-A durable answerable Human Task declares a yes/no, finite-choice, or free-text answer kind, explicit
-options where applicable, source-session provenance, and materiality. Answering is a separate,
-revision-checked, idempotent Workstream mutation that records the answer and its receipt. Resolving
-a task is distinct from answering it.
+A durable, answerable Human Task declares:
 
-A live PI WEB `ask_user` submission remains live session attention. It is not copied into a durable
-Human Task implicitly, and submitting one does not make a Workstream answer atomic with it.
+- a yes/no, finite-choice, or free-text answer kind;
+- explicit options where applicable;
+- source-session provenance; and
+- materiality.
 
-## Completion and cleanup
+Answering is a separate, revision-checked, idempotent Workstream mutation that records the answer and its receipt. Resolving a task is distinct from answering it.
+
+A live PI WEB `ask_user` submission remains live session attention. It is not copied implicitly into a durable Human Task, and submitting one does not make a Workstream answer atomic with it.
+
+## Completion and Cleanup
 
 Closing a Workstream freezes that context as completed. Later work on the same topic starts a new Workstream and may reference the closed one.
 
-Before closure, Pi Workbench recommends reviewing unresolved human tasks and linked scratch files. Closure does not require that review. Unresolved items remain visible in the closed projection. Cleanup is proposed rather than automatic: files are deleted only after human confirmation.
+Before closure, Pi Workbench recommends reviewing unresolved Human Tasks and linked scratch files. Closure does not require that review. Unresolved items remain visible in the closed projection.
+
+Cleanup is proposed rather than automatic. Files are deleted only after human confirmation.

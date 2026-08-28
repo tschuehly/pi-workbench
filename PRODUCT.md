@@ -4,63 +4,81 @@
 
 ## Platform
 
-macOS application backed by a local web runtime
+A macOS application backed by a local web runtime.
 
 ## Users
 
-Pi Workbench serves one software developer conducting attended work with Pi and returning to related work across sessions, repositories, branches, and worktrees.
+Pi Workbench serves one software developer working with Pi across sessions, repositories, branches,
+and worktrees.
 
 ## Product Purpose
 
-Pi Workbench provides a graphical working surface that is preferable to the terminal while preserving durable attention across sessions. Success begins with one complete Chat and grows only from friction observed in daily use.
+Make graphical work with Pi preferable to terminal work, while preserving enough state to leave and
+resume without reconstructing the work from transcripts.
+
+Success starts with one complete Chat. New surfaces earn their place through friction observed in
+real use.
 
 ## Positioning
 
-The Workbench client is its own product interface. It reuses PI WEB's server, session daemon, transport, and selected leaf UI modules rather than adopting the existing PI WEB application shell.
+Pi Workbench owns the product interface. It reuses PI WEB's server, session daemon, transport, and
+selected UI components instead of adopting the existing PI WEB shell.
 
-A Workstream is a finite cross-session attention container. It links independently anchored sessions, checkpoints, Human Tasks, and references; it is neither a Chat folder nor an execution-authority boundary.
+A Workstream preserves attention across related sessions. It links sessions, checkpoints, Human
+Tasks, and references. It is not a Chat folder and grants no execution authority.
 
 ## Current Product Direction
 
-The first slice is one Chat per macOS window, delivered input-first:
+The first release is one Chat per macOS window, delivered in this order:
 
-- A blank window selects an explicit workspace and an existing or new Pi session.
-- The first checkpoint provides a proper graphical composer for reading, drafting, sending, steering, stopping, attachments, and live questions.
-- The second checkpoint adds a toggleable right-hand file pane for viewing and editing the selected workspace while Chat remains visible.
-- Several windows may operate independent Chats and file panes without state crossover.
+1. **Fix text input.** Provide a proper graphical composer for drafting, editing, sending, steering,
+   stopping, attachments, and live questions.
+2. **Add files beside Chat.** Provide a toggleable right-hand pane for viewing and editing the
+   selected workspace while Chat stays visible.
+3. **Use it.** Add nothing else until daily use exposes the next concrete problem.
 
-Workstreams remain useful and supported through their Store and terminal skill, but they do not enter the graphical client until the Chat slice is useful in daily work.
+A blank window asks for an explicit workspace and an existing or new Pi session. Separate windows
+must keep their Chats, drafts, files, and live events isolated.
+
+Workstreams remain available through their Store and terminal skill. They enter the graphical client
+only after the Chat window is useful in daily work.
 
 ## Capabilities and Constraints
 
-- PI WEB runtime owns session persistence, projects, workspaces, transport, authentication, reconnect, and operational lifecycle.
-- The Workbench client owns its composition and later Workstream navigation.
-- Every selected session uses a complete machine/project/workspace/session identity; hidden current-workspace state never chooses a Chat anchor.
-- Workstream state comes from the typed Workstream protocol, never Chat text or visual state.
-- Checkpoints persist automatically at meaningful attention changes and remain correctable by the owner.
-- Browser or client replacement must not restart the session daemon or disturb unrelated Chats.
-- File save must reject stale loaded content rather than silently overwriting newer agent or external changes.
-- Files are the second checkpoint of the first slice because the owner identified them as the next concrete need; Working Mode, file upload, Git, Terminal, Workstreams, history, and child inspection remain later observed-need slices.
+- PI WEB runtime owns projects, workspaces, session persistence, transport, authentication,
+  reconnect, and operational lifecycle.
+- Pi Workbench owns client composition and future Workstream navigation.
+- A selected Chat always has a complete machine/project/workspace/session identity. Hidden shell
+  state never chooses its workspace.
+- Workstream state comes from the typed Workstream protocol, never from Chat text or visual state.
+- Checkpoints persist automatically at meaningful attention changes and remain owner-correctable.
+- Replacing or closing a client must not restart the session daemon or disturb another Chat.
+- File save must reject a stale editor version instead of silently overwriting newer agent or
+  external changes.
+- File upload, Working Mode, Git, Terminal, graphical Workstreams, history, and child inspection are
+  not part of the first release.
 
 ## Evidence on Hand
 
-- Current UI plan: `docs/plans/workbench-ui.md`
-- PI WEB reuse boundary: `docs/integrations/pi-web/reuse-boundary.md`
-- UI reset evidence: `docs/research/reports/workbench-ui-reset-2026-08-28.md`
-- Workstream semantics: `docs/contracts/workstreams.md`
-- Legacy UI plans and disposition: `docs/archive/pi-web-ui/README.md`
+- [Current UI plan](docs/plans/workbench-ui.md)
+- [PI WEB reuse boundary](docs/integrations/pi-web/reuse-boundary.md)
+- [UI reset evidence](docs/research/reports/workbench-ui-reset-2026-08-28.md)
+- [Workstream contract](docs/contracts/workstreams.md)
+- [Legacy UI plan disposition](docs/archive/pi-web-ui/README.md)
 - Controlled runtime fixture: `packages/pi-web-integration/scripts/run-unified-shell-acceptance.mjs`
 
-No customer claims, usage analytics, or validated scale distributions are currently recorded.
+No customer claims, usage analytics, or validated scale distributions are recorded.
 
 ## Product Principles
 
-- Deliver one complete daily-use path before adding navigation around it.
+- Finish one daily-use path before adding navigation around it.
 - Let observed friction choose the next slice.
-- Keep conversation central and supporting detail absent until needed.
-- Reuse proven runtime behavior; replace presentation that does not serve the owner.
+- Keep conversation central and reveal supporting detail only when needed.
+- Reuse proven runtime behavior; replace presentation that does not help the owner.
 - Keep Workstream and Run protocols authoritative regardless of client design.
 
 ## Accessibility & Inclusion
 
-Every delivered slice preserves keyboard operation, visible focus, readable text, semantic status, reduced-motion behavior, and operability at the supported window sizes. Accessibility is part of each slice rather than a final hardening phase.
+Every delivered slice must support keyboard operation, visible focus, readable text, semantic
+status, reduced motion, and its declared window sizes. Accessibility is part of acceptance, not a
+later hardening phase.

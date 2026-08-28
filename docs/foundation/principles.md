@@ -1,198 +1,139 @@
 # Pi Workbench principles
 
-These principles govern system-wide design choices. When two designs conflict and no contract
-settles it, the guiding principle decides.
+> **Use these principles when no contract settles a system-wide design choice.** Detailed behavior
+> belongs in the owning [`../contracts/`](../contracts/) document; settled trade-offs and exceptions
+> belong in the [decision record](decisions.md).
 
-The doc has two altitudes. A short **guiding maxim** carries the intent and is the part to
-remember; beneath each maxim, the **detailed principles** it refines preserve the exact
-commitment. Detailed behavior still belongs to the owning document under
-[`../contracts/`](../contracts/); settled trade-offs and exceptions belong in the
-[decision record](decisions.md).
+The 16 guiding principles below carry both the memorable rule and its exact commitment. Each
+principle appears under one theme. A commitment that fits no theme reveals a design gap.
 
-Every detailed principle appears under exactly one maxim. If a commitment fits no maxim, that is a
-real gap, not a formatting choice.
-
-## Attention — spend the scarce resource well
+## Attention: spend the scarce resource well
 
 ### 1. Human Attention is scarce and bracketed
 
-Principal Judgments frame autonomous work before and after it; In-Run Judgment enters only for a
-Material Question. Attention follows judgment leverage, operational impact, and recovery cost, not
-routine activity.
-
-- Human Attention is spent according to judgment leverage, operational impact, and recovery cost
-  rather than routine workflow activity.
-- Human Attention brackets autonomous work and enters it conditionally when an In-Run Judgment can
-  materially improve the outcome.
+Spend Human Attention according to judgment leverage, operational impact, and recovery cost—not
+routine activity. Principal Judgments frame autonomous work before and after it. Human Attention
+enters In-Run work only when an In-Run Judgment can materially improve the outcome of a Material
+Question.
 
 ### 2. The interface protects attention
 
-Human-facing state is action-first and interruption-resilient: required judgment leads, routine
-activity stays separate, place is preserved, and what changed since the last judgment is explained.
-
-- Human-facing state assumes interruption and context switching: it externalizes memory,
-  distinguishes activity from action, preserves place, and explains what changed since the last
-  judgment.
-- Graphical interaction is action-first and interruption-resilient by default: required judgment
-  leads, routine activity is perceptually and structurally separate, completed outcomes are
-  concrete, and deeper evidence remains available on demand.
+Design human-facing state for interruption and context switching. Lead with required judgment;
+separate routine activity perceptually and structurally; preserve the reader's place; explain what
+changed since the last judgment; make completed outcomes concrete; and keep deeper evidence
+available on demand.
 
 ### 3. Discovery and review are bounded
 
-Parallelism is limited by dependencies, isolation, and review capacity; the shortest path to
-decision-changing evidence outranks unbounded discovery; an attention request pauses only the work
-it affects.
-
-- Parallelism is bounded by dependencies, isolation, and review capacity.
-- The shortest path to decision-changing evidence takes priority over unbounded issue discovery or
-  review activity.
-- Attention requests pause only affected work when dependencies and authority allow independent
-  work to continue.
-- Coordination scales Human Attention across concurrent work without transferring execution
-  authority to the coordinator.
+Bound parallelism by dependencies, isolation, and review capacity. Prefer the shortest path to
+decision-changing evidence over unbounded discovery or review. An attention request pauses only
+the work it affects when dependencies and authority allow other work to continue. Coordination
+scales Human Attention across concurrent work without transferring execution authority to the
+coordinator.
 
 ### 4. Work shape follows context, not rank
 
-Repository and task context shape Attention Allocation and the semantic work graph; Working Mode
-axes are selected per task; a loop or graph is an execution shape, never a maturity level.
+Repository and task context determine Attention Allocation and the semantic work graph. Select
+Working Mode axes per task. A loop or graph is an execution shape chosen for the outcome, not a
+workflow rank or maturity level.
 
-- Repository and task context shape Attention Allocation and the semantic work graph.
-- A loop or graph is an execution shape selected for the outcome, not a workflow or maturity level
-  in itself.
-
-## Authority — who and what may decide and mutate
+## Authority: who and what may decide and mutate
 
 ### 5. Models propose; deterministic modules dispose
 
-Models choose and revise the semantic work graph; the controller owns the fixed lifecycle, side
-effects, and the one authoritative reduced state; coordinators reason but never mutate a project.
-Routine activity is reconciled mechanically, so models enter only when judgment is actionable.
+The model chooses and revises the semantic work graph inside a fixed lifecycle. The controller
+alone owns that lifecycle, validates changes, performs side effects, and reduces immutable events
+into authoritative current Run state. Fixed lifecycle gates exist only in the controller state
+machine, not as duplicated execution-graph nodes.
 
-- The controller owns the fixed lifecycle; the model chooses and revises the semantic work graph
-  inside it.
-- The coordinator reasons about project work but never mutates a project directly.
-- Immutable events record facts; only the deterministic controller reducer defines current run
-  state.
-- Fixed lifecycle gates exist only in the controller state machine rather than being duplicated as
-  execution-graph nodes.
-- Watchers classify and reconcile routine execution mechanically; models enter only when
-  interpretation or judgment is actionable.
-- Routine execution activity remains observable without consuming model attention.
+The coordinator reasons about project work but never mutates a project directly. Watchers classify
+and reconcile routine execution mechanically, keeping it observable without consuming model
+attention. Models enter only when interpretation or judgment is actionable.
 
 ### 6. Authority is structural, never textual
 
-Permission lives in leases, envelopes, and schemas that services enforce—not in prompt text.
-Working Mode configures behavior and cannot grant a guarantee the underlying service does not
-enforce.
+Services enforce permission through leases, envelopes, and schemas—not prompt text. Working Mode
+configures behavior; it cannot grant a guarantee that the underlying service does not enforce.
 
-- New maxim, grounded in Decision 52 (prompt instructions are not the authority mechanism), Decision
-  69, and the Working Mode definition in [vocabulary](vocabulary.md) and [Working
-  Mode](working-mode.md).
+This principle is grounded in Decision 52, Decision 69, and the Working Mode definitions in the
+[vocabulary](vocabulary.md) and [Working Mode](working-mode.md).
 
 ### 7. Uncertainty fails closed
 
-Unknown or contradictory state resolves to `unknown` rather than a guess. Unrecognized types,
-unreleased workspaces, and unmatched model bindings stop rather than proceed.
+Resolve unknown or contradictory state to `unknown`, never to a guess. Stop on unrecognized types,
+unreleased workspaces, or unmatched model bindings instead of proceeding.
 
-- New maxim, grounded in Decisions 54 (classify to `unknown`), 59 (fail-closed workspace release),
-  61 (unknown schema types fail closed), and 88 (no silent model-binding fallback).
+This principle is grounded in Decisions 54, 59, 61, and 88.
 
 ### 8. One human owner is accountable per Run
 
-A Run may use many model workers, but exactly one owner holds steering and authority at a time.
-Ownership transfers only through an explicit, portable handoff.
+A Run may use many model workers, but exactly one human owner holds steering and authority at a
+time. Ownership transfers only through an explicit, portable handoff.
 
-- New maxim, grounded in Decision 11 (one active human owner per run).
+This principle is grounded in Decision 11.
 
-## Context and state — what persists, what is thrown away
+## Context and state: what persists and what is discarded
 
 ### 9. Model Context is disposable; Run state is durable
 
-No model session is authoritative Run state; Logical Actor identity and accountability outlive
-replaceable model sessions.
-
-- Model Context is disposable; Run state is resumable.
-- Logical Actor identity and accountability outlive replaceable model sessions; no model context is
-  authoritative Run state.
+Run state is resumable; Model Context is disposable. Logical Actor identity and accountability
+outlive replaceable model sessions. No model session or context is authoritative Run state.
 
 ### 10. Work moves as contracts, not conversations
 
-Every Dispatch receives a self-contained Work Packet and returns a typed, validated Episode.
-Durable references carry results forward instead of full conversation histories.
-
-- Every dispatch has a self-contained input contract and every result has a mechanically validated
-  typed episode contract.
-- Each Pi actor receives only the context justified by its bounded work; durable references carry
-  forward results instead of full conversation histories.
+Every Dispatch receives a self-contained Work Packet and returns a mechanically validated, typed
+Episode. Give each Pi actor only the context its bounded work justifies. Carry results forward as
+durable references rather than complete conversation histories.
 
 ### 11. Bindings are assigned by role and measured
 
-Model capability, Model Effort, Continuity, and Independence are set by Cognitive Role and measured
-rather than assumed.
-
-- Model capability, Model Effort, Continuity, and Independence are assigned by Cognitive Role and
-  measured rather than assumed.
+Assign model capability, Model Effort, Continuity, and Independence by Cognitive Role, and measure
+them rather than assuming them.
 
 ### 12. State classes stay distinct and compound deliberately
 
-Working state, collaboration state, and durable knowledge remain separate. Local working state
-drives execution while external systems are systems of record synced explicitly and idempotently.
-Generated state expires or promotes; only validated Learning Candidates become knowledge.
+Keep working state, collaboration state, and durable project knowledge distinct. Local working
+state drives execution; external systems remain systems of record and synchronize only through
+explicit, idempotent side effects. Generated state must expire or follow a promotion path.
 
-- Working state, collaboration state, and durable project knowledge are distinct.
-- External side effects are explicit and idempotent.
-- Generated state has an expiry or promotion path.
-- Every run analyzes its outcome and execution, then compounds validated lessons without promoting
-  raw agent output as knowledge.
+Every Run analyzes its outcome and execution, then compounds validated Learning Candidates. Raw
+agent output does not become durable knowledge.
 
-## Evidence — how the outcome earns trust
+## Evidence: how the outcome earns trust
 
 ### 13. Judgment is preserved and evaluated against
 
-Judgment survives as source-backed artifacts with one accountable synthesis. Implementation is
-judged against those artifacts on a task-shaped Review Surface that joins intent, behavior, Primary
-Evidence, deviations, and risk.
-
-- Judgment is preserved as source-backed artifacts; implementation is evaluated against those
-  artifacts.
-- Deliberation is represented by durable, evidence-linked episodes and one accountable synthesis.
-- Acceptance is supported by a task-shaped Review Surface that joins intent, realized behavior,
-  Primary Evidence, deviations, risks, feedback, and available actions.
+Preserve judgment as source-backed artifacts and evidence-linked Episodes with one accountable
+synthesis. Evaluate implementation against those artifacts. Acceptance uses a task-shaped Review
+Surface that joins intent, realized behavior, Primary Evidence, deviations, risks, feedback, and
+available actions.
 
 ### 14. Verification is independent and evidence-backed
 
-Material claims are checked by an actor that did not produce them and are supported by Primary
-Evidence, not model confidence.
+An actor that did not produce a material claim checks it against Primary Evidence, not model
+confidence.
 
-- New maxim, grounded in the Independence and Primary Evidence definitions in
-  [vocabulary](vocabulary.md) and the Quality and Authority Envelope in
-  [`../contracts/workflow.md`](../contracts/workflow.md).
+This principle uses the Independence and Primary Evidence definitions in
+[vocabulary](vocabulary.md) and the Quality and Authority Envelope in the
+[workflow contract](../contracts/workflow.md).
 
-## Boundaries — where ownership stops
+## Boundaries: where ownership stops
 
 ### 15. The Workbench client owns experience, never authority
 
-The user-facing client delivers every interaction over typed protocols but never owns workflow
-state. Trust-sensitive controls stay outside agent-generated surfaces.
-
-- Pi Workbench owns its client composition while PI WEB may supply runtime and leaf modules.
-- User-facing Workbench interactions cross typed protocols.
-- Trust-sensitive controls remain outside agent-generated surfaces.
+Pi Workbench owns its client composition while PI WEB may provide runtime and leaf modules. Every
+user-facing Workbench interaction crosses a typed protocol; the client never owns workflow state.
+Trust-sensitive controls remain outside agent-generated surfaces.
 
 ### 16. Workstreams restore attention without Run authority
 
-Workstreams persist cross-session attention at meaningful changes, preserving source events with a
-separately projected re-entry state, and make no managed-recovery claim.
+Workstreams preserve cross-session attention without claiming managed Run authority or recovery.
+They persist source events only at meaningful attention changes; raw transcripts and routine
+activity do not become standing context by default. A separate projection provides current
+re-entry state, and combined synthesis is generated only when needed.
 
-- Workstreams preserve cross-session attention without borrowing the authority or recovery claims of
-  managed Runs.
-- Cross-session persistence occurs at meaningful attention changes; raw transcripts and routine
-  activity do not become standing context by default.
-- Workstream ledgers preserve source events while current re-entry state is projected separately and
-  combined synthesis is generated only when needed.
+## What is not a principle
 
-## Not a principle
-
-The former principles that PI WEB must own the complete experience or that its attention surface is
-the V1 vertical slice were scope and roadmap choices, not timeless design commitments. Their
-replacement is tracked in the [decision record](decisions.md).
+The former claims that PI WEB must own the complete experience and that its attention surface is
+the V1 vertical slice were roadmap and scope choices, not timeless design commitments. Their
+replacements are recorded in the [decision record](decisions.md).

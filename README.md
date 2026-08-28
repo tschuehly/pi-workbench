@@ -1,45 +1,60 @@
 # Pi Workbench
 
-Pi Workbench helps one developer spend their attention well across agent-assisted work. It makes
-pair programming with Pi durable across sessions, so you can leave and come back without
-reconstructing state from chat history.
+Pi Workbench helps one developer work with Pi, leave, and resume without reconstructing the work
+from chat history. Pi is its only model runtime.
 
-Pi is the only model runtime it uses.
+**Current reality:** the attended terminal workflow works, but the graphical client does not. The
+next release replaces the unusable PI WEB/Workbench shell with one focused macOS Chat window.
+
+## What we are building now
+
+The first graphical release has two ordered checkpoints:
+
+1. **Fix text input.** Replace terminal composition with PI WEB's graphical Prompt Editor.
+2. **Add files beside Chat.** Add a toggleable viewer/editor for the selected workspace.
+
+Each native window owns one Chat. A small chooser opens an explicitly located existing session or
+starts a new one. The client reuses PI WEB runtime but not its legacy application shell.
+
+After these checkpoints are in daily use, the next feature must answer a problem observed in that
+use. See the [Workbench UI plan](docs/plans/workbench-ui.md).
 
 ## What works today
 
-**Workstreams.** A Workstream is a container for your attention across sessions and repositories.
-It holds several concurrent Pi sessions, the last confirmed checkpoint for each, unresolved
-questions, and links. You leave, come back, and read the projection instead of scrolling a
-transcript. A Workstream grants no execution authority and promises no recovery.
+### Workstreams
 
-**Bounded child Pi processes.** A lead session can delegate work to a fresh child Pi — one child,
-one assignment, one result. Children can run in the background and wake the lead once when they
-finish. Nothing survives the session.
+A Workstream preserves attention across sessions and repositories. It records associated sessions,
+the latest checkpoint for each, unresolved Human Tasks, and links. You can resume from this compact
+projection instead of rereading transcripts.
 
-**Durable workers.** A worker is a name plus a resumable Pi session, for repeated work in one
-scope. Identity survives the session; execution never does.
+Workstreams grant no execution authority and promise no recovery. Until their graphical surface is
+built, use the [`workstreams`](skills/workstreams/SKILL.md) skill.
 
-**Model routing by Cognitive Role.** Work is classified by the kind of thinking it needs, and each
-role resolves to a model and thinking budget.
+### Bounded child Pi processes
 
-## What does not work today
+A lead session can give one bounded assignment to a fresh child Pi and collect one result. A child
+may run in the background and wake the lead once when it finishes. No child process survives the
+attended session.
 
-**The graphical client is being reset.** The implemented PI WEB/Workbench shell is not usable for
-daily work, so the terminal remains the working surface. The replacement starts with one macOS
-window per Chat and reuses PI WEB below the application shell. Use the
-[`workstreams`](skills/workstreams/SKILL.md) skill to read and update Workstreams until a later UI
-slice brings them into the client.
+### Durable workers
 
-**Four of the nine packages are empty directories.** `controller/`, `pi-execution/`,
-`repository-workspace/`, and `artifact-store/` contain only a `.gitkeep`. Documentation that
-describes a Run Controller, managed execution, enforced workspace isolation, or durable Run
-recovery is describing something unbuilt. Those decisions are collected in
-[Level 4 concepts](docs/research/level-4-concepts.md) and are marked non-authoritative.
+A Worker is a name plus a resumable Pi session for repeated assignments in one scope. Its identity
+survives; its execution does not.
 
-## How you control Pi's behavior
+### Model routing
 
-The intended Working Mode has two independent choices:
+Workbench classifies work by Cognitive Role and resolves each role to a model and thinking budget.
+
+## What is not fully implemented
+
+### The replacement graphical client
+
+The native wrapper works, but it still loads the legacy PI WEB client. The focused Chat and file
+composition described above has not shipped.
+
+### Working Mode
+
+The intended control separates two choices:
 
 ```text
 Alignment:  Vibe  |  Align  |  Plan   |  Spec
@@ -52,52 +67,47 @@ covers required behavior and evidence. Checking states the minimum completion ev
 repository-dependent default that has not been configured yet. A new context starts in Vibe;
 restoring a previous choice is not part of the current design.
 
-This control is **not implemented yet**. Current sessions do not mechanically block mutation or
-show persistent mode state. Working Mode changes behavior, never permission: it cannot grant
-workspace isolation, publication authority, durable execution, or recovery. Details in
-[Working Mode](docs/foundation/working-mode.md).
+Alignment and Checking are available today only as prompt guidance. There is no selector,
+persistence, visible mode, or mutation gate. Working Mode changes behavior, never permissions or
+guarantees. See [Working Mode](docs/foundation/working-mode.md).
 
-## What's next
+### Managed execution
 
-Build the first usable graphical slice: one Pi Chat per native macOS window, with a small chooser for
-an explicitly located existing or new session. Deliver PI WEB's graphical Prompt Editor first, then
-its workspace file viewer/editor as a toggleable right-hand pane without loading the legacy shell.
+Four package directories are placeholders: `controller/`, `pi-execution/`,
+`repository-workspace/`, and `artifact-store/`. Claims about a Run Controller, enforced workspace
+isolation, durable Run recovery, or managed execution describe unbuilt concepts. They live in
+[Level 4 concepts](docs/research/level-4-concepts.md) and are not authoritative behavior.
 
-After those owner-selected checkpoints are in real use, add only the next capability whose absence is concrete. See the concise
-[Workbench UI plan](docs/plans/workbench-ui.md). Working Mode remains a separate intended control.
+## Documentation map
 
-## Where everything else lives
-
-This README is the file for a human. Everything below is context for an agent, read on demand.
-
-- [`docs/README.md`](docs/README.md) — map of all documentation and its authority order.
-- [`docs/foundation/`](docs/foundation/) — decisions that govern code, canonical vocabulary,
-  principles, and Working Mode.
-- [`docs/contracts/`](docs/contracts/) — behavioral contracts at each module seam.
-- [`docs/plans/`](docs/plans/) — implementation sequences, some complete, some not started.
-- [`docs/research/`](docs/research/) — evidence, reports, and unbuilt concepts. Never authoritative.
+- [`docs/README.md`](docs/README.md) — where to find authority, plans, and evidence.
+- [`docs/foundation/`](docs/foundation/) — vocabulary, system boundaries, principles, and decisions.
+- [`docs/contracts/`](docs/contracts/) — stable behavior at module boundaries.
+- [`docs/plans/`](docs/plans/) — implementation sequences and their status.
+- [`docs/research/`](docs/research/) — evidence and reports; never product authority.
 - [`AGENTS.md`](AGENTS.md) — task router for agents working in this repository.
 
 ## Repository layout
 
-- `packages/` — persistence, execution mechanics, client integration (four are placeholders).
-- `skills/`, `extensions/`, `prompts/` — curated Pi capabilities.
+- `packages/` — persistence, execution, and integration modules; four remain placeholders.
+- `skills/`, `extensions/`, `prompts/` — Pi capabilities distributed by the harness.
 - `config/` — commit-safe configuration templates.
 - `schemas/`, `workflows/`, `repositories/` — protocol and policy scaffolding.
 
 ## Local development
 
-A PI WEB source checkout is expected at `../pi-web`.
+Keep a PI WEB source checkout at `../pi-web`.
 
-Machine-local state stays outside this repository: `~/.config/pi-web`, `~/.pi-web`, and Workstreams
-in `~/.pi-workbench/workstreams`. Never commit credentials, authentication state, sessions, or
+Machine-local state belongs outside this repository: `~/.config/pi-web`, `~/.pi-web`, and
+`~/.pi-workbench/workstreams`. Never commit credentials, authentication state, sessions, or
 machine-specific paths.
 
-Run the checks with:
+Run the repository checks with:
 
 ```sh
 npm test
 ```
 
-That runs model routing, the Pi execution adapter, the worker registry, the Workstream store,
-session coordination, the PI WEB integration, and the extension tests.
+This command covers model routing, quota startup, activity and autonomous-grill extensions, child
+execution, the Pi execution adapter, Worker registry, Workstream Store, session coordination, and
+PI WEB integration.

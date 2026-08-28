@@ -1,95 +1,106 @@
 # Workbench UI plan
 
-Status: current iterative plan. It supersedes the archived PI WEB shell, plugin-customization, unified-navigation, and prototype-fidelity plans.
+**Current plan:** fix text input first, then add files beside Chat. Use both before choosing another
+feature.
 
-## Direction
+This plan replaces the archived PI WEB shell, plugin-customization, unified-navigation, and
+prototype-fidelity plans.
 
-Build a useful graphical coding client one observable slice at a time. The client uses PI WEB's runtime and selected leaf UI modules, but its navigation and composition belong to Pi Workbench.
+## What we are building
 
-The first product is a macOS Chat window with a graphical composer and an embedded file pane, not a portfolio shell:
+One native macOS window represents one Pi Chat.
+
+A new window first asks for a workspace and an existing or new session. After selection, the window
+shows the Chat. A toggle opens that workspace's files on the right while Chat stays visible on the
+left.
 
 ```text
 Pi Workbench.app window
-  -> Workbench Chat client
+  -> Workbench Chat and file client
   -> PI WEB HTTP/WebSocket clients
   -> PI WEB server and session daemon
   -> Pi session
 ```
 
-One window owns one selected Chat and its workspace files. A blank window offers only the choices needed to open or create that Chat.
+## Build order
 
-## Delivery rule
+### Checkpoint 1: fix text input
 
-Each slice must be usable for real work before the next slice is chosen. Choose it from observed friction in actual work—not from the archived backlog or a prototype conformance matrix—and validate the need again in the running client.
+Mount PI WEB's existing `PromptEditor` with the selected Chat. The owner must be able to use normal
+macOS text editing instead of composing in the terminal.
 
-For each slice:
+This checkpoint is done when an attended real Chat proves:
 
-1. State the user-visible outcome and the behavior kept fixed.
-2. Implement the smallest end-to-end path against real PI WEB runtime seams.
-3. Verify it with the existing controlled fixture and one attended real-use pass.
-4. Use it before selecting the next missing capability.
+- multiline editing, selection, copy and paste, undo and redo, and normal macOS navigation shortcuts;
+- durable drafts and attachments;
+- send, streaming, steer, stop, and inline question answers;
+- model and session status, formatted messages, tool results, live activity, transcript paging, and
+  correct scroll behavior; and
+- reopening an existing session after the app restarts.
 
-A historical design may supply a requirement or tested mechanism. It does not make that feature current scope.
+Use this checkpoint for real work before starting the file pane.
 
-## Slice 1 — graphical input, then embedded files
+### Checkpoint 2: add files beside Chat
 
-### Outcome
+Add a toggleable right-hand file pane. Adapt the useful file behavior from PI WEB's
+`WorkspaceFilesPanel`, but give it a narrow file-only context. Do not import the old plugin panel,
+upload controls, Git, or Terminal.
 
-The owner can launch Pi Workbench, open an existing Pi session or start one in an explicitly selected workspace, conduct the full attended conversation with a proper graphical text editor, and view or edit that workspace's files without leaving the Chat window.
+This checkpoint is done when an attended Chat-and-file session proves:
 
-### Delivery checkpoints
+- opening and closing Files does not disturb Chat;
+- the tree shows only the selected workspace;
+- text and supported images render correctly;
+- text files can be edited, saved, and reloaded;
+- save failures remain visible;
+- switching files or closing the pane never silently discards unsaved edits; and
+- a stale editor cannot overwrite newer work.
 
-1. **Graphical input first.** Mount the existing PI WEB `PromptEditor` with the selected Chat. Prove ordinary macOS text editing, drafts, send, steer, stop, attachments, and inline answers in attended use before adding another surface.
-2. **Files second.** Add a toggleable right-hand pane by adapting the file tree/viewer/editor behavior in PI WEB's `WorkspaceFilesPanel`. Keep Chat visible on the left; support the workspace tree, text and image viewing, text editing, save, and safe handling of unsaved or externally changed files. Narrow the component's context to file concerns and omit its upload controls rather than importing the plugin panel context, Git, or Terminal.
+For stale-save protection, the editor sends the version it loaded as a PI WEB runtime write
+precondition. If Pi or another process changed the file, save must fail without changing the newer
+content. The owner can then reload or explicitly choose to overwrite.
 
-These are ordered checkpoints in one slice. The file pane does not delay dogfooding the graphical composer.
-
-### Included
+## Behavior shared by both checkpoints
 
 - Keep the existing AppKit `WKWebView` wrapper and PI WEB lifecycle management.
-- A small blank-window chooser for workspace and existing/new Chat.
-- A new Chat is a standalone PI WEB-runtime session and does not create a Workstream implicitly.
-- One selected Chat per window, identified by machine, project, workspace, and session.
-- Existing PI WEB Chat rendering, formatted messages, tool results, live activity, paging, and scroll behavior where they fit.
-- Existing Prompt Editor behavior for drafts, send, steer, stop, attachments, model/status display, and inline asks or extension dialogs.
-- A toggleable right-hand file pane scoped to the selected Chat's workspace, reusing `WorkspaceFilesPanel` behavior for tree navigation, text and image viewing, text editing, and save.
-- Save submits the loaded file version as a PI WEB runtime precondition. A changed version rejects the write instead of overwriting agent or external edits; reload or explicit overwrite remains a human choice.
-- The Workbench Chat client becomes the fork's default web root loaded by the existing macOS wrapper.
+- A new Chat is a standalone PI WEB session; it does not create a Workstream.
+- Identify every Chat by machine, project, workspace, and session.
+- Make the Workbench client the default web root in the PI WEB fork.
 - `Command-N` opens another independent Chat window.
-- Native tabbing is disabled: remove New Tab, `Command-T`, tab navigation/merge menu items, and tab creation from same-origin links.
-- Closing or reloading one window does not restart the session daemon or disturb another Chat.
-- Existing sessions can be reopened after application restart.
+- Remove native tabbing: New Tab, `Command-T`, tab navigation, Merge All Windows, and tab creation
+  from same-origin links.
+- Closing or reloading one window must not restart the session daemon or disturb another Chat.
+- Two windows must not share selection, drafts, scroll, files, or live events.
 
-### Excluded
+## Not in this release
 
-- Workstreams and cross-Chat attention.
-- File upload, Git, Terminal, message trees, editor tabs, project-wide search, and child-execution inspectors.
-- Projects or sessions as permanent navigation panes.
-- Shell profiles, plugin-composed layout, dashboards, and portfolio views.
-- Redesigning PI WEB server, session-daemon, authentication, or persistence.
-- A native Swift implementation of Chat.
-- Mobile and coarse-pointer clients.
+- Workstreams or cross-Chat attention
+- File upload, Git, or Terminal
+- Message trees, child-execution inspectors, project-wide search, or editor tabs
+- Permanent project or session navigation panes
+- Shell profiles, plugin-composed layout, dashboards, or portfolio views
+- A native Swift Chat implementation
+- Mobile or coarse-pointer clients
+- A redesign of PI WEB authentication, persistence, server, or session daemon
 
-### Acceptance
+## How each checkpoint ships
 
-1. A fresh window shows the chooser and no legacy PI WEB shell.
-2. Selecting an existing session opens the correct transcript and receives live updates.
-3. Starting a session records an explicit workspace and reaches an operable Chat.
-4. The graphical composer supports multiline editing, selection, copy/paste, undo/redo, ordinary macOS navigation shortcuts, draft retention, attachments, send, stream, steer, stop, and inline question answering. This checkpoint passes an attended real Chat before file work begins.
-5. The Files pane opens and closes without disturbing Chat, shows only the selected workspace, views text and supported images, edits and saves text, reports save failures, and does not silently discard unsaved changes.
-6. If Pi or another process changes an open file after it loads, save rejects the stale edit and offers reload or explicit overwrite; ordinary save never silently clobbers the newer content.
-7. Two windows can operate two different sessions without selection, draft, scroll, file, or live-event crossover; one window never contains multiple Chats.
-8. Closing, reloading, or replacing the web UI leaves other sessions and the session daemon running.
-9. The controlled no-model fixture and an attended real Chat-and-file pass both succeed.
+1. State the user-visible outcome and behavior that must remain unchanged.
+2. Implement the smallest complete path through real PI WEB runtime seams.
+3. Run the controlled no-model fixture.
+4. Pass the attended use described above.
+5. Use the result before adding more scope.
 
-### Verification entry point
+Choose later work from friction observed in actual use, not from an archived backlog or prototype
+matrix. Historical designs may provide evidence; they do not create scope.
 
-Adapt `packages/pi-web-integration/scripts/run-unified-shell-acceptance.mjs` to start the replacement
-client and assert the Slice 1 behavior while preserving its isolated `HOME`, data, session, socket,
-port, and browser roots. Keep the existing script until the replacement scenario is green; rename it
-only afterwards.
+## Automated verification
 
-Run the adapted fixture from the Workbench repository:
+Adapt `packages/pi-web-integration/scripts/run-unified-shell-acceptance.mjs` to launch the replacement
+client. Keep its isolated `HOME`, data, session, socket, port, and browser roots. Keep the current
+script name until the replacement scenario passes; rename it afterwards.
+
+Run it from the Workbench repository:
 
 ```sh
 root="/tmp/workbench-chat-acceptance-$$"
@@ -99,38 +110,36 @@ node packages/pi-web-integration/scripts/run-unified-shell-acceptance.mjs \
   --root "$root"
 ```
 
-Completion requires a passing result and removal of the owned runtime root and processes.
+Acceptance requires a passing run and removal of the owned runtime root and processes. The final
+fixture must also prove:
 
-## Later slices
+- a fresh window shows the chooser, not the legacy PI WEB shell;
+- new and existing sessions use the correct complete identity;
+- two windows remain isolated;
+- stale file saves are rejected; and
+- closing, reloading, or replacing the client leaves other sessions and the session daemon running.
 
-Later slices are candidates, not a committed sequence:
+## Later, only if use demands it
 
-- Add Terminal when leaving Chat for terminal work becomes the next repeated friction.
-- Add Workstream re-entry when choosing among Chats becomes the next repeated friction.
-- Add Git when switching to an external Git client becomes the next repeated friction.
-- Add project-wide search or editor tabs only if the single-file pane proves insufficient.
-- Add cross-session attention, Working Mode, history, or child inspection only after the simpler client is in daily use and the missing information is concrete.
+Possible later slices include Terminal, Workstream re-entry, Git, project-wide search, editor tabs,
+cross-session attention, Working Mode, history, and child inspection. They are not a committed
+sequence.
 
-Each addition must preserve the one-window/one-Chat model unless real use shows that model is wrong.
+Keep one window per Chat unless real use proves that model wrong.
 
 ## Ownership
 
-### Pi Workbench macOS wrapper
+- **macOS wrapper:** native windows, application menus, same-origin hosting, lifecycle status, and
+  window creation. It does not own session state.
+- **Workbench web client in the PI WEB fork:** Chat and file composition, then any later Workbench
+  navigation.
+- **PI WEB runtime:** projects, workspaces, sessions, transport, reconnect, authentication, files,
+  Git, terminals, remote machines, packaging, and lifecycle.
+- **Pi Workbench protocols:** authoritative Workstream and future Run state. The client renders typed
+  projections and receipts; Chat text and visual state never become authority.
 
-Owns native windows, application menus, same-origin hosting, lifecycle status, and window creation. It does not own Pi session state.
+## Supporting evidence
 
-### Workbench web client in the PI WEB fork
-
-Owns the input-first Chat and file composition and later Workbench navigation. It may reuse PI WEB client modules directly while the product seam is being proven; no public frontend framework is required first.
-
-### PI WEB runtime
-
-Owns projects, workspaces, sessions, HTTP/WebSocket transport, reconnect, authentication, terminals, files, Git, remote machines, packaging, and operational lifecycle. Only capabilities used by a delivered slice appear in the Workbench client.
-
-### Pi Workbench protocols
-
-The Workstream Store and future Run Controller remain authoritative for their own state. A client renders typed projections and receipts; Chat text and visual state never become Workstream or Run authority.
-
-## Preserved evidence
-
-The extracted reuse boundary is in [`../integrations/pi-web/reuse-boundary.md`](../integrations/pi-web/reuse-boundary.md). Owner-observed problems and repository evidence are in [`../research/reports/workbench-ui-reset-2026-08-28.md`](../research/reports/workbench-ui-reset-2026-08-28.md). Superseded plans and their disposition are indexed in [`../archive/pi-web-ui/README.md`](../archive/pi-web-ui/README.md).
+- [PI WEB reuse boundary](../integrations/pi-web/reuse-boundary.md)
+- [Owner-observed UI failure and retained lessons](../research/reports/workbench-ui-reset-2026-08-28.md)
+- [Archived UI plans and their disposition](../archive/pi-web-ui/README.md)
