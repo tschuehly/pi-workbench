@@ -45,6 +45,7 @@ const Params = Type.Object({
   profile: StringEnum(Object.keys(PROFILES) as (keyof typeof PROFILES)[], { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
   independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Defaults to the active parent model provider; set it explicitly for child-authored work." })),
+  telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the terminal wakeup with subagent_collect. The child still dies when the attended session ends." })),
 });
 
@@ -61,6 +62,7 @@ const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
+  telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the terminal wakeup with subagent_collect." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
 });
@@ -160,7 +162,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       emitExecutionEvent(pi, {
         type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
         executionId: receipt.executionId, kind: "subagent", task: childTask,
-        profile: params.profile, cognitiveRole: params.cognitiveRole,
+        profile: params.profile, cognitiveRole: params.cognitiveRole, concept: params.telemetryConcept ?? null,
         provider: binding.provider, model: binding.model, effort: binding.effort,
       });
 
@@ -372,7 +374,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       emitExecutionEvent(pi, {
         type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
         executionId: receipt.executionId, kind: "worker", workerId: params.workerId, task: childTask,
-        profile: begin.profile, cognitiveRole: params.cognitiveRole,
+        profile: begin.profile, cognitiveRole: params.cognitiveRole, concept: params.telemetryConcept ?? null,
         provider: binding.provider, model: binding.model, effort: binding.effort,
       });
       workerExecutions.set(params.workerId, receipt.executionId);

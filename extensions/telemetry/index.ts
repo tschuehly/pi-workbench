@@ -13,6 +13,7 @@ export function registerTelemetry(
   const argv = runtime.argv ?? process.argv;
   const env = runtime.env ?? process.env;
   let currentSessionId: string | null = null;
+  const deliveredStudioMarkers = new Set<string>();
 
   pi.on("session_start", async (event, ctx) => {
     const session = sessionData(ctx);
@@ -38,8 +39,15 @@ export function registerTelemetry(
       entryId: ctx.sessionManager.getLeafId() ?? null,
       prompt: session.sessionFile === null ? event.prompt : null,
     });
-    for (const marker of studioWakeMarkers(event.prompt)) {
-      recorder.record("studio.comment_delivered", { sessionId: session.sessionId, ...marker });
+  });
+
+  pi.on("message_start", async (event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    for (const marker of studioWakeMarkers(messageText(event.message))) {
+      const key = `${sessionId}:${marker.kind}:${marker.id ?? ""}:${marker.seq}`;
+      if (deliveredStudioMarkers.has(key)) continue;
+      deliveredStudioMarkers.add(key);
+      recorder.record("studio.comment_delivered", { sessionId, ...marker });
     }
   });
 
@@ -50,7 +58,7 @@ export function registerTelemetry(
     const message = event.message;
     if (message?.role !== "assistant" || message.usage === undefined) return;
     const sessionId = ctx.sessionManager.getSessionId();
-    recordUsage(recorder, sessionId, `assistant:${message.timestamp}:${message.provider}:${message.model}`, message.usage, {
+    recordUsage(recorder, sessionId, `assistant:${message.responseId ?? `${message.timestamp}:${message.provider}:${message.model}`}`, message.usage, {
       turnIndex: event.turnIndex,
       provider: message.provider ?? null,
       model: message.model ?? null,
@@ -126,9 +134,10 @@ function studioWakeMarkers(prompt: string) {
   const prefix = "PI_TELEMETRY_STUDIO_V1 ";
   const markers = [];
   for (const line of prompt.split(/\r?\n/)) {
-    if (!line.startsWith(prefix)) continue;
+    const offset = line.indexOf(prefix);
+    if (offset < 0) continue;
     try {
-      const value = JSON.parse(line.slice(prefix.length));
+      const value = JSON.parse(line.slice(offset + prefix.length));
       if (value?.version !== 1 || value.type !== "studio.review_wake" || typeof value.kind !== "string" || !Number.isInteger(value.seq)) continue;
       if (value.concept !== null && typeof value.concept !== "string") continue;
       if (value.id !== null && typeof value.id !== "string") continue;
@@ -137,6 +146,12 @@ function studioWakeMarkers(prompt: string) {
     } catch {}
   }
   return markers;
+}
+
+function messageText(message: { content?: unknown }) {
+  if (typeof message?.content === "string") return message.content;
+  if (!Array.isArray(message?.content)) return "";
+  return message.content.filter((part) => part?.type === "text").map((part) => part.text).join("\n");
 }
 
 function recordUsage(recorder: { record(type: string, data?: Record<string, unknown>): unknown }, sessionId: string, identity: string, usage: unknown, extra = {}) {

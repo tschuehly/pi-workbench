@@ -24,13 +24,15 @@ test("records Pi lifecycle usage and execution bus events without prompt duplica
 
   registerTelemetry(pi, recorder, { argv: ["pi", "--mode", "rpc", "secret prompt"], env: { PI_TELEMETRY_PARENT_SESSION_ID: "parent-1", PI_TELEMETRY_EXECUTION_ID: "exec-1" } });
   await handlers.get("session_start")({ reason: "startup" }, ctx);
-  await handlers.get("before_agent_start")({ prompt: `do not duplicate me
-PI_TELEMETRY_STUDIO_V1 {"version":2,"type":"studio.review_wake","kind":"sent","concept":"wrong","id":"wrong","seq":11,"eventTime":null}
-PI_TELEMETRY_STUDIO_V1 {"version":1,"type":"studio.review_wake","kind":"sent","concept":"alpha","id":"comment-1","seq":12,"eventTime":"2026-08-28T11:59:00.000Z","detail":"Fix it"}` }, ctx);
+  await handlers.get("before_agent_start")({ prompt: "do not duplicate me" }, ctx);
   await handlers.get("agent_start")({}, ctx);
+  const monitorMessage = { role: "custom", content: `[watcher 42 · review-studio-events] PI_TELEMETRY_STUDIO_V1 {"version":1,"type":"studio.review_wake","kind":"sent","concept":"alpha","id":"comment-1","seq":12,"eventTime":"2026-08-28T11:59:00.000Z","detail":"Fix it"}` };
+  await handlers.get("message_start")({ message: monitorMessage }, ctx);
+  await handlers.get("message_start")({ message: monitorMessage }, ctx);
+  await handlers.get("message_start")({ message: { role: "toolResult", content: [{ type: "text", text: monitorMessage.content }] } }, ctx);
   await handlers.get("turn_end")({
     turnIndex: 3,
-    message: { role: "assistant", timestamp: 123, provider: "anthropic", model: "claude", stopReason: "stop", usage: usage(0.5) },
+    message: { role: "assistant", responseId: "response-123", timestamp: 123, provider: "anthropic", model: "claude", stopReason: "stop", usage: usage(0.5) },
     toolResults: [{ role: "toolResult", toolCallId: "web-1", toolName: "web_search", timestamp: 124, usage: usage(0.3) }],
   }, ctx);
   await handlers.get("session_compact")({ reason: "overflow", willRetry: true, compactionEntry: { id: "compact-1", usage: usage(0.2) } }, ctx);
@@ -42,15 +44,15 @@ PI_TELEMETRY_STUDIO_V1 {"version":1,"type":"studio.review_wake","kind":"sent","c
   await handlers.get("session_shutdown")({ reason: "quit" }, ctx);
 
   assert.equal(closed, true);
-  assert.deepEqual(recorded.map(({ type }) => type), ["session.start", "prompt", "studio.comment_delivered", "agent.start", "usage", "usage", "session.compact", "usage", "session.tree", "usage", "thinking.select", "execution.launched", "orchestration.start", "orchestration.end", "session.shutdown"]);
+  assert.deepEqual(recorded.map(({ type }) => type), ["session.start", "prompt", "agent.start", "studio.comment_delivered", "usage", "usage", "session.compact", "usage", "session.tree", "usage", "thinking.select", "execution.launched", "orchestration.start", "orchestration.end", "session.shutdown"]);
   assert.deepEqual(recorded[0], {
     type: "session.start", sessionId: "session-1", sessionFile: "/sessions/session-1.jsonl", cwd: "/repo", mode: "rpc", reason: "startup", provider: "anthropic", model: "claude", effort: "high", argv: null, parentSessionId: "parent-1", executionId: "exec-1",
   });
   assert.deepEqual(recorded[1], { type: "prompt", sessionId: "session-1", entryId: "entry-1", prompt: null });
-  assert.deepEqual(recorded[2], {
+  assert.deepEqual(recorded[3], {
     type: "studio.comment_delivered", sessionId: "session-1", kind: "sent", concept: "alpha", id: "comment-1", seq: 12, eventTime: "2026-08-28T11:59:00.000Z",
   });
-  assert.equal(recorded[4].usageKey, "session-1:assistant:123:anthropic:claude");
+  assert.equal(recorded[4].usageKey, "session-1:assistant:response-123");
   assert.equal(recorded[4].turnIndex, 3);
   assert.equal(recorded[5].usageKey, "session-1:tool:web-1:124");
   assert.equal(recorded[7].usageKey, "session-1:compaction:compact-1");

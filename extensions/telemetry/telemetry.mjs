@@ -36,26 +36,18 @@ export function createRecorder(options = {}) {
 
 export function buildReport(events, options = {}) {
   const selectedSessions = selectSessions(events, options.rootSessionId);
-  const selected = events.filter((event) => event.sessionId == null || selectedSessions.has(event.sessionId));
+  const selected = events.filter((event) => selectedSessions.has(event.sessionId) || (options.rootSessionId == null && event.sessionId == null));
   const usageEvents = dedupe(selected.filter((event) => event.type === "usage"), (event) => event.usageKey ?? `${event.sessionId}:${event.at}:${JSON.stringify(event.usage)}`);
-  const knownCosts = usageEvents.map((event) => event.usage?.cost?.total).filter(Number.isFinite);
-  const unknownCostEvents = usageEvents.length - knownCosts.length;
-  const { intervals, incomplete } = agentIntervals(selected);
   const executions = executionTimeline(selected);
-  const studio = studioReport(selected, intervals, options.concept);
+  const { intervals, incomplete } = agentIntervals(selected, executions);
+  const studio = studioReport(selected, intervals, executions, options.concept);
   return {
     rootSessionId: options.rootSessionId ?? null,
     sessionIds: [...selectedSessions].sort(),
-    activeMs: unionDuration(intervals),
+    activeMs: unionDuration(intervals.map((interval) => [interval.start, interval.end])),
     incompleteActiveIntervals: incomplete,
-    usage: {
-      eventCount: usageEvents.length,
-      inputTokens: usageEvents.length === 0 ? null : sum(usageEvents, (event) => event.usage?.input),
-      outputTokens: usageEvents.length === 0 ? null : sum(usageEvents, (event) => event.usage?.output),
-      knownCost: knownCosts.length === 0 ? null : knownCosts.reduce((total, value) => total + value, 0),
-      totalCost: usageEvents.length > 0 && unknownCostEvents === 0 ? knownCosts.reduce((total, value) => total + value, 0) : null,
-      unknownCostEvents,
-    },
+    usage: usageSummary(usageEvents),
+    usageByAttribution: usageAttribution(selected, usageEvents, executions),
     executions,
     failures: executions.filter((execution) => execution.outcome != null && execution.outcome !== "success").length,
     retrySignals: selected.filter((event) => event.type === "session.compact" && event.willRetry === true).length,
@@ -90,21 +82,74 @@ function selectSessions(events, rootSessionId) {
   return selected;
 }
 
-function agentIntervals(events) {
+function usageSummary(events) {
+  const knownCosts = events.map((event) => event.usage?.cost?.total).filter(Number.isFinite);
+  const unknownCostEvents = events.length - knownCosts.length;
+  const total = (field) => events.length > 0 && events.every((event) => Number.isFinite(event.usage?.[field]))
+    ? events.reduce((sum, event) => sum + event.usage[field], 0)
+    : null;
+  return {
+    eventCount: events.length,
+    inputTokens: total("input"),
+    outputTokens: total("output"),
+    knownCost: knownCosts.length === 0 ? null : knownCosts.reduce((sum, value) => sum + value, 0),
+    totalCost: events.length > 0 && unknownCostEvents === 0 ? knownCosts.reduce((sum, value) => sum + value, 0) : null,
+    unknownCostEvents,
+  };
+}
+
+function usageAttribution(events, usageEvents, executions) {
+  const groups = new Map();
+  for (const event of usageEvents) {
+    const at = Date.parse(event.at);
+    const execution = executions
+      .filter((candidate) => candidate.childSessionId === event.sessionId && Date.parse(candidate.acceptedAt) <= at && (candidate.endedAt === null || at <= Date.parse(candidate.endedAt)))
+      .sort((left, right) => Date.parse(right.acceptedAt) - Date.parse(left.acceptedAt))[0];
+    const binding = bindingAt(events, event.sessionId, at);
+    const attribution = {
+      role: execution?.cognitiveRole ?? "shared_lead",
+      concept: execution?.concept ?? null,
+      provider: event.provider ?? binding.provider,
+      model: event.model ?? binding.model,
+    };
+    const key = JSON.stringify(attribution);
+    if (!groups.has(key)) groups.set(key, { ...attribution, events: [] });
+    groups.get(key).events.push(event);
+  }
+  return [...groups.values()]
+    .map(({ events: grouped, ...attribution }) => ({ ...attribution, ...usageSummary(grouped) }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+function bindingAt(events, sessionId, at) {
+  const event = events
+    .filter((candidate) => candidate.sessionId === sessionId && (candidate.type === "session.start" || candidate.type === "model.select") && Date.parse(candidate.at) <= at)
+    .sort((left, right) => Date.parse(right.at) - Date.parse(left.at))[0];
+  return { provider: event?.provider ?? null, model: event?.model ?? null };
+}
+
+function agentIntervals(events, executions) {
   const open = new Map();
   const intervals = [];
   let incomplete = 0;
   for (const event of events) {
     const key = `${event.sessionId ?? "?"}:${event.processId ?? "?"}`;
-    if (event.type === "agent.start") open.set(key, Date.parse(event.at));
+    if (event.type === "agent.start") open.set(key, { start: Date.parse(event.at), sessionId: event.sessionId ?? null });
     if (event.type === "agent.settled") {
-      const start = open.get(key);
-      if (Number.isFinite(start)) intervals.push([start, Date.parse(event.at)]);
+      const value = open.get(key);
+      if (Number.isFinite(value?.start)) intervals.push({ ...value, end: Date.parse(event.at) });
       else incomplete++;
       open.delete(key);
     }
   }
-  return { intervals, incomplete: incomplete + open.size };
+  for (const value of open.values()) {
+    const execution = executions
+      .filter((candidate) => candidate.childSessionId === value.sessionId && candidate.endedAt !== null && Date.parse(candidate.endedAt) >= value.start)
+      .sort((left, right) => Date.parse(left.endedAt) - Date.parse(right.endedAt))[0];
+    if (execution === undefined) incomplete++;
+    else intervals.push({ ...value, end: Date.parse(execution.endedAt) });
+  }
+  return { intervals, incomplete };
 }
 
 function unionDuration(intervals) {
@@ -120,11 +165,11 @@ function unionDuration(intervals) {
   return total + (current === undefined ? 0 : current[1] - current[0]);
 }
 
-function studioReport(events, agentActiveIntervals, concept) {
+function studioReport(events, agentActiveIntervals, executions, concept) {
   const correctionKinds = new Set(["sent", "rejected", "bad", "comment-state", "decision"]);
   const builds = buildTimeline(events).filter((build) => concept == null || build.concept === concept);
   const ready = events
-    .filter((event) => event.type === "studio.draft_ready" && (concept == null || event.concept === concept))
+    .filter((event) => event.type === "studio.draft_ready" && event.watchable !== false && (concept == null || event.concept === concept))
     .sort((left, right) => String(left.at).localeCompare(String(right.at)));
   const deliveries = dedupe(
     events
@@ -141,10 +186,19 @@ function studioReport(events, agentActiveIntervals, concept) {
     if (draft === undefined) return {
       kind: delivery.kind, id: delivery.id ?? null, seq: delivery.seq, concept: delivery.concept,
       eventTime: delivery.eventTime ?? null, deliveredAt: delivery.at, draftReadyAt: null,
-      cycleMs: null, activeMs: null, idleMs: null, buildId: null, gitHead: null, sha256: null, reviewAccepted: null,
+      cycleMs: null, activeMs: null, idleMs: null, attributedAgentIntervals: 0,
+      buildId: null, gitHead: null, sha256: null, reviewAccepted: null,
     };
     const end = Date.parse(draft.at);
-    const activeIntervals = [...agentActiveIntervals, ...buildIntervals]
+    const executionWindows = executions.filter((execution) => execution.concept === delivery.concept && execution.childSessionId !== null);
+    const attributedAgentIntervals = agentActiveIntervals.flatMap((interval) => executionWindows
+      .filter((execution) => execution.childSessionId === interval.sessionId)
+      .map((execution) => [
+        Math.max(start, interval.start, Date.parse(execution.acceptedAt)),
+        Math.min(end, interval.end, execution.endedAt === null ? end : Date.parse(execution.endedAt)),
+      ])
+      .filter(([intervalStart, intervalEnd]) => Number.isFinite(intervalStart) && Number.isFinite(intervalEnd) && intervalEnd >= intervalStart));
+    const activeIntervals = [...attributedAgentIntervals, ...buildIntervals]
       .map(([intervalStart, intervalEnd]) => [Math.max(start, intervalStart), Math.min(end, intervalEnd)])
       .filter(([intervalStart, intervalEnd]) => Number.isFinite(intervalStart) && Number.isFinite(intervalEnd) && intervalEnd >= intervalStart);
     const cycleMs = end - start;
@@ -153,6 +207,7 @@ function studioReport(events, agentActiveIntervals, concept) {
       kind: delivery.kind, id: delivery.id ?? null, seq: delivery.seq, concept: delivery.concept,
       eventTime: delivery.eventTime ?? null, deliveredAt: delivery.at, draftReadyAt: draft.at,
       cycleMs, activeMs, idleMs: activeMs === null ? null : Math.max(0, cycleMs - activeMs),
+      attributedAgentIntervals: attributedAgentIntervals.length,
       buildId: draft.buildId ?? null, gitHead: draft.gitHead ?? null, sha256: draft.sha256 ?? null,
       reviewAccepted: typeof draft.reviewAccepted === "boolean" ? draft.reviewAccepted : null,
     };
@@ -200,7 +255,10 @@ function executionTimeline(events) {
     if (event.type === "execution.launched") executions.set(event.executionId, {
       executionId: event.executionId,
       kind: event.kind,
+      workerId: event.workerId ?? null,
       task: event.task,
+      cognitiveRole: event.cognitiveRole ?? null,
+      concept: event.concept ?? null,
       provider: event.provider,
       model: event.model,
       effort: event.effort,
@@ -209,20 +267,24 @@ function executionTimeline(events) {
       childSessionId: null,
       outcome: null,
     });
-    if (event.type === "execution.settled") Object.assign(executions.get(event.executionId) ?? {}, {
-      endedAt: event.at,
-      childSessionId: event.childSessionId ?? null,
-      outcome: event.outcome ?? null,
-    });
+    if (event.type === "execution.settled") {
+      const execution = executions.get(event.executionId);
+      if (execution !== undefined) Object.assign(execution, {
+        endedAt: event.at,
+        childSessionId: event.childSessionId ?? execution.childSessionId,
+        outcome: event.outcome ?? null,
+      });
+    }
   }
-  return [...executions.values()].sort((left, right) => left.acceptedAt.localeCompare(right.acceptedAt));
+  for (const event of events) {
+    if (event.type !== "session.start" || typeof event.executionId !== "string" || typeof event.sessionId !== "string") continue;
+    const execution = executions.get(event.executionId);
+    if (execution !== undefined && execution.childSessionId === null) execution.childSessionId = event.sessionId;
+  }
+  return [...executions.values()].sort((left, right) => String(left.acceptedAt).localeCompare(String(right.acceptedAt)));
 }
 
 function dedupe(values, key) {
   const seen = new Set();
   return values.filter((value) => { const id = key(value); if (seen.has(id)) return false; seen.add(id); return true; });
-}
-
-function sum(events, read) {
-  return events.reduce((total, event) => total + (Number.isFinite(read(event)) ? read(event) : 0), 0);
 }

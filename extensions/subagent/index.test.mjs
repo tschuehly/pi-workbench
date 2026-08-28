@@ -2,16 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import subagentExtension, { detachLatestForeground, emitExecutionEvent, streamToResult } from "./index.ts";
 
-test("registers Cmd+B and a portable fallback", () => {
+test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
   const shortcuts = new Map();
+  const tools = new Map();
   subagentExtension({
     on: () => {},
-    registerTool: () => {},
+    registerTool: (tool) => tools.set(tool.name, tool),
     registerShortcut: (key, options) => shortcuts.set(key, options),
     sendMessage: () => {},
   });
 
   assert.deepEqual([...shortcuts.keys()], ["super+b", "ctrl+alt+b"]);
+  assert.ok(tools.get("subagent").parameters.properties.telemetryConcept);
+  assert.ok(tools.get("worker_dispatch").parameters.properties.telemetryConcept);
   let notice;
   shortcuts.get("super+b").handler({ ui: { notify: (...args) => { notice = args; } } });
   assert.deepEqual(notice, ["No Subagent or Worker can be backgrounded.", "info"]);
