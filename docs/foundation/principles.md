@@ -170,13 +170,13 @@ Evidence, not model confidence.
 
 ## Boundaries — where ownership stops
 
-### 15. PI WEB owns experience, never authority
+### 15. The Workbench client owns experience, never authority
 
 The user-facing client delivers every interaction over typed protocols but never owns workflow
 state. Trust-sensitive controls stay outside agent-generated surfaces.
 
-- PI WEB owns the user experience without owning workflow semantics.
-- User-facing Workbench interaction is implemented in PI WEB over typed protocols.
+- Pi Workbench owns its client composition while PI WEB may supply runtime and leaf modules.
+- User-facing Workbench interactions cross typed protocols.
 - Trust-sensitive controls remain outside agent-generated surfaces.
 
 ### 16. Workstreams restore attention without Run authority
@@ -193,6 +193,6 @@ separately projected re-entry state, and make no managed-recovery claim.
 
 ## Not a principle
 
-The former principle "PI WEB's attention surface is part of the V1 vertical slice" is a scope and
-roadmap statement, not a timeless design commitment. It is tracked in the [decision
-record](decisions.md), not here.
+The former principles that PI WEB must own the complete experience or that its attention surface is
+the V1 vertical slice were scope and roadmap choices, not timeless design commitments. Their
+replacement is tracked in the [decision record](decisions.md).

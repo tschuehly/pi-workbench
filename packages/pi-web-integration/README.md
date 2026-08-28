@@ -1,10 +1,15 @@
-# Pi Workbench PI WEB integration
+# Legacy Pi Workbench PI WEB integration
 
-This package is the bounded `apiVersion: 1` customization probe from the
-[PI WEB customization plan](../../docs/integrations/pi-web/customization-plan.md). It is a PI WEB
-browser plugin with a small trusted web-process service, not a Run Controller and not authoritative Run state.
+Status: implemented legacy UI and reusable service/fixture code. The current client direction is
+[`docs/plans/workbench-ui.md`](../../docs/plans/workbench-ui.md); the former customization and
+unified-shell plans are indexed under [`docs/archive/pi-web-ui/`](../../docs/archive/pi-web-ui/).
 
-## What the adapter contributes
+This package contains the former `apiVersion: 1` browser plugin plus a small trusted web-process
+service. The plugin remains fallback and historical evidence while the replacement Chat client
+proves which service, coordination, fixture, and projection modules should survive. It is not a Run
+Controller and does not own authoritative Run or Workstream state.
+
+## What the legacy adapter contributes
 
 - **Workstreams navigation entry:** opens a first-class primary view through PI WEB's qualified
   navigation and primary-view interfaces.
@@ -151,8 +156,8 @@ The temporary probe projection contains:
 - `activity`: work progressing without owner attention.
 - `evidence`: workspace-relative Primary Evidence paths.
 
-This JSON is not the final Run protocol. Phase 7 replaces the projection source with the
-framework-neutral Run client while retaining this deterministic fixture.
+This JSON is not the final Run protocol. The archived campaign proposed replacing it with a
+framework-neutral Run client; no current slice depends on that replacement.
 
 ## Proven behavior and gaps
 

@@ -35,7 +35,7 @@ Demonstrable comparison material, at the revisions checked out locally:
 | --- | --- | --- |
 | PI WEB shell | sibling `../pi-web` at `8644d99`, `README.md`, `docs/config.md`, `docs/plugins.md`, `docker/README.md` | Device support, loopback bind, allowed hosts, WebSocket transport, PWA prefix behavior, mobile tabs |
 | Workbench decisions | `docs/foundation/decisions.md` items 4, 24, 33, 65, 76, 87–89, 96 | PI WEB is the client; the Workstream Store, execution adapter, and session coordinator retain their existing ownership; extensibility is upstream-first |
-| Workbench PI WEB work | `packages/pi-web-integration/test/`, `docs/plans/pi-web-workbench-ui.md`, `docs/foundation/requirements.md` item 12 | Existing tests; desktop-first status; required mobile states |
+| Historical Workbench PI WEB work | `packages/pi-web-integration/test/`, `docs/archive/pi-web-ui/plans/pi-web-workbench-ui.md`, pre-reset `docs/foundation/requirements.md` item 12 | Historical tests and mobile requirements; the 2026-08-28 macOS-first reset no longer makes mobile a current slice gate |
 
 ## Prompt evidence versus implementation evidence
 

@@ -1,8 +1,14 @@
 # Pi Workbench for macOS
 
-A small native macOS app that displays PI WEB using `WKWebView`. It provides native windows,
-macOS window tabs, shared website data, standard navigation shortcuts, and restricted same-origin
-navigation. It remains a client of PI WEB and does not own Pi sessions or Workbench Run state.
+Status: the native wrapper works; it still loads the legacy PI WEB client until the first slice in
+[`docs/plans/workbench-ui.md`](../../docs/plans/workbench-ui.md) replaces that web root.
+
+A small native macOS app that displays the fork's default web root using `WKWebView`. It provides
+native windows, shared website data, standard navigation shortcuts, and restricted same-origin
+navigation. It uses PI WEB runtime and does not own Pi sessions, Workstreams, or Run state.
+
+The installed wrapper still exposes native tabs today. Slice 1 removes every tab entry point so one
+window remains one Chat; the replacement web root, not a native route setting, selects the Chat client.
 
 ## Run the development environment
 
@@ -75,7 +81,9 @@ pi-web restart --component sessiond
 
 The wrapper keeps same-origin navigation inside the app and opens other links in the default browser.
 
-## Shortcuts
+## Current legacy shortcuts
+
+Until Slice 1 lands:
 
 - `Command-N`: new window
 - `Command-T`: new tab
@@ -84,5 +92,5 @@ The wrapper keeps same-origin navigation inside the app and opens other links in
 - `Command-[` and `Command-]`: browser history
 - `Command-Shift-[` and `Command-Shift-]`: previous or next tab
 
-Use **Window > Move Tab to New Window** and **Window > Merge All Windows** for native macOS tab
-management.
+Slice 1 keeps new window, close, reload, and history navigation and removes the tab commands and
+Window-menu tab operations.

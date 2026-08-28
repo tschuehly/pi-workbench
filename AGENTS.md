@@ -1,8 +1,8 @@
 # Pi Workbench agent router
 
 Pi Workbench allocates Human Attention and model work across interactive Workstreams and durable
-project Runs. A deterministic Run Controller owns managed lifecycle and authoritative Run state;
-PI WEB is the user-facing client of its typed protocols.
+project Runs. A deterministic Run Controller owns managed lifecycle and authoritative Run state.
+The iterative Workbench client uses PI WEB's runtime without adopting its existing application shell.
 
 ## Load only what the task needs
 
@@ -20,7 +20,7 @@ PI WEB is the user-facing client of its typed protocols.
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
 | Pi CLI activity presentation | `extensions/activity/` |
 | Pi agent and PI WEB configuration templates | `config/` |
-| V1 human–Pi pair programming | `docs/plans/level-1.md` |
+| Attended human–Pi pair programming | `docs/contracts/execution.md`, `docs/contracts/workstreams.md` |
 | V1 attended child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |
 | Session evaluation and iterative Subagent/Worker improvement | `docs/plans/subagent-worker-iterative-improvement.md`, `skills/compound/` |
 | Working Mode, Alignment, and Checking | `docs/foundation/working-mode.md`, `docs/plans/working-mode.md` |
@@ -30,9 +30,9 @@ PI WEB is the user-facing client of its typed protocols.
 | Workspaces and delivery | `docs/contracts/controller.md`, `packages/repository-workspace/` |
 | Evidence and immutable objects | `docs/contracts/controller.md`, `packages/artifact-store/` |
 | Cross-session Workstreams, attended checkpoints, and session coordination | `docs/contracts/workstreams.md`, `packages/workstream-store/`, `packages/workstream-session-coordination/`, `packages/pi-web-integration/`, `skills/workstreams/` |
-| Attention and PI WEB interfaces | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
-| PI WEB integration, unified-shell remediation, and fork customization | `packages/package.json`, `packages/pi-web-integration/`, `docs/integrations/pi-web/`, `docs/plans/pi-web-unified-shell-prototype-fidelity.md`, sibling `../pi-web` checkout |
-| macOS PI WEB wrapper | `apps/pi-web-macos/` |
+| Attention and graphical client interfaces | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
+| Workbench UI and PI WEB reuse | `docs/plans/workbench-ui.md`, `docs/integrations/pi-web/reuse-boundary.md`, `apps/pi-web-macos/`, sibling `../pi-web` checkout |
+| Legacy PI WEB UI evidence or code | `docs/archive/pi-web-ui/`, `packages/pi-web-integration/` |
 | Workflow or repository policy | `docs/contracts/workflow.md`, `workflows/`, `repositories/` |
 | Decision evidence | `docs/research/sources/` |
 
@@ -40,8 +40,8 @@ Follow any nearer `AGENTS.md` before changing files in its directory.
 
 ## Invariants
 
-- Keep the Run Controller independent from PI WEB.
-- Treat PI WEB as a Run-protocol client, never as authoritative Run state.
+- Keep the Run Controller independent from every graphical client and from PI WEB runtime.
+- Treat the Workbench client as a protocol client, never as authoritative Workstream or Run state.
 - Models propose semantic work; deterministic modules own transitions and side effects.
 - Working Mode configures behavior, never permission; a selected mode may not claim a guarantee no code enforces.
 - Add one axis, contract, or module at a time from observed need. Do not design a complete model before shipping part of one.

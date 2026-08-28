@@ -25,10 +25,11 @@ role resolves to a model and thinking budget.
 
 ## What does not work today
 
-**PI WEB is not usable yet.** The design is sound and the client is not fundamentally broken — the
-new Workstreams UI is still being built and does not work. Until it does, **the terminal is the
-working surface**. Use the [`workstreams`](skills/workstreams/SKILL.md) skill to read and update
-Workstreams directly.
+**The graphical client is being reset.** The implemented PI WEB/Workbench shell is not usable for
+daily work, so the terminal remains the working surface. The replacement starts with one macOS
+window per Chat and reuses PI WEB below the application shell. Use the
+[`workstreams`](skills/workstreams/SKILL.md) skill to read and update Workstreams until a later UI
+slice brings them into the client.
 
 **Four of the nine packages are empty directories.** `controller/`, `pi-execution/`,
 `repository-workspace/`, and `artifact-store/` contain only a `.gitkeep`. Documentation that
@@ -57,12 +58,12 @@ workspace isolation, publication authority, durable execution, or recovery. Deta
 
 ## What's next
 
-Implement the smallest truthful Working Mode extension: persisted visible configuration, a
-fail-closed read-only discovery gate, owner selection, concise Plan and Spec acceptance, and one
-inspectable Vibe slice. Checking remains an independent choice.
+Build the first usable graphical slice: one Pi Chat per native macOS window, with a small chooser for
+an explicitly located existing or new session. The slice reuses PI WEB session runtime, Chat, and
+Prompt Editor behavior without loading the legacy PI WEB shell.
 
-After that, add axes only from observed need. The withdrawn nine-dimensional design remains evidence
-against settling a complete control model before shipping one justified dimension.
+After real use, add only the next capability whose absence is concrete. See the concise
+[Workbench UI plan](docs/plans/workbench-ui.md). Working Mode remains a separate intended control.
 
 ## Where everything else lives
 

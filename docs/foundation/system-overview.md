@@ -14,8 +14,11 @@ Pi Workbench must let models perform more bounded work without obscuring who own
 
 ## Product model
 
-Pi Workbench V1 allocates Human Attention across interactive Workstreams. Pi is the model runtime,
-and PI WEB is the user-facing client of the typed Workstream protocol.
+Pi Workbench V1 allocates Human Attention across interactive Workstreams. Pi is the model runtime.
+The graphical Workbench client reuses PI WEB's server, session daemon, transport, and selected leaf
+UI modules without adopting the existing PI WEB application shell. The first client slice is one
+Chat per macOS window; Workstreams remain available through their typed protocol and temporary
+terminal skill until a later observed-need UI slice.
 
 V1 supports attended human–Pi work: one human works directly with one interactive lead Pi while
 Human Attention is continuous. The lead may use bounded ephemeral child Pi processes as attended
@@ -49,8 +52,9 @@ The owner approves Shared Understanding and the Autonomy Envelope before autonom
 
 A Workstream is the owner's finite cross-session attention container. It may hold several concurrent interactive sessions and link human tasks, files, repositories, artifacts, and managed Runs. It is user-local and cross-repository. Its sparse ledger and derived projection support re-entry without becoming an execution-authority boundary.
 
-In V1, the owner inspects Workstream projections directly in PI WEB to decide what to resume. No
-FirstMate or other model broker performs portfolio synthesis.
+The owner currently inspects Workstream projections through the terminal skill. A later graphical
+slice will present the same canonical projection directly; no FirstMate or other model broker
+performs portfolio synthesis.
 
 The managed Run concept separates three accountability scopes:
 
@@ -74,7 +78,7 @@ Five deep modules contain the trusted behavior:
 
 The [Workstream contract](../contracts/workstreams.md) owns V1 cross-session attention, sparse
 ledgers, attended checkpointing, and closure. The [interface contract](../contracts/interfaces.md)
-owns PI WEB client behavior. The [harness contract](../contracts/harness.md) owns distribution,
+owns graphical Workbench client behavior. The [harness contract](../contracts/harness.md) owns distribution,
 skills, and repository adaptation. Workflow, controller, and execution contracts describe unbuilt managed Run boundaries and do not
 expand V1.
 
@@ -107,24 +111,34 @@ Every retained artifact has a promotion or expiry path. Run analysis and compoun
 
 ## Clients and integrations
 
-PI WEB consumes the Run and Workstream protocols and canonical projections. It is the selected user-facing shell and remains a client, never the owner of Run or Workstream state.
+The Workbench client consumes canonical protocol projections and remains a client, never the owner
+of Run or Workstream state. Its first graphical slice presents one complete Pi Chat per macOS
+window through reused PI WEB runtime and client modules. The existing PI WEB shell and legacy
+Workbench plugin remain fallback and evidence, not the target composition.
 
-**Current state:** PI WEB is not usable yet because the new Workstreams UI is still being built. The design below is intended state, not delivered state. Use the [`workstreams`](../../skills/workstreams/SKILL.md) skill to operate Workstreams from the terminal until that UI works.
+**Current state:** the replacement graphical client is not implemented, so the terminal remains the
+working surface. Use the [`workstreams`](../../skills/workstreams/SKILL.md) skill to operate
+Workstreams until a later client slice adds their re-entry surface.
 
-PI WEB is attention-first: required judgment leads, autonomous activity remains visible but secondary, and Review Surfaces join intent, realized behavior, evidence, deviations, and residual risks. Workstreams are the primary home for interactive sessions and provide re-entry views across repositories; Projects and managed Runs remain separate linked views.
+Later attention surfaces lead with required judgment, keep autonomous activity secondary, and join
+intent, realized behavior, evidence, deviations, and residual risks. Workstreams remain the primary
+cross-session attention container even while the first graphical slice deliberately starts with Chat.
 
 External systems such as GitHub, Linear, Sentry, and CI remain collaboration surfaces. Import and Publication are explicit, idempotent adapter operations; external events never advance the local lifecycle implicitly.
 
 ## V1 boundary
 
-V1 is the attended human–Pi workflow defined in the historically named
-[Level 1 plan](../plans/level-1.md). It covers Workstream selection, reconnect-safe attended session
-launch, automatically persisted correctable checkpoints, restart and resume, human tasks and links,
-and human-instructed closure.
+V1 is the attended human–Pi workflow defined by the [requirements](requirements.md),
+[execution contract](../contracts/execution.md), and [Workstream contract](../contracts/workstreams.md).
+It covers standalone and Workstream-associated sessions, reconnect-safe attended session launch,
+automatically persisted correctable checkpoints, restart and resume, Human Tasks and links, and
+human-instructed closure. The archived Level 1 plan preserves the earlier PI WEB-first sequence only
+as provenance.
 
 V1 does not include autonomous model-session replacement, a Run Controller, managed execution,
-unattended work, or FirstMate. Browser and PI WEB web-process restart must preserve Workstream state;
-machine loss, multi-user control, and portable cross-machine handoff remain outside V1.
+unattended work, or FirstMate. Browser or Workbench web-client replacement must preserve session
+and Workstream state without restarting PI WEB's session daemon; machine loss, multi-user control,
+and portable cross-machine handoff remain outside V1.
 
 The complete V1 outcomes and acceptance matrix are in [requirements.md](requirements.md).
 

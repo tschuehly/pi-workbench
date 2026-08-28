@@ -30,7 +30,7 @@ Each resulting episode records the exact skill and adaptation versions that infl
 In V1, the one interactive Pi loads only the resources selected for the attended task. Tool output
 and model claims remain ordinary session material and do not become authoritative Workstream state.
 
-Every supported V1 skill remains executable by Pi, and every supported human interaction is available through PI WEB. Skills with meaningful human interaction may contribute focused interface definitions or sandboxed views. Those views project the same durable run state and cannot control identity, permissions, recovery, or workflow transitions independently.
+Every supported V1 skill remains executable by Pi. Human interactions become available through delivered Workbench client slices; the terminal remains the fallback for capabilities not yet graphical. Skills with meaningful human interaction may contribute focused interface definitions or sandboxed views. Those views project the same durable run state and cannot control identity, permissions, recovery, or workflow transitions independently.
 
 Skills improve through evidence from real runs: observed friction, failed handoffs, weak judgment artifacts, missing tools, and repeated manual steps become evaluated skill or interface candidates rather than automatic standing context.
 
@@ -48,8 +48,8 @@ The generated surface is integrated into the harness UI and remains flexible dur
 
 ## V1 Operating Posture
 
-Every interactive session starts in exactly one Workstream. One human pairs with one interactive
-lead Pi under continuous Human Attention. The lead may launch bounded ephemeral child Pi processes
+An interactive session may remain a standalone Chat or have exactly one home Workstream. One human
+pairs with one interactive lead Pi under continuous Human Attention. The lead may launch bounded ephemeral child Pi processes
 as attended tool activity and remains accountable for their assignments and results. A child may
 run non-blocking only inside the attended lead session and is cancelled at session shutdown. The
 harness launches no unattended execution that survives the session and no managed Runs.
@@ -80,7 +80,7 @@ The repository package is versioned with the project and declares:
 - Shared-understanding participants, interaction cadence, direct-experience surfaces, review responsibilities, and result-packaging requirements.
 - Permission and AFK autonomy limits.
 - External adapters and publication mappings.
-- Supported PI WEB project surfaces.
+- Supported Workbench client project surfaces.
 - Artifact classes, retention periods, promotion gates, and cleanup rules.
 
 PhotoQuest and embabel-me use the same controller lifecycle and record schemas. Their packages vary finite policy fields such as judgment depth, required challenge and independent-review profiles, evidence classes, verification commands, risk and impact ceilings, execution profiles, fallback equivalences, retry bounds, and retention rules. A repository package cannot remove invariant authority, independent verification, acceptance, publication, analysis, promotion review, or cleanup obligations.

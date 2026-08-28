@@ -26,10 +26,10 @@ Every bounded dispatch ends or pauses at a synchronization point and returns a t
 
 ## Interactive and Ephemeral Execution
 
-Every V1 interactive Pi session starts in exactly one Workstream. The Workstream supplies
-cross-session re-entry only; it does not grant execution authority.
+A V1 interactive Pi session may remain a standalone Chat or have exactly one home Workstream. A
+Workstream supplies cross-session re-entry only; it does not grant execution authority.
 
-An interactive lead is a Pi session hosted by PI WEB and bound to a Coordinator or Worker profile. An ephemeral Subagent receives one bounded Dispatch, returns one Episode, and ends. A resumable Worker may receive later controller-mediated Dispatches under the same Logical Actor identity when preserving scope context has value. Every follow-up still crosses a synchronization point and returns a new Episode; continuity never turns a conversation into authoritative Run state.
+An interactive lead is a Pi session hosted by PI WEB runtime and bound to a Coordinator or Worker profile. An ephemeral Subagent receives one bounded Dispatch, returns one Episode, and ends. A resumable Worker may receive later controller-mediated Dispatches under the same Logical Actor identity when preserving scope context has value. Every follow-up still crosses a synchronization point and returns a new Episode; continuity never turns a conversation into authoritative Run state.
 
 The Pi Execution interface remains `dispatch`, `observe`, and `cancel`. Starting or continuing an interactive Worker is expressed through Dispatch fields for Logical Actor identity, Continuity, and interaction mode rather than a second worker interface. Human or Coordinator messages cannot attach directly to a child process or bypass controller validation. An unmanaged harness adapter may preserve a Pi session for local interactive use, but it does not acquire Run authority, workspace rights, durable identity, or controller-mediated status by doing so.
 

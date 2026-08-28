@@ -1,70 +1,62 @@
 # Pi Workbench V1 requirements and validation
 
-This document preserves the product outcomes and system-level validation matrix for V1. The
-[system overview](system-overview.md) explains the architecture, the
-[Working Mode specification](working-mode.md) defines the intended behavioral control, and the
-[Workstream contract](../contracts/workstreams.md) defines supported behavior.
+This document preserves product outcomes and system-level validation for the attended workflow. The
+[system overview](system-overview.md) defines the architecture, the [Workstream contract](../contracts/workstreams.md)
+defines continuity, and the [Workbench UI plan](../plans/workbench-ui.md) sequences the graphical client.
 
 ## User outcomes
 
-1. For the approved unified-shell candidate, as a developer I want each interactive Pi session to start either as an explicitly located standalone Chat or in an explicitly selected Workstream, so lightweight conversation stays lightweight while every associated session has one durable home. Current V1 keeps one home until the candidate amendment lands.
-2. As a PI WEB user, I want every V1 Workstream operation available in the shell, so that I do not
-   need a terminal client.
-3. As a developer, I want to pair directly with one lead Pi while I am attending the session and
-   let it delegate bounded work to ephemeral child Pi processes, so that semantic work remains
-   observable, cancellable, and accountable to one lead.
-4. As an interruptible developer, I want current and closed Workstreams to survive browser and PI
-   WEB process restarts, so that I can resume related work across days.
-5. As a developer, I want session launch to be idempotent and reconnect-safe, so that failure cannot
-   orphan a session or associate it with multiple Workstreams.
-6. As a developer, I want each session checkpointed independently through an explicit attended
-   action, so that several sessions do not create one duplicated or stale combined summary.
-7. As a developer, I want to review and correct Pi's proposed checkpoint before saving it, so that
-   the continuation state reflects shared understanding.
-8. As a developer, I want a failed or abandoned checkpoint to preserve the latest confirmed
-   checkpoint, so that stale context is not presented as current.
-9. As a developer with several active topics, I want Workstream projections to show sessions,
-   unresolved human tasks, links, and closure state, so that I can choose what to resume without a
-   broker model turn.
-10. As a repository owner, I want Workstream persistence to exclude raw transcripts, routine
-    activity, and linked file contents, so that continuity does not become unlimited standing
-    context.
-11. As a developer, I want closure to preserve unresolved items and require explicit file cleanup,
-    so that finishing an attention container cannot silently delete work.
-12. As a PI WEB user, I want loading, empty, failure, reconnect, narrow, and mobile states to retain
-    access to shell-owned authentication, settings, recovery, workspace, and conversation controls.
+### Graphical client
+
+1. As a developer, I want one native macOS window to contain one complete Pi Chat, so I can work graphically without navigating a portfolio shell.
+2. As a developer opening a window, I want to choose an explicitly located existing or new session, so hidden shell state cannot select the wrong workspace.
+3. As a developer using several Chats, I want each window's transcript, draft, scroll, status, live events, and controls isolated from every other window.
+4. As a developer, I want send, steer, stop, attachments, model/status display, transcript paging, live questions, and extension dialogs available in Chat.
+5. As an interruptible developer, I want closing, reloading, or replacing a client window to leave Pi sessions and the session daemon running.
+6. As a developer, I want the client to add Terminal, Workstreams, Files, Git, and other surfaces only after real use demonstrates the next missing capability.
+
+### Workstreams
+
+7. As an interruptible developer, I want Workstreams to preserve session associations, checkpoints, Human Tasks, links, and closure across client and web-process restarts.
+8. As a developer, I want session launch to be idempotent and reconnect-safe, so uncertain responses cannot create duplicate sessions or homes.
+9. As a developer, I want each session checkpointed automatically at meaningful attention changes and correctable afterwards, so continuity does not depend on repeated confirmation prompts.
+10. As a developer, I want failed writes and explicit checkpoint staleness to preserve the prior confirmed continuation rather than manufacturing current state.
+11. As a developer with several topics, I want the canonical Workstream projection to show enough mechanical state to choose what to resume without a broker model turn.
+12. As a repository owner, I want Workstream persistence to exclude raw transcripts, routine activity, and linked file contents.
+13. As a developer closing a Workstream, I want unresolved items preserved and file cleanup kept explicit.
+
+### Attended execution
+
+14. As a developer, I want to pair with one lead Pi and optionally delegate bounded, visible child work while I remain attended.
+15. As an owner, I want graphical presentation and Working Mode to configure interaction without claiming managed authority, workspace isolation, publication rights, or recovery that no code enforces.
 
 ## Validation matrix
 
-- Exercise `create`, `append`, `inspect`, `list`, `watch`, and `close` through the PI WEB adapter;
-  assert Workstream Store semantics independently from presentation.
-- Rebuild Workstream current state from its ledger; assert sessions, latest confirmed checkpoints,
-  unresolved human tasks, links, revision, and closure state without a persisted combined narrative.
-- Replay exact mutations and assert the original receipt; reuse an idempotency key with changed input
-  and assert deterministic rejection.
-- Submit stale revisions, invalid records, oversized mutations, and illegal session transitions;
-  assert deterministic rejection without prompt interpretation.
-- Reconnect observation after retained and expired sequences; assert ordered replay or canonical
-  snapshot reconciliation without duplicate current state.
-- Start several human-initiated sessions in one Workstream and Workstreams across repositories; assert the current V1 invariant of one home Workstream per session and no cross-assignment.
-- **Candidate validation (Decision 94; not active current behavior):** create a standalone Chat at an explicit complete location, link/unlink it by typed reference, promote it atomically with response-loss retry, and rename its Workstream; assert identity preservation, one home after promotion, append-only history, and no inferred ownership.
-- Interrupt session launch before and after PI WEB returns a session identifier; assert pending
-  association reconciliation, no duplicate launch, and visible failure without an orphaned session.
-- Let the active Pi session write a checkpoint automatically, then correct it; assert the correction
-  replaces the prior checkpoint.
-- Fail a checkpoint write; assert the prior checkpoint remains and failure or staleness is visible.
-- Restart the browser and PI WEB web process; assert Workstreams and confirmed continuation state
-  remain available from user-local storage.
-- Resume a real session from the Workstream projection; assert the user does not need to reconstruct
-  the current plan from raw chat history or scratch directories.
-- Append routine activity, verbose output, raw transcript content, linked file content, and an
-  oversized checkpoint; assert rejection or reference-based storage rather than ledger growth.
-- Close a Workstream with unresolved tasks and linked scratch files; assert preserved unresolved
-  state and no deletion without human confirmation.
-- Delegate one bounded task to an ephemeral child Pi process; assert its assignment, progress,
-  cancellation, and result remain part of the attended lead session and create no managed authority
-  or durable Run state.
-- Verify that V1 launches no background checkpoint context, portfolio broker, or unattended
-  semantic work.
-- Exercise loading, empty, failure, reconnect, desktop, narrow, and mobile Workstream views; assert
-  that PI WEB-owned protected controls remain visible and operable.
+### First graphical slice
+
+- Launch a blank macOS window; assert it shows only an explicit workspace/session chooser rather than the legacy PI WEB shell.
+- Open an existing session; assert transcript paging, live updates, status, pending asks, dialogs, and draft restoration belong to that complete session identity.
+- Start a session in an explicitly selected workspace; assert the returned machine/project/workspace/session identity is complete.
+- Exercise send, steer, stop, attachments, inline answers, model/status display, reconnect, and error recovery.
+- Operate two windows on different sessions; assert no selection, draft, scroll, status, transcript, or event crossover.
+- Close and reload one window; assert another window and the session daemon continue without interruption.
+- Run the controlled no-model fixture and one attended real-session pass before accepting the slice.
+- Verify keyboard operation, visible focus, readable text, reduced motion, and supported narrow window sizes.
+
+### Workstream modules
+
+- Exercise `create`, `append`, `inspect`, `list`, `watch`, and `close` through the typed client; assert Store semantics independently from presentation.
+- Rebuild current state from the ledger; assert sessions, checkpoints, Human Tasks, links, revision, and closure without a persisted combined narrative.
+- Replay exact mutations and reject changed input under a reused idempotency key.
+- Submit stale revisions, invalid records, oversized mutations, and illegal transitions; assert deterministic rejection.
+- Reconnect after retained and expired sequences; assert ordered replay or canonical snapshot replacement without duplicate state.
+- Interrupt session launch before and after the host returns an identity; assert pending reconciliation and no duplicate launch.
+- Let an active Pi session write a checkpoint automatically, then correct it; assert the correction supersedes the prior checkpoint.
+- Fail a checkpoint write and explicitly mark a checkpoint stale; assert the prior checkpoint remains and no Chat activity is interpreted as canonical staleness.
+- Restart the browser client and PI WEB web process; assert Workstream state survives without restarting the session daemon.
+- Close a Workstream with unresolved tasks and links; assert preserved state and no file deletion.
+
+### Attended boundary
+
+- Delegate one bounded child task; assert assignment, progress, cancellation, and result remain subordinate to the lead session and create no managed authority.
+- Verify V1 launches no background checkpoint model, portfolio broker, managed Run, or unattended semantic work.

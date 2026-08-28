@@ -1,6 +1,6 @@
 # Attention and Interface Specification
 
-Defines the supported supervision, attention, PI WEB, Review Surface, and external-adapter contracts.
+Defines the supported supervision, attention, Workbench client, Review Surface, and external-adapter contracts.
 
 This document is authoritative for attention and interface behavior. [The system overview](../foundation/system-overview.md) remains authoritative for system-wide behavior and boundaries.
 
@@ -28,12 +28,12 @@ Each named execution profile declares a finite attempt ladder. Failed independen
 
 In managed execution, the supervision loop is owned by the live controller host and does not require a model session to remain active. Loss of the coordinator session triggers bounded Pi-session replacement or a persisted attention item. These managed supervision semantics are outside V1.
 
-## Stable Workbench Shell
+## Stable Workbench client
 
-The shell owns:
+The delivered client owns only the capabilities in its current usable slice. Across slices, the client owns:
 
 - A visible boundary between attended interaction and any future managed execution.
-- Workstream, conversation, repository, and workspace navigation in V1; any future portfolio, project, worktree, and Run navigation remains shell-owned.
+- Navigation introduced by the current usable slice; later Workstream, repository, workspace, portfolio, project, worktree, and Run navigation remains client-owned when delivered.
 - User, agent, and model identity.
 - Authentication, authorization, and permission controls.
 - Start, pause, resume, steer, stop, retry, and handoff controls.
@@ -42,21 +42,22 @@ The shell owns:
 - Recovery, reconciliation, and cleanup entry points.
 - Hosting and isolation of bounded project surfaces.
 
-## Workstream Surfaces
+## Workstream surfaces
 
-Workstreams are the primary home for interactive sessions. The cross-repository Workstream view
-lists current and closed Workstreams, supports starting a session in exactly one Workstream, and
-shows each session's latest confirmed checkpoint, unresolved human tasks, linked files and Runs,
-revision, and closure state. The owner uses this mechanical projection directly to decide what to
-resume; V1 does not launch FirstMate or another broker model.
+Workstreams are the primary cross-session attention home. Their graphical surface is a later client
+slice; until then the terminal skill operates the same typed protocol. When delivered, the
+cross-repository view lists current and closed Workstreams, starts an associated session in exactly
+one Workstream, and shows each session's latest confirmed checkpoint, unresolved Human Tasks,
+linked files and Runs, revision, and closure state. The owner uses this mechanical projection
+directly to decide what to resume; V1 does not launch FirstMate or another broker model.
 
 Human tasks remain distinct from any future managed Run Attention Items. An advisory Workstream
 task cannot block or authorize a Run transition.
 
-Checkpointing is an explicit attended action. The active Pi session proposes the checkpoint, the
-owner may correct it, and only owner-confirmed content is persisted. The interface shows missing,
-failed, or stale checkpoints instead of presenting old context as current. Several sessions and
-Workstreams may remain active concurrently.
+The active Pi session persists a checkpoint automatically at a meaningful attention change. The
+owner may correct or replace it afterwards. The interface shows missing, failed, or explicitly stale
+checkpoints instead of presenting old context as current. Several sessions and Workstreams may
+remain active concurrently.
 
 Session selection and opening fail with typed causes for a missing anchor, unavailable machine,
 unavailable project, unavailable workspace, missing session, or transport failure. The missing-anchor
@@ -135,26 +136,23 @@ resume. Mode selection
 cannot grant permissions or guarantees, and a PI WEB session identifier is never inferred to be a
 Run identifier.
 
-## V1 Graphical Surface
+## First graphical slice
 
-The V1 vertical slice is a PI WEB Workstreams destination over the typed Workstream protocol. It
-provides current and closed Workstreams, session association and launch state, confirmed
-checkpoints, unresolved human tasks, links, revision and closure state, and actions to create,
-resume, checkpoint, and close.
+The first graphical slice is one Pi Chat per macOS window. A blank window chooses an explicitly
+located existing or new session; after selection, Chat and its composer fill the window. Each
+window keeps transcript, draft, scroll, live events, status, asks, and dialogs scoped to its complete
+session identity. Client replacement does not restart the PI WEB session daemon.
 
-The graphical Workbench is entered through a Workstream. It preserves the owner's place across
-interruptions and consumes canonical Workstream projections rather than inferring current state
-from chat messages. PI WEB retains visible authentication, connectivity, settings, recovery,
-workspace, conversation, and navigation controls across loading, empty, failure, reconnect, narrow,
-and mobile states.
+Workstreams, Files, Git, Terminal, history, and cross-session attention are later slices selected
+from observed use. Adding one does not weaken the typed state or complete-identity requirements.
 
-## PI WEB Control Surface
+## Workstream control surface
 
-PI WEB provides every V1 Workstream action. Controls cover listing, creating, inspecting, starting
-or resuming a session, proposing and confirming a checkpoint, adding human tasks and links, and
-closing.
+When the Workstream slice is delivered, it provides every supported Workstream action: listing,
+creating, inspecting, starting or resuming a session, correcting a checkpoint, adding Human Tasks
+and links, and closing.
 
-Every mutation crosses the typed protocol with revision checks and idempotency. Attended-session creation uses the shared Workstream session-coordination module, which records pending before host creation and preserves unknown outcomes for reconciliation. Session-anchor repair additionally crosses PI WEB's typed resolver boundary, receives explicit owner confirmation, and appends the bounded catalog-resolution receipt only after an immediate evidence recheck. Mechanical status, checkpoint state, and unresolved human tasks remain inspectable without launching another model turn. Managed Run controls belong only to a future approved controller implementation.
+Every mutation crosses the typed protocol with revision checks and idempotency. Attended-session creation uses the shared Workstream session-coordination module, which records pending before host creation and preserves unknown outcomes for reconciliation. Session-anchor repair additionally crosses the reused PI WEB runtime's typed resolver seam, receives explicit owner confirmation, and appends the bounded catalog-resolution receipt only after an immediate evidence recheck. Mechanical status, checkpoint state, and unresolved Human Tasks remain inspectable without launching another model turn. Managed Run controls belong only to a future approved controller implementation.
 
 ## External Adapters
 
