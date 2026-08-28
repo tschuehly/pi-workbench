@@ -14,6 +14,7 @@ export function registerTelemetry(
   const env = runtime.env ?? process.env;
   let currentSessionId: string | null = null;
   const deliveredStudioMarkers = new Set<string>();
+  const deliveredStudioLifecycle = new Set<string>();
 
   pi.on("session_start", async (event, ctx) => {
     const session = sessionData(ctx);
@@ -43,11 +44,18 @@ export function registerTelemetry(
 
   pi.on("message_start", async (event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
-    for (const marker of studioWakeMarkers(messageText(event.message))) {
+    const text = messageText(event.message);
+    for (const marker of studioWakeMarkers(text)) {
       const key = `${sessionId}:${marker.concept ?? ""}:${marker.kind}:${marker.id ?? ""}:${marker.seq}`;
       if (deliveredStudioMarkers.has(key)) continue;
       deliveredStudioMarkers.add(key);
       recorder.record("studio.comment_delivered", { sessionId, ...marker });
+    }
+    for (const state of studioLifecycleMarkers(text)) {
+      const key = `${sessionId}:${state.concept}:${state.id}:${state.state}:${state.source}`;
+      if (deliveredStudioLifecycle.has(key)) continue;
+      deliveredStudioLifecycle.add(key);
+      recorder.record("studio.comment_state", { sessionId, ...state });
     }
   });
 
@@ -143,6 +151,22 @@ function studioWakeMarkers(prompt: string) {
       if (value.id !== null && typeof value.id !== "string") continue;
       if (value.eventTime !== null && typeof value.eventTime !== "string") continue;
       markers.push({ kind: value.kind, concept: value.concept, id: value.id, seq: value.seq, eventTime: value.eventTime });
+    } catch {}
+  }
+  return markers;
+}
+
+function studioLifecycleMarkers(prompt: string) {
+  const prefix = "PI_TELEMETRY_STUDIO_LIFECYCLE_V1 ";
+  const markers = [];
+  for (const line of prompt.split(/\r?\n/)) {
+    const offset = line.indexOf(prefix);
+    if (offset < 0) continue;
+    try {
+      const value = JSON.parse(line.slice(offset + prefix.length));
+      if (value?.version !== 1 || value.type !== "studio.comment_state" || value.state !== "accepted" || value.source !== "human") continue;
+      if (typeof value.concept !== "string" || typeof value.id !== "string") continue;
+      markers.push({ concept: value.concept, id: value.id, state: value.state, source: value.source });
     } catch {}
   }
   return markers;

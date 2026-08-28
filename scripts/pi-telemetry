@@ -1,21 +1,73 @@
 #!/usr/bin/env node
 
 (async () => {
-  const { buildReport, readEvents } = await import("../extensions/telemetry/telemetry.mjs");
+  const { buildReport, createRecorder, readEvents } = await import("../extensions/telemetry/telemetry.mjs");
   const [command, ...args] = process.argv.slice(2);
-  if (command !== "report") throw new Error("Usage: pi-telemetry report [--root-session <id>] [--concept <slug>] [--events-dir <path>]");
-  const options = {};
-  let directory;
-  for (let index = 0; index < args.length; index += 2) {
-    const value = args[index + 1];
-    if (value === undefined) throw new Error(`Missing value for ${args[index]}.`);
-    if (args[index] === "--root-session") options.rootSessionId = value;
-    else if (args[index] === "--concept") options.concept = value;
-    else if (args[index] === "--events-dir") directory = value;
-    else throw new Error(`Unknown option ${args[index]}.`);
+  const values = parseArgs(args);
+
+  if (command === "report") {
+    rejectUnknown(values, new Set(["--root-session", "--concept", "--events-dir"]));
+    const options = {};
+    if (values["--root-session"] !== undefined) options.rootSessionId = values["--root-session"];
+    if (values["--concept"] !== undefined) options.concept = values["--concept"];
+    console.log(JSON.stringify(buildReport(await readEvents(values["--events-dir"]), options), null, 2));
+    return;
   }
-  console.log(JSON.stringify(buildReport(await readEvents(directory), options), null, 2));
+
+  const rootSessionId = values["--root-session"] ?? process.env.PI_SESSION_ID;
+  if (!rootSessionId) throw new Error("Missing --root-session (or PI_SESSION_ID).");
+  const concept = required(values, "--concept");
+  const id = required(values, "--comment-id");
+  if (command === "record-studio-verification") {
+    rejectUnknown(values, new Set(["--root-session", "--concept", "--comment-id", "--sha256", "--verdict", "--execution-id"]));
+    const sha256 = required(values, "--sha256");
+    const verdict = choice(values, "--verdict", ["pass", "rework", "needs_human"]);
+    if (!/^[a-f0-9]{64}$/i.test(sha256)) throw new Error("--sha256 must be 64 hexadecimal characters.");
+    record(createRecorder, "studio.verification_settled", { sessionId: rootSessionId, concept, id, sha256, verdict, ...(values["--execution-id"] === undefined ? {} : { executionId: values["--execution-id"] }) });
+    return;
+  }
+  if (command === "record-studio-state") {
+    rejectUnknown(values, new Set(["--root-session", "--concept", "--comment-id", "--state", "--source"]));
+    const state = choice(values, "--state", ["implemented", "accepted", "rejected"]);
+    const source = choice(values, "--source", ["agent", "human"]);
+    record(createRecorder, "studio.comment_state", { sessionId: rootSessionId, concept, id, state, source });
+    return;
+  }
+  throw new Error("Usage: pi-telemetry report|record-studio-verification|record-studio-state [options]");
 })().catch((error) => {
   console.error(error.message);
   process.exitCode = 2;
 });
+
+function record(createRecorder, type, data) {
+  const recorder = createRecorder();
+  try { recorder.record(type, data); }
+  finally { recorder.close(); }
+}
+
+function parseArgs(args) {
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    if (!args[index].startsWith("--")) throw new Error(`Unknown option ${args[index]}.`);
+    const value = args[index + 1];
+    if (value === undefined) throw new Error(`Missing value for ${args[index]}.`);
+    values[args[index]] = value;
+  }
+  return values;
+}
+
+function required(values, name) {
+  if (!values[name]) throw new Error(`Missing ${name}.`);
+  return values[name];
+}
+
+function choice(values, name, allowed) {
+  const value = required(values, name);
+  if (!allowed.includes(value)) throw new Error(`Invalid ${name}: ${value}. Expected ${allowed.join("|")}.`);
+  return value;
+}
+
+function rejectUnknown(values, allowed) {
+  const unknown = Object.keys(values).find((name) => !allowed.has(name));
+  if (unknown !== undefined) throw new Error(`Unknown option ${unknown}.`);
+}

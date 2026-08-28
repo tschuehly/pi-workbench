@@ -65,10 +65,10 @@ test("reports descendant usage once and unions parallel active intervals", () =>
     sessionIds: ["child", "root"],
     activeMs: 15_000,
     incompleteActiveIntervals: 0,
-    usage: { eventCount: 2, inputTokens: 15, outputTokens: 4, knownCost: 2, totalCost: null, unknownCostEvents: 1 },
+    usage: { eventCount: 2, inputTokens: 15, outputTokens: 4, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 19, knownCost: 2, totalCost: null, unknownCostEvents: 1 },
     usageByAttribution: [
-      { role: "independent-review", concept: "alpha", provider: "anthropic", model: "claude", eventCount: 1, inputTokens: 5, outputTokens: 2, knownCost: null, totalCost: null, unknownCostEvents: 1 },
-      { role: "shared_lead", concept: null, provider: "openai", model: "lead", eventCount: 1, inputTokens: 10, outputTokens: 2, knownCost: 2, totalCost: 2, unknownCostEvents: 0 },
+      { role: "independent-review", concept: "alpha", provider: "anthropic", model: "claude", eventCount: 1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 7, knownCost: null, totalCost: null, unknownCostEvents: 1 },
+      { role: "shared_lead", concept: null, provider: "openai", model: "lead", eventCount: 1, inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12, knownCost: 2, totalCost: 2, unknownCostEvents: 0 },
     ],
     executions: [{ executionId: "exec-1", kind: "subagent", workerId: null, task: "Review it", cognitiveRole: "independent-review", concept: "alpha", provider: "anthropic", model: "claude", effort: "high", acceptedAt: "2026-08-28T12:00:01.000Z", endedAt: "2026-08-28T12:00:15.000Z", childSessionId: "child", outcome: "cancelled" }],
     failures: 1,
@@ -131,11 +131,76 @@ test("joins the first delivered correction marker to the next changed draft", ()
     correctionCycles: [{
       kind: "sent", id: "c1", seq: 7, concept: "alpha", eventTime: "2026-08-28T11:59:00.000Z",
       deliveredAt: "2026-08-28T12:00:00.000Z", draftReadyAt: "2026-08-28T12:00:09.000Z",
-      cycleMs: 9_000, activeMs: 8_000, idleMs: 1_000, attributedAgentIntervals: 1, buildId: "changed", gitHead: "def",
-      sha256: "a".repeat(64), reviewAccepted: false,
+      cycleMs: 9_000, activeMs: 9_000, leadActiveMs: 7_000, idleMs: 0, attributedLeadIntervals: 2, attributedAgentIntervals: 1,
+      usageToDraft: { eventCount: 0, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, totalTokens: null, knownCost: null, totalCost: null, unknownCostEvents: 0 },
+      usageToDraftByAttribution: [], usageToCompletion: null, usageToCompletionByAttribution: [], usageFinalized: false,
+      verificationAt: null, verification: null, implementedAt: null, acceptedAt: null, rejectedAt: null,
+      result: { status: "draft_ready", verificationVerdict: null, totalTokens: null, totalCost: null, readyForCompounding: false },
+      buildId: "changed", gitHead: "def", sha256: "a".repeat(64), reviewAccepted: false,
     }],
     completedCorrectionRounds: 1,
   });
+});
+
+test("enriches correction cycles with scoped usage, lead activity, lifecycle, and compounding readiness", () => {
+  const sha256 = "a".repeat(64);
+  const events = [
+    event("session.start", "12:00:00", { sessionId: "root" }),
+    event("session.start", "12:00:01", { sessionId: "alpha-child", parentSessionId: "root", executionId: "exec-alpha" }),
+    event("session.start", "12:00:01", { sessionId: "beta-child", parentSessionId: "root", executionId: "exec-beta" }),
+    event("execution.launched", "12:00:01", { sessionId: "root", executionId: "exec-alpha", kind: "worker", cognitiveRole: "implementation", concept: "alpha", provider: "openai", model: "worker", effort: "high" }),
+    event("execution.launched", "12:00:01", { sessionId: "root", executionId: "exec-beta", kind: "worker", cognitiveRole: "implementation", concept: "beta", provider: "openai", model: "worker", effort: "high" }),
+    event("studio.comment_delivered", "12:00:00", { sessionId: "root", kind: "sent", concept: "alpha", id: "c1", seq: 1 }),
+    event("agent.start", "12:00:00", { sessionId: "root" }),
+    event("agent.start", "12:00:01", { sessionId: "alpha-child" }),
+    event("agent.start", "12:00:01", { sessionId: "beta-child" }),
+    event("usage", "12:00:02", { sessionId: "root", usageKey: "root:1", provider: "openai", model: "lead", usage: usage(10, 2) }),
+    event("usage", "12:00:03", { sessionId: "alpha-child", usageKey: "alpha:1", provider: "openai", model: "worker", usage: usage(5, 1) }),
+    event("usage", "12:00:04", { sessionId: "beta-child", usageKey: "beta:1", provider: "openai", model: "worker", usage: usage(100, 20) }),
+    event("agent.settled", "12:00:05", { sessionId: "alpha-child" }),
+    event("agent.settled", "12:00:05", { sessionId: "beta-child" }),
+    event("studio.draft_ready", "12:00:06", { sessionId: "root", concept: "alpha", buildId: "alpha", watchable: true, sha256 }),
+    event("usage", "12:00:07", { sessionId: "root", usageKey: "root:2", provider: "openai", model: "lead", usage: usage(3, 0.5) }),
+    event("studio.comment_state", "12:00:08", { sessionId: "root", concept: "alpha", id: "c1", state: "implemented", source: "agent" }),
+    event("studio.verification_settled", "12:00:09", { sessionId: "root", concept: "alpha", id: "c1", sha256, verdict: "pass", executionId: "verify-1" }),
+    event("studio.comment_state", "12:00:10", { sessionId: "root", concept: "alpha", id: "c1", state: "accepted", source: "human" }),
+  ];
+
+  const cycle = buildReport(events, { rootSessionId: "root" }).studio.correctionCycles[0];
+  assert.deepEqual(cycle.usageToDraft, { eventCount: 2, inputTokens: 15, outputTokens: 4, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 19, knownCost: 3, totalCost: 3, unknownCostEvents: 0 });
+  assert.equal(cycle.usageToDraftByAttribution.length, 2);
+  assert.equal(cycle.usageToCompletion.inputTokens, 18);
+  assert.equal(cycle.usageToCompletionByAttribution.some((group) => group.concept === "beta"), false);
+  assert.equal(cycle.activeMs, 6_000);
+  assert.equal(cycle.leadActiveMs, 6_000);
+  assert.equal(cycle.attributedLeadIntervals, 1);
+  assert.equal(cycle.attributedAgentIntervals, 1);
+  assert.equal(cycle.usageFinalized, false);
+  assert.deepEqual(cycle.verification, { at: "2026-08-28T12:00:09.000Z", verdict: "pass", sha256, executionId: "verify-1" });
+  assert.equal(cycle.implementedAt, "2026-08-28T12:00:08.000Z");
+  assert.equal(cycle.acceptedAt, "2026-08-28T12:00:10.000Z");
+  assert.equal(cycle.rejectedAt, null);
+  assert.deepEqual(cycle.result, { status: "accepted", verificationVerdict: "pass", totalTokens: 24, totalCost: 3.5, readyForCompounding: false });
+});
+
+test("does not join lifecycle events across a later delivery of the same comment", () => {
+  const sha256 = "b".repeat(64);
+  const events = [
+    event("session.start", "12:00:00", { sessionId: "root" }),
+    event("studio.comment_delivered", "12:00:00", { sessionId: "root", kind: "sent", concept: "alpha", id: "c1", seq: 1 }),
+    event("studio.draft_ready", "12:00:01", { sessionId: "root", concept: "alpha", buildId: "first", watchable: true, sha256 }),
+    event("studio.comment_delivered", "12:00:02", { sessionId: "root", kind: "sent", concept: "alpha", id: "c1", seq: 2 }),
+    event("studio.draft_ready", "12:00:03", { sessionId: "root", concept: "alpha", buildId: "second", watchable: true, sha256 }),
+    event("studio.verification_settled", "12:00:04", { sessionId: "root", concept: "alpha", id: "c1", sha256, verdict: "pass" }),
+    event("studio.comment_state", "12:00:05", { sessionId: "root", concept: "alpha", id: "c1", state: "accepted", source: "human" }),
+  ];
+
+  const [first, second] = buildReport(events, { rootSessionId: "root" }).studio.correctionCycles;
+  assert.equal(first.verification, null);
+  assert.equal(first.acceptedAt, null);
+  assert.equal(second.verification.verdict, "pass");
+  assert.equal(second.acceptedAt, "2026-08-28T12:00:05.000Z");
+  assert.equal(second.result.readyForCompounding, true);
 });
 
 test("top-level signals include failed Studio builds and their next same-concept attempt", () => {
@@ -197,8 +262,34 @@ test("root reports exclude session-less events and keep unknown token fields nul
   ];
 
   const report = buildReport(events, { rootSessionId: "root-a" });
-  assert.deepEqual(report.usage, { eventCount: 1, inputTokens: 3, outputTokens: null, knownCost: null, totalCost: null, unknownCostEvents: 1 });
+  assert.deepEqual(report.usage, { eventCount: 1, inputTokens: 3, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, totalTokens: null, knownCost: null, totalCost: null, unknownCostEvents: 1 });
   assert.deepEqual(report.studio.builds, []);
+});
+
+test("CLI records validated Studio lifecycle events", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-telemetry-cli-record-"));
+  const script = fileURLToPath(new URL("../../scripts/pi-telemetry", import.meta.url));
+  const sha256 = "c".repeat(64);
+  const env = { ...process.env, PI_TELEMETRY_DIR: directory, PI_SESSION_ID: "root" };
+
+  const verification = spawnSync(process.execPath, [script, "record-studio-verification", "--concept", "alpha", "--comment-id", "c1", "--sha256", sha256, "--verdict", "pass", "--execution-id", "verify-1"], { encoding: "utf8", env });
+  const state = spawnSync(process.execPath, [script, "record-studio-state", "--root-session", "override", "--concept", "alpha", "--comment-id", "c1", "--state", "accepted", "--source", "human"], { encoding: "utf8", env });
+
+  assert.equal(verification.status, 0, verification.stderr);
+  assert.equal(state.status, 0, state.stderr);
+  assert.deepEqual((await readEvents(directory)).map(({ type, sessionId, concept, id, verdict, state, source, executionId }) => ({ type, sessionId, concept, id, verdict, state, source, executionId })), [
+    { type: "studio.verification_settled", sessionId: "root", concept: "alpha", id: "c1", verdict: "pass", state: undefined, source: undefined, executionId: "verify-1" },
+    { type: "studio.comment_state", sessionId: "override", concept: "alpha", id: "c1", verdict: undefined, state: "accepted", source: "human", executionId: undefined },
+  ]);
+
+  const invalidCommands = [
+    ["record-studio-verification", "--concept", "alpha", "--comment-id", "c1", "--sha256", sha256, "--verdict", "maybe"],
+    ["record-studio-verification", "--concept", "alpha", "--comment-id", "c1", "--sha256", "bad", "--verdict", "pass"],
+    ["record-studio-state", "--concept", "alpha", "--state", "accepted", "--source", "human"],
+    ["record-studio-state", "--concept", "alpha", "--comment-id", "c1", "--state", "pending", "--source", "human"],
+    ["record-studio-state", "--concept", "alpha", "--comment-id", "c1", "--state", "accepted", "--source", "system"],
+  ];
+  for (const command of invalidCommands) assert.equal(spawnSync(process.execPath, [script, ...command], { encoding: "utf8", env }).status, 2);
 });
 
 test("CLI prints the report for a selected root session", async () => {

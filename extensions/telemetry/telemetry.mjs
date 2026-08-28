@@ -39,8 +39,8 @@ export function buildReport(events, options = {}) {
   const selected = events.filter((event) => selectedSessions.has(event.sessionId) || (options.rootSessionId == null && event.sessionId == null));
   const usageEvents = dedupe(selected.filter((event) => event.type === "usage"), (event) => event.usageKey ?? `${event.sessionId}:${event.at}:${JSON.stringify(event.usage)}`);
   const executions = executionTimeline(selected);
-  const { intervals, incomplete } = agentIntervals(selected, executions);
-  const studio = studioReport(selected, intervals, executions, options.concept);
+  const { intervals, openIntervals, incomplete } = agentIntervals(selected, executions);
+  const studio = studioReport(selected, intervals, openIntervals, usageEvents, executions, options.rootSessionId, options.concept);
   return {
     rootSessionId: options.rootSessionId ?? null,
     sessionIds: [...selectedSessions].sort(),
@@ -94,6 +94,9 @@ function usageSummary(events) {
     eventCount: events.length,
     inputTokens: total("input"),
     outputTokens: total("output"),
+    cacheReadTokens: total("cacheRead"),
+    cacheWriteTokens: total("cacheWrite"),
+    totalTokens: total("totalTokens"),
     knownCost: knownCosts.length === 0 ? null : knownCosts.reduce((sum, value) => sum + value, 0),
     totalCost: events.length > 0 && unknownCostEvents === 0 ? knownCosts.reduce((sum, value) => sum + value, 0) : null,
     unknownCostEvents,
@@ -151,7 +154,7 @@ function agentIntervals(events, executions) {
     if (execution === undefined) incomplete++;
     else intervals.push({ ...value, end: Date.parse(execution.endedAt) });
   }
-  return { intervals, incomplete };
+  return { intervals, openIntervals: [...open.values()], incomplete };
 }
 
 function unionDuration(intervals) {
@@ -167,7 +170,7 @@ function unionDuration(intervals) {
   return total + (current === undefined ? 0 : current[1] - current[0]);
 }
 
-function studioReport(events, agentActiveIntervals, executions, concept) {
+function studioReport(events, agentActiveIntervals, openAgentIntervals, usageEvents, executions, rootSessionId, concept) {
   const correctionKinds = new Set(["sent", "rejected", "bad", "comment-state", "decision"]);
   const builds = buildTimeline(events).filter((build) => concept == null || build.concept === concept);
   const ready = events
@@ -179,16 +182,66 @@ function studioReport(events, agentActiveIntervals, executions, concept) {
       .sort((left, right) => String(left.at).localeCompare(String(right.at))),
     (event) => `${event.concept}:${event.kind}:${event.id ?? ""}:${event.seq}`,
   );
-  const correctionCycles = deliveries.map((delivery) => {
+  const correctionCycles = deliveries.map((delivery, index) => {
     const start = Date.parse(delivery.at);
-    const draft = ready.find((event) => event.concept === delivery.concept && Date.parse(event.at) >= start);
-    if (draft === undefined) return {
+    const nextDelivery = deliveries.slice(index + 1).find((candidate) => candidate.concept === delivery.concept && (candidate.id ?? null) === (delivery.id ?? null));
+    const boundary = nextDelivery === undefined ? Infinity : Date.parse(nextDelivery.at);
+    const draft = ready.find((event) => event.concept === delivery.concept && Date.parse(event.at) >= start && Date.parse(event.at) < boundary);
+    const lifecycle = events.filter((event) => event.concept === delivery.concept && (event.id ?? null) === (delivery.id ?? null)
+      && Date.parse(event.at) >= start && Date.parse(event.at) < boundary);
+    const draftEnd = draft === undefined ? null : Date.parse(draft.at);
+    const verificationEvent = lifecycle.filter((event) => event.type === "studio.verification_settled"
+      && (draftEnd === null || Date.parse(event.at) >= draftEnd) && (draft?.sha256 == null || event.sha256 === draft.sha256)).at(-1);
+    const stateEvents = lifecycle.filter((event) => event.type === "studio.comment_state");
+    const stateAt = (state, source) => stateEvents.filter((event) => event.state === state && (source === undefined || event.source === source)).at(-1)?.at ?? null;
+    const implementedAt = stateAt("implemented");
+    const acceptedAt = stateAt("accepted", "human");
+    const rejectedAt = stateAt("rejected");
+    const completionAt = [acceptedAt, rejectedAt].filter(Boolean).sort().at(-1) ?? null;
+    const leadSessionId = rootSessionId ?? delivery.sessionId;
+    const completionEnd = completionAt === null ? null : Date.parse(completionAt);
+    const scopedUsage = (end) => end === null ? null : usageEvents.filter((event) => {
+      const at = Date.parse(event.at);
+      if (at < start || at > end) return false;
+      if (event.sessionId === leadSessionId) return true;
+      return executions.some((execution) => execution.concept === delivery.concept && execution.childSessionId === event.sessionId
+        && Date.parse(execution.acceptedAt) <= at && (execution.endedAt === null || at <= Date.parse(execution.endedAt)));
+    });
+    const usageToDraftEvents = scopedUsage(draftEnd);
+    const usageToCompletionEvents = scopedUsage(completionEnd);
+    const summarize = (values) => values === null ? null : usageSummary(values);
+    const attribute = (values) => values === null ? [] : usageAttribution(events, values, executions);
+    const usageToDraft = summarize(usageToDraftEvents);
+    const usageToCompletion = summarize(usageToCompletionEvents);
+    const finalizationEnd = completionEnd ?? draftEnd;
+    const usageFinalized = completionEnd !== null && !openAgentIntervals.some((interval) => interval.sessionId === leadSessionId && interval.start <= finalizationEnd);
+    const verification = verificationEvent === undefined ? null : {
+      at: verificationEvent.at,
+      verdict: verificationEvent.verdict,
+      sha256: verificationEvent.sha256,
+      executionId: verificationEvent.executionId ?? null,
+    };
+    const status = acceptedAt !== null ? "accepted" : rejectedAt !== null ? "rejected" : implementedAt !== null ? "implemented" : draft !== undefined ? "draft_ready" : "pending";
+    const result = {
+      status,
+      verificationVerdict: verification?.verdict ?? null,
+      totalTokens: usageToCompletion?.totalTokens ?? null,
+      totalCost: usageToCompletion?.totalCost ?? null,
+      readyForCompounding: verification?.verdict === "pass" && acceptedAt !== null && usageFinalized,
+    };
+    const common = {
       kind: delivery.kind, id: delivery.id ?? null, seq: delivery.seq, concept: delivery.concept,
-      eventTime: delivery.eventTime ?? null, deliveredAt: delivery.at, draftReadyAt: null,
-      cycleMs: null, activeMs: null, idleMs: null, attributedAgentIntervals: 0,
+      eventTime: delivery.eventTime ?? null, deliveredAt: delivery.at,
+      usageToDraft, usageToDraftByAttribution: attribute(usageToDraftEvents),
+      usageToCompletion, usageToCompletionByAttribution: attribute(usageToCompletionEvents), usageFinalized,
+      verificationAt: verification?.at ?? null, verification, implementedAt, acceptedAt, rejectedAt, result,
+    };
+    if (draft === undefined) return {
+      ...common, draftReadyAt: null, cycleMs: null, activeMs: null, leadActiveMs: null, idleMs: null,
+      attributedLeadIntervals: 0, attributedAgentIntervals: 0,
       buildId: null, gitHead: null, sha256: null, reviewAccepted: null,
     };
-    const end = Date.parse(draft.at);
+    const end = draftEnd;
     const executionWindows = executions.filter((execution) => execution.concept === delivery.concept && execution.childSessionId !== null);
     const buildIntervals = builds
       .filter((build) => build.concept === delivery.concept)
@@ -196,31 +249,30 @@ function studioReport(events, agentActiveIntervals, executions, concept) {
       .filter(([intervalStart, intervalEnd]) => Number.isFinite(intervalStart) && Number.isFinite(intervalEnd));
     const attributedAgentIntervals = agentActiveIntervals.flatMap((interval) => executionWindows
       .filter((execution) => execution.childSessionId === interval.sessionId)
-      .map((execution) => [
-        Math.max(start, interval.start, Date.parse(execution.acceptedAt)),
-        Math.min(end, interval.end, execution.endedAt === null ? end : Date.parse(execution.endedAt)),
-      ])
-      .filter(([intervalStart, intervalEnd]) => Number.isFinite(intervalStart) && Number.isFinite(intervalEnd) && intervalEnd >= intervalStart));
-    const activeIntervals = [...attributedAgentIntervals, ...buildIntervals]
+      .map((execution) => [Math.max(start, interval.start, Date.parse(execution.acceptedAt)), Math.min(end, interval.end, execution.endedAt === null ? end : Date.parse(execution.endedAt))])
+      .filter(validInterval));
+    const leadIntervals = [...agentActiveIntervals, ...openAgentIntervals]
+      .filter((interval) => interval.sessionId === leadSessionId)
+      .map((interval) => [Math.max(start, interval.start), Math.min(end, interval.end ?? end)])
+      .filter(validInterval);
+    const activeIntervals = [...attributedAgentIntervals, ...leadIntervals, ...buildIntervals]
       .map(([intervalStart, intervalEnd]) => [Math.max(start, intervalStart), Math.min(end, intervalEnd)])
-      .filter(([intervalStart, intervalEnd]) => Number.isFinite(intervalStart) && Number.isFinite(intervalEnd) && intervalEnd >= intervalStart);
+      .filter(validInterval);
     const cycleMs = end - start;
     const activeMs = activeIntervals.length === 0 ? null : unionDuration(activeIntervals);
     return {
-      kind: delivery.kind, id: delivery.id ?? null, seq: delivery.seq, concept: delivery.concept,
-      eventTime: delivery.eventTime ?? null, deliveredAt: delivery.at, draftReadyAt: draft.at,
-      cycleMs, activeMs, idleMs: activeMs === null ? null : Math.max(0, cycleMs - activeMs),
-      attributedAgentIntervals: attributedAgentIntervals.length,
+      ...common, draftReadyAt: draft.at, cycleMs, activeMs, leadActiveMs: leadIntervals.length === 0 ? null : unionDuration(leadIntervals),
+      idleMs: activeMs === null ? null : Math.max(0, cycleMs - activeMs),
+      attributedLeadIntervals: leadIntervals.length, attributedAgentIntervals: attributedAgentIntervals.length,
       buildId: draft.buildId ?? null, gitHead: draft.gitHead ?? null, sha256: draft.sha256 ?? null,
       reviewAccepted: typeof draft.reviewAccepted === "boolean" ? draft.reviewAccepted : null,
     };
   });
-  return {
-    concept: concept ?? null,
-    builds,
-    correctionCycles,
-    completedCorrectionRounds: correctionCycles.filter((cycle) => cycle.draftReadyAt !== null).length,
-  };
+  return { concept: concept ?? null, builds, correctionCycles, completedCorrectionRounds: correctionCycles.filter((cycle) => cycle.draftReadyAt !== null).length };
+}
+
+function validInterval([start, end]) {
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start;
 }
 
 function isFailedBuild(build) {
