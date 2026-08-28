@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
+import { stripVTControlCharacters } from "node:util";
 
 const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out", "outcome_unknown"]);
 const INDEPENDENT_ROLES = new Set(["independent-judgment", "challenge", "independent-review"]);
@@ -166,9 +167,17 @@ export class PiRpcExecutionAdapter {
       if (event.message.stopReason !== "toolUse") this.#scheduleSettlementProbe(state);
       return;
     }
-    if (event.type === "tool_execution_start") this.#emit(state, "tool_start", { toolCallId: event.toolCallId, toolName: event.toolName });
-    else if (event.type === "tool_execution_update") this.#emit(state, "tool_progress", { toolCallId: event.toolCallId, toolName: event.toolName });
-    else if (event.type === "tool_execution_end") this.#emit(state, "tool_end", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError === true });
+    if (event.type === "tool_execution_start") {
+      const action = summarizeToolAction(event.toolName, event.args);
+      state.toolActions.set(event.toolCallId, action);
+      this.#emit(state, "tool_start", { toolCallId: event.toolCallId, toolName: event.toolName, action });
+    } else if (event.type === "tool_execution_update") {
+      this.#emit(state, "tool_progress", { toolCallId: event.toolCallId, toolName: event.toolName, action: state.toolActions.get(event.toolCallId) ?? summarizeToolAction(event.toolName, event.args) });
+    } else if (event.type === "tool_execution_end") {
+      const action = state.toolActions.get(event.toolCallId) ?? String(event.toolName ?? "tool");
+      state.toolActions.delete(event.toolCallId);
+      this.#emit(state, "tool_end", { toolCallId: event.toolCallId, toolName: event.toolName, action, isError: event.isError === true });
+    }
     else if (event.type === "extension_error") this.#emit(state, "diagnostic", { message: bounded(String(event.error ?? "Extension error"), 2_000) });
     else if (event.type === "agent_settled") void this.#completeSuccess(state);
   }
@@ -331,7 +340,36 @@ export class PiRpcExecutionAdapter {
 function createState(executionId, spec, acceptedAt) {
   let resultResolve;
   let closeResolve;
-  return { executionId, spec: structuredClone(spec), acceptedAt, observations: [], observationSequence: 0, waiters: new Set(), commands: new Map(), commandSequence: 0, done: false, closed: false, prompted: false, phase: "starting", completing: false, finalText: "", resultPromise: new Promise((resolve) => { resultResolve = resolve; }), resultResolve, closePromise: new Promise((resolve) => { closeResolve = resolve; }), closeResolve };
+  return { executionId, spec: structuredClone(spec), acceptedAt, observations: [], observationSequence: 0, waiters: new Set(), commands: new Map(), commandSequence: 0, toolActions: new Map(), done: false, closed: false, prompted: false, phase: "starting", completing: false, finalText: "", resultPromise: new Promise((resolve) => { resultResolve = resolve; }), resultResolve, closePromise: new Promise((resolve) => { closeResolve = resolve; }), closeResolve };
+}
+
+export function summarizeToolAction(toolName, args) {
+  const path = concisePath(args?.path);
+  if (toolName === "read") return bounded(`reading ${path ?? "file"}`, 56);
+  if (toolName === "edit") return bounded(`editing ${path ?? "file"}`, 56);
+  if (toolName === "write") return bounded(`writing ${path ?? "file"}`, 56);
+  if (toolName === "ls") return bounded(`listing ${path ?? "files"}`, 56);
+  if (toolName === "grep") return bounded(`searching ${concisePath(args?.path) ?? "files"}`, 56);
+  if (toolName === "find") return bounded(`finding ${concisePath(args?.path) ?? "files"}`, 56);
+  if (toolName === "bash" || toolName === "powershell") return bounded(`running ${safeCommandName(args?.command) ?? toolName}`, 56);
+  return cleanText(toolName) || "working";
+}
+
+function concisePath(value) {
+  const parts = cleanText(value).split(/[\\/]/).filter(Boolean);
+  return parts.slice(-2).join("/") || undefined;
+}
+
+function cleanText(value) {
+  return stripVTControlCharacters(String(value ?? "")).replace(/\s+/g, " ").trim();
+}
+
+function safeCommandName(value) {
+  const parts = cleanText(value).split(" ");
+  const executable = parts[0]?.split(/[\\/]/).at(-1);
+  if (!["npm", "pnpm", "yarn", "git", "node", "python", "python3", "mvn", "gradle", "gradlew", "cargo", "go"].includes(executable)) return undefined;
+  const safe = parts.slice(1, executable === "npm" && parts[1] === "run" ? 3 : 2).filter((part) => /^[\w.:-]+$/.test(part) && !/(?:token|secret|password|key)/i.test(part));
+  return [executable, ...safe].join(" ");
 }
 
 function validateSpec(spec, hostTools, now, maxAgeMs) {

@@ -41,5 +41,8 @@ test("collapses noisy repeated assistant and tool progress updates", () => {
   assert.equal(entries[1].at, "2026-08-07T20:00:02.000Z");
   assert.equal(entries[2].at, "2026-08-07T20:00:05.000Z");
   assert.equal(activityText({ type: "thinking_progress" }), "thinking");
-  assert.equal(activityText({ type: "tool_progress", detail: { toolName: "bash" } }), "bash");
+  assert.equal(activityText({ type: "tool_progress", detail: { toolName: "bash", action: "running npm test" } }), "running npm test");
+  assert.equal(activityText({ type: "usage", detail: { input: 10 } }), undefined);
+  assert.equal(activityText({ type: "cancellation" }), "stopping");
+  assert.equal(activityText({ type: "timeout" }), "timed out");
 });

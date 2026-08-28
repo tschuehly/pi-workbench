@@ -1,8 +1,14 @@
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+
 export const ACTIVITY_CHANNEL = "pi-workbench:activity";
-export const ACTIVITY_SUMMARY_LIMIT = 120;
 
 const KINDS = new Set(["subagent", "worker", "monitor", "shell"]);
 const ICONS = { subagent: "🤖", worker: "🧰", monitor: "👀", shell: "💻" };
+const CARD_MIN_WIDTH = 49;
+const CARD_MAX_WIDTH = 80;
+const CARD_GAP = 2;
+const CARD_MAX_COLUMNS = 3;
+const MIN_ACTION_WIDTH = 6;
 
 export function upsertActivity(pi, item) {
   pi.events.emit(ACTIVITY_CHANNEL, { type: "upsert", item });
@@ -15,15 +21,18 @@ export function removeActivity(pi, id) {
 export function createActivitySurface() {
   const items = new Map();
   let ui;
-
-  const render = () => {
-    if (ui !== undefined) ui.setWidget(ACTIVITY_CHANNEL, renderActivityLines([...items.values()]));
-  };
+  let requestRender;
 
   return {
     attach(nextUi) {
       ui = nextUi;
-      render();
+      ui.setWidget(ACTIVITY_CHANNEL, (tui) => {
+        requestRender = () => tui.requestRender();
+        return {
+          render: (width) => renderActivityLines([...items.values()], width) ?? [],
+          invalidate() {},
+        };
+      });
     },
     update(event) {
       const normalized = normalizeActivityEvent(event);
@@ -34,46 +43,80 @@ export function createActivitySurface() {
         if (JSON.stringify(items.get(normalized.item.id)) === JSON.stringify(normalized.item)) return;
         items.set(normalized.item.id, normalized.item);
       }
-      render();
+      requestRender?.();
     },
     dispose() {
       items.clear();
       if (ui !== undefined) ui.setWidget(ACTIVITY_CHANNEL, undefined);
+      requestRender = undefined;
       ui = undefined;
     },
   };
 }
 
-export function renderActivityLines(items) {
-  if (items.length === 0) return undefined;
-  return [`Active · ${items.length}`, ...items.map(renderActivityLine)];
+export function renderActivityLines(items, width = 120) {
+  if (items.length === 0 || width < 1) return undefined;
+  const columns = Math.max(1, Math.min(CARD_MAX_COLUMNS, items.length, Math.floor((width + CARD_GAP) / (CARD_MIN_WIDTH + CARD_GAP))));
+  const availableCardWidth = Math.floor((width - CARD_GAP * (columns - 1)) / columns);
+  const cardWidth = columns === 1 ? availableCardWidth : Math.min(CARD_MAX_WIDTH, availableCardWidth);
+  const rows = [];
+  for (let index = 0; index < items.length; index += columns) {
+    const cards = items.slice(index, index + columns).map((item) => renderActivityPill(item, cardWidth));
+    rows.push(cards.map((card, cardIndex) => cardIndex === cards.length - 1 ? card : padToWidth(card, cardWidth)).join(" ".repeat(CARD_GAP)));
+  }
+  const visibleRows = rows.length <= 9 ? rows : [...rows.slice(0, 8), truncateToWidth(`… ${items.length - columns * 8} more`, width)];
+  return [truncateToWidth(`Active · ${items.length}`, width), ...visibleRows];
 }
 
 export function shortModel(value) {
-  const id = String(value ?? "").split("/").at(-1)?.replace(/^(?:claude|gpt)-/, "").replace(/-\d{8}$/, "") ?? "";
-  const words = id.split("-").filter(Boolean);
+  const id = String(value ?? "").split("/").at(-1)?.replace(/-\d{8}$/, "") ?? "";
+  const gpt = id.match(/^gpt-(\d+(?:[.-]\d+)*?)-(terra|sol|luna)$/);
+  if (gpt !== null) return `${capitalize(gpt[2])} ${gpt[1].replaceAll("-", ".")}`;
+  const words = id.replace(/^(?:claude|gpt)-/, "").split("-").filter(Boolean);
   const compact = [];
   for (const word of words) {
     if (/^\d+$/.test(word) && /^\d+(?:\.\d+)*$/.test(compact.at(-1) ?? "")) compact[compact.length - 1] += `.${word}`;
-    else compact.push(/^\d/.test(word) ? word : `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`);
+    else compact.push(/^\d/.test(word) ? word : capitalize(word));
   }
-  return bounded(compact.join(" ") || "unknown model", 32);
+  return bounded(compact.join(" ") || "unknown model", 14);
 }
 
-function renderActivityLine(item) {
-  const icon = ICONS[item.kind];
-  if (item.kind === "shell") return `${icon} ${bounded(clean(item.objective) || "shell", ACTIVITY_SUMMARY_LIMIT)}`;
-  const identity = item.name === undefined ? formatRole(item.role) : `${item.name}${item.role === undefined ? "" : ` · ${formatRole(item.role)}`}`;
-  const model = item.model === undefined ? "" : ` · ${shortModel(item.model)}`;
-  return `${icon} ${identity ?? item.kind}${model} — ${activitySentence(item)}`;
+function renderActivityPill(item, width) {
+  const prefix = `${ICONS[item.kind]} `;
+  const metadata = activityMetadata(item, Math.max(0, width - visibleWidth(prefix) - MIN_ACTION_WIDTH - 4));
+  const suffix = metadata === "" ? "" : `  ⟨${metadata}⟩`;
+  const actionWidth = Math.max(1, width - visibleWidth(prefix) - visibleWidth(suffix));
+  const line = `${prefix}${truncateToWidth(activityAction(item), actionWidth, "…")}${suffix}`;
+  return truncateToWidth(line, width, "…");
 }
 
-function activitySentence(item) {
-  const objective = clean(item.objective);
+function activityAction(item) {
   const current = clean(item.activity);
-  const activity = current === "starting" || current === "running" ? "" : current;
-  const text = objective === "" ? activity : activity === "" ? objective : `${objective}; ${activity}`;
-  return bounded(text || "working", ACTIVITY_SUMMARY_LIMIT);
+  if (item.kind === "shell") return clean(item.objective) || "running shell";
+  if (item.kind === "monitor" && (current === "" || current === "watching" || current === "starting")) return clean(item.objective) || "watching";
+  return current === "" || current === "running" ? "starting" : current;
+}
+
+function activityMetadata(item, width) {
+  if (width < 1) return "";
+  const name = bounded(clean(item.name), 8);
+  const role = shortRole(item.role);
+  const model = item.model === undefined ? "" : shortModel(item.model);
+  const effort = bounded(clean(item.effort), 6);
+  const candidates = [[name, role, model, effort], [name, model, effort], [model, effort]];
+  for (const parts of candidates) {
+    const text = parts.filter(Boolean).join(" · ");
+    if (visibleWidth(text) <= width) return text;
+  }
+  if (model !== "" && effort !== "") {
+    const modelWidth = width - visibleWidth(effort) - 3;
+    if (modelWidth > 0) return `${truncateToWidth(model, modelWidth, "…")} · ${effort}`;
+  }
+  return truncateToWidth(model || effort || name || role || "", width, "…");
+}
+
+function padToWidth(value, width) {
+  return value + " ".repeat(Math.max(0, width - visibleWidth(value)));
 }
 
 function normalizeActivityEvent(value) {
@@ -109,12 +152,28 @@ function requiredText(value, max) {
   return typeof value === "string" && value.trim() !== "" ? bounded(clean(value), max) : undefined;
 }
 
-function formatRole(value) {
-  return value === undefined ? undefined : value.replaceAll("-", " ");
+function shortRole(value) {
+  const roles = {
+    "independent-review": "review",
+    "independent-judgment": "judge",
+    implementation: "build",
+    "problem-solving": "solve",
+    investigation: "inspect",
+    design: "design",
+    escalation: "escalate",
+    challenge: "challenge",
+    synthesis: "synthesize",
+    mechanics: "mechanics",
+  };
+  return typeof value === "string" && Object.hasOwn(roles, value) ? roles[value] : value?.replaceAll("-", " ");
+}
+
+function capitalize(value) {
+  return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
 }
 
 function clean(value) {
-  return String(value ?? "").replace(/\s+/g, " ").trim().replace(/[.;:]$/, "");
+  return stripTerminalSequences(String(value ?? "")).replace(/\s+/g, " ").trim().replace(/[.;:]$/, "");
 }
 
 function bounded(value, max) {

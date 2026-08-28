@@ -501,7 +501,10 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 async function watchActivity(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, executionId: string, activity: Record<string, unknown>) {
   try {
-    for await (const observation of adapter.observe(executionId)) upsertActivity(pi, { ...activity, activity: activityText(observation) });
+    for await (const observation of adapter.observe(executionId)) {
+      const text = activityText(observation);
+      if (text !== undefined) upsertActivity(pi, { ...activity, activity: text });
+    }
   } catch {
     // The execution result carries the diagnostic; this watcher owns presentation only.
   } finally {

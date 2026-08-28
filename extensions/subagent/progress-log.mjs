@@ -41,13 +41,15 @@ export function progressText(observation) {
 }
 
 export function activityText(observation) {
-  if (observation.type.startsWith("tool_")) return String(observation.detail?.toolName ?? "tool");
+  if (observation.type.startsWith("tool_")) return String(observation.detail?.action ?? observation.detail?.toolName ?? "tool");
   if (observation.type === "thinking_progress") return "thinking";
   if (observation.type === "assistant_progress") return "responding";
   if (observation.type === "terminal") return String(observation.detail?.outcome ?? "finished").replaceAll("_", " ");
   if (observation.type === "settlement_reconciled") return "finishing";
-  if (["launch", "binding_verified", "quota_degraded"].includes(observation.type)) return "starting";
-  return observation.type.replaceAll("_", " ");
+  if (observation.type === "cancellation") return "stopping";
+  if (observation.type === "timeout" || observation.type === "startup_timeout") return "timed out";
+  if (["launch", "binding_verified", "continuation_verified", "quota_degraded"].includes(observation.type)) return "starting";
+  return undefined;
 }
 
 function progressKey(observation) {

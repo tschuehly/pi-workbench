@@ -1,6 +1,6 @@
 # Activity extension
 
-Interactive Pi renders one bounded **Active** surface above the editor. Each item stays on one line: an icon identifies its kind, optional identity and Cognitive Role precede a shortened model name, and the objective plus latest activity share a 120-character sentence.
+Interactive Pi renders one bounded **Active** surface above the editor. Width-aware, single-line activity pills pack into one to three columns and wrap as units. Each pill leads with the current action, protects model and Model Effort metadata, and adds compact identity and Cognitive Role when width permits; launch objectives are not rendered.
 
 Other extensions publish session-local presentation state through Pi's existing event bus:
 
