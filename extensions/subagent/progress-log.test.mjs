@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { recordProgress, renderProgressLog } from "./progress-log.mjs";
+import { activityText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
 const startedAt = Date.parse("2026-08-07T20:00:00.000Z");
 
@@ -40,4 +40,6 @@ test("collapses noisy repeated assistant and tool progress updates", () => {
   assert.equal(entries[0].text, "Child Pi is thinking…");
   assert.equal(entries[1].at, "2026-08-07T20:00:02.000Z");
   assert.equal(entries[2].at, "2026-08-07T20:00:05.000Z");
+  assert.equal(activityText({ type: "thinking_progress" }), "thinking");
+  assert.equal(activityText({ type: "tool_progress", detail: { toolName: "bash" } }), "bash");
 });

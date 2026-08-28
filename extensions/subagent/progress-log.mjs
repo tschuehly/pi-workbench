@@ -40,6 +40,16 @@ export function progressText(observation) {
   return observation.type.replaceAll("_", " ");
 }
 
+export function activityText(observation) {
+  if (observation.type.startsWith("tool_")) return String(observation.detail?.toolName ?? "tool");
+  if (observation.type === "thinking_progress") return "thinking";
+  if (observation.type === "assistant_progress") return "responding";
+  if (observation.type === "terminal") return String(observation.detail?.outcome ?? "finished").replaceAll("_", " ");
+  if (observation.type === "settlement_reconciled") return "finishing";
+  if (["launch", "binding_verified", "quota_degraded"].includes(observation.type)) return "starting";
+  return observation.type.replaceAll("_", " ");
+}
+
 function progressKey(observation) {
   if (observation.type === "thinking_progress" || observation.type === "assistant_progress") return observation.type;
   if (observation.type === "tool_progress") return `${observation.type}:${String(observation.detail?.toolCallId ?? observation.detail?.toolName ?? "tool")}`;

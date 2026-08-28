@@ -18,6 +18,7 @@ PI WEB is the user-facing client of its typed protocols.
 | Task | Read or change |
 | --- | --- |
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
+| Pi CLI activity presentation | `extensions/activity/` |
 | Pi agent and PI WEB configuration templates | `config/` |
 | V1 human–Pi pair programming | `docs/plans/level-1.md` |
 | V1 attended child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |

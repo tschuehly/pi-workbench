@@ -6,9 +6,9 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
 import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
+import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { createCompletionWakeup, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
-import { createDelegateWidget } from "./delegate-widget.mjs";
-import { progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
+import { activityText, progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
@@ -83,14 +83,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
   const completionWakeup = createCompletionWakeup({
     sendMessage: (message: any, options: any) => pi.sendMessage(message, options),
   });
-  const delegateWidget = createDelegateWidget();
-
-  pi.on("session_start", (_event, ctx) => {
-    if (ctx.mode === "tui") delegateWidget.attach(ctx.ui);
-  });
 
   pi.on("session_shutdown", async () => {
-    delegateWidget.dispose();
     completionWakeup.shutdown();
     await adapter.cancelAll("Attended parent session ended.");
     await Promise.allSettled([...pendingWorkerCompletions, ...pendingSubagentCompletions]);
@@ -154,8 +148,17 @@ export default function subagentExtension(pi: ExtensionAPI) {
         launchedAt: receipt.acceptedAt,
       };
       launched.set(receipt.executionId, meta);
-      delegateWidget.launch({ executionId: receipt.executionId, ...meta });
-      void watchDelegate(adapter, delegateWidget, receipt.executionId);
+      const activity = {
+        id: `delegate:${receipt.executionId}`,
+        kind: "subagent",
+        role: params.cognitiveRole,
+        model: `${binding.provider}/${binding.model}`,
+        effort: binding.effort,
+        objective: params.task,
+        activity: "starting",
+      };
+      upsertActivity(pi, activity);
+      void watchActivity(pi, adapter, receipt.executionId, activity);
 
       if (params.background === true) {
         const completion = adapter.result(receipt.executionId).then((final) => {
@@ -329,8 +332,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
         workerName: begin.name,
       };
       launched.set(receipt.executionId, meta);
-      delegateWidget.launch({ executionId: receipt.executionId, ...meta });
-      void watchDelegate(adapter, delegateWidget, receipt.executionId);
+      const activity = {
+        id: `delegate:${receipt.executionId}`,
+        kind: "worker",
+        name: begin.name,
+        role: params.cognitiveRole,
+        model: `${binding.provider}/${binding.model}`,
+        effort: binding.effort,
+        objective: params.task,
+        activity: "starting",
+      };
+      upsertActivity(pi, activity);
+      void watchActivity(pi, adapter, receipt.executionId, activity);
       const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
       heartbeat.unref();
       let workerReceiptError: unknown;
@@ -443,13 +456,13 @@ export default function subagentExtension(pi: ExtensionAPI) {
   });
 }
 
-async function watchDelegate(adapter: PiRpcExecutionAdapter, widget: ReturnType<typeof createDelegateWidget>, executionId: string) {
+async function watchActivity(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, executionId: string, activity: Record<string, unknown>) {
   try {
-    for await (const observation of adapter.observe(executionId)) widget.update(executionId, progressText(observation));
+    for await (const observation of adapter.observe(executionId)) upsertActivity(pi, { ...activity, activity: activityText(observation) });
   } catch {
     // The execution result carries the diagnostic; this watcher owns presentation only.
   } finally {
-    widget.finish(executionId);
+    removeActivity(pi, `delegate:${executionId}`);
   }
 }
 
