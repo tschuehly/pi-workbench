@@ -431,6 +431,20 @@ test("marks execution kind and propagates the active routing overlay to the chil
   assert.equal(leafOptions.env.PI_WORKBENCH_EXECUTION_KIND, "subagent");
 });
 
+test("carries a concept-bound phase down to the leaf environment", async () => {
+  let workerOptions;
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, _args, options) => { workerOptions = options; return fakeRpc(); } });
+  await adapter.dispatch(spec({ kind: "worker", telemetryConcept: "29-printed-cards-giftable" }));
+  assert.equal(workerOptions.env.PI_WORKBENCH_TELEMETRY_CONCEPT, "29-printed-cards-giftable");
+
+  let plainOptions;
+  const plain = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, _args, options) => { plainOptions = options; return fakeRpc(); } });
+  await plain.dispatch(spec());
+  assert.equal(plainOptions.env.PI_WORKBENCH_TELEMETRY_CONCEPT, undefined, "an unbound execution leaks no stale concept");
+
+  await assert.rejects(adapter.dispatch(spec({ telemetryConcept: "  " })), (error) => error.code === "INVALID_SPEC");
+});
+
 test("fails closed when a binding does not match the active routing overlay", async () => {
   const adapter = stubOverlayRead(overlayAdapter());
   await adapter.dispatch(spec({ binding: { ...spec().binding, routingOverlay: overlayReceipt } }));

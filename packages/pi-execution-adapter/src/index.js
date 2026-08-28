@@ -151,6 +151,10 @@ export class PiRpcExecutionAdapter {
     const env = { ...process.env, PI_TELEMETRY_EXECUTION_ID: state.executionId, PI_WORKBENCH_EXECUTION_KIND: state.kind };
     if (spec.parentSessionId === undefined) delete env.PI_TELEMETRY_PARENT_SESSION_ID;
     else env.PI_TELEMETRY_PARENT_SESSION_ID = spec.parentSessionId;
+    // A concept-bound Worker phase makes every leaf it launches concept-bound too, so per-concept
+    // telemetry keeps the nested work instead of attributing it to no concept at all.
+    if (spec.telemetryConcept === undefined) delete env.PI_WORKBENCH_TELEMETRY_CONCEPT;
+    else env.PI_WORKBENCH_TELEMETRY_CONCEPT = spec.telemetryConcept;
     if (this.routingOverlayPath === undefined || this.routingOverlayPath === "") delete env.PI_WORKBENCH_ROUTING_OVERLAY;
     else env.PI_WORKBENCH_ROUTING_OVERLAY = this.routingOverlayPath;
     let child;
@@ -451,6 +455,9 @@ function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   }
   if (spec.parentSessionId !== undefined && (typeof spec.parentSessionId !== "string" || spec.parentSessionId.trim() === "")) {
     throw typedError("INVALID_SPEC", "parentSessionId must be a non-empty string when present.");
+  }
+  if (spec.telemetryConcept !== undefined && (typeof spec.telemetryConcept !== "string" || spec.telemetryConcept.trim() === "")) {
+    throw typedError("INVALID_SPEC", "telemetryConcept must be a non-empty string when present.");
   }
   const binding = spec.binding;
   if (!binding || binding.cognitiveRole !== spec.cognitiveRole || !binding.provider || !binding.model || !binding.effort) throw typedError("INVALID_BINDING", "Resolved binding does not match the requested Cognitive Role.");

@@ -193,6 +193,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
       const parentSessionId = ctx.sessionManager.getSessionId();
       const childTask = `${profile.instruction}\n\nAssignment:\n${params.task}`;
+      const telemetryConcept = params.telemetryConcept ?? inheritedConcept();
       let receipt;
       try {
         receipt = await adapter.dispatch({
@@ -204,6 +205,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
           binding,
           parentSessionId,
           kind: "subagent",
+          ...(telemetryConcept === undefined ? {} : { telemetryConcept }),
           ...(params.timeoutSeconds === undefined ? {} : { timeoutMs: Math.round(params.timeoutSeconds * 1000) }),
         });
       } catch (error) {
@@ -212,8 +214,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
       emitExecutionEvent(pi, {
         type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
         executionId: receipt.executionId, kind: "subagent", task: childTask,
-        profile: params.profile, cognitiveRole: params.cognitiveRole, concept: params.telemetryConcept ?? null,
+        profile: params.profile, cognitiveRole: params.cognitiveRole, concept: telemetryConcept ?? null,
         provider: binding.provider, model: binding.model, effort: binding.effort,
+        independence: binding.independence ?? null,
       });
 
       const meta = {
@@ -452,6 +455,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
           binding,
           parentSessionId,
           kind: "worker",
+          ...(params.telemetryConcept === undefined ? {} : { telemetryConcept: params.telemetryConcept }),
           ...(params.timeoutSeconds === undefined ? {} : { timeoutMs: Math.round(params.timeoutSeconds * 1000) }),
           ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
         });
@@ -464,6 +468,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
         executionId: receipt.executionId, kind: "worker", workerId: params.workerId, task: childTask,
         profile: begin.profile, cognitiveRole: params.cognitiveRole, concept: params.telemetryConcept ?? null,
         provider: binding.provider, model: binding.model, effort: binding.effort,
+        independence: binding.independence ?? null,
       });
       workerExecutions.set(params.workerId, receipt.executionId);
       const meta = {
@@ -722,8 +727,11 @@ export async function streamToResult(
   const summary = final.outcome === "success"
     ? final.text || "Child completed without a text result."
     : `${final.outcome}: ${final.diagnostic ?? final.text ?? "No diagnostic was reported."}`;
+  // The author model must be citable from the completion itself: a later independent review passes
+  // it as independentOfModel, and digging it out of a child session log is not a receipt.
+  const receiptLine = `\n\nCompletion receipt: ${final.provider}/${final.model}:${final.effort} · ${final.kind ?? "subagent"} · ${final.profile} · ${final.cognitiveRole} · outcome ${final.outcome}${final.truncated ? " · TRUNCATED, cannot satisfy verification" : ""}`;
   return {
-    content: [{ type: "text", text: summary }],
+    content: [{ type: "text", text: `${summary}${receiptLine}` }],
     details: { executionId, ...final, observations },
     ...(final.outcome === "success" ? {} : { isError: true }),
   };
@@ -743,6 +751,12 @@ export function createCheckpointAwareWakeup(pi: any, barrier = checkpointBarrier
       if (!barrier.defer(send, key)) send();
     },
   });
+}
+
+// A leaf launched inside a concept-bound Worker phase inherits that concept slug.
+export function inheritedConcept(env: Record<string, string | undefined> = process.env): string | undefined {
+  const value = env.PI_WORKBENCH_TELEMETRY_CONCEPT;
+  return value === undefined || value.trim() === "" ? undefined : value;
 }
 
 export function providerOf(qualifiedModel: string | undefined): string | undefined {

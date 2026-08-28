@@ -328,8 +328,11 @@ function executionTimeline(events) {
       kind: event.kind,
       workerId: event.workerId ?? null,
       task: event.task,
+      // The launching session is the parent link that makes lead → Worker → leaf readable.
+      parentSessionId: event.sessionId ?? null,
       cognitiveRole: event.cognitiveRole ?? null,
       concept: event.concept ?? null,
+      independence: event.independence ?? null,
       provider: event.provider,
       model: event.model,
       effort: event.effort,

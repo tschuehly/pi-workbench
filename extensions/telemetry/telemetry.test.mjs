@@ -70,11 +70,30 @@ test("reports descendant usage once and unions parallel active intervals", () =>
       { role: "independent-review", concept: "alpha", provider: "anthropic", model: "claude", eventCount: 1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 7, knownCost: null, totalCost: null, unknownCostEvents: 1 },
       { role: "shared_lead", concept: null, provider: "openai", model: "lead", eventCount: 1, inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12, knownCost: 2, totalCost: 2, unknownCostEvents: 0 },
     ],
-    executions: [{ executionId: "exec-1", kind: "subagent", workerId: null, task: "Review it", cognitiveRole: "independent-review", concept: "alpha", provider: "anthropic", model: "claude", effort: "high", acceptedAt: "2026-08-28T12:00:01.000Z", endedAt: "2026-08-28T12:00:15.000Z", childSessionId: "child", outcome: "cancelled" }],
+    executions: [{ executionId: "exec-1", kind: "subagent", workerId: null, task: "Review it", parentSessionId: "root", cognitiveRole: "independent-review", concept: "alpha", independence: null, provider: "anthropic", model: "claude", effort: "high", acceptedAt: "2026-08-28T12:00:01.000Z", endedAt: "2026-08-28T12:00:15.000Z", childSessionId: "child", outcome: "cancelled" }],
     failures: 1,
     retrySignals: 0,
     studio: { concept: null, builds: [], correctionCycles: [], completedCorrectionRounds: 0 },
   });
+});
+
+test("executions expose the lead → worker → leaf parent chain and the independence basis", () => {
+  const independence = { kind: "fresh-context-distinct-model", authorProvider: "anthropic", authorModel: "claude-sonnet-5", selectedProvider: "anthropic", selectedModel: "claude-opus-5" };
+  const events = [
+    event("session.start", "12:00:00", { sessionId: "lead" }),
+    event("session.start", "12:00:02", { sessionId: "worker", parentSessionId: "lead", executionId: "exec-worker" }),
+    event("session.start", "12:00:04", { sessionId: "leaf", parentSessionId: "worker", executionId: "exec-leaf" }),
+    event("execution.launched", "12:00:01", { sessionId: "lead", executionId: "exec-worker", kind: "worker", workerId: "w1", task: "Coordinate 29", cognitiveRole: "synthesis", concept: "29-printed-cards-giftable", provider: "anthropic", model: "claude-opus-5", effort: "high", independence: null }),
+    event("execution.launched", "12:00:03", { sessionId: "worker", executionId: "exec-leaf", kind: "subagent", task: "Review the draft", cognitiveRole: "independent-review", concept: "29-printed-cards-giftable", provider: "anthropic", model: "claude-opus-5", effort: "high", independence }),
+  ];
+
+  const byId = new Map(buildReport(events, { rootSessionId: "lead" }).executions.map((execution) => [execution.executionId, execution]));
+  assert.equal(byId.get("exec-worker").parentSessionId, "lead");
+  assert.equal(byId.get("exec-worker").childSessionId, "worker");
+  // The leaf's parent is the Worker session, not the lead: that is the readable three-level chain.
+  assert.equal(byId.get("exec-leaf").parentSessionId, "worker");
+  assert.equal(byId.get("exec-leaf").concept, "29-printed-cards-giftable");
+  assert.deepEqual(byId.get("exec-leaf").independence, independence);
 });
 
 test("resumed sessions count old usage identities once and new turns once", () => {

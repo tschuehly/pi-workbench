@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, providerOf, streamToResult } from "./index.ts";
+import subagentExtension, { PROFILES, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, streamToResult } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -105,6 +105,29 @@ test("emits structured execution telemetry on the shared extension bus", () => {
     executionId: "exec-1",
     task: "Review",
   }]);
+});
+
+test("a terminal result cites the author model so independentOfModel can quote a receipt", async () => {
+  const final = {
+    outcome: "success", text: "Applied the caption fix.", truncated: false, kind: "subagent",
+    profile: "implementer", cognitiveRole: "implementation",
+    provider: "anthropic", model: "claude-sonnet-5", effort: "medium", sessionId: "leaf",
+  };
+  const adapter = { result: () => Promise.resolve(final), cancel: () => {}, async *observe() {} };
+
+  const result = await streamToResult(adapter, "child-1", "implementer", "implementation", new Date().toISOString(), undefined, undefined, { cancelOnAbort: true });
+  assert.match(result.content[0].text, /Completion receipt: anthropic\/claude-sonnet-5:medium/);
+  assert.equal(result.details.model, "claude-sonnet-5");
+
+  const truncated = { ...final, truncated: true };
+  const oversized = await streamToResult({ ...adapter, result: () => Promise.resolve(truncated) }, "child-2", "implementer", "implementation", new Date().toISOString(), undefined, undefined, { cancelOnAbort: true });
+  assert.match(oversized.content[0].text, /TRUNCATED, cannot satisfy verification/);
+});
+
+test("a leaf inherits the concept slug of the worker phase that launched it", () => {
+  assert.equal(inheritedConcept({ PI_WORKBENCH_TELEMETRY_CONCEPT: "29-printed-cards-giftable" }), "29-printed-cards-giftable");
+  assert.equal(inheritedConcept({ PI_WORKBENCH_TELEMETRY_CONCEPT: "  " }), undefined);
+  assert.equal(inheritedConcept({}), undefined);
 });
 
 test("detaching a foreground wait leaves the child running", async () => {

@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en" data-theme="night">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi Workbench — Working Mode alignment</title>
+<link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
+<link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<link rel="stylesheet" href="/atelier.css">
+<script type="module" src="/atelier.mjs"></script>
+<style>
+  body { background: radial-gradient(circle at 15% 0%, color-mix(in oklab, var(--color-primary) 12%, transparent), transparent 32%), var(--color-base-100); }
+  .eyebrow { letter-spacing: .14em; text-transform: uppercase; font-size: .72rem; opacity: .58; }
+  .source { font-size: .75rem; opacity: .58; }
+  .flow-step { border-left: 3px solid color-mix(in oklab, var(--color-primary) 68%, transparent); }
+  .settled { border-color: color-mix(in oklab, var(--color-success) 45%, transparent); }
+  .open { border-color: color-mix(in oklab, var(--color-warning) 55%, transparent); }
+</style>
+</head>
+<body class="p-4 sm:p-6 lg:p-8">
+<atelier-region key="working-mode" label="Working Mode alignment" comments="sheet">
+<div class="max-w-7xl mx-auto grid gap-8 xl:grid-cols-[minmax(0,1fr)_18rem]">
+<main class="min-w-0">
+
+  <atelier-region key="orientation" comments="sheet" class="mb-10">
+    <div class="eyebrow mb-3">Re-entry brief · 28 August 2026</div>
+    <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight max-w-3xl">We are designing how Pi aligns, uses your attention, and preserves your place.</h1>
+    <p class="mt-4 text-lg opacity-80 max-w-3xl">The repository-adaptation schema and trial remain deferred. Attention research found an existing managed-Run contract and a withdrawn cadence knob, but neither earns a new interactive control today. Session continuity is now separated: a Session Summary explains one resumed Chat, while a Workstream checkpoint carries work into a new session or day.</p>
+    <div class="grid sm:grid-cols-3 gap-3 mt-6">
+      <div class="stat bg-base-200 rounded-box"><div class="stat-title">Working Mode</div><div class="stat-value text-xl">2 axes</div><div class="stat-desc">Alignment + Checking under trial</div></div>
+      <div class="stat bg-base-200 rounded-box"><div class="stat-title">Attention control</div><div class="stat-value text-xl">Deferred</div><div class="stat-desc">no new axis or agreement</div></div>
+      <div class="stat bg-base-200 rounded-box"><div class="stat-title">Continuity</div><div class="stat-value text-xl">Separated</div><div class="stat-desc">Session Summary vs Workstream</div></div>
+    </div>
+    <p class="source mt-3">Sources: current 5.3 MB / 772-entry Pi session; compactions on 27 and 28 August; no Workstream association for this session; Pi compaction/session docs; Workstream checkpoint contract.</p>
+  </atelier-region>
+
+  <atelier-region key="shared-understanding" label="Final shared understanding" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-primary/40">
+    <div class="eyebrow text-primary">Grill closeout</div>
+    <h2 class="text-2xl font-semibold mt-1">Final concise shared understanding <atelier-attention mode="dot"></atelier-attention></h2>
+    <p class="mt-3 opacity-80"><strong>Purpose:</strong> prevent Pi from scaling an unconfirmed product direction without turning normal interactive work into ceremony. Working Mode changes behavior only; it never grants mutation permission, authority, isolation, durability, or recovery. This is intended prompt-guided behavior: selection, persistence, and visible display are not implemented.</p>
+
+    <div class="grid md:grid-cols-2 gap-3 mt-5 text-sm">
+      <div class="bg-base-300/40 rounded-box p-4"><strong>Alignment</strong><p class="opacity-75 mt-1"><code>Vibe | Align | Plan | Spec</code> describes how much shared understanding the owner must judge at once. Vibe is normal collaboration in chat. Align is a prompt-guided trial before one unconfirmed product, architecture, scope, or quality choice becomes durable implementation or parallel work. Plan agrees whole-task direction. Spec agrees required behavior, constraints, and acceptance evidence.</p></div>
+      <div class="bg-base-300/40 rounded-box p-4"><strong>Checking</strong><p class="opacity-75 mt-1"><code>light | tests | adversarial</code> states the minimum completion evidence, independently of Alignment. Its default is repository-dependent; no default value, config schema, or format is chosen. Evidence may be inspected live by the owner or produced for later review, but that route is not yet configured.</p></div>
+      <div class="bg-base-300/40 rounded-box p-4"><strong>Selection and delegation</strong><p class="opacity-75 mt-1">When implemented, a new context starts in Vibe; persisting and restoring a prior Alignment choice is not part of the current design. Delegation remains task-local under every Alignment value. One router conditionally loads Binding, Checking, or Managed-dispatch guidance; calibration loads only when evaluating routing policy.</p></div>
+      <div class="bg-base-300/40 rounded-box p-4"><strong>Continuity</strong><p class="opacity-75 mt-1">No durable plan file. Session state carries accepted direction. A Workstream checkpoint supports a fresh session or next day. The approved <strong>Reconcile and End</strong> trial would add a session-local entry, shown as a Session Summary, when returning to the same Pi session; it is not read automatically for next-day re-entry. Compaction remains lossy model context and <code>compound</code> remains harness improvement.</p></div>
+    </div>
+
+    <div class="mt-5 border border-base-300 rounded-box p-4 text-sm">
+      <strong>Explicitly deferred</strong>
+      <ul class="list-disc pl-5 mt-2 space-y-1 opacity-75">
+        <li>Human Attention remains open and paused. No interactive axis, agreement, presence detector, or inference from Alignment is adopted.</li>
+        <li>The repository config path is decided as <code>.pi-workbench/config.json</code>; its schema, format, and adoption remain deferred.</li>
+        <li>Repository Adaptation remains a hypothesis; the PhotoQuest and Embabel trials are deferred, with no mutation of either target repository.</li>
+        <li>No mechanical mutation gate for Align; evaluate the prompt-guided trial from real use.</li>
+      </ul>
+    </div>
+
+    <div class="mt-5 bg-success/10 border border-success/30 rounded-box p-4 text-sm"><strong>After confirmation:</strong> reconcile the canonical Working Mode, vocabulary, decision, and plan documents to this understanding. Do not add a separate summary document, schema, or implementation in that slice.</div>
+    <atelier-region key="confirmation" label="Confirm the final shared understanding" comments="sheet" class="mt-5"></atelier-region>
+  </atelier-region>
+
+  <atelier-region key="yesterday" comments="sheet" class="mb-10">
+    <h2 class="text-2xl font-semibold">What happened yesterday <atelier-attention mode="dot"></atelier-attention></h2>
+    <div class="grid gap-3 mt-4">
+      <div class="flow-step settled bg-base-200 rounded-r-box px-5 py-4">
+        <div class="eyebrow text-success">1 · Evidence</div>
+        <p class="mt-1">An attended PhotoQuest session showed that strong checking can still produce the wrong product direction. After finding evidence against the proposed simplification, Pi continued into broad product and architecture changes without returning for owner judgment.</p>
+      </div>
+      <div class="flow-step settled bg-base-200 rounded-r-box px-5 py-4">
+        <div class="eyebrow text-success">2 · Grill</div>
+        <p class="mt-1">We separated <strong>Alignment</strong> from <strong>Checking</strong>. Pairing and Human Attention are separate again: being present does not say how much shared understanding is needed.</p>
+      </div>
+      <div class="flow-step settled bg-base-200 rounded-r-box px-5 py-4">
+        <div class="eyebrow text-success">3 · Decision</div>
+        <p class="mt-1"><code>Alignment: Vibe | Plan | Spec</code> and <code>Checking: light | tests | adversarial</code> were committed. Operating Levels were retired. Configuration should always be visible and survive session resume.</p>
+      </div>
+      <div class="flow-step settled bg-base-200 rounded-r-box px-5 py-4">
+        <div class="eyebrow text-success">4 · Documentation</div>
+        <p class="mt-1">The canonical vocabulary, decisions, contracts, README, and implementation plan were updated and committed as <code>4bab002</code>.</p>
+      </div>
+      <div class="flow-step open bg-base-200 rounded-r-box px-5 py-4">
+        <div class="eyebrow text-warning">5 · Post-commit correction</div>
+        <p class="mt-1">You revised Vibe to mean working together under continuous attention, with alignment happening in chat. You identified a missing behavior before Plan: Pi asks whether one coherent change is the right thing to do. You also marked the durable file as uncertain and proposed modular model orchestration.</p>
+      </div>
+    </div>
+    <p class="source mt-3">Sources: Decision 69; <code>docs/research/reports/agent-usage-session-audit-2026-08-27.md</code>; audited PhotoQuest session <code>01a04371-3f19-7ce8-b1fc-726814879816</code>.</p>
+  </atelier-region>
+
+  <atelier-region key="committed-plan" comments="sheet" class="mb-10">
+    <h2 class="text-2xl font-semibold">The currently committed plan <atelier-attention mode="dot"></atelier-attention></h2>
+    <p class="opacity-75 mt-2 max-w-3xl">This is what the repository says today. It is not implemented, and today’s grill will revise it.</p>
+    <div class="grid md:grid-cols-3 gap-3 mt-5">
+      <div class="bg-base-200 rounded-box p-4"><div class="eyebrow">Discovering</div><p class="mt-2 text-sm">Investigate, recommend both axes, and wait for the owner to select them.</p></div>
+      <div class="bg-base-200 rounded-box p-4"><div class="eyebrow">Executing</div><p class="mt-2 text-sm">The committed design limits Vibe to one slice; Plan or Spec proceeds inside an accepted artifact.</p></div>
+      <div class="bg-base-200 rounded-box p-4"><div class="eyebrow">Reviewing</div><p class="mt-2 text-sm">Checking supplies evidence; completion or a Material Question returns for judgment.</p></div>
+    </div>
+    <div class="alert alert-warning mt-5"><span><strong>Known mismatches:</strong> the committed plan limits Vibe to one slice and blocks mutation during Discovering. Today's decisions make Vibe normal interactive work, add Align, and reject a blanket mutation block. Human Attention remains outside interactive Working Mode unless observed use later proves one small control is needed. No durable plan file will be added.</span></div>
+    <p class="source mt-3">Canonical sources: <code>docs/foundation/working-mode.md</code> and <code>docs/plans/working-mode.md</code>.</p>
+  </atelier-region>
+
+  <atelier-region key="current-understanding" comments="sheet" class="mb-12">
+    <h2 class="text-2xl font-semibold">Current shared meaning and its status <atelier-attention mode="dot"></atelier-attention></h2>
+    <div class="hidden sm:block overflow-x-auto mt-4">
+      <table class="table table-sm">
+        <thead><tr><th>Concept</th><th>Current shared meaning</th><th>Source</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Working Mode</td><td>Two independent behavioral axes, never a permission or authority grant.</td><td><code>4bab002</code></td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+          <tr><td>Vibe</td><td>Normal interactive work as it operates today: align in chat, with no extra attention detector, pause guard, or automatic mode switch.</td><td>Q1 + Q6 today</td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+          <tr><td>Align</td><td>Ask before one coherent change, not before every implementation step.</td><td>Q1 today</td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+          <tr><td>Plan</td><td>Concise shared understanding of outcome, approach, boundaries, and evidence.</td><td><code>4bab002</code></td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+          <tr><td>Spec</td><td>Larger required behavior, constraints, and acceptance evidence; implementation may adapt.</td><td><code>4bab002</code></td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+          <tr><td>Start and resume</td><td>New contexts start in Vibe. Persisting and restoring a prior Alignment choice is not important now and remains outside the current design.</td><td>Q7 closeout correction</td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+          <tr><td>Human Attention</td><td>The canonical managed-Run contract remains intact. Interactive Working Mode gains no Attention axis or agreement until observed use proves a smaller control is needed.</td><td>Q13 today</td><td><span class="badge badge-ghost badge-sm">deferred</span></td></tr>
+          <tr><td>Continuity</td><td>Q15 settled the source split: Workstream checkpoint for a fresh session or day; owner-facing summary for the same Pi session. Q14's Session Summary Entry mechanism remains a trial.</td><td>Q14–Q15 today</td><td><span class="badge badge-info badge-outline badge-sm">trial</span></td></tr>
+          <tr><td>Repository config</td><td>Path is decided as <code>.pi-workbench/config.json</code>. Schema, format, prompt composition, adoption, and the PhotoQuest/Embabel trial are deferred.</td><td>Q9–Q12, Q16</td><td><span class="badge badge-ghost badge-sm">partial</span></td></tr>
+          <tr><td>Repository Adaptation</td><td>Working hypothesis: stable mode contracts resolve different repository prompts, skills, checks, and evidence. Not yet adopted.</td><td>Q11 today</td><td><span class="badge badge-info badge-outline badge-sm">hypothesis</span></td></tr>
+          <tr><td>Checking default</td><td>Repository-dependent. No default value or configuration mechanism is chosen yet.</td><td>Q8 today</td><td><span class="badge badge-info badge-outline badge-sm">principle settled</span></td></tr>
+          <tr><td>Plan file</td><td>No durable file. Accepted direction stays in session state; Workstream checkpoints support fresh-session re-entry.</td><td>Q2 today</td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+          <tr><td>Align boundary</td><td>Trial asking before an uncertain product, architecture, scope, or quality choice becomes durable implementation or parallel work. No mechanical mutation lock.</td><td>Q5 today</td><td><span class="badge badge-info badge-outline badge-sm">trial</span></td></tr>
+          <tr><td>Model orchestration</td><td>One router loads Binding, Checking, or Managed dispatch references only when the task triggers them.</td><td>Q3 today</td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+          <tr><td>Delegation</td><td>Task-local mechanism, not a Working Mode axis. Any Alignment may use children; each invocation triggers Binding.</td><td>Q4 today</td><td><span class="badge badge-success badge-sm">settled</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="sm:hidden grid gap-3 mt-4 text-sm">
+      <div class="bg-base-200 rounded-box p-4"><strong>Alignment</strong><p class="opacity-75 mt-1">Q1 settled <code>Vibe | Align | Plan | Spec</code>. Q6 keeps Vibe as normal interactive work without an attention guard.</p><span class="badge badge-success badge-sm mt-2">settled today</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Start and resume</strong><p class="opacity-75 mt-1">New contexts start in Vibe; prior-choice restoration is outside the current design.</p><span class="badge badge-success badge-sm mt-2">settled at closeout</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Human Attention</strong><p class="opacity-75 mt-1">Managed-Run contract preserved; no interactive control added now.</p><span class="badge badge-ghost badge-sm mt-2">deferred</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Continuity</strong><p class="opacity-75 mt-1">Source split settled; Session Summary Entry mechanism remains a trial.</p><span class="badge badge-info badge-outline badge-sm mt-2">trial</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Repository config</strong><p class="opacity-75 mt-1">Path decided; schema, format, adoption, and trials deferred.</p><span class="badge badge-ghost badge-sm mt-2">partial</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Repository Adaptation</strong><p class="opacity-75 mt-1">Stable contracts plus project-specific execution is a working hypothesis, not adopted architecture.</p><span class="badge badge-info badge-outline badge-sm mt-2">hypothesis</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Checking default</strong><p class="opacity-75 mt-1">Repository-dependent principle settled; value and mechanism remain open.</p><span class="badge badge-info badge-outline badge-sm mt-2">partial</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Plan file</strong><p class="opacity-75 mt-1">Q2 settled no durable file; use session state and Workstream checkpoints.</p><span class="badge badge-success badge-sm mt-2">settled today</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Align boundary</strong><p class="opacity-75 mt-1">Q5 selected a prompt-guided commitment-boundary trial with no mechanical mutation lock.</p><span class="badge badge-info badge-outline badge-sm mt-2">trial</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Model orchestration</strong><p class="opacity-75 mt-1">Q3 settled one router with conditional Binding, Checking, and Managed dispatch references.</p><span class="badge badge-success badge-sm mt-2">settled today</span></div>
+      <div class="bg-base-200 rounded-box p-4"><strong>Delegation</strong><p class="opacity-75 mt-1">Q4 settled task-local use under any Alignment; no new axis.</p><span class="badge badge-success badge-sm mt-2">settled today</span></div>
+    </div>
+  </atelier-region>
+
+  <atelier-region key="frontier" label="Grilling decisions" comments="sheet">
+    <div class="mb-6">
+      <div class="eyebrow">Grill-with-docs · round one</div>
+      <h2 class="text-3xl font-semibold mt-1">Round one complete</h2>
+      <p class="opacity-75 mt-2 max-w-3xl">Q1 settled four Alignment values. Q2 rejected a durable plan file. Q3 accepted one model-orchestration router with conditional references.</p>
+      <p class="text-sm opacity-60 mt-2"><strong>?</strong> asks me to explain an option. The attention dot marks a Region whose state needs review.</p>
+    </div>
+
+    <atelier-region key="commitment" label="Alignment values" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q1 · The missing behavior between Vibe and Plan <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">The common scale is the size of the unit you must understand before work continues—and how quickly you can judge it. Vibe keeps understanding continuous through chat. The missing behavior is lighter than a Plan: before one coherent change, Pi says what it intends and asks whether that is the right thing to do.</p>
+      <div class="grid sm:grid-cols-4 gap-3 mt-4 text-sm">
+        <div class="border border-base-300 rounded-box p-3"><strong>Vibe</strong><br><span class="opacity-70">Understand the next action continuously in chat.</span></div>
+        <div class="border border-primary rounded-box p-3"><strong>Align</strong><br><span class="opacity-70">Judge one coherent change from a short summary.</span></div>
+        <div class="border border-base-300 rounded-box p-3"><strong>Plan</strong><br><span class="opacity-70">Judge the concise direction for the whole task.</span></div>
+        <div class="border border-base-300 rounded-box p-3"><strong>Spec</strong><br><span class="opacity-70">Judge required behavior and acceptance evidence.</span></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Recommendation:</strong> use <code>Alignment: Vibe | Align | Plan | Spec</code>, ordered by the size of the agreement presented for human judgment. Vibe often pairs with continuous attention, but does not determine it; the restored Q13 decides how attention is expressed. These are interaction contracts, not mutation permissions.</div>
+      <details class="collapse collapse-arrow bg-base-300/30 mt-4"><summary class="collapse-title text-sm font-medium">What counts as one coherent change?</summary><div class="collapse-content text-sm opacity-80"><p>A change the owner can judge as one product, domain, architecture, or behavioral decision—for example, “replace the current showcase flow with a generic upload flow.” It is not each file edit, test, or mechanical implementation step. If Pi discovers another consequential choice, Align asks again.</p></div></details>
+      <atelier-region key="decision" label="Choose the Alignment value shape" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <atelier-region key="plan-file" label="Plan file hypothesis" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q2 · Does a durable plan file earn its complexity? <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">A file could give you a readable shared plan, let Pi check progress, and help a fresh session resume. It could also duplicate Workstream checkpoints, drift from the repository, and create confusion about whether mutable Markdown is authoritative.</p>
+      <div class="grid sm:grid-cols-2 gap-3 mt-4 text-sm">
+        <div class="border border-base-300 rounded-box p-4"><strong>Existing continuity</strong><p class="opacity-70 mt-1">Pi session state preserves the active interaction. Workstream checkpoints already carry concise cross-session re-entry.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Potential missing surface</strong><p class="opacity-70 mt-1">Neither gives owner and agent one continuously readable progress view outside the conversation.</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Decision:</strong> no durable plan file. Keep accepted direction in session state and use concise Workstream checkpoints for fresh-session re-entry. This avoids a second mutable progress source.</div>
+      <details class="collapse collapse-arrow bg-base-300/30 mt-4"><summary class="collapse-title text-sm font-medium">What each choice commits</summary><div class="collapse-content text-sm opacity-80"><p><strong>Experiment:</strong> one disposable task tests the idea before documentation changes. <strong>No file:</strong> rely on session state and Workstream checkpoints. <strong>Adopt now:</strong> make the file lifecycle part of Working Mode before usage evidence exists.</p></div></details>
+      <atelier-region key="decision" label="Choose whether to trial a plan file" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <atelier-region key="orchestration" label="Model orchestration modules" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q3 · Progressive disclosure for model orchestration <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">The current <code>SKILL.md</code> is 90 lines / 6.8 KB. Every invocation loads role classification, checking panels, quota resolution, launch guidance, and future controller rules. The proposal keeps one skill name but turns its short <code>SKILL.md</code> into a routing table that reads only the reference needed for this task.</p>
+      <div class="grid gap-3 mt-4 text-sm">
+        <div class="border border-base-300 rounded-box p-4"><strong>Example 1 · You and Pi work directly without delegation in this task</strong><p class="opacity-70 mt-1">No child model or independent review is needed, so load nothing from model orchestration. This is an example of the task shape, not a rule for Vibe, Align, Plan, or Spec.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Example 2 · Pi delegates bug reproduction</strong><p class="opacity-70 mt-1">Load <strong>Binding</strong> only: classify the child as investigation, choose its model and Model Effort, and check quota. Do not load panel construction or managed-controller rules.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Example 3 · Checking is adversarial</strong><p class="opacity-70 mt-1">Load <strong>Checking + Binding</strong>: decide how many independent challengers consequence requires, ensure different model families, then resolve each binding. Do not load managed Dispatch rules.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Example 4 · A future managed Run dispatches work</strong><p class="opacity-70 mt-1">Load <strong>Managed dispatch</strong> for the Work Packet and controller boundary, plus Binding or Checking only when that Dispatch needs them.</p></div>
+      </div>
+      <div class="alert alert-info mt-4 text-sm"><span><strong>Clarification from your decision:</strong> any Alignment value may use scouts, subagents, or Workers. The first child invocation triggers Binding. Alignment chooses the size of human agreement; it does not choose the execution shape.</span></div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Decision:</strong> one discoverable router, three conditional modules. A separate calibration reference loads only when we are evaluating whether the routing policy itself is good.</div>
+      <details class="collapse collapse-arrow bg-base-300/30 mt-4"><summary class="collapse-title text-sm font-medium">Terms used in this decision</summary><div class="collapse-content text-sm opacity-80"><p><strong>Cognitive Role:</strong> the kind of thinking required, independent of model name. <strong>Independence:</strong> a judgment made by a different underlying model family from the author. <strong>Work Packet:</strong> the self-contained input to a managed Dispatch. <strong>Policy calibration:</strong> evaluating whether the routing map remains appropriate from observed outcomes.</p></div></details>
+      <atelier-region key="decision" label="Choose the orchestration module shape" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <div class="divider my-12"></div>
+    <div class="mb-6">
+      <div class="eyebrow">Grill-with-docs · round two</div>
+      <h2 class="text-3xl font-semibold mt-1">Round two complete</h2>
+      <p class="opacity-75 mt-2 max-w-3xl">Q4 keeps delegation task-local. Q5 trials Align at the commitment boundary. Q6 keeps Vibe free of special attention guards.</p>
+    </div>
+
+    <atelier-region key="delegation" label="Delegation and Working Mode" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q4 · Is Delegation another Working Mode axis? <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">Scouts, subagents, and Workers can help in Vibe, Align, Plan, or Spec. Their use always triggers Binding because Pi must choose a Cognitive Role, model, and Model Effort. The separate decision is whether the owner needs to configure delegation as part of the visible, resumable Working Mode.</p>
+      <div class="grid sm:grid-cols-2 gap-3 mt-4 text-sm">
+        <div class="border border-primary rounded-box p-4"><strong>Task-local mechanism</strong><p class="opacity-70 mt-1">Pi may propose or use delegation when the task benefits. Tool calls remain visible. Add an axis only after a recurring owner choice is observed.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Working Mode axis</strong><p class="opacity-70 mt-1">A visible preference such as <code>direct | assisted</code> would survive resume, but mixed tasks do not fit that binary cleanly.</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Decision:</strong> do not add an axis. Delegation remains task-local under every Alignment value, and conditional Binding handles each child invocation.</div>
+      <atelier-region key="decision" label="Choose whether Delegation becomes an axis" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <atelier-region key="align-boundary" label="Align boundary" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q5 · What exactly triggers Align? <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">The alignment boundary must be lighter than a Plan without becoming vague. It occurs when investigation would turn an uncertain product, architecture, scope, or quality choice into durable implementation or parallel work.</p>
+      <div class="alert alert-info mt-4 text-sm"><span><strong>Agent rule:</strong> ask when the next step would commit the repository, task scope, architecture, product behavior, quality trade-off, or parallel implementers to a direction the owner has not confirmed. Judge the semantic consequence—not whether a tool writes a file.</span></div>
+      <div class="grid lg:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="border border-primary rounded-box p-4"><strong>Ask before</strong><ul class="list-disc pl-5 mt-2 opacity-75 space-y-1"><li>A bug fix changes user-visible or API behavior.</li><li>A solution moves responsibility across modules or adds a dependency.</li><li>A local task expands into a workflow redesign.</li><li>Children would implement one still-open direction.</li></ul></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Proceed without asking</strong><ul class="list-disc pl-5 mt-2 opacity-75 space-y-1"><li>Read code, reproduce the bug, run tests, or gather evidence.</li><li>Use a scout or scratch prototype to investigate.</li><li>Edit, refactor, test, and document inside the confirmed change.</li><li>Repair a failure without changing the intended outcome or boundary.</li></ul></div>
+        <div class="border border-warning rounded-box p-4"><strong>Ask again when</strong><ul class="list-disc pl-5 mt-2 opacity-75 space-y-1"><li>Evidence contradicts the confirmed direction.</li><li>The user-visible outcome or architecture must change.</li><li>The affected scope expands materially.</li><li>The agreed checking or quality bar cannot be met.</li></ul></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Decision:</strong> Pi first summarizes the intended outcome, affected boundary, and checking. Confirmation covers the coherent change until one of the “ask again” conditions occurs. This is prompt-guided behavior with no mechanical mutation lock.</div>
+      <div class="alert alert-warning mt-4 text-sm"><span><strong>Trial status:</strong> re-evaluate after real use. Keep the rule if it catches consequential changes, leaves routine implementation uninterrupted, and produces summaries the owner can judge quickly. Revise it if asks are late, frequent, or ambiguous. Do not add mechanical enforcement before that evidence exists.</span></div>
+      <atelier-region key="decision" label="Choose the Align trigger" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <atelier-region key="vibe-attention" label="Vibe attention boundary" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q6 · Does Vibe need an attention fallback? <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">No. The earlier proposal treated a new session or gap in attention as a reason to pause or change behavior. Your correction makes Vibe the current normal interactive experience instead.</p>
+      <div class="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="border border-primary rounded-box p-4"><strong>No extra guard</strong><p class="opacity-70 mt-1">Pi works in chat as it does today. Vibe adds no attention detector or pause boundary.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>No automatic switch</strong><p class="opacity-70 mt-1">A silence, disconnect, or new session does not turn Vibe into Align.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Explicit stronger mode</strong><p class="opacity-70 mt-1">Choose Align, Plan, or Spec when you want a stronger agreement boundary.</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Decision:</strong> Vibe has no special fallback. A new context starts in Vibe; no prior-choice restoration behavior is needed now.</div>
+      <atelier-region key="decision" label="Choose the Vibe attention fallback" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <div class="divider my-12"></div>
+    <div class="mb-6">
+      <div class="eyebrow">Grill-with-docs · round three</div>
+      <h2 class="text-3xl font-semibold mt-1">Round three complete</h2>
+      <p class="opacity-75 mt-2 max-w-3xl">Q7 defaults a new context to Vibe; the closeout later removed prior-choice restoration from the current design. Q8 says the Checking default is repository-dependent without yet choosing its value or configuration mechanism.</p>
+    </div>
+
+    <atelier-region key="alignment-start" label="Alignment start and resume" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q7 · Revised at closeout: how should Alignment start?</h3>
+      <p class="opacity-80 mt-3">The earlier answer added persistence that the current design does not need. Keep only the behavior required for ordinary new work.</p>
+      <div class="grid sm:grid-cols-2 gap-3 mt-4 text-sm">
+        <div class="border border-primary rounded-box p-4"><strong>New context</strong><p class="opacity-70 mt-1">Start in Vibe. Pi works normally; the owner can select Align, Plan, or Spec when useful.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Return</strong><p class="opacity-70 mt-1">The same Pi session retains its own conversation naturally. A fresh context does not need a Working Mode restoration feature now.</p></div>
+      </div>
+      <div class="mt-4 bg-success/10 border border-success/30 rounded-box p-4 text-sm"><strong>Final correction:</strong> persistence and prior-choice restoration are outside the current Working Mode design.</div>
+    </atelier-region>
+
+    <atelier-region key="checking-start" label="Checking start and resume" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q8 · What should Checking be before an explicit choice? <atelier-attention mode="dot"></atelier-attention></h3>
+      <div class="alert alert-info mt-3 text-sm"><span><strong>Checking means the minimum evidence Pi must produce before claiming the work is done.</strong> Alignment asks “are we changing the right thing?” Checking asks “what proves the result works?” A selected value is a floor; Pi may do more when the task warrants it.</span></div>
+      <p class="font-medium mt-5">Same example: Pi changes retry behavior after an API failure.</p>
+      <div class="grid sm:grid-cols-3 gap-3 mt-3 text-sm">
+        <div class="border border-base-300 rounded-box p-4"><strong>Checking: light</strong><p class="opacity-70 mt-1">Inspect the diff and exercise the changed path once, then report what was observed. Automated tests are optional.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Checking: tests</strong><p class="opacity-70 mt-1">Run the relevant automated test that proves retry count and failure behavior, then report the exact command and result.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Checking: adversarial</strong><p class="opacity-70 mt-1">Run tests, then have an independent challenger look for missed failure modes or disagreement with the accepted behavior. Scale the panel to consequence.</p></div>
+      </div>
+      <p class="font-medium mt-5">The default decision</p>
+      <div class="grid sm:grid-cols-3 gap-3 mt-3 text-sm">
+        <div class="border border-primary rounded-box p-4"><strong>Start at light</strong><p class="opacity-70 mt-1">Ordinary work has a visible minimum without forcing automated tests onto prose, research, or tasks that lack them.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Start at tests</strong><p class="opacity-70 mt-1">Coding starts safer, but the default mismatches work where automated tests are not meaningful.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Start unset</strong><p class="opacity-70 mt-1">The owner chooses after discovery, but every ordinary task gains a setup prompt.</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Decision:</strong> there is no single repository-independent Checking default. Each repository may declare its default in a versioned Workbench config. The next round decides that file's location and first schema; precedence and missing-file behavior follow from those choices.</div>
+      <atelier-region key="decision" label="Choose the Checking start rule" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <div class="divider my-12"></div>
+    <div class="mb-6">
+      <div class="eyebrow">Grill-with-docs · round four</div>
+      <h2 class="text-3xl font-semibold mt-1">Path settled; defaults-only schema rejected</h2>
+      <p class="opacity-75 mt-2 max-w-3xl">Q9 places committed policy at <code>.pi-workbench/config.json</code>. Q10 establishes that repositories need different mode instructions and evidence routes; round five decides how to express that without making the labels meaningless across repositories.</p>
+    </div>
+
+    <atelier-region key="repository-config-path" label="Repository config location" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q9 · Where should repository policy live? <atelier-attention mode="dot"></atelier-attention></h3>
+      <div class="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="border border-primary rounded-box p-4"><strong><code>.pi-workbench/config.json</code></strong><p class="opacity-70 mt-1">One committed Workbench namespace. Existing ignore rules already exclude <code>runs/</code> and <code>objects/</code> without excluding this file.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong><code>pi-workbench.json</code></strong><p class="opacity-70 mt-1">More visible at repository root, but adds another top-level manifest and diverges from the existing namespace.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong><code>AGENTS.md</code></strong><p class="opacity-70 mt-1">No new file, but mixes machine-readable defaults with prose and cannot be validated reliably.</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Decision:</strong> commit <code>.pi-workbench/config.json</code>. It is repository policy, not generated Run state, a plan, credentials, or machine-local configuration.</div>
+      <atelier-region key="decision" label="Choose the repository config path" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <atelier-region key="repository-config-scope" label="Repository config first schema" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q10 · Defaults alone are not the repository contract <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">Your correction is supported by Big Sky. Repository onboarding routes every fresh session; path rules load only for affected files; skills reload specialized behavior at the moment of action; and PhotoQuest verification combines Gradle/JUnit, specialized reviewer prompts, browser screenshots, and a verification report.</p>
+      <div class="grid sm:grid-cols-2 gap-3 mt-4 text-sm">
+        <div class="border border-base-300 rounded-box p-4"><strong>PhotoQuest example</strong><p class="opacity-70 mt-1"><code>Checking: tests</code> may route through the repository's <code>/test</code> skill and JUnit XML. A UI flow may additionally require agent-browser screenshots. Adversarial review uses specification, security, and test-adequacy roles.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Embabel example</strong><p class="opacity-70 mt-1">The same visible Checking value can load different build commands, framework guidance, reviewer prompts, and evidence because the repository's risks and toolchain differ.</p></div>
+      </div>
+      <div class="alert alert-warning mt-4 text-sm"><span><strong>Boundary to settle:</strong> repository-specific execution is necessary. The unresolved part is whether repositories adapt stable Workbench contracts or redefine the mode values themselves.</span></div>
+      <atelier-region key="decision" label="Choose the first repository config schema" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <div class="divider my-12"></div>
+    <div class="mb-6">
+      <div class="eyebrow">Grill-with-docs · round five</div>
+      <h2 class="text-3xl font-semibold mt-1">Stop designing; test the hypothesis simply</h2>
+      <p class="opacity-75 mt-2 max-w-3xl">Q11 accepts stable contracts only as a trial direction. Q12 leaves JSON, YAML/TOML, inline instructions, and composable AGENTS guidance unresolved. The remaining decision is the smallest experiment that can inform both.</p>
+    </div>
+
+    <atelier-region key="mode-semantics" label="Canonical mode meaning" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q11 · May a repository redefine Working Mode values? <atelier-attention mode="dot"></atelier-attention></h3>
+      <div class="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="border border-primary rounded-box p-4"><strong>Adapt stable contracts</strong><p class="opacity-70 mt-1"><code>Plan</code> always means whole-task direction and <code>tests</code> always means executable evidence. Each repository decides how to realize them.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Redefine the values</strong><p class="opacity-70 mt-1">Maximum flexibility, but <code>Plan · tests</code> no longer tells the owner the same thing across PhotoQuest and Embabel.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Add named repository workflows</strong><p class="opacity-70 mt-1">Profiles can compose axes and prompts later, but adding them now risks reviving bundled Operating Levels before the two-axis trial is used.</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Working hypothesis:</strong> keep the value contracts stable and call the project-specific layer a <strong>Repository Adaptation</strong>. Do not adopt or implement this model until it survives one PhotoQuest trial and one Embabel trial without unnecessary machinery.</div>
+      <atelier-region key="decision" label="Choose whether repositories adapt or redefine modes" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <atelier-region key="instruction-routing" label="Repository instruction routing" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q12 · How should repository prompts enter the mode? <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">The repository may compose always-on <code>AGENTS.md</code> guidance, path-scoped rules, skills, and mode-specific instructions. We do not yet know whether that composition needs JSON references, YAML/TOML with multiline content, Markdown metadata, or no new format.</p>
+      <div class="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="border border-base-300 rounded-box p-4"><strong>Existing source</strong><p class="opacity-70 mt-1"><code>AGENTS.md</code> remains concise always-on onboarding, not a document to copy wholesale into another config.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Composable detail</strong><p class="opacity-70 mt-1">Scoped rules and skills already provide progressive disclosure. The trial must reveal what additional mode-specific composition is missing.</p></div>
+        <div class="border border-primary rounded-box p-4"><strong>Format later</strong><p class="opacity-70 mt-1">Compare JSON, YAML/TOML, or Markdown only after the two-repository trial yields the fields and authoring needs.</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Decision deferred:</strong> do not choose a format or extract <code>AGENTS.md</code> into a new schema yet. First record which existing instructions actually had to compose.</div>
+      <atelier-region key="decision" label="Choose how mode prompts are stored and loaded" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <div class="divider my-12"></div>
+    <div class="mb-6">
+      <div class="eyebrow">Grill-with-docs · round six</div>
+      <h2 class="text-3xl font-semibold mt-1">Restore Attention and separate continuity</h2>
+      <p class="opacity-75 mt-2 max-w-3xl">Today's 5.3 MB session had two compactions but no owner-facing Session Summary. Automatic Workstream checkpoints still carry associated work into a fresh session; a separate summary should explain the session to the owner who stays in or resumes that same Chat. The summary adds to checkpoints rather than replacing them.</p>
+    </div>
+
+    <atelier-region key="attention-checking" label="Human Attention research" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q13 · Paused: does interactive work need an Attention control at all?</h3>
+      <p class="opacity-80 mt-3">The repository contains two ideas, but neither should be imported automatically: the canonical <strong>Human-Attention Contract</strong> belongs to managed Runs, while <code>Interactive | Phase boundaries | Material questions | Outcome</code> came from the withdrawn multidimensional proposal.</p>
+      <div class="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="border border-base-300 rounded-box p-4"><strong>Current interactive behavior</strong><p class="opacity-70 mt-1">The owner can say they are stepping away. Existing Goal, ask, notification, and Workstream mechanisms keep their own attention boundaries.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>No inference</strong><p class="opacity-70 mt-1">Alignment still does not prove owner availability. Vibe, Align, Plan, or Spec must not silently become an attention claim.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Observed need first</strong><p class="opacity-70 mt-1">Reopen only after repeated evidence that Pi interrupts too often, fails to ask, or mishandles an explicit “I am away.”</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Paused:</strong> add no Attention axis, agreement, values, persistence, or resolver now. The concrete problem observed today was session reconciliation, which Q14 addresses directly.</div>
+      <div class="mt-5 text-sm opacity-65">No decision requested while this question is paused.</div>
+    </atelier-region>
+
+    <atelier-region key="session-boundary" label="Standalone Chat reconciliation" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q14 · How should one Chat explain itself before ending? <atelier-attention mode="dot"></atelier-attention></h3>
+      <p class="opacity-80 mt-3">This is not cross-session re-entry. It is the report the owner sees after leaving the terminal open or resuming the same Pi session: what changed, what remains, and what comes next.</p>
+      <div class="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="border border-primary rounded-box p-4"><strong>Reconcile and End</strong><p class="opacity-70 mt-1">Append one structured <strong>Session Summary Entry</strong> to the existing Pi session JSONL, show its brief, then stop.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Require a Workstream</strong><p class="opacity-70 mt-1">Use a Workstream checkpoint even for same-session return. Durable, but conflates informing the owner with creating fresh-session continuation.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong><code>/compact</code>, then end manually</strong><p class="opacity-70 mt-1">Save lossy model context in the same session. It still does not give the owner a concise report.</p></div>
+      </div>
+      <div class="alert alert-info mt-4 text-sm"><span><strong>Why not overload <code>compound</code>?</strong> Compound evaluates a finished session for harness learning through an independent reviewer. It serves improvement, not continuity.</span></div>
+      <div class="mt-4 bg-success/10 border border-success/30 rounded-box p-4 text-sm"><strong>Decision · Option 0:</strong> trial <strong>Reconcile and End</strong>. Write a Session Summary Entry before any optional lossy compaction. It informs the owner on same-session return; it does not replace a Workstream checkpoint.</div>
+      <atelier-region key="decision" label="Decision recorded: Reconcile and End" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <atelier-region key="reentry" label="Return and re-entry sources" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q15 · Which source serves each kind of return? <atelier-attention mode="dot"></atelier-attention></h3>
+      <div class="grid sm:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="border border-base-300 rounded-box p-4"><strong>Same terminal or Pi session</strong><p class="opacity-70 mt-1">Show the Session Summary Entry so the owner sees what this Chat did without rereading it.</p></div>
+        <div class="border border-primary rounded-box p-4"><strong>Fresh session or next day</strong><p class="opacity-70 mt-1">Start from the selected Workstream's latest confirmed checkpoint and verify current repository state.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Missing or stale state</strong><p class="opacity-70 mt-1">A fresh bounded subagent inspects only the exact session logs needed to propose a repair brief for owner correction.</p></div>
+      </div>
+      <div class="mt-4 bg-success/10 border border-success/30 rounded-box p-4 text-sm"><strong>Decision:</strong> Workstreams are the next-day and fresh-session re-entry mechanism. A Session Summary only informs the owner when the same terminal remains open or the same Pi session resumes. Raw logs are fallback evidence, not the normal morning source.</div>
+      <atelier-region key="decision" label="Decision recorded: Workstream for next-day re-entry" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+
+    <atelier-region key="repository-trial" label="Two-repository trial" comments="sheet" class="mb-10 bg-base-200 rounded-box p-5 sm:p-6 border border-base-300">
+      <h3 class="text-xl font-semibold">Q16 · What is the smallest repository-adaptation trial? <atelier-attention mode="dot"></atelier-attention></h3>
+      <div class="grid sm:grid-cols-2 gap-3 mt-4 text-sm">
+        <div class="border border-base-300 rounded-box p-4"><strong>PhotoQuest</strong><p class="opacity-70 mt-1">Resolve <code>Align · tests</code> from its test, restart, frontend, path-rule, and agent-browser guidance without mutating its diverged worktree.</p></div>
+        <div class="border border-base-300 rounded-box p-4"><strong>Embabel</strong><p class="opacity-70 mt-1">Resolve the same vector from root TDD guidance, module coding style, and nearest-module Maven checks without mutating its worktree.</p></div>
+      </div>
+      <div class="mt-4 bg-base-300/40 rounded-box p-4 text-sm"><strong>Deferred:</strong> do not run Stage A or change either target repository. Revisit only when the owner chooses to resume and a real repository-adaptation need remains.</div>
+      <atelier-region key="decision" label="Decision recorded: repository trial deferred" comments="sheet" class="mt-5"></atelier-region>
+    </atelier-region>
+  </atelier-region>
+
+</main>
+
+<aside class="xl:sticky xl:top-8 xl:self-start">
+  <div class="card bg-base-200 border border-base-300">
+    <div class="card-body p-4">
+      <div class="eyebrow">Review controls</div>
+      <h2 class="font-semibold">Open loops</h2>
+      <p class="text-xs opacity-65">Choose each proposal. Use comments only when the visible framing itself needs correction.</p>
+      <atelier-cockpit owner="human"></atelier-cockpit>
+      <div class="divider my-2"></div>
+      <p class="text-xs">Waiting on you: <atelier-attention for="working-mode" mode="count" owner="human"></atelier-attention></p>
+      <p class="text-xs">Waiting on me: <atelier-attention for="working-mode" mode="count" owner="agent"></atelier-attention></p>
+    </div>
+  </div>
+</aside>
+
+</div>
+</atelier-region>
+</body>
+</html>
