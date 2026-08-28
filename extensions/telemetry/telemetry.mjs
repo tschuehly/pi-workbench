@@ -175,7 +175,7 @@ function studioReport(events, agentActiveIntervals, executions, concept) {
     events
       .filter((event) => event.type === "studio.comment_delivered" && correctionKinds.has(event.kind) && typeof event.concept === "string" && (concept == null || event.concept === concept))
       .sort((left, right) => String(left.at).localeCompare(String(right.at))),
-    (event) => `${event.kind}:${event.id ?? ""}:${event.seq}`,
+    (event) => `${event.concept}:${event.kind}:${event.id ?? ""}:${event.seq}`,
   );
   const correctionCycles = deliveries.map((delivery) => {
     const start = Date.parse(delivery.at);

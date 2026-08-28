@@ -44,7 +44,7 @@ export function registerTelemetry(
   pi.on("message_start", async (event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
     for (const marker of studioWakeMarkers(messageText(event.message))) {
-      const key = `${sessionId}:${marker.kind}:${marker.id ?? ""}:${marker.seq}`;
+      const key = `${sessionId}:${marker.concept ?? ""}:${marker.kind}:${marker.id ?? ""}:${marker.seq}`;
       if (deliveredStudioMarkers.has(key)) continue;
       deliveredStudioMarkers.add(key);
       recorder.record("studio.comment_delivered", { sessionId, ...marker });

@@ -138,6 +138,18 @@ test("joins the first delivered correction marker to the next changed draft", ()
   });
 });
 
+test("root reports keep same-sequence deliveries for different concepts", () => {
+  const events = [
+    event("session.start", "12:00:00", { sessionId: "root" }),
+    event("studio.comment_delivered", "12:00:00", { sessionId: "root", kind: "decision", concept: "alpha", id: null, seq: 1 }),
+    event("studio.comment_delivered", "12:00:00", { sessionId: "root", kind: "decision", concept: "beta", id: null, seq: 1 }),
+    event("studio.draft_ready", "12:00:10", { sessionId: "root", concept: "alpha", buildId: "alpha", watchable: true, sha256: "a".repeat(64) }),
+    event("studio.draft_ready", "12:00:20", { sessionId: "root", concept: "beta", buildId: "beta", watchable: true, sha256: "b".repeat(64) }),
+  ];
+
+  assert.deepEqual(buildReport(events, { rootSessionId: "root" }).studio.correctionCycles.map((cycle) => cycle.concept), ["alpha", "beta"]);
+});
+
 test("correction cycles ignore other concepts' build intervals", () => {
   const events = [
     event("session.start", "12:00:00", { sessionId: "root" }),
