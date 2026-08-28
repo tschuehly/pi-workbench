@@ -139,12 +139,15 @@ Run identifier.
 ## First graphical slice
 
 The first graphical slice is one Pi Chat per macOS window. A blank window chooses an explicitly
-located existing or new session; after selection, Chat and its composer fill the window. Each
-window keeps transcript, draft, scroll, live events, status, asks, and dialogs scoped to its complete
-session identity. Client replacement does not restart the PI WEB session daemon.
+located existing or new session. Its first checkpoint mounts a proper graphical composer with Chat;
+its second adds a toggleable right-hand file viewer/editor while Chat remains visible. Each window
+keeps transcript, draft, scroll, live events, status, asks, dialogs, selected file, and file edits
+scoped to its complete session and workspace identity. A save rejects a stale loaded file version
+instead of silently overwriting newer agent or external content. Client replacement does not restart
+the PI WEB session daemon.
 
-Workstreams, Files, Git, Terminal, history, and cross-session attention are later slices selected
-from observed use. Adding one does not weaken the typed state or complete-identity requirements.
+Workstreams, Git, Terminal, history, and cross-session attention are later slices selected from
+observed use. Adding one does not weaken the typed state or complete-identity requirements.
 
 ## Workstream control surface
 

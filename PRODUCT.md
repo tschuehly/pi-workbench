@@ -22,12 +22,12 @@ A Workstream is a finite cross-session attention container. It links independent
 
 ## Current Product Direction
 
-The first slice is one Chat per macOS window:
+The first slice is one Chat per macOS window, delivered input-first:
 
 - A blank window selects an explicit workspace and an existing or new Pi session.
-- The selected Chat fills the window.
-- The owner can read, send, steer, stop, answer live questions, and return to persisted sessions.
-- Several windows may operate independent Chats without state crossover.
+- The first checkpoint provides a proper graphical composer for reading, drafting, sending, steering, stopping, attachments, and live questions.
+- The second checkpoint adds a toggleable right-hand file pane for viewing and editing the selected workspace while Chat remains visible.
+- Several windows may operate independent Chats and file panes without state crossover.
 
 Workstreams remain useful and supported through their Store and terminal skill, but they do not enter the graphical client until the Chat slice is useful in daily work.
 
@@ -39,7 +39,8 @@ Workstreams remain useful and supported through their Store and terminal skill, 
 - Workstream state comes from the typed Workstream protocol, never Chat text or visual state.
 - Checkpoints persist automatically at meaningful attention changes and remain correctable by the owner.
 - Browser or client replacement must not restart the session daemon or disturb unrelated Chats.
-- Working Mode, Files, Git, Terminal, Workstreams, history, and child inspection join the client only through later observed-need slices.
+- File save must reject stale loaded content rather than silently overwriting newer agent or external changes.
+- Files are the second checkpoint of the first slice because the owner identified them as the next concrete need; Working Mode, file upload, Git, Terminal, Workstreams, history, and child inspection remain later observed-need slices.
 
 ## Evidence on Hand
 

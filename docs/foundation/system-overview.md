@@ -113,8 +113,9 @@ Every retained artifact has a promotion or expiry path. Run analysis and compoun
 
 The Workbench client consumes canonical protocol projections and remains a client, never the owner
 of Run or Workstream state. Its first graphical slice presents one complete Pi Chat per macOS
-window through reused PI WEB runtime and client modules. The existing PI WEB shell and legacy
-Workbench plugin remain fallback and evidence, not the target composition.
+window, delivering the reused graphical composer first and a toggleable workspace file
+viewer/editor second. The existing PI WEB shell and legacy Workbench plugin remain fallback and
+evidence, not the target composition.
 
 **Current state:** the replacement graphical client is not implemented, so the terminal remains the
 working surface. Use the [`workstreams`](../../skills/workstreams/SKILL.md) skill to operate

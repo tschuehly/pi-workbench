@@ -11,9 +11,9 @@ defines continuity, and the [Workbench UI plan](../plans/workbench-ui.md) sequen
 1. As a developer, I want one native macOS window to contain one complete Pi Chat, so I can work graphically without navigating a portfolio shell.
 2. As a developer opening a window, I want to choose an explicitly located existing or new session, so hidden shell state cannot select the wrong workspace.
 3. As a developer using several Chats, I want each window's transcript, draft, scroll, status, live events, and controls isolated from every other window.
-4. As a developer, I want send, steer, stop, attachments, model/status display, transcript paging, live questions, and extension dialogs available in Chat.
+4. As a developer, I want a proper graphical composer with ordinary macOS multiline editing, selection, clipboard, undo, navigation, drafts, send, steer, stop, attachments, model/status display, transcript paging, live questions, and extension dialogs available in Chat.
 5. As an interruptible developer, I want closing, reloading, or replacing a client window to leave Pi sessions and the session daemon running.
-6. As a developer, I want the client to add Terminal, Workstreams, Files, Git, and other surfaces only after real use demonstrates the next missing capability.
+6. As a developer, I want a toggleable file pane beside Chat for viewing and safely editing the selected workspace without silently overwriting newer agent or external changes, while upload, Terminal, Workstreams, Git, and other surfaces wait for observed need.
 
 ### Workstreams
 
@@ -37,10 +37,12 @@ defines continuity, and the [Workbench UI plan](../plans/workbench-ui.md) sequen
 - Launch a blank macOS window; assert it shows only an explicit workspace/session chooser rather than the legacy PI WEB shell.
 - Open an existing session; assert transcript paging, live updates, status, pending asks, dialogs, and draft restoration belong to that complete session identity.
 - Start a session in an explicitly selected workspace; assert the returned machine/project/workspace/session identity is complete.
-- Exercise send, steer, stop, attachments, inline answers, model/status display, reconnect, and error recovery.
-- Operate two windows on different sessions; assert no selection, draft, scroll, status, transcript, or event crossover.
+- Exercise multiline input, selection, clipboard, undo/redo, macOS navigation shortcuts, draft restoration, send, steer, stop, attachments, inline answers, model/status display, reconnect, and error recovery; accept this checkpoint in attended use before adding Files.
+- Toggle the right-hand file pane; assert the tree is scoped to the selected workspace, text and supported images render, text edits survive save and reload, failures remain visible, and unsaved work is not silently discarded.
+- Change an open file outside the editor before save; assert the stale save is rejected and the newer content survives until the owner explicitly chooses reload or overwrite.
+- Operate two windows on different sessions; assert no selection, draft, scroll, status, transcript, file, or event crossover.
 - Close and reload one window; assert another window and the session daemon continue without interruption.
-- Run the controlled no-model fixture and one attended real-session pass before accepting the slice.
+- Run the controlled no-model fixture, an attended composer pass before file work, and an attended Chat-and-file pass before accepting the slice.
 - Verify keyboard operation, visible focus, readable text, reduced motion, and supported narrow window sizes.
 
 ### Workstream modules

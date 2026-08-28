@@ -8,7 +8,8 @@ native windows, shared website data, standard navigation shortcuts, and restrict
 navigation. It uses PI WEB runtime and does not own Pi sessions, Workstreams, or Run state.
 
 The installed wrapper still exposes native tabs today. Slice 1 removes every tab entry point so one
-window remains one Chat; the replacement web root, not a native route setting, selects the Chat client.
+window remains one Chat. The replacement web root, not a native route setting, selects the Chat,
+mounts the graphical composer first, and then adds its toggleable workspace file pane.
 
 ## Run the development environment
 

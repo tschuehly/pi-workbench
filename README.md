@@ -59,10 +59,10 @@ workspace isolation, publication authority, durable execution, or recovery. Deta
 ## What's next
 
 Build the first usable graphical slice: one Pi Chat per native macOS window, with a small chooser for
-an explicitly located existing or new session. The slice reuses PI WEB session runtime, Chat, and
-Prompt Editor behavior without loading the legacy PI WEB shell.
+an explicitly located existing or new session. Deliver PI WEB's graphical Prompt Editor first, then
+its workspace file viewer/editor as a toggleable right-hand pane without loading the legacy shell.
 
-After real use, add only the next capability whose absence is concrete. See the concise
+After those owner-selected checkpoints are in real use, add only the next capability whose absence is concrete. See the concise
 [Workbench UI plan](docs/plans/workbench-ui.md). Working Mode remains a separate intended control.
 
 ## Where everything else lives

@@ -28,9 +28,12 @@ appropriate; neither owns Workstream semantics or persistence.
 ## Chat window
 
 A blank native window offers a small explicit workspace/session chooser. Once selected, one Chat
-fills the window and retains transcript, draft, scroll, live activity, status, asks, and dialogs for
-that complete session identity. Separate windows do not share selection or presentation state.
-Closing or replacing a window leaves the PI WEB session daemon and unrelated sessions running.
+owns the window and retains transcript, draft, scroll, live activity, status, asks, and dialogs for
+that complete session identity. A proper graphical composer is the first delivery checkpoint. The
+second adds a toggleable right-hand viewer/editor for that Chat's workspace while Chat remains
+visible. File save rejects stale loaded content rather than silently overwriting newer agent or
+external changes. Separate windows do not share Chat, file, or presentation state. Closing or
+replacing a window leaves the PI WEB session daemon and unrelated sessions running.
 
 ## Later Workstream re-entry surface
 
@@ -80,9 +83,9 @@ terminal output as current state.
 
 ## Acceptance fixtures
 
-The first slice satisfies this contract when the controlled session fixture and an attended real
-pass prove one-window/one-Chat isolation, explicit location, complete conversation controls,
-reconnect, and runtime survival.
+The first slice satisfies this contract when the controlled session fixture and attended real passes
+prove one-window/one-Chat isolation, explicit location, complete graphical conversation controls,
+workspace-scoped file viewing and editing, stale-save rejection, reconnect, and runtime survival.
 
 A later Workstream slice satisfies this contract when the shared recorded Workstream fixture proves:
 

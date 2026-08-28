@@ -28,8 +28,10 @@ Reuse these as implementation when they satisfy the current slice:
 
 - `SessionController` and its transcript/event handling.
 - `ChatView`, `FormattedText`, `ToolExecutionView`, `AskUserCard`, and extension-dialog rendering.
-- `PromptEditor` and its draft, attachment, completion, model, thinking, steer, and stop behavior.
-- `TerminalPanel`, `WorkspaceFilesPanel`, and `WorkspaceGitPanel` only when their slices begin.
+- `PromptEditor` and its draft, attachment, completion, model, thinking, steer, and stop behavior for the first checkpoint.
+- `WorkspaceFilesPanel` tree, text/image viewing, editing, and save behavior for the second checkpoint. Adapt it to a narrow file-only context and omit upload controls rather than mounting its broad plugin panel context unchanged.
+- The workspace-file API, with the smallest runtime-enforced conditional-save addition: accept the loaded file version as a write precondition and reject a mismatch.
+- `TerminalPanel` and `WorkspaceGitPanel` only when their later slices begin.
 - The controlled no-model session fixture and isolated acceptance runner.
 
 Reuse does not freeze presentation. A reused module can later be replaced when observed friction is inside that module rather than in the surrounding shell.
