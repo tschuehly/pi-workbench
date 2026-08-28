@@ -64,7 +64,7 @@ function fakeRpc(options = {}) {
         if (!options.hang) queueMicrotask(() => {
           send({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "secret reasoning" } });
           send({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "src" } });
-          send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Compact result" }], stopReason: "stop" } });
+          send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: options.text ?? "Compact result" }], stopReason: "stop" } });
           if (!options.omitSettled) send({ type: "agent_settled" });
         });
       }
@@ -365,4 +365,106 @@ test("allows concurrent executions and confirms their cancellation", async () =>
   assert.equal((await adapter.result(first.executionId)).outcome, "cancelled");
   assert.equal((await adapter.result(second.executionId)).outcome, "cancelled");
   assert.equal(children.every((child) => child.kills.includes("SIGTERM")), true);
+});
+
+const overlayReceipt = { path: "/abs/overlay.json", sha256: "d2f0a4" };
+function overlayAdapter(options = {}) {
+  return new PiRpcExecutionAdapter({
+    clock: () => now,
+    routingOverlayPath: overlayReceipt.path,
+    spawn: options.spawn ?? (() => fakeRpc()),
+    ...options,
+  });
+}
+function stubOverlayRead(adapter, allowed = ["anthropic/claude-test", "anthropic/claude-other"]) {
+  adapter.overlayCache = { path: overlayReceipt.path, sha256: overlayReceipt.sha256, allowed: new Set(allowed) };
+  return adapter;
+}
+
+test("admits leaf delegation tools for a coordinating worker but nothing beyond the ceiling", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  const coordinatorTools = ["read", "bash", "grep", "find", "ls", "subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
+  const receipt = await adapter.dispatch(spec({ kind: "worker", tools: coordinatorTools }));
+  assert.equal((await adapter.result(receipt.executionId)).kind, "worker");
+  await assert.rejects(adapter.dispatch(spec({ tools: [...coordinatorTools, "worker_dispatch"] })), (error) => error.code === "CAPABILITY_EXCEEDED");
+  await assert.rejects(adapter.dispatch(spec({ kind: "coordinator" })), (error) => error.code === "INVALID_SPEC");
+});
+
+test("caps phase timeouts per execution kind", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  await adapter.dispatch(spec({ timeoutMs: 45 * 60_000 }));
+  await adapter.dispatch(spec({ kind: "worker", timeoutMs: 60 * 60_000 }));
+  await assert.rejects(adapter.dispatch(spec({ timeoutMs: 45 * 60_000 + 1 })), (error) => error.code === "TIMEOUT_CEILING_EXCEEDED");
+  await assert.rejects(adapter.dispatch(spec({ kind: "worker", timeoutMs: 60 * 60_000 + 1 })), (error) => error.code === "TIMEOUT_CEILING_EXCEEDED");
+  await assert.rejects(adapter.dispatch(spec({ timeoutMs: 0 })), (error) => error.code === "INVALID_SPEC");
+});
+
+test("marks an oversized child result truncated so it cannot satisfy verification", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, resultMaxChars: 40, spawn: () => fakeRpc({ text: "x".repeat(500) }) });
+  const receipt = await adapter.dispatch(spec());
+  const result = await adapter.result(receipt.executionId);
+  assert.equal(result.truncated, true);
+  assert.match(result.text, /TRUNCATED at 40 characters/);
+  assert.equal(result.text.startsWith("x".repeat(40)), true);
+
+  const small = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ text: "done" }) });
+  assert.equal((await small.result((await small.dispatch(spec())).executionId)).truncated, false);
+});
+
+test("marks execution kind and propagates the active routing overlay to the child", async () => {
+  let spawnOptions;
+  const adapter = stubOverlayRead(overlayAdapter({ spawn: (_command, _args, options) => { spawnOptions = options; return fakeRpc(); } }));
+  await adapter.dispatch(spec({ kind: "worker", binding: { ...spec().binding, routingOverlay: overlayReceipt } }));
+  assert.equal(spawnOptions.env.PI_WORKBENCH_EXECUTION_KIND, "worker");
+  assert.equal(spawnOptions.env.PI_WORKBENCH_ROUTING_OVERLAY, overlayReceipt.path);
+  assert.equal(spawnOptions.detached, true, "a lead launch owns its own process group");
+
+  let leafOptions;
+  const insideWorker = new PiRpcExecutionAdapter({ clock: () => now, ownsProcessGroups: false, spawn: (_command, _args, options) => { leafOptions = options; return fakeRpc(); } });
+  await insideWorker.dispatch(spec());
+  assert.equal(leafOptions.detached, false, "a leaf launched inside a worker stays in the worker's group");
+  assert.equal(leafOptions.env.PI_WORKBENCH_EXECUTION_KIND, "subagent");
+});
+
+test("fails closed when a binding does not match the active routing overlay", async () => {
+  const adapter = stubOverlayRead(overlayAdapter());
+  await adapter.dispatch(spec({ binding: { ...spec().binding, routingOverlay: overlayReceipt } }));
+  await assert.rejects(adapter.dispatch(spec()), (error) => error.code === "INVALID_BINDING");
+  await assert.rejects(
+    adapter.dispatch(spec({ binding: { ...spec().binding, routingOverlay: { ...overlayReceipt, sha256: "stale" } } })),
+    (error) => error.code === "INVALID_BINDING",
+  );
+  await assert.rejects(
+    adapter.dispatch(spec({ binding: { ...spec().binding, model: "claude-outside", routingOverlay: overlayReceipt } })),
+    (error) => error.code === "INVALID_BINDING",
+  );
+  await assert.rejects(
+    new PiRpcExecutionAdapter({ clock: () => now, routingOverlayPath: "/absent-overlay.json", spawn: () => fakeRpc() }).dispatch(spec()),
+    (error) => error.code === "ROUTING_OVERLAY_UNAVAILABLE",
+  );
+
+  const withoutOverlay = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  await assert.rejects(withoutOverlay.dispatch(spec({ binding: { ...spec().binding, routingOverlay: overlayReceipt } })), (error) => error.code === "INVALID_BINDING");
+});
+
+test("accepts distinct-model independence only under an active overlay with fresh context", async () => {
+  const adapter = stubOverlayRead(overlayAdapter());
+  const independence = { kind: "fresh-context-distinct-model", authorProvider: "anthropic", authorModel: "claude-other", selectedProvider: "anthropic", selectedModel: "claude-test" };
+  const reviewBinding = { ...spec().binding, cognitiveRole: "independent-review", routingOverlay: overlayReceipt, independence };
+  const receipt = await adapter.dispatch(spec({ cognitiveRole: "independent-review", binding: reviewBinding }));
+  assert.equal((await adapter.result(receipt.executionId)).outcome, "success");
+
+  const rejected = [
+    spec({ cognitiveRole: "independent-review", binding: reviewBinding, continuation: { sessionId: "resumed" } }),
+    spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: { ...independence, authorModel: "claude-test" } } }),
+    spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: { ...independence, authorModel: "claude-elsewhere" } } }),
+    spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: { ...independence, selectedModel: "claude-other" } } }),
+  ];
+  for (const candidate of rejected) await assert.rejects(adapter.dispatch(candidate), (error) => error.code === "INVALID_BINDING");
+
+  const withoutOverlay = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  await assert.rejects(
+    withoutOverlay.dispatch(spec({ cognitiveRole: "independent-review", binding: { ...spec().binding, cognitiveRole: "independent-review", independence } })),
+    (error) => error.code === "INVALID_BINDING",
+  );
 });

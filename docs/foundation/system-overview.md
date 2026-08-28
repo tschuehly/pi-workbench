@@ -47,6 +47,14 @@ continuous Human Attention. The lead may launch bounded, ephemeral child Pi proc
 attended tool activity and remains accountable for their assignments and results. A child may run
 non-blocking only within its attended lead session; no child execution survives session shutdown.
 
+Delegation nests exactly one level: lead → durable Worker → leaf Subagent. A `coordinator` Worker
+holds one scope's context and delegates its work to fresh leaf Subagents, while leaf profiles receive
+no delegation tool, so recursion terminates. A nested leaf must run in the foreground and settle
+before its Worker dispatch returns; cancelling a Worker removes its uncollected leaves, and
+cancelling one leaf leaves its Worker alive. This is workflow containment rather than a sandbox:
+`bash` stays inside the attended local trust boundary, so unsupported deeper nesting is detected
+through telemetry and hierarchy evaluations, not shell interception.
+
 A Chat may remain standalone or be associated with exactly one user-local Workstream. A Workstream
 lets the owner leave and resume without treating chat history as current state. It may span
 repositories and contain several concurrent interactive sessions, Human Tasks, files, artifacts,
@@ -202,8 +210,9 @@ The complete V1 outcomes and validation conditions are in [requirements.md](requ
 - Multiple coding-agent harnesses or provider-specific coding CLIs as Worker runtimes.
 - Treating conversations, mutable Markdown, terminal output, or model-authored transitions as
   authoritative Run state.
-- Peer worker mailboxes, open-ended worker conversations, or unbounded recursive agent hierarchies
-  in the initial implementation.
+- Peer worker mailboxes, open-ended worker conversations, or agent hierarchies deeper than the one
+  bounded lead → Worker → leaf level.
+- Workers that create, dispatch, or retire other Workers.
 - Model-backed log watching, terminal-screen parsing, or maximizing worker count as a product goal.
 - A blanket autonomy switch, universal Working Mode ladder, cost tier, Scout-first rule,
   plan-once rule, or universal file-size limit.

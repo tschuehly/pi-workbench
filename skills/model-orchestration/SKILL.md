@@ -33,6 +33,12 @@ Assign exactly one role:
 
 Include bounded scope, task risk, required Independence, and the author provider when Independence matters. `independent-judgment`, `challenge`, and `independent-review` require cross-family routing; their model binding is selected dynamically from the author provider rather than fixed to one family.
 
+### Run-scoped routing overlay
+
+Set `PI_WORKBENCH_ROUTING_OVERLAY` to an absolute JSON path to narrow a whole run to one declared allowlist; see [`references/anthropic-opus-sonnet-overlay.json`](references/anthropic-opus-sonnet-overlay.json). It is the sole activation variable and fails closed: an unmapped role, a model outside the allowlist, or missing, unreadable, invalid, or unpropagated bytes blocks instead of falling back to default routing. Each binding receipt carries the overlay path and content hash, and the execution adapter re-verifies that hash before launch.
+
+While an overlay is active, independence is distinct-model rather than cross-family: pass `--independent-of-model '<provider>/<model>'` (the Subagent tool's `independentOfModel`) taken from the author's completion receipt, and the overlay selects a different model. Never label same-model review independent.
+
 **Complete when:** every proposed Dispatch has exactly one Cognitive Role and a non-overlapping bounded responsibility.
 
 ## 2. Size independent checking by consequence

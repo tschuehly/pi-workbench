@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -13,7 +15,8 @@ import { activityText, progressText, recordProgress, renderProgressLog } from ".
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
-const PROFILES = {
+const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"] as const;
+export const PROFILES = {
   scout: {
     tools: ["read", "bash", "grep", "find", "ls"],
     instruction: "Investigate only. Do not mutate files. Return compact evidence and conclusions to the attending lead.",
@@ -30,7 +33,34 @@ const PROFILES = {
     tools: ["read", "bash", "grep", "find", "ls", "edit", "write"],
     instruction: "Implement only the bounded assignment. Verify your changes and report files changed, checks, and remaining risks. Do not commit or publish.",
   },
+  // Worker-only. A coordinator holds one scope's durable context and delegates the work itself to
+  // fresh leaf Subagents; it has no edit or write tool, and no Worker lifecycle tool, so the
+  // hierarchy stays exactly lead → Worker → leaf.
+  coordinator: {
+    tools: ["read", "bash", "grep", "find", "ls", ...DELEGATION_TOOLS],
+    instruction: "Coordinate this scope. You do not edit files yourself: launch one fresh bounded leaf Subagent per phase, collect it exactly once, and keep only intent, decisions, and compact child evidence in your own context. Run at most one writing leaf at a time. Leaves never commit or publish; after their evidence passes you may make one mechanical scope-only checkpoint commit with bash. You cannot create workers.",
+  },
 } as const;
+
+const LEAF_PROFILES = ["scout", "planner", "reviewer", "implementer"] as const;
+const WORKER_PROFILES = [...LEAF_PROFILES, "coordinator"] as const;
+// A leaf launched inside a Worker is the deepest supported level.
+const INSIDE_WORKER = process.env.PI_WORKBENCH_EXECUTION_KIND === "worker";
+const LEAF_TIMEOUT_CEILING_SECONDS = 45 * 60;
+const WORKER_TIMEOUT_CEILING_SECONDS = 60 * 60;
+const NO_NESTED_WORKERS = "Workers cannot create or dispatch Workers. The supported hierarchy is lead → Worker → leaf Subagent; delegate this work to a fresh leaf Subagent instead.";
+
+// A long-running lead keeps the revision it started with. After a harness change on disk, that lead
+// is silently running the old delegation rules until it restarts, so make the drift observable.
+const HARNESS_SOURCES = [path.resolve(here, "index.ts"), path.resolve(here, "../../packages/pi-execution-adapter/src/index.js"), resolver];
+export function harnessRevision(files: string[] = HARNESS_SOURCES): string {
+  const hash = createHash("sha256");
+  for (const file of files) {
+    try { hash.update(readFileSync(file)); } catch { hash.update(`missing:${file}`); }
+  }
+  return hash.digest("hex").slice(0, 12);
+}
+const LOADED_HARNESS_REVISION = harnessRevision();
 
 const COGNITIVE_ROLES = [
   "implementation", "problem-solving", "design", "escalation", "investigation",
@@ -42,26 +72,32 @@ const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed
 
 const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output" }),
-  profile: StringEnum(Object.keys(PROFILES) as (keyof typeof PROFILES)[], { description: "Bundled Level 1 child behavior profile" }),
+  profile: StringEnum(LEAF_PROFILES, { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
   independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Defaults to the active parent model provider; set it explicitly for child-authored work." })),
+  independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Required for an independent role while a routing overlay narrows routing to one provider." })),
+  timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, maximum: LEAF_TIMEOUT_CEILING_SECONDS, description: `Bounded leaf deadline in seconds; defaults to 20 minutes and may not exceed ${LEAF_TIMEOUT_CEILING_SECONDS / 60} minutes. Raise it explicitly for a long render or build.` })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
-  background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the terminal wakeup with subagent_collect. The child still dies when the attended session ends." })),
+  background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the terminal wakeup with subagent_collect. The child still dies when the attended session ends. A Subagent launched inside a Worker must stay in the foreground." })),
 });
 
 const IdParam = Type.Object({ executionId: Type.String({ minLength: 1, description: "Execution identifier returned by a background subagent launch" }) });
-const StatusParams = Type.Object({ executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect; omit to list every child launched this session" })) });
+const StatusParams = Type.Object({
+  executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect; omit to list running and terminal-but-uncollected direct children" })),
+  all: Type.Optional(Type.Boolean({ description: "Include already-collected children for bounded diagnostics" })),
+});
 const CancelParams = Type.Object({ executionId: Type.String({ minLength: 1 }), reason: Type.Optional(Type.String({ description: "Why the child is being cancelled" })) });
 
 const WorkerCreateParams = Type.Object({
   name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),
   scope: Type.String({ minLength: 1, description: "One semantic scope statement this worker retains context for" }),
-  profile: StringEnum(Object.keys(PROFILES) as (keyof typeof PROFILES)[], { description: "Bundled Level 1 child behavior profile" }),
+  profile: StringEnum(WORKER_PROFILES, { description: "Bundled Level 1 child behavior profile. Use 'coordinator' for a worker that owns one scope and delegates its work to fresh leaf Subagents." }),
 });
 const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
+  timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, maximum: WORKER_TIMEOUT_CEILING_SECONDS, description: `Bounded phase deadline in seconds; defaults to 20 minutes and may not exceed ${WORKER_TIMEOUT_CEILING_SECONDS / 60} minutes. A phase that launches leaves must outlast them, so raise it explicitly for a long render or build phase.` })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the terminal wakeup with subagent_collect." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
@@ -83,6 +119,7 @@ type ForegroundDispatch = { label: string; detach: () => void };
 export default function subagentExtension(pi: ExtensionAPI) {
   const adapter = new PiRpcExecutionAdapter();
   const launched = new Map<string, LaunchMeta>();
+  const collected = new Set<string>();
   const foreground = new Map<string, ForegroundDispatch>();
   const registry = createUserLocalWorkerRegistry();
   const workerExecutions = new Map<string, string>();
@@ -121,6 +158,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Subagent in the foreground. Reconcile every background result with subagent_collect and cancel with subagent_cancel.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
+      "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
     ],
     parameters: Params,
 
@@ -129,19 +167,27 @@ export default function subagentExtension(pi: ExtensionAPI) {
       if (profile === undefined) {
         return failure("preflight_failed", `Unknown child profile: ${params.profile}.`);
       }
+      // A nested leaf must settle before its Worker's dispatch returns, otherwise the lead would
+      // reconcile a Worker whose own child is still writing.
+      if (INSIDE_WORKER && params.background === true) {
+        return failure("preflight_failed", "A Subagent launched inside a Worker must run in the foreground so it settles and is collected before the Worker dispatch returns.");
+      }
 
       const needsIndependence = INDEPENDENT_ROLES.has(params.cognitiveRole);
-      if (!needsIndependence && params.independentOfProvider !== undefined) {
-        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' does not use independentOfProvider.`);
+      if (!needsIndependence && (params.independentOfProvider !== undefined || params.independentOfModel !== undefined)) {
+        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' does not use an independence constraint.`);
       }
-      const independentOfProvider = needsIndependence ? (params.independentOfProvider ?? ctx.model?.provider) : undefined;
+      const independentOfProvider = needsIndependence ? (params.independentOfProvider ?? providerOf(params.independentOfModel) ?? ctx.model?.provider) : undefined;
       if (needsIndependence && independentOfProvider === undefined) {
         return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' requires an author provider for independent routing.`);
+      }
+      if (needsIndependence && params.independentOfModel !== undefined && providerOf(params.independentOfModel) === undefined) {
+        return failure("preflight_failed", `independentOfModel must be '<provider>/<model>', got '${params.independentOfModel}'.`);
       }
 
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, independentOfProvider);
+        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, params.independentOfModel);
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
       }
@@ -158,6 +204,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
           tools: [...profile.tools],
           binding,
           parentSessionId,
+          kind: "subagent",
+          ...(params.timeoutSeconds === undefined ? {} : { timeoutMs: Math.round(params.timeoutSeconds * 1000) }),
         });
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
@@ -224,7 +272,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
       try {
         const result = await streamToResult(adapter, receipt.executionId, params.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
-        return (result as { details?: { outcome?: unknown } }).details?.outcome === "detached" ? backgroundResult("Moved") : result;
+        if ((result as { details?: { outcome?: unknown } }).details?.outcome === "detached") return backgroundResult("Moved");
+        collected.add(receipt.executionId);
+        return result;
       } finally {
         foreground.delete(receipt.executionId);
       }
@@ -242,7 +292,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
       const meta = launched.get(params.executionId);
       const result = await streamToResult(adapter, params.executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", meta?.launchedAt ?? new Date().toISOString(), signal, onUpdate, { cancelOnAbort: false });
       const outcome = (result as { details?: { outcome?: unknown } }).details?.outcome;
-      completionWakeup.finishReconciliation(params.executionId, typeof outcome === "string" && TERMINAL_OUTCOMES.has(outcome));
+      const terminal = typeof outcome === "string" && TERMINAL_OUTCOMES.has(outcome);
+      if (terminal) collected.add(params.executionId);
+      completionWakeup.finishReconciliation(params.executionId, terminal);
       return result;
     },
   });
@@ -250,8 +302,11 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_status",
     label: "Subagent status",
-    description: "Non-blocking snapshot of one child, or a list of every child launched this session.",
+    description: "Non-blocking snapshot of one child, or the running and terminal-but-uncollected direct children. Pass all:true for the full session roster.",
     promptSnippet: "Inspect backgrounded child Pi progress",
+    promptGuidelines: [
+      "Default subagent_status is the actionable set: children still running plus terminal children you have not reconciled. Use all:true only for bounded diagnostics.",
+    ],
     parameters: StatusParams,
     async execute(_toolCallId, params) {
       if (params.executionId !== undefined) {
@@ -265,14 +320,23 @@ export default function subagentExtension(pi: ExtensionAPI) {
           details: { ...status, taskPreview: meta?.taskPreview },
         };
       }
-      const summaries = adapter.list();
-      if (summaries.length === 0) return { content: [{ type: "text", text: "No subagents have been launched this session." }], details: { children: [] } };
+      const roster = adapter.list();
+      const all = params.all === true;
+      const summaries = all ? roster : roster.filter((s) => s.running || !collected.has(s.executionId));
+      const running = roster.filter((s) => s.running).length;
+      const uncollected = roster.filter((s) => !s.running && !collected.has(s.executionId)).length;
+      const current = harnessRevision();
+      const stale = current === LOADED_HARNESS_REVISION ? "" : `\nHarness drift: this lead loaded delegation revision ${LOADED_HARNESS_REVISION}, but ${current} is on disk. Restart the lead before relying on the changed hierarchy rules.`;
+      const counts = `${running} running, ${uncollected} terminal and uncollected, ${roster.length} launched this session.${stale}`;
+      if (summaries.length === 0) {
+        return { content: [{ type: "text", text: `${counts}${all ? "" : " Nothing needs reconciliation; use all:true for the full roster."}` }], details: { children: [], running, uncollected, total: roster.length } };
+      }
       const lines = summaries.map((s) => {
         const meta = launched.get(s.executionId);
-        const state = s.running ? "running" : (s.outcome ?? "finished");
-        return `- ${s.executionId} [${state}] ${s.profile} · ${s.cognitiveRole}${meta?.workerName !== undefined ? ` · worker \"${meta.workerName}\"` : ""}${meta ? ` — ${meta.taskPreview}` : ""}`;
+        const state = s.running ? "running" : `${s.outcome ?? "finished"}${collected.has(s.executionId) ? ", collected" : ", uncollected"}`;
+        return `- ${s.executionId} [${state}] ${s.kind} · ${s.profile} · ${s.cognitiveRole}${meta?.workerName !== undefined ? ` · worker \"${meta.workerName}\"` : ""}${meta ? ` — ${meta.taskPreview}` : ""}`;
       });
-      return { content: [{ type: "text", text: lines.join("\n") }], details: { children: summaries } };
+      return { content: [{ type: "text", text: `${counts}\n${lines.join("\n")}` }], details: { children: summaries, running, uncollected, total: roster.length } };
     },
   });
 
@@ -284,6 +348,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     parameters: CancelParams,
     async execute(_toolCallId, params) {
       completionWakeup.markHandled(params.executionId);
+      collected.add(params.executionId);
       try {
         const receipt = await adapter.cancel(params.executionId, params.reason ?? "Cancelled by the attended lead.");
         return { content: [{ type: "text", text: `${params.executionId}: ${receipt.outcome}.` }], details: receipt, ...(receipt.outcome === "outcome_unknown" ? { isError: true } : {}) };
@@ -303,6 +368,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     ],
     parameters: WorkerCreateParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (INSIDE_WORKER) return failure("preflight_failed", NO_NESTED_WORKERS);
       if (ctx.sessionManager.getSessionFile() === undefined) {
         return failure("preflight_failed", "Durable workers require a persisted lead Pi session.");
       }
@@ -339,6 +405,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     ],
     parameters: WorkerDispatchParams,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      if (INSIDE_WORKER) return failure("preflight_failed", NO_NESTED_WORKERS);
       if (INDEPENDENT_ROLES.has(params.cognitiveRole)) {
         return failure("preflight_failed", `Independence requires fresh context; Cognitive Role '${params.cognitiveRole}' is subagent-only.`);
       }
@@ -385,6 +452,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
           tools: [...profile.tools],
           binding,
           parentSessionId,
+          kind: "worker",
+          ...(params.timeoutSeconds === undefined ? {} : { timeoutMs: Math.round(params.timeoutSeconds * 1000) }),
           ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
         });
       } catch (error) {
@@ -485,6 +554,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       try {
         const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
         if ((result as { details?: { outcome?: unknown } }).details?.outcome === "detached") return backgroundResult("Moved");
+        collected.add(receipt.executionId);
         await tracked;
         if (workerReceiptError !== undefined) return workerReceiptFailureResult(result, receipt.executionId, params.workerId, workerReceiptError);
         return result;
@@ -554,6 +624,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     promptSnippet: "Retire one durable attended worker",
     parameters: WorkerRetireParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (INSIDE_WORKER) return failure("preflight_failed", NO_NESTED_WORKERS);
       if (ctx.sessionManager.getSessionFile() === undefined) {
         return failure("preflight_failed", "Durable workers require a persisted lead Pi session.");
       }
@@ -659,8 +730,18 @@ export async function streamToResult(
   };
 }
 
-async function resolveBinding(cognitiveRole: string, independentOfProvider?: string): Promise<any> {
-  const args = [resolver, cognitiveRole, ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider])];
+export function providerOf(qualifiedModel: string | undefined): string | undefined {
+  if (qualifiedModel === undefined) return undefined;
+  const slash = qualifiedModel.indexOf("/");
+  return slash > 0 && slash < qualifiedModel.length - 1 ? qualifiedModel.slice(0, slash) : undefined;
+}
+
+async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string): Promise<any> {
+  const args = [
+    resolver, cognitiveRole,
+    ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider]),
+    ...(independentOfModel === undefined ? [] : ["--independent-of-model", independentOfModel]),
+  ];
   const stdout = await new Promise<string>((resolve, reject) => {
     execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 15_000 }, (error, output, stderr) => {
       if (error !== null) reject(new Error(String(stderr || output || error.message).trim()));

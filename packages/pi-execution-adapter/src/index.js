@@ -1,10 +1,17 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
 
 const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out", "outcome_unknown"]);
 const INDEPENDENT_ROLES = new Set(["independent-judgment", "challenge", "independent-review"]);
+const EXECUTION_KINDS = new Set(["subagent", "worker"]);
+// One bounded nested level: a Worker coordinates leaf Subagents, so a Worker phase must be able to
+// outlast the leaves it launches.
+const LEAF_TIMEOUT_CEILING_MS = 45 * 60_000;
+const WORKER_TIMEOUT_CEILING_MS = 60 * 60_000;
+const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
 
 export class PiRpcExecutionAdapter {
   constructor(options = {}) {
@@ -12,19 +19,28 @@ export class PiRpcExecutionAdapter {
     this.defaultTimeoutMs = options.timeoutMs ?? 20 * 60_000;
     this.defaultStartupTimeoutMs = options.startupTimeoutMs ?? 15_000;
     this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 10 * 60_000;
-    this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write"]);
+    this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write", ...DELEGATION_TOOLS]);
     this.clock = options.clock ?? (() => new Date());
     this.spawn = options.spawn ?? nodeSpawn;
     this.killGraceMs = options.killGraceMs ?? 2_000;
     this.settlementProbeMs = options.settlementProbeMs ?? 5_000;
+    this.resultMaxChars = options.resultMaxChars ?? 8_000;
+    this.routingOverlayPath = options.routingOverlayPath ?? process.env.PI_WORKBENCH_ROUTING_OVERLAY;
+    // A lead adapter puts each child in its own process group so cancelling a Worker also removes
+    // the leaves it launched. Inside a Worker, leaves stay in the Worker's group instead, so an
+    // individual leaf can be cancelled without killing its Worker.
+    this.ownsProcessGroups = options.ownsProcessGroups ?? process.env.PI_WORKBENCH_EXECUTION_KIND !== "worker";
     this.executions = new Map();
   }
 
   async dispatch(spec) {
-    const quotaDegradation = validateSpec(spec, this.hostTools, this.clock(), this.bindingMaxAgeMs);
+    const quotaDegradation = validateSpec(spec, this.hostTools, this.clock(), this.bindingMaxAgeMs, this.#routingOverlay());
     const executionId = randomUUID();
     const acceptedAt = this.clock().toISOString();
     const state = createState(executionId, spec, acceptedAt);
+    state.kind = spec.kind ?? "subagent";
+    state.ownsGroup = this.ownsProcessGroups;
+    state.resultMaxChars = this.resultMaxChars;
     state.quotaAdmission = quotaDegradation === undefined ? spec.binding.admission : "degraded-quota-telemetry";
     state.quotaTelemetryStatus = quotaDegradation?.telemetryStatus ?? spec.binding.quotaSnapshot.telemetryStatus;
     this.executions.set(executionId, state);
@@ -59,6 +75,7 @@ export class PiRpcExecutionAdapter {
       provider: b.provider,
       model: b.model,
       effort: b.effort,
+      kind: state.kind,
       running: !state.done,
       outcome: state.done ? state.result.outcome : undefined,
       acceptedAt: state.acceptedAt,
@@ -73,6 +90,7 @@ export class PiRpcExecutionAdapter {
       executionId: state.executionId,
       profile: state.spec.profile,
       cognitiveRole: state.spec.cognitiveRole,
+      kind: state.kind,
       running: !state.done,
       outcome: state.done ? state.result.outcome : undefined,
       acceptedAt: state.acceptedAt,
@@ -95,6 +113,30 @@ export class PiRpcExecutionAdapter {
     return Promise.all([...this.executions.values()].filter((state) => !state.done).map((state) => this.cancel(state.executionId, reason)));
   }
 
+  // Read once per adapter: an active overlay must be readable here too, or a nested Pi that never
+  // received it would silently resolve default routing.
+  #routingOverlay() {
+    if (this.routingOverlayPath === undefined || this.routingOverlayPath === "") return undefined;
+    if (this.overlayCache === undefined) {
+      let raw;
+      try {
+        raw = readFileSync(this.routingOverlayPath, "utf8");
+      } catch (error) {
+        throw typedError("ROUTING_OVERLAY_UNAVAILABLE", `Active routing overlay is unreadable: ${errorMessage(error)}`);
+      }
+      let doc;
+      try {
+        doc = JSON.parse(raw);
+      } catch (error) {
+        throw typedError("ROUTING_OVERLAY_UNAVAILABLE", `Active routing overlay is not valid JSON: ${errorMessage(error)}`);
+      }
+      const allowed = new Set((Array.isArray(doc.allowedModels) ? doc.allowedModels : []).map((entry) => `${entry?.provider}/${entry?.model}`));
+      if (allowed.size === 0) throw typedError("ROUTING_OVERLAY_UNAVAILABLE", "Active routing overlay lists no allowed model.");
+      this.overlayCache = { path: this.routingOverlayPath, sha256: createHash("sha256").update(raw).digest("hex"), allowed };
+    }
+    return this.overlayCache;
+  }
+
   #state(executionId) {
     const state = this.executions.get(executionId);
     if (state === undefined) throw typedError("EXECUTION_NOT_FOUND", `Execution ${executionId} was not found.`);
@@ -106,13 +148,16 @@ export class PiRpcExecutionAdapter {
     const args = ["--mode", "rpc", "--provider", spec.binding.provider, "--model", spec.binding.model, "--thinking", spec.binding.effort, "--tools", spec.tools.join(",")];
     if (spec.continuation === undefined) args.push("--name", `workbench-${spec.profile}-${state.executionId.slice(0, 8)}`);
     else args.push("--session", spec.continuation.sessionId);
-    const env = { ...process.env, PI_TELEMETRY_EXECUTION_ID: state.executionId };
+    const env = { ...process.env, PI_TELEMETRY_EXECUTION_ID: state.executionId, PI_WORKBENCH_EXECUTION_KIND: state.kind };
     if (spec.parentSessionId === undefined) delete env.PI_TELEMETRY_PARENT_SESSION_ID;
     else env.PI_TELEMETRY_PARENT_SESSION_ID = spec.parentSessionId;
+    if (this.routingOverlayPath === undefined || this.routingOverlayPath === "") delete env.PI_WORKBENCH_ROUTING_OVERLAY;
+    else env.PI_WORKBENCH_ROUTING_OVERLAY = this.routingOverlayPath;
     let child;
     try {
-      child = this.spawn(this.command, args, { cwd: spec.cwd, shell: false, stdio: ["pipe", "pipe", "pipe"], env });
+      child = this.spawn(this.command, args, { cwd: spec.cwd, shell: false, stdio: ["pipe", "pipe", "pipe"], env, detached: state.ownsGroup });
       state.child = child;
+      if (state.ownsGroup) child.unref?.();
     } catch (error) {
       this.#finish(state, resultFor(state, "launch_failed", "", errorMessage(error)));
       return;
@@ -242,9 +287,24 @@ export class PiRpcExecutionAdapter {
 
   async #retireSuccessfulProcess(state) {
     await this.#waitForClose(state, this.killGraceMs);
-    if (!state.closed) state.child?.kill?.("SIGTERM");
+    if (!state.closed) this.#signal(state, "SIGTERM");
     await this.#waitForClose(state, this.killGraceMs);
-    if (!state.closed) state.child?.kill?.("SIGKILL");
+    if (!state.closed) this.#signal(state, "SIGKILL");
+  }
+
+  // Group-owning launches are signalled as a whole group so a Worker's uncollected leaves die with
+  // it; a leaf launched from inside a Worker is signalled alone.
+  #signal(state, signal) {
+    const pid = state.child?.pid;
+    if (state.ownsGroup && typeof pid === "number") {
+      try {
+        process.kill(-pid, signal);
+        return;
+      } catch (error) {
+        if (error?.code === "ESRCH") return;
+      }
+    }
+    state.child?.kill?.(signal);
   }
 
   async #waitForClose(state, timeoutMs) {
@@ -307,9 +367,9 @@ export class PiRpcExecutionAdapter {
     if (state.done) return { executionId: state.executionId, outcome: state.result.outcome === "outcome_unknown" ? "outcome_unknown" : "cancelled" };
     try { state.child?.stdin?.write(`${JSON.stringify({ id: `${state.executionId}:abort`, type: "abort" })}\n`); } catch {}
     await delay(Math.min(100, this.killGraceMs));
-    if (!state.closed) state.child?.kill?.("SIGTERM");
+    if (!state.closed) this.#signal(state, "SIGTERM");
     await this.#waitForClose(state, this.killGraceMs);
-    if (!state.closed) state.child?.kill?.("SIGKILL");
+    if (!state.closed) this.#signal(state, "SIGKILL");
     await this.#waitForClose(state, this.killGraceMs);
     const outcome = state.closed ? (state.cancelKind ?? "cancelled") : "outcome_unknown";
     if (!state.done) this.#finish(state, resultFor(state, outcome, state.finalText, state.closed ? undefined : "Process termination could not be confirmed."));
@@ -375,10 +435,17 @@ function safeCommandName(value) {
   return [executable, ...safe].join(" ");
 }
 
-function validateSpec(spec, hostTools, now, maxAgeMs) {
+function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   if (!spec || typeof spec !== "object") throw typedError("INVALID_SPEC", "ResolvedExecutionSpec is required.");
   for (const field of ["task", "profile", "cognitiveRole", "cwd"]) if (typeof spec[field] !== "string" || spec[field].trim() === "") throw typedError("INVALID_SPEC", `${field} is required.`);
   if (!Array.isArray(spec.tools) || spec.tools.some((tool) => !hostTools.has(tool))) throw typedError("CAPABILITY_EXCEEDED", "Requested tools exceed the host capability ceiling.");
+  const kind = spec.kind ?? "subagent";
+  if (!EXECUTION_KINDS.has(kind)) throw typedError("INVALID_SPEC", `kind must be one of ${[...EXECUTION_KINDS].join(", ")}.`);
+  if (spec.timeoutMs !== undefined) {
+    const ceiling = kind === "worker" ? WORKER_TIMEOUT_CEILING_MS : LEAF_TIMEOUT_CEILING_MS;
+    if (!Number.isFinite(spec.timeoutMs) || spec.timeoutMs <= 0) throw typedError("INVALID_SPEC", "timeoutMs must be a positive number of milliseconds.");
+    if (spec.timeoutMs > ceiling) throw typedError("TIMEOUT_CEILING_EXCEEDED", `A ${kind} execution may not exceed ${ceiling / 60_000} minutes.`);
+  }
   if (spec.continuation !== undefined && (typeof spec.continuation !== "object" || spec.continuation === null || typeof spec.continuation.sessionId !== "string" || spec.continuation.sessionId.trim() === "")) {
     throw typedError("INVALID_SPEC", "continuation.sessionId must be a non-empty string when continuation is present.");
   }
@@ -387,12 +454,33 @@ function validateSpec(spec, hostTools, now, maxAgeMs) {
   }
   const binding = spec.binding;
   if (!binding || binding.cognitiveRole !== spec.cognitiveRole || !binding.provider || !binding.model || !binding.effort) throw typedError("INVALID_BINDING", "Resolved binding does not match the requested Cognitive Role.");
+  // The overlay must reach every nested Pi. A binding resolved without it, or against different
+  // bytes, means routing was not actually narrowed and must fail closed.
+  if (overlay === undefined) {
+    if (binding.routingOverlay !== undefined) throw typedError("INVALID_BINDING", "Binding records a routing overlay that is not active in this process.");
+  } else if (binding.routingOverlay?.path !== overlay.path || binding.routingOverlay?.sha256 !== overlay.sha256) {
+    throw typedError("INVALID_BINDING", "Binding was not resolved against the active routing overlay bytes.");
+  } else if (!overlay.allowed.has(`${binding.provider}/${binding.model}`)) {
+    throw typedError("INVALID_BINDING", `Binding model ${binding.provider}/${binding.model} is outside the active routing overlay allowlist.`);
+  }
   if (INDEPENDENT_ROLES.has(spec.cognitiveRole)) {
     const independence = binding.independence;
-    const selectedFamily = providerFamily(binding.provider);
-    const independentOfFamily = providerFamily(independence?.independentOfProvider);
-    if (!independence || independentOfFamily === undefined || independence.independentOfFamily !== independentOfFamily || independence.independentOfFamily === independence.selectedFamily || independence.selectedFamily !== selectedFamily) {
-      throw typedError("INVALID_BINDING", "Independent Cognitive Roles require a verified cross-family binding.");
+    if (independence?.kind === "fresh-context-distinct-model") {
+      // Under an explicit overlay, independence is fresh context on a distinct model rather than a
+      // second provider family.
+      if (overlay === undefined) throw typedError("INVALID_BINDING", "Distinct-model independence requires an active routing overlay.");
+      if (spec.continuation !== undefined) throw typedError("INVALID_BINDING", "Independent Cognitive Roles require fresh context, not a resumed session.");
+      const author = `${independence.authorProvider}/${independence.authorModel}`;
+      const selected = `${independence.selectedProvider}/${independence.selectedModel}`;
+      if (selected !== `${binding.provider}/${binding.model}`) throw typedError("INVALID_BINDING", "Independence metadata does not describe the resolved binding.");
+      if (author === selected) throw typedError("INVALID_BINDING", "Independent review must run on a different model than the recorded author model.");
+      if (!overlay.allowed.has(author)) throw typedError("INVALID_BINDING", `Recorded author model ${author} is outside the active routing overlay allowlist.`);
+    } else {
+      const selectedFamily = providerFamily(binding.provider);
+      const independentOfFamily = providerFamily(independence?.independentOfProvider);
+      if (!independence || independentOfFamily === undefined || independence.independentOfFamily !== independentOfFamily || independence.independentOfFamily === independence.selectedFamily || independence.selectedFamily !== selectedFamily) {
+        throw typedError("INVALID_BINDING", "Independent Cognitive Roles require a verified cross-family binding.");
+      }
     }
   } else if (binding.independence !== undefined) {
     throw typedError("INVALID_BINDING", "Independence metadata is valid only for an independent Cognitive Role.");
@@ -412,7 +500,23 @@ function validateSpec(spec, hostTools, now, maxAgeMs) {
   }
 }
 
-function resultFor(state, outcome, text = "", diagnostic) { const b = state.spec.binding; return { outcome, text: bounded(text, 50_000), profile: state.spec.profile, cognitiveRole: state.spec.cognitiveRole, provider: b.provider, model: b.model, effort: b.effort, quotaAdmission: state.quotaAdmission, quotaTelemetryStatus: state.quotaTelemetryStatus, ...(state.sessionId ? { sessionId: state.sessionId } : {}), ...(diagnostic ? { diagnostic: bounded(diagnostic, 8_000) } : {}) }; }
+function resultFor(state, outcome, text = "", diagnostic) {
+  const b = state.spec.binding;
+  const max = state.resultMaxChars ?? 8_000;
+  const truncated = text.length > max;
+  return {
+    outcome,
+    text: truncated ? `${text.slice(0, max)}…\n\n[TRUNCATED at ${max} characters. A truncated result is evidence of an oversized assignment and cannot satisfy verification; re-run a narrower bounded task.]` : text,
+    truncated,
+    kind: state.kind ?? "subagent",
+    profile: state.spec.profile,
+    cognitiveRole: state.spec.cognitiveRole,
+    provider: b.provider, model: b.model, effort: b.effort,
+    quotaAdmission: state.quotaAdmission, quotaTelemetryStatus: state.quotaTelemetryStatus,
+    ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+    ...(diagnostic ? { diagnostic: bounded(diagnostic, 8_000) } : {}),
+  };
+}
 function providerFamily(provider) {
   if (provider === "anthropic") return "anthropic";
   if (provider === "openai" || provider === "openai-codex") return "openai";

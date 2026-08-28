@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -163,6 +164,77 @@ try {
   fs.writeFileSync(cachePath, JSON.stringify(expiredCache));
   execFileSync(process.execPath, [resolver, "investigation", "--catalog", catalogPath], { encoding: "utf8", env: cachedEnv });
   assert.equal(fs.readFileSync(callCountPath, "utf8"), "2", "the first resolution at the ten-minute boundary should refresh quota telemetry");
+
+  // Run-scoped routing overlay: sole activation variable, fail-closed, distinct-model independence.
+  const overlayPath = path.join(here, "..", "references", "anthropic-opus-sonnet-overlay.json");
+  const overlaySha = createHash("sha256").update(fs.readFileSync(overlayPath)).digest("hex");
+  const withOverlay = (value) => ({ ...process.env, PI_WORKBENCH_ROUTING_OVERLAY: value });
+  const runOverlay = (args, value = overlayPath) => spawnSync(process.execPath, [resolver, ...args, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8", env: withOverlay(value) });
+  const passOverlay = (args, value = overlayPath) => {
+    const run = runOverlay(args, value);
+    assert.equal(run.status, 0, run.stderr);
+    return JSON.parse(run.stdout);
+  };
+
+  for (const [role, model] of [["investigation", "claude-sonnet-5"], ["implementation", "claude-sonnet-5"], ["mechanics", "claude-sonnet-5"], ["problem-solving", "claude-sonnet-5"], ["synthesis", "claude-opus-5"]]) {
+    const resolved = passOverlay([role]);
+    assert.equal(resolved.modelBinding.provider, "anthropic", role);
+    assert.equal(resolved.modelBinding.model, model, role);
+    assert.equal(resolved.modelBinding.routingOverlay.sha256, overlaySha, role);
+    assert.equal(resolved.modelBinding.routingOverlay.path, overlayPath, role);
+  }
+
+  const sonnetAuthored = passOverlay(["independent-review", "--independent-of-model", "anthropic/claude-sonnet-5"]);
+  assert.equal(sonnetAuthored.modelBinding.model, "claude-opus-5");
+  assert.deepEqual(sonnetAuthored.modelBinding.independence, {
+    kind: "fresh-context-distinct-model",
+    authorProvider: "anthropic", authorModel: "claude-sonnet-5",
+    selectedProvider: "anthropic", selectedModel: "claude-opus-5",
+  });
+  assert.equal(passOverlay(["independent-review", "--independent-of-model", "anthropic/claude-opus-5"]).modelBinding.model, "claude-sonnet-5");
+
+  const overlayBlocks = [
+    [["independent-review", "--independent-of", "openai-codex"], /requires --independent-of-model/, "cross-family independence is not available under the overlay"],
+    [["independent-review", "--independent-of-model", "anthropic/claude-fable-5"], /no independent binding for author model/, "an unmapped author model fails closed"],
+    [["investigation", "--independent-of-model", "anthropic/claude-opus-5"], /does not use an independence constraint/, "a non-independent role rejects an author model"],
+  ];
+  for (const [args, pattern, message] of overlayBlocks) {
+    const run = runOverlay(args);
+    assert.equal(run.status, 3, message);
+    assert.match(run.stderr, pattern, message);
+  }
+
+  assert.equal(spawnSync(process.execPath, [resolver, "investigation", "--independent-of-model", "anthropic/claude-opus-5", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }).status, 3, "--independent-of-model requires an active overlay");
+
+  const badOverlay = (contents, pattern, message) => {
+    const file = path.join(temp, `overlay-${createHash("sha256").update(String(contents)).digest("hex").slice(0, 8)}.json`);
+    fs.writeFileSync(file, typeof contents === "string" ? contents : JSON.stringify(contents));
+    const run = runOverlay(["investigation"], file);
+    assert.equal(run.status, 3, message);
+    assert.match(run.stderr, pattern, message);
+  };
+  const valid = JSON.parse(fs.readFileSync(overlayPath, "utf8"));
+  const absentOverlay = runOverlay(["investigation"], path.join(temp, "absent-overlay.json"));
+  assert.equal(absentOverlay.status, 3, "a missing overlay fails closed");
+  assert.match(absentOverlay.stderr, /unreadable/i);
+  const relative = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8", env: withOverlay("references/anthropic-opus-sonnet-overlay.json") });
+  assert.equal(relative.status, 3, "a relative overlay path fails closed");
+  assert.match(relative.stderr, /must be an absolute path/);
+  badOverlay("{not json", /not valid JSON/, "invalid JSON fails closed");
+  badOverlay({ ...valid, version: 2 }, /version must be 1/, "an unknown overlay version fails closed");
+  badOverlay({ ...valid, allowedModels: [] }, /at least one allowed model/, "an empty allowlist fails closed");
+  badOverlay({ ...valid, roles: { ...valid.roles, investigation: { provider: "openai-codex", model: "gpt-5.6-sol", effort: "medium", quotaProvider: "codex" } } }, /resolves outside its own allowlist/, "a role outside the allowlist fails closed");
+  badOverlay({ ...valid, roles: { ...valid.roles, "not-a-role": valid.roles.investigation } }, /unknown cognitive role/, "an unknown mapped role fails closed");
+
+  // An unmapped role fails closed rather than falling back to the default openai-codex binding.
+  const withoutInvestigation = path.join(temp, "overlay-without-investigation.json");
+  const { investigation: _dropped, ...remainingRoles } = valid.roles;
+  fs.writeFileSync(withoutInvestigation, JSON.stringify({ ...valid, roles: remainingRoles }));
+  const unmapped = runOverlay(["investigation"], withoutInvestigation);
+  assert.equal(unmapped.status, 3, "an unmapped role fails closed instead of using default routing");
+  assert.match(unmapped.stderr, /does not map cognitive role/);
+  assert.equal(passOverlay(["design"], withoutInvestigation).modelBinding.model, "claude-opus-5", "every mapped role stays inside the two-model allowlist");
+  badOverlay({ ...valid, independentReview: { "anthropic/claude-opus-5": { provider: "anthropic", model: "claude-opus-5", effort: "high", quotaProvider: "claude" } } }, /not a distinct model/, "same-model review mapping fails closed");
 
   console.log("resolve-runtime-binding: PASS");
 } finally {
