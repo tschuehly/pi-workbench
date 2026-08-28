@@ -4,6 +4,11 @@ import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import { PiRpcExecutionAdapter, summarizeToolAction } from "../src/index.js";
 
+// The adapter defaults its overlay path from the environment, so a run-scoped overlay in the
+// surrounding session would silently activate fail-closed validation in the default-path cases.
+// Overlay cases below pass routingOverlayPath explicitly.
+delete process.env.PI_WORKBENCH_ROUTING_OVERLAY;
+
 test("summarizes child tool activity without exposing shell arguments", () => {
   assert.equal(summarizeToolAction("read", { path: "/repo/src/auth-service.ts" }), "reading src/auth-service.ts");
   assert.equal(summarizeToolAction("edit", { path: "src/index.ts" }), "editing src/index.ts");

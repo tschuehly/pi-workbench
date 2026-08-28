@@ -8,6 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Default-path cases must not inherit a run-scoped overlay from the surrounding session; the
+// overlay cases below set the variable explicitly on the child env instead.
+delete process.env.PI_WORKBENCH_ROUTING_OVERLAY;
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.join(here, "resolve-runtime-binding.mjs");
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-routing-test-"));
