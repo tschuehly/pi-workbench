@@ -61,11 +61,16 @@ rather than embedding lifecycle logic in a skill or interface adapter. Model sel
 the interactive lead and child processes' concrete providers, models, and Model Effort, but those
 bindings do not change the attended posture.
 
-The intended [Working Mode](../foundation/working-mode.md) is not implemented. When it is, the
-harness must start each task in fail-closed Discovering, persist the owner-selected Alignment and
-Checking values in session state, expose them continuously, and gate mutating tools until the
-selected alignment condition is met. Availability of a mutating custom tool cannot bypass that
-gate.
+The intended [Working Mode](../foundation/working-mode.md) has no implemented selector, persistent
+presentation, or mutation gate. Current sessions may state its prompt-guided contracts in
+conversation. Any later harness control must start a new context in Vibe without a setup gate, keep
+Alignment and Checking independent, present an active owner choice truthfully without implying
+mechanical enforcement, and leave Human Attention, delegation, authority, durability, and workspace
+protection outside Working Mode.
+
+Prior-choice restoration, read-only Discovering, tool filtering, and a blanket mutating-tool gate
+are outside the current design. A later control earns state or enforcement only from observed need
+and explicit owner approval.
 
 ## Repository Package
 

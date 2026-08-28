@@ -5,7 +5,7 @@ graduated as a provisional Pi adapter from the skill-incubator policy; evaluate 
 run evidence rather than treating them as permanent model ownership. The current mapping predates
 Working Mode and resolves one binding from Cognitive Role alone. The adoption target adds the
 owner-selected Checking value and task consequence so routing can fail closed on required
-independent fan-out; Alignment remains a separate mutation boundary.
+independent fan-out; Alignment remains a separate commitment boundary, not a mutation gate.
 
 The Sol ladder carries routine through consequential GPT work. Higher Model Effort follows novelty and consequence rather than code volume; maximum effort remains exceptional because marginal quality can consume disproportionate quota.
 

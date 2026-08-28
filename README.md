@@ -42,14 +42,15 @@ recovery is describing something unbuilt. Those decisions are collected in
 The intended Working Mode has two independent choices:
 
 ```text
-Alignment:  Vibe  |  Plan   |  Spec
+Alignment:  Vibe  |  Align  |  Plan   |  Spec
 Checking:   light |  tests  |  adversarial
 ```
 
-Alignment controls how much shared understanding is required before mutation. Checking controls
-verification. Every task starts read-only in Discovering; Pi recommends both values after initial
-investigation, and you choose before mutation. The current configuration stays visible and survives
-session resume.
+Alignment controls how much shared understanding the owner judges at once. Vibe is normal work in
+chat; Align asks about one coherent unconfirmed direction; Plan covers the task direction; Spec
+covers required behavior and evidence. Checking states the minimum completion evidence, with a
+repository-dependent default that has not been configured yet. A new context starts in Vibe;
+restoring a previous choice is not part of the current design.
 
 This control is **not implemented yet**. Current sessions do not mechanically block mutation or
 show persistent mode state. Working Mode changes behavior, never permission: it cannot grant

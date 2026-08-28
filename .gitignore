@@ -20,6 +20,7 @@ __pycache__/
 .pi-workbench/runs/
 .pi-workbench/objects/
 .impeccable/questions/
+.review/
 .scratch/
 
 # Logs

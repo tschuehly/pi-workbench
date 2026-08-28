@@ -128,13 +128,15 @@ Attention during semantic work, optional bounded child Pi work reconciled by the
 unattended execution beyond the lead session, managed authority, or recovery claim. They do not yet
 implement the intended Working Mode control.
 
-The [Working Mode specification](../foundation/working-mode.md) defines the next interface boundary.
-Every task must start visibly read-only in Discovering. After enough investigation, Pi must
-recommend Alignment and Checking with one short reason; the owner chooses before mutation. The
-current values and gate state must remain visible in a fixed session footer and survive session
-resume. Mode selection
-cannot grant permissions or guarantees, and a PI WEB session identifier is never inferred to be a
-Run identifier.
+The [Working Mode specification](../foundation/working-mode.md) defines intended prompt-guided
+behavior. A new context starts in Vibe; the owner may state Align, Plan, Spec, or a Checking value
+when useful. Align returns for owner judgment at a semantic commitment boundary rather than
+mechanically blocking project mutation.
+
+No selector, persistent footer, prior-choice restoration, or gate is implemented or required by
+the current slice. A later visible control requires evidence that conversation is insufficient.
+Mode selection cannot grant permissions or guarantees, and a PI WEB session identifier is never
+inferred to be a Run identifier.
 
 ## First graphical slice
 

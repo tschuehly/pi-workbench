@@ -1,99 +1,119 @@
 # Pi Workbench Working Mode
 
-Status: owner-settled intended behavior as of 2026-08-27. Alignment selection, mutation gating,
-and persistent display are not implemented; Checking is available only as prompt-guided behavior.
+Status: owner-confirmed intended behavior as of 2026-08-28. The Alignment control and persistent
+presentation are not implemented. Checking is available only as prompt-guided behavior.
 
-Working Mode lets the owner choose how Pi aligns before mutation and how Pi checks the resulting
-work. It has two independent axes:
+Working Mode lets the owner choose how Pi establishes shared understanding and what evidence Pi must
+produce before claiming completion. It has two independent behavioral axes:
 
 ```text
-Alignment:  Vibe  |  Plan   |  Spec
+Alignment:  Vibe  |  Align  |  Plan   |  Spec
 Checking:   light |  tests  |  adversarial
 ```
 
-There are no bundled Operating Levels. Human Attention, model, Model Effort, authority, delegation,
-durability, and workspace protection remain separate capabilities rather than hidden parts of a
-mode.
-
-## Start in Discovering
-
-Every task starts read-only with both values unselected:
-
-```text
-Alignment: — · Checking: — · Discovering
-```
-
-Pi gathers enough evidence to understand the task, then recommends both values with one short
-reason. The owner chooses. Pi cannot mutate the project until that choice is explicit.
-
-The current values and state remain visible in the session footer, survive session resume, and
-change only prospectively. Pi may recommend a change but cannot choose one. Repository policy or
-task consequence may reject insufficient Checking; the owner still chooses an acceptable value.
+Working Mode configures behavior, never permission. Human Attention, model, Model Effort, authority,
+delegation, durability, and workspace protection remain separate capabilities. There are no bundled
+Operating Levels.
 
 ## Alignment
 
-Alignment is the minimum shared understanding required before Pi may mutate the project.
+Alignment values are ordered by how much shared understanding the owner must judge at once.
 
-| Value | Before mutation | Stopping point |
-| --- | --- | --- |
-| `Vibe` | No separate artifact. Pi may realize one small, reversible idea directly. | Return after one owner-inspectable slice, before expanding the work. |
-| `Plan` | The owner accepts a concise statement of outcome, approach, boundaries, and evidence. | Work stays inside that shared direction; a material deviation returns for alignment. |
-| `Spec` | The owner accepts the required behavior, constraints, and acceptance evidence. | Work stays inside that accepted behavior; implementation strategy may adapt. |
+| Value | Shared-understanding behavior |
+| --- | --- |
+| `Vibe` | Work normally in chat. Pi and the owner align continuously without a separate artifact or extra guard. |
+| `Align` | Before one unconfirmed product, architecture, scope, or quality choice becomes durable implementation or parallel work, Pi presents the coherent change and asks whether its direction is right. |
+| `Plan` | The owner accepts a concise statement of outcome, approach, boundaries, and evidence for the whole task. |
+| `Spec` | The owner accepts required behavior, constraints, and acceptance evidence; implementation strategy may adapt. |
 
-`Vibe` is not permission to do everything in one turn. An inspectable slice is a concrete result the
-owner can judge before another slice begins; it is not a universal line, file, or time limit.
-Removing an existing capability is allowed when the owner's request explicitly includes that
-trade-off. Otherwise, removal is a Material Question and mutation pauses.
+`Vibe` is the normal interactive experience. It adds no one-slice limit, attention detector, pause
+boundary, or automatic mode switch.
 
-`Plan` is intentionally concise. It exists to confirm shared understanding, not to predict every
-implementation step. `Spec` is larger only when the outcome needs more behavioral precision; it
-does not freeze implementation details.
+`Align` is a prompt-guided trial, not a mechanically enforced gate. Pi asks before turning an
+uncertain semantic choice into committed work, not before every file edit. It may proceed without a
+new question when implementation stays inside an already understood direction. It asks again when
+evidence invalidates that direction or materially changes the consequence.
 
-Grilling is a technique for producing a Plan or Spec when material ambiguity remains. It asks only
-the frontier of decisions that can be answered, uses evidence rather than asking the owner for
-facts Pi can find, and stops when the selected artifact can be accepted—not when models run out of
-questions.
+Examples:
 
-Every recommendation, question, Plan, Spec, and review message applies the `write-for-humans` skill.
+- **Ask before:** remove an existing capability, introduce a new state owner, choose a product
+  trade-off, broaden scope, or turn a prototype into the delivery architecture.
+- **Proceed without asking:** rename a local symbol, repair a defect inside accepted behavior, or
+  perform an implementation detail that does not alter the owner's understood outcome.
+- **Ask again:** contrary evidence appears, a reversible experiment becomes a lasting dependency,
+  or the proposed change gains material scope, risk, or quality consequences.
+
+Evaluate the Align trial from observed use: missed consequential choices, unnecessary
+interruptions, and summaries that are difficult for the owner to judge. Do not add a mutation lock
+or richer state model without that evidence.
+
+A `Plan` confirms task direction rather than predicting every implementation step. A `Spec` adds
+behavioral precision only when the outcome needs it. Grilling may produce either artifact when
+material ambiguity remains. It asks the current frontier of decisions, finds facts rather than
+asking the owner for them, and ends with owner confirmation of the shared understanding.
+
+Working Mode creates no durable plan file. Accepted direction stays in the Pi session; Workstream
+checkpoints provide fresh-session and next-day continuity.
 
 ## Checking
 
-Checking controls how thoroughly Pi verifies the work before reporting.
+Checking states the minimum evidence Pi must produce before reporting completion.
 
-| Value | What Pi does |
+| Value | Minimum evidence |
 | --- | --- |
-| `light` | No required test-writing or separate review pass. The attending owner directly checks the result. |
-| `tests` | Pi writes and runs tests for the changed behavior before reporting. |
-| `adversarial` | Everything in `tests`, plus a fresh cross-family challenge whose job is to argue against the result. |
+| `light` | Inspect or exercise the changed result directly. No test-writing or separate review pass is required. |
+| `tests` | Run the relevant automated tests that prove the changed behavior and report the exact result. |
+| `adversarial` | Produce the relevant deterministic evidence, then obtain a fresh independent challenge against the result. |
 
-The values are ordered by cost and delay, not by quality. A selected value is the checking floor.
-Explicit owner direction, repository policy, or the consequence of a wrong conclusion may require
-more independent checking, but cannot silently remove the selected checks. The
-[`model-orchestration`](../../skills/model-orchestration/SKILL.md) skill sizes required adversarial
-fan-out and preserves model-family Independence.
+The values are ordered by cost and delay, not quality. Alignment never silently selects Checking.
+Explicit owner direction, repository policy, or the consequence of a wrong conclusion may require a
+stronger floor, but cannot silently remove selected checks.
 
-## Selection and execution
+There is no universal Checking default. The default is repository-dependent, but no default value,
+configuration schema, or format is adopted yet. Whether the owner inspects evidence live or Pi
+produces it for later review may change the evidence route without changing the Checking value.
 
-Selecting `Vibe` permits one owner-inspectable slice and then relocks for review. Selecting `Plan`
-or `Spec` keeps the project read-only while Pi prepares the corresponding artifact; the owner
-explicitly proceeds after accepting it. Plan and Spec execution continue inside the accepted
-direction and relock on completion or a Material Question. Changing either axis applies only to
-future work.
+## Delegation and model orchestration
 
-Working Mode may withhold an available mutation capability; it cannot grant one. It cannot grant a workspace lease, filesystem
-isolation, publication authority, durable execution, or recovery guarantee. Those claims require
-deterministic services that enforce them.
+Delegation remains task-local under every Alignment value; it is not another Working Mode axis. The
+intended structure is one [`model-orchestration`](../../skills/model-orchestration/SKILL.md) router
+that conditionally loads Binding, Checking, future Managed-dispatch, or calibration guidance. Today
+Binding and Checking guidance remain in the skill itself, no Managed-dispatch reference exists, and
+the router conditionally loads only routing rationale for policy evaluation and provenance for port
+audits.
 
-## Future dimensions
+## Start and presentation
 
-Axes are added one at a time from observed need. The withdrawn
+A new context starts in `Vibe`. The owner may state a different Alignment or Checking value in
+conversation. Persisting and restoring a prior Alignment choice is not part of the current design;
+the same Pi session retains its conversation naturally.
+
+A future visible control may present the active values, but no selection surface or persistent
+footer exists today. Working Mode does not block project mutation mechanically. It cannot grant a
+workspace lease, filesystem isolation, publication authority, durable execution, or recovery.
+Those claims require deterministic services that enforce them.
+
+## Human Attention and continuity
+
+Human Attention remains distinct from Working Mode. The managed-Run Human-Attention Contract stays
+intact, but interactive work gains no Attention axis, agreement, presence detector, or inferred
+cadence now. Reopen that question only after repeated evidence that Pi interrupts too often, fails
+to ask, or mishandles an explicit statement that the owner is away.
+
+A Workstream checkpoint is the canonical fresh-session or next-day re-entry source. The approved
+`Reconcile and End` trial is separate: it would write a session-local owner-facing Session Summary
+for someone returning to the same Pi session. That summary is not read automatically for next-day
+re-entry and does not replace a Workstream checkpoint. Compaction remains lossy model context;
+`compound` evaluates completed sessions for harness improvement rather than continuity.
+
+## Deferred repository adaptation
+
+If repository-level Working Mode configuration is later adopted, its committed path is
+`.pi-workbench/config.json`. Its schema, format, prompt composition, and adoption remain deferred.
+Repository Adaptation—stable mode meanings with project-specific prompts, skills, commands, and
+evidence—remains a hypothesis. The PhotoQuest and Embabel trials are deferred and neither target
+repository is changed by this design.
+
+Axes and configuration are added one at a time from observed need. The withdrawn
 [multidimensional proposal](../research/reports/multidimensional-working-mode-proposal.md) remains
 research, not a backlog or specification.
-
-| Dimension | Status |
-| --- | --- |
-| Alignment intensity | Current intended axis. |
-| Checking depth | Current intended axis; prompt-guided today, without selection or persistent display. |
-| Human Attention cadence | Existing session capability, not a Working Mode axis. |
-| Bounds, delegation shape | Candidate only when observed work requires a control. |
-| Authority, execution governance, durability, workspace protection | Deferred until deterministic services can enforce them. |

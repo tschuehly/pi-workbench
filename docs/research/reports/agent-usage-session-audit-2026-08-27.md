@@ -76,7 +76,7 @@ Not every loop is caused by an unsettled prompt. The archive contains concrete s
 
 The standing environment also steers leads toward process: delegate proactively, prefer background children, reconcile results, use independent review, and preserve lifecycle state. The [default-context challenge dossier](default-context-challenge-dossier.md) states that several worker-era additions came from plausible reasoning rather than observed failure.
 
-A recent short opening Workbench question began with a 14,057-token first model call (`2026-08-27T08-06-40-610Z_01a04241-c0e2-79d5-8195-498362d48502.jsonl`). The repository's own 2026-08-26 estimate in [`next_steps.md`](../../../next_steps.md#what-remains-in-the-standing-context) listed about 1,431 words of skill index, 762 words of subagent guidance, and 894 words across loaded `AGENTS.md` files. Cache reuse can make this affordable without preventing the text from steering behavior or conflicting.
+A recent short opening Workbench question began with a 14,057-token first model call (`2026-08-27T08-06-40-610Z_01a04241-c0e2-79d5-8195-498362d48502.jsonl`). A repository-local estimate recorded on 2026-08-26 listed about 1,431 words of skill index, 762 words of subagent guidance, and 894 words across loaded `AGENTS.md` files. Cache reuse can make this affordable without preventing the text from steering behavior or conflicting.
 
 The Marketing Autopilot complaint is therefore credible as a harness symptom, not merely frustration: “you are constantly reintroducing unnecessary shit.”  
 Evidence: `~/.pi/agent/sessions/--Users-tschuehly-IdeaProjects-PhotoQuest.pi-marketing-autopilot-v1--/2026-08-10T10-49-48-037Z_019feb4a-fd05-7293-ace2-3bed4cd4a25c.jsonl`, message `29c045cf`.

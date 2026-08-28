@@ -23,8 +23,8 @@ _Avoid_: Decision, approval, reasoning
 
 **Shared Understanding:**
 The agreed problem model, desired outcome, constraints, language, assumptions, risks, and success
-evidence from which the work proceeds. Alignment selects how much of this must be explicit before
-project mutation.
+evidence from which the work proceeds. Alignment selects how much of this Pi establishes before
+committing semantic work.
 _Avoid_: Context dump, implementation script
 
 **Human-Attention Contract:**
@@ -81,30 +81,33 @@ The versioned quality, authority, safety, evidence, and retention envelope gover
 _Avoid_: Prompt, workflow script, execution plan
 
 **Alignment:**
-The intended owner-selected axis controlling the minimum Shared Understanding required before Pi may mutate
-the project: `Vibe` permits one owner-inspectable slice before returning, `Plan` requires an
-accepted concise direction, and `Spec` requires accepted behavior, constraints, and evidence. It
-controls commitment before mutation, not Human Attention or verification.
+The intended owner-selected axis controlling how much Shared Understanding Pi establishes before
+committing semantic work: `Vibe` aligns normally in chat, `Align` asks about one coherent
+unconfirmed product, architecture, scope, or quality choice, `Plan` requires accepted whole-task
+direction, and `Spec` requires accepted behavior, constraints, and evidence. Alignment is
+prompt-guided and controls commitment, not mutation permission, Human Attention, or verification.
 _Avoid_: Approval flow, planning depth, autonomy level
 
-**Discovering:**
-The intended read-only task state in which Alignment and Checking are unselected. Pi gathers enough evidence
-to recommend both values; the owner chooses before mutation.
-_Avoid_: Default mode, Scout authority, planning phase
-
 **Checking:**
-The owner-selected axis controlling how thoroughly Pi verifies its own work before reporting:
-`light` performs no required test-writing or review pass because the attending human is the check,
-`tests` writes and runs tests for the changed behavior, and `adversarial` adds a fresh cross-family
-pass that argues against the result. Ordered by cost and delay, not by quality.
+The intended owner-selected axis stating the minimum completion evidence: `light` directly inspects or
+exercises the result without required test-writing or review, `tests` runs relevant automated tests,
+and `adversarial` adds a fresh independent challenge. The default is repository-dependent; the
+values are ordered by cost and delay, not quality.
 _Avoid_: Quality level, rigor tier, autonomy level
 
 **Working Mode:**
-The visible, owner-selected configuration of independent behavioral axes. Its current intended axes
-are Alignment (`Vibe | Plan | Spec`) and Checking (`light | tests | adversarial`). Every task begins
-Discovering with both unselected; further axes are added one at a time from observed need. Working
-Mode configures behavior and never grants permission.
+The intended configuration of independent behavioral axes. Its current axes are Alignment
+(`Vibe | Align | Plan | Spec`) and Checking (`light | tests | adversarial`). A new context starts in
+Vibe; prior-choice restoration is outside the current design. Working Mode configures behavior and
+never grants permission. Selection and persistent presentation are not implemented.
 _Avoid_: Operating Level, workflow profile, authority grant, agent tier
+
+**Session Summary:**
+The proposed session-local, owner-facing result of the `Reconcile and End` trial. It explains what
+one Pi session changed, what remains, and what comes next to an owner returning to that same
+session. It is not a Workstream checkpoint, next-day re-entry state, compaction summary, or
+`compound` analysis.
+_Avoid_: Checkpoint, Continuation Artifact, transcript summary
 
 **Autonomy Envelope:**
 The authority granted for autonomous work, bounded by permissions, impact, budget, stopping

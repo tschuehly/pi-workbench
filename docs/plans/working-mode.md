@@ -1,119 +1,104 @@
-# Working Mode implementation plan
+# Working Mode trial and implementation plan
 
-Status: proposed implementation sequence for the owner-confirmed design; no implementation has
-started.
+Status: owner-confirmed trial direction as of 2026-08-28. No Working Mode extension, selection
+surface, persistence, repository configuration, or mutation gate is approved for implementation.
 
 ## Outcome
 
-An attended Pi task begins visibly read-only in Discovering. Pi investigates, recommends one
-Alignment value and one Checking value, and the owner chooses. Mutation remains mechanically blocked
-until the selected Alignment condition is met. The current configuration and gate state stay in the
-session footer and survive resume.
+Validate the smallest useful behavioral model before building machinery:
 
 ```text
-Alignment: Vibe | Plan | Spec
-Checking:  light | tests | adversarial
+Alignment:  Vibe  |  Align  |  Plan   |  Spec
+Checking:   light |  tests  |  adversarial
 ```
 
-This plan adds only the two axes in [Working Mode](../foundation/working-mode.md). It does not revive
-Operating Levels or the withdrawn nine-dimensional design.
+Working Mode remains two independent behavioral axes and never grants permission or authority. The
+immediate work is prompt-guided use and evidence gathering, not an extension or schema.
 
-## Smallest state model
+## Current trial
 
-One `extensions/working-mode/` extension owns a pure reducer and the Pi adapter around it:
+### Vibe
 
-```text
-Discovering (both values unselected, read-only)
-  → Vibe selected → one mutation-capable slice → Reviewing (read-only)
-  → Plan selected → Plan prepared read-only → owner proceeds → Executing accepted Plan
-  → Spec selected → Spec prepared read-only → owner proceeds → Executing accepted Spec
-```
+Keep ordinary interactive work unchanged. A new context starts in Vibe. Add no setup selector,
+one-slice boundary, attention detector, pause guard, automatic switch, or prior-choice restoration.
 
-Vibe relocks after its slice. Plan and Spec relock on completion or a Material Question, not after
-every agent turn. `Reviewing` preserves the visible configuration but blocks further mutation. The
-owner may proceed under the same accepted direction, select different values for future work, or
-return to Discovering.
+### Align
 
-The extension appends versioned session entries for every state transition and restores the latest
-valid entry on resume. Unknown, missing, or contradictory state resolves to Discovering.
+Trial one concise owner question before an unconfirmed product, architecture, scope, or quality
+choice becomes durable implementation or parallel work. Use the examples and decision rule in the
+[Working Mode specification](../foundation/working-mode.md).
 
-## Implementation slices
+The trial succeeds only if it catches consequential wrong-direction work while remaining lighter
+than a Plan. Re-evaluate it from three observations:
 
-### 1. Reducer and fail-closed gate
+1. consequential choices Pi missed;
+2. interruptions the owner judged unnecessary; and
+3. summaries the owner could not judge quickly.
 
-- Define the finite states, commands, transition errors, and versioned persisted entry.
-- Reuse Pi's plan-mode tool filtering and read-only Bash classifier rather than inventing another
-  shell parser; add only tests for bypasses relevant to this gate.
-- In every read-only state, remove `edit` and `write` and block unknown custom tools. Keep delegated
-  children and generic MCP calls blocked until either has a mechanically read-only profile; a label
-  such as `scout` is not confinement.
-- Restore the pre-gate tool set for Vibe's one slice or for execution inside an accepted Plan or
-  Spec. Relock Vibe at its slice boundary.
-- Before coding Plan/Spec completion, probe Pi's lifecycle for a reliable completion-or-deviation
-  signal. If none exists, stop and ask the owner to choose an explicit boundary action rather than
-  silently imposing per-turn approval.
+Do not infer semantic boundaries mechanically or add a mutation lock during this trial.
 
-The gate enforces *when* mutation may begin. It does not infer whether a result is semantically
-small or whether implementation has materially deviated from an accepted artifact.
+### Plan and Spec
 
-### 2. Owner control and human-readable alignment
+Use accepted task direction for Plan and accepted behavior, constraints, and evidence for Spec.
+Keep implementation details adaptive. Store no separate mutable plan file; the Pi session carries
+accepted direction and a Workstream checkpoint carries fresh-session continuity.
 
-- Add one `/mode` chooser for both axes, `/proceed` for an accepted Plan or Spec or another approved
-  slice, and `/discover` to clear the configuration.
-- A model recommendation never changes state. Only an owner command may select or proceed.
-- Selecting Vibe starts one bounded slice. Selecting Plan or Spec triggers a read-only turn that
-  produces the corresponding artifact; `/proceed` records the accepted artifact revision before
-  enabling mutation.
-- Inject the selected contracts before each agent turn. Require `write-for-humans` for every
-  recommendation, Material Question, Plan, Spec, and review message; make that skill a declared
-  harness capability rather than relying on personal configuration.
-- Treat grilling as an optional way to resolve Material Questions for Plan or Spec. It stops when
-  the artifact is acceptable.
-- Replace active launch prompts and tool descriptions that still teach “Level 1 Pair” with the
-  canonical “attended V1 posture”; keep historical filenames and evidence titles unchanged.
+### Checking
 
-### 3. Checking behavior
+Use `light`, `tests`, or `adversarial` as prompt-guided minimum evidence. The default is
+repository-dependent, but no repository default value or configuration mechanism is selected.
+Evidence may be inspected by the owner live or produced for later review without silently changing
+the Checking value.
 
-- Inject `light`, `tests`, or `adversarial` independently of Alignment.
-- Reuse `model-orchestration` for cross-family challenge routing and consequence-based fan-out.
-- Keep the first implementation truthful: Checking is prompt-guided unless later receipt tracking
-  mechanically proves tests and challenge completion. The UI must not imply stronger enforcement.
+Use one model-orchestration router with conditional references:
 
-### 4. Persistent presentation
+- Binding for every delegated Subagent or Worker invocation;
+- Checking for required independent challenge;
+- Managed dispatch only for a future managed Run; and
+- calibration only when evaluating the routing policy.
 
-- Render `Alignment · Checking · state` continuously with `ctx.ui.setStatus` in Pi's footer,
-  including the unselected Discovering state.
-- Project the same versioned state into a fixed PI WEB session footer on desktop and narrow layouts.
-  Before changing the sibling PI WEB checkout, fetch `upstream` and `origin`; prefer a generic
-  upstream extension-status seam and keep Workbench semantics in `pi-web-integration`.
-- Resume and reconnect from persisted Pi session state rather than reconstructing configuration
-  from chat text.
+Delegation stays task-local under every Alignment value.
 
-## Acceptance
+## Related continuity trial
 
-1. A new task shows `Alignment: — · Checking: — · Discovering` and cannot call `edit`, `write`, a
-   mutating Bash form, an unknown custom tool, or a delegated child.
-2. Read-only repository investigation still works, and the reused classifier rejects its declared
-   mutating commands and known bypass cases.
-3. Pi can recommend values but cannot select them. The owner can select any of the nine combinations.
-4. Vibe enables one owner-inspectable slice and relocks in Reviewing; further mutation requires
-   another explicit owner action.
-5. Plan and Spec remain read-only until `/proceed` records acceptance of the current artifact
-   revision, then continue without per-turn approval until completion or a Material Question.
-   Switching values affects only later work.
-6. TUI and PI WEB always show the same current values and state, including desktop, narrow, resume,
-   reconnect, invalid-entry, and extension-reload cases.
-7. Prompt tests distinguish Vibe, Plan, and Spec; Checking tests distinguish light, tests, and
-   adversarial without coupling the axes.
-8. Every human-facing mode prompt is concise, leads with the decision or action, and loads
-   `write-for-humans` before model-authored presentation.
-9. The full repository test suite remains green, and the documentation still states that Working
-   Mode grants no authority, isolation, durability, publication, or recovery guarantee.
+`Reconcile and End` is an approved, separate trial. If the owner later authorizes its
+implementation, it should write a session-local owner-facing Session Summary before any optional
+compaction. It informs someone returning to the same Pi session. It is not a Workstream checkpoint,
+a next-day source, automatic session-log reconciliation, or a `compound` evaluation.
 
-## Non-goals
+This plan does not authorize that implementation.
 
-- Automatic mode selection or semantic detection of a new task.
-- Operating Level presets.
-- A Run Controller, workspace sandbox, durable autonomous execution, or publication authority.
-- Parsing Plan or Spec content into a second planning system.
-- Adding Human Attention, delegation, durability, or risk as another Working Mode axis.
+## Deferred work
+
+- A Working Mode extension, reducer, footer, selector, or command.
+- Persistent selection or restoration of a prior Alignment choice.
+- Read-only Discovering, tool filtering, `/proceed`, relocking, or any other mutation gate.
+- An interactive Human Attention axis, agreement, presence detector, or inferred cadence.
+- A repository configuration schema or format. If later adopted, its path is
+  `.pi-workbench/config.json`.
+- Repository Adaptation as architecture.
+- PhotoQuest or Embabel trials or target-repository mutation.
+
+Resume one deferred item only after the owner chooses to reopen it and observed use supplies the
+missing need or acceptance evidence.
+
+## Documentation slice
+
+The first post-grill slice reconciles the canonical Working Mode, vocabulary, decision, interface,
+harness, README, and plan documents to this direction. It adds no implementation or separate
+shared-understanding file.
+
+## Evidence for a later implementation decision
+
+A later owner decision may authorize the smallest visible control only when evidence shows that
+conversation alone is insufficient. That decision must state:
+
+1. the observed failure the control fixes;
+2. the minimum state that must exist;
+3. whether any state needs persistence and why;
+4. what is prompt-guided versus mechanically enforced;
+5. how the interface avoids implying permission, authority, durability, or recovery; and
+6. how the behavior will be checked in ordinary attended use.
+
+Until then, current sessions remain ordinary attended Pi sessions with prompt-guided Working Mode
+language only.

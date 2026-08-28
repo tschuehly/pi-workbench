@@ -28,7 +28,7 @@ When documents disagree, follow the highest applicable authority and repair the 
 ## Plans and integrations
 
 - [`contracts/workstreams.md`](contracts/workstreams.md) and [`contracts/execution.md`](contracts/execution.md) — current attended workflow behavior; the former Level 1 implementation plan is archived.
-- [`plans/working-mode.md`](plans/working-mode.md) — concise implementation plan for visible, owner-selected Alignment and Checking.
+- [`plans/working-mode.md`](plans/working-mode.md) — prompt-guided Working Mode trial and evidence required before any selector, persistence, or gate.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — implemented attended child Pi execution plan.
 - [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — implemented durable attended worker identity and resumable bounded dispatch beside ephemeral subagents.
 - [`plans/subagent-worker-iterative-improvement.md`](plans/subagent-worker-iterative-improvement.md) — attended-use loop for evaluating and improving Subagent and Worker behavior through the user-invoked [`compound`](../skills/compound/SKILL.md) skill.

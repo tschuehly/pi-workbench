@@ -27,9 +27,10 @@ start inside a user-local Workstream so the owner can leave and resume without t
 as current state. A child may run non-blocking only within its attended lead session; no child
 execution survives session shutdown.
 
-The intended [Working Mode](working-mode.md) adds independent Alignment and Checking controls, but
-that extension is not implemented: current sessions provide no read-only Discovering gate,
-owner-selected configuration, accepted-before-mutation Plan or Spec, or persistent mode display.
+The intended [Working Mode](working-mode.md) adds prompt-guided
+`Alignment: Vibe | Align | Plan | Spec` and independent Checking, but no extension or selection
+surface is implemented. Current sessions provide no mechanical mutation gate or persistent mode
+display. A new context behaves as Vibe, and prior-choice restoration is outside the current design.
 They also provide no unattended execution, managed Run authority, enforced workspace isolation, or
 controller-mediated recovery.
 
