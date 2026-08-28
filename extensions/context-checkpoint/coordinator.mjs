@@ -1,4 +1,6 @@
-export function createCheckpointCoordinator(resume) {
+import { checkpointBarrier } from "./checkpoint-barrier.mjs";
+
+export function createCheckpointCoordinator(resume, barrier = checkpointBarrier()) {
   let pending;
   let compacting = false;
   let disposed = false;
@@ -13,6 +15,9 @@ export function createCheckpointCoordinator(resume) {
       }
 
       pending = { ...request };
+      // Block child wakes from acceptance, not from agent_settled: a child that finishes
+      // in between would otherwise trigger a turn on the far side of the boundary.
+      barrier.open();
       return { accepted: true, state: "pending" };
     },
 
@@ -22,6 +27,7 @@ export function createCheckpointCoordinator(resume) {
       const request = pending;
       pending = undefined;
       compacting = true;
+      barrier.beginCompaction();
       let finished = false;
 
       const finish = (outcome) => {
@@ -29,6 +35,9 @@ export function createCheckpointCoordinator(resume) {
         finished = true;
         compacting = false;
         resume({ request, ...outcome });
+        // Compaction has succeeded or failed and the checkpoint result is delivered;
+        // only now may queued child wakes ask for their own turn.
+        barrier.release();
       };
 
       try {
@@ -48,6 +57,7 @@ export function createCheckpointCoordinator(resume) {
       disposed = true;
       pending = undefined;
       compacting = false;
+      barrier.dispose();
     },
   };
 }

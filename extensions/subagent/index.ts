@@ -10,6 +10,7 @@ import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/i
 import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
+import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { createCompletionWakeup, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
@@ -125,9 +126,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
   const workerExecutions = new Map<string, string>();
   const pendingWorkerCompletions = new Set<Promise<unknown>>();
   const pendingSubagentCompletions = new Set<Promise<unknown>>();
-  const completionWakeup = createCompletionWakeup({
-    sendMessage: (message: any, options: any) => pi.sendMessage(message, options),
-  });
+  const completionWakeup = createCheckpointAwareWakeup(pi);
 
   const backgroundShortcut = {
     description: "Background the newest foreground Subagent or Worker",
@@ -728,6 +727,22 @@ export async function streamToResult(
     details: { executionId, ...final, observations },
     ...(final.outcome === "success" ? {} : { isError: true }),
   };
+}
+
+/**
+ * A completion wake asks for a turn. While a context checkpoint is pending or compacting, the
+ * shared barrier queues that wake instead and releases it exactly once after the checkpoint settles.
+ */
+export function createCheckpointAwareWakeup(pi: any, barrier = checkpointBarrier()) {
+  return createCompletionWakeup({
+    sendMessage: (message: any, options: any) => {
+      const send = () => pi.sendMessage(message, options);
+      const executionId = message?.details?.executionId;
+      // A terminal wake and a receipt-failure wake for one execution are distinct wakes.
+      const key = executionId === undefined ? undefined : `${executionId}:${message?.details?.receiptStatus ?? "terminal"}`;
+      if (!barrier.defer(send, key)) send();
+    },
+  });
 }
 
 export function providerOf(qualifiedModel: string | undefined): string | undefined {

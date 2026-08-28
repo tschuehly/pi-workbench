@@ -8,6 +8,7 @@ import {
   MAX_SUMMARY_FOCUS_CHARS,
   validateCheckpointRequest,
 } from "./coordinator.mjs";
+import { createCheckpointBarrier } from "./checkpoint-barrier.mjs";
 
 const request = {
   summaryFocus: "Preserve implementation decisions and verification results.",
@@ -107,4 +108,58 @@ test("reports asynchronous and synchronous compaction failures", () => {
     { request, status: "failed", error: asynchronous },
     { request, status: "failed", error: synchronous },
   ]);
+});
+
+test("a child finishing between checkpoint scheduling and agent_settled wakes only after compaction", () => {
+  const delivered = [];
+  const barrier = createCheckpointBarrier();
+  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), barrier);
+  const childFinished = (id) => barrier.defer(() => delivered.push(`wake:${id}`), id);
+
+  assert.equal(coordinator.request(request).accepted, true);
+
+  // The gap the regression guards: the run has ended, but agent_settled has not fired yet.
+  assert.equal(childFinished("execution-1"), true);
+  assert.deepEqual(delivered, [], "a child wake must not trigger a turn before compaction settles");
+
+  let options;
+  coordinator.onAgentSettled((value) => { options = value; });
+  assert.equal(childFinished("execution-2"), true, "a child finishing mid-compaction is queued too");
+  assert.deepEqual(delivered, []);
+
+  options.onComplete({ summary: "checkpoint" });
+
+  assert.deepEqual(delivered, ["checkpoint:compacted", "wake:execution-1", "wake:execution-2"]);
+  assert.equal(barrier.state, "idle");
+  assert.equal(childFinished("execution-3"), false, "later children wake immediately again");
+});
+
+test("a failed checkpoint still releases the children it queued", () => {
+  const delivered = [];
+  const barrier = createCheckpointBarrier();
+  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), barrier);
+
+  coordinator.request(request);
+  barrier.defer(() => delivered.push("wake:execution-1"), "execution-1");
+  coordinator.onAgentSettled(() => { throw new Error("extension context is stale"); });
+
+  assert.deepEqual(delivered, ["checkpoint:failed", "wake:execution-1"]);
+  assert.equal(barrier.state, "idle", "a failed checkpoint must not strand the barrier closed");
+});
+
+test("session shutdown during a checkpoint drops queued wakes with the pending checkpoint", () => {
+  const delivered = [];
+  const barrier = createCheckpointBarrier();
+  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), barrier);
+
+  coordinator.request(request);
+  let options;
+  coordinator.onAgentSettled((value) => { options = value; });
+  barrier.defer(() => delivered.push("wake:execution-1"), "execution-1");
+
+  coordinator.dispose();
+  options.onComplete({ summary: "too late" });
+
+  assert.deepEqual(delivered, []);
+  assert.equal(barrier.queuedCount, 0);
 });

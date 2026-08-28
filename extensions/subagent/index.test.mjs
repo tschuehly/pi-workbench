@@ -4,7 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, detachLatestForeground, emitExecutionEvent, harnessRevision, providerOf, streamToResult } from "./index.ts";
+import subagentExtension, { PROFILES, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, providerOf, streamToResult } from "./index.ts";
+import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
   const shortcuts = new Map();
@@ -218,4 +219,46 @@ test("makes harness revision drift observable to a long-running lead", () => {
   assert.match(stable, /^[0-9a-f]{12}$/);
   assert.equal(harnessRevision(), stable, "the same bytes give the same revision");
   assert.notEqual(harnessRevision(["/absent-harness-file.js"]), stable, "changed harness bytes change the revision");
+});
+
+test("holds child completion wakes while a context checkpoint is pending or compacting", () => {
+  const barrier = createCheckpointBarrier();
+  const sent = [];
+  const wakeup = createCheckpointAwareWakeup({ sendMessage: (message, options) => sent.push({ id: message.details?.executionId, triggerTurn: options?.triggerTurn }) }, barrier);
+  const finish = (executionId, extra = {}) => wakeup.notify({ executionId, outcome: "succeeded", profile: "implementer", cognitiveRole: "implementation", ...extra });
+
+  finish("before-checkpoint");
+  assert.deepEqual(sent.map((entry) => entry.id), ["before-checkpoint"]);
+
+  barrier.open();
+  finish("during-pending");
+  barrier.beginCompaction();
+  finish("during-compaction");
+  assert.deepEqual(sent.map((entry) => entry.id), ["before-checkpoint"], "no turn-triggering wake escapes the checkpoint");
+
+  barrier.release();
+  assert.deepEqual(sent.map((entry) => entry.id), ["before-checkpoint", "during-pending", "during-compaction"]);
+  assert.equal(sent.every((entry) => entry.triggerTurn === true), true);
+
+  barrier.release();
+  assert.equal(sent.length, 3, "queued wakes are released exactly once");
+});
+
+test("keeps a terminal wake and a receipt-failure wake for one execution distinct across a checkpoint", () => {
+  const barrier = createCheckpointBarrier();
+  const sent = [];
+  const wakeup = createCheckpointAwareWakeup({ sendMessage: (message) => sent.push(message.details?.receiptStatus ?? "terminal") }, barrier);
+
+  barrier.open();
+  const base = { executionId: "execution-1", outcome: "succeeded", profile: "implementer", cognitiveRole: "implementation" };
+  wakeup.notify(base);
+  wakeup.notify({ ...base, workerId: "worker-1", receiptFailure: "registry write failed" });
+  assert.deepEqual(sent, []);
+
+  barrier.release();
+  assert.deepEqual(sent, ["terminal", "failed"], "the receipt failure must not overwrite the terminal wake");
+});
+
+test("the subagent extension uses the process-shared barrier", () => {
+  assert.equal(checkpointBarrier(), checkpointBarrier());
 });
