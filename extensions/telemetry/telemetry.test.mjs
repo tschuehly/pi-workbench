@@ -70,6 +70,43 @@ test("reports descendant usage once and unions parallel active intervals", () =>
     executions: [{ executionId: "exec-1", kind: "subagent", task: "Review it", provider: "anthropic", model: "claude", effort: "high", acceptedAt: "2026-08-28T12:00:01.000Z", endedAt: "2026-08-28T12:00:15.000Z", childSessionId: "child", outcome: "success" }],
     failures: 0,
     retrySignals: 0,
+    studio: { concept: null, builds: [], correctionCycles: [], completedCorrectionRounds: 0 },
+  });
+});
+
+test("joins the first delivered correction marker to the next changed draft", () => {
+  const events = [
+    event("session.start", "12:00:00", { sessionId: "root" }),
+    event("studio.comment_delivered", "12:00:00", { sessionId: "root", kind: "sent", concept: "alpha", id: "c1", seq: 7, eventTime: "2026-08-28T11:59:00.000Z" }),
+    event("studio.comment_delivered", "12:00:01", { sessionId: "root", kind: "sent", concept: "alpha", id: "c1", seq: 7, eventTime: "2026-08-28T11:59:00.000Z" }),
+    event("agent.start", "12:00:00", { sessionId: "root" }),
+    event("studio.build_start", "12:00:02", { sessionId: "root", concept: "alpha", buildId: "failed", lane: "draft", gitHead: "abc" }),
+    event("studio.build_settled", "12:00:03", { sessionId: "root", concept: "alpha", buildId: "failed", lane: "draft", gitHead: "abc", status: "failed", reason: "render" }),
+    event("agent.settled", "12:00:04", { sessionId: "root" }),
+    event("studio.build_start", "12:00:04", { sessionId: "root", concept: "alpha", buildId: "fresh", lane: "draft", gitHead: "abc" }),
+    event("studio.build_settled", "12:00:05", { sessionId: "root", concept: "alpha", buildId: "fresh", lane: "draft", gitHead: "abc", status: "skipped-fresh" }),
+    event("agent.start", "12:00:06", { sessionId: "root" }),
+    event("studio.build_start", "12:00:07", { sessionId: "root", concept: "alpha", buildId: "changed", lane: "draft", gitHead: "def" }),
+    event("studio.draft_ready", "12:00:09", { sessionId: "root", concept: "alpha", buildId: "changed", lane: "draft", gitHead: "def", sha256: "a".repeat(64), reviewAccepted: false }),
+    event("studio.build_settled", "12:00:09", { sessionId: "root", concept: "alpha", buildId: "changed", lane: "draft", gitHead: "def", status: "built" }),
+    event("agent.settled", "12:00:10", { sessionId: "root" }),
+    event("studio.comment_delivered", "12:00:00", { sessionId: "root", kind: "sent", concept: "beta", id: "c2", seq: 8 }),
+  ];
+
+  assert.deepEqual(buildReport(events, { rootSessionId: "root", concept: "alpha" }).studio, {
+    concept: "alpha",
+    builds: [
+      { buildId: "failed", concept: "alpha", lane: "draft", sessionId: "root", gitHead: "abc", startedAt: "2026-08-28T12:00:02.000Z", endedAt: "2026-08-28T12:00:03.000Z", status: "failed", reason: "render", draftReadyAt: null, sha256: null, reviewAccepted: null },
+      { buildId: "fresh", concept: "alpha", lane: "draft", sessionId: "root", gitHead: "abc", startedAt: "2026-08-28T12:00:04.000Z", endedAt: "2026-08-28T12:00:05.000Z", status: "skipped-fresh", reason: null, draftReadyAt: null, sha256: null, reviewAccepted: null },
+      { buildId: "changed", concept: "alpha", lane: "draft", sessionId: "root", gitHead: "def", startedAt: "2026-08-28T12:00:07.000Z", endedAt: "2026-08-28T12:00:09.000Z", status: "built", reason: null, draftReadyAt: "2026-08-28T12:00:09.000Z", sha256: "a".repeat(64), reviewAccepted: false },
+    ],
+    correctionCycles: [{
+      kind: "sent", id: "c1", seq: 7, concept: "alpha", eventTime: "2026-08-28T11:59:00.000Z",
+      deliveredAt: "2026-08-28T12:00:00.000Z", draftReadyAt: "2026-08-28T12:00:09.000Z",
+      cycleMs: 9_000, activeMs: 8_000, idleMs: 1_000, buildId: "changed", gitHead: "def",
+      sha256: "a".repeat(64), reviewAccepted: false,
+    }],
+    completedCorrectionRounds: 1,
   });
 });
 

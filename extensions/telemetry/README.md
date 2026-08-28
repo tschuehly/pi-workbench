@@ -12,6 +12,9 @@ Create a report for one root session and all linked children:
 
 ```sh
 pi-telemetry report --root-session <session-id>
+pi-telemetry report --root-session <session-id> --concept <studio-concept>
 ```
+
+Studio reports deduplicate replayed Review Poll sentinels and join the first agent delivery to the next byte-changed draft for that concept. Build intervals, draft SHA-256, Git HEAD, and Review Studio acceptance remain in the same report.
 
 Set `PI_TELEMETRY_DIR` only for isolated tests or fixtures. Persisted sessions store prompt entry pointers; ephemeral `--no-session` runs store their redacted invocation and exact prompt locally. Unknown cost remains `null`.

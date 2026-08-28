@@ -42,6 +42,7 @@ export function buildReport(events, options = {}) {
   const unknownCostEvents = usageEvents.length - knownCosts.length;
   const { intervals, incomplete } = agentIntervals(selected);
   const executions = executionTimeline(selected);
+  const studio = studioReport(selected, intervals, options.concept);
   return {
     rootSessionId: options.rootSessionId ?? null,
     sessionIds: [...selectedSessions].sort(),
@@ -58,6 +59,7 @@ export function buildReport(events, options = {}) {
     executions,
     failures: executions.filter((execution) => execution.outcome != null && execution.outcome !== "success").length,
     retrySignals: selected.filter((event) => event.type === "session.compact" && event.willRetry === true).length,
+    studio,
   };
 }
 
@@ -116,6 +118,80 @@ function unionDuration(intervals) {
     } else current[1] = Math.max(current[1], interval[1]);
   }
   return total + (current === undefined ? 0 : current[1] - current[0]);
+}
+
+function studioReport(events, agentActiveIntervals, concept) {
+  const correctionKinds = new Set(["sent", "rejected", "bad", "comment-state", "decision"]);
+  const builds = buildTimeline(events).filter((build) => concept == null || build.concept === concept);
+  const ready = events
+    .filter((event) => event.type === "studio.draft_ready" && (concept == null || event.concept === concept))
+    .sort((left, right) => String(left.at).localeCompare(String(right.at)));
+  const deliveries = dedupe(
+    events
+      .filter((event) => event.type === "studio.comment_delivered" && correctionKinds.has(event.kind) && typeof event.concept === "string" && (concept == null || event.concept === concept))
+      .sort((left, right) => String(left.at).localeCompare(String(right.at))),
+    (event) => `${event.kind}:${event.id ?? ""}:${event.seq}`,
+  );
+  const buildIntervals = builds
+    .map((build) => [Date.parse(build.startedAt), Date.parse(build.endedAt)])
+    .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end));
+  const correctionCycles = deliveries.map((delivery) => {
+    const start = Date.parse(delivery.at);
+    const draft = ready.find((event) => event.concept === delivery.concept && Date.parse(event.at) >= start);
+    if (draft === undefined) return {
+      kind: delivery.kind, id: delivery.id ?? null, seq: delivery.seq, concept: delivery.concept,
+      eventTime: delivery.eventTime ?? null, deliveredAt: delivery.at, draftReadyAt: null,
+      cycleMs: null, activeMs: null, idleMs: null, buildId: null, gitHead: null, sha256: null, reviewAccepted: null,
+    };
+    const end = Date.parse(draft.at);
+    const activeIntervals = [...agentActiveIntervals, ...buildIntervals]
+      .map(([intervalStart, intervalEnd]) => [Math.max(start, intervalStart), Math.min(end, intervalEnd)])
+      .filter(([intervalStart, intervalEnd]) => Number.isFinite(intervalStart) && Number.isFinite(intervalEnd) && intervalEnd >= intervalStart);
+    const cycleMs = end - start;
+    const activeMs = activeIntervals.length === 0 ? null : unionDuration(activeIntervals);
+    return {
+      kind: delivery.kind, id: delivery.id ?? null, seq: delivery.seq, concept: delivery.concept,
+      eventTime: delivery.eventTime ?? null, deliveredAt: delivery.at, draftReadyAt: draft.at,
+      cycleMs, activeMs, idleMs: activeMs === null ? null : Math.max(0, cycleMs - activeMs),
+      buildId: draft.buildId ?? null, gitHead: draft.gitHead ?? null, sha256: draft.sha256 ?? null,
+      reviewAccepted: typeof draft.reviewAccepted === "boolean" ? draft.reviewAccepted : null,
+    };
+  });
+  return {
+    concept: concept ?? null,
+    builds,
+    correctionCycles,
+    completedCorrectionRounds: correctionCycles.filter((cycle) => cycle.draftReadyAt !== null).length,
+  };
+}
+
+function buildTimeline(events) {
+  const builds = new Map();
+  const get = (event) => {
+    if (!builds.has(event.buildId)) builds.set(event.buildId, {
+      buildId: event.buildId, concept: event.concept ?? null, lane: event.lane ?? null,
+      sessionId: event.sessionId ?? null, gitHead: event.gitHead ?? null,
+      startedAt: null, endedAt: null, status: null, reason: null,
+      draftReadyAt: null, sha256: null, reviewAccepted: null,
+    });
+    return builds.get(event.buildId);
+  };
+  for (const event of events) {
+    if (typeof event.buildId !== "string" || typeof event.type !== "string" || !event.type.startsWith("studio.")) continue;
+    const build = get(event);
+    if (event.type === "studio.build_start") build.startedAt = event.at;
+    if (event.type === "studio.build_settled") {
+      build.endedAt = event.at;
+      build.status = event.status ?? null;
+      build.reason = event.reason ?? null;
+    }
+    if (event.type === "studio.draft_ready") {
+      build.draftReadyAt = event.at;
+      build.sha256 = event.sha256 ?? null;
+      build.reviewAccepted = typeof event.reviewAccepted === "boolean" ? event.reviewAccepted : null;
+    }
+  }
+  return [...builds.values()].sort((left, right) => String(left.startedAt).localeCompare(String(right.startedAt)));
 }
 
 function executionTimeline(events) {

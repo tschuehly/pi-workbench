@@ -38,6 +38,9 @@ export function registerTelemetry(
       entryId: ctx.sessionManager.getLeafId() ?? null,
       prompt: session.sessionFile === null ? event.prompt : null,
     });
+    for (const marker of studioWakeMarkers(event.prompt)) {
+      recorder.record("studio.comment_delivered", { sessionId: session.sessionId, ...marker });
+    }
   });
 
   pi.on("agent_start", async (_event, ctx) => recorder.record("agent.start", sessionData(ctx)));
@@ -117,6 +120,23 @@ function sessionData(ctx: ExtensionContext) {
     sessionId: ctx.sessionManager.getSessionId(),
     sessionFile: ctx.sessionManager.getSessionFile() ?? null,
   };
+}
+
+function studioWakeMarkers(prompt: string) {
+  const prefix = "PI_TELEMETRY_STUDIO_V1 ";
+  const markers = [];
+  for (const line of prompt.split(/\r?\n/)) {
+    if (!line.startsWith(prefix)) continue;
+    try {
+      const value = JSON.parse(line.slice(prefix.length));
+      if (value?.version !== 1 || value.type !== "studio.review_wake" || typeof value.kind !== "string" || !Number.isInteger(value.seq)) continue;
+      if (value.concept !== null && typeof value.concept !== "string") continue;
+      if (value.id !== null && typeof value.id !== "string") continue;
+      if (value.eventTime !== null && typeof value.eventTime !== "string") continue;
+      markers.push({ kind: value.kind, concept: value.concept, id: value.id, seq: value.seq, eventTime: value.eventTime });
+    } catch {}
+  }
+  return markers;
 }
 
 function recordUsage(recorder: { record(type: string, data?: Record<string, unknown>): unknown }, sessionId: string, identity: string, usage: unknown, extra = {}) {
