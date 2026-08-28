@@ -22,6 +22,7 @@ export interface WorkerRecord {
   scope: string;
   profile: string;
   repositoryRoot: string;
+  ownerSessionId?: string;
   createdAt: string;
   sessionLineage: string[];
   receipts: WorkerDispatchReceipt[];
@@ -37,6 +38,7 @@ export interface WorkerSummary {
   scope: string;
   profile: string;
   repositoryRoot: string;
+  ownerSessionId: string | null;
   createdAt: string;
   dispatchCount: number;
   latestSessionId: string | null;
@@ -75,13 +77,13 @@ export class WorkerRegistryError extends Error {
 
 export class WorkerRegistry {
   constructor(options: { adapter: WorkerAdapter; clock?: () => Date; isProcessAlive?: (pid: number) => boolean });
-  create(input: { name: string; scope: string; profile: string; repositoryRoot: string }): Promise<WorkerRecord>;
+  create(input: { name: string; scope: string; profile: string; repositoryRoot: string; ownerSessionId: string }): Promise<WorkerRecord>;
   inspect(workerId: string): Promise<WorkerRecord>;
-  list(): Promise<WorkerSummary[]>;
-  beginDispatch(workerId: string, input: { pid: number; repositoryRoot: string; acknowledgeInspection?: boolean }): Promise<BeginDispatchGrant>;
+  list(options: { ownerSessionId?: string; includeRetired?: boolean; all?: boolean }): Promise<WorkerSummary[]>;
+  beginDispatch(workerId: string, input: { pid: number; repositoryRoot: string; ownerSessionId: string; acknowledgeInspection?: boolean }): Promise<BeginDispatchGrant>;
   heartbeat(workerId: string, lockToken: string): Promise<{ heartbeatAt: string }>;
   completeDispatch(workerId: string, lockToken: string, receipt: { outcome: WorkerOutcome; executionId?: string; cognitiveRole?: string; provider?: string; model?: string; effort?: string; sessionId?: string; acceptedAt?: string; endedAt?: string; usage?: unknown; diagnostic?: string }): Promise<WorkerDispatchReceipt>;
-  retire(workerId: string, reason: string): Promise<{ at: string; reason: string }>;
+  retire(workerId: string, reason: string, options: { ownerSessionId: string }): Promise<{ at: string; reason: string }>;
 }
 
 export function createUserLocalWorkerRegistry(options?: { directory?: string; clock?: () => Date; isProcessAlive?: (pid: number) => boolean }): WorkerRegistry;

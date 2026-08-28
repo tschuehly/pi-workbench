@@ -66,7 +66,10 @@ const WorkerDispatchParams = Type.Object({
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the terminal wakeup with subagent_collect." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
 });
-const WorkerStatusParams = Type.Object({ workerId: Type.Optional(Type.String({ minLength: 1, description: "One worker to inspect; omit to list every durable worker for this machine" })) });
+const WorkerStatusParams = Type.Object({
+  workerId: Type.Optional(Type.String({ minLength: 1, description: "One worker to inspect; omit to list active workers owned by this session" })),
+  all: Type.Optional(Type.Boolean({ description: "Show all machine-local workers across sessions, including retired records, for diagnostics" })),
+});
 const WorkerRetireParams = Type.Object({
   workerId: Type.String({ minLength: 1 }),
   reason: Type.String({ minLength: 1, description: "Why the worker's scope is finished or its context is no longer trustworthy" }),
@@ -293,15 +296,24 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "worker_create",
     label: "Worker create",
-    description: "Create one durable attended worker: a machine-local identity bound to one semantic scope and this repository root. Creation writes a record and starts no process. Prefer fresh subagents; create a worker only when repeated bounded actions in one scope benefit from preserved context.",
-    promptSnippet: "Create one durable attended worker for one semantic scope",
+    description: "Create one durable attended worker: a machine-local identity owned by this lead session and bound to one semantic scope and repository root. Creation writes a record and starts no process. Prefer fresh subagents; create a worker only when repeated bounded actions in one scope benefit from preserved context.",
+    promptSnippet: "Create one session-owned durable attended worker for one semantic scope",
     promptGuidelines: [
-      "Worker identity is durable across sessions: check worker_status for an existing worker covering the scope and reuse or retire it before creating another.",
+      "Worker identity persists across reloads of its owning lead session; use worker_status to reuse or retire a worker before creating another for the same scope.",
     ],
     parameters: WorkerCreateParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (ctx.sessionManager.getSessionFile() === undefined) {
+        return failure("preflight_failed", "Durable workers require a persisted lead Pi session.");
+      }
       try {
-        const record = await registry.create({ name: params.name, scope: params.scope, profile: params.profile, repositoryRoot: ctx.cwd });
+        const record = await registry.create({
+          name: params.name,
+          scope: params.scope,
+          profile: params.profile,
+          repositoryRoot: ctx.cwd,
+          ownerSessionId: ctx.sessionManager.getSessionId(),
+        });
         return {
           content: [{ type: "text", text: `Created worker ${record.workerId} \"${record.name}\" (${record.profile}) for scope \"${record.scope}\", bound to ${record.repositoryRoot}. Dispatch bounded assignments with worker_dispatch.` }],
           details: record,
@@ -330,9 +342,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
       if (INDEPENDENT_ROLES.has(params.cognitiveRole)) {
         return failure("preflight_failed", `Independence requires fresh context; Cognitive Role '${params.cognitiveRole}' is subagent-only.`);
       }
+      if (ctx.sessionManager.getSessionFile() === undefined) {
+        return failure("preflight_failed", "Durable workers require a persisted lead Pi session.");
+      }
+      const parentSessionId = ctx.sessionManager.getSessionId();
       let begin;
       try {
-        begin = await registry.beginDispatch(params.workerId, { pid: process.pid, repositoryRoot: ctx.cwd, acknowledgeInspection: params.acknowledgeInspection === true });
+        begin = await registry.beginDispatch(params.workerId, {
+          pid: process.pid,
+          repositoryRoot: ctx.cwd,
+          ownerSessionId: parentSessionId,
+          acknowledgeInspection: params.acknowledgeInspection === true,
+        });
       } catch (error) {
         return registryFailure(error);
       }
@@ -353,7 +374,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
       }
       const continuing = begin.continuationSessionId !== null;
       const preamble = `You are the durable attended worker \"${begin.name}\" with the semantic scope \"${begin.scope}\".${continuing ? " This dispatch resumes your persisted session; the earlier conversation above is your own prior work in this scope." : " This is your first dispatch in this scope."}`;
-      const parentSessionId = ctx.sessionManager.getSessionId();
       const childTask = `${profile.instruction}\n\n${preamble}\n\nAssignment:\n${params.task}`;
       let receipt;
       try {
@@ -477,13 +497,20 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "worker_status",
     label: "Worker status",
-    description: "Inspect one durable worker's record and any live dispatch, or list every durable worker recorded for this machine.",
+    description: "Inspect this session's durable workers by default. Pass all:true only for machine-wide diagnostics, including workers from other sessions and retired records.",
     promptSnippet: "Inspect durable attended workers",
     parameters: WorkerStatusParams,
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
+        const ownerSessionId = ctx.sessionManager.getSessionId();
         if (params.workerId !== undefined) {
           const record = await registry.inspect(params.workerId);
+          if (params.all !== true && record.ownerSessionId === undefined) {
+            return failure("preflight_failed", `Worker ${params.workerId} is a legacy unowned record; use all:true to inspect it, then dispatch or retire it from this persisted session to claim it.`);
+          }
+          if (params.all !== true && record.ownerSessionId !== ownerSessionId) {
+            return failure("preflight_failed", `Worker ${params.workerId} belongs to another lead session; use all:true only for diagnostics.`);
+          }
           const latest = record.receipts[record.receipts.length - 1];
           const lines = [
             `${record.workerId} \"${record.name}\" (${record.profile})${record.retired !== null ? ` [retired ${record.retired.at}: ${record.retired.reason}]` : ""}`,
@@ -503,8 +530,15 @@ export default function subagentExtension(pi: ExtensionAPI) {
           }
           return { content: [{ type: "text", text: lines.join("\n") }], details: { record, live } };
         }
-        const summaries = await registry.list();
-        if (summaries.length === 0) return { content: [{ type: "text", text: "No durable workers are recorded on this machine." }], details: { workers: [] } };
+        const summaries = params.all === true
+          ? await registry.list({ all: true })
+          : await registry.list({ ownerSessionId });
+        if (summaries.length === 0) {
+          const text = params.all === true
+            ? "No durable workers are recorded on this machine."
+            : "No active durable workers are recorded for this session. Use all:true for machine-wide diagnostics.";
+          return { content: [{ type: "text", text }], details: { workers: [] } };
+        }
         const lines = summaries.map((s) => `- ${s.workerId} \"${s.name}\" (${s.profile}) [${s.retired ? "retired" : s.locked ? "dispatching" : s.requiresInspection ? "needs inspection" : "idle"}] ${s.dispatchCount} dispatch(es), last ${s.latestOutcome ?? "none"} — ${s.scope}`);
         return { content: [{ type: "text", text: lines.join("\n") }], details: { workers: summaries } };
       } catch (error) {
@@ -519,9 +553,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
     description: "Immutably retire a durable worker whose scope is finished or whose accumulated context is no longer trustworthy. A retired worker cannot be dispatched again; start a fresh worker or subagent instead.",
     promptSnippet: "Retire one durable attended worker",
     parameters: WorkerRetireParams,
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (ctx.sessionManager.getSessionFile() === undefined) {
+        return failure("preflight_failed", "Durable workers require a persisted lead Pi session.");
+      }
       try {
-        const retired = await registry.retire(params.workerId, params.reason);
+        const retired = await registry.retire(params.workerId, params.reason, { ownerSessionId: ctx.sessionManager.getSessionId() });
         return { content: [{ type: "text", text: `Retired worker ${params.workerId} at ${retired.at}: ${retired.reason}` }], details: { workerId: params.workerId, ...retired } };
       } catch (error) {
         return registryFailure(error);

@@ -9,15 +9,16 @@ change the managed Level 4 contracts in [`docs/contracts/execution.md`](../contr
 ## Outcome
 
 Add durable, attended workers alongside the existing ephemeral `subagent` tool. A worker is a
-durable machine-local identity bound to one semantic scope and one persisted Pi session lineage.
+durable machine-local identity owned by one lead Pi session and bound to one semantic scope and one persisted child Pi session lineage.
 Creating a worker writes a record and starts no process. Each worker action is one bounded,
 attended dispatch that resumes the worker's persisted Pi session, streams progress, permits
 cancellation, and returns a compact result — the same lifecycle as an ephemeral child, plus
 continuity within the worker's scope.
 
-Worker identity survives the attended session; execution never does. No child process outlives its
-attended parent, and no unattended activity occurs between dispatches. An idle worker is a record
-plus a persisted Pi session file, never a waiting subprocess.
+Worker identity survives reloads and process restarts of its owning persisted lead session; execution
+never survives that session's shutdown. No child process outlives its attended parent, and no unattended
+activity occurs between dispatches. An idle worker is a record plus a persisted child Pi session file,
+never a waiting subprocess.
 
 This realizes the canonical Worker meaning — "a Pi actor that retains useful continuity across
 bounded actions within one semantic scope" — in the Level 1 posture. It is not a managed Level 4
@@ -41,6 +42,7 @@ Pi RPC subprocess resuming a persisted session
 (default `~/.pi-workbench/workers`, following the Workstream Store pattern). A record contains:
 
 - worker identifier and human-readable name;
+- owning lead Pi session identifier;
 - one semantic scope statement (for example "PhotoQuest importer redesign");
 - bound repository root;
 - bundled child profile;
@@ -53,7 +55,10 @@ The registry is mechanics, not authority. It is never committed to the repositor
 authoritative Run state, and never stores a second narrative ledger: continuity lives in the Pi
 session file itself, and the registry stores only references and bounded receipts. Registry writes
 are atomic; corrupt or unreadable records fail dispatch preflight closed instead of silently
-recreating identity.
+recreating identity. Workers require a persisted lead session. Forks and new sessions receive a
+new session identifier and therefore cannot mutate the source session's workers. For records created
+before session ownership existed, the first dispatch or retirement claims the record for that calling
+session; every later foreign mutation fails closed.
 
 ## Tool surface
 
@@ -63,7 +68,7 @@ The subagent extension gains four worker tools beside the existing `subagent` fa
 worker_create   { name: string; scope: string; profile: Profile }        // record only, no process
 worker_dispatch { workerId: string; task: string;
                   cognitiveRole: CognitiveRole; background?: boolean }   // one bounded execution
-worker_status   { workerId?: string }                                    // registry + live state
+worker_status   { workerId?: string; all?: boolean }                     // session-active by default; all for diagnostics
 worker_retire   { workerId: string; reason: string }                     // immutable retirement
 ```
 
@@ -72,9 +77,11 @@ progress, while `background: true` returns a handle reconciled through the exist
 `subagent_status`, `subagent_collect`, and `subagent_cancel` tools. Decision 99 makes
 `background: true` the system-prompt preference for most Worker dispatches; foreground blocking is
 reserved for an immediate dependency when no useful lead work or attended response can continue.
-The extension performs no batches, chains,
-retries, or synthesis; the attended lead remains accountable for what it delegates to a worker and
-for reconciling every result.
+The extension performs no batches, chains, retries, or synthesis; the attended lead remains
+accountable for what it delegates to a worker and for reconciling every result. Worker mutation is
+restricted to the owning lead session. Status defaults to that session's active workers; `all: true`
+provides read-only machine-wide diagnostics, including retired, legacy-unowned, and foreign-session
+records. The registry uses the same explicit `all` opt-in rather than exposing all records by default.
 
 Ephemeral subagents remain the default delegation form. A worker is justified only when repeated
 bounded actions in one semantic scope benefit from preserved context; the tool descriptions state
@@ -164,11 +171,11 @@ additionally marks the worker as requiring inspection before the next dispatch.
 
 Accept the implementation only after tests prove:
 
-1. `worker_create` writes exactly one durable record and starts no process;
+1. `worker_create` writes exactly one session-owned durable record, rejects non-persisted lead sessions, and starts no process;
 2. one `worker_dispatch` creates exactly one child execution resuming the recorded session;
 3. continuity is real: a fact introduced in dispatch N is observable in dispatch N+1 without
    restatement, across a simulated parent-session restart;
-4. worker identity survives parent termination while no child process does;
+4. worker identity survives reload or process restart of its owning persisted lead session while no child process survives session shutdown;
 5. Independence roles fail worker preflight and remain accepted for subagents;
 6. every dispatch uses a fresh verified binding, including a changed model on a resumed session;
 7. a concurrent dispatch to a busy worker fails with a typed diagnostic; distinct workers run
@@ -176,8 +183,8 @@ Accept the implementation only after tests prove:
 8. the dispatch lock releases on success, failure, cancellation, timeout, and forced termination,
    and dead-owner reclaim requires verified liveness failure;
 9. a missing, foreign, or corrupt continuation session fails preflight closed;
-10. retirement is immutable and blocks further dispatch;
-11. registry data stays outside the repository and results claim no managed authority; and
+10. retirement is immutable, blocks further dispatch, foreign lead sessions cannot dispatch or retire the worker, and the first mutation safely claims a legacy unowned record;
+11. default status lists only active workers owned by the current lead session, while explicit `all: true` lists every record for diagnostics; registry data stays outside the repository and results claim no managed authority; and
 12. the existing subagent acceptance evidence (items 1–14 of the Level 1 child plan) remains green.
 
 Use the fake RPC process for deterministic lifecycle, lock, and failure tests. Keep one real Pi RPC
@@ -192,6 +199,7 @@ Do not implement as part of this plan:
   Publication;
 - Continuation Artifacts, Context Curator rotation, or automatic context-staleness policy;
 - cross-machine, shared, or repository-committed worker registries;
+- cross-lead-session ownership transfer or adoption beyond the one-time legacy-record claim;
 - peer worker communication, mailboxes, or worker-to-worker delegation;
 - project or user-authored worker profiles;
 - token, cost, or budget enforcement; and

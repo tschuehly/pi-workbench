@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Autonomous Grill
 
-Stress-test consequential decisions autonomously, then walk the human through the resulting design tree for verdicts. Frontload the cognitive work: models grill whole frontiers in batched rounds so human attention is spent only on judging settled, evidence-backed proposals. Use a Level 1 durable attended worker for recurring advice and a fresh `subagent` for the cross-family closing audit. Apply `/domain-modeling` only to outcomes the human accepts.
+Stress-test consequential decisions autonomously, then walk the human through the resulting design tree for verdicts. Frontload the cognitive work: models grill whole frontiers in batched rounds so human attention is spent only on judging settled, evidence-backed proposals. Use a session-owned durable attended worker for recurring advice and a fresh `subagent` for the cross-family closing audit. Apply `/domain-modeling` only to outcomes the human accepts.
 
 ## Establish the decision tree
 
@@ -18,7 +18,7 @@ Draft a recommendation for every currently reachable branch. The lead owns synth
 
 ## Run the grill
 
-Use `worker_status` to find an active worker already bound to the current repository root and exact grill scope after a session restart. Resume that worker when present; otherwise use `worker_create` to create one named for the grill, with the exact target as its semantic scope and the `planner` profile. Use Cognitive Role `design` for every advisor dispatch: it is the consequential-design role available to workers, while the Independence roles (`challenge`, `independent-judgment`, and `independent-review`) correctly fail worker preflight because resumed context is anchored by prior rounds.
+Run the grill in one persisted lead Pi session. After a reload or process restart, resume that same lead session and use `worker_status` to find its active worker for the exact grill scope. A fork or new lead session cannot mutate the source session's worker; start a new advisor there instead. When no current-session worker exists, use `worker_create` to create one named for the grill, with the exact target as its semantic scope and the `planner` profile. Use Cognitive Role `design` for every advisor dispatch: it is the consequential-design role available to workers, while the Independence roles (`challenge`, `independent-judgment`, and `independent-review`) correctly fail worker preflight because resumed context is anchored by prior rounds.
 
 This trades Independence for continuity. The worker retains the decision tree, challenge style, prior responses, and dissent in its persisted Pi session, but its advice is neither fresh-context judgment nor guaranteed cross-family review. Never describe worker output as independent. The fresh closing audit restores Independence from the lead's provider.
 
@@ -46,7 +46,7 @@ If cross-family routing or a closing-audit Subagent fails to launch or complete,
 
 When the audit finds no material gap—or the grill must stop—reconcile any active dispatch, inspect each advisor worker, and call `worker_retire` with the terminal or replacement reason. Retirement is immutable; do it only after that worker's final dispatch has ended.
 
-**Complete when:** the closing audit finds no material gap, every consequential branch is a supported proposal or unresolved dissent, and every advisor worker created for the grill is retired.
+**Complete when:** the closing audit finds no material gap, every consequential branch is a supported proposal or unresolved dissent, and every advisor worker created by the current lead session for the grill is retired.
 
 ## Walk the human through the design tree
 

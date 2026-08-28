@@ -26,17 +26,19 @@ export class WorkerRegistry {
     this.isProcessAlive = isProcessAlive;
   }
 
-  async create({ name, scope, profile, repositoryRoot } = {}) {
+  async create({ name, scope, profile, repositoryRoot, ownerSessionId } = {}) {
     requireBoundedString("name", name, NAME_LIMIT);
     requireBoundedString("scope", scope, SCOPE_LIMIT);
     requireBoundedString("profile", profile, NAME_LIMIT);
     requireBoundedString("repositoryRoot", repositoryRoot, 1_024);
+    requireBoundedString("ownerSessionId", ownerSessionId, NAME_LIMIT);
     const record = {
       workerId: randomUUID(),
       name: name.trim(),
       scope: scope.trim(),
       profile: profile.trim(),
       repositoryRoot,
+      ownerSessionId: ownerSessionId.trim(),
       createdAt: this.clock().toISOString(),
       sessionLineage: [],
       receipts: [],
@@ -55,20 +57,27 @@ export class WorkerRegistry {
     return this.adapter.transaction((database) => structuredClone(this.#worker(database, workerId)), { readOnly: true });
   }
 
-  async list() {
+  async list({ ownerSessionId, includeRetired = false, all = false } = {}) {
+    if (!all) requireBoundedString("ownerSessionId", ownerSessionId, NAME_LIMIT);
+    const normalizedOwnerSessionId = ownerSessionId?.trim();
     return this.adapter.transaction((database) => {
       return Object.values(database.workers)
+        .filter((worker) => all || worker.ownerSessionId === normalizedOwnerSessionId)
+        .filter((worker) => all || includeRetired || worker.retired === null)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .map((worker) => summarize(worker));
     }, { readOnly: true });
   }
 
-  async beginDispatch(workerId, { pid, repositoryRoot, acknowledgeInspection = false } = {}) {
+  async beginDispatch(workerId, { pid, repositoryRoot, ownerSessionId, acknowledgeInspection = false } = {}) {
     if (!Number.isSafeInteger(pid) || pid <= 0) fail("INVALID_INPUT", "pid must be a positive integer");
     requireBoundedString("repositoryRoot", repositoryRoot, 1_024);
+    requireBoundedString("ownerSessionId", ownerSessionId, NAME_LIMIT);
+    ownerSessionId = ownerSessionId.trim();
     const now = this.clock().toISOString();
     return this.adapter.transaction((database) => {
       const worker = this.#worker(database, workerId);
+      this.#requireOwner(worker, workerId, ownerSessionId);
       if (worker.retired !== null) fail("WORKER_RETIRED", `worker ${workerId} was retired at ${worker.retired.at}: ${worker.retired.reason}`);
       if (worker.repositoryRoot !== repositoryRoot) fail("REPOSITORY_MISMATCH", `worker ${workerId} is bound to ${worker.repositoryRoot}, not ${repositoryRoot}`);
       if (worker.requiresInspection !== null && acknowledgeInspection !== true) {
@@ -132,11 +141,14 @@ export class WorkerRegistry {
     });
   }
 
-  async retire(workerId, reason) {
+  async retire(workerId, reason, { ownerSessionId } = {}) {
     requireBoundedString("reason", reason, SCOPE_LIMIT);
+    requireBoundedString("ownerSessionId", ownerSessionId, NAME_LIMIT);
+    ownerSessionId = ownerSessionId.trim();
     const now = this.clock().toISOString();
     return this.adapter.transaction((database) => {
       const worker = this.#worker(database, workerId);
+      this.#requireOwner(worker, workerId, ownerSessionId);
       if (worker.retired !== null) fail("WORKER_RETIRED", `worker ${workerId} was already retired at ${worker.retired.at}: ${worker.retired.reason}`);
       this.#reclaimDeadLock(worker, now);
       if (worker.lock !== null) fail("WORKER_BUSY", `worker ${workerId} has an active dispatch held by live process ${worker.lock.pid}; cancel it before retiring`);
@@ -149,6 +161,14 @@ export class WorkerRegistry {
     const worker = database.workers[workerId];
     if (worker === undefined) fail("WORKER_NOT_FOUND", `worker ${workerId} was not found`);
     return worker;
+  }
+
+  #requireOwner(worker, workerId, ownerSessionId) {
+    if (worker.ownerSessionId === undefined) {
+      worker.ownerSessionId = ownerSessionId;
+      return;
+    }
+    if (worker.ownerSessionId !== ownerSessionId) fail("WORKER_SESSION_MISMATCH", `worker ${workerId} is owned by a different lead session`);
   }
 
   #requireLock(worker, workerId, lockToken) {
@@ -174,6 +194,7 @@ function summarize(worker) {
     scope: worker.scope,
     profile: worker.profile,
     repositoryRoot: worker.repositoryRoot,
+    ownerSessionId: worker.ownerSessionId ?? null,
     createdAt: worker.createdAt,
     dispatchCount: worker.receipts.length,
     latestSessionId: worker.sessionLineage.length === 0 ? null : worker.sessionLineage[worker.sessionLineage.length - 1],
