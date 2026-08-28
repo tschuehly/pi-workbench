@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
@@ -72,10 +72,12 @@ const WorkerRetireParams = Type.Object({
 type Observation = { type: string; at: string; detail?: unknown };
 type ProgressEntry = { at: string; key: string; text: string };
 type LaunchMeta = { profile: string; cognitiveRole: string; taskPreview: string; launchedAt: string; workerId?: string; workerName?: string };
+type ForegroundDispatch = { label: string; detach: () => void };
 
 export default function subagentExtension(pi: ExtensionAPI) {
   const adapter = new PiRpcExecutionAdapter();
   const launched = new Map<string, LaunchMeta>();
+  const foreground = new Map<string, ForegroundDispatch>();
   const registry = createUserLocalWorkerRegistry();
   const workerExecutions = new Map<string, string>();
   const pendingWorkerCompletions = new Set<Promise<unknown>>();
@@ -84,7 +86,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
     sendMessage: (message: any, options: any) => pi.sendMessage(message, options),
   });
 
+  const backgroundShortcut = {
+    description: "Background the newest foreground Subagent or Worker",
+    handler: (ctx: ExtensionContext) => {
+      const label = detachLatestForeground(foreground);
+      ctx.ui.notify(label === undefined ? "No Subagent or Worker can be backgrounded." : `${label} is running in the background.`, "info");
+    },
+  };
+  pi.registerShortcut("super+b", backgroundShortcut);
+  pi.registerShortcut("ctrl+alt+b", backgroundShortcut);
+
   pi.on("session_shutdown", async () => {
+    foreground.clear();
     completionWakeup.shutdown();
     await adapter.cancelAll("Attended parent session ended.");
     await Promise.allSettled([...pendingWorkerCompletions, ...pendingSubagentCompletions]);
@@ -160,25 +173,41 @@ export default function subagentExtension(pi: ExtensionAPI) {
       upsertActivity(pi, activity);
       void watchActivity(pi, adapter, receipt.executionId, activity);
 
-      if (params.background === true) {
-        const completion = adapter.result(receipt.executionId).then((final) => {
+      let backgrounded = params.background === true;
+      const detachController = new AbortController();
+      if (!backgrounded) {
+        foreground.set(receipt.executionId, {
+          label: `Subagent (${params.profile} · ${params.cognitiveRole})`,
+          detach: () => { backgrounded = true; detachController.abort(); },
+        });
+      }
+      // Register terminal cleanup before waiting so it wins a same-tick detach race.
+      const completion = adapter.result(receipt.executionId).then((final) => {
+        foreground.delete(receipt.executionId);
+        if (backgrounded) {
           completionWakeup.notify({
             executionId: receipt.executionId,
             outcome: final.outcome,
             profile: params.profile,
             cognitiveRole: params.cognitiveRole,
           });
-        });
-        const tracked = completion.catch(() => {});
-        pendingSubagentCompletions.add(tracked);
-        void tracked.then(() => pendingSubagentCompletions.delete(tracked));
-        return {
-          content: [{ type: "text", text: `Launched background subagent ${receipt.executionId} (${params.profile} · ${params.cognitiveRole}). Its terminal outcome will wake this lead once; reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
-          details: { outcome: "launched", executionId: receipt.executionId, profile: params.profile, cognitiveRole: params.cognitiveRole, acceptedAt: receipt.acceptedAt },
-        };
-      }
+        }
+      });
+      const tracked = completion.catch(() => {});
+      pendingSubagentCompletions.add(tracked);
+      void tracked.then(() => pendingSubagentCompletions.delete(tracked));
+      const backgroundResult = (verb: string) => ({
+        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background (${params.profile} · ${params.cognitiveRole}). Its terminal outcome will wake this lead once; reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
+        details: { outcome: "launched", executionId: receipt.executionId, profile: params.profile, cognitiveRole: params.cognitiveRole, acceptedAt: receipt.acceptedAt },
+      });
+      if (backgrounded) return backgroundResult("Launched");
 
-      return streamToResult(adapter, receipt.executionId, params.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true });
+      try {
+        const result = await streamToResult(adapter, receipt.executionId, params.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
+        return (result as { details?: { outcome?: unknown } }).details?.outcome === "detached" ? backgroundResult("Moved") : result;
+      } finally {
+        foreground.delete(receipt.executionId);
+      }
     },
   });
 
@@ -346,11 +375,21 @@ export default function subagentExtension(pi: ExtensionAPI) {
       void watchActivity(pi, adapter, receipt.executionId, activity);
       const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
       heartbeat.unref();
+      let backgrounded = params.background === true;
+      const detachController = new AbortController();
+      if (!backgrounded) {
+        foreground.set(receipt.executionId, {
+          label: `Worker “${begin.name}”`,
+          detach: () => { backgrounded = true; detachController.abort(); },
+        });
+      }
       let workerReceiptError: unknown;
+      // Register terminal cleanup before waiting so it wins a same-tick detach race.
       const completion = (async () => {
         let usage: unknown;
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
         const final = await adapter.result(receipt.executionId);
+        foreground.delete(receipt.executionId);
         await usageWatch;
         clearInterval(heartbeat);
         await settleWorkerReceipt({
@@ -368,7 +407,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
             diagnostic: final.diagnostic,
           }),
           wakeup: completionWakeup,
-          background: params.background === true,
+          background: backgrounded,
           completion: {
             executionId: receipt.executionId,
             outcome: final.outcome,
@@ -386,17 +425,21 @@ export default function subagentExtension(pi: ExtensionAPI) {
       pendingWorkerCompletions.add(tracked);
       void tracked.then(() => pendingWorkerCompletions.delete(tracked));
 
-      if (params.background === true) {
-        return {
-          content: [{ type: "text", text: `Dispatched worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). Its terminal outcome will wake this lead once after the Worker receipt settles; a receipt failure wakes bounded outcome_unknown attention instead. Reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
-          details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, continuing, acceptedAt: receipt.acceptedAt },
-        };
-      }
+      const backgroundResult = (verb: string) => ({
+        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). Its terminal outcome will wake this lead once after the Worker receipt settles; a receipt failure wakes bounded outcome_unknown attention instead. Reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
+        details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, continuing, acceptedAt: receipt.acceptedAt },
+      });
+      if (backgrounded) return backgroundResult("Dispatched");
 
-      const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true });
-      await tracked;
-      if (workerReceiptError !== undefined) return workerReceiptFailureResult(result, receipt.executionId, params.workerId, workerReceiptError);
-      return result;
+      try {
+        const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
+        if ((result as { details?: { outcome?: unknown } }).details?.outcome === "detached") return backgroundResult("Moved");
+        await tracked;
+        if (workerReceiptError !== undefined) return workerReceiptFailureResult(result, receipt.executionId, params.workerId, workerReceiptError);
+        return result;
+      } finally {
+        foreground.delete(receipt.executionId);
+      }
     },
   });
 
@@ -466,7 +509,7 @@ async function watchActivity(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, e
   }
 }
 
-async function streamToResult(
+export async function streamToResult(
   adapter: PiRpcExecutionAdapter,
   executionId: string,
   profile: string,
@@ -474,18 +517,28 @@ async function streamToResult(
   launchedAt: string,
   signal: AbortSignal | undefined,
   onUpdate: ((update: { content: { type: "text"; text: string }[]; details?: unknown }) => void) | undefined,
-  options: { cancelOnAbort: boolean },
+  options: { cancelOnAbort: boolean; detachSignal?: AbortSignal },
 ) {
   let result;
   try { result = adapter.result(executionId); } catch (error) { return failure("outcome_unknown", errorMessage(error)); }
 
   let detached = false;
+  let detach = () => {};
+  const detachedRace = new Promise<"detached">((resolve) => {
+    detach = () => {
+      if (detached) return;
+      detached = true;
+      resolve("detached");
+    };
+  });
   const abort = () => {
     if (options.cancelOnAbort) void adapter.cancel(executionId, "Cancelled from the attended parent tool.");
-    else detached = true;
+    else detach();
   };
   if (signal?.aborted) abort();
   else signal?.addEventListener("abort", abort, { once: true });
+  if (options.detachSignal?.aborted) detach();
+  else options.detachSignal?.addEventListener("abort", detach, { once: true });
 
   const observations: Observation[] = [];
   const progressEntries: ProgressEntry[] = [];
@@ -507,12 +560,10 @@ async function streamToResult(
     }
   })();
 
-  const detachedRace = new Promise<"detached">((resolve) => {
-    if (!options.cancelOnAbort) signal?.addEventListener("abort", () => resolve("detached"), { once: true });
-  });
   const settled = await Promise.race([result.then(() => "done" as const), detachedRace]);
   clearInterval(heartbeat);
   signal?.removeEventListener("abort", abort);
+  options.detachSignal?.removeEventListener("abort", detach);
 
   if (settled === "detached") {
     return {
@@ -545,6 +596,15 @@ async function resolveBinding(cognitiveRole: string, independentOfProvider?: str
   try { value = JSON.parse(stdout); } catch (error) { throw new Error(`Routing returned invalid JSON: ${errorMessage(error)}`); }
   if (value?.status !== "pass" || value.modelBinding?.cognitiveRole !== cognitiveRole) throw new Error("Routing did not return the requested resolved binding.");
   return value.modelBinding;
+}
+
+export function detachLatestForeground(foreground: Map<string, ForegroundDispatch>): string | undefined {
+  const latest = [...foreground.entries()].at(-1);
+  if (latest === undefined) return undefined;
+  const [executionId, dispatch] = latest;
+  foreground.delete(executionId);
+  dispatch.detach();
+  return dispatch.label;
 }
 
 function failure(outcome: string, diagnostic: string) {
