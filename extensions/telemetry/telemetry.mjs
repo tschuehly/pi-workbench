@@ -177,9 +177,6 @@ function studioReport(events, agentActiveIntervals, executions, concept) {
       .sort((left, right) => String(left.at).localeCompare(String(right.at))),
     (event) => `${event.kind}:${event.id ?? ""}:${event.seq}`,
   );
-  const buildIntervals = builds
-    .map((build) => [Date.parse(build.startedAt), Date.parse(build.endedAt)])
-    .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end));
   const correctionCycles = deliveries.map((delivery) => {
     const start = Date.parse(delivery.at);
     const draft = ready.find((event) => event.concept === delivery.concept && Date.parse(event.at) >= start);
@@ -191,6 +188,10 @@ function studioReport(events, agentActiveIntervals, executions, concept) {
     };
     const end = Date.parse(draft.at);
     const executionWindows = executions.filter((execution) => execution.concept === delivery.concept && execution.childSessionId !== null);
+    const buildIntervals = builds
+      .filter((build) => build.concept === delivery.concept)
+      .map((build) => [Date.parse(build.startedAt), Date.parse(build.endedAt)])
+      .filter(([intervalStart, intervalEnd]) => Number.isFinite(intervalStart) && Number.isFinite(intervalEnd));
     const attributedAgentIntervals = agentActiveIntervals.flatMap((interval) => executionWindows
       .filter((execution) => execution.childSessionId === interval.sessionId)
       .map((execution) => [

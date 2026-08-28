@@ -138,6 +138,20 @@ test("joins the first delivered correction marker to the next changed draft", ()
   });
 });
 
+test("correction cycles ignore other concepts' build intervals", () => {
+  const events = [
+    event("session.start", "12:00:00", { sessionId: "root" }),
+    event("studio.comment_delivered", "12:00:00", { sessionId: "root", kind: "sent", concept: "alpha", id: "c1", seq: 1 }),
+    event("studio.build_start", "12:00:01", { sessionId: "root", concept: "beta", buildId: "beta", lane: "draft" }),
+    event("studio.build_settled", "12:00:09", { sessionId: "root", concept: "beta", buildId: "beta", lane: "draft", status: "built" }),
+    event("studio.draft_ready", "12:00:10", { sessionId: "root", concept: "alpha", buildId: "alpha", watchable: true, sha256: "a".repeat(64) }),
+  ];
+
+  const cycle = buildReport(events, { rootSessionId: "root" }).studio.correctionCycles[0];
+  assert.equal(cycle.activeMs, null);
+  assert.equal(cycle.idleMs, null);
+});
+
 test("unwatchable changed drafts do not close correction cycles", () => {
   const events = [
     event("session.start", "12:00:00", { sessionId: "root" }),
