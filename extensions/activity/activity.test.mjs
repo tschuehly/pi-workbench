@@ -14,10 +14,10 @@ test("renders bounded one-line activity with compact identity and model names", 
     { id: "shell-1", kind: "shell", objective: "npm test", activity: "running" },
   ]), [
     "Active · 4",
-    "◇ independent review · Opus 5 — Review activity design; reading monitor/runtime.ts",
-    "◆ Catalog · implementation · 5.6 Terra — Run focused tests; bash",
-    "◌ build — npm test; watching",
-    "$ npm test",
+    "🤖 independent review · Opus 5 — Review activity design; reading monitor/runtime.ts",
+    "🧰 Catalog · implementation · 5.6 Terra — Run focused tests; bash",
+    "👀 build — npm test; watching",
+    "💻 npm test",
   ]);
 
   const calls = [];

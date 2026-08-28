@@ -2,7 +2,7 @@ export const ACTIVITY_CHANNEL = "pi-workbench:activity";
 export const ACTIVITY_SUMMARY_LIMIT = 120;
 
 const KINDS = new Set(["subagent", "worker", "monitor", "shell"]);
-const ICONS = { subagent: "◇", worker: "◆", monitor: "◌", shell: "$" };
+const ICONS = { subagent: "🤖", worker: "🧰", monitor: "👀", shell: "💻" };
 
 export function upsertActivity(pi, item) {
   pi.events.emit(ACTIVITY_CHANNEL, { type: "upsert", item });

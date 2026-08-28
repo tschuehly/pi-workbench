@@ -12,4 +12,4 @@ pi.events.emit("pi-workbench:activity", { type: "upsert", item: {
 pi.events.emit("pi-workbench:activity", { type: "remove", id: "stable-owner-id" });
 ```
 
-Supported kinds are `subagent` (`◇`), `worker` (`◆`), `monitor` (`◌`), and `shell` (`$`). Optional fields are `name`, `role`, `model`, `effort`, `objective`, and `activity`. The surface validates and bounds every update, remains presentation-only, and clears at session shutdown. The built-in `bash` and `powershell` tool lifecycle is projected automatically. Publishers remain responsible for truthful lifecycle state and must remove terminal items.
+Supported kinds are `subagent` (`🤖`), `worker` (`🧰`), `monitor` (`👀`), and `shell` (`💻`). Optional fields are `name`, `role`, `model`, `effort`, `objective`, and `activity`. The surface validates and bounds every update, remains presentation-only, and clears at session shutdown. The built-in `bash` and `powershell` tool lifecycle is projected automatically. Publishers remain responsible for truthful lifecycle state and must remove terminal items.

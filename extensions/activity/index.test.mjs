@@ -17,7 +17,7 @@ test("projects active shell tools through the shared activity surface", () => {
   activityExtension(pi);
   lifecycle.get("session_start")({}, { mode: "tui", ui: { setWidget: (...args) => calls.push(args) } });
   lifecycle.get("tool_execution_start")({ toolCallId: "bash-1", toolName: "bash", args: { command: "npm test" } });
-  assert.deepEqual(calls.at(-1), ["pi-workbench:activity", ["Active · 1", "$ npm test"]]);
+  assert.deepEqual(calls.at(-1), ["pi-workbench:activity", ["Active · 1", "💻 npm test"]]);
   lifecycle.get("tool_execution_end")({ toolCallId: "bash-1", toolName: "bash" });
   assert.deepEqual(calls.at(-1), ["pi-workbench:activity", undefined]);
 });
