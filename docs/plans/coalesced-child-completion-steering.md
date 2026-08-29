@@ -25,7 +25,7 @@ idle -> queued -> idle
 
 The generic message says:
 
-> One or more background children have terminal results. Call `subagent_status` with no arguments, then call `subagent_collect` exactly once for every terminal-uncollected execution and reconcile all results. Do not retry, relaunch, publish, or accept an outcome based only on this signal.
+> Background children finished. Call `subagent_status`, then collect and reconcile each terminal-uncollected child once. This notice authorizes no retry, relaunch, publication, or acceptance.
 
 Delivery, not a particular status or collection call, clears the signal. This keeps the interface small. The lead remains prompt-accountable for collecting every child shown by the default status roster; if it ignores that instruction and collects only some, the extension does not add a second reminder loop. A human abort can discard the outstanding signal after its children entered `handled`; those results remain discoverable through `subagent_status`, but they do not wake the lead again unless a later completion schedules another signal.
 
