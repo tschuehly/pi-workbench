@@ -2,97 +2,57 @@
 
 Status: proposed.
 
-## Outcome
+## Goal
 
-Replace one queued `followUp` per terminal background child with one outstanding completion signal delivered as `steer`. The signal reaches a busy lead after its current assistant tool batch, before the next model call. It tells the lead to inspect the authoritative `subagent_status` roster and collect every terminal-uncollected child once.
+Replace per-child completion `followUp`s with one coalesced `steer` signal. In a 23-child fan-out, 20 wakes arrived after collection and 12 did no useful work. `steer` also reaches a busy lead at the next safe model boundary instead of waiting for the run to stop.
 
-A 23-child attended fan-out exposed the current defect: all children emitted one wake and were collected once, but 20 wakes arrived after collection and 12 wake cycles did no useful work. The owner also rejected waiting until the lead stops because that reacts too late. Coalescing removes the backlog; `steer` provides the required next-boundary latency.
+## Design
 
-## Smallest design
-
-Keep the change inside the existing completion-wakeup module. Add no timer, dependency, setting, scheduler, or new module.
-
-Normal completion attention has two states:
+Keep the change in `extensions/subagent/completion-wakeup.mjs`. Normal attention has two states:
 
 ```text
 idle -> queued -> idle
 ```
 
-- On the first normal terminal completion while `idle`, keep the existing per-execution validation and deduplication, set `queued`, and send one generic custom message with `{ deliverAs: "steer", triggerTurn: true }`. Its details are `{ attention: "terminal-results" }`.
-- Further normal completions while `queued` still enter the existing `handled` set, send nothing, and make `notify()` return `false`.
-- On `message_start` for the exact `terminal-results` marker, return to `idle`. Later completions may then schedule the next signal.
-- If `agent_settled` occurs while still `queued`, return to `idle` without sending. During explicit compaction, the barrier-held signal remains valid; another normal signal replaces it under the same stable key.
+1. The first normal completion while `idle` sends one generic message with `{ deliverAs: "steer", triggerTurn: true }` and details `{ attention: "terminal-results" }`.
+2. Later completions while `queued` enter the existing `handled` set, send nothing, and make `notify()` return `false`.
+3. `rearm()` clears only `queued`; `handled` and per-child metadata validation stay unchanged. Only a new execution can send later.
+4. Only `message_start` with that marker returns attention to `idle`.
+5. `agent_settled` also re-arms without sending. A checkpoint-held signal remains valid and a later normal signal replaces it under the same stable key.
 
-The generic message says:
+The message says:
 
 > Background children finished. Call `subagent_status`, then collect and reconcile each terminal-uncollected child once. This notice authorizes no retry, relaunch, publication, or acceptance.
 
-Delivery, not a particular status or collection call, clears the signal. This keeps the interface small. The lead remains prompt-accountable for collecting every child shown by the default status roster; if it ignores that instruction and collects only some, the extension does not add a second reminder loop. A human abort can discard the outstanding signal after its children entered `handled`; those results remain discoverable through `subagent_status`, but they do not wake the lead again unless a later completion schedules another signal.
+Delivery—not status or collection—clears the signal. The lead must collect every child in the default status roster; there is no second reminder loop.
 
-Keep active-collection suppression, cancellation, shutdown, and per-execution `handled` semantics unchanged. Keep Worker receipt-failure attention exact, separately deduplicated, and on its current delivery path; it has a different safety action and does not carry the normal attention marker.
+Keep active-collection suppression, cancellation, shutdown, and exact Worker receipt-failure attention unchanged. Receipt-failure messages carry no normal marker and cannot clear or merge with normal attention.
 
-Keep the checkpoint barrier. Key normal attention by its stable marker so a later signal replaces the held signal; retain execution-specific receipt-failure keys.
+Accepted residual: abort can discard a signal after its children entered `handled`. The results remain visible through `subagent_status` but do not wake the lead again unless another child finishes.
 
 ## Implementation
 
-### 1. Add one deterministic regression
+1. **Test first.** Rewrite the four assertions that intentionally change: normal delivery becomes generic `steer`; normal Worker attention loses per-child message details; settled Worker success uses the generic message; and checkpoint fan-out defers one signal instead of three. Add one 23-completion regression proving:
+   - one signal, 22 suppressed `false` returns;
+   - only the normal marker re-arms;
+   - `agent_settled` re-arms without sending;
+   - a later completion sends again;
+   - after explicit re-arm, the checkpoint barrier defers and releases one signal; and
+   - receipt failure, collection, cancellation, and shutdown remain correct.
 
-Extend `extensions/subagent/completion-wakeup.test.mjs` and `extensions/subagent/index.test.mjs` to prove:
+   The regression must fail against the current implementation.
 
-- 23 distinct normal completions before delivery produce one `steer` message;
-- the 22 suppressed notifications return `false` and remain execution-deduplicated;
-- only `message_start` with the normal attention marker re-arms delivery;
-- a later completion sends one new signal;
-- `agent_settled` re-arms without sending;
-- after an explicit re-arm, checkpoint fan-out defers and releases one stable normal signal;
-- receipt-failure attention cannot clear or merge with normal attention; and
-- active collection, cancellation, and shutdown retain current behavior.
+2. **Change the existing seam.** Add one queued flag and idempotent `rearm()` to `completion-wakeup.mjs`. In `extensions/subagent/index.ts`, re-arm on matching `message_start` and `agent_settled`, and key checkpoint deferral by normal marker or receipt-failure execution.
 
-Rewrite the four existing assertions that intentionally change: normal delivery uses `steer`, normal Worker attention becomes generic, settled Worker success no longer exposes per-child message details, and the checkpoint test explicitly re-arms before proving that one fan-out signal is deferred and released. Add one idempotent `rearm()` method to the existing wake module's production interface; call it for matching `message_start` and `agent_settled` events captured by the index test harness.
-
-Completion criterion: the new regression and the four rewritten assertions fail against the current per-child `followUp` behavior for the expected reasons.
-
-### 2. Change the existing seam
-
-Edit:
-
-- `extensions/subagent/completion-wakeup.mjs` — own the queued flag, generic message, marker, and idempotent re-arm operation;
-- `extensions/subagent/index.ts` — re-arm for matching `message_start` and `agent_settled`, and key checkpoint deferral by normal marker or receipt-failure execution.
-
-Normal `notify(meta)` continues to require the current per-child metadata for validation and deduplication, but the generic message does not carry that metadata. Receipt-failure message details remain unchanged.
+3. **Update current behavior.** Amend Decision 98 in `docs/foundation/decisions.md`; update `docs/plans/level-1-subagents.md`, `docs/plans/subagent-worker-iterative-improvement.md` with the failed busy-lead pilot, `extensions/subagent/README.md`, the launch receipts and tool guidance in `extensions/subagent/index.ts`, `extensions/context-checkpoint/README.md`, the keying comment in `extensions/context-checkpoint/checkpoint-barrier.mjs`, and `extensions/subagent/real-smoke-evidence.md`.
 
 Do not change the execution adapter, Worker registry, result format, status filtering, or collection tools.
 
-Completion criterion: every test passes after the four enumerated assertion rewrites; unchanged Subagent, Worker receipt-failure, cancellation, shutdown, and checkpoint guarantees remain green.
+## Done when
 
-### 3. Update current behavior
+- `npm test` passes.
+- During a multi-step lead tool batch, at least two of three smoke children finish before delivery; one useful `steer` leads to one default status snapshot, each result is collected once, and no stale completion turn follows.
 
-Update together:
+## Not doing
 
-- `docs/foundation/decisions.md` — amend Decision 98;
-- `docs/plans/level-1-subagents.md`;
-- `docs/plans/subagent-worker-iterative-improvement.md` — record the failed busy-lead pilot;
-- `extensions/subagent/README.md`;
-- `extensions/context-checkpoint/README.md` and the keying comment in `checkpoint-barrier.mjs`;
-- the Subagent and Worker prompt guidance and background-result text in `extensions/subagent/index.ts`; and
-- `extensions/subagent/real-smoke-evidence.md` after verification.
-
-Completion criterion: neither documentation nor runtime guidance claims that normal completion queues one `followUp` per execution.
-
-### 4. Verify
-
-Run:
-
-```sh
-npm test
-```
-
-Then run one attended smoke with three short background children while the lead executes a multi-step tool batch, so at least two children finish before the signal is delivered. Verify one `steer`, one default status snapshot, one collection per terminal child, and no stale completion turn afterward.
-
-## Non-goals
-
-- No global delivery-mode setting.
-- No debounce or timer.
-- No automatic collection or result injection.
-- No upstream Pi queue API change.
-- No batching, retry, scheduler, or authority expansion.
+No new module, dependency, timer, global delivery setting, automatic collection or result injection, upstream Pi change, batching, retry, scheduler, or authority expansion.
