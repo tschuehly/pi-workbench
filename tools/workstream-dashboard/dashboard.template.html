@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><circle cx=%2216%22 cy=%2216%22 r=%2212%22 fill=%22none%22 stroke=%22%235c9ab8%22 stroke-width=%223%22/><circle cx=%2216%22 cy=%2216%22 r=%224%22 fill=%22%233b6d86%22/></svg>">
+<link rel="stylesheet" href="/atelier.css">
+<script type="module" src="/atelier.mjs"></script>
+<title>Workstream atlas</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: oklch(0.975 0.004 230);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.952 0.009 230);
+  --ink: oklch(0.235 0.028 245);
+  --muted: oklch(0.49 0.028 240);
+  --line: oklch(0.88 0.015 230);
+  --primary: oklch(0.65 0.10 230);
+  --primary-dark: oklch(0.46 0.105 230);
+  --current: oklch(0.54 0.115 165);
+  --blocked: oklch(0.62 0.13 75);
+  --stale: oklch(0.56 0.15 30);
+  --superseded: oklch(0.50 0.07 290);
+  --closed: oklch(0.53 0.02 240);
+  --completed: oklch(0.52 0.11 215);
+  --unreviewed: oklch(0.52 0.08 255);
+  --focus: oklch(0.58 0.16 235);
+  --shadow: 0 18px 45px oklch(0.28 0.03 240 / 0.10);
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--ink);
+  background: var(--bg);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+}
+button, input, select { font: inherit; }
+button, select { color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 3px solid oklch(0.75 0.12 230 / 0.52);
+  outline-offset: 2px;
+}
+.app { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  min-height: 72px; padding: 14px 24px;
+  background: oklch(1 0 0 / 0.94); border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px);
+}
+.brand { display: flex; align-items: center; gap: 11px; min-width: 245px; }
+.brand-mark { width: 28px; height: 28px; position: relative; }
+.brand-mark::before, .brand-mark::after { content: ""; position: absolute; border-radius: 50%; }
+.brand-mark::before { inset: 2px; border: 2px solid var(--primary); }
+.brand-mark::after { width: 8px; height: 8px; background: var(--primary-dark); top: 10px; left: 10px; box-shadow: -10px 0 0 -2px var(--primary), 10px 0 0 -2px var(--primary); }
+.brand h1 { margin: 0; font-size: 1.05rem; letter-spacing: -0.015em; }
+.brand p { margin: 1px 0 0; color: var(--muted); font-size: 0.78rem; }
+.summary { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--muted); }
+.summary span { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.summary b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.generated { margin-left: auto; color: var(--muted); font-size: 0.78rem; }
+.workspace { min-height: 0; display: grid; grid-template-columns: minmax(300px, 370px) 1fr; }
+.navigator { min-height: 0; border-right: 1px solid var(--line); background: var(--surface-2); display: flex; flex-direction: column; }
+.controls { padding: 18px 18px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.search { width: 100%; min-height: 40px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); padding: 9px 12px; }
+.search::placeholder { color: var(--muted); opacity: 1; }
+.filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
+.filters select { min-width: 0; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 0 9px; }
+.result-count { margin: 9px 2px 0; color: var(--muted); font-size: 0.78rem; }
+.workstream-list { min-height: 0; overflow: auto; padding: 10px; }
+.group-title { display: flex; align-items: center; justify-content: space-between; margin: 14px 8px 6px; color: var(--muted); font-size: 0.78rem; font-weight: 650; }
+.group-title:first-child { margin-top: 4px; }
+.workstream-row { width: 100%; display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: start; padding: 11px 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; text-align: left; cursor: pointer; }
+.workstream-row:hover { background: oklch(1 0 0 / 0.76); }
+.workstream-row[aria-current="true"] { background: var(--surface); border-color: oklch(0.79 0.07 230); box-shadow: 0 5px 16px oklch(0.40 0.05 230 / 0.08); }
+.status-dot { width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; background: var(--status); box-shadow: 0 0 0 3px color-mix(in oklch, var(--status) 16%, transparent); }
+.row-title { font-weight: 640; line-height: 1.3; text-wrap: pretty; }
+.row-meta { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 5px; color: var(--muted); font-size: 0.73rem; }
+.row-count { color: var(--muted); font-size: 0.73rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.detail { min-width: 0; min-height: 0; overflow: auto; padding: 28px clamp(22px, 4vw, 56px) 64px; }
+.detail-inner { max-width: 1120px; margin: 0 auto; }
+.detail-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: start; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+.breadcrumb { color: var(--muted); font-size: 0.78rem; margin-bottom: 8px; }
+.detail h2 { margin: 0; max-width: 26ch; font-size: 1.8rem; line-height: 1.16; letter-spacing: -0.035em; text-wrap: balance; }
+.detail-id { margin: 8px 0 0; color: var(--muted); font: 0.76rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.status-stack { display: flex; align-items: flex-end; flex-direction: column; gap: 8px; }
+.status-pill { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 5px 10px; border-radius: 999px; color: var(--ink); background: color-mix(in oklch, var(--status) 11%, white); border: 1px solid color-mix(in oklch, var(--status) 35%, white); font-size: 0.78rem; font-weight: 700; text-transform: capitalize; }
+.lifecycle { color: var(--muted); font-size: 0.75rem; }
+.summary-copy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr); gap: 28px; padding: 24px 0 28px; }
+.summary-copy h3, .timeline-heading h3, .questions h3, .references h3 { margin: 0 0 7px; font-size: 0.82rem; }
+.summary-copy p { margin: 0; max-width: 72ch; color: var(--muted); font-size: 0.98rem; text-wrap: pretty; }
+.reason { padding: 14px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
+.reason p { font-size: 0.86rem; }
+.workstream-region { display: block; }
+.instruction-box { display: grid; grid-template-columns: minmax(220px, 0.48fr) minmax(0, 1fr); gap: 24px; align-items: start; margin: 0 0 28px; padding: 18px; border: 1px solid oklch(0.79 0.07 230); border-radius: 11px; background: color-mix(in oklch, var(--primary) 7%, white); }
+.instruction-box h3 { margin: 0 0 5px; font-size: 0.88rem; }
+.instruction-box p { margin: 0; max-width: 48ch; color: var(--muted); font-size: 0.82rem; }
+.instruction-box atelier-comments { min-width: 0; }
+.timeline-section { padding: 4px 0 28px; }
+.timeline-heading { display: flex; justify-content: space-between; gap: 16px; align-items: end; margin-bottom: 8px; }
+.timeline-heading p { margin: 0; color: var(--muted); font-size: 0.77rem; }
+.timeline-scroll { overflow-x: auto; padding: 12px 4px 16px; scrollbar-color: var(--line) transparent; }
+.timeline { min-width: max-content; display: flex; align-items: flex-start; padding: 0 16px; }
+.bead-wrap { position: relative; width: 150px; display: grid; justify-items: center; text-align: center; }
+.bead-wrap:not(:last-child)::after { content: ""; position: absolute; z-index: 0; top: 21px; left: calc(50% + 22px); width: calc(100% - 44px); height: 2px; background: var(--line); }
+.bead { position: relative; z-index: 1; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.bead::before { content: ""; position: absolute; inset: 8px; border-radius: 50%; border: 2px solid var(--surface); background: var(--bead); box-shadow: 0 0 0 2px color-mix(in oklch, var(--bead) 35%, var(--line)); }
+.bead:hover::before { transform: scale(1.08); }
+.bead[aria-pressed="true"]::before { box-shadow: 0 0 0 3px var(--surface), 0 0 0 6px color-mix(in oklch, var(--bead) 46%, transparent); }
+.bead-date { margin-top: 2px; color: var(--muted); font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+.bead-label { margin-top: 3px; width: 136px; color: var(--ink); font-size: 0.75rem; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.checkpoint-panel { min-height: 230px; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr); gap: 30px; padding: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.checkpoint-panel h3 { margin: 0 0 8px; font-size: 1.05rem; line-height: 1.3; text-wrap: pretty; }
+.checkpoint-kicker { margin: 0 0 7px; color: var(--muted); font-size: 0.75rem; }
+.checkpoint-panel p { max-width: 72ch; margin: 0; color: var(--muted); }
+.cp-section + .cp-section { margin-top: 18px; }
+.cp-section h4 { margin: 0 0 5px; font-size: 0.78rem; color: var(--ink); }
+.stale-note { margin-top: 14px; padding: 11px 12px; border: 1px solid color-mix(in oklch, var(--stale) 35%, white); border-radius: 8px; background: color-mix(in oklch, var(--stale) 8%, white); color: var(--stale); }
+.meta-list { display: grid; gap: 10px; margin: 0; }
+.meta-list div { display: grid; grid-template-columns: 82px 1fr; gap: 10px; }
+.meta-list dt { color: var(--muted); font-size: 0.74rem; }
+.meta-list dd { margin: 0; font-size: 0.78rem; overflow-wrap: anywhere; }
+.ref-list { margin: 0; padding-left: 18px; color: var(--muted); font: 0.75rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.empty-timeline { padding: 28px; color: var(--muted); background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; }
+.aux { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding-top: 28px; }
+.questions, .references { border-top: 1px solid var(--line); padding-top: 18px; }
+.question { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.question:last-child { border-bottom: 0; }
+.question strong { display: block; font-size: 0.82rem; }
+.question span { color: var(--muted); font-size: 0.75rem; }
+.link { padding: 7px 0; color: var(--muted); font-size: 0.76rem; overflow-wrap: anywhere; }
+.link b { color: var(--ink); }
+.empty-detail { min-height: 60vh; display: grid; place-items: center; color: var(--muted); text-align: center; }
+@media (min-width: 901px) {
+  .workspace { height: calc(100vh - 72px); }
+  .navigator, .detail { height: 100%; }
+}
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: 1fr; }
+  .navigator { max-height: 46vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  .detail { overflow: visible; padding: 24px 18px 48px; }
+  .detail-head, .summary-copy, .instruction-box, .checkpoint-panel, .aux { grid-template-columns: 1fr; }
+  .status-stack { align-items: flex-start; }
+  .generated { display: none; }
+}
+@media (max-width: 560px) {
+  .topbar { padding: 12px 15px; gap: 10px; }
+  .summary { width: 100%; }
+  .filters { grid-template-columns: 1fr; }
+  .detail h2 { font-size: 1.55rem; }
+  .bead-wrap { width: 132px; }
+  .bead-label { width: 118px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .workstream-row, .bead::before { transition: background-color 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark" aria-hidden="true"></div><div><h1>Workstream atlas</h1><p>Attention history, checkpoint by checkpoint</p></div></div>
+    <div class="summary" id="summary" aria-label="Workstream counts"></div>
+    <div class="generated" id="generated"></div>
+  </header>
+  <main class="workspace">
+    <aside class="navigator" aria-label="Workstream navigator">
+      <div class="controls">
+        <input class="search" id="search" type="search" placeholder="Search titles, IDs, explanations…" aria-label="Search Workstreams">
+        <div class="filters">
+          <select id="groupFilter" aria-label="Filter by group"><option value="all">All groups</option><option>Embabel</option><option>Pi Workbench</option><option>PhotoQuest</option><option>Personal</option></select>
+          <select id="statusFilter" aria-label="Choose open Workstreams or closed archive"><option value="open">Open Workstreams</option><option value="current">Open · Current</option><option value="blocked">Open · Blocked</option><option value="stale">Open · Needs refresh</option><option value="unreviewed">Open · Unreviewed</option><option value="archive">Closed archive</option></select>
+        </div>
+        <p class="result-count" id="resultCount"></p>
+      </div>
+      <div class="workstream-list" id="workstreamList"></div>
+    </aside>
+    <section class="detail" id="detail" aria-live="polite"></section>
+  </main>
+</div>
+<script>
+let DATA = __WORKSTREAM_DATA__;
+const statusColor = {
+  current: "var(--current)", blocked: "var(--blocked)", stale: "var(--stale)",
+  superseded: "var(--superseded)", completed: "var(--completed)", unreviewed: "var(--unreviewed)", closed: "var(--closed)"
+};
+const state = { selectedId: null, selectedCheckpoint: null, query: "", group: "all", status: "open" };
+const fmtDate = (value, withTime = false) => value ? new Intl.DateTimeFormat(undefined, withTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" }).format(new Date(value)) : "—";
+const escapeHtml = (value = "") => String(value).replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"})[char]);
+const titleCase = value => value.charAt(0).toUpperCase() + value.slice(1);
+
+function filteredItems() {
+  const q = state.query.trim().toLowerCase();
+  return DATA.items.filter(item => {
+    const matchesGroup = state.group === "all" || item.group === state.group;
+    const matchesStatus = state.status === "archive" ? item.lifecycle === "closed" : item.lifecycle === "open" && (state.status === "open" || item.status === state.status);
+    const haystack = [item.title, item.id, item.explainer, item.reason].join(" ").toLowerCase();
+    return matchesGroup && matchesStatus && (!q || haystack.includes(q));
+  });
+}
+
+function renderSummary() {
+  const open = DATA.items.filter(item => item.lifecycle === "open").length;
+  const stale = DATA.items.filter(item => item.status === "stale" && item.lifecycle === "open").length;
+  const blocked = DATA.items.filter(item => item.status === "blocked").length;
+  document.getElementById("summary").innerHTML = `<span><b>${open}</b> open</span><span><b>${stale}</b> need refresh</span><span><b>${blocked}</b> blocked</span>`;
+  document.getElementById("generated").textContent = `Snapshot ${fmtDate(DATA.generatedAt, true)}`;
+}
+
+function renderList() {
+  const items = filteredItems();
+  const list = document.getElementById("workstreamList");
+  document.getElementById("resultCount").textContent = state.status === "archive" ? `${items.length} closed Workstreams` : `${items.length} open Workstreams`;
+  const grouped = new Map();
+  for (const item of items) {
+    if (!grouped.has(item.group)) grouped.set(item.group, []);
+    grouped.get(item.group).push(item);
+  }
+  const order = ["Embabel", "Pi Workbench", "PhotoQuest", "Personal"];
+  list.innerHTML = order.filter(group => grouped.has(group)).map(group => `
+    <div class="group-title"><span>${group}</span><span>${grouped.get(group).length}</span></div>
+    ${grouped.get(group).map(item => `
+      <button class="workstream-row" data-id="${escapeHtml(item.id)}" aria-current="${state.selectedId === item.id}" style="--status:${statusColor[item.status]}">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span><span class="row-title">${escapeHtml(item.title)}</span><span class="row-meta"><span>${titleCase(item.status)}</span><span>·</span><span>${item.lifecycle}</span><span>·</span><span>${fmtDate(item.updatedAt)}</span></span></span>
+        <span class="row-count" title="${item.checkpoints.length} checkpoints">${item.checkpoints.length} cp</span>
+      </button>`).join("")}
+  `).join("") || `<div class="empty-detail"><div><strong>No matches</strong><br>Try a broader filter.</div></div>`;
+  list.querySelectorAll("button[data-id]").forEach(button => button.addEventListener("click", () => selectWorkstream(button.dataset.id)));
+}
+
+function selectWorkstream(id) {
+  state.selectedId = id;
+  const item = DATA.items.find(candidate => candidate.id === id);
+  state.selectedCheckpoint = item?.checkpoints.at(-1)?.id || null;
+  renderList();
+  renderDetail();
+  const detail = document.getElementById("detail");
+  detail.scrollTo({ top: 0, behavior: "auto" });
+  if (window.innerWidth <= 900) detail.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+}
+
+function renderTimeline(item) {
+  if (!item.checkpoints.length) return `<div class="empty-timeline"><strong>No checkpoint recorded.</strong><br>This Workstream has lifecycle history, but no resumable checkpoint.</div>`;
+  return `
+    <div class="timeline-heading"><div><h3>Checkpoint timeline</h3><p>Select a bead to inspect what changed, what remained, and the intended next move.</p></div><p>${item.checkpoints.length} checkpoint${item.checkpoints.length === 1 ? "" : "s"} · scroll horizontally</p></div>
+    <div class="timeline-scroll"><div class="timeline">
+      ${item.checkpoints.map((cp, index) => `<div class="bead-wrap"><button class="bead ${cp.stale ? "stale-bead" : ""}" data-cp="${escapeHtml(cp.id)}" aria-pressed="${state.selectedCheckpoint === cp.id}" aria-label="Checkpoint ${index + 1}: ${escapeHtml(cp.label)}" style="--bead:${cp.stale ? "var(--stale)" : index === item.checkpoints.length - 1 ? statusColor[item.status] : "var(--primary)"}"></button><div class="bead-date">${fmtDate(cp.recordedAt)}</div><div class="bead-label">${escapeHtml(cp.label)}</div></div>`).join("")}
+    </div></div>
+    <div id="checkpointPanel"></div>`;
+}
+
+function renderCheckpoint(item) {
+  const host = document.getElementById("checkpointPanel");
+  if (!host) return;
+  const cp = item.checkpoints.find(candidate => candidate.id === state.selectedCheckpoint) || item.checkpoints.at(-1);
+  if (!cp) return;
+  const refs = cp.references.length ? `<ul class="ref-list">${cp.references.map(ref => `<li>${escapeHtml(ref)}</li>`).join("")}</ul>` : `<p>No references recorded.</p>`;
+  host.innerHTML = `<article class="checkpoint-panel">
+    <div>
+      <p class="checkpoint-kicker">Checkpoint · ${fmtDate(cp.recordedAt, true)}</p>
+      <h3>${escapeHtml(cp.label)}</h3>
+      <div class="cp-section"><h4>What changed</h4><p>${escapeHtml(cp.whatChanged || "No change summary recorded.")}</p></div>
+      <div class="cp-section"><h4>What remained</h4><p>${escapeHtml(cp.remains || "Nothing recorded.")}</p></div>
+      <div class="cp-section"><h4>Next move</h4><p>${escapeHtml(cp.next || "No next move recorded.")}</p></div>
+      ${cp.stale ? `<div class="stale-note"><strong>Marked stale.</strong> ${escapeHtml(cp.stale.reason)}</div>` : ""}
+    </div>
+    <div>
+      <dl class="meta-list"><div><dt>ID</dt><dd>${escapeHtml(cp.id)}</dd></div><div><dt>Session</dt><dd>${escapeHtml(cp.sessionId || "—")}</dd></div><div><dt>Producer</dt><dd>${escapeHtml(cp.producer || "—")}</dd></div><div><dt>Revision</dt><dd>${cp.revision}</dd></div></dl>
+      <div class="cp-section"><h4>References</h4>${refs}</div>
+      ${cp.nextSessionPrompt ? `<div class="cp-section"><h4>Continuation prompt</h4><p>${escapeHtml(cp.nextSessionPrompt)}</p></div>` : ""}
+    </div>
+  </article>`;
+}
+
+function renderDetail() {
+  const item = DATA.items.find(candidate => candidate.id === state.selectedId);
+  const detail = document.getElementById("detail");
+  if (!item) { detail.innerHTML = `<div class="empty-detail"><div><strong>Select a Workstream</strong><br>Its checkpoint history will appear here.</div></div>`; return; }
+  const pending = item.tasks.filter(task => task.status !== "resolved");
+  const regionKey = `workstream-${item.id}`;
+  detail.innerHTML = `<atelier-region class="detail-inner workstream-region" key="${escapeHtml(regionKey)}" label="${escapeHtml(item.title)}" comments="sheet" style="--status:${statusColor[item.status]}">
+    <header class="detail-head"><div><div class="breadcrumb">${escapeHtml(item.group)} · updated ${fmtDate(item.updatedAt)}</div><h2>${escapeHtml(item.title)}</h2><p class="detail-id">${escapeHtml(item.id)}</p></div><div class="status-stack"><span class="status-pill"><span class="status-dot"></span>${escapeHtml(item.status)}</span><span class="lifecycle">${titleCase(item.lifecycle)} · revision ${item.revision} · ${item.sessions} session${item.sessions === 1 ? "" : "s"}</span></div></header>
+    <section class="summary-copy"><div><h3>What this Workstream does</h3><p>${escapeHtml(item.explainer)}</p></div><div class="reason"><h3>Why it has this state</h3><p>${escapeHtml(item.reason)}</p></div></section>
+    <section class="instruction-box"><div><h3>Tell Pi what to do with this Workstream</h3><p>Write one concrete instruction for this Workstream. Send it here; Pi receives it with the Workstream identity attached.</p></div><atelier-comments for="${escapeHtml(regionKey)}"></atelier-comments></section>
+    <section class="timeline-section">${renderTimeline(item)}</section>
+    <section class="aux">
+      <div class="questions"><h3>Human tasks</h3>${pending.length ? pending.map(task => `<div class="question"><strong>${escapeHtml(task.title)}</strong><span>${titleCase(task.status)}${task.answer?.optionId ? ` · answer: ${escapeHtml(task.answer.optionId)}` : ""}</span></div>`).join("") : `<p class="lifecycle">No unresolved Human Tasks.</p>`}</div>
+      <div class="references"><h3>Workstream links</h3>${item.links.length ? item.links.map(link => `<div class="link"><b>${escapeHtml(link.label)}</b><br>${escapeHtml(link.reference)}</div>`).join("") : `<p class="lifecycle">No links recorded.</p>`}</div>
+    </section>
+  </atelier-region>`;
+  detail.querySelectorAll("button[data-cp]").forEach(button => button.addEventListener("click", () => { state.selectedCheckpoint = button.dataset.cp; detail.querySelectorAll("button[data-cp]").forEach(bead => bead.setAttribute("aria-pressed", bead === button)); renderCheckpoint(item); }));
+  renderCheckpoint(item);
+}
+
+function applyFilters() {
+  const visible = filteredItems();
+  if (!visible.some(item => item.id === state.selectedId)) {
+    state.selectedId = visible[0]?.id || null;
+    state.selectedCheckpoint = visible[0]?.checkpoints.at(-1)?.id || null;
+  }
+  renderList();
+  renderDetail();
+}
+
+async function refreshSnapshot() {
+  if (document.activeElement?.matches("input, textarea, select")) return;
+  try {
+    const next = await fetch("/dashboard-data.json", { cache: "no-store" }).then(response => response.json());
+    if (next.generatedAt === DATA.generatedAt) return;
+    DATA = next;
+    const selected = DATA.items.find(item => item.id === state.selectedId);
+    if (selected && !selected.checkpoints.some(checkpoint => checkpoint.id === state.selectedCheckpoint)) state.selectedCheckpoint = selected.checkpoints.at(-1)?.id || null;
+    renderSummary();
+    applyFilters();
+  } catch { /* keep the last good snapshot while the local server is restarting */ }
+}
+
+document.getElementById("search").addEventListener("input", event => { state.query = event.target.value; applyFilters(); });
+document.getElementById("groupFilter").addEventListener("change", event => { state.group = event.target.value; applyFilters(); });
+document.getElementById("statusFilter").addEventListener("change", event => { state.status = event.target.value; applyFilters(); });
+renderSummary();
+const firstAttention = DATA.items.find(item => item.lifecycle === "open" && item.status === "stale") || DATA.items[0];
+state.selectedId = firstAttention?.id || null;
+state.selectedCheckpoint = firstAttention?.checkpoints.at(-1)?.id || null;
+renderList();
+renderDetail();
+setInterval(refreshSnapshot, 5000);
+</script>
+</body>
+</html>

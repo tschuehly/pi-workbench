@@ -1,0 +1,161 @@
+/* atelier chrome — every selector is .atl-* scoped.
+   No bare-tag rules: the content library (daisyUI/Tailwind) owns the agent's markup, this file
+   owns kernel chrome only, and neither can restyle the other by accident.
+   Colors derive from currentColor so any daisyUI theme carries through without configuration. */
+:root{
+  --atl-line: color-mix(in srgb, currentColor 18%, transparent);
+  --atl-soft: color-mix(in srgb, currentColor 6%, transparent);
+  --atl-accent: #f59e0b;
+  --atl-gutter: 320px;
+}
+
+/* kernel element defaults — custom elements are inline until told otherwise */
+atelier-region, atelier-comments, atelier-cockpit{ display:block; }
+atelier-attention{ display:inline-flex; align-items:center; gap:4px; }
+/* An empty Updates or Proposals host must occupy nothing: every Region carries one, and most
+   Regions have neither pending. */
+atelier-update, atelier-proposal{ display:block; }
+atelier-update:empty, atelier-proposal:empty{ display:none; }
+
+.atl-region{ position:relative; }
+.atl-region--side{ padding-right: calc(var(--atl-gutter) + 20px); }
+.atl-region--side > .atl-thread{
+  position:absolute; top:0; right:0; width:var(--atl-gutter);
+}
+/* Below the gutter's working width, side placement stacks. Squeezing the content to keep a
+   320px gutter costs more than the side-by-side view buys. */
+@media (max-width: 900px){
+  .atl-region--side{ padding-right:0; }
+  .atl-region--side > .atl-thread{ position:static; width:auto; }
+  .atl-region--side > .atl-bar{ right:0; }
+}
+
+
+.atl-bar{ position:absolute; top:0; right:0; display:flex; align-items:center; gap:6px; min-height:26px; }
+.atl-region--side > .atl-bar{ right: calc(var(--atl-gutter) + 20px); }
+.atl-icon{
+  display:inline-grid; place-items:center; width:26px; height:26px; padding:0;
+  border:1px solid transparent; border-radius:7px; background:transparent; color:inherit;
+  opacity:.55; cursor:pointer; font-size:13px; line-height:1;
+}
+.atl-icon:hover, .atl-icon:focus-visible{ opacity:1; border-color:var(--atl-line); background:var(--atl-soft); }
+/* On a phone there is no free margin for the bar to sit in, so it stops floating over the heading
+   and takes its own right-aligned row above the content. */
+@media (max-width: 640px){
+  .atl-bar, .atl-region--side > .atl-bar{ position:static; justify-content:flex-end; margin-bottom:2px; }
+}
+.atl-count{ font-size:10px; font-variant-numeric:tabular-nums; opacity:.8; }
+.atl-badge{
+  display:inline-block; border:1px solid var(--atl-line); border-radius:999px;
+  padding:1px 8px; font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; opacity:.75;
+}
+.atl-badge--changed{ border-color:var(--atl-accent); color:var(--atl-accent); opacity:1; }
+.atl-badge--zero{ opacity:.4; }
+.atl-dot{
+  display:inline-block; width:7px; height:7px; border-radius:50%;
+  background:var(--atl-accent); vertical-align:middle;
+}
+
+.atl-thread{ display:block; margin-top:12px; font-size:13px; }
+.atl-comment{ border-left:2px solid var(--atl-line); padding:6px 0 6px 10px; margin-bottom:8px; }
+.atl-comment--sent{ border-left-color:var(--atl-accent); }
+.atl-quote{
+  border-left:2px solid var(--atl-accent); padding-left:8px; margin-bottom:4px;
+  opacity:.7; font-style:italic;
+}
+.atl-text{ white-space:pre-wrap; }
+.atl-state{ margin-top:3px; font-size:11px; opacity:.6; }
+.atl-reply{ margin-top:6px; padding:6px 8px; border-radius:7px; background:var(--atl-soft); white-space:pre-wrap; }
+.atl-reply b{ display:block; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; opacity:.6; }
+.atl-verdict{ display:flex; gap:6px; margin-top:6px; }
+.atl-btn, .atl-send{
+  border:1px solid var(--atl-line); border-radius:7px; background:transparent; color:inherit;
+  padding:3px 10px; font:inherit; font-size:12px; cursor:pointer;
+}
+.atl-btn:hover, .atl-send:hover{ background:var(--atl-soft); }
+.atl-compose{ display:flex; gap:6px; align-items:flex-start; margin-top:8px; }
+.atl-input{
+  flex:1; min-height:40px; border:1px solid var(--atl-line); border-radius:7px;
+  background:transparent; color:inherit; padding:6px 8px; font:inherit; font-size:13px; resize:vertical;
+}
+
+/* Agent → human messages. Both sit above the content of the Region they belong to: a question
+   about a diagram is useless three screens away from the diagram. */
+.atl-update{
+  display:flex; gap:10px; align-items:flex-start; justify-content:space-between;
+  border:1px solid var(--atl-line); border-left:3px solid var(--atl-accent); border-radius:7px;
+  padding:8px 10px; margin:0 0 8px; font-size:13px; background:var(--atl-soft);
+}
+.atl-update__body b{ display:block; }
+.atl-update__body span{ opacity:.75; }
+
+.atl-proposal{
+  border:1px solid var(--atl-line); border-left:3px solid var(--atl-accent); border-radius:7px;
+  padding:10px; margin:0 0 10px; font-size:13px;
+}
+.atl-proposal--decided{ border-left-color:var(--atl-line); opacity:.7; }
+.atl-proposal__q{ font-weight:600; margin-bottom:8px; }
+.atl-options{ display:flex; flex-direction:column; gap:6px; }
+.atl-option{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.atl-explain{
+  flex-basis:100%; padding:6px 8px; border-radius:7px; background:var(--atl-soft);
+  white-space:pre-wrap; opacity:.85;
+}
+.atl-explain--waiting{ opacity:.6; font-style:italic; }
+.atl-custom{ display:flex; gap:6px; margin-top:8px; }
+.atl-custom .atl-input{ min-height:0; }
+
+/* Cockpit: every open loop on the Surface, split by whose turn it is. */
+.atl-cockpit{ font-size:13px; min-width:0; }
+.atl-cockpit__head{ display:flex; justify-content:space-between; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+.atl-cockpit__filters{ display:flex; gap:4px; }
+.atl-btn--on{ border-color:var(--atl-accent); color:var(--atl-accent); }
+.atl-cockpit__list{ display:flex; flex-direction:column; gap:4px; }
+/* Two lines on purpose: the label is a whole question and the Region Key is long. Competing for one
+   row in a sidebar clamps both into fragments. */
+.atl-cockpit__row{
+  display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px 8px; width:100%; min-width:0; text-align:left;
+  border:1px solid transparent; border-radius:7px; background:transparent; color:inherit;
+  padding:5px 6px; font:inherit; font-size:12.5px; cursor:pointer;
+}
+.atl-cockpit__row:hover{ border-color:var(--atl-line); background:var(--atl-soft); }
+/* A Cockpit label is a whole question, and a Cockpit often sits in a narrow column. Clamping two
+   wrapped lines keeps its minimum width at one word; a nowrap ellipsis instead reports the entire
+   sentence as the element's minimum and drags the whole page wider than the viewport. */
+.atl-cockpit__label{
+  flex:1; min-width:0; overflow:hidden;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+}
+.atl-cockpit__region{ flex-basis:100%; opacity:.5; font-size:11px; word-break:break-word; }
+
+/* A jump has to announce where it landed. */
+.atl-flash{ animation: atl-flash 1.2s ease-out; }
+@keyframes atl-flash{
+  from{ box-shadow:0 0 0 3px var(--atl-accent); }
+  to{ box-shadow:0 0 0 3px transparent; }
+}
+
+/* Bottom sheet: overlays the lower viewport rather than reflowing the document, so the content
+   above keeps scrolling normally and the human can line up context and comment. */
+.atl-sheet{
+  position:fixed; left:0; right:0; bottom:0; z-index:60; max-height:45vh; overflow:auto;
+  padding:12px 16px 16px; border-top:1px solid var(--atl-line);
+  /* Theme token when the content library supplies one, system surface when it does not. */
+  background:var(--color-base-200, Canvas); color:var(--color-base-content, CanvasText);
+  box-shadow:0 -8px 24px rgb(0 0 0 / .18);
+}
+.atl-sheet__head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+
+.atl-warn{
+  position:sticky; top:0; z-index:65; padding:6px 14px; font-size:12.5px;
+  border-bottom:1px solid var(--atl-accent);
+  background:color-mix(in srgb, var(--atl-accent) 20%, Canvas); color:CanvasText;
+}
+
+html[data-atl-offline] .atl-thread{ opacity:.55; }
+html[data-atl-offline] body::after{
+  content:"offline — the atelier server is not responding";
+  position:fixed; left:50%; bottom:12px; transform:translateX(-50%); z-index:70;
+  padding:4px 12px; border-radius:999px; font-size:12px;
+  background:var(--atl-accent); color:#000;
+}
