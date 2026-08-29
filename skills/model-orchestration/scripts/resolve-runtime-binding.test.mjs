@@ -61,6 +61,14 @@ try {
   assert.equal(reviewOfOpenAi.modelBinding.independence.independentOfFamily, "openai");
   assert.equal(reviewOfOpenAi.modelBinding.independence.selectedFamily, "anthropic");
 
+  const exactModelWithoutOverlay = JSON.parse(execFileSync(process.execPath, [resolver, "independent-review", "--independent-of-model", "openai-codex/gpt-5.6-sol", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.deepEqual(exactModelWithoutOverlay.modelBinding.independence, reviewOfOpenAi.modelBinding.independence);
+  assert.equal(exactModelWithoutOverlay.modelBinding.model, "claude-opus-5");
+
+  const contradictoryAuthor = spawnSync(process.execPath, [resolver, "independent-review", "--independent-of", "anthropic", "--independent-of-model", "openai-codex/gpt-5.6-sol", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(contradictoryAuthor.status, 3);
+  assert.match(contradictoryAuthor.stderr, /contradicts --independent-of-model/);
+
   const reviewOfClaude = JSON.parse(execFileSync(process.execPath, [resolver, "independent-review", "--independent-of", "anthropic", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(reviewOfClaude.modelBinding.model, "gpt-5.6-sol");
   assert.equal(reviewOfClaude.modelBinding.independence.selectedFamily, "openai");
@@ -208,7 +216,9 @@ try {
     assert.match(run.stderr, pattern, message);
   }
 
-  assert.equal(spawnSync(process.execPath, [resolver, "investigation", "--independent-of-model", "anthropic/claude-opus-5", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }).status, 3, "--independent-of-model requires an active overlay");
+  const unrelatedExactModel = spawnSync(process.execPath, [resolver, "investigation", "--independent-of-model", "anthropic/claude-opus-5", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(unrelatedExactModel.status, 3, "a non-independent role rejects an author model without an overlay");
+  assert.match(unrelatedExactModel.stderr, /does not use an independence constraint/);
 
   const badOverlay = (contents, pattern, message) => {
     const file = path.join(temp, `overlay-${createHash("sha256").update(String(contents)).digest("hex").slice(0, 8)}.json`);

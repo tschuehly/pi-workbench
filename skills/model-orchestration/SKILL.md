@@ -31,13 +31,13 @@ Assign exactly one role:
 | `independent-review` | Fresh review of a bounded, high-risk diff from another model family |
 | `mechanics` | Cheap mechanical work that saves meaningful lead context |
 
-Include bounded scope, task risk, required Independence, and the author provider when Independence matters. `independent-judgment`, `challenge`, and `independent-review` require cross-family routing; their model binding is selected dynamically from the author provider rather than fixed to one family.
+Include bounded scope, task risk, required Independence, and the author provider when Independence matters. `independent-judgment`, `challenge`, and `independent-review` require cross-family routing; their model binding is selected dynamically from the author provider rather than fixed to one family. When the author's completion receipt names an exact model, pass it as `independentOfModel`; default routing safely uses its provider.
 
 ### Run-scoped routing overlay
 
 Set `PI_WORKBENCH_ROUTING_OVERLAY` to an absolute JSON path to narrow a whole run to one declared allowlist; see [`references/anthropic-opus-sonnet-overlay.json`](references/anthropic-opus-sonnet-overlay.json). It is the sole activation variable and fails closed: an unmapped role, a model outside the allowlist, or missing, unreadable, invalid, or unpropagated bytes blocks instead of falling back to default routing. Each binding receipt carries the overlay path and content hash, and the execution adapter re-verifies that hash before launch.
 
-While an overlay is active, independence is distinct-model rather than cross-family: pass `--independent-of-model '<provider>/<model>'` (the Subagent tool's `independentOfModel`) taken from the author's completion receipt, and the overlay selects a different model. Never label same-model review independent.
+While an overlay is active, independence is distinct-model rather than cross-family: `--independent-of-model '<provider>/<model>'` (the Subagent tool's `independentOfModel`) is required, and the overlay selects a different model. The same parameter is safe without an overlay, where routing uses its provider for cross-family independence. Never label same-model review independent.
 
 **Complete when:** every proposed Dispatch has exactly one Cognitive Role and a non-overlapping bounded responsibility.
 
@@ -70,7 +70,7 @@ repeated identical resolutions do not satisfy the panel.
 Run:
 
 ```bash
-node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--independent-of <author-provider>]
+node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--independent-of <author-provider> | --independent-of-model <provider/model>]
 ```
 
 The resolver checks the vendored policy, the current Pi model catalog, and a machine-local `quota-axi --json` snapshot cached for ten minutes. Catalog and quota subprocesses each have a 15-second deadline so routing cannot silently stall a child launch. Concurrent and repeated resolutions share that snapshot, including telemetry failures; the first resolution after the cache expires refreshes it. Fresh quota telemetry with an exhausted relevant window blocks routing. Stale, unavailable, or unreadable quota telemetry produces a `degraded-quota-telemetry` admission instead: the child launch proceeds and Pi's runtime binding verification remains authoritative. An unknown role or absent model still fails closed. Routing never silently substitutes the requested role. Independent roles fail closed without a recognized author provider or a configured binding from another family.

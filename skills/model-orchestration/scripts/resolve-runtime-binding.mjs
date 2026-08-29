@@ -21,6 +21,12 @@ function block(role, reason) {
   process.exit(3);
 }
 
+function authorFromModel(role, authorKey) {
+  const slash = authorKey.indexOf("/");
+  if (slash <= 0 || slash === authorKey.length - 1) block(role, `--independent-of-model must be '<provider>/<model>', got '${authorKey}'`);
+  return { provider: authorKey.slice(0, slash), model: authorKey.slice(slash + 1) };
+}
+
 // A run-scoped overlay narrows routing to one explicit allowlist. It is the sole activation
 // variable, and any missing, unreadable, or invalid byte fails closed rather than silently
 // falling back to the default policy.
@@ -120,10 +126,7 @@ if (overlay !== undefined) {
     // Independence under the overlay is distinct-model, not cross-family: a single-provider run
     // still gets a fresh child on a different model than the one that authored the bytes.
     if (authorKey === undefined) block(role, `Role '${role}' requires --independent-of-model <provider>/<model> while a routing overlay is active`);
-    const slash = authorKey.indexOf("/");
-    if (slash <= 0 || slash === authorKey.length - 1) block(role, `--independent-of-model must be '<provider>/<model>', got '${authorKey}'`);
-    const authorProvider = authorKey.slice(0, slash);
-    const authorModel = authorKey.slice(slash + 1);
+    const { provider: authorProvider, model: authorModel } = authorFromModel(role, authorKey);
     if (independentOfProvider !== undefined && independentOfProvider !== authorProvider) {
       block(role, `--independent-of '${independentOfProvider}' contradicts --independent-of-model '${authorKey}'`);
     }
@@ -131,11 +134,16 @@ if (overlay !== undefined) {
     if (binding === undefined) block(role, `Routing overlay has no independent binding for author model '${authorKey}'`);
     independence = { kind: "fresh-context-distinct-model", authorProvider, authorModel, selectedProvider: binding.provider, selectedModel: binding.model };
   }
-} else if (independentOfModel !== undefined) {
-  block(role, "--independent-of-model requires an active PI_WORKBENCH_ROUTING_OVERLAY");
 } else if (rolePolicy.independentBindings !== undefined) {
+  if (independentOfModel !== undefined) {
+    const { provider: authorProvider } = authorFromModel(role, independentOfModel);
+    if (independentOfProvider !== undefined && independentOfProvider !== authorProvider) {
+      block(role, `--independent-of '${independentOfProvider}' contradicts --independent-of-model '${independentOfModel}'`);
+    }
+    independentOfProvider = authorProvider;
+  }
   if (independentOfProvider === undefined) {
-    console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Role '${role}' requires --independent-of <provider>`);
+    console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Role '${role}' requires --independent-of <provider> or --independent-of-model <provider>/<model>`);
     process.exit(3);
   }
   const independentOfFamily = policy.providerFamilies[independentOfProvider];
@@ -150,7 +158,7 @@ if (overlay !== undefined) {
     process.exit(3);
   }
   independence = { independentOfProvider, independentOfFamily, selectedFamily };
-} else if (independentOfProvider !== undefined) {
+} else if (independentOfProvider !== undefined || independentOfModel !== undefined) {
   console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Role '${role}' does not use an independence constraint`);
   process.exit(3);
 }
