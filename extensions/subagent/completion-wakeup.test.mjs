@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCompletionWakeup, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
+import { createCompletionWakeup, isNormalCompletionAttention, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
 
 function harness() {
   const sent = [];
@@ -12,23 +12,23 @@ function harness() {
 
 const subagent = { executionId: "exec-1", outcome: "success", profile: "scout", cognitiveRole: "investigation" };
 
-test("sends one bounded follow-up turn for a terminal background subagent", () => {
+test("sends one coalesced steer signal for terminal background children", () => {
   const { wakeup, sent } = harness();
 
   assert.equal(wakeup.notify(subagent), true);
   assert.equal(wakeup.notify(subagent), false);
 
   assert.equal(sent.length, 1);
-  assert.deepEqual(sent[0].options, { deliverAs: "followUp", triggerTurn: true });
+  assert.deepEqual(sent[0].options, { deliverAs: "steer", triggerTurn: true });
   assert.equal(sent[0].message.customType, "pi-workbench:child-completion");
-  assert.match(sent[0].message.content, /exec-1/);
-  assert.match(sent[0].message.content, /success/);
-  assert.match(sent[0].message.content, /Call subagent_collect exactly once/);
-  assert.match(sent[0].message.content, /Do not retry, relaunch, publish, or accept/);
-  assert.deepEqual(sent[0].message.details, subagent);
+  assert.match(sent[0].message.content, /Background children finished/);
+  assert.match(sent[0].message.content, /subagent_status/);
+  assert.match(sent[0].message.content, /collect and reconcile each terminal-uncollected child once/);
+  assert.match(sent[0].message.content, /authorizes no retry, relaunch, publication, or acceptance/);
+  assert.deepEqual(sent[0].message.details, { attention: "terminal-results" });
 });
 
-test("identifies a worker without including its terminal result", () => {
+test("carries no per-child identity in normal worker attention", () => {
   const { wakeup, sent } = harness();
 
   wakeup.notify({
@@ -40,17 +40,53 @@ test("identifies a worker without including its terminal result", () => {
     workerName: "Catalog worker",
   });
 
-  assert.match(sent[0].message.content, /Worker "Catalog worker" \(worker-1\)/);
-  assert.deepEqual(sent[0].message.details, {
-    executionId: "exec-worker",
-    outcome: "execution_failed",
-    profile: "implementer",
-    cognitiveRole: "implementation",
-    workerId: "worker-1",
-    workerName: "Catalog worker",
-  });
-  assert.equal("text" in sent[0].message.details, false);
-  assert.equal("diagnostic" in sent[0].message.details, false);
+  assert.doesNotMatch(sent[0].message.content, /Catalog worker|exec-worker/);
+  assert.deepEqual(sent[0].message.details, { attention: "terminal-results" });
+});
+
+test("coalesces a fan-out into one signal that only a delivered marker re-arms", () => {
+  const { wakeup, sent } = harness();
+  const finish = (n) => wakeup.notify({ ...subagent, executionId: `exec-${n}` });
+
+  assert.equal(finish(0), true);
+  const later = [];
+  for (let n = 1; n < 23; n += 1) later.push(finish(n));
+  assert.equal(sent.length, 1, "23 completions produce one signal");
+  assert.equal(later.filter((delivered) => delivered === false).length, 22);
+
+  const marker = { role: "custom", customType: sent[0].message.customType, details: sent[0].message.details };
+  assert.equal(isNormalCompletionAttention(marker), true);
+  assert.equal(isNormalCompletionAttention({ ...marker, role: "user" }), false);
+  assert.equal(isNormalCompletionAttention({ ...marker, customType: "context-checkpoint" }), false);
+  assert.equal(isNormalCompletionAttention({ ...marker, details: { executionId: "exec-1" } }), false);
+  assert.equal(isNormalCompletionAttention(undefined), false);
+
+  wakeup.rearm();
+  wakeup.rearm();
+  assert.equal(sent.length, 1, "re-arming sends nothing");
+  assert.equal(finish(23), true);
+  assert.equal(sent.length, 2, "a later completion signals again");
+  assert.equal(finish(24), false);
+});
+
+test("keeps receipt-failure attention outside normal coalescing", async () => {
+  const { wakeup, sent } = harness();
+  wakeup.notify(subagent);
+
+  await assert.rejects(settleWorkerReceipt({
+    settle: async () => { throw new Error("registry write failed"); },
+    wakeup,
+    background: true,
+    completion: { ...subagent, executionId: "exec-worker", workerId: "worker-1", workerName: "Worker" },
+  }), /registry write failed/);
+
+  assert.equal(sent.length, 2, "a receipt failure is never suppressed by a queued normal signal");
+  assert.deepEqual(sent[1].options, { deliverAs: "followUp", triggerTurn: true });
+  assert.equal(isNormalCompletionAttention({ role: "custom", customType: sent[1].message.customType, details: sent[1].message.details }), false);
+  assert.match(sent[1].message.content, /Worker "Worker" \(worker-1\)/);
+
+  wakeup.notify({ ...subagent, executionId: "exec-2" });
+  assert.equal(sent.length, 2, "receipt-failure delivery does not re-arm normal attention");
 });
 
 test("re-arms wakeup when collection detaches before terminal", () => {
@@ -94,7 +130,7 @@ test("wakes a worker only after its receipt settles", async () => {
   release();
   await settling;
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].message.details.outcome, "success");
+  assert.deepEqual(sent[0].message.details, { attention: "terminal-results" });
 });
 
 test("emits bounded outcome_unknown attention when a worker receipt fails", async () => {

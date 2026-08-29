@@ -10,7 +10,7 @@ This is a same-session, lossy context checkpoint. The focus directs Pi's summari
 
 `checkpoint-barrier.mjs` makes the checkpoint atomic against background children. A background Subagent or Worker can reach terminal completion after `compact_and_continue` is accepted but before `agent_settled` fires, and its wakeup asks for a turn. The barrier blocks turn-triggering child wakes from acceptance through compaction, delivers the checkpoint result first, then releases every queued wake exactly once. A failed compaction still releases them; session shutdown drops them instead of delivering them late.
 
-The barrier is one process-local instance shared by import: this extension owns it, and `extensions/subagent/` wraps its completion wakeup with it. Wakes are keyed by execution and receipt status, so one execution cannot wake the lead twice while a terminal wake and a receipt-failure wake stay distinct.
+The barrier is one process-local instance shared by import: this extension owns it, and `extensions/subagent/` wraps its completion wakeup with it. The coalesced completion signal holds one stable key, so a fan-out across a checkpoint releases one signal and a later signal replaces the held one; a receipt-failure wake keys by its own execution and stays distinct.
 
 This covers only the explicit `compact_and_continue` boundary. Pi's own threshold and overflow compaction is upstream behavior that this extension does not schedule and does not fix; see [`docs/plans/upstream-pi-summary-owner-direction.md`](../../docs/plans/upstream-pi-summary-owner-direction.md).
 

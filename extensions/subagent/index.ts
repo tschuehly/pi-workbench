@@ -11,7 +11,7 @@ import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/sr
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
-import { createCompletionWakeup, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
+import { createCompletionWakeup, isNormalCompletionAttention, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -79,7 +79,7 @@ const Params = Type.Object({
   independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Safe in every run: default routing uses its provider for cross-family independence, while an active routing overlay uses the exact model." })),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, maximum: LEAF_TIMEOUT_CEILING_SECONDS, description: `Bounded leaf deadline in seconds; defaults to 20 minutes and may not exceed ${LEAF_TIMEOUT_CEILING_SECONDS / 60} minutes. Raise it explicitly for a long render or build.` })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
-  background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the terminal wakeup with subagent_collect. The child still dies when the attended session ends. A Subagent launched inside a Worker must stay in the foreground." })),
+  background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the coalesced completion signal with subagent_status and subagent_collect. The child still dies when the attended session ends. A Subagent launched inside a Worker must stay in the foreground." })),
 });
 
 const IdParam = Type.Object({ executionId: Type.String({ minLength: 1, description: "Execution identifier returned by a background subagent launch" }) });
@@ -100,7 +100,7 @@ const WorkerDispatchParams = Type.Object({
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, maximum: WORKER_TIMEOUT_CEILING_SECONDS, description: `Bounded phase deadline in seconds; defaults to 20 minutes and may not exceed ${WORKER_TIMEOUT_CEILING_SECONDS / 60} minutes. A phase that launches leaves must outlast them, so raise it explicitly for a long render or build phase.` })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
-  background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the terminal wakeup with subagent_collect." })),
+  background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the coalesced completion signal with subagent_collect." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
 });
 const WorkerStatusParams = Type.Object({
@@ -138,6 +138,13 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerShortcut("super+b", backgroundShortcut);
   pi.registerShortcut("ctrl+alt+b", backgroundShortcut);
 
+  // Delivery, not collection, clears coalesced completion attention: the lead is now looking at the
+  // signal. A settled agent re-arms too, so an aborted or swallowed delivery cannot mute later children.
+  pi.on("message_start", (event: { message?: unknown }) => {
+    if (isNormalCompletionAttention(event.message)) completionWakeup.rearm();
+  });
+  pi.on("agent_settled", () => completionWakeup.rearm());
+
   pi.on("session_shutdown", async () => {
     foreground.clear();
     completionWakeup.shutdown();
@@ -154,7 +161,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       "Delegate execution only after the assignment's direction and verification are established. Use a subagent when context isolation, mechanical volume, parallelism, or genuinely independent judgment materially improves the result; work inline while the task needs continuous owner steering or is smaller than a handoff brief.",
       "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
-      "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Subagent in the foreground. Reconcile every background result with subagent_collect and cancel with subagent_cancel.",
+      "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Subagent in the foreground. One coalesced signal reports that background children finished: answer it with subagent_status, reconcile every terminal child once with subagent_collect, and cancel with subagent_cancel.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
@@ -267,7 +274,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       pendingSubagentCompletions.add(tracked);
       void tracked.then(() => pendingSubagentCompletions.delete(tracked));
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background (${params.profile} · ${params.cognitiveRole}). Its terminal outcome will wake this lead once; reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
+        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background (${params.profile} · ${params.cognitiveRole}). One coalesced signal wakes this lead after background children finish; answer it with subagent_status, then reconcile each terminal child once with subagent_collect. Watch with subagent_status, stop with subagent_cancel.` }],
         details: { outcome: "launched", executionId: receipt.executionId, profile: params.profile, cognitiveRole: params.cognitiveRole, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Launched");
@@ -307,7 +314,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     description: "Non-blocking snapshot of one child, or the running and terminal-but-uncollected direct children. Pass all:true for the full session roster.",
     promptSnippet: "Inspect backgrounded child Pi progress",
     promptGuidelines: [
-      "Default subagent_status is the actionable set: children still running plus terminal children you have not reconciled. Use all:true only for bounded diagnostics.",
+      "Default subagent_status is the actionable set: children still running plus terminal children you have not reconciled. Use it to answer a completion signal, which arrives once rather than per child. Use all:true only for bounded diagnostics.",
     ],
     parameters: StatusParams,
     async execute(_toolCallId, params) {
@@ -400,7 +407,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
       "Keep every worker task self-contained with paths, constraints, and expected output; continuity supplements explicit tasking.",
-      "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Worker dispatch in the foreground. Reconcile every background result with subagent_collect.",
+      "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Worker dispatch in the foreground. Reconcile every background result with subagent_collect after the coalesced completion signal.",
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
       "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
@@ -550,7 +557,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       void tracked.then(() => pendingWorkerCompletions.delete(tracked));
 
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). Its terminal outcome will wake this lead once after the Worker receipt settles; a receipt failure wakes bounded outcome_unknown attention instead. Reconcile with subagent_collect, watch with subagent_status, stop with subagent_cancel.` }],
+        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). It joins the coalesced completion signal after its Worker receipt settles; a receipt failure wakes separate bounded outcome_unknown attention naming this execution. Answer the signal with subagent_status, then reconcile each terminal child once with subagent_collect; stop with subagent_cancel.` }],
         details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, continuing, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Dispatched");
@@ -738,16 +745,18 @@ export async function streamToResult(
 }
 
 /**
- * A completion wake asks for a turn. While a context checkpoint is pending or compacting, the
- * shared barrier queues that wake instead and releases it exactly once after the checkpoint settles.
+ * A completion signal asks for a turn. While a context checkpoint is pending or compacting, the
+ * shared barrier queues that signal instead and releases it exactly once after the checkpoint settles.
  */
 export function createCheckpointAwareWakeup(pi: any, barrier = checkpointBarrier()) {
   return createCompletionWakeup({
     sendMessage: (message: any, options: any) => {
       const send = () => pi.sendMessage(message, options);
-      const executionId = message?.details?.executionId;
-      // A terminal wake and a receipt-failure wake for one execution are distinct wakes.
-      const key = executionId === undefined ? undefined : `${executionId}:${message?.details?.receiptStatus ?? "terminal"}`;
+      // The coalesced normal signal holds one stable key so a later one replaces it; a
+      // receipt-failure wake stays distinct per execution.
+      const key = message?.details?.attention !== undefined
+        ? `attention:${message.details.attention}`
+        : message?.details?.executionId === undefined ? undefined : `${message.details.executionId}:receipt-failure`;
       if (!barrier.defer(send, key)) send();
     },
   });

@@ -244,27 +244,43 @@ test("makes harness revision drift observable to a long-running lead", () => {
   assert.notEqual(harnessRevision(["/absent-harness-file.js"]), stable, "changed harness bytes change the revision");
 });
 
-test("holds child completion wakes while a context checkpoint is pending or compacting", () => {
+test("holds one coalesced completion signal while a context checkpoint is pending or compacting", () => {
   const barrier = createCheckpointBarrier();
   const sent = [];
-  const wakeup = createCheckpointAwareWakeup({ sendMessage: (message, options) => sent.push({ id: message.details?.executionId, triggerTurn: options?.triggerTurn }) }, barrier);
+  const wakeup = createCheckpointAwareWakeup({ sendMessage: (message, options) => sent.push({ attention: message.details?.attention, deliverAs: options?.deliverAs, triggerTurn: options?.triggerTurn }) }, barrier);
   const finish = (executionId, extra = {}) => wakeup.notify({ executionId, outcome: "succeeded", profile: "implementer", cognitiveRole: "implementation", ...extra });
 
   finish("before-checkpoint");
-  assert.deepEqual(sent.map((entry) => entry.id), ["before-checkpoint"]);
+  assert.equal(sent.length, 1);
+  wakeup.rearm();
 
   barrier.open();
   finish("during-pending");
   barrier.beginCompaction();
   finish("during-compaction");
-  assert.deepEqual(sent.map((entry) => entry.id), ["before-checkpoint"], "no turn-triggering wake escapes the checkpoint");
+  assert.equal(sent.length, 1, "no turn-triggering wake escapes the checkpoint");
 
   barrier.release();
-  assert.deepEqual(sent.map((entry) => entry.id), ["before-checkpoint", "during-pending", "during-compaction"]);
-  assert.equal(sent.every((entry) => entry.triggerTurn === true), true);
+  assert.equal(sent.length, 2, "a checkpoint fan-out releases one coalesced signal");
+  assert.equal(sent.every((entry) => entry.attention === "terminal-results" && entry.deliverAs === "steer" && entry.triggerTurn === true), true);
 
   barrier.release();
-  assert.equal(sent.length, 3, "queued wakes are released exactly once");
+  assert.equal(sent.length, 2, "queued wakes are released exactly once");
+});
+
+test("re-arms coalesced completion attention on marker delivery and on agent_settled", () => {
+  const handlers = new Map();
+  subagentExtension({
+    on: (event, handler) => handlers.set(event, handler),
+    registerTool: () => {},
+    registerShortcut: () => {},
+    sendMessage: () => {},
+  });
+
+  assert.ok(handlers.has("message_start"), "delivery of the coalesced marker must return attention to idle");
+  assert.ok(handlers.has("agent_settled"), "a settled agent must re-arm without sending");
+  handlers.get("message_start")({ message: { role: "assistant", content: [] } });
+  handlers.get("agent_settled")({});
 });
 
 test("keeps a terminal wake and a receipt-failure wake for one execution distinct across a checkpoint", () => {
@@ -279,7 +295,7 @@ test("keeps a terminal wake and a receipt-failure wake for one execution distinc
   assert.deepEqual(sent, []);
 
   barrier.release();
-  assert.deepEqual(sent, ["terminal", "failed"], "the receipt failure must not overwrite the terminal wake");
+  assert.deepEqual(sent, ["terminal", "failed"], "the receipt failure must not overwrite the coalesced signal");
 });
 
 test("the subagent extension uses the process-shared barrier", () => {

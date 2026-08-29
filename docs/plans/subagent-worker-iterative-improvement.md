@@ -1,10 +1,10 @@
 # Subagent and Worker Iterative Improvement Plan
 
-Status: Step 1 and background-first system guidance owner-approved and implemented on 2026-08-11; completion wakeup is smoke-verified. Steps 2–6 remain proposals for owner review.
+Status: Step 1 and background-first system guidance owner-approved and implemented on 2026-08-11; its per-child `followUp` delivery failed the busy-lead case and was replaced by one coalesced `steer` signal on 2026-08-29. Steps 2–6 remain proposals for owner review.
 
 ## Decision requested
 
-Approve or revise the remaining order below. Step 1 now makes explicitly backgrounded child work wake the attended lead once when it finishes. A later, provider-aware cache-ping pilot may keep the lead's prompt cache warm while the child runs, but it must remain measurable, bounded, and easy to disable.
+Approve or revise the remaining order below. Step 1 now makes explicitly backgrounded child work wake the attended lead once per attention cycle, however many children finish. A later, provider-aware cache-ping pilot may keep the lead's prompt cache warm while the child runs, but it must remain measurable, bounded, and easy to disable.
 
 The remaining review questions are:
 
@@ -73,30 +73,34 @@ A long foreground child makes the lead unavailable. A background child avoids th
 
 ### Recorded decision
 
-Decision 98 approves one deduplicated terminal completion turn for an explicitly backgrounded child. Pi wakes an idle lead with `sendMessage(..., { deliverAs: "followUp", triggerTurn: true })`. This starts a real, billed lead model turn without a new human message; it either reads the live cached prefix or pays the miss after expiry. It grants no new authority and remains bounded by the attended Level 1 session.
+Decision 98 approves one coalesced terminal completion turn for explicitly backgrounded children. Pi wakes the lead with `sendMessage(..., { deliverAs: "steer", triggerTurn: true })`. This starts a real, billed lead model turn without a new human message; it either reads the live cached prefix or pays the miss after expiry. It grants no new authority and remains bounded by the attended Level 1 session.
 
-The woken lead may collect and reconcile the named terminal result. It may not use the wakeup as authority to start unrelated work, retry, relaunch, publish, or accept an outcome. This limit is partly prompt-guided rather than mechanically enforced, so unexpected actions count as a failed pilot observation.
+The woken lead may reconcile the terminal results the default `subagent_status` roster names. It may not use the signal as authority to start unrelated work, retry, relaunch, publish, or accept an outcome. This limit is partly prompt-guided rather than mechanically enforced, so unexpected actions count as a failed pilot observation.
+
+### Failed per-child `followUp` pilot
+
+The first pilot sent one bounded `followUp` per terminal child, identifying the execution and outcome. It passed its idle-lead smoke, then failed the busy-lead case it was meant to answer. In one 23-child fan-out the lead received 23 wakes: 20 arrived after the results were already collected and 12 produced no useful work. `followUp` also holds the signal until the whole run stops, so a lead in a long tool batch learns nothing until it would have checked anyway. Per-child identity was the cause, not a detail: the lead reconciles the whole `subagent_status` roster at once, so every wake after the first restates work already claimed.
 
 ### Implemented quick win
 
-`background: true` remains explicit. When a background Subagent or Worker reaches a terminal outcome, the extension sends exactly one bounded completion message to the attending lead. The Subagent path passed a real Pi RPC smoke in which the idle lead launched once, received one custom completion message, collected exactly once, reconciled the marker, and left no process behind.
+`background: true` remains explicit. Terminal background children coalesce into exactly one generic bounded `steer` signal, delivered at the lead's next safe model boundary.
 
-The completion message should:
+The completion signal should:
 
-- identify the execution and, when applicable, the Worker;
-- distinguish success, failure, cancellation, timeout, and unknown outcome;
-- tell the lead to call `subagent_collect` and reconcile the result exactly once;
-- use Pi's supported `followUp` delivery so a busy lead finishes its current work before receiving it; unlike the reviewed `steer` prior art, this first pilot deliberately avoids delivery between lead turns;
+- name no execution and carry no result, because the lead reconciles the default status roster rather than one child;
+- tell the lead to call `subagent_status`, then collect and reconcile each terminal-uncollected child exactly once;
+- use `steer` delivery so a busy lead is reached between turns of one long run;
 - wake an idle lead with `triggerTurn: true`;
-- contain no raw child transcript or large result; and
-- deduplicate by execution identifier.
+- suppress every later completion until this signal is delivered; and
+- return to idle only on delivery of that exact message or on `agent_settled`, never on status or collection.
 
-For a Worker, the terminal result and registry receipt must settle and the dispatch lock must release before the completion wakeup is sent. If a background receipt cannot settle, one separately deduplicated bounded `outcome_unknown` attention wakeup reports that failure without claiming lock release; a foreground failure returns `outcome_unknown` directly with the child result marked inspection-only. The terminal result remains available through the existing adapter for collection. Session shutdown still cancels live children. No wakeup may survive that shutdown.
+For a Worker, the terminal result and registry receipt must settle and the dispatch lock must release before the completion signal is sent. If a background receipt cannot settle, one separately deduplicated bounded `outcome_unknown` attention wakeup reports that failure without claiming lock release; a foreground failure returns `outcome_unknown` directly with the child result marked inspection-only. The terminal result remains available through the existing adapter for collection. Session shutdown still cancels live children. No wakeup may survive that shutdown.
 
 ### Completion evidence
 
 - An idle lead starts one new turn when a background child finishes.
-- Verify the currently unproven busy-lead case: after the current run settles, the queued completion starts a turn that reads and collects the result rather than waiting for another human message.
+- A busy lead in a multi-step tool batch receives the signal at the next model boundary, with children still finishing after it was sent.
+- A fan-out produces one signal, one status snapshot, one collection per child, and no stale completion turn afterwards.
 - Duplicate terminal observations do not create duplicate turns.
 - Every terminal outcome remains collectable and attributable.
 - A Worker can be dispatched again after its completion wakeup without a stale busy lock.
@@ -264,7 +268,7 @@ These stable IDs remain the default question source for `/skill:workbench-compou
 - **Q9 — Human visibility:** Did the user receive material timing, failure, uncertainty, and confidence changes without routine execution telemetry?
 - **Q10 — Prompt usefulness:** Which persistent instruction measurably changed behavior, and which instruction was ignored, redundant, or misleading?
 - **Q11 — Retired:** Stateless Model Call value moved to `ws-stateless-model-call`; do not select Q11 for this roadmap.
-- **Q12 — Completion wakeup:** Did terminal wakeup eliminate polling without creating duplicate, premature, unrelated, or unexpectedly costly lead turns?
+- **Q12 — Completion signal:** Did the coalesced terminal signal eliminate polling without creating duplicate, post-collection, premature, unrelated, or unexpectedly costly lead turns?
 
 Per-session evaluations are working evidence under `~/.pi-workbench/compound/`. They are not an authoritative global ledger. The owner decides whether a Learning Candidate is promoted into an extension, instruction, skill, contract, or decision record. Until the roadmap is approved, the stable questions remain usable for observing current behavior; the proposed runtime steps do not become supported behavior.
 

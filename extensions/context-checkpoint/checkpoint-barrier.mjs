@@ -39,8 +39,9 @@ export function createCheckpointBarrier() {
 
     /**
      * Queues a turn-triggering send while a checkpoint is pending or compacting.
-     * Returns true when the caller must not send now. Repeat keys collapse, so one
-     * execution can only wake the lead once.
+     * Returns true when the caller must not send now. Repeat keys collapse, so the
+     * coalesced completion signal releases once under its stable key while a
+     * receipt-failure wake keyed by its own execution stays distinct.
      */
     defer(send, key) {
       if (state === "idle") return false;

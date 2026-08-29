@@ -1,17 +1,30 @@
 const CUSTOM_TYPE = "pi-workbench:child-completion";
+const NORMAL_ATTENTION = "terminal-results";
+const NORMAL_CONTENT = "Background children finished. Call `subagent_status`, then collect and reconcile each terminal-uncollected child once. This notice authorizes no retry, relaunch, publication, or acceptance.";
+
+/** True only for the delivered coalesced normal-attention message; receipt failures never match. */
+export function isNormalCompletionAttention(message) {
+  return message?.role === "custom" && message.customType === CUSTOM_TYPE && message.details?.attention === NORMAL_ATTENTION;
+}
 
 /**
- * Owns session-local completion wakeup deduplication and shutdown suppression.
- * Terminal result content remains behind subagent_collect; the wakeup carries only
- * bounded identity and outcome metadata.
+ * Owns session-local completion attention: normal completions coalesce into one steer
+ * signal that only delivery re-arms, while a Worker receipt failure keeps its own exact
+ * per-execution attention. Terminal result content remains behind subagent_collect.
  */
 export function createCompletionWakeup({ sendMessage }) {
   const handled = new Set();
   const receiptFailuresObserved = new Set();
   const reconciliationInFlight = new Set();
   let shuttingDown = false;
+  let queued = false;
 
   return {
+    /** Idempotent: normal attention returns to idle so a later completion can signal again. */
+    rearm() {
+      queued = false;
+    },
+
     beginReconciliation(executionId) {
       reconciliationInFlight.add(executionId);
     },
@@ -42,31 +55,38 @@ export function createCompletionWakeup({ sendMessage }) {
         handled.add(executionId);
       }
 
-      const outcome = bounded(requiredString(meta.outcome, "outcome"), 64);
+      requiredString(meta.outcome, "outcome");
+      requiredString(meta.profile, "profile");
+      requiredString(meta.cognitiveRole, "cognitiveRole");
+
+      if (!receiptFailed) {
+        // One signal per attention cycle: the lead reconciles the whole default status roster,
+        // so a second child adds nothing until the first signal has been delivered.
+        if (queued) return false;
+        queued = true;
+        sendMessage(
+          { customType: CUSTOM_TYPE, content: NORMAL_CONTENT, display: true, details: { attention: NORMAL_ATTENTION } },
+          { deliverAs: "steer", triggerTurn: true },
+        );
+        return true;
+      }
+
       const actor = meta.workerId === undefined
         ? "Background subagent"
         : `Worker "${bounded(meta.workerName ?? "unnamed", 120)}" (${bounded(meta.workerId, 128)}) background dispatch`;
-      const status = receiptFailed
-        ? `reached a terminal child result, but its Worker receipt did not settle; treat the recorded outcome as outcome_unknown and inspect worker_status`
-        : `reached terminal outcome ${outcome}`;
-      const reconciliation = receiptFailed
-        ? `Inspect worker_status and do not dispatch this Worker again. If executionId "${executionId}" has not already been collected, call subagent_collect exactly once and reconcile it.`
-        : `Call subagent_collect exactly once for executionId "${executionId}" and reconcile the result.`;
-      const content = `${actor} ${executionId} ${status}. ${reconciliation} Do not retry, relaunch, publish, or accept this outcome based only on the wakeup.`;
+      const content = `${actor} ${executionId} reached a terminal child result, but its Worker receipt did not settle; treat the recorded outcome as outcome_unknown and inspect worker_status. Inspect worker_status and do not dispatch this Worker again. If executionId "${executionId}" has not already been collected, call subagent_collect exactly once and reconcile it. Do not retry, relaunch, publish, or accept this outcome based only on the wakeup.`;
       const details = {
         executionId,
-        outcome: receiptFailed ? "outcome_unknown" : outcome,
-        profile: bounded(requiredString(meta.profile, "profile"), 64),
-        cognitiveRole: bounded(requiredString(meta.cognitiveRole, "cognitiveRole"), 64),
+        outcome: "outcome_unknown",
+        profile: bounded(meta.profile, 64),
+        cognitiveRole: bounded(meta.cognitiveRole, 64),
         ...(meta.workerId === undefined ? {} : {
           workerId: bounded(meta.workerId, 128),
           workerName: bounded(meta.workerName ?? "unnamed", 120),
         }),
-        ...(receiptFailed ? {
-          receiptStatus: "failed",
-          receiptDiagnostic: bounded(meta.receiptFailure, 240),
-          resultAlreadyReconciled: handled.has(executionId),
-        } : {}),
+        receiptStatus: "failed",
+        receiptDiagnostic: bounded(meta.receiptFailure, 240),
+        resultAlreadyReconciled: handled.has(executionId),
       };
 
       sendMessage({ customType: CUSTOM_TYPE, content, display: true, details }, { deliverAs: "followUp", triggerTurn: true });
