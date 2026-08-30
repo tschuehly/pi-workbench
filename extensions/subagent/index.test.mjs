@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, streamToResult } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, reservePending, streamToResult } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -331,7 +331,41 @@ test("bulk collection stays bounded and leaves what it did not read reconcilable
   assert.deepEqual(calls, ["child-a"], "a child past the budget is never collected, so it stays reconcilable");
   assert.deepEqual(aggregate.details.remaining, ["child-b", "child-c"]);
   assert.match(aggregate.content[0].text, /Reconciled 1 of 3 terminal children/);
-  assert.match(aggregate.content[0].text, /collect each individually: child-b, child-c/);
+  assert.match(aggregate.content[0].text, /collect again or name one: child-b, child-c/);
+
+  const many = await collectAll({
+    pending: Array.from({ length: 15 }, (_, index) => `child-${index}`),
+    running: 0,
+    collectOne,
+    maxChars: 1,
+  });
+  assert.equal(many.details.remaining.length, 14);
+  assert.equal((many.content[0].text.match(/child-\d+,/g) ?? []).length <= 10, true, "the named remainder stays bounded");
+  assert.match(many.content[0].text, /and 4 more reached by collecting again/);
+});
+
+test("collecting an empty roster through the registered tool reports nothing to reconcile", async () => {
+  const tools = new Map();
+  subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} });
+
+  const result = await tools.get("subagent_collect").execute("call", {}, undefined, undefined, {});
+  assert.match(result.content[0].text, /Nothing terminal to reconcile/);
+  assert.deepEqual(result.details, { collected: [], remaining: [], running: 0 });
+});
+
+test("two bulk collections in one batch cannot reconcile the same child twice", () => {
+  const roster = [
+    { executionId: "child-a", running: false },
+    { executionId: "child-b", running: true },
+    { executionId: "child-c", running: false },
+  ];
+  const collected = new Set(["child-c"]);
+  const reconciling = new Set();
+
+  assert.deepEqual(reservePending(roster, collected, reconciling), ["child-a"], "a running child and an already-collected child are left alone");
+  assert.deepEqual(reservePending(roster, collected, reconciling), [], "a parallel call finds the reserved child already claimed");
+  reconciling.delete("child-a");
+  assert.deepEqual(reservePending(roster, collected, reconciling), ["child-a"], "a released reservation is reconcilable again");
 });
 
 test("bulk collection reports an empty roster and never hides a child failure", async () => {

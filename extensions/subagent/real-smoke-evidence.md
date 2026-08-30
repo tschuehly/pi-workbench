@@ -25,6 +25,20 @@ A real Pi RPC lead on `anthropic/claude-sonnet-5` at low effort launched three b
 
 Three completions produced one delivered signal, one status snapshot, three collections, and no post-collection or post-settle wake.
 
+## Bulk collection, three children (2026-08-29)
+
+A real interactive Pi lead on `anthropic/claude-sonnet-5` at low effort launched three background `scout` · `mechanics` children, ran two `sleep` bash turns without polling for them, and answered the signal with one argument-free `subagent_collect`.
+
+| Observation | Evidence |
+| --- | --- |
+| new launch receipts | "answer it with subagent_collect, which reconciles every terminal child when called without an executionId" ×3 |
+| one coalesced signal | one `[pi-workbench:child-completion]` message, delivered mid-run |
+| one collection call | `subagent_collect` with no parameters returned `Reconciled 3 of 3 terminal children.` |
+| nothing orphaned | the following `subagent_status`: `0 running, 0 terminal and uncollected, 3 launched this session` |
+| results reached the lead | final reply `BULK_OK` followed by `BULK_CHILD_1`, `BULK_CHILD_2`, `BULK_CHILD_3` |
+
+Three completions produced one signal, one collection call, and zero restated identifiers.
+
 ## Deterministic coverage
 
 Extension tests additionally cover coalescing a 23-completion fan-out into one signal with 22 suppressed returns, re-arming only on the delivered normal marker or `agent_settled`, checkpoint deferral releasing one signal under a stable key, per-execution `outcome_unknown` receipt-failure attention staying outside coalescing, detached-collection re-arming, and cancellation and shutdown suppression.

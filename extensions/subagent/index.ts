@@ -127,6 +127,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
   const registry = createUserLocalWorkerRegistry();
   const workerExecutions = new Map<string, string>();
   const workerReceipts = new Map<string, WorkerReceipt>();
+  const reconciling = new Set<string>();
   const pendingWorkerCompletions = new Set<Promise<unknown>>();
   const pendingSubagentCompletions = new Set<Promise<unknown>>();
   const completionWakeup = createCheckpointAwareWakeup(pi);
@@ -306,6 +307,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     parameters: CollectParams,
     async execute(_toolCallId, params, signal, onUpdate) {
       const collectOne = async (executionId: string) => {
+        reconciling.add(executionId);
         completionWakeup.beginReconciliation(executionId);
         const meta = launched.get(executionId);
         const result = await streamToResult(adapter, executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", meta?.launchedAt ?? new Date().toISOString(), signal, onUpdate, { cancelOnAbort: false });
@@ -313,15 +315,19 @@ export default function subagentExtension(pi: ExtensionAPI) {
         const terminal = typeof outcome === "string" && TERMINAL_OUTCOMES.has(outcome);
         if (terminal) collected.add(executionId);
         completionWakeup.finishReconciliation(executionId, terminal);
+        reconciling.delete(executionId);
         return receiptSafeResult({ result, executionId, terminal, receipt: workerReceipts.get(executionId) });
       };
       if (params.executionId !== undefined) return collectOne(params.executionId);
       const roster = adapter.list();
-      return collectAll({
-        pending: roster.filter((child) => !child.running && !collected.has(child.executionId)).map((child) => child.executionId),
-        running: roster.filter((child) => child.running).length,
-        collectOne,
-      });
+      // Reserve the whole set before the first await: parallel tool calls in one batch would
+      // otherwise read the same roster and collect the same children twice.
+      const pending = reservePending(roster, collected, reconciling);
+      try {
+        return await collectAll({ pending, running: roster.filter((child) => child.running).length, collectOne });
+      } finally {
+        for (const executionId of pending) reconciling.delete(executionId);
+      }
     },
   });
 
@@ -760,6 +766,16 @@ export async function streamToResult(
 }
 
 const BULK_COLLECT_MAX_CHARS = 24_000;
+const REMAINDER_NAMES = 10;
+
+/** Claims the terminal-uncollected set before the first await so parallel calls cannot double-collect. */
+export function reservePending(roster: { executionId: string; running: boolean }[], collected: Set<string>, reconciling: Set<string>): string[] {
+  const pending = roster
+    .filter((child) => !child.running && !collected.has(child.executionId) && !reconciling.has(child.executionId))
+    .map((child) => child.executionId);
+  for (const executionId of pending) reconciling.add(executionId);
+  return pending;
+}
 
 /**
  * Reconciles the terminal-uncollected set the extension already owns, so a lead never restates
@@ -789,7 +805,7 @@ export async function collectAll({ pending, running, collectOne, maxChars = BULK
     ? "Nothing terminal to reconcile."
     : `Reconciled ${entries.length} of ${total} terminal children.`;
   const notes = [
-    remaining.length === 0 ? "" : `Bounded before reading ${remaining.length} more; they stay uncollected, so collect each individually: ${remaining.join(", ")}.`,
+    remaining.length === 0 ? "" : `Bounded before reading ${remaining.length} more; they stay uncollected, so collect again or name one: ${remaining.slice(0, REMAINDER_NAMES).join(", ")}${remaining.length > REMAINDER_NAMES ? `, and ${remaining.length - REMAINDER_NAMES} more reached by collecting again` : ""}.`,
     running === 0 ? "" : `${running} ${running === 1 ? "child is" : "children are"} still running and cannot be collected yet.`,
   ].filter((note) => note !== "");
   const sections = entries.map((entry) => `${entry.executionId} [${entry.outcome}]\n${entry.text}`);
