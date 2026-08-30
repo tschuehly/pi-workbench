@@ -106,6 +106,17 @@ export async function settleWorkerReceipt({ settle, wakeup, background, completi
   }
 }
 
+/**
+ * Collection must not report a Worker success before its registry receipt settles: the child
+ * process ending and the receipt landing are separate events. A non-terminal result never waits,
+ * so aborting collect on a running child stays immediate.
+ */
+export async function receiptSafeResult({ result, executionId, terminal, receipt }) {
+  if (!terminal || receipt === undefined) return result;
+  const failure = await receipt.settled;
+  return failure === undefined ? result : workerReceiptFailureResult(result, executionId, receipt.workerId, failure.error);
+}
+
 export function workerReceiptFailureResult(result, executionId, workerId, error) {
   const childOutcome = result?.details?.outcome ?? "outcome_unknown";
   const childText = Array.isArray(result?.content)

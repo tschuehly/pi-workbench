@@ -11,7 +11,7 @@ import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/sr
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
-import { createCompletionWakeup, isNormalCompletionAttention, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
+import { createCompletionWakeup, isNormalCompletionAttention, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -116,6 +116,8 @@ type Observation = { type: string; at: string; detail?: unknown };
 type ProgressEntry = { at: string; key: string; text: string };
 type LaunchMeta = { profile: string; cognitiveRole: string; taskPreview: string; launchedAt: string; workerId?: string; workerName?: string };
 type ForegroundDispatch = { label: string; detach: () => void };
+/** A background Worker's registry receipt settles after its child result, so collection awaits it. */
+type WorkerReceipt = { workerId: string; settled: Promise<{ error: unknown } | undefined> };
 
 export default function subagentExtension(pi: ExtensionAPI) {
   const adapter = new PiRpcExecutionAdapter();
@@ -124,6 +126,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
   const foreground = new Map<string, ForegroundDispatch>();
   const registry = createUserLocalWorkerRegistry();
   const workerExecutions = new Map<string, string>();
+  const workerReceipts = new Map<string, WorkerReceipt>();
   const pendingWorkerCompletions = new Set<Promise<unknown>>();
   const pendingSubagentCompletions = new Set<Promise<unknown>>();
   const completionWakeup = createCheckpointAwareWakeup(pi);
@@ -293,7 +296,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_collect",
     label: "Subagent collect",
-    description: "Stream the remaining progress of a backgrounded child and return its compact terminal result. Aborting collect stops waiting but leaves the child running.",
+    description: "Stream the remaining progress of a backgrounded child and return its compact terminal result. A Worker result is held until its registry receipt settles, and a failed receipt collects as outcome_unknown. Aborting collect stops waiting but leaves the child running.",
     promptSnippet: "Reconcile one backgrounded child Pi",
     parameters: IdParam,
     async execute(_toolCallId, params, signal, onUpdate) {
@@ -304,7 +307,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       const terminal = typeof outcome === "string" && TERMINAL_OUTCOMES.has(outcome);
       if (terminal) collected.add(params.executionId);
       completionWakeup.finishReconciliation(params.executionId, terminal);
-      return result;
+      return receiptSafeResult({ result, executionId: params.executionId, terminal, receipt: workerReceipts.get(params.executionId) });
     },
   });
 
@@ -509,7 +512,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
           detach: () => { backgrounded = true; detachController.abort(); },
         });
       }
-      let workerReceiptError: unknown;
       // Register terminal cleanup before waiting so it wins a same-tick detach race.
       const completion = (async () => {
         let usage: unknown;
@@ -549,10 +551,11 @@ export default function subagentExtension(pi: ExtensionAPI) {
           },
         });
       })();
-      const tracked = completion.catch((error) => {
-        workerReceiptError = error;
+      const tracked = completion.then(() => undefined, (error: unknown) => {
         clearInterval(heartbeat);
+        return { error };
       });
+      workerReceipts.set(receipt.executionId, { workerId: params.workerId, settled: tracked });
       pendingWorkerCompletions.add(tracked);
       void tracked.then(() => pendingWorkerCompletions.delete(tracked));
 
@@ -566,9 +569,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
         const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
         if ((result as { details?: { outcome?: unknown } }).details?.outcome === "detached") return backgroundResult("Moved");
         collected.add(receipt.executionId);
-        await tracked;
-        if (workerReceiptError !== undefined) return workerReceiptFailureResult(result, receipt.executionId, params.workerId, workerReceiptError);
-        return result;
+        return receiptSafeResult({ result, executionId: receipt.executionId, terminal: true, receipt: workerReceipts.get(receipt.executionId) });
       } finally {
         foreground.delete(receipt.executionId);
       }

@@ -1,6 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCompletionWakeup, isNormalCompletionAttention, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
+import { createCompletionWakeup, isNormalCompletionAttention, receiptSafeResult, settleWorkerReceipt, workerReceiptFailureResult } from "./completion-wakeup.mjs";
+
+function childResult() {
+  return { content: [{ type: "text", text: "Applied the caption fix." }], details: { outcome: "success", executionId: "execution-1" } };
+}
+
+test("collection holds a Worker result until its registry receipt settles", async () => {
+  let settle;
+  const receipt = { workerId: "worker-1", settled: new Promise((resolve) => { settle = resolve; }) };
+
+  let reported = false;
+  const collecting = receiptSafeResult({ result: childResult(), executionId: "execution-1", terminal: true, receipt })
+    .then((value) => { reported = true; return value; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reported, false, "a Worker success cannot be collected while its receipt is unsettled");
+
+  settle({ error: new Error("registry write failed") });
+  const guarded = await collecting;
+  assert.equal(guarded.details.outcome, "outcome_unknown");
+  assert.equal(guarded.details.childOutcome, "success");
+  assert.equal(guarded.details.receiptStatus, "failed");
+  assert.equal(guarded.isError, true);
+  assert.match(guarded.content[0].text, /Child result for inspection only:/);
+});
+
+test("collection returns the child result unchanged when no receipt can fail", async () => {
+  const result = childResult();
+  const settled = { workerId: "worker-1", settled: Promise.resolve(undefined) };
+  assert.equal(await receiptSafeResult({ result, executionId: "execution-1", terminal: true, receipt: settled }), result, "a settled receipt reports the child result");
+  assert.equal(await receiptSafeResult({ result, executionId: "execution-1", terminal: true, receipt: undefined }), result, "a Subagent has no receipt to await");
+
+  const pending = { workerId: "worker-1", settled: new Promise(() => {}) };
+  assert.equal(await receiptSafeResult({ result, executionId: "execution-1", terminal: false, receipt: pending }), result, "aborting collect on a running child never waits for a receipt");
+});
 
 function harness() {
   const sent = [];
