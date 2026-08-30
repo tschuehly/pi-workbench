@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, streamToResult } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, streamToResult } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -182,6 +182,9 @@ test("exposes bounded independence, timeout, and status parameters", () => {
   assert.equal(leaf.timeoutSeconds.maximum, 45 * 60);
   assert.equal(tools.get("worker_dispatch").parameters.properties.timeoutSeconds.maximum, 60 * 60);
   assert.ok(tools.get("subagent_status").parameters.properties.all, "status defaults to the actionable set");
+  const collect = tools.get("subagent_collect").parameters;
+  assert.ok(collect.properties.executionId, "one child can still be collected by identifier");
+  assert.equal((collect.required ?? []).includes("executionId"), false, "collecting without an identifier reconciles every terminal child");
 
   assert.equal(providerOf("anthropic/claude-opus-5"), "anthropic");
   for (const invalid of [undefined, "claude-opus-5", "/claude-opus-5", "anthropic/"]) assert.equal(providerOf(invalid), undefined);
@@ -296,6 +299,54 @@ test("keeps a terminal wake and a receipt-failure wake for one execution distinc
 
   barrier.release();
   assert.deepEqual(sent, ["terminal", "failed"], "the receipt failure must not overwrite the coalesced signal");
+});
+
+test("collecting without an identifier reconciles every terminal child exactly once", async () => {
+  const calls = [];
+  const collectOne = async (executionId) => {
+    calls.push(executionId);
+    return { content: [{ type: "text", text: `result of ${executionId}` }], details: { outcome: "success" } };
+  };
+
+  const aggregate = await collectAll({ pending: ["child-a", "child-b"], running: 1, collectOne });
+  assert.deepEqual(calls, ["child-a", "child-b"], "every terminal child is collected once, in launch order");
+  assert.match(aggregate.content[0].text, /Reconciled 2 of 2 terminal children/);
+  assert.match(aggregate.content[0].text, /child-a \[success\]\nresult of child-a/);
+  assert.match(aggregate.content[0].text, /1 child is still running and cannot be collected yet/);
+  assert.deepEqual(aggregate.details.collected, [
+    { executionId: "child-a", outcome: "success" },
+    { executionId: "child-b", outcome: "success" },
+  ]);
+  assert.deepEqual(aggregate.details.remaining, []);
+});
+
+test("bulk collection stays bounded and leaves what it did not read reconcilable", async () => {
+  const calls = [];
+  const collectOne = async (executionId) => {
+    calls.push(executionId);
+    return { content: [{ type: "text", text: "x".repeat(60) }], details: { outcome: "success" } };
+  };
+
+  const aggregate = await collectAll({ pending: ["child-a", "child-b", "child-c"], running: 0, collectOne, maxChars: 50 });
+  assert.deepEqual(calls, ["child-a"], "a child past the budget is never collected, so it stays reconcilable");
+  assert.deepEqual(aggregate.details.remaining, ["child-b", "child-c"]);
+  assert.match(aggregate.content[0].text, /Reconciled 1 of 3 terminal children/);
+  assert.match(aggregate.content[0].text, /collect each individually: child-b, child-c/);
+});
+
+test("bulk collection reports an empty roster and never hides a child failure", async () => {
+  const empty = await collectAll({ pending: [], running: 2, collectOne: async () => assert.fail("nothing terminal may be collected") });
+  assert.match(empty.content[0].text, /Nothing terminal to reconcile/);
+  assert.match(empty.content[0].text, /2 children are still running/);
+  assert.deepEqual(empty.details.collected, []);
+
+  const failing = await collectAll({
+    pending: ["child-a"],
+    running: 0,
+    collectOne: async () => ({ content: [{ type: "text", text: "registry receipt did not settle" }], details: { outcome: "outcome_unknown" }, isError: true }),
+  });
+  assert.equal(failing.isError, true, "an outcome_unknown child must stay visible as an error through the aggregate");
+  assert.deepEqual(failing.details.collected, [{ executionId: "child-a", outcome: "outcome_unknown" }]);
 });
 
 test("the subagent extension uses the process-shared barrier", () => {

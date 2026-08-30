@@ -82,7 +82,7 @@ const Params = Type.Object({
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the coalesced completion signal with subagent_status and subagent_collect. The child still dies when the attended session ends. A Subagent launched inside a Worker must stay in the foreground." })),
 });
 
-const IdParam = Type.Object({ executionId: Type.String({ minLength: 1, description: "Execution identifier returned by a background subagent launch" }) });
+const CollectParams = Type.Object({ executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to collect; omit to reconcile every terminal child that is not yet collected" })) });
 const StatusParams = Type.Object({
   executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect; omit to list running and terminal-but-uncollected direct children" })),
   all: Type.Optional(Type.Boolean({ description: "Include already-collected children for bounded diagnostics" })),
@@ -164,8 +164,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
       "Delegate execution only after the assignment's direction and verification are established. Use a subagent when context isolation, mechanical volume, parallelism, or genuinely independent judgment materially improves the result; work inline while the task needs continuous owner steering or is smaller than a handoff brief.",
       "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
-      "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Subagent in the foreground. One coalesced signal reports that background children finished: answer it with subagent_status, reconcile every terminal child once with subagent_collect, and cancel with subagent_cancel.",
+      "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Subagent in the foreground. One coalesced signal reports that background children finished: answer it with subagent_collect, which reconciles every terminal child when called without an executionId, inspect with subagent_status, and cancel with subagent_cancel.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
+      "Never sleep or poll to wait for a background child: the completion signal reaches a busy lead, and collecting one executionId is the supported way to wait.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
     ],
@@ -277,7 +278,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       pendingSubagentCompletions.add(tracked);
       void tracked.then(() => pendingSubagentCompletions.delete(tracked));
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background (${params.profile} · ${params.cognitiveRole}). One coalesced signal wakes this lead after background children finish; answer it with subagent_status, then reconcile each terminal child once with subagent_collect. Watch with subagent_status, stop with subagent_cancel.` }],
+        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background (${params.profile} · ${params.cognitiveRole}). One coalesced signal wakes this lead after background children finish; answer it with subagent_collect, which reconciles every terminal child when called without an executionId. Watch with subagent_status, stop with subagent_cancel.` }],
         details: { outcome: "launched", executionId: receipt.executionId, profile: params.profile, cognitiveRole: params.cognitiveRole, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Launched");
@@ -296,18 +297,31 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_collect",
     label: "Subagent collect",
-    description: "Stream the remaining progress of a backgrounded child and return its compact terminal result. A Worker result is held until its registry receipt settles, and a failed receipt collects as outcome_unknown. Aborting collect stops waiting but leaves the child running.",
-    promptSnippet: "Reconcile one backgrounded child Pi",
-    parameters: IdParam,
+    description: "Reconcile backgrounded children: omit executionId to collect every terminal child that is not yet collected, or name one to stream its remaining progress. A Worker result is held until its registry receipt settles, and a failed receipt collects as outcome_unknown. Aborting collect stops waiting but leaves the child running.",
+    promptSnippet: "Reconcile backgrounded child Pi results",
+    promptGuidelines: [
+      "Answer a completion signal by collecting without an executionId: the extension owns the terminal-uncollected set, so restating identifiers only risks dropping a finished child. Name one execution to wait on a specific child.",
+      "Never sleep, poll, or re-run a command to wait for a background child. The coalesced signal reaches a busy lead on its own, so do other useful work; when waiting is genuinely the only remaining work, collect that executionId, which streams its progress and returns when it is terminal.",
+    ],
+    parameters: CollectParams,
     async execute(_toolCallId, params, signal, onUpdate) {
-      completionWakeup.beginReconciliation(params.executionId);
-      const meta = launched.get(params.executionId);
-      const result = await streamToResult(adapter, params.executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", meta?.launchedAt ?? new Date().toISOString(), signal, onUpdate, { cancelOnAbort: false });
-      const outcome = (result as { details?: { outcome?: unknown } }).details?.outcome;
-      const terminal = typeof outcome === "string" && TERMINAL_OUTCOMES.has(outcome);
-      if (terminal) collected.add(params.executionId);
-      completionWakeup.finishReconciliation(params.executionId, terminal);
-      return receiptSafeResult({ result, executionId: params.executionId, terminal, receipt: workerReceipts.get(params.executionId) });
+      const collectOne = async (executionId: string) => {
+        completionWakeup.beginReconciliation(executionId);
+        const meta = launched.get(executionId);
+        const result = await streamToResult(adapter, executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", meta?.launchedAt ?? new Date().toISOString(), signal, onUpdate, { cancelOnAbort: false });
+        const outcome = (result as { details?: { outcome?: unknown } }).details?.outcome;
+        const terminal = typeof outcome === "string" && TERMINAL_OUTCOMES.has(outcome);
+        if (terminal) collected.add(executionId);
+        completionWakeup.finishReconciliation(executionId, terminal);
+        return receiptSafeResult({ result, executionId, terminal, receipt: workerReceipts.get(executionId) });
+      };
+      if (params.executionId !== undefined) return collectOne(params.executionId);
+      const roster = adapter.list();
+      return collectAll({
+        pending: roster.filter((child) => !child.running && !collected.has(child.executionId)).map((child) => child.executionId),
+        running: roster.filter((child) => child.running).length,
+        collectOne,
+      });
     },
   });
 
@@ -317,7 +331,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     description: "Non-blocking snapshot of one child, or the running and terminal-but-uncollected direct children. Pass all:true for the full session roster.",
     promptSnippet: "Inspect backgrounded child Pi progress",
     promptGuidelines: [
-      "Default subagent_status is the actionable set: children still running plus terminal children you have not reconciled. Use it to answer a completion signal, which arrives once rather than per child. Use all:true only for bounded diagnostics.",
+      "Default subagent_status is the actionable set: children still running plus terminal children you have not reconciled. A completion signal arrives once rather than per child: reconcile it with subagent_collect and use status to see what is still running. Use all:true only for bounded diagnostics.",
     ],
     parameters: StatusParams,
     async execute(_toolCallId, params) {
@@ -560,7 +574,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       void tracked.then(() => pendingWorkerCompletions.delete(tracked));
 
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). It joins the coalesced completion signal after its Worker receipt settles; a receipt failure wakes separate bounded outcome_unknown attention naming this execution. Answer the signal with subagent_status, then reconcile each terminal child once with subagent_collect; stop with subagent_cancel.` }],
+        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). It joins the coalesced completion signal after its Worker receipt settles; a receipt failure wakes separate bounded outcome_unknown attention naming this execution. Answer the signal with subagent_collect, which reconciles every terminal child when called without an executionId; stop with subagent_cancel.` }],
         details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, continuing, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Dispatched");
@@ -742,6 +756,51 @@ export async function streamToResult(
     content: [{ type: "text", text: `${summary}${receiptLine}` }],
     details: { executionId, ...final, observations },
     ...(final.outcome === "success" ? {} : { isError: true }),
+  };
+}
+
+const BULK_COLLECT_MAX_CHARS = 24_000;
+
+/**
+ * Reconciles the terminal-uncollected set the extension already owns, so a lead never restates
+ * identifiers it was just shown and cannot silently drop a finished child. Collection stops once
+ * the budget is spent: a child that was not read stays uncollected and is named, because marking
+ * it collected without showing its result is the loss this tool exists to prevent.
+ */
+export async function collectAll({ pending, running, collectOne, maxChars = BULK_COLLECT_MAX_CHARS }: {
+  pending: string[];
+  running: number;
+  collectOne: (executionId: string) => Promise<any>;
+  maxChars?: number;
+}) {
+  const entries: { executionId: string; outcome: string; text: string; isError: boolean }[] = [];
+  const remaining: string[] = [];
+  let used = 0;
+  for (const executionId of pending) {
+    if (entries.length > 0 && used >= maxChars) { remaining.push(executionId); continue; }
+    const result = await collectOne(executionId);
+    const text = (result?.content ?? []).filter((part: any) => part?.type === "text").map((part: any) => String(part.text ?? "")).join("\n");
+    used += text.length;
+    entries.push({ executionId, outcome: String(result?.details?.outcome ?? "unknown"), text, isError: result?.isError === true });
+  }
+
+  const total = entries.length + remaining.length;
+  const header = total === 0
+    ? "Nothing terminal to reconcile."
+    : `Reconciled ${entries.length} of ${total} terminal children.`;
+  const notes = [
+    remaining.length === 0 ? "" : `Bounded before reading ${remaining.length} more; they stay uncollected, so collect each individually: ${remaining.join(", ")}.`,
+    running === 0 ? "" : `${running} ${running === 1 ? "child is" : "children are"} still running and cannot be collected yet.`,
+  ].filter((note) => note !== "");
+  const sections = entries.map((entry) => `${entry.executionId} [${entry.outcome}]\n${entry.text}`);
+  return {
+    content: [{ type: "text" as const, text: [[header, ...notes].join(" "), ...sections].join("\n\n") }],
+    details: {
+      collected: entries.map((entry) => ({ executionId: entry.executionId, outcome: entry.outcome })),
+      remaining,
+      running,
+    },
+    ...(entries.some((entry) => entry.isError) ? { isError: true } : {}),
   };
 }
 

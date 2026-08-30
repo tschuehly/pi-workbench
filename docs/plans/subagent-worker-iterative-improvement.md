@@ -81,6 +81,10 @@ The woken lead may reconcile the terminal results the default `subagent_status` 
 
 The first pilot sent one bounded `followUp` per terminal child, identifying the execution and outcome. It passed its idle-lead smoke, then failed the busy-lead case it was meant to answer. In one 23-child fan-out the lead received 23 wakes: 20 arrived after the results were already collected and 12 produced no useful work. `followUp` also holds the signal until the whole run stops, so a lead in a long tool batch learns nothing until it would have checked anyway. Per-child identity was the cause, not a detail: the lead reconciles the whole `subagent_status` roster at once, so every wake after the first restates work already claimed.
 
+### Rejected follow-ups
+
+Two adverse reviews on `openai-codex/gpt-5.6-sol`, independent of the authoring model family, rejected two proposed refinements on 2026-08-29. Adding "finish your current step first" to the signal was rejected because the signal arrives at a model boundary, so the instruction means "continue what was already intended", which the finished child may have invalidated; interrupting is sometimes correct and message text cannot decide which case applies. Printing uncollected children to the terminal when the agent settles was rejected because it is visible only in the interactive host, leaving RPC and graphical hosts with no signal, while `subagent_status` already reports the terminal-uncollected count as the recovery path. The same reviews established the receipt guard and the bulk-collection predicate now recorded in Decision 98.
+
 ### Implemented quick win
 
 `background: true` remains explicit. Terminal background children coalesce into exactly one generic bounded `steer` signal, delivered at the lead's next safe model boundary.
@@ -88,7 +92,7 @@ The first pilot sent one bounded `followUp` per terminal child, identifying the 
 The completion signal should:
 
 - name no execution and carry no result, because the lead reconciles the default status roster rather than one child;
-- tell the lead to call `subagent_status`, then collect and reconcile each terminal-uncollected child exactly once;
+- tell the lead to collect and reconcile each terminal-uncollected child exactly once, which `subagent_collect` does for the whole set when it is called without an `executionId`;
 - use `steer` delivery so a busy lead is reached between turns of one long run;
 - wake an idle lead with `triggerTurn: true`;
 - suppress every later completion until this signal is delivered; and
