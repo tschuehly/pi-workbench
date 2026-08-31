@@ -139,6 +139,15 @@ async function runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture
     passed: mounted.machineId === first.machineId && mounted.projectId === first.projectId && mounted.workspaceId === first.workspaceId && mounted.sessionId === first.sessionId && mounted.chat && mounted.prompt && mounted.editor && mounted.send && mounted.stop && mounted.onSend && mounted.onStop,
     detail: JSON.stringify(mounted),
   });
+  const backAvailable = await evaluate(cdp, `document.querySelector("pi-workbench-app")?.shadowRoot?.querySelector('button[aria-label="Back"]') instanceof HTMLButtonElement`);
+  if (backAvailable) {
+    await clickDeepSelector(cdp, 'button[aria-label="Back"]');
+    await waitForDeepText(cdp, "Choose a Chat", 10_000);
+  }
+  const backed = await evaluate(cdp, `(() => { const root = document.querySelector("pi-workbench-app")?.shadowRoot; const url = new URL(location.href); return { chooser: root?.querySelector('[data-view="chooser"]') !== null, projectId: root?.querySelector('select[aria-label="Project"]')?.value ?? "", workspaceId: root?.querySelector('select[aria-label="Workspace"]')?.value ?? "", sessionId: url.searchParams.get("session") }; })()`);
+  checks.push({ id: "chat-back-to-workspace-chooser", passed: backAvailable && backed.chooser && backed.projectId === first.projectId && backed.workspaceId === first.workspaceId && backed.sessionId === null, detail: JSON.stringify({ backAvailable, backed }) });
+  await navigate(cdp, firstUrl.href, 20_000);
+  await waitForDeepText(cdp, first.transcriptMarker, 15_000);
   const uiPaged = runtime.web.recentOutput().includes(`/sessions/${first.sessionId}/messages`) && runtime.web.recentOutput().includes("&before=");
   const pageUrl = new URL(`api/machines/${encodeURIComponent(first.machineId)}/sessions/${encodeURIComponent(first.sessionId)}/messages`, baseUrl);
   pageUrl.searchParams.set("cwd", first.cwd);
@@ -166,7 +175,22 @@ async function runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture
     await waitForBrowserExpression(secondPage, `(() => { const root = document.querySelector("pi-workbench-app")?.shadowRoot; const select = root?.querySelector('select[aria-label="Workspace"]'); return [...(select?.options ?? [])].some((option) => option.value === ${JSON.stringify(second.workspaceId)}); })()`, 10_000);
     await selectDeepValue(secondPage, "Workspace", second.workspaceId);
     await waitForDeepText(secondPage, second.displayName, 10_000);
-    const chooser = await evaluate(secondPage, `(() => { const root = document.querySelector("pi-workbench-app")?.shadowRoot; const button = [...(root?.querySelectorAll("button") ?? [])].find((candidate) => candidate.textContent?.trim() === "New Chat"); return { newChat: button instanceof HTMLButtonElement, enabled: button instanceof HTMLButtonElement && !button.disabled, existing: root?.textContent?.includes(${JSON.stringify(second.displayName)}) === true }; })()`);
+    const chooser = await evaluate(secondPage, `(() => {
+      const root = document.querySelector("pi-workbench-app")?.shadowRoot;
+      const button = [...(root?.querySelectorAll("button") ?? [])].find((candidate) => candidate.textContent?.trim() === "New Chat");
+      const session = root?.querySelector("button.session");
+      const section = root?.querySelector(".chooser > section");
+      const existing = root?.textContent?.includes(${JSON.stringify(second.displayName)}) === true;
+      const title = session?.querySelector("strong");
+      if (title) title.textContent = "unbroken-session-title-".repeat(30);
+      return {
+        newChat: button instanceof HTMLButtonElement,
+        enabled: button instanceof HTMLButtonElement && !button.disabled,
+        existing,
+        sessionContained: session instanceof HTMLButtonElement && section instanceof HTMLElement && section.scrollWidth <= section.clientWidth && session.getBoundingClientRect().right <= section.getBoundingClientRect().right,
+      };
+    })()`);
+    checks.push({ id: "chooser-session-text-contained", passed: chooser.sessionContained, detail: JSON.stringify(chooser) });
     await clickDeepText(secondPage, "New Chat");
     await waitForBrowserExpression(secondPage, `(() => { const id = document.querySelector("pi-workbench-app")?.shadowRoot?.querySelector('[data-view="chat"]')?.dataset.session ?? ""; return id !== "" && !id.startsWith("pending-session-"); })()`, 20_000);
     const created = await chatSnapshot(secondPage);
