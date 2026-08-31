@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BROWSER_UNAVAILABLE, findSystemChromium } from "../scripts/run-unified-shell-acceptance.mjs";
+import { BROWSER_UNAVAILABLE, findSystemChromium } from "../scripts/run-workbench-chat-acceptance.mjs";
 
 test("reports a stable typed browser-unavailable result", () => {
   assert.deepEqual(BROWSER_UNAVAILABLE, {

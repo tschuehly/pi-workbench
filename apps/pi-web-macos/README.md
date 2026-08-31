@@ -1,8 +1,8 @@
 # Pi Workbench for macOS
 
-The native wrapper works today, but it still loads the legacy PI WEB client. The first
-[Workbench UI slice](../../docs/plans/workbench-ui.md) will replace that web root with one Chat per
-window: graphical text input first, then a toggleable workspace file pane.
+The native wrapper loads one Pi Chat per window. A new window first asks for a workspace and a new
+or existing session, then mounts PI WEB's Chat and PromptEditor without the legacy application shell.
+The file pane remains deferred to the next [Workbench UI checkpoint](../../docs/plans/workbench-ui.md).
 
 The app uses AppKit and `WKWebView` for native windows, shared website data, lifecycle status, and
 same-origin navigation. PI WEB owns sessions and runtime state. The wrapper owns neither Pi
@@ -91,16 +91,11 @@ pi-web restart --component sessiond
 
 Same-origin links stay inside the app. Other links open in the default browser.
 
-## Current keyboard behavior
+## Keyboard behavior
 
-The native wrapper still exposes tabs:
-
-- `Command-N` — new window
-- `Command-T` — new tab
-- `Command-W` — close the current tab or window
-- `Command-R` — reload
+- `Command-N` — open another independent Chat window
+- `Command-W` — close the current window
+- `Command-R` — reload the current Chat
 - `Command-[` and `Command-]` — browser history
-- `Command-Shift-[` and `Command-Shift-]` — previous or next tab
 
-Slice 1 keeps new window, close, reload, and history navigation. It removes every tab command and
-Window-menu tab action so one native window always represents one Chat.
+Native tabs and their menu commands are disabled so one macOS window always represents one Chat.

@@ -65,7 +65,7 @@ only after the Chat window is useful in daily work.
 - [UI reset evidence](docs/research/reports/workbench-ui-reset-2026-08-28.md)
 - [Workstream contract](docs/contracts/workstreams.md)
 - [Legacy UI plan disposition](docs/archive/pi-web-ui/README.md)
-- Controlled runtime fixture: `packages/pi-web-integration/scripts/run-unified-shell-acceptance.mjs`
+- Controlled runtime fixture: `packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs`
 
 No customer claims, usage analytics, or validated scale distributions are recorded.
 

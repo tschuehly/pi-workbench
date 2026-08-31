@@ -62,7 +62,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     @objc private func newWindow(_ sender: Any?) { browser.openWindow() }
-    @objc private func newTab(_ sender: Any?) { browser.openTab() }
     @objc private func reload(_ sender: Any?) { browser.reloadKeyWindow() }
     @objc private func goBack(_ sender: Any?) { browser.goBackInKeyWindow() }
     @objc private func goForward(_ sender: Any?) { browser.goForwardInKeyWindow() }
@@ -112,7 +111,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "n")
-        fileMenu.addItem(withTitle: "New Tab", action: #selector(newTab(_:)), keyEquivalent: "t")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
@@ -155,11 +153,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let windowMenu = NSMenu(title: "Window")
         windowItem.submenu = windowMenu
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        windowMenu.addItem(withTitle: "Show Previous Tab", action: #selector(NSWindow.selectPreviousTab(_:)), keyEquivalent: "{")
-        windowMenu.addItem(withTitle: "Show Next Tab", action: #selector(NSWindow.selectNextTab(_:)), keyEquivalent: "}")
-        windowMenu.addItem(.separator())
-        windowMenu.addItem(withTitle: "Move Tab to New Window", action: #selector(NSWindow.moveTabToNewWindow(_:)), keyEquivalent: "")
-        windowMenu.addItem(withTitle: "Merge All Windows", action: #selector(NSWindow.mergeAllWindows(_:)), keyEquivalent: "")
         NSApp.windowsMenu = windowMenu
         NSApp.mainMenu = mainMenu
     }
@@ -215,7 +208,7 @@ private final class LifecycleController {
 
     func start() {
         onMain { self.browser?.showStartup("Checking installed PI WEB services…") }
-        queue.async { [weak self] in self?.prepareStack(reload: false) }
+        queue.async { [weak self] in self?.prepareStack() }
     }
 
     func restartUI() {
@@ -236,19 +229,19 @@ private final class LifecycleController {
             do {
                 let result = try self.runCLI(["restart", "--component", component])
                 guard result.status == 0 else { throw LifecycleError.command(result.output) }
-                self.prepareStack(reload: true)
+                self.prepareStack()
             } catch {
                 self.showFailure(error.localizedDescription)
             }
         }
     }
 
-    private func prepareStack(reload: Bool) {
+    private func prepareStack() {
         do {
             var status = try typedStatus()
             switch stackState(status) {
             case .ready:
-                showReady(reload: reload)
+                showReady()
                 return
             case .stopped:
                 onMain { self.browser?.showStartup("Starting installed PI WEB services…") }
@@ -265,7 +258,7 @@ private final class LifecycleController {
                 status = try typedStatus()
                 switch stackState(status) {
                 case .ready:
-                    showReady(reload: reload)
+                    showReady()
                     return
                 case .waiting(let message):
                     onMain { self.browser?.showStartup(message) }
@@ -361,11 +354,8 @@ private final class LifecycleController {
         }
     }
 
-    private func showReady(reload: Bool) {
-        onMain {
-            self.browser?.showReady()
-            if reload { self.browser?.reloadAll() }
-        }
+    private func showReady() {
+        onMain { self.browser?.showReady() }
     }
 
     private func showFailure(_ message: String) {
@@ -418,14 +408,6 @@ private final class BrowserCoordinator {
         return controller
     }
 
-    func openTab(url: URL? = nil, relativeTo parent: NSWindow? = nil) {
-        let parent = parent ?? NSApp.keyWindow
-        let controller = openWindow(url: url)
-        guard let parent, let child = controller.window, parent !== child else { return }
-        parent.addTabbedWindow(child, ordered: .above)
-        child.makeKeyAndOrderFront(nil)
-    }
-
     func showStartup(_ message: String) {
         ready = false
         controllers.values.forEach { $0.showStartup(message) }
@@ -439,10 +421,9 @@ private final class BrowserCoordinator {
     func showReady() {
         ready = true
         guard let serverURL else { return }
-        controllers.values.forEach { $0.load(serverURL) }
+        controllers.values.forEach { $0.resume(fallback: serverURL) }
     }
 
-    func reloadAll() { controllers.values.forEach { $0.reload() } }
     func reloadKeyWindow() { keyController?.reload() }
     func goBackInKeyWindow() { keyController?.goBack() }
     func goForwardInKeyWindow() { keyController?.goForward() }
@@ -499,6 +480,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     private let actionHandler: (LifecycleAction) -> Void
     private let webView: WKWebView
     private let onClose: (BrowserWindowController) -> Void
+    private var lastApplicationURL: URL?
 
     init(serverURL: URL?, actionHandler: @escaping (LifecycleAction) -> Void, onClose: @escaping (BrowserWindowController) -> Void) {
         self.serverURL = serverURL
@@ -519,8 +501,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         webView = WKWebView(frame: .zero, configuration: configuration)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Pi Workbench"
-        window.tabbingIdentifier = "pi-web-browser"
-        window.tabbingMode = .preferred
+        window.tabbingMode = .disallowed
         window.center()
         window.contentView = webView
         super.init(window: window)
@@ -531,7 +512,14 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func load(_ url: URL) { webView.load(URLRequest(url: url)) }
+    func load(_ url: URL) {
+        if isAllowed(url) { lastApplicationURL = url }
+        webView.load(URLRequest(url: url))
+    }
+    func resume(fallback: URL) {
+        if let current = webView.url, isAllowed(current) { lastApplicationURL = current }
+        load(lastApplicationURL ?? fallback)
+    }
     func reload() { webView.reload() }
     func goBack() { if webView.canGoBack { webView.goBack() } }
     func goForward() { if webView.canGoForward { webView.goForward() } }
@@ -554,6 +542,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     }
 
     private func showLifecyclePage(title: String, message: String, actions: String) {
+        if let current = webView.url, isAllowed(current) { lastApplicationURL = current }
         let html = """
         <!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
@@ -570,6 +559,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let current = webView.url, isAllowed(current) { lastApplicationURL = current }
         window?.title = webView.title?.isEmpty == false ? webView.title! : "Pi Workbench"
     }
 
@@ -632,7 +622,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let url = navigationAction.request.url else { return nil }
-        if isAllowed(url) { (NSApp.delegate as? AppDelegate)?.browserOpenTab(url) }
+        if isAllowed(url) { (NSApp.delegate as? AppDelegate)?.browserOpenWindow(url) }
         else { NSWorkspace.shared.open(url) }
         return nil
     }
@@ -660,9 +650,10 @@ private func escapeHTML(_ value: String) -> String {
 }
 
 private extension AppDelegate {
-    func browserOpenTab(_ url: URL) { browser.openTab(url: url) }
+    func browserOpenWindow(_ url: URL) { browser.openWindow(url: url) }
 }
 
+NSWindow.allowsAutomaticWindowTabbing = false
 private let application = NSApplication.shared
 private let delegate = AppDelegate()
 application.delegate = delegate

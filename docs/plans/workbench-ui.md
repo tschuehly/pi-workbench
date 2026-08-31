@@ -96,16 +96,16 @@ matrix. Historical designs may provide evidence; they do not create scope.
 
 ## Automated verification
 
-Adapt `packages/pi-web-integration/scripts/run-unified-shell-acceptance.mjs` to launch the replacement
-client. Keep its isolated `HOME`, data, session, socket, port, and browser roots. Keep the current
-script name until the replacement scenario passes; rename it afterwards.
+Use `packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs` for the replacement
+client. Keep its isolated `HOME`, data, session, socket, port, and browser roots. The runner was
+renamed after the replacement scenario passed.
 
 Run it from the Workbench repository:
 
 ```sh
 root="/tmp/workbench-chat-acceptance-$$"
 test ! -e "$root"
-node packages/pi-web-integration/scripts/run-unified-shell-acceptance.mjs \
+node packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs \
   --pi-web-root ../pi-web \
   --root "$root"
 ```
