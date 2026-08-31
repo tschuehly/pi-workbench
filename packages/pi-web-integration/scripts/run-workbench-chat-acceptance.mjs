@@ -183,14 +183,16 @@ async function runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture
       const existing = root?.textContent?.includes(${JSON.stringify(second.displayName)}) === true;
       const title = session?.querySelector("strong");
       if (title) title.textContent = "unbroken-session-title-".repeat(30);
+      const titleLineHeight = title === null || title === undefined ? Number.NaN : Number.parseFloat(getComputedStyle(title).lineHeight);
       return {
         newChat: button instanceof HTMLButtonElement,
         enabled: button instanceof HTMLButtonElement && !button.disabled,
         existing,
         sessionContained: session instanceof HTMLButtonElement && section instanceof HTMLElement && section.scrollWidth <= section.clientWidth && session.getBoundingClientRect().right <= section.getBoundingClientRect().right,
+        sessionTitleClamped: title instanceof HTMLElement && Number.isFinite(titleLineHeight) && title.scrollHeight > title.clientHeight && title.clientHeight <= titleLineHeight * 2 + 1,
       };
     })()`);
-    checks.push({ id: "chooser-session-text-contained", passed: chooser.sessionContained, detail: JSON.stringify(chooser) });
+    checks.push({ id: "chooser-session-text-contained", passed: chooser.sessionContained && chooser.sessionTitleClamped, detail: JSON.stringify(chooser) });
     await clickDeepText(secondPage, "New Chat");
     await waitForBrowserExpression(secondPage, `(() => { const id = document.querySelector("pi-workbench-app")?.shadowRoot?.querySelector('[data-view="chat"]')?.dataset.session ?? ""; return id !== "" && !id.startsWith("pending-session-"); })()`, 20_000);
     const created = await chatSnapshot(secondPage);
