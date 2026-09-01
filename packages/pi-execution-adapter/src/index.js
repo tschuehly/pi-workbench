@@ -7,16 +7,11 @@ import { stripVTControlCharacters } from "node:util";
 const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out", "outcome_unknown"]);
 const INDEPENDENT_ROLES = new Set(["independent-judgment", "challenge", "independent-review"]);
 const EXECUTION_KINDS = new Set(["subagent", "worker"]);
-// One bounded nested level: a Worker coordinates leaf Subagents, so a Worker phase must be able to
-// outlast the leaves it launches.
-const LEAF_TIMEOUT_CEILING_MS = 45 * 60_000;
-const WORKER_TIMEOUT_CEILING_MS = 60 * 60_000;
 const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
 
 export class PiRpcExecutionAdapter {
   constructor(options = {}) {
     this.command = options.command ?? "pi";
-    this.defaultTimeoutMs = options.timeoutMs ?? 20 * 60_000;
     this.defaultStartupTimeoutMs = options.startupTimeoutMs ?? 15_000;
     this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 10 * 60_000;
     this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write", ...DELEGATION_TOOLS]);
@@ -361,7 +356,9 @@ export class PiRpcExecutionAdapter {
     if (state.done || state.phase !== "ready" || state.cancelKind !== undefined) return;
     state.phase = "prompt_submitted";
     state.prompted = true;
-    state.timeout = setTimeout(() => { state.cancelKind = "timed_out"; this.#emit(state, "timeout"); void this.#terminate(state); }, state.spec.timeoutMs ?? this.defaultTimeoutMs);
+    if (state.spec.timeoutMs !== undefined) {
+      state.timeout = setTimeout(() => { state.cancelKind = "timed_out"; this.#emit(state, "timeout"); void this.#terminate(state); }, state.spec.timeoutMs);
+    }
     const id = `${state.executionId}:${String(++state.commandSequence)}`;
     state.commands.set(id, { command: "prompt", resolve: () => {}, reject: (error) => { if (!state.done) this.#finish(state, resultFor(state, "execution_failed", "", errorMessage(error))); } });
     state.child.stdin.write(`${JSON.stringify({ id, type: "prompt", message: state.spec.task })}\n`);
@@ -445,10 +442,8 @@ function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   if (!Array.isArray(spec.tools) || spec.tools.some((tool) => !hostTools.has(tool))) throw typedError("CAPABILITY_EXCEEDED", "Requested tools exceed the host capability ceiling.");
   const kind = spec.kind ?? "subagent";
   if (!EXECUTION_KINDS.has(kind)) throw typedError("INVALID_SPEC", `kind must be one of ${[...EXECUTION_KINDS].join(", ")}.`);
-  if (spec.timeoutMs !== undefined) {
-    const ceiling = kind === "worker" ? WORKER_TIMEOUT_CEILING_MS : LEAF_TIMEOUT_CEILING_MS;
-    if (!Number.isFinite(spec.timeoutMs) || spec.timeoutMs <= 0) throw typedError("INVALID_SPEC", "timeoutMs must be a positive number of milliseconds.");
-    if (spec.timeoutMs > ceiling) throw typedError("TIMEOUT_CEILING_EXCEEDED", `A ${kind} execution may not exceed ${ceiling / 60_000} minutes.`);
+  if (spec.timeoutMs !== undefined && (!Number.isFinite(spec.timeoutMs) || spec.timeoutMs <= 0)) {
+    throw typedError("INVALID_SPEC", "timeoutMs must be a positive number of milliseconds.");
   }
   if (spec.continuation !== undefined && (typeof spec.continuation !== "object" || spec.continuation === null || typeof spec.continuation.sessionId !== "string" || spec.continuation.sessionId.trim() === "")) {
     throw typedError("INVALID_SPEC", "continuation.sessionId must be a non-empty string when continuation is present.");

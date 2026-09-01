@@ -173,14 +173,15 @@ test("bounds the hierarchy to lead → worker → leaf with a delegating coordin
   }
 });
 
-test("exposes bounded independence, timeout, and status parameters", () => {
+test("exposes optional uncapped timeouts with bounded independence and status parameters", () => {
   const tools = new Map();
   subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} });
 
   const leaf = tools.get("subagent").parameters.properties;
   assert.ok(leaf.independentOfModel, "a leaf reviewer carries the recorded author model");
-  assert.equal(leaf.timeoutSeconds.maximum, 45 * 60);
-  assert.equal(tools.get("worker_dispatch").parameters.properties.timeoutSeconds.maximum, 60 * 60);
+  assert.equal(leaf.timeoutSeconds.minimum, 1);
+  assert.equal(leaf.timeoutSeconds.maximum, undefined);
+  assert.equal(tools.get("worker_dispatch").parameters.properties.timeoutSeconds.maximum, undefined);
   assert.ok(tools.get("subagent_status").parameters.properties.all, "status defaults to the actionable set");
   const collect = tools.get("subagent_collect").parameters;
   assert.ok(collect.properties.executionId, "one child can still be collected by identifier");

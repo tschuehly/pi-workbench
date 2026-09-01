@@ -170,7 +170,6 @@ test("reconciles terminal output when the settled event is missing but RPC state
     clock: () => now,
     spawn: () => fakeRpc({ omitSettled: true }),
     settlementProbeMs: 1,
-    timeoutMs: 20,
     killGraceMs: 1,
   });
   const receipt = await adapter.dispatch(spec());
@@ -254,7 +253,6 @@ test("fails launch quickly when Pi RPC never answers the initial state request",
     clock: () => now,
     spawn: () => child,
     startupTimeoutMs: 5,
-    timeoutMs: 1_000,
     killGraceMs: 1,
   });
   const receipt = await adapter.dispatch(spec());
@@ -273,7 +271,7 @@ test("fails launch quickly when Pi RPC never answers the initial state request",
 
 test("ignores a late initial state response after startup termination begins", async () => {
   const child = fakeRpc({ hangOnGetState: true, respondStateOnAbort: true });
-  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, startupTimeoutMs: 5, timeoutMs: 1_000, killGraceMs: 1 });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, startupTimeoutMs: 5, killGraceMs: 1 });
   const receipt = await adapter.dispatch(spec());
   const observations = [];
   const collecting = (async () => { for await (const observation of adapter.observe(receipt.executionId)) observations.push(observation); })();
@@ -291,26 +289,33 @@ test("reports unknown outcome when startup termination cannot be confirmed", asy
     clock: () => now,
     spawn: () => fakeRpc({ hangOnGetState: true, confirmKill: false }),
     startupTimeoutMs: 2,
-    timeoutMs: 1_000,
     killGraceMs: 1,
   });
   const receipt = await adapter.dispatch(spec());
   assert.equal((await adapter.result(receipt.executionId)).outcome, "outcome_unknown");
 });
 
-test("starts the task timeout only after the initial RPC handshake", async () => {
-  const child = fakeRpc({ stateDelayMs: 10, hang: true });
-  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, startupTimeoutMs: 50, timeoutMs: 5, killGraceMs: 1 });
+test("runs without a task timeout unless the execution explicitly requests one", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }), killGraceMs: 1 });
   const receipt = await adapter.dispatch(spec());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(adapter.status(receipt.executionId).running, true);
+  await adapter.cancel(receipt.executionId, "test complete");
+});
+
+test("starts an explicit task timeout only after the initial RPC handshake", async () => {
+  const child = fakeRpc({ stateDelayMs: 10, hang: true });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, startupTimeoutMs: 50, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec({ timeoutMs: 5 }));
   const result = await adapter.result(receipt.executionId);
 
   assert.equal(result.outcome, "timed_out");
   assert.equal(child.commands.some((command) => command.type === "prompt"), true);
 });
 
-test("clears the startup deadline while retaining the task deadline", async () => {
-  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }), startupTimeoutMs: 2, timeoutMs: 8, killGraceMs: 1 });
-  const receipt = await adapter.dispatch(spec());
+test("clears the startup deadline while retaining an explicit task deadline", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }), startupTimeoutMs: 2, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec({ timeoutMs: 8 }));
   const observations = [];
   const collecting = (async () => { for await (const observation of adapter.observe(receipt.executionId)) observations.push(observation); })();
   assert.equal((await adapter.result(receipt.executionId)).outcome, "timed_out");
@@ -319,13 +324,13 @@ test("clears the startup deadline while retaining the task deadline", async () =
   assert.equal(observations.some((value) => value.type === "timeout"), true);
 });
 
-test("distinguishes confirmed timeout from an unknown termination outcome", async () => {
-  const timedOut = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }), timeoutMs: 1, killGraceMs: 1 });
-  const timedReceipt = await timedOut.dispatch(spec());
+test("distinguishes confirmed explicit timeout from an unknown termination outcome", async () => {
+  const timedOut = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }), killGraceMs: 1 });
+  const timedReceipt = await timedOut.dispatch(spec({ timeoutMs: 1 }));
   assert.equal((await timedOut.result(timedReceipt.executionId)).outcome, "timed_out");
 
-  const unknown = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true, confirmKill: false }), timeoutMs: 1, killGraceMs: 1 });
-  const unknownReceipt = await unknown.dispatch(spec());
+  const unknown = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true, confirmKill: false }), killGraceMs: 1 });
+  const unknownReceipt = await unknown.dispatch(spec({ timeoutMs: 1 }));
   assert.equal((await unknown.result(unknownReceipt.executionId)).outcome, "outcome_unknown");
 });
 
@@ -339,7 +344,7 @@ test("forces a successful RPC child to terminate when graceful stdin shutdown ha
 });
 
 test("reports non-blocking status and list snapshots for background reconciliation", async () => {
-  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }), timeoutMs: 60_000 });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ hang: true }) });
   const receipt = await adapter.dispatch(spec());
   const running = adapter.status(receipt.executionId);
   assert.equal(running.running, true);
@@ -395,13 +400,12 @@ test("admits leaf delegation tools for a coordinating worker but nothing beyond 
   await assert.rejects(adapter.dispatch(spec({ kind: "coordinator" })), (error) => error.code === "INVALID_SPEC");
 });
 
-test("caps phase timeouts per execution kind", async () => {
+test("accepts uncapped explicit task timeouts", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
-  await adapter.dispatch(spec({ timeoutMs: 45 * 60_000 }));
-  await adapter.dispatch(spec({ kind: "worker", timeoutMs: 60 * 60_000 }));
-  await assert.rejects(adapter.dispatch(spec({ timeoutMs: 45 * 60_000 + 1 })), (error) => error.code === "TIMEOUT_CEILING_EXCEEDED");
-  await assert.rejects(adapter.dispatch(spec({ kind: "worker", timeoutMs: 60 * 60_000 + 1 })), (error) => error.code === "TIMEOUT_CEILING_EXCEEDED");
+  await adapter.dispatch(spec({ timeoutMs: 2 * 60 * 60_000 }));
+  await adapter.dispatch(spec({ kind: "worker", timeoutMs: 2 * 60 * 60_000 }));
   await assert.rejects(adapter.dispatch(spec({ timeoutMs: 0 })), (error) => error.code === "INVALID_SPEC");
+  await assert.rejects(adapter.dispatch(spec({ timeoutMs: Number.POSITIVE_INFINITY })), (error) => error.code === "INVALID_SPEC");
 });
 
 test("marks an oversized child result truncated so it cannot satisfy verification", async () => {

@@ -99,7 +99,7 @@ The module keeps only bounded live process state: execution identifier, process 
 
 Level 1 imposes no local child concurrency cap and provides no scheduler. Each invocation still represents one bounded child execution; future managed admission and scheduling remain controller-owned.
 
-Each execution has separate startup and task timeouts. Pi RPC must answer the initial state handshake within 15 seconds; a stall terminates before prompting as `launch_failed` with explicit startup evidence. The 20-minute task timeout remains separate. Both follow the same confirmed termination sequence as user cancellation and remain implementation constants rather than product-level budget policy.
+Each execution has a startup timeout. Pi RPC must answer the initial state handshake within 15 seconds; a stall terminates before prompting as `launch_failed` with explicit startup evidence. Tasks otherwise run until the child finishes or is cancelled. The lead may explicitly supply an uncapped positive task timeout when the assignment needs a deadline; it starts only after the handshake and follows the same confirmed termination sequence as user cancellation.
 
 ## Observations, results, and cancellation
 
@@ -142,7 +142,7 @@ Replace the temporary official-example implementation only after tests prove:
 7. progress streams through normalized observations without raw thinking content entering the public contract;
 8. terminal parent context is compact and includes the Pi session identifier;
 9. child sessions persist in Pi's standard machine-local store but are never reopened automatically;
-10. pre-prompt startup timeout, task timeout, cancellation, forced termination, and unknown outcomes are distinguishable;
+10. pre-prompt startup timeout, an explicitly requested task timeout, cancellation, forced termination, and unknown outcomes are distinguishable;
 11. concurrent invocations launch independently and remain cancellable;
 12. a background launch returns a handle immediately; terminal outcomes coalesce into one bounded signal that triggers status and collection without duplicate or post-collection notifications; and `status`, `list`, and `collect` reconcile the child within the session without ever letting it outlive the attended parent;
 13. parent termination cleans up every active child; and

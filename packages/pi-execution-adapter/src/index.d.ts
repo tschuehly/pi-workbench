@@ -17,7 +17,7 @@ export interface CancellationReceipt { executionId: string; outcome: "cancelled"
 export interface ExecutionStatus { executionId: string; profile: string; cognitiveRole: string; kind: ExecutionKind; provider: string; model: string; effort: string; running: boolean; outcome?: ExecutionOutcome; acceptedAt: string; observationCount: number; latestObservation?: { type: string; at: string; detail?: unknown }; sessionId?: string }
 export interface ExecutionSummary { executionId: string; profile: string; cognitiveRole: string; kind: ExecutionKind; running: boolean; outcome?: ExecutionOutcome; acceptedAt: string }
 export class PiRpcExecutionAdapter {
-  constructor(options?: { command?: string; timeoutMs?: number; startupTimeoutMs?: number; bindingMaxAgeMs?: number; hostTools?: string[]; clock?: () => Date; spawn?: Function; killGraceMs?: number; settlementProbeMs?: number; resultMaxChars?: number; routingOverlayPath?: string; ownsProcessGroups?: boolean });
+  constructor(options?: { command?: string; startupTimeoutMs?: number; bindingMaxAgeMs?: number; hostTools?: string[]; clock?: () => Date; spawn?: Function; killGraceMs?: number; settlementProbeMs?: number; resultMaxChars?: number; routingOverlayPath?: string; ownsProcessGroups?: boolean });
   dispatch(spec: ResolvedExecutionSpec): Promise<ExecutionReceipt>;
   observe(executionId: string): AsyncIterable<ExecutionObservation>;
   result(executionId: string): Promise<ExecutionResult>;
