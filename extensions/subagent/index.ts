@@ -67,7 +67,7 @@ const COGNITIVE_ROLES = [
 ] as const;
 const INDEPENDENT_ROLES = new Set<string>(["independent-judgment", "challenge", "independent-review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
-const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out", "outcome_unknown"]);
+const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
 
 const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output" }),
@@ -75,7 +75,6 @@ const Params = Type.Object({
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
   independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Defaults to the active parent model provider; set it explicitly for child-authored work." })),
   independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Safe in every run: default routing uses its provider for cross-family independence, while an active routing overlay uses the exact model." })),
-  timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, description: "Optional leaf deadline in seconds. Omit it to let the Subagent run until it finishes or is cancelled." })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the coalesced completion signal with subagent_status and subagent_collect. The child still dies when the attended session ends. A Subagent launched inside a Worker must stay in the foreground." })),
 });
@@ -96,7 +95,6 @@ const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
-  timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, description: "Optional phase deadline in seconds. Omit it to let the Worker run until it finishes or is cancelled." })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the coalesced completion signal with subagent_collect." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
@@ -216,7 +214,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
           parentSessionId,
           kind: "subagent",
           ...(telemetryConcept === undefined ? {} : { telemetryConcept }),
-          ...(params.timeoutSeconds === undefined ? {} : { timeoutMs: Math.round(params.timeoutSeconds * 1000) }),
         });
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
@@ -484,7 +481,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
           parentSessionId,
           kind: "worker",
           ...(params.telemetryConcept === undefined ? {} : { telemetryConcept: params.telemetryConcept }),
-          ...(params.timeoutSeconds === undefined ? {} : { timeoutMs: Math.round(params.timeoutSeconds * 1000) }),
           ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
         });
       } catch (error) {

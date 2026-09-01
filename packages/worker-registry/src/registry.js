@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { fail } from "./errors.js";
 
+// `timed_out` remains readable only for receipts persisted before task deadlines were removed.
 const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out", "outcome_unknown"]);
 const RECEIPT_LIMIT = 20;
 const LINEAGE_LIMIT = 200;

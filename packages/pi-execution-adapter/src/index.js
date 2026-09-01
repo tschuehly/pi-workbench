@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
 
-const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out", "outcome_unknown"]);
+const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
 const INDEPENDENT_ROLES = new Set(["independent-judgment", "challenge", "independent-review"]);
 const EXECUTION_KINDS = new Set(["subagent", "worker"]);
 const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
@@ -95,7 +95,7 @@ export class PiRpcExecutionAdapter {
   async cancel(executionId, reason) {
     const state = this.#state(executionId);
     if (state.done) {
-      if (state.result.outcome === "cancelled" || state.result.outcome === "timed_out") return { executionId, outcome: "cancelled" };
+      if (state.result.outcome === "cancelled") return { executionId, outcome: "cancelled" };
       if (state.result.outcome === "outcome_unknown") return { executionId, outcome: "outcome_unknown" };
       throw typedError("EXECUTION_TERMINAL", `Execution ${executionId} already ended with ${state.result.outcome}.`);
     }
@@ -356,9 +356,6 @@ export class PiRpcExecutionAdapter {
     if (state.done || state.phase !== "ready" || state.cancelKind !== undefined) return;
     state.phase = "prompt_submitted";
     state.prompted = true;
-    if (state.spec.timeoutMs !== undefined) {
-      state.timeout = setTimeout(() => { state.cancelKind = "timed_out"; this.#emit(state, "timeout"); void this.#terminate(state); }, state.spec.timeoutMs);
-    }
     const id = `${state.executionId}:${String(++state.commandSequence)}`;
     state.commands.set(id, { command: "prompt", resolve: () => {}, reject: (error) => { if (!state.done) this.#finish(state, resultFor(state, "execution_failed", "", errorMessage(error))); } });
     state.child.stdin.write(`${JSON.stringify({ id, type: "prompt", message: state.spec.task })}\n`);
@@ -389,7 +386,6 @@ export class PiRpcExecutionAdapter {
     if (!OUTCOMES.has(result.outcome)) throw new Error(`Invalid outcome ${result.outcome}`);
     state.done = true;
     state.result = result;
-    clearTimeout(state.timeout);
     clearTimeout(state.startupTimeout);
     clearTimeout(state.settlementTimer);
     state.settlementTimer = undefined;
@@ -442,9 +438,6 @@ function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   if (!Array.isArray(spec.tools) || spec.tools.some((tool) => !hostTools.has(tool))) throw typedError("CAPABILITY_EXCEEDED", "Requested tools exceed the host capability ceiling.");
   const kind = spec.kind ?? "subagent";
   if (!EXECUTION_KINDS.has(kind)) throw typedError("INVALID_SPEC", `kind must be one of ${[...EXECUTION_KINDS].join(", ")}.`);
-  if (spec.timeoutMs !== undefined && (!Number.isFinite(spec.timeoutMs) || spec.timeoutMs <= 0)) {
-    throw typedError("INVALID_SPEC", "timeoutMs must be a positive number of milliseconds.");
-  }
   if (spec.continuation !== undefined && (typeof spec.continuation !== "object" || spec.continuation === null || typeof spec.continuation.sessionId !== "string" || spec.continuation.sessionId.trim() === "")) {
     throw typedError("INVALID_SPEC", "continuation.sessionId must be a non-empty string when continuation is present.");
   }

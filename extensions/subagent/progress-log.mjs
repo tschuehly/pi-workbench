@@ -47,7 +47,7 @@ export function activityText(observation) {
   if (observation.type === "terminal") return String(observation.detail?.outcome ?? "finished").replaceAll("_", " ");
   if (observation.type === "settlement_reconciled") return "finishing";
   if (observation.type === "cancellation") return "stopping";
-  if (observation.type === "timeout" || observation.type === "startup_timeout") return "timed out";
+  if (observation.type === "startup_timeout") return "timed out";
   if (["launch", "binding_verified", "continuation_verified", "quota_degraded"].includes(observation.type)) return "starting";
   return undefined;
 }

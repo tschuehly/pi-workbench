@@ -99,7 +99,7 @@ The module keeps only bounded live process state: execution identifier, process 
 
 Level 1 imposes no local child concurrency cap and provides no scheduler. Each invocation still represents one bounded child execution; future managed admission and scheduling remain controller-owned.
 
-Each execution has a startup timeout. Pi RPC must answer the initial state handshake within 15 seconds; a stall terminates before prompting as `launch_failed` with explicit startup evidence. Tasks otherwise run until the child finishes or is cancelled. The lead may explicitly supply an uncapped positive task timeout when the assignment needs a deadline; it starts only after the handshake and follows the same confirmed termination sequence as user cancellation.
+Each execution has a startup timeout. Pi RPC must answer the initial state handshake within 15 seconds; a stall terminates before prompting as `launch_failed` with explicit startup evidence. After launch, a task runs until the child finishes, the lead cancels it, or the attended session shuts down.
 
 ## Observations, results, and cancellation
 
@@ -110,7 +110,7 @@ The adapter normalizes Pi RPC activity into bounded observations for:
 - tool start, progress, and completion;
 - usage;
 - diagnostics and RPC startup timeout;
-- cancellation and task timeout; and
+- cancellation; and
 - terminal outcome.
 
 Detailed observations drive the rolling tool UI and, in interactive Pi, one width-aware, single-line pill on the shared **Active** surface above the editor for every active Subagent or Worker dispatch. Pills pack horizontally and wrap as units; each leads with mechanically normalized current activity, protects model and Model Effort metadata, adds compact identity and Cognitive Role when width permits, and omits the launch objective. Terminal executions are removed. These presentation updates do not enter parent Model Context. The parent receives only terminal status, final text, child profile, Cognitive Role, resolved provider/model/effort, effective quota admission and telemetry status, and Pi session identifier. V1 does not expose arbitrary JSON Schema or automatic correction turns. Usage is observed, but custom token and cost enforcement remains deferred.
@@ -121,7 +121,6 @@ The stable Level 1 outcome categories are:
 - `launch_failed`
 - `execution_failed`
 - `cancelled`
-- `timed_out`
 - `outcome_unknown`
 - success
 
@@ -142,7 +141,7 @@ Replace the temporary official-example implementation only after tests prove:
 7. progress streams through normalized observations without raw thinking content entering the public contract;
 8. terminal parent context is compact and includes the Pi session identifier;
 9. child sessions persist in Pi's standard machine-local store but are never reopened automatically;
-10. pre-prompt startup timeout, an explicitly requested task timeout, cancellation, forced termination, and unknown outcomes are distinguishable;
+10. pre-prompt startup timeout, cancellation, forced termination, and unknown outcomes are distinguishable;
 11. concurrent invocations launch independently and remain cancellable;
 12. a background launch returns a handle immediately; terminal outcomes coalesce into one bounded signal that triggers status and collection without duplicate or post-collection notifications; and `status`, `list`, and `collect` reconcile the child within the session without ever letting it outlive the attended parent;
 13. parent termination cleans up every active child; and

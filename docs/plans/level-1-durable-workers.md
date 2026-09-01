@@ -128,7 +128,7 @@ remain deferred (deferred design decision 14).
 
 One dispatch at a time per worker. `worker_dispatch` acquires the worker's dispatch lock (owner
 process identifier, acquisition time, heartbeat) before preflight and releases it on every terminal
-outcome, including cancellation, timeout, and forced termination. A concurrent dispatch to a locked
+outcome, including cancellation and forced termination. A concurrent dispatch to a locked
 worker fails preflight with a typed busy diagnostic instead of queueing. Distinct workers dispatch
 concurrently exactly like independent subagents.
 
@@ -180,7 +180,7 @@ Accept the implementation only after tests prove:
 6. every dispatch uses a fresh verified binding, including a changed model on a resumed session;
 7. a concurrent dispatch to a busy worker fails with a typed diagnostic; distinct workers run
    concurrently and remain independently cancellable;
-8. the dispatch lock releases on success, failure, cancellation, timeout, and forced termination,
+8. the dispatch lock releases on success, failure, cancellation, and forced termination,
    and dead-owner reclaim requires verified liveness failure;
 9. a missing, foreign, or corrupt continuation session fails preflight closed;
 10. retirement is immutable, blocks further dispatch, foreign lead sessions cannot dispatch or retire the worker, and the first mutation safely claims a legacy unowned record;

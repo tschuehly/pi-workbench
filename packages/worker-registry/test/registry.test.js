@@ -93,7 +93,7 @@ test("a live lock is never reclaimed regardless of heartbeat age", async () => {
   await assert.rejects(retire(store, workerId, "cleanup"), (error) => error.code === "WORKER_BUSY");
 });
 
-test("every terminal outcome releases the lock and outcome_unknown demands inspection", async () => {
+test("every current or legacy terminal outcome releases the lock and outcome_unknown demands inspection", async () => {
   const store = registry();
   const { workerId } = await store.create(creation());
   for (const outcome of ["preflight_failed", "launch_failed", "execution_failed", "cancelled", "timed_out"]) {

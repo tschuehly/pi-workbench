@@ -1,3 +1,4 @@
+/** `timed_out` is retained only for receipts persisted before task deadlines were removed. */
 export type WorkerOutcome = "success" | "preflight_failed" | "launch_failed" | "execution_failed" | "cancelled" | "timed_out" | "outcome_unknown";
 
 export interface WorkerDispatchReceipt {
