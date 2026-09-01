@@ -164,6 +164,7 @@ function shortRole(value) {
     challenge: "challenge",
     synthesis: "synthesize",
     mechanics: "mechanics",
+    coordination: "coordinate",
   };
   return typeof value === "string" && Object.hasOwn(roles, value) ? roles[value] : value?.replaceAll("-", " ");
 }

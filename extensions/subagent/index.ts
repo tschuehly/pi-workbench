@@ -39,7 +39,7 @@ export const PROFILES = {
   // hierarchy stays exactly lead → Worker → leaf.
   coordinator: {
     tools: ["read", "bash", "grep", "find", "ls", ...DELEGATION_TOOLS],
-    instruction: "Coordinate this scope. You do not edit files yourself: launch one fresh bounded leaf Subagent per phase, collect it exactly once, and keep only intent, decisions, and compact child evidence in your own context. Run at most one writing leaf at a time. Leaves never commit or publish; after their evidence passes you may make one mechanical scope-only checkpoint commit with bash. You cannot create workers.",
+    instruction: "Coordinate this scope (cognitive role: coordination). You do not edit files yourself: launch one fresh bounded leaf Subagent per phase, collect it exactly once, and keep only intent, decisions, and compact child evidence in your own context. Run at most one writing leaf at a time. Leaves never commit or publish; after their evidence passes you may make one mechanical scope-only checkpoint commit with bash. You cannot create workers.",
   },
 } as const;
 
@@ -63,7 +63,7 @@ const LOADED_HARNESS_REVISION = harnessRevision();
 
 const COGNITIVE_ROLES = [
   "implementation", "problem-solving", "design", "escalation", "investigation",
-  "independent-judgment", "challenge", "synthesis", "independent-review", "mechanics",
+  "independent-judgment", "challenge", "synthesis", "independent-review", "mechanics", "coordination",
 ] as const;
 const INDEPENDENT_ROLES = new Set<string>(["independent-judgment", "challenge", "independent-review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));

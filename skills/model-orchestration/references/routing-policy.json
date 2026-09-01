@@ -31,6 +31,12 @@
       "model": "gpt-5.6-sol",
       "effort": "max"
     },
+    "coordination": {
+      "provider": "openai-codex",
+      "quotaProvider": "codex",
+      "model": "gpt-5.6-sol",
+      "effort": "high"
+    },
     "investigation": {
       "provider": "anthropic",
       "quotaProvider": "claude",
@@ -42,7 +48,7 @@
         "openai": {
           "provider": "anthropic",
           "quotaProvider": "claude",
-          "model": "claude-fable-5",
+          "model": "claude-fable-5-1",
           "effort": "low"
         },
         "anthropic": {
@@ -58,7 +64,7 @@
         "openai": {
           "provider": "anthropic",
           "quotaProvider": "claude",
-          "model": "claude-fable-5",
+          "model": "claude-fable-5-1",
           "effort": "high"
         },
         "anthropic": {

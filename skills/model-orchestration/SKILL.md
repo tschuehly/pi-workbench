@@ -30,6 +30,9 @@ Assign exactly one role:
 | `synthesis` | Build a faithful system model from gathered evidence |
 | `independent-review` | Fresh review of a bounded, high-risk diff from another model family |
 | `mechanics` | Cheap mechanical work that saves meaningful lead context |
+| `coordination` | Own one scope in a long run: decompose it, dispatch leaf Subagents, reconcile their evidence, decide next or stop. The role for a `coordinator` Worker dispatch |
+
+In an orchestrated run the lead dispatches `coordination` Workers, one per non-overlapping scope, and keeps only intent, decisions, and compact child evidence in its own context; each coordinator runs the same loop one level down with fresh leaves. Judgment about the run itself (drift, stalled scopes, whether to stop) is `independent-judgment`, not a coordinator's self-report.
 
 Include bounded scope, task risk, required Independence, and the author provider when Independence matters. `independent-judgment`, `challenge`, and `independent-review` require cross-family routing; their model binding is selected dynamically from the author provider rather than fixed to one family. When the author's completion receipt names an exact model, pass it as `independentOfModel`; default routing safely uses its provider.
 

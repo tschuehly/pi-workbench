@@ -38,7 +38,7 @@ const quota = {
 };
 const catalog = [
   "anthropic claude-sonnet-5 1M 128K yes yes",
-  "anthropic claude-fable-5 1M 128K yes yes",
+  "anthropic claude-fable-5-1 1M 128K yes yes",
   "anthropic claude-opus-5 1M 128K yes yes",
   "openai-codex gpt-5.6-sol 272K 128K yes yes",
 ].join("\n");
@@ -77,7 +77,7 @@ try {
   assert.equal(challengeOfClaude.modelBinding.effort, "xhigh");
 
   const judgmentOfOpenAi = JSON.parse(execFileSync(process.execPath, [resolver, "independent-judgment", "--independent-of", "openai", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
-  assert.equal(judgmentOfOpenAi.modelBinding.model, "claude-fable-5");
+  assert.equal(judgmentOfOpenAi.modelBinding.model, "claude-fable-5-1");
 
   const missingIndependence = spawnSync(process.execPath, [resolver, "independent-review", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(missingIndependence.status, 3);
@@ -188,7 +188,7 @@ try {
     return JSON.parse(run.stdout);
   };
 
-  for (const [role, model] of [["investigation", "claude-sonnet-5"], ["implementation", "claude-sonnet-5"], ["mechanics", "claude-sonnet-5"], ["problem-solving", "claude-sonnet-5"], ["synthesis", "claude-opus-5"]]) {
+  for (const [role, model] of [["investigation", "claude-sonnet-5"], ["implementation", "claude-sonnet-5"], ["mechanics", "claude-sonnet-5"], ["problem-solving", "claude-sonnet-5"], ["synthesis", "claude-opus-5"], ["coordination", "claude-opus-5"]]) {
     const resolved = passOverlay([role]);
     assert.equal(resolved.modelBinding.provider, "anthropic", role);
     assert.equal(resolved.modelBinding.model, model, role);
@@ -207,7 +207,7 @@ try {
 
   const overlayBlocks = [
     [["independent-review", "--independent-of", "openai-codex"], /requires --independent-of-model/, "cross-family independence is not available under the overlay"],
-    [["independent-review", "--independent-of-model", "anthropic/claude-fable-5"], /no independent binding for author model/, "an unmapped author model fails closed"],
+    [["independent-review", "--independent-of-model", "anthropic/claude-fable-5-1"], /no independent binding for author model/, "an unmapped author model fails closed"],
     [["investigation", "--independent-of-model", "anthropic/claude-opus-5"], /does not use an independence constraint/, "a non-independent role rejects an author model"],
   ];
   for (const [args, pattern, message] of overlayBlocks) {
