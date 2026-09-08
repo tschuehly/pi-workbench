@@ -1,7 +1,9 @@
 # Working Mode trial and implementation plan
 
-Status: owner-confirmed trial direction as of 2026-08-28. No Working Mode extension, selection
-surface, persistence, repository configuration, or mutation gate is approved for implementation.
+Status: the owner reopened the terminal control and accepted `/mode`, independent built-in
+pickers, a footer indicator, next-prompt guidance, and Vibe / unset defaults. The bounded terminal
+slice is implemented in `extensions/working-mode/`; behavioral evaluation continues in attended use.
+Persistence, repository configuration, graphical controls, and mutation gates remain deferred.
 
 ## Outcome
 
@@ -12,8 +14,11 @@ Alignment:  Vibe  |  Align  |  Plan   |  Spec
 Checking:   light |  tests  |  adversarial
 ```
 
-Working Mode remains two independent behavioral axes and never grants permission or authority. The
-immediate work is prompt-guided use and evidence gathering, not an extension or schema.
+Working Mode remains two independent behavioral axes and never grants permission or authority.
+The terminal control makes the selected guidance visible and changeable without relying on chat
+alone. Checking starts unset, meaning no floor selected by the control. Choices live only in
+extension memory and apply to the next prompt. See the [extension](../../extensions/working-mode/README.md)
+for reset behavior and verification; use it on ordinary attended tasks before adding machinery.
 
 ## Current trial
 
@@ -45,8 +50,9 @@ accepted direction and a Workstream checkpoint carries fresh-session continuity.
 
 ### Checking
 
-Use `light`, `tests`, or `adversarial` as prompt-guided minimum evidence. The default is
-repository-dependent, but no repository default value or configuration mechanism is selected.
+Use `light`, `tests`, or `adversarial` as prompt-guided minimum evidence. The terminal starts
+Checking unset; owner direction, repository policy, and task consequences still apply. No
+repository default configuration mechanism is selected.
 Evidence may be inspected by the owner live or produced for later review without silently changing
 the Checking value.
 
@@ -70,7 +76,7 @@ This plan does not authorize that implementation.
 
 ## Deferred work
 
-- A Working Mode extension, reducer, footer, selector, or command.
+- Graphical Working Mode controls or a richer state model.
 - Persistent selection or restoration of a prior Alignment choice.
 - Read-only Discovering, tool filtering, `/proceed`, relocking, or any other mutation gate.
 - An interactive Human Attention axis, agreement, presence detector, or inferred cadence.
@@ -82,23 +88,13 @@ This plan does not authorize that implementation.
 Resume one deferred item only after the owner chooses to reopen it and observed use supplies the
 missing need or acceptance evidence.
 
-## Documentation slice
+## Terminal slice verification
 
-The first post-grill slice reconciles the canonical Working Mode, vocabulary, decision, interface,
-harness, README, and plan documents to this direction. It adds no implementation or separate
-shared-understanding file.
+Automated checks cover defaults, independent changes, cancellation, invalid input, prompt delivery,
+reset behavior, and non-terminal isolation. The extension changes neither tools nor permissions,
+writes no settings or session entries, and labels the footer as guidance.
 
-## Evidence for a later implementation decision
-
-A later owner decision may authorize the smallest visible control only when evidence shows that
-conversation alone is insufficient. That decision must state:
-
-1. the observed failure the control fixes;
-2. the minimum state that must exist;
-3. whether any state needs persistence and why;
-4. what is prompt-guided versus mechanically enforced;
-5. how the interface avoids implying permission, authority, durability, or recovery; and
-6. how the behavior will be checked in ordinary attended use.
-
-Until then, current sessions remain ordinary attended Pi sessions with prompt-guided Working Mode
-language only.
+The next evidence is attended use: can the owner find and change each choice, does Pi act on the
+selected guidance, and do Align questions catch consequential wrong-direction work without adding
+unnecessary interruptions? Prompt-delivery tests do not prove model compliance. Gather those
+observations before adding persistence, enforcement, repository defaults, or another surface.

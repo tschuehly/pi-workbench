@@ -1,7 +1,7 @@
 # Pi Workbench Working Mode
 
-Status: owner-confirmed intended behavior as of 2026-08-28. The Alignment control and persistent
-presentation are not implemented. Checking is available only as prompt-guided behavior.
+Status: the owner-approved Pi terminal slice provides `/mode` and a footer indicator. Both axes
+remain prompt-guided behavior, not mechanically enforced gates.
 
 Working Mode lets the owner choose how Pi establishes shared understanding and what evidence Pi must
 produce before claiming completion. It has two independent behavioral axes:
@@ -69,8 +69,10 @@ The values are ordered by cost and delay, not quality. Alignment never silently 
 Explicit owner direction, repository policy, or the consequence of a wrong conclusion may require a
 stronger floor, but cannot silently remove selected checks.
 
-There is no universal Checking default. The default is repository-dependent, but no default value,
-configuration schema, or format is adopted yet. Whether the owner inspects evidence live or Pi
+The terminal control starts Checking at `unset`: it adds no selected evidence floor and leaves
+explicit owner direction, repository policy, and task consequences in effect. `unset` is absence
+of a selection, not a fourth Checking level or an instruction to skip checks. No repository default
+configuration schema or format is adopted yet. Whether the owner inspects evidence live or Pi
 produces it for later review may change the evidence route without changing the Checking value.
 
 ## Delegation and model orchestration
@@ -84,14 +86,21 @@ audits.
 
 ## Start and presentation
 
-A new context starts in `Vibe`. The owner may state a different Alignment or Checking value in
-conversation. Persisting and restoring a prior Alignment choice is not part of the current design;
-the same Pi session retains its conversation naturally.
+In the Pi terminal, `/mode` opens a built-in picker: choose an axis, then its value. The footer
+shows both selections as guidance. Choices apply to the next prompt, not an already-running agent
+loop. Changing either axis leaves the other unchanged; cancelling leaves both unchanged.
 
-A future visible control may present the active values, but no selection surface or persistent
-footer exists today. Working Mode does not block project mutation mechanically. It cannot grant a
-workspace lease, filesystem isolation, publication authority, durable execution, or recovery.
-Those claims require deterministic services that enforce them.
+Selections exist only in extension memory. Startup, `/reload`, `/new`, `/resume`, and `/fork` or
+`/clone` reset them to `Vibe` and `unset`. Compaction and `/tree` navigation retain the current
+in-memory choices rather than restoring historical ones. Conversation remains ordinary session
+context; the control neither parses chat for selections nor removes earlier owner instructions.
+Use `/mode` to change the displayed selection.
+
+The control is terminal-only; RPC, print, and JSON sessions receive no selector or injected Working
+Mode guidance from this extension. No settings or session entries are written. Working Mode does
+not block project mutation mechanically or grant workspace leases, filesystem isolation,
+publication authority, durable execution, or recovery. Those claims require deterministic services
+that enforce them. See the [extension](../../extensions/working-mode/README.md) for use and checks.
 
 ## Human Attention and continuity
 

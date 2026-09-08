@@ -13,7 +13,7 @@ Current V1 sessions use the attended human–Pi posture:
 - optional bounded child Pi work reconciled by the lead; and
 - no unattended execution beyond the lead session, managed authority, or recovery claim.
 
-V1 does not yet implement the intended Working Mode control. A PI WEB session identifier is never inferred to be a Run identifier.
+V1 provides a terminal-only Working Mode control; graphical selection remains deferred. A PI WEB session identifier is never inferred to be a Run identifier.
 
 Managed supervision, future managed Run controls, and broker-driven prioritization remain outside V1.
 
@@ -189,7 +189,7 @@ Project surfaces cannot alter shell-owned permission, identity, or recovery cont
 
 The [Working Mode specification](../foundation/working-mode.md) defines intended prompt-guided behavior. A new context starts in Vibe; the owner may state Align, Plan, Spec, or a Checking value when useful. Align returns for owner judgment at a semantic commitment boundary rather than mechanically blocking project mutation.
 
-No selector, persistent footer, prior-choice restoration, or gate is implemented or required by the current slice. A later visible control requires evidence that conversation is insufficient. Mode selection can never grant permissions or guarantees.
+The Pi terminal provides `/mode` with independent pickers and a footer labelled as guidance. It starts at Vibe / unset, applies choices to the next prompt, and resets on reload or session replacement without saving selections. No graphical selector, prior-choice restoration, or mutation gate is implemented. Mode selection can never grant permissions or guarantees.
 
 ## External Adapters
 

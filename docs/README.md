@@ -53,7 +53,7 @@ not in the authoritative decision record.
   client reuses from PI WEB and what it replaces.
 - [`contracts/workstreams.md`](contracts/workstreams.md) and
   [`contracts/execution.md`](contracts/execution.md) — current attended workflow.
-- [`plans/working-mode.md`](plans/working-mode.md) — prompt-guided Working Mode trial and evidence required before any selector, persistence, or gate.
+- [`plans/working-mode.md`](plans/working-mode.md) — terminal `/mode` control, attended behavioral evaluation, and deferred persistence and enforcement.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — implemented attended child execution.
 - [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — implemented durable Worker
   identity and resumable dispatch.

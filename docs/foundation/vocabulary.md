@@ -81,7 +81,7 @@ The versioned quality, authority, safety, evidence, and retention envelope gover
 _Avoid_: Prompt, workflow script, execution plan
 
 **Alignment:**
-The intended owner-selected axis controlling how much Shared Understanding Pi establishes before
+The owner-selected axis controlling how much Shared Understanding Pi establishes before
 committing semantic work: `Vibe` aligns normally in chat, `Align` asks about one coherent
 unconfirmed product, architecture, scope, or quality choice, `Plan` requires accepted whole-task
 direction, and `Spec` requires accepted behavior, constraints, and evidence. Alignment is
@@ -89,17 +89,19 @@ prompt-guided and controls commitment, not mutation permission, Human Attention,
 _Avoid_: Approval flow, planning depth, autonomy level
 
 **Checking:**
-The intended owner-selected axis stating the minimum completion evidence: `light` directly inspects or
+The owner-selected axis stating the minimum completion evidence: `light` directly inspects or
 exercises the result without required test-writing or review, `tests` runs relevant automated tests,
-and `adversarial` adds a fresh independent challenge. The default is repository-dependent; the
-values are ordered by cost and delay, not quality.
+and `adversarial` adds a fresh independent challenge. The terminal starts unset, leaving owner
+direction, repository policy, and task consequences in effect without a selected floor. The values
+are ordered by cost and delay, not quality.
 _Avoid_: Quality level, rigor tier, autonomy level
 
 **Working Mode:**
-The intended configuration of independent behavioral axes. Its current axes are Alignment
+The configuration of independent behavioral axes. Its current axes are Alignment
 (`Vibe | Align | Plan | Spec`) and Checking (`light | tests | adversarial`). A new context starts in
 Vibe; prior-choice restoration is outside the current design. Working Mode configures behavior and
-never grants permission. Selection and persistent presentation are not implemented.
+never grants permission. The terminal provides in-memory `/mode` selection and a footer indicator;
+graphical controls and saved selections remain deferred.
 _Avoid_: Operating Level, workflow profile, authority grant, agent tier
 
 **Session Summary:**

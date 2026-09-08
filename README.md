@@ -54,7 +54,7 @@ composition described above has not shipped.
 
 ### Working Mode
 
-The intended control separates two choices:
+The Pi terminal's `/mode` control separates two choices:
 
 ```text
 Alignment:  Vibe  |  Align  |  Plan   |  Spec
@@ -63,13 +63,13 @@ Checking:   light |  tests  |  adversarial
 
 Alignment controls how much shared understanding the owner judges at once. Vibe is normal work in
 chat; Align asks about one coherent unconfirmed direction; Plan covers the task direction; Spec
-covers required behavior and evidence. Checking states the minimum completion evidence, with a
-repository-dependent default that has not been configured yet. A new context starts in Vibe;
-restoring a previous choice is not part of the current design.
+covers required behavior and evidence. Checking states the minimum completion evidence and starts
+**unset**, leaving owner direction and repository policy in effect without a selected floor.
 
-Alignment and Checking are available today only as prompt guidance. There is no selector,
-persistence, visible mode, or mutation gate. Working Mode changes behavior, never permissions or
-guarantees. See [Working Mode](docs/foundation/working-mode.md).
+Run `/mode` to choose an axis and value; the footer shows both as guidance for the next prompt.
+Selections are not saved: reload or session replacement resets them to **Vibe / unset**. Graphical
+controls remain deferred. Working Mode changes behavior, never permissions or guarantees; there
+is no mutation gate. See [Working Mode](docs/foundation/working-mode.md).
 
 ### Managed execution
 

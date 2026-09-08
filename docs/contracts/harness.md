@@ -14,14 +14,14 @@ A Workstream preserves cross-session attention but grants no workspace lease, en
 
 Model selection may resolve concrete providers, models, and Model Effort for the interactive lead and child processes. Those bindings do not change the attended posture.
 
-The intended [Working Mode](../foundation/working-mode.md) has no implemented selector, persistent presentation, or mutation gate. Current sessions may state its prompt-guided contracts in conversation. Any later harness control must:
+The terminal [Working Mode](../foundation/working-mode.md) control provides `/mode` and a footer indicator with in-memory Vibe / unset defaults. Selections guide the next prompt; reload and session replacement reset them. It writes no settings or session entries and leaves non-terminal sessions unchanged. The control must:
 
 - start a new context in Vibe without a setup gate;
 - keep Alignment and Checking independent;
 - present an active owner choice truthfully without implying mechanical enforcement; and
 - leave Human Attention, delegation, authority, durability, and workspace protection outside Working Mode.
 
-Restoring a prior choice, forcing an initial read-only phase, filtering tools, and applying a blanket mutation gate are outside the current design. A later control earns state or enforcement only from observed need and explicit owner approval.
+Restoring a prior choice, forcing an initial read-only phase, filtering tools, and applying a blanket mutation gate are outside the current design. Further state or enforcement requires observed need and explicit owner approval.
 
 ## Harness Distribution Repository
 

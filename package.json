@@ -18,7 +18,7 @@
     "typebox": "*"
   },
   "scripts": {
-    "test": "npm run test:model-routing && npm run test:quota-startup && npm run test:activity-extension && npm run test:telemetry-extension && npm run test:subagent-extension && npm run test:context-checkpoint-extension && npm run test:autonomous-grill-extension && npm run test:pi-execution-adapter && npm run test:worker-registry && npm run test:workstream-store && npm run test:workstream-session-coordination && npm run test:pi-web-integration",
+    "test": "npm run test:model-routing && npm run test:quota-startup && npm run test:activity-extension && npm run test:telemetry-extension && npm run test:subagent-extension && npm run test:context-checkpoint-extension && npm run test:autonomous-grill-extension && npm run test:working-mode-extension && npm run test:pi-execution-adapter && npm run test:worker-registry && npm run test:workstream-store && npm run test:workstream-session-coordination && npm run test:pi-web-integration",
     "workstream-dashboard:build": "node tools/workstream-dashboard/build-dashboard.mjs",
     "workstream-dashboard:verify": "node tools/workstream-dashboard/verify-dashboard.mjs",
     "test:model-routing": "node skills/model-orchestration/scripts/resolve-runtime-binding.test.mjs",
@@ -28,6 +28,7 @@
     "test:subagent-extension": "node --test extensions/subagent/*.test.mjs",
     "test:context-checkpoint-extension": "node --test extensions/context-checkpoint/*.test.mjs",
     "test:autonomous-grill-extension": "node --test extensions/autonomous-grill/*.test.mjs",
+    "test:working-mode-extension": "node --test extensions/working-mode/*.test.mjs",
     "test:pi-execution-adapter": "npm --prefix packages/pi-execution-adapter test",
     "test:worker-registry": "npm --prefix packages/worker-registry test",
     "test:workstream-store": "npm --prefix packages/workstream-store test",
