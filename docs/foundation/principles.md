@@ -4,7 +4,7 @@
 > belongs in the owning [`../contracts/`](../contracts/) document; settled trade-offs and exceptions
 > belong in the [decision record](decisions.md).
 
-The 16 guiding principles below carry both the memorable rule and its exact commitment. Each
+The 17 guiding principles below carry both the memorable rule and its exact commitment. Each
 principle appears under one theme. A commitment that fits no theme reveals a design gap.
 
 ## Attention: spend the scarce resource well
@@ -131,6 +131,13 @@ Workstreams preserve cross-session attention without claiming managed Run author
 They persist source events only at meaningful attention changes; raw transcripts and routine
 activity do not become standing context by default. A separate projection provides current
 re-entry state, and combined synthesis is generated only when needed.
+
+## Evolution: grow from observed need
+
+### 17. Build the next thing, not the whole system
+
+Add one axis, contract, or module only when observed need justifies it. Ship the smallest useful
+part, learn from it, and defer the rest.
 
 ## What is not a principle
 

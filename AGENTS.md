@@ -12,6 +12,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - If authority is unclear, read `docs/README.md`.
 - For domain terms, read `docs/foundation/vocabulary.md`.
 - For system boundaries, read `docs/foundation/system-overview.md`.
+- For system-wide design not settled by a contract, read `docs/foundation/principles.md`.
 - For decision status or provenance, read `docs/foundation/decisions.md`.
 - For localized changes, begin with the routed code. Load more documentation only to resolve
   meaning, constraints, or intent.
@@ -46,7 +47,6 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - Treat the Workbench client as a protocol client, never as authoritative Workstream or Run state.
 - Models propose semantic work; deterministic modules own transitions and side effects.
 - Working Mode configures behavior, not permission. Never claim a guarantee the code does not enforce.
-- Add one axis, contract, or module at a time from observed need.
 - Describe only the supported current workflow and intended state.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
 - Commit each coherent unit after it is complete and needs no further human input.
