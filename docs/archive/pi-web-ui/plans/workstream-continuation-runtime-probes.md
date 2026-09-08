@@ -1,5 +1,5 @@
 # Workstream continuation runtime probes
-> **Archive notice (2026-08-28):** This document preserves the former plan or strategy as evidence. It defines no current implementation scope. See [`../README.md`](../README.md) for its disposition and the current direction.
+> **ARCHIVED — OUTDATED HISTORICAL EVIDENCE (2026-08-28).** Retained for provenance only; this file does not describe current behavior or intended state. See [`../README.md`](../README.md) for its disposition and the current direction.
 
 Status: approved experiment plan; implementation not started. These probes answer the Phase 0 host questions in `workstream-continuation-extension.md`; they do not independently alter continuation protocol meaning.
 

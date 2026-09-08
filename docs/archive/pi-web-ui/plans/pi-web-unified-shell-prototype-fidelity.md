@@ -1,5 +1,5 @@
 # Unified PI WEB shell prototype-fidelity release plan
-> **Archive notice (2026-08-28):** This document preserves the former plan or strategy as evidence. It defines no current implementation scope. See [`../README.md`](../README.md) for its disposition and the current direction.
+> **ARCHIVED — OUTDATED HISTORICAL EVIDENCE (2026-08-28).** Retained for provenance only; this file does not describe current behavior or intended state. See [`../README.md`](../README.md) for its disposition and the current direction.
 
 Status: approved for an isolated candidate experiment; owner Acceptance and release remain pending. The superseded UI-only plan is frozen as historical baseline evidence.
 

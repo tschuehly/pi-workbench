@@ -1,5 +1,5 @@
 # Workstream continuation extension and shared session coordination plan
-> **Archive notice (2026-08-28):** This document preserves the former plan or strategy as evidence. It defines no current implementation scope. See [`../README.md`](../README.md) for its disposition and the current direction.
+> **ARCHIVED — OUTDATED HISTORICAL EVIDENCE (2026-08-28).** Retained for provenance only; this file does not describe current behavior or intended state. See [`../README.md`](../README.md) for its disposition and the current direction.
 
 Status: owner-approved implementation direction for the isolated unified-shell candidate. The Store records, shared coordinator, and PI WEB compatibility adapter for existing blank launches are implemented; the server journal, explicit-location host contribution, PI WEB continuation action, terminal adapter, and terminal command remain prerequisites.
 

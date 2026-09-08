@@ -1,5 +1,5 @@
 # Pi Workbench Level 1 Plan
-> **Archive notice (2026-08-28):** This document preserves the former V1 Workstreams/PI WEB implementation plan as evidence. Current attended behavior is defined by contracts and the current UI direction is [`../../../plans/workbench-ui.md`](../../../plans/workbench-ui.md).
+> **ARCHIVED — OUTDATED HISTORICAL EVIDENCE (2026-08-28).** Retained for provenance only; this file does not describe current behavior or intended state. Current attended behavior is defined by contracts and the current UI direction is [`../../../plans/workbench-ui.md`](../../../plans/workbench-ui.md).
 
 Status: implemented V1; acceptance evidence is maintained with the implementation. The filename and
 title preserve the retired Operating Level terminology for historical links.

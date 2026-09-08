@@ -1,6 +1,7 @@
 # Archived PI WEB UI campaigns
 
-**This directory is historical. It defines no current implementation scope or sequence.**
+> **ARCHIVED — OUTDATED HISTORICAL EVIDENCE.** Retained for provenance only; this file does not
+> describe current behavior or intended state.
 
 For current work, use:
 

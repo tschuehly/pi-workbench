@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Review Surface — Guiding principles distillation</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a21; --panel-2: #1c222b; --line: #262d38;
+    --ink: #e6e9ef; --muted: #9aa4b2; --faint: #6b7480;
+    --accent: #6ea8fe; --good: #4ec38a; --warn: #e0a94a; --add: #2ea043; --del: #cf4d52;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 24px 96px; }
+  .eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  h1 { font-size: 26px; line-height: 1.2; margin: 6px 0 8px; letter-spacing: -.01em; }
+  .lede { color: var(--muted); font-size: 16px; margin: 0 0 4px; }
+  .meta { color: var(--faint); font-size: 13px; margin-top: 10px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.review { background: rgba(224,169,74,.12); color: var(--warn); }
+  .pill.material { background: rgba(110,168,254,.12); color: var(--accent); }
+
+  section { margin-top: 34px; }
+  h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin: 0 0 14px; font-weight: 700; }
+
+  .judgment {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: var(--radius); padding: 20px 22px;
+  }
+  .judgment h3 { margin: 0 0 6px; font-size: 18px; }
+  .judgment .rec { color: var(--good); font-weight: 600; margin: 12px 0 4px; }
+  .kv { display: grid; grid-template-columns: 132px 1fr; gap: 6px 14px; margin-top: 14px; font-size: 14px; }
+  .kv dt { color: var(--faint); }
+  .kv dd { margin: 0; color: var(--ink); }
+
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  button {
+    font: inherit; font-weight: 600; font-size: 14px; cursor: pointer;
+    border-radius: 9px; padding: 9px 16px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); transition: transform .06s ease, background .12s ease, border-color .12s ease;
+  }
+  button:hover { transform: translateY(-1px); border-color: #34405060; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0b1220; }
+  button.approve { background: var(--good); border-color: var(--good); color: #06231a; }
+  .hint { color: var(--faint); font-size: 12px; margin-top: 8px; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+  .card + .card { margin-top: 12px; }
+  .card h3 { margin: 0 0 4px; font-size: 15.5px; }
+  .card p.sub { margin: 0 0 12px; color: var(--muted); font-size: 13.5px; }
+
+  .ba { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 620px) { .ba { grid-template-columns: 1fr; } }
+  .ba > div { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .ba header { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 6px 10px; color: var(--faint); background: var(--panel-2); border-bottom: 1px solid var(--line); }
+  pre { margin: 0; padding: 10px 12px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #c9d3e0; white-space: pre-wrap; overflow-x: auto; }
+  .before header { color: var(--del); } .after header { color: var(--add); }
+
+  table.ev { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.ev th, table.ev td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  table.ev th { color: var(--faint); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  table.ev td.path { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--ink); }
+  .num { font-family: ui-monospace, Menlo, monospace; }
+  .num .a { color: var(--add); } .num .d { color: var(--del); }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 5px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+
+  ul.clean { margin: 0; padding-left: 18px; }
+  ul.clean li { margin: 6px 0; }
+  li b { color: var(--ink); }
+  .risk li::marker { color: var(--warn); }
+  textarea { width: 100%; min-height: 84px; margin-top: 6px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; color: var(--ink); padding: 10px 12px; font: inherit; resize: vertical; }
+  footer { margin-top: 40px; color: var(--faint); font-size: 12px; border-top: 1px solid var(--line); padding-top: 16px; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 620px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header role="note" aria-label="Archive status" style="max-width: 860px; margin: 24px auto 0; padding: 14px 18px; border: 1px solid var(--warn); border-radius: var(--radius); background: var(--panel); color: var(--ink);">
+  <strong>ARCHIVED — OUTDATED HISTORICAL EVIDENCE</strong><br />
+  Retained for provenance only; this file does not describe current behavior or intended state.
+</header>
+<div class="wrap">
+
+  <div class="eyebrow">Review Surface · Level 1 · attended</div>
+  <h1>Distill 34 flat principles into a guiding spine</h1>
+  <p class="lede">All 34 system-design principles now sit under 16 memorable maxims in 5 clusters, with the detail preserved and self-auditing. One decision is open for your judgment.</p>
+  <div class="meta">
+    <span><span class="pill review">● Awaiting acceptance</span></span>
+    <span>Workstream: <b>Workbench guiding-principles distillation</b></span>
+    <span>Changes: <span class="num"><span class="a">+193</span> / <span class="d">−39</span></span> across 3 files</span>
+  </div>
+
+  <!-- REQUIRED JUDGMENT FIRST -->
+  <section>
+    <h2>Judgment needed now</h2>
+    <div class="judgment">
+      <h3>Record the two-altitude principles structure as Decision 93? <span class="pill material">material</span></h3>
+      <p style="margin:0;color:var(--muted)">The rewrite chose <em>distilled spine over preserved detail</em> — over two rejected alternatives: replacing the 34 outright, and adding a separate philosophy file. A future reader will see 16 maxims governing 34 detailed rules and may ask why. A recorded decision names the trade-off and locks the self-audit rule (“every detailed principle maps to exactly one maxim”).</p>
+      <p class="rec">➡ Recommended: Yes — add one terse Decision 93.</p>
+      <dl class="kv">
+        <dt>Materiality</dt><dd>Material — it governs how the principle doc is maintained.</dd>
+        <dt>If you defer</dt><dd>Safe. The doc stands as written; the structure risks silently drifting back to a flat list.</dd>
+        <dt>Reversibility</dt><dd>Easy to reverse; the decision is a record, not a lock.</dd>
+      </dl>
+      <div class="actions">
+        <button class="approve">Accept all changes</button>
+        <button class="primary">Yes — write Decision 93</button>
+        <button>No — leave decisions.md as-is</button>
+        <button>Request changes</button>
+      </div>
+      <p class="hint">Buttons are illustrative. This is a static Review Surface artifact; confirm the action in session.</p>
+    </div>
+  </section>
+
+  <!-- REALIZED BEHAVIOR -->
+  <section>
+    <h2>What changed</h2>
+
+    <div class="card">
+      <h3>1 · Principles: one flat list → a spine over the detail</h3>
+      <p class="sub">34 equal-weight rules became 16 maxims in 5 clusters (Attention · Authority · Context &amp; State · Evidence · Boundaries). The single most important commitment had been split across 5 entries (#13/16/17/20/29); it is now one maxim with those rules nested beneath.</p>
+      <div class="ba">
+        <div class="before"><header>before — flat</header><pre>13. The controller owns the fixed lifecycle;
+    the model chooses the semantic graph.
+16. The coordinator reasons but never mutates.
+17. Immutable events; the reducer defines state.
+20. Gates exist only in the controller.
+29. Watchers reconcile routine execution.</pre></div>
+        <div class="after"><header>after — maxim + detail</header><pre>### 5. Models propose; deterministic
+        modules dispose
+Models choose the graph; the controller owns
+lifecycle, side effects, and reduced state;
+coordinators reason but never mutate.
+  - (nests original 13, 16, 17, 20, 29)</pre></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>2 · Fixed four real gaps found by independent review</h3>
+      <p class="sub">A fresh cross-family adversary reviewed both the 34 and the draft spine.</p>
+      <ul class="clean">
+        <li><b>Added</b> three missing constitutional maxims: <em>authority is structural not textual</em> (#6), <em>uncertainty fails closed</em> (#7), <em>one owner per Run</em> (#8).</li>
+        <li><b>Cut</b> a weak draft rule that imported the talk’s repo-level “shift-left guardrails”; <b>replaced</b> with #14 <em>verification is independent and evidence-backed</em>.</li>
+        <li><b>Removed</b> old #30 — a roadmap line, not a principle — pointing to the decision record instead.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>3 · Pinned the word “intensity”</h3>
+      <p class="sub">The term that started the session now resolves to Working Mode dimensions, not a second axis beside Operating Level.</p>
+      <div class="ba">
+        <div class="before"><header>before</header><pre>_Avoid_: Entry Preset, workflow profile,
+         autonomy level, agent tier</pre></div>
+        <div class="after"><header>after</header><pre>_Avoid_: Entry Preset, workflow profile,
+         autonomy level, agent tier, intensity</pre></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRIMARY EVIDENCE -->
+  <section>
+    <h2>Primary evidence</h2>
+    <table class="ev">
+      <thead><tr><th>File</th><th>Change</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td class="path">docs/foundation/principles.md</td><td class="num"><span class="a">+192</span> <span class="d">−38</span></td><td>Restructured to 16 maxims / 5 clusters</td></tr>
+        <tr><td class="path">docs/foundation/vocabulary.md</td><td class="num"><span class="a">+1</span> <span class="d">−1</span></td><td>“intensity” rejected under Working Mode</td></tr>
+        <tr><td class="path">docs/research/sources/agentic-engineering-jvm-talk.md</td><td><span class="tag">new</span></td><td>Source analysis grounding the distillation</td></tr>
+      </tbody>
+    </table>
+    <p class="hint" style="margin-top:12px">Self-audit invariant: <b>37 detail lines = 33 original principles + 4 new-maxim notes.</b> Old #30 relocated. Every original maps to exactly one maxim — verified.</p>
+  </section>
+
+  <!-- DEVIATIONS & RISKS -->
+  <section>
+    <h2>Deviations &amp; residual risk</h2>
+    <div class="grid2">
+      <div class="card">
+        <h3>Deviations from the ask</h3>
+        <ul class="clean">
+          <li>Landed at <b>16 maxims</b>, not the requested “10.” You confirmed 10 was a target, not a cap; clusters carry memorability.</li>
+          <li>Kept the 34 as nested detail rather than deleting them, to preserve contract-level precision.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Residual risk</h3>
+        <ul class="clean risk">
+          <li>Decision 93 not yet written — structure could drift back to flat.</li>
+          <li>Old #30’s content assumed covered by Decisions 24/75/80/92 (verified by reading, not by an added cross-link).</li>
+          <li>Adversary findings reconciled by the lead, not re-verified by a second independent pass.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEEDBACK -->
+  <section>
+    <h2>Feedback</h2>
+    <textarea placeholder="Anchor a comment to a specific maxim, deviation, or evidence row…"></textarea>
+  </section>
+
+  <footer>
+    Generated review artifact · not committed (<span class="path" style="font-family:ui-monospace,Menlo,monospace">.scratch/</span> is gitignored) ·
+    Sources: <a href="../../foundation/principles.md">principles.md</a> ·
+    <a href="../../foundation/vocabulary.md">vocabulary.md</a> ·
+    <a href="../../research/sources/agentic-engineering-jvm-talk.md">source analysis</a>
+  </footer>
+
+</div>
+</body>
+</html>

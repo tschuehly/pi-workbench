@@ -8,6 +8,8 @@ Load only the authority needed for the documentation task:
 - Read only the relevant document under `contracts/` when detailed contract behavior affects the work. V1 cross-session attention and attended checkpoint behavior belong in `contracts/workstreams.md`.
 - Read `foundation/decisions.md` when decision status or open questions are relevant.
 - Consult `research/sources/` only when evidence lineage is relevant.
+- Every file under `archive/` must present a visible **ARCHIVED — OUTDATED HISTORICAL EVIDENCE**
+  notice stating that it is retained for provenance, not current behavior or intended state.
 
 Begin from a faithful understanding of the existing concepts and principles. Do not critique,
 challenge, replace, or redesign them unless the user explicitly requests a review, grill, or

@@ -48,6 +48,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - Models propose semantic work; deterministic modules own transitions and side effects.
 - Working Mode configures behavior, not permission. Never claim a guarantee the code does not enforce.
 - Describe only the supported current workflow and intended state.
+- Treat every file under `docs/archive/` as outdated historical evidence, never current behavior or intended state.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
 - Commit each coherent unit after it is complete and needs no further human input.
 - Before changing sibling PI WEB, fetch `upstream` and the `origin` fork. Work on a fork branch and

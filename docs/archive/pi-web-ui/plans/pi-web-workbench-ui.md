@@ -1,5 +1,5 @@
 # PI WEB Workbench UI implementation plan
-> **Archive notice (2026-08-28):** This document preserves the former plan or strategy as evidence. It defines no current implementation scope. See [`../README.md`](../README.md) for its disposition and the current direction.
+> **ARCHIVED — OUTDATED HISTORICAL EVIDENCE (2026-08-28).** Retained for provenance only; this file does not describe current behavior or intended state. See [`../README.md`](../README.md) for its disposition and the current direction.
 
 Status: phases 0–5 implemented as the historical UI baseline. The approved [`pi-web-unified-shell-prototype-fidelity.md`](pi-web-unified-shell-prototype-fidelity.md) plan supersedes its shell composition and governs the isolated replacement candidate; the explicit V1 deferrals below remain baseline evidence, not current shell scope.
 

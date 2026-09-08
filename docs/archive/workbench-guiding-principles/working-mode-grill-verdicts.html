@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Review Atelier — Working Mode grill verdicts</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a21; --panel-2: #1c222b; --line: #262d38;
+    --ink: #e6e9ef; --muted: #9aa4b2; --faint: #6b7480;
+    --accent: #6ea8fe; --good: #4ec38a; --warn: #e0a94a; --bad: #cf4d52;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 40px 24px 340px; }
+  .eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  h1 { font-size: 26px; line-height: 1.2; margin: 6px 0 8px; letter-spacing: -.01em; }
+  .lede { color: var(--muted); font-size: 16px; margin: 0 0 4px; }
+  .meta { color: var(--faint); font-size: 13px; margin-top: 10px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .meta b { color: var(--muted); }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+
+  section { margin-top: 36px; }
+  h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin: 0 0 6px; font-weight: 700; }
+  .cluster-sub { color: var(--faint); font-size: 13px; margin: 0 0 14px; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.review { background: rgba(224,169,74,.12); color: var(--warn); }
+  .pill.dissent { background: rgba(207,77,82,.12); color: var(--bad); }
+  .pill.locked { background: rgba(107,116,128,.15); color: var(--faint); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; position: relative; }
+  .card + .card { margin-top: 12px; }
+  .card h3 { margin: 0 0 4px; font-size: 16px; padding-right: 96px; }
+  .card h3 .id { color: var(--accent); font-family: ui-monospace, Menlo, monospace; font-size: 14px; margin-right: 8px; }
+  .deciding { color: var(--muted); font-size: 14px; margin: 4px 0 10px; }
+  .deciding b { color: var(--ink); font-weight: 600; }
+  .rec { font-size: 14px; margin: 10px 0 0; color: var(--good); font-weight: 600; }
+  .rec.neutral { color: var(--warn); }
+
+  details { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+  details summary { cursor: pointer; color: var(--faint); font-size: 13px; user-select: none; }
+  details summary:hover { color: var(--muted); }
+  details .body { margin-top: 8px; font-size: 13.5px; color: var(--muted); }
+  details .body b { color: var(--ink); }
+  details .body pre { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.5 ui-monospace, Menlo, monospace; color: #c9d3e0; white-space: pre-wrap; overflow-x: auto; margin: 8px 0; }
+  details .body ul { margin: 6px 0; padding-left: 18px; }
+  details .body li { margin: 4px 0; }
+  blockquote { margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--line); color: var(--muted); font-size: 13.5px; background: var(--panel-2); border-radius: 0 8px 8px 0; }
+  .dissent-note { margin-top: 10px; font-size: 13px; color: var(--bad); }
+  .dissent-note b { color: var(--bad); }
+
+  .verdict-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+  .vbtn {
+    font: inherit; font-weight: 600; font-size: 13px; cursor: pointer;
+    border-radius: 8px; padding: 7px 14px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--muted); transition: all .1s ease;
+  }
+  .vbtn:hover { color: var(--ink); border-color: #3a465a; }
+  .vbtn.sel-accept { background: rgba(78,195,138,.15); border-color: var(--good); color: var(--good); }
+  .vbtn.sel-revise { background: rgba(224,169,74,.15); border-color: var(--warn); color: var(--warn); }
+  .vbtn.sel-reject { background: rgba(207,77,82,.15); border-color: var(--bad); color: var(--bad); }
+  .reason { display: none; width: 100%; margin-top: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); padding: 8px 11px; font: inherit; font-size: 13.5px; }
+  .reason.show { display: block; }
+  .reason:focus { outline: none; border-color: var(--accent); }
+
+  .state-badge { position: absolute; top: 16px; right: 18px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: var(--panel-2); color: var(--faint); border: 1px solid var(--line); }
+  .card[data-verdict="accept"] .state-badge { background: rgba(78,195,138,.12); color: var(--good); border-color: rgba(78,195,138,.4); }
+  .card[data-verdict="revise"] .state-badge { background: rgba(224,169,74,.12); color: var(--warn); border-color: rgba(224,169,74,.4); }
+  .card[data-verdict="reject"] .state-badge { background: rgba(207,77,82,.12); color: var(--bad); border-color: rgba(207,77,82,.4); }
+  .card[data-verdict] { border-left: 3px solid var(--line); }
+  .card[data-verdict="accept"] { border-left-color: var(--good); }
+  .card[data-verdict="revise"] { border-left-color: var(--warn); }
+  .card[data-verdict="reject"] { border-left-color: var(--bad); }
+
+  /* Composer bar */
+  .composer {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    background: rgba(15,17,21,.97); border-top: 1px solid var(--line);
+    backdrop-filter: blur(8px); padding: 14px 24px 16px;
+  }
+  .composer .inner { max-width: 900px; margin: 0 auto; }
+  .composer .topline { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .progress { flex: 1; min-width: 180px; height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0%; background: var(--accent); transition: width .2s ease; }
+  .count { font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .count b { color: var(--ink); }
+  .composer textarea {
+    width: 100%; margin-top: 10px; background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 9px; color: var(--ink); padding: 9px 12px;
+    font: 12.5px/1.5 ui-monospace, Menlo, monospace; resize: none; height: 74px;
+  }
+  .composer .actions { display: flex; gap: 10px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+  button.big {
+    font: inherit; font-weight: 600; font-size: 13.5px; cursor: pointer;
+    border-radius: 9px; padding: 8px 16px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink);
+  }
+  button.big.primary { background: var(--accent); border-color: var(--accent); color: #0b1220; }
+  button.big.approve { background: var(--good); border-color: var(--good); color: #06231a; }
+  button.big:hover { filter: brightness(1.1); }
+  .hint { color: var(--faint); font-size: 12px; }
+
+  /* Round 2 */
+  .locked-panel { opacity: .55; transition: opacity .3s ease; }
+  .locked-panel.unlocked { opacity: 1; }
+  .locked-panel .card { border-style: dashed; }
+  .unlock-note { font-size: 13px; color: var(--warn); margin: 0 0 12px; }
+  .unlock-note.done { color: var(--good); }
+
+  table.sheet { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  table.sheet th, table.sheet td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); }
+  table.sheet th { color: var(--faint); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+  table.sheet td:first-child { font-family: ui-monospace, Menlo, monospace; color: var(--accent); white-space: nowrap; }
+  table.sheet tr { cursor: pointer; }
+  table.sheet tr:hover td { background: var(--panel-2); }
+  table.sheet td.v { white-space: nowrap; font-weight: 600; }
+  td.v[data-v="accept"] { color: var(--good); } td.v[data-v="revise"] { color: var(--warn); }
+  td.v[data-v="reject"] { color: var(--bad); } td.v[data-v=""] { color: var(--faint); font-weight: 400; }
+
+  .plain { background: rgba(110,168,254,.07); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 9px 12px; margin: 2px 0 10px; font-size: 14.5px; color: var(--ink); }
+  .plain b { color: var(--accent); font-weight: 600; }
+  .prime { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 12px; }
+  .prime h3 { margin: 0 0 8px; font-size: 16px; }
+  .prime p { margin: 0 0 10px; color: var(--muted); font-size: 14.5px; }
+  .prime p:last-child { margin-bottom: 0; }
+  .prime p b, .prime li b { color: var(--ink); font-weight: 600; }
+  .prime ol, .prime ul { color: var(--muted); font-size: 14.5px; margin: 0 0 10px; padding-left: 20px; }
+  .prime li { margin: 5px 0; }
+  .news { background: rgba(224,169,74,.08); border: 1px solid rgba(224,169,74,.35); border-radius: var(--radius); padding: 14px 18px; margin-bottom: 12px; font-size: 14.5px; color: var(--muted); }
+  .news b { color: var(--warn); }
+  dl.gloss { margin: 0; font-size: 14px; }
+  dl.gloss dt { color: var(--ink); font-weight: 600; margin-top: 12px; }
+  dl.gloss dt:first-child { margin-top: 0; }
+  dl.gloss dd { margin: 3px 0 0; color: var(--muted); }
+  details.wide { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 14px 18px; margin-top: 12px; border-top: 1px solid var(--line); }
+  details.wide > summary { color: var(--accent); font-size: 14px; font-weight: 600; }
+  details.wide[open] > summary { margin-bottom: 12px; }
+
+  footer { margin-top: 44px; color: var(--faint); font-size: 12px; border-top: 1px solid var(--line); padding-top: 16px; line-height: 1.7; }
+  ol.dr { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+  ol.dr li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<header role="note" aria-label="Archive status" style="max-width: 900px; margin: 24px auto 0; padding: 14px 18px; border: 1px solid var(--warn); border-radius: var(--radius); background: var(--panel); color: var(--ink);">
+  <strong>ARCHIVED — OUTDATED HISTORICAL EVIDENCE</strong><br />
+  Retained for provenance only; this file does not describe current behavior or intended state.
+</header>
+<div class="wrap">
+
+  <div class="eyebrow">Review page · machine-local · nothing here is authoritative</div>
+  <h1>How should Pi describe what a working session is allowed to do?</h1>
+  <p class="lede">Eighteen proposals need your yes, no, or change-it. They come from one review that ran on 8 August 2026 and has been parked since. This page explains each from scratch and writes out a reply you paste back into a Pi session.</p>
+  <div class="meta">
+    <span><span class="pill review">● All 18 still pending</span></span>
+    <span>Source report: <b class="mono">working-mode-grill-decisions-2026-08-08.md</b> @ <b class="mono">a583264</b></span>
+    <span>Workstream: <b>ws-workbench-guiding-principles-20260807</b></span>
+  </div>
+
+  <!-- START HERE -->
+  <section>
+    <h2>Start here</h2>
+
+    <div class="news">
+      <b>Changed since you last opened this page.</b> On 25 August you approved the three-value Entry Preset experiment
+      (<code>Optimize for: Feedback | Balanced | Assurance</code>) in the Workstream <code>ws-multidimensional-working-mode</code>.
+      That answer overrides one line inside card <b>D5</b> below, which still says “V1 ships exactly one preset.” Card D5 is annotated accordingly. Nothing else on this page has moved.
+    </div>
+
+    <div class="prime">
+      <h3>What this is about</h3>
+      <p>Right now Pi describes a session with one number: Operating Level 1 to 4. Level 1 is you and one Pi, watching everything. Level 4 is a controller running work while you sleep. Only Level 1 is built.</p>
+      <p>The number hides what actually differs. An overnight run on 8 August was treated as roughly Level 4. It had no controller, no crash recovery, no isolated workspace and no spending limit. It produced nothing, then reported itself complete.</p>
+      <p>The proposal: drop the single rank. Describe a session by the facts that vary — how closely you watch, who enforces rules, whether work survives a crash, whether the workspace is isolated, what the spending limits are. Each fact records whether it was asked for or actually granted.</p>
+    </div>
+
+    <div class="prime">
+      <h3>How to use this page</h3>
+      <ol>
+        <li>Decide the 18 cards. Every card has a recommendation. Accepting all of them and then changing the few you disagree with is a fine way to do it.</li>
+        <li>Deciding D1–D6 unlocks round 2 at the bottom. That is where the real commitment happens — D7 decides whether the Level ladder is retired.</li>
+        <li>Paste the composed reply into a Pi session. Nothing in the repository changes until then.</li>
+      </ol>
+      <p><b>Worth your attention:</b> D6, D11, D14, D15, D17 and D21 change what gets built. D21 is the only one where the two reviewers disagree. The rest are wording and record-keeping.</p>
+    </div>
+
+    <details class="wide">
+      <summary>Background — the four events these cards keep referring to</summary>
+      <div class="body" style="font-size:14.5px;color:var(--muted)">
+        <p style="margin-top:0"><b>The failed AFK run, 8 August 2026.</b> AFK means away from keyboard: an unattended overnight run. This one was supposed to produce a finished marketing video for the PhotoQuest project. A startup command was rejected before any real work began. Instead of stopping, the run kept diagnosing itself, and then reported the whole job as complete although nothing had been produced. It is cited constantly because it is the concrete proof that a model checking its own completion produces false “done” signals. <span class="mono" style="font-size:12px">docs/research/reports/afk-autopilot-production-failure-2026-08-08.md</span></p>
+        <p><b>The observer session.</b> A second Pi session was watching that run. Rather than reacting only to real events, it woke on nearly every log line, spent about 25.9 million tokens and roughly $7, and initially repeated the failing run's own false success claim instead of challenging it. It is the standing argument for watching with deterministic events rather than a model.</p>
+        <p><b>PhotoQuest attempt 04.</b> The proposed fourth unattended production attempt for the same pipeline. Attempt 03 also failed, with a step called Asset Scout hanging for fifteen minutes before being killed. Attempt 04 is deliberately blocked until that hang is reproduced and diagnosed outside production. Card D14 keeps it blocked.</p>
+        <p style="margin-bottom:0"><b>The grill itself.</b> A grill is an adversarial review: a lead session and a separately-modelled advisor argue a proposal across several rounds, then independent auditors check the result before a human rules on it. This one ran four design rounds and two closing audits. The first audit found six material gaps, all reconciled; the second found none. The advisor ran on a different model family from the lead, which is why its dissent is preserved on the cards rather than smoothed away.</p>
+      </div>
+    </details>
+
+    <details class="wide">
+      <summary>Glossary — terms used on the cards</summary>
+      <div class="body">
+        <dl class="gloss">
+          <dt>Operating Level 1–4</dt><dd>The current single-number description of a session. 1 Pair: you and one Pi, watching continuously. 2 Agree: you agree a written plan first. 3 Contract: work runs against an approved plan with independent review. 4 Manage: a controller runs execution so you can be offline. Only Level 1 is built.</dd>
+          <dt>Run</dt><dd>One durable pursuit of a stated outcome under agreed rules. Survives across sessions. Not built yet at V1.</dd>
+          <dt>Workstream</dt><dd>A personal container that tracks related sessions, links and open questions so you can pick attention back up later. Grants no permissions.</dd>
+          <dt>Subagent</dt><dd>A fresh, single-use Pi spun up for one bounded task, then gone.</dd>
+          <dt>Durable Worker</dt><dd>A helper Pi that keeps its context across several assignments within one scope, unlike a single-use Subagent.</dd>
+          <dt>Independence / cross-family routing</dt><dd>Having a check performed by something not anchored to the work under review — in practice, a different model family from the one that produced it.</dd>
+          <dt>Fail-closed</dt><dd>When something is unverified or uncertain, block rather than proceed.</dd>
+          <dt>Attention</dt><dd>Your finite capacity for real judgement. The system is designed to spend it only where it changes an outcome.</dd>
+          <dt>Effect class</dt><dd>The category of real-world consequence a piece of work can have. Used to decide which rules apply: a read-only overnight scout and a run that publishes files should not face the same requirements.</dd>
+          <dt>Provenance stage</dt><dd>The five labels attached to any posture value: <b>requested</b> (someone asked), <b>recommended</b> (policy suggests), <b>required</b> (a check demands), <b>admitted</b> (a mechanism actually granted it), <b>observed</b> (a receipt says it happened).</dd>
+          <dt>Ratification</dt><dd>You approving something after the fact. Deliberately <i>not</i> the same as a mechanism granting it — this distinction is the point of card D2.</dd>
+          <dt>Standing context</dt><dd>The roughly 750 words of Workbench-owned instructions injected into every session's prompt. Card D17 audits it.</dd>
+          <dt>Compaction</dt><dd>Summarising a session's context to free space, at a point where the summary will not lose something load-bearing.</dd>
+          <dt>Entry Preset</dt><dd>An optional named starting bundle of settings. It cannot grant a capability the system does not enforce. This is what you approved on 25 August.</dd>
+          <dt>Learning Candidate</dt><dd>An evidence-backed lesson from a run, proposed for promotion into permanent project knowledge.</dd>
+          <dt>FirstMate / coordination mate</dt><dd>A proposed assistant that helps you triage and resume your Workstreams without owning any of the underlying state. Card D11 scopes it down to notify-and-focus only.</dd>
+          <dt>Principle 14</dt><dd>Every material claim must be checked by an actor that did not produce it, with evidence rather than confidence. Card D15 keeps this as an unwaivable floor.</dd>
+          <dt>Decisions 79–82</dt><dd>The recorded decisions that establish the Level ladder as concepts rather than a roadmap (79), restrict V1 to Level 1 (80), allow model choice to vary by role (81), and forbid a UI level-switcher (82). These are what card D7 would supersede in round 2.</dd>
+        </dl>
+      </div>
+    </details>
+  </section>
+
+  <!-- LIVE SHEET -->
+  <section>
+    <h2>Verdict sheet — live</h2>
+    <p class="cluster-sub">Every card at a glance. Click any row to jump to it. This fills in as you decide.</p>
+    <table class="sheet" id="sheet">
+      <thead><tr><th>Id</th><th>Decision in one line</th><th>Recommended</th><th>Your verdict</th></tr></thead>
+      <tbody><!-- filled by JS --></tbody>
+    </table>
+  </section>
+
+  <!-- P0 -->
+  <section>
+    <h2>Process deviation</h2>
+    <p class="cluster-sub">One housekeeping question about how the review was run. It does not affect the proposals.</p>
+    <div class="card" data-id="P0" data-title="Mid-grill observer commit 9a87d1f" data-rec="waive"
+         data-opts='[["waive","Waive as exception"],["violation","Record as violation"],["third-audit","Order third audit"]]'>
+      <span class="state-badge">pending</span>
+      <h3><span class="id">P0</span>Mid-grill observer commit <code>9a87d1f</code></h3>
+      <p class="plain"><b>Plainly:</b> the review promised no documents would be edited while it ran. One was — another session of yours committed an analysis file at 20:49. Nobody in the review read it. Harmless exception, or a real violation?</p>
+      <p class="deciding"><b>Deciding:</b> how to classify a commit that landed while the grill ran. At 20:49 your observer session committed <code>autonomous-grill-session-analysis-2026-08-08.md</code>; the dossier said “no document edits during the grilling itself.”</p>
+      <p class="rec">➡ Recommend: waive as explicit exception.</p>
+      <details><summary>Facts &amp; alternatives</summary><div class="body">
+        Facts: separate session, new research file only, no challenged document touched, no grill participant read it (zero evidence from it entered the decision tree).<br><br>
+        Alternatives: record as a violation and add a freeze rule for future grills, or order a third audit over that report's content.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Condition or reason…" />
+    </div>
+  </section>
+
+  <!-- D1-D6 -->
+  <section>
+    <h2>Core model — D1–D6</h2>
+    <p class="cluster-sub">The proposal itself: what replaces the Level 1–4 ladder. Deciding all six unlocks round 2 at the bottom.</p>
+
+    <div class="card" data-id="D1" data-title="Nine fields with provenance, not a level number">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D1</span>Nine fields with provenance, not a level number</h3>
+      <p class="plain"><b>Plainly:</b> the core swap. Stop saying “this session is Level 3”. List the nine facts that actually differ instead, each marked as asked-for or actually-granted. The example below writes the failed August run out this way, and the mismatch the label hid becomes obvious.</p>
+      <p class="deciding"><b>Deciding:</b> whether a Run's posture is described by fields whose values carry provenance, with per-field validity predicates, instead of one ladder rank.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>Concrete example — the failed AFK run as a vector</summary><div class="body">
+<pre>attention:    outcome-only        (requested)
+governance:   session-owned       (observed — no controller)
+durability:   live-session-only   (observed — crash = total loss)
+workspace:    shared checkout     (observed — no isolation)
+bounds:       unlimited turns     (observed — pi-goal default)
+verification: dual judgment       (requested, ran)</pre>
+        “Level 4-ish” hid exactly this mismatch — the production failure report's conclusion (“the operating level did not match the use”) <b>is</b> this table. The ladder also has a live counterexample: durable workers put session-resumable durability inside Level 1 while Independence roles refuse continuity.<br><br>
+        Validity is checked per field — <code>admits(required, granted)</code>, <code>conforms(admitted, observed)</code> — not by ordering, because bounds order backwards and authority values are sets. Presentation stays simple: you request attention, commitment, and bounds; the environment supplies governance, durability, and workspace protection.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D2" data-title="Provenance pipeline: requested → … → observed">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D2</span>The provenance pipeline</h3>
+      <p class="plain"><b>Plainly:</b> each fact is labelled with how real it is: asked for, suggested, demanded, actually granted, or observed. The point is that <b>your approval never counts as granted</b> — only a mechanism does. The August run treated “the human approved the plan” as granted authority and escalated itself on the strength of it.</p>
+      <p class="deciding"><b>Deciding:</b> whether every field value carries one of five stages: <b>requested → recommended → required → admitted → observed</b>. A value is <b>admitted</b> only when a mechanism grants it; your approval is ratification — a recorded event, never an admitted stage.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>Concrete example — a worker dispatch today</summary><div class="body">
+        Role requested → binding recommended by routing policy → cross-family required for Independence → binding admitted only after the adapter verifies the launched runtime (Decision 88, fail-closed) → receipt records what observed.<br><br>
+        In the AFK run, “the human approved the plan” was treated like granted authority; that ambiguity let <code>escalate</code> route into more autonomous work. Ratification semantics stay deferred (Deferred Design Decision 7) — this proposal does not settle them.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D3" data-title="Three constraint classes, applied per effect class">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D3</span>Three constraint classes, applied per effect class</h3>
+      <p class="plain"><b>Plainly:</b> rules come in three strengths — never break, this repository requires it, advice you may skip with a reason. Which ones apply depends on what the work can affect. A read-only overnight scout and a run that publishes files should not face the same checklist.</p>
+      <p class="deciding"><b>Deciding:</b> whether constraints divide into <b>universal invariants</b> / <b>binding repository requirements</b> / <b>ignorable-with-reason recommendations</b> — evaluated per effect class.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>One of each, plus why effect classes matter</summary><div class="body">
+        <ul>
+          <li><b>Invariant:</b> the invoked plan never owns completion semantics — the missing clause that let the PhotoQuest plan call <code>goal_complete</code> with Steps 4–8 unfinished.</li>
+          <li><b>Repository requirement:</b> PhotoQuest's browser-evidence rule.</li>
+          <li><b>Recommendation:</b> “use two judges on this refactor.”</li>
+        </ul>
+        An overnight read-only scout needs budgets and an external completion predicate but no worktree isolation; the same posture shipping video files needs both. One global floor forced the wrong answer for one of them.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D4" data-title="Commitment per object, not one altitude">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D4</span>Commitment per object</h3>
+      <p class="plain"><b>Plainly:</b> “we agreed the plan” is too coarse. Split it into four: the outcome, how you know it is done, constraints on the approach, and the exact route. Then conflicts settle themselves. If your prompt says “don't pause” and the plan says “stop at this gate”, the gate wins, because you agreed to it.</p>
+      <p class="deciding"><b>Deciding:</b> whether direction commitment is four independently agreed, versioned objects — <b>outcome, acceptance criteria, strategy constraints, implementation route</b> — rather than one agreement altitude.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>Concrete example — the AFK run's two recorded conflicts</summary><div class="body">
+        Under D4: outcome and acceptance agreed; strategy adaptive, not a promise; route unagreed. The conflicts then resolve mechanically:
+        <ul>
+          <li>Prompt said “don't pause,” plan said “gate hard” (session-ledger F3). The gate is part of agreed acceptance, so it wins — not because plans beat prompts, but because that clause carries agreement and the prompt line does not.</li>
+          <li>You type “2 videos is fine” mid-run: a human amendment within authority re-versions the outcome object. Document type is irrelevant.</li>
+        </ul>
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D5" data-title="Presets as intent templates with disclosure cards" data-dissent="1">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D5</span>Presets as intent templates with disclosure cards <span class="pill dissent">dissent</span></h3>
+      <p class="plain"><b>Plainly:</b> a preset is a starting template, and the screen where you pick it must say what you get and what you don't. No “Level 2 ✓” badge implying guarantees nobody enforces. <b>Note:</b> the “V1 ships exactly one preset” line below is overridden by your 25 August answer approving three values. Accepting this card accepts the disclosure rule, not the one-preset limit.</p>
+      <p class="deciding"><b>Deciding:</b> whether named presets are starting templates whose launch surface shows what you get and what you don't — presentation enforcing only the disclosure, never a capability.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>The Attended Pair card, and the rejected form</summary><div class="body">
+        <blockquote><b>Attended Pair.</b> You get: continuous attention, bounded cancellable children, fail-closed model binding, Workstream checkpoints. You don't get: unattended execution, crash recovery of live work, workspace isolation, publication authority.</blockquote>
+        The rejected form is a <code>Level 2 ✓</code> badge implying a bundle nobody enforces. V1 ships exactly one preset; AFK Experiment and Managed Run stay research examples until their decisions land.
+      </div></details>
+      <p class="dissent-note"><b>Dissent (preserved):</b> even use-case names may be mentally ranked by autonomy. Test with readers of the cards.</p>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D6" data-title="No V1 resolver; local fail-closed gates instead">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D6</span>No resolver at V1; local gates instead</h3>
+      <p class="plain"><b>Plainly:</b> don't build a rules engine. One rule instead: any feature that lets a model work past a point where a human would decide must ship its own hard block that refuses when unsure. One already exists — the AFK gate refuses “goal complete” without an evidence receipt.</p>
+      <p class="deciding"><b>Deciding:</b> whether V1 skips resolver/validator machinery and adopts one invariant: any feature that lets model activity continue past a human boundary ships its own <b>local fail-closed mechanical gate</b>.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>The pattern that exists, and what this blocks</summary><div class="body">
+        The AFK extension already rejects <code>goal_complete</code> unless <code>afk_outcome_finalize</code> produced an evidence-bearing receipt — local, mechanical, no controller.<br><br>
+        What this blocks later: a “mate auto-continue” config flag with no equivalent gate — invalid regardless of prompt quality. Rejected alternative: a V1 resolver service validating the only legal posture — a one-row table maintained forever.<br><br>
+        Human boundaries here are decision points: typed ask, explicit pause, always-escalate classes. Control disconnect is deliberately not one — see D21.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+  </section>
+
+  <!-- D11-D13 -->
+  <section>
+    <h2>Coordination — D11–D13</h2>
+    <p class="cluster-sub">Three questions about how your attention gets directed: a coordinator for multiple sessions, batching questions to you, and what an agent does at the end of a phase.</p>
+
+    <div class="card" data-id="D11" data-title="FirstMate: unbundle, scoped to notify-and-focus mate v0" data-dissent="1">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D11</span>FirstMate: unbundle, scoped to mate v0 <span class="pill dissent">dissent</span></h3>
+      <p class="plain"><b>Plainly:</b> with several sessions running, nothing tells you which one needs you. This approves a minimal coordinator: “Session B needs you (1 of 3)”, plus a jump link. It answers nothing, writes nothing, and runs no model in the background.</p>
+      <p class="deciding"><b>Deciding:</b> <code>task-firstmate-gating-decision</code> — unbundle a level-agnostic coordination mate from managed-authority machinery, at <b>notify-and-focus v0</b> scope only.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>Mate v0 concretely, and what stays blocked</summary><div class="body">
+        Three sessions run; one hits an ask; the mate surface shows “Session B needs you (1 of 3)” with a focus action; you answer in the session yourself. The mate answers nothing, writes nothing, synthesizes only when you open the panel.<br><br>
+        Blocked, and by what:
+        <ul>
+          <li><b>Answering for you (Phase 2):</b> blocked on the typed answer-delivery build plus its own superseding decision. This verdict alone cannot enable it. Its gate uses mechanically derived effect class; model attestations only narrow or escalate — never widen.</li>
+          <li><b>Steering a running child:</b> Decision 80 stands — cancel-and-relaunch. A child pausing on a decision point times out to a terminal needs-decision state.</li>
+          <li><b>Background model synthesis:</b> your observer session is the cautionary tale — 25.9M tokens, about $7, a model turn every few seconds, and it initially repeated the target's broken completion claim. Watching is deterministic events only.</li>
+        </ul>
+      </div></details>
+      <p class="dissent-note"><b>Dissent (residual):</b> calibration quality of model-attested fields — bounded, cannot widen authority.</p>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D12" data-title="Frontier-batched questions per round">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D12</span>Frontier-batched questions</h3>
+      <p class="plain"><b>Plainly:</b> only ask you something once everything it depends on is settled, and batch the questions into rounds instead of interrupting you one at a time. This page is that idea working.</p>
+      <p class="deciding"><b>Deciding:</b> <code>task-frontier-attention</code> — a question enters a round only when its prerequisites are settled and it is currently material; the frontier recomputes from answers.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>This report is the mechanism in use</summary><div class="body">
+        17 decisions in one round, D7–D10 visibly parked because their prerequisite is you. Over your live Workstream: answerable now = task-decision-93, watched-sources, branch-evidence, default-context; waiting = the Working Mode task (on D1–D6). Answers stay individual revision-checked submissions (Decision 91); a mooted sibling drops from the round.<br><br>
+        Destination: V1 version in <code>graphical-attention.md</code>; managed-Run batching waits for a managed-attention contract — <code>graphical-attention.md:15-16</code> excludes it today.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D13" data-title="Phase boundaries: five branch questions, not a ranked ladder">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D13</span>Phase boundaries as branch questions</h3>
+      <p class="plain"><b>Plainly:</b> at the end of a phase an agent picks between carrying on, wiping its context, handing off, or spawning a helper. Replace the ranked list with five yes/no questions. The ranking gets a common case wrong: “review the code I just wrote” needs a fresh helper immediately, and the ranking puts that fourth.</p>
+      <p class="deciding"><b>Deciding:</b> <code>task-phase-boundary-tree</code> — fold five questions, not a ranked ladder, into the <code>focus-handoff</code> skill: independence needed → subagent; context poisoned → clear; parallelizable and bounded → subagent; durable transfer → handoff; otherwise continue. Compact at semantic boundaries under context pressure.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>Why not the source's ranking</summary><div class="body">
+        The source ranked continue &gt; clear &gt; handoff &gt; subagent &gt; compact. But “review the code I just wrote” needs a fresh subagent immediately — fourth place in the ranking, first correct answer in practice. The source's “conversation is a primary source” rationale is rewritten to “the live session is the cheapest current context, never authoritative state,” keeping Principles 9–10 intact.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+  </section>
+
+  <!-- D14-D16 -->
+  <section>
+    <h2>Autonomy floors — D14–D16</h2>
+    <p class="cluster-sub">The minimum bars: before unattended work is allowed, how much independent review is required, and what blocks a run from closing.</p>
+
+    <div class="card" data-id="D14" data-title="Outcome-only attention floor; aggregate budget hard-blocks">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D14</span>The outcome-only attention floor</h3>
+      <p class="plain"><b>Plainly:</b> the minimum bar before Pi may run work you only check the result of — overnight runs, in practice. Five conditions; PhotoQuest passes two. The decisive gap: nothing totals spending across a session and its children, so no limit can stop it. Accepting this keeps that trial blocked.</p>
+      <p class="deciding"><b>Deciding:</b> the Q8 answer — outcome-only attention is admissible only above a five-item floor. <b>The PhotoQuest overnight trial fails it today</b>; this verdict keeps attempt 04 blocked.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>Floor scored against the trial today</summary><div class="body">
+        <ul>
+          <li>Aggregate reserve-and-stop budget across lead, children, judges, compaction, supervisors — <b>fails</b>; nothing aggregates nested spend; this alone makes it inadmissible.</li>
+          <li>Deterministic event-driven supervision, no model polling — <b>passes</b> (matrix supervisor made zero model calls).</li>
+          <li>Completion predicate outside the invoked plan — <b>passes</b> (AFK receipt gate exists).</li>
+          <li>Restart classifies resume-or-stop — <b>fails</b>; untested.</li>
+          <li>Human boundaries pause work, never reroute to diagnostics — <b>fails</b>; the failure run routed <code>escalate</code> into diagnostics.</li>
+        </ul>
+        The trial additionally needs, in order: Asset Scout hang diagnosed → disposable guarded successor test → proven aggregate stop → a fresh explicit yes from you. Diagnosis never implicitly authorizes attempt 04.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D15" data-title="Judgment cadence proportional to risk; Principle-14 floor">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D15</span>Judgment cadence</h3>
+      <p class="plain"><b>Plainly:</b> someone proposed two independent reviews at every phase of every run. Too expensive, and a quota outage would stall runs at boundaries nobody thought were risky. Scale review to risk instead. One floor stays: a claim is always checked by something that didn't make it, and a plan can argue its own review up but never down.</p>
+      <p class="deciding"><b>Deciding:</b> the Q7 answer — reject “dual cross-family judgment every phase” as default; make cadence proportional, with one invariant floor (Principle 14: every material claim is checked by an actor that did not produce it — no policy, plan, or ratification waives it).</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>The real numbers behind the rejection</summary><div class="body">
+        Lead $13.44, observer $7.01, one five-arm smoke matrix $15.16 — and quota fails closed, so mandatory dual judgment would stall runs at boundaries nobody assessed as needing it.<br><br>
+        Above the floor: independent review only where it breaks a named failure correlation; dual cross-family only at material or irreversible boundaries or weak evidence; deterministic checks always. A quota-blocked judgment pauses as an attention state, never silently skips. A plan's own “phase 3 is low-risk” can only <b>increase</b> review, never reduce it.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D16" data-title="Run close blocks on disposition + analysis + extraction">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D16</span>Stewardship at close</h3>
+      <p class="plain"><b>Plainly:</b> which loose ends block a run from closing, and which become follow-up tasks. Before close: decide what to keep or delete, analyse how the run went, extract the lessons. Later: tidying, generalising, simplifying.</p>
+      <p class="deciding"><b>Deciding:</b> the Q9 answer — what blocks Run close versus what becomes a task.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>The split</summary><div class="body">
+        <b>Blocks close:</b> recorded retain-or-clean disposition (“delete scratch worktree after 14 days”), retire-superseded within the changed scope where authorized, outcome-plus-orchestration analysis, and source-backed Learning Candidate extraction (Decision 27).<br><br>
+        <b>Becomes tasks:</b> promotion, generalization, simplification (unless a recorded hazard), retirement outside the changed scope.<br><br>
+        Workstream close keeps Decision 86 semantics — nothing forced. Compaction stays in-flight hygiene.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+  </section>
+
+  <!-- D17-D19 -->
+  <section>
+    <h2>Standing context — D17–D19</h2>
+    <p class="cluster-sub">About the instructions injected into every session you start: audit the current ones, set a test for new ones, and measure the doubtful ones by 15 September.</p>
+
+    <div class="card" data-id="D17" data-title="Standing context: per-item verdicts, dated grandfathers">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D17</span>Standing context: restructure</h3>
+      <p class="plain"><b>Plainly:</b> about 750 words of instructions go into every session you start. Audit them line by line, keep what documents real enforcement, and put two unproven lines about delegation on probation until 15 September. One of those two is currently the only thing stopping duplicate workers — the code creates them unconditionally.</p>
+      <p class="deciding"><b>Deciding:</b> <code>task-challenge-default-context</code> — per-item verdicts over the ~750 standing Workbench-owned words.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>The two contested lines, and the keep list</summary><div class="body">
+        <blockquote>“Delegate proactively when it protects your context or the result…” (<code>extensions/subagent/index.ts:97</code>, commit <code>5c0f620</code>)</blockquote>
+        <blockquote>“Worker identity is durable across sessions: check worker_status for an existing worker covering the scope and reuse or retire it before creating another.” (<code>extensions/subagent/index.ts:217</code>, commit <code>0493eee</code>)</blockquote>
+        Both <b>grandfather</b>: owner = you, observable = D19, review 2026-09-15, auto-demote to a skill if no evidence by then. The second line is currently the only guardrail — <code>registry.create()</code> mints a UUID unconditionally, with no duplicate-scope check.<br><br>
+        <b>Keep:</b> AGENTS.md router and invariants, tool schema facts, guidelines documenting real enforcement (Independence-roles preflight, dispatch lock), checkpoint lifecycle rules (the compaction race was a real failure class), skills index. External blocks (goal, AFK gate, web-access): authorship is upstream, admission is yours — the lever is enable/disable in harness distribution; each block carries the same 2026-09-15 review.<br><br>
+        The clause-level sentence audit is the <b>first execution step</b> of this verdict, not completed work.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D18" data-title="Admission rule for all future standing context">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D18</span>Admission rule for standing context</h3>
+      <p class="plain"><b>Plainly:</b> a test every future sentence must pass to earn a place in those 750 words. “Prefer small, focused commits” fails it. “A worker runs one dispatch at a time” passes, because the code enforces exactly that.</p>
+      <p class="deciding"><b>Deciding:</b> future standing text is admitted only if it changes action at the margin, <b>and</b> is backed by mechanical enforcement, observed failure, or a named catastrophic threat, <b>and</b> no cheaper seam (skill, tool description, doc) serves, <b>and</b> it carries an owner plus an observable and a review date. An observable alone never grants permanence.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>Two candidates through the rule</summary><div class="body">
+        “A worker runs one dispatch at a time; busy workers fail preflight” — documents real enforcement, agent must know before dispatching — <b>admitted</b>.<br>
+        “Prefer small, focused commits” — no enforcement, no observed failure, a doc serves — <b>refused</b> as standing text.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D19" data-title="Worker receipts as the (one-sided) delegation observable">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D19</span>The delegation observable</h3>
+      <p class="plain"><b>Plainly:</b> D17 put two lines on probation, so something has to measure them. Use the worker registry's records — a worker created and retired the same day means a one-shot helper would have done. It only works one way: records show over-delegation, never the delegation that should have happened and didn't.</p>
+      <p class="deciding"><b>Deciding:</b> use worker-registry receipts as the over-eager-worker signal, honestly one-sided.</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>The 2026-09-15 review, concretely</summary><div class="body">
+        A worker with one dispatch, retired same day → <b>flag</b> (a subagent would have done); four dispatches over 3.5 hours → <b>healthy</b>; one dispatch then 37 idle days → <b>sprawl</b>. Flags plus your classification are the renewal evidence D17's grandfathered lines live or die on. Receipts cannot see under-delegation; no such claim is made.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+  </section>
+
+  <!-- D20-D21 -->
+  <section>
+    <h2>Principles &amp; disconnect — D20–D21</h2>
+    <p class="cluster-sub">One piece of record-keeping, and the single question where the two reviewers still disagree.</p>
+
+    <div class="card" data-id="D20" data-title="Record two-altitude principles structure as a numbered decision">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D20</span>Record the two-altitude principles structure</h3>
+      <p class="plain"><b>Plainly:</b> bookkeeping. The principles document already works on two levels: short maxims, with detailed commitments underneath. Write that down as a numbered decision so it stops being an unstated habit.</p>
+      <p class="deciding"><b>Deciding:</b> <code>task-decision-93</code> — record this decision text (number assigned at recording time).</p>
+      <p class="rec">➡ Recommend: accept.</p>
+      <details><summary>The decision text, verbatim</summary><div class="body">
+        <blockquote><b>9X. Principles use two altitudes with single primary homes.</b> <code>principles.md</code> carries guiding maxims and, beneath each, the detailed principles it refines; provenance notes are a third content type, not detailed principles. Every detailed principle has exactly one primary maxim home; cross-references are free. Chosen over replacing the 34 detailed commitments and over a separate philosophy file. A commitment fitting no maxim is a gap.</blockquote>
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+
+    <div class="card" data-id="D21" data-title="Disconnect: truthful labels (lead) vs pause-on-control-loss (advisor)" data-dissent="1"
+         data-revise-prefill="mandate grace-period pause">
+      <span class="state-badge">pending</span>
+      <h3><span class="id">D21</span>Disconnect handling — the one live disagreement <span class="pill dissent">dissent</span></h3>
+      <p class="plain"><b>Plainly:</b> the only card where the reviewers disagree — read both. You close the laptop at 22:03 with a twenty-minute job running and reopen at 22:20. Should it have finished, or stopped? Recommended: it finishes, may not start anything new, and stops being called “attended”. The dissent: nobody was there, so a truthful label doesn't help — pause it.</p>
+      <p class="deciding"><b>Deciding:</b> what happens when you close the laptop at 22:03 with a 20-minute background child running, and reopen at 22:20.</p>
+      <p class="rec neutral">➡ Recommend: accept the lead version — or revise to side with the advisor.</p>
+      <details open><summary>Both versions</summary><div class="body">
+        <b>Lead version (recommended):</b> the child finishes its bounded work, labeled <i>session-scoped (control lost)</i> — never “attended” — and is killable the moment you return. Anything new that relaxes attention during the gap (auto-continue, another background child) is refused fail-closed. Where no control-presence signal exists (plain terminal), no dynamic claim is made; protection stays bounded-children-die-with-parent (Decision 89's explicit-absence pattern). The control-presence producer, where it exists, is PI WEB's session transport.<br><br>
+        <b>Advisor version (preserved dissent):</b> after a bounded grace period the child pauses or dies. “A live session with nobody at it isn't attended, and labels don't cancel processes.” Cost: new pause/cancel machinery, and closing the lid kills every long-running read.
+      </div></details>
+      <div class="verdict-row"></div>
+      <input class="reason" placeholder="Reason / constraint…" />
+    </div>
+  </section>
+
+  <!-- ROUND 2 -->
+  <section class="locked-panel" id="round2">
+    <h2>Round 2 — D7–D10 <span class="pill locked" id="lockpill">🔒 locked</span></h2>
+    <p class="cluster-sub">Shown for context only — you decide these in a session, after D1–D6. D7 is the real one: whether the Level ladder stops being the primary model.</p>
+    <p class="unlock-note" id="unlocknote">Unlocks when all of D1–D6 carry a verdict. Preview only — the round-2 walk happens in session.</p>
+    <div class="card">
+      <h3><span class="id">D7</span>The verdict itself — adopt / revise / retain-levels</h3>
+      <p class="deciding">Lean: <b>revise</b> — retire the ladder as primary model with the corrections above. The superseding decision must map Decisions 79–82 clause by clause (retained / renamed / superseded) and prove with a boundary-equivalence table that continuous attention, cancel-and-relaunch, fail-closed binding, no selector, no unattended execution, and truthful guarantees all survive.</p>
+    </div>
+    <div class="card">
+      <h3><span class="id">D8</span>Migration outline</h3>
+      <p class="deciding">One coherent change set over the 18 referencing documents, partitioned into normative text (rewrite), active plans (annotate, keep filenames), and history (untouched); Operating Level keeps a superseded legacy definition.</p>
+    </div>
+    <div class="card">
+      <h3><span class="id">D9</span>PI WEB presentation</h3>
+      <p class="deciding">Static disclosure card only; no dynamic capability report until a named producer exists; no editable vector dashboard.</p>
+    </div>
+    <div class="card">
+      <h3><span class="id">D10</span>Principles impact</h3>
+      <p class="deciding">Link and terminology repair in the migration set; stewardship gap resolved either as a new detailed principle under Principle 12 or recorded as workflow policy.</p>
+    </div>
+  </section>
+
+  <!-- DISSENT REGISTER -->
+  <section>
+    <h2>Dissent register — survives regardless of verdicts</h2>
+    <p class="cluster-sub">Objections raised during the review, kept on record whichever way you decide. A verdict settles what gets built, not whether the objection was reasonable.</p>
+    <div class="card">
+      <ol class="dr">
+        <li>Preset names may still be mentally ranked (D5).</li>
+        <li>Retiring the categorical ladder may cost pedagogy and migration recognition (D7).</li>
+        <li>Model-attestation calibration inside an admitted envelope (D11) — measure false-escalation and missed-narrowing rates.</li>
+        <li>Advisor versus lead on disconnect gating (D21) — the human verdict settles behavior, the disagreement stays recorded.</li>
+        <li>Enforcement debt: prose-not-enforcement is accepted invariant; no general V1 resolver is a declared limitation; aggregate reserve-and-stop budgeting is a build prerequisite blocking outcome-only postures (D14).</li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    <b>Method &amp; independence.</b> Lead: Anthropic session. Advisor: durable worker <code>working-mode-grill-advisor</code> (<code>gpt-5.6-sol:xhigh</code>), four design rounds, retired after audit. Closing audits: two fresh reviewer subagents, cognitive role challenge, routed away from the Anthropic lead — both landed on <code>gpt-5.6-sol</code>, so they are context-fresh and lead-independent but <b>not model-independent from the advisor</b>. Audit 1: six material gaps, all reconciled; audit 2: none.<br>
+    Sources: <a href="../../research/reports/working-mode-grill-decisions-2026-08-08.md">grill decisions report</a> · <a href="../../research/reports/working-mode-challenge-dossier.md">challenge dossier</a> · <a href="working-mode-grill-decision-tree.md">full decision tree (machine-local)</a><br>
+    Generated review artifact · not committed (<code>.scratch/</code> is gitignored) · verdicts persist only in this browser's localStorage until you paste the reply into your session.
+  </footer>
+
+</div>
+
+<!-- COMPOSER -->
+<div class="composer">
+  <div class="inner">
+    <div class="topline">
+      <span class="count"><b id="ndone">0</b> / <span id="ntotal">18</span> decided</span>
+      <div class="progress"><div id="pbar"></div></div>
+      <button class="big approve" id="acceptall">Accept all recommendations</button>
+      <button class="big" id="resetall">Reset</button>
+    </div>
+    <textarea id="out" readonly placeholder="Your verdict reply builds here as you decide…"></textarea>
+    <div class="actions">
+      <button class="big primary" id="copy">Copy verdict reply</button>
+      <span class="hint">Paste the reply into your Pi session. This page records nothing outside this browser, and nothing in the repository changes until a session writes your answers down.</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const KEY = 'atelier-working-mode-grill-a583264';
+  const cards = Array.from(document.querySelectorAll('.card[data-id]'));
+  const state = JSON.parse(localStorage.getItem(KEY) || '{}');
+
+  const DEFAULT_OPTS = [['accept','Accept'],['revise','Revise'],['reject','Reject']];
+  const CLASSMAP = { accept:'sel-accept', waive:'sel-accept', revise:'sel-revise', 'third-audit':'sel-revise', reject:'sel-reject', violation:'sel-reject' };
+  const KINDMAP  = { accept:'accept', waive:'accept', revise:'revise', 'third-audit':'revise', reject:'reject', violation:'reject' };
+
+  cards.forEach(card => {
+    const id = card.dataset.id;
+    const opts = card.dataset.opts ? JSON.parse(card.dataset.opts) : DEFAULT_OPTS;
+    const row = card.querySelector('.verdict-row');
+    const reason = card.querySelector('.reason');
+    opts.forEach(([val, label]) => {
+      const b = document.createElement('button');
+      b.className = 'vbtn'; b.textContent = label; b.dataset.val = val;
+      b.addEventListener('click', () => {
+        const cur = state[id];
+        if (cur && cur.v === val) { delete state[id]; }
+        else {
+          state[id] = { v: val, r: reason.value || '' };
+          if (val === 'revise' && !reason.value && card.dataset.revisePrefill) {
+            reason.value = card.dataset.revisePrefill; state[id].r = reason.value;
+          }
+        }
+        render();
+      });
+      row.appendChild(b);
+    });
+    reason.addEventListener('input', () => { if (state[id]) { state[id].r = reason.value; render(false); } });
+    if (state[id] && state[id].r) reason.value = state[id].r;
+  });
+
+  // Live sheet
+  const tbody = document.querySelector('#sheet tbody');
+  cards.forEach(card => {
+    const tr = document.createElement('tr');
+    const rec = card.dataset.id === 'P0' ? 'waive' : (card.dataset.id === 'D21' ? 'accept lead' : 'accept');
+    tr.innerHTML = '<td>' + card.dataset.id + '</td><td>' + card.dataset.title + '</td><td>' + rec + '</td><td class="v" data-v=""></td>';
+    tr.addEventListener('click', () => card.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    tr.dataset.for = card.dataset.id;
+    tbody.appendChild(tr);
+  });
+
+  function compactRange(ids) {
+    // group consecutive D-numbers: D1,D2,D3 -> D1-D3
+    const ds = ids.filter(i => /^D\d+$/.test(i)).map(i => +i.slice(1)).sort((a,b)=>a-b);
+    const rest = ids.filter(i => !/^D\d+$/.test(i));
+    const parts = [];
+    let s = null, p = null;
+    ds.forEach(n => {
+      if (s === null) { s = p = n; return; }
+      if (n === p + 1) { p = n; return; }
+      parts.push(s === p ? 'D'+s : 'D'+s+'-D'+p); s = p = n;
+    });
+    if (s !== null) parts.push(s === p ? 'D'+s : 'D'+s+'-D'+p);
+    return rest.concat(parts);
+  }
+
+  function compose() {
+    const acc = [], rev = [], rej = [];
+    let p0 = null;
+    cards.forEach(c => {
+      const id = c.dataset.id, v = state[id];
+      if (!v) return;
+      if (id === 'P0') { p0 = v; return; }
+      const kind = KINDMAP[v.v];
+      if (kind === 'accept') acc.push(id);
+      else if (kind === 'revise') rev.push('revise ' + id + (v.r ? ': ' + v.r : ''));
+      else rej.push('reject ' + id + (v.r ? ': ' + v.r : ''));
+    });
+    const parts = [];
+    if (acc.length) parts.push('accept ' + compactRange(acc).join(', '));
+    parts.push(...rev, ...rej);
+    if (p0) {
+      if (p0.v === 'waive') parts.push('P0 waive');
+      else if (p0.v === 'violation') parts.push('P0 record as violation' + (p0.r ? ': ' + p0.r : ''));
+      else parts.push('P0 third audit' + (p0.r ? ': ' + p0.r : ''));
+    }
+    const undecided = cards.filter(c => !state[c.dataset.id]).map(c => c.dataset.id);
+    let txt = parts.join('; ');
+    if (txt && undecided.length) txt += '\n(undecided: ' + compactRange(undecided).join(', ') + ')';
+    return txt;
+  }
+
+  function render(save = true) {
+    let done = 0;
+    cards.forEach(card => {
+      const id = card.dataset.id, v = state[id];
+      const kind = v ? KINDMAP[v.v] : null;
+      if (v) done++;
+      card.dataset.verdict = kind || '';
+      if (!kind) card.removeAttribute('data-verdict');
+      card.querySelector('.state-badge').textContent = v ? v.v : 'pending';
+      card.querySelectorAll('.vbtn').forEach(b => {
+        b.className = 'vbtn' + (v && v.v === b.dataset.val ? ' ' + CLASSMAP[b.dataset.val] : '');
+      });
+      const reason = card.querySelector('.reason');
+      reason.classList.toggle('show', !!(v && (kind === 'revise' || kind === 'reject')));
+      const td = tbody.querySelector('tr[data-for="' + id + '"] td.v');
+      td.dataset.v = kind || '';
+      td.textContent = v ? (v.v + (v.r ? ' — ' + v.r : '')) : '—';
+    });
+    document.getElementById('ndone').textContent = done;
+    document.getElementById('pbar').style.width = (100 * done / cards.length) + '%';
+    document.getElementById('out').value = compose();
+
+    const d16 = ['D1','D2','D3','D4','D5','D6'].every(i => state[i]);
+    const r2 = document.getElementById('round2');
+    r2.classList.toggle('unlocked', d16);
+    document.getElementById('lockpill').textContent = d16 ? '🔓 unlocked' : '🔒 locked';
+    const note = document.getElementById('unlocknote');
+    note.classList.toggle('done', d16);
+    note.textContent = d16
+      ? 'D1–D6 decided — round 2 is unlocked. The D7–D10 walk (clause mapping, migration set, PI WEB card, principles edits) happens in session after you paste the reply.'
+      : 'Unlocks when all of D1–D6 carry a verdict. Preview only — the round-2 walk happens in session.';
+
+    if (save) localStorage.setItem(KEY, JSON.stringify(state));
+  }
+
+  document.getElementById('acceptall').addEventListener('click', () => {
+    cards.forEach(c => {
+      const id = c.dataset.id;
+      if (state[id]) return; // don't overwrite explicit choices
+      state[id] = { v: id === 'P0' ? 'waive' : 'accept', r: '' };
+    });
+    render();
+  });
+  document.getElementById('resetall').addEventListener('click', () => {
+    Object.keys(state).forEach(k => delete state[k]);
+    cards.forEach(c => { c.querySelector('.reason').value = ''; });
+    render();
+  });
+  document.getElementById('copy').addEventListener('click', async () => {
+    const out = document.getElementById('out');
+    try { await navigator.clipboard.writeText(out.value); }
+    catch (e) { out.select(); document.execCommand('copy'); }
+    const btn = document.getElementById('copy');
+    const t = btn.textContent; btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = t; }, 1200);
+  });
+
+  render(false);
+})();
+</script>
+</body>
+</html>
