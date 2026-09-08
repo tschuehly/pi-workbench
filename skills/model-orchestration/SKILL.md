@@ -5,11 +5,11 @@ description: Route Pi Cognitive Roles to quota-eligible model and Model Effort b
 
 # Model orchestration
 
-Propose one Pi binding per Cognitive Role. The Run Controller remains authoritative for Dispatch validation and launch.
+Propose one Pi binding per Cognitive Role. An attended Worker dispatch may carry an explicit owner-requested model override; the Cognitive Role still selects Model Effort. The Run Controller remains authoritative for managed Dispatch validation and launch.
 
 The target checking contract is `Cognitive Role + Checking + consequence → required bindings`.
-The current resolver accepts one Cognitive Role and optional author provider per invocation; it does
-not enforce the selected Checking value or assemble a panel. See [Working
+The current resolver accepts one Cognitive Role, optional Worker model override, and optional author
+provider per invocation; it does not enforce the selected Checking value or assemble a panel. See [Working
 Mode](../../docs/foundation/working-mode.md).
 
 Set `SKILL_DIR` to this skill's directory before using its bundled tools.
@@ -73,18 +73,20 @@ repeated identical resolutions do not satisfy the panel.
 Run:
 
 ```bash
-node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--independent-of <author-provider> | --independent-of-model <provider/model>]
+node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--model <provider/model>] [--independent-of <author-provider> | --independent-of-model <provider/model>]
 ```
 
 The resolver checks the vendored policy, the current Pi model catalog, and a machine-local `quota-axi --json` snapshot cached for ten minutes. Catalog and quota subprocesses each have a 15-second deadline so routing cannot silently stall a child launch. Concurrent and repeated resolutions share that snapshot, including telemetry failures; the first resolution after the cache expires refreshes it. Fresh quota telemetry with an exhausted relevant window blocks routing. Stale, unavailable, or unreadable quota telemetry produces a `degraded-quota-telemetry` admission instead: the child launch proceeds and Pi's runtime binding verification remains authoritative. An unknown role or absent model still fails closed. Routing never silently substitutes the requested role. Independent roles fail closed without a recognized author provider or a configured binding from another family.
 
-Resolve before a major fan-out, scarce Claude call, escalation, or later major phase; resolutions inside the ten-minute window reuse the cached quota snapshot. Identify windows by `windowSeconds` and `resetsAt`; labels are secondary. A model-scoped window applies only to that model. Compare percentages only within one provider.
+Resolve before a major fan-out, scarce model call, escalation, or later major phase; resolutions inside the ten-minute window reuse the cached quota snapshot. `--model` is the attended `worker_dispatch` exception: use it only for an exact owner or run-contract request. It accepts `<provider>/<model>`, keeps the role-selected effort, follows the selected provider's mapped quota telemetry, and fails if the provider has no quota mapping, the model or effort is unavailable, or the model is outside an active routing overlay. It is unavailable to independent roles and ephemeral Subagents.
+
+Identify windows by `windowSeconds` and `resetsAt`; labels are secondary. A model-scoped window applies only to that model. Compare percentages only within one provider.
 
 **Complete when:** every role has one resolver-produced `provider`, `model`, `effort`, quota admission, and quota snapshot, or the unavailable role is explicit. Disclose degraded telemetry; do not describe it as fresh quota evidence.
 
 ## 4. Submit the proposed binding
 
-Place the complete `modelBinding` in the Work Packet without changing it. The controller resolves the named Execution Profile, checks authority, permissions, workspace, skills, budget, and expected Episode schema, then accepts or rejects the Dispatch. A child Pi process never inherits its caller's skills, permissions, evidence, or authority implicitly.
+Place the complete `modelBinding` in the Work Packet without changing it. For an attended Worker, pass any owner-requested exact model to the resolver and keep its returned binding unchanged. The controller resolves a future managed Dispatch's named Execution Profile, checks authority, permissions, workspace, skills, budget, and expected Episode schema, then accepts or rejects it. A child Pi process never inherits its caller's skills, permissions, evidence, or authority implicitly.
 
 For an interactive Pi lead outside a managed Run, the harness launcher provides the same routing gate:
 

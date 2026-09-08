@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readCachedQuotaSnapshot } from "./quota-snapshot-cache.mjs";
@@ -12,7 +13,7 @@ const policy = JSON.parse(fs.readFileSync(path.join(here, "..", "references", "r
 const ROUTING_COMMAND_TIMEOUT_MS = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
 
 function usage() {
-  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--independent-of <provider>] [--independent-of-model <provider>/<model>] [--quota <path|->] [--catalog <path>] [--format json|env]");
+  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--model <provider>/<model>] [--independent-of <provider>] [--independent-of-model <provider>/<model>] [--quota <path|->] [--catalog <path>] [--model-metadata <path>] [--format json|env]");
   process.exit(2);
 }
 
@@ -21,10 +22,10 @@ function block(role, reason) {
   process.exit(3);
 }
 
-function authorFromModel(role, authorKey) {
-  const slash = authorKey.indexOf("/");
-  if (slash <= 0 || slash === authorKey.length - 1) block(role, `--independent-of-model must be '<provider>/<model>', got '${authorKey}'`);
-  return { provider: authorKey.slice(0, slash), model: authorKey.slice(slash + 1) };
+function parseQualifiedModel(role, value, option = "--independent-of-model") {
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1) block(role, `${option} must be '<provider>/<model>', got '${value}'`);
+  return { provider: value.slice(0, slash), model: value.slice(slash + 1) };
 }
 
 // A run-scoped overlay narrows routing to one explicit allowlist. It is the sole activation
@@ -68,7 +69,7 @@ function loadRoutingOverlay(role) {
     if (!allowed.has(modelKey(target))) block(role, `Routing overlay independentReview '${authorKey}' resolves outside its own allowlist`);
     if (modelKey(target) === authorKey) block(role, `Routing overlay independentReview '${authorKey}' is not a distinct model`);
   }
-  return { path: overlayPath, sha256: createHash("sha256").update(raw).digest("hex"), doc };
+  return { path: overlayPath, sha256: createHash("sha256").update(raw).digest("hex"), doc, allowed };
 }
 
 function isPlainObject(value) {
@@ -83,27 +84,51 @@ function modelKey(binding) {
   return `${binding.provider}/${binding.model}`;
 }
 
+function validateModelEffort(role, binding, metadataInput) {
+  const metadataPath = metadataInput ?? path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"), "models-store.json");
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+  } catch (error) {
+    block(role, `Pi model metadata is unavailable: ${error.message}`);
+  }
+  const model = doc?.[binding.provider]?.models?.find((candidate) => candidate.id === binding.model);
+  if (model === undefined) block(role, `Pi model metadata has no entry for '${modelKey(binding)}'`);
+  const levelMap = isPlainObject(model.thinkingLevelMap) ? model.thinkingLevelMap : {};
+  // Pi maps absent standard levels normally; absent xhigh/max levels are unsupported.
+  const supported = Object.hasOwn(levelMap, binding.effort)
+    ? levelMap[binding.effort] !== null
+    : model.reasoning === true && binding.effort !== "xhigh" && binding.effort !== "max";
+  if (!supported) block(role, `Pi model '${modelKey(binding)}' does not support Model Effort '${binding.effort}'`);
+}
+
 const args = process.argv.slice(2);
 const role = args.shift();
 if (!role) usage();
+let modelOverride;
 let independentOfProvider;
 let independentOfModel;
 let quotaInput;
 let catalogInput;
+let modelMetadataInput;
 let format = "json";
 while (args.length) {
   const option = args.shift();
-  if (option === "--independent-of") independentOfProvider = args.shift();
+  if (option === "--model") modelOverride = args.shift();
+  else if (option === "--independent-of") independentOfProvider = args.shift();
   else if (option === "--independent-of-model") independentOfModel = args.shift();
   else if (option === "--quota") quotaInput = args.shift();
   else if (option === "--catalog") catalogInput = args.shift();
+  else if (option === "--model-metadata") modelMetadataInput = args.shift();
   else if (option === "--format") format = args.shift();
   else usage();
 }
-if ((independentOfProvider === undefined && process.argv.includes("--independent-of")) ||
+if ((modelOverride === undefined && process.argv.includes("--model")) ||
+    (independentOfProvider === undefined && process.argv.includes("--independent-of")) ||
     (independentOfModel === undefined && process.argv.includes("--independent-of-model")) ||
     (quotaInput === undefined && process.argv.includes("--quota")) ||
     (catalogInput === undefined && process.argv.includes("--catalog")) ||
+    (modelMetadataInput === undefined && process.argv.includes("--model-metadata")) ||
     !["json", "env"].includes(format)) usage();
 
 const rolePolicy = policy.bindings[role];
@@ -126,7 +151,7 @@ if (overlay !== undefined) {
     // Independence under the overlay is distinct-model, not cross-family: a single-provider run
     // still gets a fresh child on a different model than the one that authored the bytes.
     if (authorKey === undefined) block(role, `Role '${role}' requires --independent-of-model <provider>/<model> while a routing overlay is active`);
-    const { provider: authorProvider, model: authorModel } = authorFromModel(role, authorKey);
+    const { provider: authorProvider, model: authorModel } = parseQualifiedModel(role, authorKey);
     if (independentOfProvider !== undefined && independentOfProvider !== authorProvider) {
       block(role, `--independent-of '${independentOfProvider}' contradicts --independent-of-model '${authorKey}'`);
     }
@@ -136,7 +161,7 @@ if (overlay !== undefined) {
   }
 } else if (rolePolicy.independentBindings !== undefined) {
   if (independentOfModel !== undefined) {
-    const { provider: authorProvider } = authorFromModel(role, independentOfModel);
+    const { provider: authorProvider } = parseQualifiedModel(role, independentOfModel);
     if (independentOfProvider !== undefined && independentOfProvider !== authorProvider) {
       block(role, `--independent-of '${independentOfProvider}' contradicts --independent-of-model '${independentOfModel}'`);
     }
@@ -161,6 +186,17 @@ if (overlay !== undefined) {
 } else if (independentOfProvider !== undefined || independentOfModel !== undefined) {
   console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Role '${role}' does not use an independence constraint`);
   process.exit(3);
+}
+
+if (modelOverride !== undefined) {
+  if (rolePolicy.independentBindings !== undefined) block(role, "An independent role cannot use an explicit model override");
+  const requested = parseQualifiedModel(role, modelOverride, "--model");
+  if (overlay !== undefined && !overlay.allowed.has(modelOverride)) block(role, `Model '${modelOverride}' is outside the active routing overlay`);
+  const quotaProvider = requested.provider === binding.provider
+    ? binding.quotaProvider
+    : policy.quotaProviders?.[requested.provider];
+  if (quotaProvider === undefined) block(role, `Provider '${requested.provider}' has no quota provider mapping for model overrides`);
+  binding = { ...binding, provider: requested.provider, model: requested.model, quotaProvider };
 }
 
 let rawQuota;
@@ -201,6 +237,8 @@ const availableModels = new Set(rawCatalog.split(/\r?\n/).map((line) => {
   return provider && model ? `${provider}/${model}` : "";
 }).filter(Boolean));
 
+if (modelOverride !== undefined && availableModels.has(modelKey(binding))) validateModelEffort(role, binding, modelMetadataInput);
+
 const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
 const provider = providers.find((candidate) => candidate.provider === binding.quotaProvider);
 const windows = Array.isArray(provider?.windows) ? provider.windows : [];
@@ -236,6 +274,7 @@ const result = {
     model: binding.model,
     effort: binding.effort,
     ...(independence === undefined ? {} : { independence }),
+    ...(modelOverride === undefined ? {} : { modelOverride }),
     ...(overlay === undefined ? {} : { routingOverlay: { path: overlay.path, sha256: overlay.sha256 } }),
     admission: telemetryStatus === "fresh" ? "fresh-quota" : "degraded-quota-telemetry",
     quotaSnapshot: {

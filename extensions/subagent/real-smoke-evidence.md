@@ -39,6 +39,19 @@ A real interactive Pi lead on `anthropic/claude-sonnet-5` at low effort launched
 
 Three completions produced one signal, one collection call, and zero restated identifiers.
 
+## Worker model override (2026-09-08)
+
+A fresh Pi lead loaded `extensions/subagent/index.ts`, created one temporary `scout` Worker, and dispatched it in the foreground with Cognitive Role `mechanics` plus `modelOverride: "openai-codex/gpt-6-astra"`. Routing retained the role's `low` effort and fresh quota admission. The adapter verified the runtime binding before prompting, and the Worker returned:
+
+```text
+openai-codex/gpt-6-astra:low
+ASTRA_WORKER_OVERRIDE_OK
+
+Completion receipt: openai-codex/gpt-6-astra:low · worker · scout · mechanics · outcome success
+```
+
+The lead then retired the Worker. The machine-local worker and session identifiers are intentionally not recorded here.
+
 ## Deterministic coverage
 
 Extension tests additionally cover coalescing a 23-completion fan-out into one signal with 22 suppressed returns, re-arming only on the delivered normal marker or `agent_settled`, checkpoint deferral releasing one signal under a stable key, per-execution `outcome_unknown` receipt-failure attention staying outside coalescing, detached-collection re-arming, and cancellation and shutdown suppression.

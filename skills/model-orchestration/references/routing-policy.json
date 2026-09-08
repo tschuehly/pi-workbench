@@ -4,7 +4,13 @@
   "providerFamilies": {
     "openai": "openai",
     "openai-codex": "openai",
+    "github-copilot": "openai",
     "anthropic": "anthropic"
+  },
+  "quotaProviders": {
+    "openai-codex": "codex",
+    "github-copilot": "copilot",
+    "anthropic": "claude"
   },
   "bindings": {
     "implementation": {

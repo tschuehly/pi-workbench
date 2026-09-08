@@ -17,6 +17,7 @@ const resolver = path.join(here, "resolve-runtime-binding.mjs");
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-routing-test-"));
 const quotaPath = path.join(temp, "quota.json");
 const catalogPath = path.join(temp, "catalog.txt");
+const modelMetadataPath = path.join(temp, "models-store.json");
 
 const quota = {
   generatedAt: "2026-07-30T00:00:00Z",
@@ -34,6 +35,11 @@ const quota = {
       windows: [{ id: "seven_day", kind: "weekly", percentRemaining: 90, resetsAt: "later" }],
       state: { status: "fresh", stale: false, refreshedAt: "now" },
     },
+    {
+      provider: "copilot",
+      windows: [{ id: "premium", kind: "monthly", percentRemaining: 60, resetsAt: "later" }],
+      state: { status: "fresh", stale: false, refreshedAt: "now" },
+    },
   ],
 };
 const catalog = [
@@ -41,11 +47,24 @@ const catalog = [
   "anthropic claude-fable-5-1 1M 128K yes yes",
   "anthropic claude-opus-5 1M 128K yes yes",
   "openai-codex gpt-5.6-sol 272K 128K yes yes",
+  "openai-codex gpt-6-astra 272K 128K yes yes",
+  "github-copilot gpt-5-mini 264K 64K yes yes",
+  "openai gpt-5.6-sol 1M 128K yes yes",
+  "openai gpt-6-astra 1M 128K yes yes",
 ].join("\n");
 
 try {
   fs.writeFileSync(quotaPath, JSON.stringify(quota));
   fs.writeFileSync(catalogPath, catalog);
+  fs.writeFileSync(modelMetadataPath, JSON.stringify({
+    "openai-codex": { models: [{ id: "gpt-6-astra", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } }] },
+    anthropic: { models: [{ id: "claude-sonnet-5", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } }] },
+    "github-copilot": { models: [{ id: "gpt-5-mini", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: null, max: null } }] },
+    openai: { models: [
+      { id: "gpt-5.6-sol", reasoning: true, thinkingLevelMap: { high: "high", max: "max" } },
+      { id: "gpt-6-astra", reasoning: true, thinkingLevelMap: { high: "high", max: "max" } },
+    ] },
+  }));
 
   const pass = JSON.parse(execFileSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(pass.status, "pass");
@@ -55,6 +74,36 @@ try {
   const synthesis = JSON.parse(execFileSync(process.execPath, [resolver, "synthesis", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(synthesis.modelBinding.model, "claude-opus-5");
   assert.equal(synthesis.modelBinding.effort, "high");
+
+  const astraWorker = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--model", "openai-codex/gpt-6-astra", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(astraWorker.modelBinding.provider, "openai-codex");
+  assert.equal(astraWorker.modelBinding.model, "gpt-6-astra");
+  assert.equal(astraWorker.modelBinding.effort, "high", "the Cognitive Role still selects effort");
+  assert.equal(astraWorker.modelBinding.modelOverride, "openai-codex/gpt-6-astra");
+  assert.equal(astraWorker.modelBinding.quotaSnapshot.telemetryStatus, "fresh");
+
+  const crossProviderWorker = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--model", "anthropic/claude-sonnet-5", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(crossProviderWorker.modelBinding.provider, "anthropic");
+  assert.equal(crossProviderWorker.modelBinding.model, "claude-sonnet-5");
+  assert.equal(crossProviderWorker.modelBinding.effort, "medium");
+  assert.equal(crossProviderWorker.modelBinding.quotaSnapshot.relevantWindows[0].id, "five_hour", "quota follows the overridden provider");
+
+  for (const requested of ["gpt-6-astra", "/gpt-6-astra", "openai-codex/", "openai-codex/not-installed"]) {
+    const rejected = spawnSync(process.execPath, [resolver, "coordination", "--model", requested, "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+    assert.equal(rejected.status, 3, requested);
+  }
+
+  const unmappedQuota = spawnSync(process.execPath, [resolver, "coordination", "--model", "openai/gpt-6-astra", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(unmappedQuota.status, 3);
+  assert.match(unmappedQuota.stderr, /no quota provider mapping/i);
+
+  const unsupportedEffort = spawnSync(process.execPath, [resolver, "escalation", "--model", "github-copilot/gpt-5-mini", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(unsupportedEffort.status, 3);
+  assert.match(unsupportedEffort.stderr, /does not support Model Effort 'max'/);
+
+  const independentOverride = spawnSync(process.execPath, [resolver, "independent-review", "--model", "openai-codex/gpt-6-astra", "--independent-of", "anthropic", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(independentOverride.status, 3);
+  assert.match(independentOverride.stderr, /independent role/i);
 
   const reviewOfOpenAi = JSON.parse(execFileSync(process.execPath, [resolver, "independent-review", "--independent-of", "openai-codex", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(reviewOfOpenAi.modelBinding.model, "claude-opus-5");
@@ -181,7 +230,7 @@ try {
   const overlayPath = path.join(here, "..", "references", "anthropic-opus-sonnet-overlay.json");
   const overlaySha = createHash("sha256").update(fs.readFileSync(overlayPath)).digest("hex");
   const withOverlay = (value) => ({ ...process.env, PI_WORKBENCH_ROUTING_OVERLAY: value });
-  const runOverlay = (args, value = overlayPath) => spawnSync(process.execPath, [resolver, ...args, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8", env: withOverlay(value) });
+  const runOverlay = (args, value = overlayPath) => spawnSync(process.execPath, [resolver, ...args, "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8", env: withOverlay(value) });
   const passOverlay = (args, value = overlayPath) => {
     const run = runOverlay(args, value);
     assert.equal(run.status, 0, run.stderr);
@@ -195,6 +244,27 @@ try {
     assert.equal(resolved.modelBinding.routingOverlay.sha256, overlaySha, role);
     assert.equal(resolved.modelBinding.routingOverlay.path, overlayPath, role);
   }
+
+  const allowedOverride = passOverlay(["coordination", "--model", "anthropic/claude-sonnet-5"]);
+  assert.equal(allowedOverride.modelBinding.model, "claude-sonnet-5");
+  assert.equal(allowedOverride.modelBinding.effort, "high");
+  const outsideOverlay = runOverlay(["coordination", "--model", "openai-codex/gpt-6-astra"]);
+  assert.equal(outsideOverlay.status, 3);
+  assert.match(outsideOverlay.stderr, /outside the active routing overlay/i);
+
+  const openAiOverlayPath = path.join(temp, "openai-overlay.json");
+  fs.writeFileSync(openAiOverlayPath, JSON.stringify({
+    version: 1,
+    allowedModels: [{ provider: "openai", model: "gpt-5.6-sol" }, { provider: "openai", model: "gpt-6-astra" }],
+    roles: { coordination: { provider: "openai", model: "gpt-5.6-sol", effort: "high", quotaProvider: "codex" } },
+    independentReview: {
+      "openai/gpt-5.6-sol": { provider: "openai", model: "gpt-6-astra", effort: "high", quotaProvider: "codex" },
+      "openai/gpt-6-astra": { provider: "openai", model: "gpt-5.6-sol", effort: "high", quotaProvider: "codex" },
+    },
+  }));
+  const sameProviderOverride = passOverlay(["coordination", "--model", "openai/gpt-6-astra"], openAiOverlayPath);
+  assert.equal(sameProviderOverride.modelBinding.admission, "fresh-quota");
+  assert.equal(sameProviderOverride.modelBinding.quotaSnapshot.relevantWindows[0].id, "seven_day", "same-provider overlay override retains its declared quota provider");
 
   const sonnetAuthored = passOverlay(["independent-review", "--independent-of-model", "anthropic/claude-sonnet-5"]);
   assert.equal(sonnetAuthored.modelBinding.model, "claude-opus-5");

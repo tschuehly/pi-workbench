@@ -20,6 +20,8 @@ test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
   assert.deepEqual([...shortcuts.keys()], ["super+b", "ctrl+alt+b"]);
   assert.ok(tools.get("subagent").parameters.properties.telemetryConcept);
   assert.ok(tools.get("worker_dispatch").parameters.properties.telemetryConcept);
+  assert.ok(tools.get("worker_dispatch").parameters.properties.modelOverride);
+  assert.equal(tools.get("subagent").parameters.properties.modelOverride, undefined, "only Worker dispatches accept an explicit model");
   assert.ok(tools.get("worker_status").parameters.properties.all);
   let notice;
   shortcuts.get("super+b").handler({ ui: { notify: (...args) => { notice = args; } } });
@@ -57,6 +59,9 @@ test("worker tools isolate mutations and default status by persisted lead sessio
     assert.deepEqual(current.details.workers.map((worker) => worker.name), ["owned"]);
     const diagnostic = await execute("worker_status", { all: true }, ctx("lead-a"));
     assert.deepEqual(diagnostic.details.workers.map((worker) => worker.name), ["owned", "retired", "foreign"]);
+
+    const invalidOverride = await execute("worker_dispatch", { workerId: owned.details.workerId, task: "none", cognitiveRole: "coordination", modelOverride: "gpt-6-astra" }, ctx("lead-a"));
+    assert.match(invalidOverride.content[0].text, /--model must be '<provider>\/<model>'/, "worker_dispatch forwards its override to routing");
 
     const foreignStatus = await execute("worker_status", { workerId: foreign.details.workerId }, ctx("lead-a"));
     assert.match(foreignStatus.content[0].text, /belongs to another lead session/);

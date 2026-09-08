@@ -95,6 +95,7 @@ const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
+  modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Optional exact '<provider>/<model>' requested by the owner; the Cognitive Role still selects Model Effort" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most Worker dispatches: launch without blocking, then reconcile after the coalesced completion signal with subagent_collect." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
@@ -420,7 +421,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "worker_dispatch",
     label: "Worker dispatch",
-    description: "Dispatch one bounded attended assignment to a durable worker, resuming its persisted Pi session for continuity within its scope. Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise omit it. One dispatch at a time per worker; no execution survives the attended session.",
+    description: "Dispatch one bounded attended assignment to a durable worker, resuming its persisted Pi session for continuity within its scope. An explicit owner-requested modelOverride may select an available provider-qualified model while the Cognitive Role still selects Model Effort. Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise omit it. One dispatch at a time per worker; no execution survives the attended session.",
     promptSnippet: "Dispatch one bounded assignment to a durable attended worker",
     promptGuidelines: [
       "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
@@ -429,6 +430,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
       "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
+      "Use worker_dispatch modelOverride only when the owner or run contract requests an exact model; Cognitive Role routing remains the default.",
     ],
     parameters: WorkerDispatchParams,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -461,7 +463,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       }
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole);
+        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride);
       } catch (error) {
         await abandon(errorMessage(error));
         return failure("preflight_failed", errorMessage(error));
@@ -492,7 +494,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
         executionId: receipt.executionId, kind: "worker", workerId: params.workerId, task: childTask,
         profile: begin.profile, cognitiveRole: params.cognitiveRole, concept: params.telemetryConcept ?? null,
         provider: binding.provider, model: binding.model, effort: binding.effort,
-        independence: binding.independence ?? null,
+        modelOverride: params.modelOverride ?? null, independence: binding.independence ?? null,
       });
       workerExecutions.set(params.workerId, receipt.executionId);
       const meta = {
@@ -574,8 +576,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
       void tracked.then(() => pendingWorkerCompletions.delete(tracked));
 
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). It joins the coalesced completion signal after its Worker receipt settles; a receipt failure wakes separate bounded outcome_unknown attention naming this execution. Answer the signal with subagent_collect, which reconciles every terminal child when called without an executionId; stop with subagent_cancel.` }],
-        details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, continuing, acceptedAt: receipt.acceptedAt },
+        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background using ${binding.provider}/${binding.model}:${binding.effort}: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). It joins the coalesced completion signal after its Worker receipt settles; a receipt failure wakes separate bounded outcome_unknown attention naming this execution. Answer the signal with subagent_collect, which reconciles every terminal child when called without an executionId; stop with subagent_cancel.` }],
+        details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, provider: binding.provider, model: binding.model, effort: binding.effort, modelOverride: params.modelOverride ?? null, continuing, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Dispatched");
 
@@ -844,9 +846,10 @@ export function providerOf(qualifiedModel: string | undefined): string | undefin
   return slash > 0 && slash < qualifiedModel.length - 1 ? qualifiedModel.slice(0, slash) : undefined;
 }
 
-async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string): Promise<any> {
+async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string, modelOverride?: string): Promise<any> {
   const args = [
     resolver, cognitiveRole,
+    ...(modelOverride === undefined ? [] : ["--model", modelOverride]),
     ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider]),
     ...(independentOfModel === undefined ? [] : ["--independent-of-model", independentOfModel]),
   ];
