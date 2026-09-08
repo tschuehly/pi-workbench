@@ -1,11 +1,8 @@
 # FirstMate coordination mate — capability plan
 
-**Status: proposed, NOT approved for V1.** This plan sits below the approved authority chain and does
-not redefine any contract. It is gated on one decision (see [Gating decision](#gating-decision)):
-whether to unbundle a level-agnostic *coordination mate* from the Level 4 *managed-authority* machinery
-that the [system overview](../foundation/system-overview.md) currently bundles under "Portfolio Broker /
-FirstMate." Until that decision is recorded in [`decisions.md`](../foundation/decisions.md), treat this
-as design exploration, not a commitment.
+**Status: rejected for V1 on 2026-09-08.** [Decision 103](../foundation/decisions.md) keeps a
+coordination mate deferred with managed execution. This document is retained as a rejected proposal;
+do not implement its capabilities or phases.
 
 The durable commitment belongs to [Principle 3](../foundation/principles.md#3-discovery-and-review-are-bounded):
 coordination scales Human Attention across concurrent work without transferring execution authority.
@@ -121,20 +118,17 @@ and managed authority. Explicitly out of this plan; it is the genuinely Level 4 
 | Phase | Delivers | Attention posture | Gate |
 | --- | --- | --- | --- |
 | 0 (done) | Policy logic prototype | — | — |
-| 1 | C1 decision signal + C2 reply channel on the execution adapter; mate in **notify-only** mode (auto-continue OFF) | Level 1 — owner present, mate only routes/queues | none beyond normal review |
-| 2 | C3 policy with envelope + reversibility axis; C4 attention surface in PI WEB; auto-continue **within envelope** | Level 1–2 — owner present but attention scaled across sessions | **[gating decision](#gating-decision)** |
-| 3 | C5 away mode, durable reconciliation, cross-project brokering | Level 4 — discontinuous attention | separate Level 4 decision + Run Controller |
+| 1 | C1 decision signal + C2 reply channel on the execution adapter; mate in **notify-only** mode (auto-continue OFF) | Level 1 — owner present, mate only routes/queues | rejected by Decision 103 |
+| 2 | C3 policy with envelope + reversibility axis; C4 attention surface in PI WEB; auto-continue **within envelope** | Level 1–2 — owner present but attention scaled across sessions | rejected by Decision 103 |
+| 3 | C5 away mode, durable reconciliation, cross-project brokering | Level 4 — discontinuous attention | separate managed-execution decision + Run Controller |
 
-Phase 1 is honest to build now: with auto-continue OFF the mate is pure "watch and notify," which does not
-grant autonomy and keeps the owner in the loop. Phase 2 is the "let it continue with reasonable certainty"
-step and is what the gating decision unlocks.
+No phase is approved. The phase split remains historical analysis of the rejected proposal.
 
 ## Gating decision
 
-Record in [`decisions.md`](../foundation/decisions.md): *does Workbench unbundle a level-agnostic coordination
-mate (attention routing + advisory synthesis, no granted authority) from the Level 4 managed-authority
-machinery, and correct the system-overview FirstMate exclusion to name only the managed-authority part?*
-Phase 2 depends on "yes." Phase 1 and this document do not.
+[Decision 103](../foundation/decisions.md) settled **no**: Workbench does not unbundle the coordination
+mate for V1. No phase is unlocked. Reopen the question only after observed concurrent-session use shows
+that manual attention routing is insufficient.
 
 ## Evidence
 
