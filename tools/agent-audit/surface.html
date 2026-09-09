@@ -13,116 +13,60 @@
       <div>
         <p class="eyebrow">LOCAL SENSITIVE EVIDENCE</p>
         <h1>Agent input audit <atelier-attention mode="count"></atelier-attention></h1>
-        <p>Compare observed outgoing provider inputs with unsent base + Working Mode previews. Observed transport bytes do not prove provider receipt or reveal server-side instructions.</p>
-        <p id="bundle-status" class="bundle-status"></p>
-        <a class="download" href="/audit.json" download>Download this JSON evidence</a>
+        <p>Compare saved stages by their exact instruction and skill differences. Open readable evidence next; use exact JSON only when needed.</p>
+        <p id="bundle-status" class="bundle-status">Loading saved evidence…</p>
+        <a class="download" href="/audit.json" download>Download exact JSON evidence</a>
       </div>
       <div class="desktop-attention"><atelier-cockpit></atelier-cockpit></div>
     </header>
     <aside class="mobile-attention" aria-label="Review attention"><atelier-cockpit></atelier-cockpit></aside>
 
-    <atelier-region key="reading" label="Evidence selection" comments="below">
+    <atelier-region key="reading" label="Choose saved stages" comments="sheet">
       <section class="controls" aria-labelledby="selection-title">
-        <div><h2 id="selection-title">Evidence selection <atelier-attention mode="dot"></atelier-attention></h2><p>Choose one request or preview. Add a second item to compare them side by side.</p></div>
-        <label>Primary evidence<select id="primary"></select></label>
-        <label>Compare with<select id="compare"><option value="">None</option></select></label>
+        <div class="section-intro">
+          <p class="eyebrow">1 · CHOOSE</p>
+          <h2 id="selection-title">Saved stages <atelier-attention mode="dot"></atelier-attention></h2>
+          <p>Choose a baseline and target. Preview dials offer only combinations present in the saved evidence.</p>
+        </div>
+        <fieldset class="stage-picker">
+          <legend>Baseline</legend>
+          <label>Evidence source<select id="baseline-source"></select></label>
+          <div id="baseline-dials" class="dial-grid"></div>
+          <p id="baseline-status" class="availability"></p>
+        </fieldset>
+        <fieldset class="stage-picker">
+          <legend>Target</legend>
+          <label>Evidence source<select id="target-source"></select></label>
+          <div id="target-dials" class="dial-grid"></div>
+          <p id="target-status" class="availability"></p>
+        </fieldset>
       </section>
     </atelier-region>
 
-    <atelier-region key="evidence" label="Evidence details">
+    <atelier-region key="differences" label="Saved differences" comments="sheet">
+      <section class="difference-panel">
+        <p class="eyebrow">2 · DIFFERENCES FIRST</p>
+        <div id="differences" aria-live="polite"></div>
+      </section>
+    </atelier-region>
+
+    <atelier-region key="evidence" label="Readable evidence">
+      <section class="evidence-intro">
+        <p class="eyebrow">3 · READABLE DETAIL</p>
+        <h2>Selected saved evidence</h2>
+        <p>Instructions, skills, tools, provenance, transport data, and native outputs remain available. Exact complete JSON is last in each record.</p>
+      </section>
       <main id="evidence" class="evidence" aria-live="polite"></main>
     </atelier-region>
   </atelier-region>
 
-<script type="module">
-const response = await fetch('/audit.json', { cache:'no-store' });
-if (!response.ok) throw new Error('audit.json unavailable');
-const audit = await response.json();
-const primary = document.querySelector('#primary');
-const compare = document.querySelector('#compare');
-const evidence = document.querySelector('#evidence');
-const records = [];
-const requests = audit.requests ?? (audit.capture ? [audit] : []);
-document.querySelector('#bundle-status').textContent = requests.length ? `${requests.length} request record(s) in this frozen export.` : (audit.notice || 'No actual requests are recorded; this export contains saved previews only.');
-
-for (const request of requests) records.push(requestRecord(request));
-for (const set of audit.previewSets || (audit.previewSet ? [audit.previewSet] : [])) {
-  for (const preview of set.previews || []) records.push(previewRecord(set, preview));
-}
-for (const record of records) {
-  const option = document.createElement('option'); option.value = record.key; option.textContent = record.label; primary.append(option);
-  compare.append(option.cloneNode(true));
-  evidence.append(renderRecord(record));
-}
-if (!records.length) evidence.append(text('p', 'No evidence records were exported.'));
-
-function requestRecord(item) {
-  const capture = item.capture;
-  const transport = capture.transport || {};
-  const observed = transport.kind === 'http-fetch' || transport.kind === 'websocket-send';
-  const kind = observed ? 'OBSERVED TRANSPORT SEND' : transport.kind === 'unsupported' ? 'UNSUPPORTED TRANSPORT' : 'MISSING TRANSPORT OBSERVATION';
-  const applied = capture.workingMode?.appliedToPrompt;
-  const outputStatus = (item.nativeOutputs?.status || 'missing').toUpperCase().replaceAll('-', ' ');
-  return {
-    key:`request-${capture.id}`, kind, label:`${capture.timestamp} · ${capture.provider?.provider || 'unknown'} · ${transport.kind}`,
-    summary:[['Capture', capture.id], ['Session', capture.session?.sessionId], ['Provider', `${capture.provider?.provider || '?'} / ${capture.provider?.model || '?'}`], ['Transport', transport.kind], ['Applied Working Mode', `${applied?.alignment || '?'} / ${applied?.checking || '?'}`], ['Native output evidence', outputStatus]],
-    sections:[
-      ['Coverage and limits', { provider:capture.provider, group:capture.group, transport:{ kind:transport.kind, url:transport.url, method:transport.method, sendOutcome:transport.sendOutcome, claimLimit:transport.claimLimit }, events:item.events }],
-      ['Instructions actually present', capture.actualRequestInterpretation?.instructionFields || []],
-      ['Skill visibility and partial loaded-skill evidence', capture.skills],
-      ['Active tool schemas', capture.activeTools],
-      ['Source provenance snapshots', capture.sourceSnapshots],
-      ['Native persisted outputs', item.nativeOutputs],
-      ['Exact outgoing body', transport.body],
-      ['Observed logical prompt and payload', { promptInputs:capture.promptInputs, logicalObservation:capture.logicalObservation }],
-      ['Complete capture JSON', item],
-    ],
-  };
-}
-function previewRecord(set, preview) {
-  return {
-    key:`preview-${set.id}-${preview.id}`, kind:'UNSENT PREVIEW', label:`Preview · ${preview.alignment} / ${preview.checking}`,
-    summary:[['Preview set', set.id], ['Working Mode', `${preview.alignment} / ${preview.checking}`], ['Status', preview.label], ['Provider request', 'None — no model call']],
-    sections:[
-      ['Instructions', preview.systemPrompt],
-      ['Advertised skill catalog', preview.advertisedSkills],
-      ['Installed explicitly callable skills', set.installedExplicitlyCallable],
-      ['Active tool schemas', set.activeTools],
-      ['Source provenance snapshots', set.sourceSnapshots],
-      ['Base prompt', set.basePrompt],
-      ['Complete preview JSON', preview],
-    ],
-  };
-}
-function renderRecord(record) {
-  const region = document.createElement('atelier-region'); region.setAttribute('key', record.key); region.setAttribute('label', record.label); region.setAttribute('comments', 'sheet'); region.hidden = true;
-  const article = document.createElement('article'); article.className = 'record';
-  const kind = text('p', record.kind); kind.className = record.kind === 'OBSERVED TRANSPORT SEND' ? 'kind observed' : record.kind === 'UNSENT PREVIEW' ? 'kind preview' : 'kind limited'; article.append(kind);
-  const heading = text('h2', record.label); const attention = document.createElement('atelier-attention'); attention.setAttribute('mode','badge'); heading.append(' ', attention); article.append(heading);
-  const dl = document.createElement('dl'); dl.className='facts'; for (const [term,value] of record.summary){ dl.append(text('dt',term), text('dd',value ?? 'missing')); } article.append(dl);
-  for (const [title,value] of record.sections) {
-    const details = document.createElement('details');
-    const summary = text('summary', title); details.append(summary);
-    const pre = text('pre', typeof value === 'string' ? value : JSON.stringify(value, null, 2)); details.append(pre); article.append(details);
-  }
-  region.append(article); return region;
-}
-function text(tag, value){ const node=document.createElement(tag); node.textContent=String(value ?? 'missing'); return node; }
-function show() {
-  const shown = new Set([primary.value, compare.value].filter(Boolean));
-  evidence.classList.toggle('comparing', shown.size > 1);
-  for (const region of evidence.querySelectorAll(':scope > atelier-region')) region.hidden = !shown.has(region.getAttribute('key'));
-}
-primary.addEventListener('change', show); compare.addEventListener('change', show);
-primary.value = records[0]?.key || ''; show();
-
-const { setRevealResolver } = await import('/atelier.mjs');
-setRevealResolver(({ region }) => {
-  const local = region.split('/').at(-1);
-  if (!records.some(record => record.key === local)) return;
-  if (primary.value !== local && compare.value !== local) primary.value = local;
-  show();
-});
-</script>
+  <script type="module">
+    import { mountAgentAuditExplorer } from '/explorer.mjs';
+    mountAgentAuditExplorer().catch((error) => {
+      const status = document.querySelector('#bundle-status');
+      status.textContent = `Saved evidence could not be opened: ${error.message}`;
+      status.setAttribute('role', 'alert');
+    });
+  </script>
 </body>
 </html>

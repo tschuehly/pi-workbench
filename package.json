@@ -29,7 +29,7 @@
     "test:context-checkpoint-extension": "node --test extensions/context-checkpoint/*.test.mjs",
     "test:autonomous-grill-extension": "node --test extensions/autonomous-grill/*.test.mjs",
     "test:working-mode-extension": "node --test extensions/working-mode/*.test.mjs",
-    "test:agent-audit-extension": "node --test extensions/agent-audit/*.test.mjs",
+    "test:agent-audit-extension": "node --test extensions/agent-audit/*.test.mjs tools/agent-audit/*.test.mjs",
     "test:pi-execution-adapter": "npm --prefix packages/pi-execution-adapter test",
     "test:worker-registry": "npm --prefix packages/worker-registry test",
     "test:workstream-store": "npm --prefix packages/workstream-store test",

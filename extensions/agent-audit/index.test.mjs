@@ -452,7 +452,8 @@ test("extension snapshots applied mode and native outputs through real lifecycle
     await commands.get("agent-audit").handler("start",ctx);
     const preview=readPreviewSet(join(dir,"audit"),readdirSync(join(dir,"audit","previews"))[0].replace(/\.json$/, ""));
     assert.equal(preview.basePrompt,"STRUCTURED BASE"); assert.equal(preview.basePromptEvidence.source,"injected-test-harness"); assert.doesNotMatch(preview.basePrompt,/STALE|Alignment: Vibe/);
-    for(const item of preview.previews) assert.equal((item.systemPrompt.match(/# Working Mode/g)||[]).length,1);
+    assert.deepEqual(Object.keys(preview.dialDefinitions),["alignment","checking"]);
+    for(const item of preview.previews) { assert.equal((item.systemPrompt.match(/# Working Mode/g)||[]).length,1); assert.deepEqual(item.dials,{alignment:item.alignment,checking:item.checking}); }
 
     await handlers.get("before_agent_start")({prompt:"task",systemPrompt:"base at audit hook",systemPromptOptions:options},ctx);
     modeEvent("applied",{alignment:"Plan",checking:"tests"},{alignment:"Plan",checking:"tests"});
@@ -569,19 +570,20 @@ test("preview-only CLI prepares and predictably reopens frozen Atelier evidence 
     assert.equal(first.token,undefined); assert.ok(first.humanUrl.includes("?token=")); assert.match(first.preflightCommand,/tools\/agent-audit\/preflight\.mjs/);
     const tokenPath=join(root,"exports",".access",`preview-${id}.token`); assert.equal(statSync(tokenPath).mode&0o077,0); assert.equal(tokenPath.startsWith(`${first.root}/`),false);
     const second=JSON.parse(execFileSync(process.execPath,[cli,"atelier-preview",id],{encoding:"utf8"})); assert.equal(second.reused,true); assert.equal(second.audit,first.audit);
-    mkdirSync(join(first.root,".review")); writeFileSync(join(first.root,".review","atelier.json"),"comment-state"); rmSync(join(first.root,"surface.css"));
-    const repaired=JSON.parse(execFileSync(process.execPath,[cli,"atelier-preview",id],{encoding:"utf8"})); assert.deepEqual(repaired.repaired,["surface.css"]); assert.equal(readFileSync(join(first.root,".review","atelier.json"),"utf8"),"comment-state");
+    mkdirSync(join(first.root,".review")); writeFileSync(join(first.root,".review","atelier.json"),"comment-state"); const frozen=readFileSync(first.audit,"utf8"), stale=join(first.root,"explorer.mjs.new"); writeFileSync(stale,"stale prior temp"); rmSync(join(first.root,"surface.css")); writeFileSync(join(first.root,"explorer.mjs"),"old viewer");
+    const repaired=JSON.parse(execFileSync(process.execPath,[cli,"atelier-preview",id],{encoding:"utf8"})); assert.deepEqual(repaired.repaired,["surface.css","explorer.mjs"]); assert.equal(readFileSync(stale,"utf8"),"stale prior temp"); assert.equal(readFileSync(join(first.root,".review","atelier.json"),"utf8"),"comment-state"); assert.equal(readFileSync(first.audit,"utf8"),frozen);
     assert.equal(JSON.parse(execFileSync(process.execPath,[cli,"previews",id],{encoding:"utf8"})).id,id);
     execFileSync(process.execPath,[cli,"cleanup-preview",id]); assert.equal(lstatSafe(first.root),null); assert.equal(lstatSafe(tokenPath),null);
   } finally { rmSync(join(root,"previews",`${id}.json`),{force:true}); rmSync(join(root,"exports",`preview-${id}`),{recursive:true,force:true}); }
 });
 function lstatSafe(path){ try{return lstatSync(path);}catch(error){if(error.code==="ENOENT")return null;throw error;} }
 
-test("Atelier Surface keeps sensitive rendering local, escaped, and responsive", () => {
-  const html=readFileSync(join(repo,"tools/agent-audit/surface.html"),"utf8"); const css=readFileSync(join(repo,"tools/agent-audit/surface.css"),"utf8");
-  assert.doesNotMatch(html,/https?:\/\//); assert.doesNotMatch(html,/innerHTML/); assert.match(html,/textContent/);
-  assert.match(html,/<select id="primary"/); assert.match(html,/<select id="compare"/); assert.match(html,/setRevealResolver/); assert.match(html,/Download this JSON evidence/);
-  assert.match(html,/UNSUPPORTED TRANSPORT/); assert.match(html,/MISSING TRANSPORT OBSERVATION/);
+test("Atelier Surface keeps sensitive rendering local, progressive, and responsive", () => {
+  const html=readFileSync(join(repo,"tools/agent-audit/surface.html"),"utf8"), css=readFileSync(join(repo,"tools/agent-audit/surface.css"),"utf8"), explorer=readFileSync(join(repo,"tools/agent-audit/explorer.mjs"),"utf8");
+  assert.doesNotMatch(`${html}${explorer}`,/https?:\/\//); assert.doesNotMatch(`${html}${explorer}`,/innerHTML/); assert.match(explorer,/textContent/);
+  assert.match(html,/<select id="baseline-source"/); assert.match(html,/<select id="target-source"/); assert.match(explorer,/Jump to saved combination/); assert.match(explorer,/setRevealResolver/); assert.match(explorer,/openDisclosureAncestors/); assert.match(html,/Download exact JSON evidence/);
+  assert.match(html,/key="reading"[^>]+comments="sheet"/); assert.match(html,/key="differences"[^>]+comments="sheet"/);
+  assert.match(html,/DIFFERENCES FIRST/); assert.match(html,/READABLE DETAIL/); assert.match(explorer,/record-category/); assert.match(explorer,/Exact complete saved JSON/); assert.match(explorer,/Exact instruction diff, including catalog markup/); assert.match(explorer,/Observed transport send/); assert.match(explorer,/Unsupported transport/);
   assert.match(readFileSync(join(repo,"tools/agent-audit/preflight.mjs"),"utf8"),/Authorization.*Bearer/);
   assert.equal((html.match(/<atelier-cockpit/g)||[]).length,2); assert.match(html,/class="mobile-attention"/);
   assert.match(css,/@media \(max-width:800px\)/); assert.match(css,/\.mobile-attention \{ position:sticky; top:0;/); assert.match(css,/\.desktop-attention \{ display:none; \}/); assert.match(css,/minmax\(0,1fr\)/);

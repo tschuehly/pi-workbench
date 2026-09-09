@@ -285,7 +285,7 @@ function buildPreviewSet(id: string, base: { prompt: string; evidence: any }, op
   for (const alignment of Object.keys(alignmentGuidance) as Array<keyof typeof alignmentGuidance>) {
     for (const checking of Object.keys(checkingGuidance) as Array<keyof typeof checkingGuidance>) {
       previews.push({
-        id: `${alignment.toLowerCase()}-${checking}`, alignment, checking,
+        id: `${alignment.toLowerCase()}-${checking}`, alignment, checking, dials: { alignment, checking },
         label: "UNSENT Pi buildSystemPrompt(options) + Working Mode preview; excludes arbitrary extension hooks and provider serialization",
         systemPrompt: renderWorkingModePrompt(base.prompt, options, { alignment, checking }),
         advertisedSkills: visibleSkillsForMode(options.skills ?? [], checking).map(({ name }: any) => name),
@@ -295,6 +295,10 @@ function buildPreviewSet(id: string, base: { prompt: string; evidence: any }, op
   return {
     schemaVersion: AUDIT_SCHEMA_VERSION, format: `${AUDIT_FORMAT}.previews`, id, timestamp: new Date().toISOString(),
     runtime: runtimeVersions(), producerSources, extensionVersion, sourceSnapshots: snapshotSources(options, commands),
+    dialDefinitions: {
+      alignment: { label: "Alignment", values: Object.keys(alignmentGuidance) },
+      checking: { label: "Checking", values: Object.keys(checkingGuidance) },
+    },
     installedExplicitlyCallable: commands.filter((command) => command.source === "skill").map(commandEvidence),
     activeTools: toolEvidence(pi), basePrompt: base.prompt,
     basePromptEvidence: { ...base.evidence, input: "ctx.getSystemPromptOptions()", limitation: "Built without reverse inference from a prior effective prompt; arbitrary extension hooks and provider serialization are excluded." }, previews,

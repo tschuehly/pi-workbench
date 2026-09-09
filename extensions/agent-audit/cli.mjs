@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomBytes } from "node:crypto";
-import { chmodSync, constants, copyFileSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,7 +68,7 @@ function prepareAtelier(kind, id) {
   const accessRoot = safeDirectory(join(exportsRoot, ".access"), true);
   const identity = kind === "preview" ? `preview-${id}` : id;
   const target = join(exportsRoot, identity);
-  const paths = { root: target, ui: join(target, "index.html"), audit: join(target, "audit.json"), css: join(target, "surface.css"), token: join(accessRoot, `${identity}.token`) };
+  const paths = { root: target, ui: join(target, "index.html"), audit: join(target, "audit.json"), css: join(target, "surface.css"), explorer: join(target, "explorer.mjs"), token: join(accessRoot, `${identity}.token`) };
   let reused = false, repaired = [];
   try {
     const stat = lstatSync(target);
@@ -88,11 +88,19 @@ function prepareAtelier(kind, id) {
   }
   const matches = kind === "preview" ? frozen.previewSets?.[0]?.id === id && frozen.requests?.length === 0 : frozen.capture?.id === id;
   if (!matches) throw new Error(`frozen Atelier export identity mismatch; run cleanup-export ${identity} to discard it`);
-  for (const [source, destination] of [["surface.html", paths.ui], ["surface.css", paths.css]]) {
-    try { safeFile(destination); }
-    catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-      assertSafeAuditRoot(base); copyFileSync(join(repo, "tools", "agent-audit", source), destination, constants.COPYFILE_EXCL); assertSafeAuditRoot(base); chmodSync(destination, 0o600); repaired.push(source);
+  for (const [source, destination] of [["surface.html", paths.ui], ["surface.css", paths.css], ["explorer.mjs", paths.explorer]]) {
+    const sourceBytes = readFileSync(join(repo, "tools", "agent-audit", source));
+    let current = null;
+    try { current = readFileSync(safeFile(destination)); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+    if (current?.equals(sourceBytes)) continue;
+    const temporary = `${destination}.${randomBytes(8).toString("hex")}.new`;
+    let created = false;
+    try {
+      assertSafeAuditRoot(base); writeFileSync(temporary, sourceBytes, { mode: 0o600, flag: "wx" }); created = true;
+      assertSafeAuditRoot(base); renameSync(temporary, destination); repaired.push(source);
+    } catch (error) {
+      if (created) try { if (lstatSync(temporary).isFile()) rmSync(temporary); } catch {}
+      throw error;
     }
   }
   const token = accessToken(paths.token, base);

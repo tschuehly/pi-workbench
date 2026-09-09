@@ -38,6 +38,8 @@ node extensions/agent-audit/cli.mjs cleanup-export <capture-id|preview-UUID>
 
 For a preview-only Atelier without a model request, run `/agent-audit start`, then `/agent-audit stop` without sending a prompt. Copy the preview-set identity from `list` and run `atelier-preview`. Repeating the same preparation reopens the frozen export and preserves its Atelier comments; missing generated Surface assets are repaired without deleting valid frozen evidence or comments. A corrupt or mismatched export names the explicit `cleanup-export` command required before replacement. Preparation prints the token-gated server, poller, preflight, and human URL commands but starts nothing.
 
+Preview sets include data-driven `dialDefinitions`; every preview carries its exact saved `dials` combination while retaining the legacy `alignment` and `checking` fields.
+
 The versioned JSON separates:
 
 - the exact transport bytes and decoded interpretation;
