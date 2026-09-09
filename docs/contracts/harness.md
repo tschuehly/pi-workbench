@@ -23,6 +23,8 @@ The terminal [Working Mode](../foundation/working-mode.md) control provides `/mo
 
 Restoring a prior choice, forcing an initial read-only phase, filtering tools, and applying a blanket mutation gate are outside the current design. Further state or enforcement requires observed need and explicit owner approval.
 
+The packaged agent-input audit is an explicitly enabled, current-terminal diagnostic. It observes supported provider sends without changing them, stores sensitive evidence only under ignored local review storage, and stops on reload, session replacement, or shutdown. Its saved request evidence and unsent Working Mode previews are inspectable as versioned JSON or through a local Atelier Surface. Native session JSONL remains the output authority; the audit stores entry references and export-time evidence snapshots rather than a second transcript. Supported transports and evidence limits are documented with the extension and must not be generalized to provider receipt, raw response bytes, hidden server instructions, or unsupported providers.
+
 ## Harness Distribution Repository
 
 The harness is one cloneable Git repository. It contains the shared Pi package, orchestration capabilities, curated skills and bundled resources, prompts, adapters, configuration, provenance, and environment checks. Shared skills must work without a separate personal dotfiles setup.

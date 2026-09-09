@@ -24,6 +24,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
 | Pi CLI activity presentation | `extensions/activity/` |
 | Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
+| Lead-session provider-input and skill-access audit | `extensions/agent-audit/`, `tools/agent-audit/` |
 | Pi and PI WEB configuration templates | `config/` |
 | Attended human–Pi work | `docs/contracts/execution.md`, `docs/contracts/workstreams.md` |
 | Child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |

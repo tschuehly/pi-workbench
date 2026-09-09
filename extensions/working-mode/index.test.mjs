@@ -37,6 +37,7 @@ function harness(mode = "tui", { cwd = checkoutRoot, loadedSkills = skills } = {
   const notifications = [];
   const choices = [];
   const pickers = [];
+  const busEvents = [];
   const ctx = {
     mode,
     hasUI: mode === "tui" || mode === "rpc",
@@ -52,6 +53,7 @@ function harness(mode = "tui", { cwd = checkoutRoot, loadedSkills = skills } = {
   workingModeExtension({
     on: (name, handler) => events.set(name, handler),
     registerCommand: (name, command) => commands.set(name, command),
+    events: { emit: (name, value) => busEvents.push({ name, value }) },
     setActiveTools: () => assert.fail("working-mode must not change tools"),
   });
   const start = (reason = "startup") => events.get("session_start")({ reason }, ctx);
@@ -66,7 +68,7 @@ function harness(mode = "tui", { cwd = checkoutRoot, loadedSkills = skills } = {
     await commands.get("mode").handler("", ctx);
   };
   start();
-  return { events, commands, statuses, notifications, choices, pickers, ctx, start, prompt, choose, basePrompt };
+  return { events, commands, statuses, notifications, choices, pickers, busEvents, ctx, start, prompt, choose, basePrompt };
 }
 
 function catalogNames(prompt) {
@@ -92,6 +94,18 @@ test("starts without a setup dialog; changes each axis independently for subsequ
   assert.match(h.notifications.at(-1).message, /Applies to the next prompt; not saved/);
   assert.match(first, /Alignment: Vibe\./, "the already-built prompt stays unchanged");
   assert.equal(h.prompt().systemPrompt.match(/# Working Mode/g).length, 1);
+});
+
+test("reports selected-next-turn separately from the mode applied by the prompt handler", async () => {
+  const h = harness();
+  assert.deepEqual(h.busEvents.at(-1).value, { phase: "selected", selected: { alignment: "Vibe", checking: "unset" }, applied: null });
+  await h.choose("Alignment: Vibe", "Plan");
+  await h.choose("Checking: unset", "tests");
+  assert.deepEqual(h.busEvents.at(-1).value, { phase: "selected", selected: { alignment: "Plan", checking: "tests" }, applied: null });
+  h.prompt();
+  assert.deepEqual(h.busEvents.at(-1).value, { phase: "applied", selected: { alignment: "Plan", checking: "tests" }, applied: { alignment: "Plan", checking: "tests" } });
+  await h.choose("Alignment: Plan", "Spec");
+  assert.deepEqual(h.busEvents.at(-1).value, { phase: "selected", selected: { alignment: "Spec", checking: "tests" }, applied: { alignment: "Plan", checking: "tests" } });
 });
 
 test("all 4x4 dial states apply the reviewed skill mapping with independent axes", async () => {

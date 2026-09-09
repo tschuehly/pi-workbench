@@ -22,36 +22,56 @@ function isInsideCheckout(cwd: string) {
   }
 }
 
+export function visibleSkillsForMode(skills: Skill[], checking: keyof typeof checkingGuidance) {
+  return skills.filter(({ name, disableModelInvocation }) =>
+    disableModelInvocation !== true &&
+    !manualOnly.has(name) &&
+    (!adversarialOnly.has(name) || checking === "adversarial") &&
+    (name !== "tdd" || checking === "tests" || checking === "adversarial")
+  );
+}
+
 function filterSkillCatalog(systemPrompt: string, skills: Skill[], checking: keyof typeof checkingGuidance) {
   const catalog = formatSkillsForPrompt(skills);
   if (!catalog) return systemPrompt;
   const at = systemPrompt.indexOf(catalog);
   if (at < 0 || systemPrompt.indexOf(catalog, at + catalog.length) >= 0) return systemPrompt;
-
-  const visible = skills.filter(({ name }) =>
-    !manualOnly.has(name) &&
-    (!adversarialOnly.has(name) || checking === "adversarial") &&
-    (name !== "tdd" || checking === "tests" || checking === "adversarial")
-  );
-  return systemPrompt.slice(0, at) + formatSkillsForPrompt(visible) + systemPrompt.slice(at + catalog.length);
+  return systemPrompt.slice(0, at) + formatSkillsForPrompt(visibleSkillsForMode(skills, checking)) + systemPrompt.slice(at + catalog.length);
 }
 
-const alignmentGuidance = {
+export const alignmentGuidance = {
   Vibe: "Work normally in chat, aligning continuously without a separate artifact, extra pause boundary, or automatic mode switch.",
   Align: "Before one unconfirmed product, architecture, scope, or quality choice becomes durable implementation or parallel work, present the coherent change and ask the owner whether its direction is right. Proceed within accepted direction; ask again if evidence invalidates it or materially changes its consequences.",
   Plan: "Before implementing the task, obtain owner acceptance of its outcome, approach, boundaries, and evidence. Reuse accepted direction in this conversation; keep implementation details adaptive.",
   Spec: "Before implementing the task, obtain owner acceptance of required behavior, constraints, and acceptance evidence. Reuse accepted requirements in this conversation; implementation strategy may adapt.",
 };
-const checkingGuidance = {
+export const checkingGuidance = {
   unset: "No Checking floor is selected by this control. Follow explicit owner direction, repository policy, and the task's consequences; unset does not mean no checks.",
   light: "Before claiming completion, inspect or exercise the changed result directly. This selection alone requires neither test-writing nor a separate review pass.",
   tests: "Before claiming completion, run relevant automated tests that prove the changed behavior and report the exact result.",
   adversarial: "Before claiming completion, produce relevant deterministic evidence, then obtain a fresh independent challenge against the result. Use model-orchestration for independent routing. If required evidence or independent challenge is unavailable, report the gap rather than claiming completion.",
 };
 
+export type WorkingModeState = { alignment: keyof typeof alignmentGuidance; checking: keyof typeof checkingGuidance };
+
+function workingModeSuffix(state: WorkingModeState) {
+  return `\n\n# Working Mode (prompt guidance)\nAlignment: ${state.alignment}. ${alignmentGuidance[state.alignment]}\nChecking: ${state.checking}. ${checkingGuidance[state.checking]}\nAlignment and Checking are independent. Preserve explicit owner direction and repository constraints; a selected Checking floor cannot silently remove required checks. These choices change behavior, not permissions, tool availability, authority, Human Attention, delegation, durability, or workspace protection. Keep accepted direction in the conversation rather than a separate mutable plan file.`;
+}
+
+export function renderWorkingModePrompt(systemPrompt: string, options: { cwd: string; skills?: Skill[] }, state: WorkingModeState) {
+  const prompt = isInsideCheckout(options.cwd)
+    ? filterSkillCatalog(systemPrompt, options.skills ?? [], state.checking)
+    : systemPrompt;
+  return `${prompt}${workingModeSuffix(state)}`;
+}
+
 export default function workingModeExtension(pi: ExtensionAPI) {
   let alignment: keyof typeof alignmentGuidance = "Vibe";
   let checking: keyof typeof checkingGuidance = "unset";
+  let applied: WorkingModeState | null = null;
+
+  const selected = (): WorkingModeState => ({ alignment, checking });
+  const announce = (phase: "selected" | "applied") => pi.events?.emit("pi-workbench:working-mode", { phase, selected: selected(), applied });
 
   function showStatus(ctx: ExtensionContext) {
     if (ctx.mode === "tui") {
@@ -62,7 +82,9 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     alignment = "Vibe";
     checking = "unset";
+    applied = null;
     showStatus(ctx);
+    announce("selected");
   });
 
   pi.registerCommand("mode", {
@@ -92,17 +114,15 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         return;
       }
       showStatus(ctx);
+      announce("selected");
       ctx.ui.notify(`Alignment: ${alignment} · Checking: ${checking}. Applies to the next prompt; not saved.`, "info");
     },
   });
 
   pi.on("before_agent_start", (event, ctx) => {
     if (ctx.mode !== "tui") return;
-    const systemPrompt = isInsideCheckout(event.systemPromptOptions.cwd)
-      ? filterSkillCatalog(event.systemPrompt, event.systemPromptOptions.skills ?? [], checking)
-      : event.systemPrompt;
-    return {
-      systemPrompt: `${systemPrompt}\n\n# Working Mode (prompt guidance)\nAlignment: ${alignment}. ${alignmentGuidance[alignment]}\nChecking: ${checking}. ${checkingGuidance[checking]}\nAlignment and Checking are independent. Preserve explicit owner direction and repository constraints; a selected Checking floor cannot silently remove required checks. These choices change behavior, not permissions, tool availability, authority, Human Attention, delegation, durability, or workspace protection. Keep accepted direction in the conversation rather than a separate mutable plan file.`,
-    };
+    applied = selected();
+    announce("applied");
+    return { systemPrompt: renderWorkingModePrompt(event.systemPrompt, event.systemPromptOptions, applied) };
   });
 }
