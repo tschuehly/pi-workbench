@@ -182,7 +182,8 @@ export async function mountAgentAuditExplorer(root = document) {
   selectors.forEach((selector) => selector.onChange(update)); update();
   const { setRevealResolver } = await import('/atelier.mjs');
   setRevealResolver(async ({ region, id }) => {
-    const local = region.split('/').at(-1), record = records.find((item) => item.key === local);
+    const local = region.split('/').at(-1), record = records.find((item) => item.key === local), advanced = root.querySelector('#advanced');
+    if (advanced && (record || ['reading', 'differences', 'evidence'].includes(local))) advanced.open = true;
     if (!record) return;
     selectors[1].select(record); update(); await Promise.resolve();
     const recordRegion = [...evidence.querySelectorAll(':scope > atelier-region')].find((item) => item.getAttribute('key') === local);

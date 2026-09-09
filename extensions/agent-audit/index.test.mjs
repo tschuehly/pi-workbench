@@ -578,15 +578,19 @@ test("preview-only CLI prepares and predictably reopens frozen Atelier evidence 
 });
 function lstatSafe(path){ try{return lstatSync(path);}catch(error){if(error.code==="ENOENT")return null;throw error;} }
 
-test("Atelier Surface keeps sensitive rendering local, progressive, and responsive", () => {
+test("Atelier Surface is informational first with the complete explorer collapsed", () => {
   const html=readFileSync(join(repo,"tools/agent-audit/surface.html"),"utf8"), css=readFileSync(join(repo,"tools/agent-audit/surface.css"),"utf8"), explorer=readFileSync(join(repo,"tools/agent-audit/explorer.mjs"),"utf8");
   assert.doesNotMatch(`${html}${explorer}`,/https?:\/\//); assert.doesNotMatch(`${html}${explorer}`,/innerHTML/); assert.match(explorer,/textContent/);
-  assert.match(html,/<select id="baseline-source"/); assert.match(html,/<select id="target-source"/); assert.match(explorer,/Jump to saved combination/); assert.match(explorer,/setRevealResolver/); assert.match(explorer,/openDisclosureAncestors/); assert.match(html,/Download exact JSON evidence/);
-  assert.match(html,/key="reading"[^>]+comments="sheet"/); assert.match(html,/key="differences"[^>]+comments="sheet"/);
-  assert.match(html,/DIFFERENCES FIRST/); assert.match(html,/READABLE DETAIL/); assert.match(explorer,/record-category/); assert.match(explorer,/Exact complete saved JSON/); assert.match(explorer,/Exact instruction diff, including catalog markup/); assert.match(explorer,/Observed transport send/); assert.match(explorer,/Unsupported transport/);
+  assert.match(html,/<title>How Pi uses instructions<\/title>/); assert.match(html,/Pi builds context, then runs a model-and-tool loop/); assert.match(html,/Conversation, instructions, rules, tools, skill catalog/); assert.match(html,/does not change permissions, remove project rules/);
+  for(const value of ["Vibe","Align","Plan","Spec","unset","light","tests","adversarial"]) assert.match(html,new RegExp(`<dt>${value}</dt>`));
+  assert.match(html,/A catalog entry is not a loaded skill body/); assert.match(html,/ILLUSTRATION · NOT THE LIVE SELECTION/);
+  const advanced=html.indexOf('<details id="advanced" class="advanced-shell">'); assert.ok(advanced>0); assert.ok(html.indexOf('<select id="baseline-source"')>advanced); assert.ok(html.indexOf('Download exact JSON evidence')>advanced); assert.doesNotMatch(html.slice(advanced,html.indexOf('>',advanced)+1),/\sopen(?:\s|>)/);
+  const mainWords=html.slice(0,advanced).replace(/<[^>]+>/g,' ').match(/[A-Za-z]+/g)?.length??0; assert.ok(mainWords>=200&&mainWords<=380,`main explainer is ${mainWords} words`);
+  assert.match(html,/key="reading"[^>]+comments="sheet"/); assert.match(html,/key="differences"[^>]+comments="sheet"/); assert.match(html,/key="evidence"/);
+  assert.match(explorer,/Jump to saved combination/); assert.match(explorer,/setRevealResolver/); assert.match(explorer,/advanced\.open = true/); assert.match(explorer,/record-category/); assert.match(explorer,/Exact complete saved JSON/);
   assert.match(readFileSync(join(repo,"tools/agent-audit/preflight.mjs"),"utf8"),/Authorization.*Bearer/);
   assert.equal((html.match(/<atelier-cockpit/g)||[]).length,2); assert.match(html,/class="mobile-attention"/);
-  assert.match(css,/@media \(max-width:800px\)/); assert.match(css,/\.mobile-attention \{ position:sticky; top:0;/); assert.match(css,/\.desktop-attention \{ display:none; \}/); assert.match(css,/minmax\(0,1fr\)/);
+  assert.match(css,/\.flow \{/); assert.match(css,/\.alignment-panel/); assert.match(css,/\.checking-panel/); assert.match(css,/@media \(max-width:800px\)/); assert.match(css,/\.mobile-attention \{ position:sticky; top:0;/); assert.match(css,/\.desktop-attention \{ display:none; \}/);
 });
 
 test("Atelier server requires its private token and still rejects hostile routes", async () => {

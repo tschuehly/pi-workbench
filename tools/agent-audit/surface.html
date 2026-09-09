@@ -3,61 +3,107 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Agent input audit</title>
+  <title>How Pi uses instructions</title>
   <link rel="stylesheet" href="/atelier.css">
   <link rel="stylesheet" href="/surface.css">
 </head>
 <body>
-  <atelier-region key="audit" label="Agent input audit">
+  <atelier-region key="audit" label="How Pi uses instructions">
     <header class="top">
       <div>
-        <p class="eyebrow">LOCAL SENSITIVE EVIDENCE</p>
-        <h1>Agent input audit <atelier-attention mode="count"></atelier-attention></h1>
-        <p>Compare saved stages by their exact instruction and skill differences. Open readable evidence next; use exact JSON only when needed.</p>
-        <p id="bundle-status" class="bundle-status">Loading saved evidence…</p>
-        <a class="download" href="/audit.json" download>Download exact JSON evidence</a>
+        <p class="eyebrow">PI WORKBENCH · WORKING MODE</p>
+        <h1>How Pi uses instructions <atelier-attention mode="count"></atelier-attention></h1>
+        <p>Working Mode changes guidance for the next prompt. It does not change permissions, remove project rules, or rewrite instructions already in the conversation.</p>
       </div>
       <div class="desktop-attention"><atelier-cockpit></atelier-cockpit></div>
     </header>
     <aside class="mobile-attention" aria-label="Review attention"><atelier-cockpit></atelier-cockpit></aside>
 
-    <atelier-region key="reading" label="Choose saved stages" comments="sheet">
-      <section class="controls" aria-labelledby="selection-title">
-        <div class="section-intro">
-          <p class="eyebrow">1 · CHOOSE</p>
-          <h2 id="selection-title">Saved stages <atelier-attention mode="dot"></atelier-attention></h2>
-          <p>Choose a baseline and target. Preview dials offer only combinations present in the saved evidence.</p>
-        </div>
-        <fieldset class="stage-picker">
-          <legend>Baseline</legend>
-          <label>Evidence source<select id="baseline-source"></select></label>
-          <div id="baseline-dials" class="dial-grid"></div>
-          <p id="baseline-status" class="availability"></p>
-        </fieldset>
-        <fieldset class="stage-picker">
-          <legend>Target</legend>
-          <label>Evidence source<select id="target-source"></select></label>
-          <div id="target-dials" class="dial-grid"></div>
-          <p id="target-status" class="availability"></p>
-        </fieldset>
+    <atelier-region key="overview" label="The model and tool loop" comments="sheet">
+      <section class="prose-section">
+        <p class="eyebrow">THE WORKING CONTEXT</p>
+        <h2>Pi builds context, then runs a model-and-tool loop</h2>
+        <p>Before the model answers, Pi assembles the conversation with its base instructions, project rules, tool definitions, and an advertised skill catalog. Working Mode adds the selected Alignment and Checking guidance to those instructions for the next prompt. The axes are independent: changing one does not choose the other.</p>
+        <ol class="flow" aria-label="Pi model and tool loop">
+          <li><strong>Context</strong><span>Conversation, instructions, rules, tools, skill catalog</span></li>
+          <li><strong>Model</strong><span>Produces text or requests a tool</span></li>
+          <li><strong>Tool result</strong><span>Pi runs the tool and adds its result to context</span></li>
+          <li><strong>Model or answer</strong><span>The model uses results to continue or answer</span></li>
+        </ol>
       </section>
     </atelier-region>
 
-    <atelier-region key="differences" label="Saved differences" comments="sheet">
-      <section class="difference-panel">
-        <p class="eyebrow">2 · DIFFERENCES FIRST</p>
-        <div id="differences" aria-live="polite"></div>
+    <div class="axes">
+      <atelier-region key="alignment" label="Alignment guidance" comments="sheet">
+        <section class="axis-panel alignment-panel">
+          <p class="eyebrow">ALIGNMENT</p>
+          <h2>How much shared understanding comes first</h2>
+          <dl class="value-list">
+            <div><dt>Vibe</dt><dd>Work normally and align continuously in conversation.</dd></div>
+            <div><dt>Align</dt><dd>Ask before an uncertain product, architecture, scope, or quality choice becomes durable work.</dd></div>
+            <div><dt>Plan</dt><dd>Get acceptance of the outcome, approach, boundaries, and evidence before implementation.</dd></div>
+            <div><dt>Spec</dt><dd>Get acceptance of required behavior, constraints, and acceptance evidence; implementation may still adapt.</dd></div>
+          </dl>
+        </section>
+      </atelier-region>
+
+      <atelier-region key="checking" label="Checking guidance" comments="sheet">
+        <section class="axis-panel checking-panel">
+          <p class="eyebrow">CHECKING</p>
+          <h2>The minimum evidence before completion</h2>
+          <dl class="value-list">
+            <div><dt>unset</dt><dd>Add no selected floor; explicit direction, project policy, and task consequences still apply.</dd></div>
+            <div><dt>light</dt><dd>Inspect or exercise the changed result directly.</dd></div>
+            <div><dt>tests</dt><dd>Run relevant automated tests and report the exact result.</dd></div>
+            <div><dt>adversarial</dt><dd>Produce deterministic evidence, then obtain a fresh independent challenge.</dd></div>
+          </dl>
+        </section>
+      </atelier-region>
+    </div>
+
+    <atelier-region key="skills" label="Skill discovery and loaded instructions" comments="sheet">
+      <section class="prose-section skill-explainer">
+        <p class="eyebrow">SKILL DISCOVERY</p>
+        <h2>A catalog entry is not a loaded skill body</h2>
+        <p>The advertised catalog gives the model a skill's name, description, and file location so it can discover relevant help. Checking changes which skills are advertised: <strong>tests</strong> adds <strong>tdd</strong>; <strong>adversarial</strong> also adds <strong>code-review</strong> and <strong>ponytail-review</strong>.</p>
+        <p>Skill text enters context when the agent reads the file or you explicitly invoke the skill. Hiding a catalog entry does not uninstall the skill, remove its command, erase instructions already loaded into the conversation, or override project rules.</p>
       </section>
     </atelier-region>
 
-    <atelier-region key="evidence" label="Readable evidence">
-      <section class="evidence-intro">
-        <p class="eyebrow">3 · READABLE DETAIL</p>
-        <h2>Selected saved evidence</h2>
-        <p>Instructions, skills, tools, provenance, transport data, and native outputs remain available. Exact complete JSON is last in each record.</p>
-      </section>
-      <main id="evidence" class="evidence" aria-live="polite"></main>
+    <atelier-region key="example" label="Illustrative Working Mode combination" comments="sheet">
+      <aside class="example">
+        <p class="example-label">ILLUSTRATION · NOT THE LIVE SELECTION</p>
+        <h2>Plan + tests</h2>
+        <p>The model is instructed to confirm the task's direction before implementation and to run relevant automated tests before claiming completion. The catalog advertises <strong>tdd</strong> for discovery, but discovery alone does not require test-first development.</p>
+      </aside>
     </atelier-region>
+
+    <details id="advanced" class="advanced-shell">
+      <summary>Explore saved instructions and evidence</summary>
+      <div class="advanced-intro">
+        <h2>Advanced saved evidence</h2>
+        <p id="bundle-status" class="bundle-status">Loading saved evidence…</p>
+        <p>Previews are unsent. Request records separately show observed sends or missing transport evidence; a local send does not prove provider receipt.</p>
+        <a class="download" href="/audit.json" download>Download exact JSON evidence</a>
+      </div>
+
+      <atelier-region key="reading" label="Choose saved stages" comments="sheet">
+        <section class="controls" aria-labelledby="selection-title">
+          <div class="section-intro"><h2 id="selection-title">Choose saved stages <atelier-attention mode="dot"></atelier-attention></h2><p>Choose a baseline and target. Only saved combinations are available.</p></div>
+          <fieldset class="stage-picker"><legend>Baseline</legend><label>Evidence source<select id="baseline-source"></select></label><div id="baseline-dials" class="dial-grid"></div><p id="baseline-status" class="availability"></p></fieldset>
+          <fieldset class="stage-picker"><legend>Target</legend><label>Evidence source<select id="target-source"></select></label><div id="target-dials" class="dial-grid"></div><p id="target-status" class="availability"></p></fieldset>
+        </section>
+      </atelier-region>
+
+      <atelier-region key="differences" label="Saved differences" comments="sheet">
+        <section class="difference-panel"><div id="differences" aria-live="polite"></div></section>
+      </atelier-region>
+
+      <atelier-region key="evidence" label="Readable evidence">
+        <section class="evidence-intro"><h2>Selected saved evidence</h2><p>Readable categories come first. Exact complete JSON is last in each record.</p></section>
+        <main id="evidence" class="evidence" aria-live="polite"></main>
+      </atelier-region>
+    </details>
   </atelier-region>
 
   <script type="module">
