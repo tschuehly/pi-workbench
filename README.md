@@ -69,7 +69,9 @@ covers required behavior and evidence. Checking states the minimum completion ev
 Run `/mode` to choose an axis and value; the footer shows both as guidance for the next prompt.
 Selections are not saved: reload or session replacement resets them to **Vibe / unset**. Graphical
 controls remain deferred. Working Mode changes behavior, never permissions or guarantees; there
-is no mutation gate. See [Working Mode](docs/foundation/working-mode.md).
+is no mutation gate. In this extension's checkout, a bounded trial also filters automatic skill
+discovery by the accepted mapping without disabling `/skill:name` or removing previously loaded instructions.
+See [Working Mode and the accepted mapping](docs/foundation/working-mode.md#skill-discovery-trial).
 
 ### Managed execution
 

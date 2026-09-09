@@ -1,4 +1,40 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { realpathSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { formatSkillsForPrompt, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
+
+const checkoutRoot = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
+const manualOnly = new Set([
+  "grilling", "domain-modeling", "to-spec", "autonomous-grill", "grill-with-docs", "handoff",
+  "improve-codebase-architecture", "process-scan-inbox", "setup-matt-pocock-skills", "teach",
+  "to-tickets", "triage", "wayfinder", "workbench-compound", "analyze-source-for-workbench",
+  "marketing-studio", "ponytail-audit", "ponytail-debt", "ponytail-gain", "ponytail-help",
+  "customize-pi-web-presentation",
+]);
+const adversarialOnly = new Set(["code-review", "ponytail-review"]);
+
+function isInsideCheckout(cwd: string) {
+  try {
+    const current = realpathSync(cwd);
+    return current === checkoutRoot || current.startsWith(`${checkoutRoot}${sep}`);
+  } catch {
+    return false;
+  }
+}
+
+function filterSkillCatalog(systemPrompt: string, skills: Skill[], checking: keyof typeof checkingGuidance) {
+  const catalog = formatSkillsForPrompt(skills);
+  if (!catalog) return systemPrompt;
+  const at = systemPrompt.indexOf(catalog);
+  if (at < 0 || systemPrompt.indexOf(catalog, at + catalog.length) >= 0) return systemPrompt;
+
+  const visible = skills.filter(({ name }) =>
+    !manualOnly.has(name) &&
+    (!adversarialOnly.has(name) || checking === "adversarial") &&
+    (name !== "tdd" || checking === "tests" || checking === "adversarial")
+  );
+  return systemPrompt.slice(0, at) + formatSkillsForPrompt(visible) + systemPrompt.slice(at + catalog.length);
+}
 
 const alignmentGuidance = {
   Vibe: "Work normally in chat, aligning continuously without a separate artifact, extra pause boundary, or automatic mode switch.",
@@ -62,8 +98,11 @@ export default function workingModeExtension(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", (event, ctx) => {
     if (ctx.mode !== "tui") return;
+    const systemPrompt = isInsideCheckout(event.systemPromptOptions.cwd)
+      ? filterSkillCatalog(event.systemPrompt, event.systemPromptOptions.skills ?? [], checking)
+      : event.systemPrompt;
     return {
-      systemPrompt: `${event.systemPrompt}\n\n# Working Mode (prompt guidance)\nAlignment: ${alignment}. ${alignmentGuidance[alignment]}\nChecking: ${checking}. ${checkingGuidance[checking]}\nAlignment and Checking are independent. Preserve explicit owner direction and repository constraints; a selected Checking floor cannot silently remove required checks. These choices change behavior, not permissions, tool availability, authority, Human Attention, delegation, durability, or workspace protection. Keep accepted direction in the conversation rather than a separate mutable plan file.`,
+      systemPrompt: `${systemPrompt}\n\n# Working Mode (prompt guidance)\nAlignment: ${alignment}. ${alignmentGuidance[alignment]}\nChecking: ${checking}. ${checkingGuidance[checking]}\nAlignment and Checking are independent. Preserve explicit owner direction and repository constraints; a selected Checking floor cannot silently remove required checks. These choices change behavior, not permissions, tool availability, authority, Human Attention, delegation, durability, or workspace protection. Keep accepted direction in the conversation rather than a separate mutable plan file.`,
     };
   });
 }

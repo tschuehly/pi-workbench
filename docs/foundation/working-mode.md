@@ -78,11 +78,11 @@ produces it for later review may change the evidence route without changing the 
 ## Delegation and model orchestration
 
 Delegation remains task-local under every Alignment value; it is not another Working Mode axis. The
-intended structure is one [`model-orchestration`](../../skills/model-orchestration/SKILL.md) router
-that conditionally loads Binding, Checking, future Managed-dispatch, or calibration guidance. Today
-Binding and Checking guidance remain in the skill itself, no Managed-dispatch reference exists, and
-the router conditionally loads only routing rationale for policy evaluation and provenance for port
-audits.
+[`model-orchestration`](../../skills/model-orchestration/SKILL.md) skill is one router with separate
+Binding and Checking references. Binding applies to every delegated Subagent or Worker invocation;
+Checking applies when independent challenge is required by the selected floor, owner direction,
+repository policy, or material risk. Routing rationale and provenance remain conditional references
+for policy evaluation and port audits. Managed Dispatch remains a future controller boundary.
 
 ## Start and presentation
 
@@ -101,6 +101,34 @@ Mode guidance from this extension. No settings or session entries are written. W
 not block project mutation mechanically or grant workspace leases, filesystem isolation,
 publication authority, durable execution, or recovery. Those claims require deterministic services
 that enforce them. See the [extension](../../extensions/working-mode/README.md) for use and checks.
+
+## Skill discovery trial
+
+The owner-approved trial filters the automatic skill catalog on the next terminal prompt in the
+checkout hosting this extension. It does not change installation, skill files, command completion,
+`/skill:name` expansion, tools, permissions, or repository instructions. Outside that checkout and
+in non-terminal sessions, discovery stays unchanged. Unknown skills retain Pi's existing behavior.
+This is a fixed Workbench trial, not a repository configuration loader.
+
+The reviewed mapping is identical under Vibe, Align, Plan, and Spec:
+
+| Automatic discovery | Skills |
+| --- | --- |
+| All modes, task-triggered | `define-goal`, `write-for-humans`, `codebase-design`, `prototype`, `atelier`, `btw`, `focus-handoff`, `workstreams`, `writing-for-agents`, `mcp-scripting`, `monitor`, `ponytail`, `agent-browser`, `diagnosing-bugs`, `research`, `wizard`, `model-orchestration` |
+| Checking `tests` or `adversarial` | `tdd` |
+| Checking `adversarial` only | `code-review`, `ponytail-review` |
+| Manual-only in every mode | `grilling`, `domain-modeling`, `to-spec`, `autonomous-grill`, `grill-with-docs`, `handoff`, `improve-codebase-architecture`, `process-scan-inbox`, `setup-matt-pocock-skills`, `teach`, `to-tickets`, `triage`, `wayfinder`, `workbench-compound`, `analyze-source-for-workbench`, `marketing-studio`, `ponytail-audit`, `ponytail-debt`, `ponytail-gain`, `ponytail-help`, `customize-pi-web-presentation` |
+
+This records the 41 reviewed skills, not a complete installation audit. Discovery permits
+consideration when the task matches; it does not make a skill mandatory. In particular, discovering
+`tdd` does not require test-first development, and discovering `model-orchestration` does not require
+delegation. `customize-pi-web-presentation` remains explicit legacy PI WEB tooling, not a retired skill.
+
+Filtering only removes entries Pi already included. It does not install missing skills or override
+an existing manual-only flag. Hidden skills remain explicitly callable when installed; repository
+requirements can still direct their use. Already loaded instructions remain in conversation context
+and cannot be erased by changing a dial. Tests can prove prompt delivery and command preservation,
+not model obedience. See the [extension checks](../../extensions/working-mode/README.md).
 
 ## Human Attention and continuity
 

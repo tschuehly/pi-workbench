@@ -3,6 +3,7 @@
 Status: the owner reopened the terminal control and accepted `/mode`, independent built-in
 pickers, a footer indicator, next-prompt guidance, and Vibe / unset defaults. The bounded terminal
 slice is implemented in `extensions/working-mode/`; behavioral evaluation continues in attended use.
+The owner also accepted a checkout-scoped terminal skill-discovery trial on 2026-09-09.
 Persistence, repository configuration, graphical controls, and mutation gates remain deferred.
 
 ## Outcome
@@ -56,14 +57,29 @@ repository default configuration mechanism is selected.
 Evidence may be inspected by the owner live or produced for later review without silently changing
 the Checking value.
 
-Use one model-orchestration router with conditional references:
-
-- Binding for every delegated Subagent or Worker invocation;
-- Checking for required independent challenge;
-- Managed dispatch only for a future managed Run; and
-- calibration only when evaluating the routing policy.
+The model-orchestration router now loads separate Binding and Checking references conditionally.
+Binding applies to each delegated invocation; Checking applies to required independent challenge.
+Policy evaluation and provenance remain separate conditional branches. Managed Dispatch remains
+future controller behavior; there is no new managed-dispatch implementation.
 
 Delegation stays task-local under every Alignment value.
+
+### Skill discovery
+
+The [accepted mapping](../foundation/working-mode.md#skill-discovery-trial) covers all 41 reviewed
+skills: 17 task-triggered in all modes, 21 manual-only, two adversarial-only, and `tdd` at tests or
+adversarial. All Alignment values use the same mapping. Retain `customize-pi-web-presentation` as
+manual-only legacy tooling rather than deleting it.
+
+The bounded trial filters only the automatic catalog on the next prompt in this extension's
+checkout. Keep `/skill:name`, repository requirements, tools, non-terminal contexts, other
+repositories, and unreviewed skills unchanged. Do not override installation-level manual-only flags.
+No configuration loader or saved dial choice is introduced.
+
+Verification covers all 16 dial combinations, restored discovery after changing Checking,
+explicit skill expansion, prompt preservation, and scope isolation. Prior skill instructions
+remain in context; prompt-delivery checks do not establish behavioral compliance. Evaluate whether
+this discovery reduction helps attended use before generalizing it.
 
 ## Related continuity trial
 

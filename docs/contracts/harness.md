@@ -55,6 +55,13 @@ Each resulting Episode records the exact versions of the skills and adaptations 
 
 In V1, the one interactive Pi loads only the resources selected for the attended task. Tool output and model claims remain ordinary session material; they do not become authoritative Workstream state.
 
+The bounded terminal [skill-discovery trial](../foundation/working-mode.md#skill-discovery-trial)
+filters the next prompt's automatic catalog in the extension's own checkout using the accepted
+Working Mode mapping. It preserves explicit `/skill:name` invocation, repository instructions,
+tools, and existing installation-level manual-only flags. Discovery neither mandates use nor grants
+permission. Previously loaded skill instructions remain in context. Other repositories and
+non-terminal sessions retain existing discovery; there is no repository configuration loader.
+
 Every supported V1 skill remains executable by Pi. Human interactions become available through delivered Workbench client slices. The terminal remains the fallback for capabilities that are not yet graphical.
 
 Skills with meaningful human interaction may contribute focused interface definitions or sandboxed views. These views project the same durable Run state and cannot independently control identity, permissions, recovery, or workflow transitions.
