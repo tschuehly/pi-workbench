@@ -1,6 +1,6 @@
 ---
 name: workstreams
-description: Interact directly with Pi Workbench Workstreams while their PI WEB interface is unavailable or incomplete. Use when the user asks to create, select, inspect, update, checkpoint, or close a Workstream through the agent instead of the UI.
+description: Interact directly with Pi Workbench Workstreams while their PI WEB interface is unavailable or incomplete. Use when the user asks to create, select, inspect, summarize, report the state or history of, update, checkpoint, or close a Workstream through the agent instead of the UI.
 ---
 
 # Workstreams
@@ -36,6 +36,42 @@ Use `{"includeClosed":true}` only when the user asks about history. Before chang
 Pass JSON inline, as `@file`, or as stdin. Keep temporary request files outside the repository.
 
 **Complete when:** every Workstream the user asked to check has been inspected, or one open Workstream is selected and its current snapshot and revision are known.
+
+### Report Workstream status
+
+When the user asks what Workstreams exist, where work stands, or what happened, make the review read-only:
+
+1. List open Workstreams, select the requested topic or project, and state the inclusion rule when the match is not obvious. Inspect every selected id in full.
+2. Reconstruct the original goal from the title and earliest durable evidence available in the snapshot. If the title is insufficient, label the reconstructed goal as an inference.
+3. Explain why the Workstream exists, what it covers, and its important boundaries in a short description. Write for an owner who no longer remembers the work.
+4. Synthesize three to six consequential events from the projected session checkpoints, Human Tasks, and links: shipped results, decisions, pivots, failed approaches, and preserved evidence. Keep them in logical order and omit routine session activity. A session checkpoint is that session's projection, not a global latest checkpoint; expose unresolved conflicts instead of silently choosing one.
+5. State what is now complete, usable, active, blocked, superseded, or merely proposed, and name the evidence supporting that state. Name the actor and exact gate under `Waiting on`.
+6. Derive directories only from concrete checkpoint or link references. For local absolute paths, verify whether each directory currently exists and label its role or absence. Never infer a path from a title or repository name.
+7. Separate current evidence from recorded history. Report `updatedAt`; when current state has not been live-verified, call it the last recorded state rather than presenting it as current fact.
+
+Report each Workstream in this shape:
+
+```markdown
+### <title>
+**ID:** `<id>`
+**Original goal:** <plain-language outcome>
+**Created:** <date> · **Last recorded update:** <date>
+**Directories:** <primary path and any evidence/worktree paths, each with role and existence>
+
+**Description:** <why this exists, its scope, and its important boundaries>
+
+**What happened**
+- <consequential event and why it mattered>
+
+**Last recorded state:** <what is complete, usable, active, blocked, superseded, or only proposed, with evidence>
+**Waiting on:** <named actor and exact gate, or none>
+**Next:** <one concrete continuation>
+**Open decisions:** <pending Human Tasks or none>
+```
+
+End a multi-Workstream review with a compact disposition table when it helps the owner allocate attention. Keep facts traceable to the inspected snapshot, distinguish recommendation from stored state, and omit empty narrative detail.
+
+**Complete when:** every selected Workstream has an explained goal, description, consequential history, evidenced state, directories, next action, and freshness boundary.
 
 ## 2. Associate this session when needed
 
