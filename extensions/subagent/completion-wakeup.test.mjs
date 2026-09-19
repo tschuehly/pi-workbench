@@ -57,7 +57,9 @@ test("sends one coalesced steer signal for terminal background children", () => 
   assert.match(sent[0].message.content, /Background children finished/);
   assert.match(sent[0].message.content, /subagent_status/);
   assert.match(sent[0].message.content, /collect and reconcile each terminal-uncollected child once/);
+  assert.match(sent[0].message.content, /resume the run that launched them at its next incomplete step/);
   assert.match(sent[0].message.content, /authorizes no retry, relaunch, publication, or acceptance/);
+  assert.match(sent[0].message.content, /existing authorization/);
   assert.deepEqual(sent[0].message.details, { attention: "terminal-results" });
 });
 

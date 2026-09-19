@@ -1,6 +1,6 @@
 const CUSTOM_TYPE = "pi-workbench:child-completion";
 const NORMAL_ATTENTION = "terminal-results";
-const NORMAL_CONTENT = "Background children finished. Call `subagent_status`, then collect and reconcile each terminal-uncollected child once. This notice authorizes no retry, relaunch, publication, or acceptance.";
+const NORMAL_CONTENT = "Background children finished. Call `subagent_status`, then collect and reconcile each terminal-uncollected child once, then resume the run that launched them at its next incomplete step. This notice authorizes no retry, relaunch, publication, or acceptance beyond that run's existing authorization.";
 
 /** True only for the delivered coalesced normal-attention message; receipt failures never match. */
 export function isNormalCompletionAttention(message) {
