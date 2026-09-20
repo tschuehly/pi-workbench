@@ -1,7 +1,9 @@
 # Workbench UI plan
 
-**Current plan:** fix text input first, then add files beside Chat. Use both before choosing another
-feature.
+**Current plan:** Checkpoint 1 (text input) shipped 2026-08-31. Thomas accepted on 2026-09-20 that
+the next slices are Workstream re-entry and direct Working Mode controls, built and reviewed through
+Workbench Chat, with the files pane after them. Evidence: the
+[session-interaction analysis](../research/reports/session-interactions-2026-09-20.md).
 
 This plan replaces the archived PI WEB shell, plugin-customization, unified-navigation, and
 prototype-fidelity plans.
@@ -119,11 +121,28 @@ fixture must also prove:
 - stale file saves are rejected; and
 - closing, reloading, or replacing the client leaves other sessions and the session daemon running.
 
+## Accepted slices after Checkpoint 1
+
+Each slice is about 300 lines, ships alone, and is accepted by Thomas using it in Workbench Chat.
+
+| Slice | Outcome for Thomas | Status |
+| --- | --- | --- |
+| 2a | The chooser lists open Workstreams; each shows a re-entry card (stored goal, one next action with its actor, conflict and open-question warnings, folded Now / So far / About / Continue); **Open session** opens the session that wrote the newest checkpoint | shipped in the PI WEB fork (`7e783b1a`); store `overview.replaced` and `GET /sessions/locate/:sessionId` support it |
+| 2b | Answer open Human Tasks from the card; the answer is recorded in the store, not only in chat | next |
+| 1a | `/mode alignment align` works in Chat and never voids an open `ask_user` question | after 2b |
+| 1b | Extensions publish a disposable per-session state snapshot that the client can read | with 1a |
+| 1c | Segmented Alignment and Checking buttons in the Chat window | after 1a and 1b |
+| 3 | Running and uncollected child agents visible in the window | after 1b |
+| 4 | Mode content that measurably changes behavior | after evidence from the weekly analysis names one change |
+
+Decisions already taken: Resume opens the existing session; modes stay guidance only; the
+Workstream-level overview replaces the earlier `goal.set` idea; the ten-variant launcher prototype
+and the context-view prototypes are superseded by the shipped card and the `agent-audit` explorer.
+
 ## Later, only if use demands it
 
-Possible later slices include Terminal, Workstream re-entry, Git, project-wide search, editor tabs,
-cross-session attention, Working Mode, history, and child inspection. They are not a committed
-sequence.
+Files beside Chat (Checkpoint 2 above), Terminal, Git, project-wide search, editor tabs, and history
+remain uncommitted until real use asks for them.
 
 Keep one window per Chat unless real use proves that model wrong.
 
