@@ -187,7 +187,7 @@ function writeChecked(path, content) {
 }
 
 const piExecutable = findPi();
-requireSuccess(run(piExecutable, ["update", "--self"], { stdio: "inherit" }), "Updating Pi");
+requireSuccess(run(piExecutable, ["update", "--all"], { stdio: "inherit" }), "Updating Pi and packages");
 const installation = findInstallation(piExecutable);
 const temporaryDir = mkdtempSync(join(tmpdir(), "pi-8773-probe-"));
 const probeExtension = join(temporaryDir, "probe.mjs");
