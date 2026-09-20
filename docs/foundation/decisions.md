@@ -39,6 +39,7 @@ execution graph, and managed Runs moved to [Level 4 concepts](../research/level-
 - [Agent-usage session audit](../research/reports/agent-usage-session-audit-2026-08-27.md) — evidence that attended work can cross a product and architecture commitment boundary despite strong Checking
 - [Model evaluation campaign proposal](../research/reports/model-evaluation-campaign-proposal.md) — proposed controlled model, effort, skill, and harness comparisons; not authoritative behavior
 - [GPT-6 Astra role-fit report](../research/reports/gpt-6-astra-strengths.md) — official capability evidence and limits behind the owner-requested attended Worker override
+- [Session interactions 2026-09-13 to 2026-09-20](../research/reports/session-interactions-2026-09-20.md) — evidence that "status" means context restoration; proposes one re-entry card and records the unaccepted graphical UI slice plan
 
 ## Settled decisions
 
