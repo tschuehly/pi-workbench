@@ -128,7 +128,7 @@ Each slice is about 300 lines, ships alone, and is accepted by Thomas using it i
 | Slice | Outcome for Thomas | Status |
 | --- | --- | --- |
 | 2a | The chooser lists open Workstreams; each shows a re-entry card (stored goal, one next action with its actor, conflict and open-question warnings, folded Now / So far / About / Continue); **Open session** opens the session that wrote the newest checkpoint | shipped in the PI WEB fork (`7e783b1a`); store `overview.replaced` and `GET /sessions/locate/:sessionId` support it |
-| 2b | Answer open Human Tasks from the card; the answer is recorded in the store, not only in chat | next |
+| 2b | Answer open Human Tasks from the card; the answer is recorded in the store, not only in chat | shipped in the PI WEB fork (`2dff591a`); routed Chat reload recovery shipped in `76d859d3` |
 | 1a | `/mode alignment align` works in Chat and never voids an open `ask_user` question | after 2b |
 | 1b | Extensions publish a disposable per-session state snapshot that the client can read | with 1a |
 | 1c | Segmented Alignment and Checking buttons in the Chat window | after 1a and 1b |
