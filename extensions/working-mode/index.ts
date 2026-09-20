@@ -77,12 +77,19 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   let applied: WorkingModeState | null = null;
 
   const selected = (): WorkingModeState => ({ alignment, checking });
-  const announce = (phase: WorkingModeSnapshot["phase"]) => pi.events?.emit("pi-workbench:working-mode", {
+  const snapshot = (phase: WorkingModeSnapshot["phase"]): WorkingModeSnapshot => ({
     schemaVersion: 1,
     phase,
     selected: selected(),
     applied,
-  } satisfies WorkingModeSnapshot);
+  });
+  const publish = (ctx: ExtensionContext, phase: WorkingModeSnapshot["phase"]) => {
+    const value = snapshot(phase);
+    pi.events?.emit("pi-workbench:working-mode", value);
+    ctx.ui.setStatus("working-mode", ctx.mode === "tui"
+      ? `Alignment: ${alignment} · Checking: ${checking} (guidance)`
+      : JSON.stringify(value));
+  };
   const usage = "/mode alignment <vibe|align|plan|spec> | /mode checking <unset|light|tests|adversarial>";
 
   function applyArgs(args: string) {
@@ -100,18 +107,11 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     return true;
   }
 
-  function showStatus(ctx: ExtensionContext) {
-    if (ctx.mode === "tui") {
-      ctx.ui.setStatus("working-mode", `Alignment: ${alignment} · Checking: ${checking} (guidance)`);
-    }
-  }
-
   pi.on("session_start", (_event, ctx) => {
     alignment = "Vibe";
     checking = "unset";
     applied = null;
-    showStatus(ctx);
-    announce("selected");
+    if (ctx.mode === "tui" || ctx.mode === "rpc") publish(ctx, "selected");
   });
 
   pi.registerCommand("mode", {
@@ -142,16 +142,15 @@ export default function workingModeExtension(pi: ExtensionAPI) {
           return;
         }
       }
-      showStatus(ctx);
-      announce("selected");
-      if (ctx.hasUI) ctx.ui.notify(`Alignment: ${alignment} · Checking: ${checking}. Applies to the next prompt; not saved.`, "info");
+      publish(ctx, "selected");
+      if (ctx.mode === "tui") ctx.ui.notify(`Alignment: ${alignment} · Checking: ${checking}. Applies to the next prompt; not saved.`, "info");
     },
   });
 
   pi.on("before_agent_start", (event, ctx) => {
     if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
     applied = selected();
-    announce("applied");
+    publish(ctx, "applied");
     return { systemPrompt: renderWorkingModePrompt(event.systemPrompt, event.systemPromptOptions, applied, ctx.mode === "tui") };
   });
 }

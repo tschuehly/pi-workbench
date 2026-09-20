@@ -254,6 +254,7 @@ test("every choice has guidance, and unset clears the selected Checking floor", 
 test("direct commands apply every value in TUI and RPC without opening a picker", async () => {
   for (const mode of ["tui", "rpc"]) {
     const h = harness(mode);
+    if (mode === "rpc") assert.deepEqual(JSON.parse(h.statuses.get("working-mode")), h.busEvents.at(-1).value);
     for (const value of ["vibe", "align", "plan", "spec"]) {
       await h.command(`alignment ${value}`);
       assert.deepEqual(h.busEvents.at(-1).value.selected.alignment, `${value[0].toUpperCase()}${value.slice(1)}`);
@@ -265,6 +266,10 @@ test("direct commands apply every value in TUI and RPC without opening a picker"
       assert.match(h.prompt().systemPrompt, new RegExp(`Checking: ${value}\\.`));
     }
     assert.equal(h.pickers.length, 0);
+    if (mode === "rpc") {
+      assert.equal(h.notifications.length, 0, "valid RPC selections do not create notification output");
+      assert.deepEqual(JSON.parse(h.statuses.get("working-mode")), h.busEvents.at(-1).value);
+    }
     h.start("reload");
     assert.deepEqual(h.busEvents.at(-1).value.selected, { alignment: "Vibe", checking: "unset" });
   }

@@ -26,8 +26,9 @@ selection.
   Compaction and tree navigation retain the in-memory choices, not historical selections.
 - RPC direct commands apply the same next-prompt guidance without changing the checkout-scoped
   skill catalog. Print and JSON sessions remain unchanged. No tools or permissions are altered.
-- Each reset, selection, and next-prompt application emits a versioned
-  `pi-workbench:working-mode` snapshot with selected and applied state for session-local consumers.
+- Each reset, selection, and next-prompt application publishes a versioned disposable snapshot
+  through RPC status key `working-mode` (and the internal `pi-workbench:working-mode` event), with
+  selected and applied state for session-local consumers.
 
 Load the Workbench package and run `/reload` to discover the command. The behavioral contract is
 [Working Mode](../../docs/foundation/working-mode.md).
