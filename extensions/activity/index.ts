@@ -7,6 +7,7 @@ export default function activityExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode === "tui") surface.attach(ctx.ui);
+    else if (ctx.mode === "rpc") surface.attachRpc(ctx.ui);
   });
 
   pi.on("tool_execution_start", (event) => {

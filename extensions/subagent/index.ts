@@ -126,6 +126,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   const workerExecutions = new Map<string, string>();
   const workerReceipts = new Map<string, WorkerReceipt>();
   const reconciling = new Set<string>();
+  const dismissedActivity = new Set<string>();
   const pendingWorkerCompletions = new Set<Promise<unknown>>();
   const pendingSubagentCompletions = new Set<Promise<unknown>>();
   const completionWakeup = createCheckpointAwareWakeup(pi);
@@ -251,9 +252,9 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         activity: "starting",
       };
       upsertActivity(pi, activity);
-      void watchActivity(pi, adapter, receipt.executionId, activity);
-
       let backgrounded = params.background === true;
+      void watchActivity(pi, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
+
       const detachController = new AbortController();
       if (!backgrounded) {
         foreground.set(receipt.executionId, {
@@ -319,7 +320,12 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         if (terminal) collected.add(executionId);
         completionWakeup.finishReconciliation(executionId, terminal);
         reconciling.delete(executionId);
-        return receiptSafeResult({ result, executionId, terminal, receipt: workerReceipts.get(executionId) });
+        const reconciled = await receiptSafeResult({ result, executionId, terminal, receipt: workerReceipts.get(executionId) });
+        if (terminal) {
+          dismissedActivity.add(executionId);
+          removeActivity(pi, `delegate:${executionId}`);
+        }
+        return reconciled;
       };
       if (params.executionId !== undefined) return collectOne(params.executionId);
       const roster = adapter.list();
@@ -384,11 +390,14 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     async execute(_toolCallId, params) {
       completionWakeup.markHandled(params.executionId);
       collected.add(params.executionId);
+      dismissedActivity.add(params.executionId);
       try {
         const receipt = await adapter.cancel(params.executionId, params.reason ?? "Cancelled by the attended lead.");
         return { content: [{ type: "text", text: `${params.executionId}: ${receipt.outcome}.` }], details: receipt, ...(receipt.outcome === "outcome_unknown" ? { isError: true } : {}) };
       } catch (error) {
         return failure("outcome_unknown", errorMessage(error));
+      } finally {
+        removeActivity(pi, `delegate:${params.executionId}`);
       }
     },
   });
@@ -524,10 +533,10 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         activity: "starting",
       };
       upsertActivity(pi, activity);
-      void watchActivity(pi, adapter, receipt.executionId, activity);
+      let backgrounded = params.background === true;
+      void watchActivity(pi, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
       const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
       heartbeat.unref();
-      let backgrounded = params.background === true;
       const detachController = new AbortController();
       if (!backgrounded) {
         foreground.set(receipt.executionId, {
@@ -673,16 +682,24 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   });
 }
 
-async function watchActivity(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, executionId: string, activity: Record<string, unknown>) {
+export async function watchActivity(
+  pi: Pick<ExtensionAPI, "events">,
+  adapter: Pick<PiRpcExecutionAdapter, "observe">,
+  executionId: string,
+  activity: Record<string, unknown>,
+  retainTerminal: () => boolean = () => false,
+) {
+  let completed = false;
   try {
     for await (const observation of adapter.observe(executionId)) {
       const text = activityText(observation);
       if (text !== undefined) upsertActivity(pi, { ...activity, activity: text });
     }
+    completed = true;
   } catch {
     // The execution result carries the diagnostic; this watcher owns presentation only.
   } finally {
-    removeActivity(pi, `delegate:${executionId}`);
+    if (!completed || !retainTerminal()) removeActivity(pi, `delegate:${executionId}`);
   }
 }
 

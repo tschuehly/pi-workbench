@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { ACTIVITY_CHANNEL, createActivitySurface, renderActivityLines, shortModel } from "./activity.mjs";
+import { ACTIVITY_CHANNEL, ACTIVITY_MAX_ITEMS, createActivitySurface, renderActivityLines, shortModel } from "./activity.mjs";
 
 const items = [
   { id: "sub-1", kind: "subagent", role: "independent-review", model: "anthropic/claude-opus-5", effort: "high", objective: "Review PR embabel/me#993", activity: "reading monitor/runtime.ts" },
@@ -67,4 +67,31 @@ test("updates one persistent width-aware widget", () => {
   assert.deepEqual(component.render(80), []);
   surface.dispose();
   assert.deepEqual(calls.at(-1), [ACTIVITY_CHANNEL, undefined]);
+});
+
+test("publishes bounded normalized RPC snapshots as activity changes", () => {
+  const statuses = [];
+  const surface = createActivitySurface();
+  surface.attachRpc({ setStatus: (...args) => statuses.push(args) });
+  assert.deepEqual(JSON.parse(statuses.at(-1)[1]), { schemaVersion: 1, items: [] });
+
+  const longObjective = `Review\u001b[2J ${"x".repeat(300)}`;
+  surface.update({ type: "upsert", item: { ...items[0], objective: longObjective, activity: "reading first.ts" } });
+  surface.update({ type: "upsert", item: { ...items[0], objective: longObjective, activity: "running focused tests" } });
+  const changed = JSON.parse(statuses.at(-1)[1]);
+  assert.equal(changed.items[0].activity, "running focused tests");
+  assert.equal(changed.items[0].objective.includes("\u001b[2J"), false);
+  assert.equal(changed.items[0].objective.length, 240);
+
+  surface.update({ type: "upsert", item: { id: "shell-secret", kind: "shell", objective: "deploy --token secret", activity: "running" } });
+  for (let index = 0; index < ACTIVITY_MAX_ITEMS + 5; index += 1) {
+    surface.update({ type: "upsert", item: { id: `worker-${index}`, kind: "worker", name: "x".repeat(100), activity: "working" } });
+  }
+  const bounded = JSON.parse(statuses.at(-1)[1]);
+  assert.equal(bounded.items.length, ACTIVITY_MAX_ITEMS);
+  assert.equal(bounded.items.at(-1).name.length, 48);
+  assert.equal(bounded.items.some((item) => item.kind === "shell"), false, "tool arguments stay out of the delegate roster");
+
+  surface.dispose();
+  assert.deepEqual(statuses.at(-1), [ACTIVITY_CHANNEL, undefined]);
 });

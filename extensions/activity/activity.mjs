@@ -1,6 +1,8 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export const ACTIVITY_CHANNEL = "pi-workbench:activity";
+export const ACTIVITY_SCHEMA_VERSION = 1;
+export const ACTIVITY_MAX_ITEMS = 64;
 
 const KINDS = new Set(["subagent", "worker", "monitor", "shell"]);
 const ICONS = { subagent: "🤖", worker: "🧰", monitor: "👀", shell: "💻" };
@@ -21,11 +23,19 @@ export function removeActivity(pi, id) {
 export function createActivitySurface() {
   const items = new Map();
   let ui;
+  let mode;
   let requestRender;
+
+  const publishSnapshot = () => {
+    if (mode !== "rpc") return;
+    const roster = [...items.values()].filter((item) => item.kind === "subagent" || item.kind === "worker").slice(-ACTIVITY_MAX_ITEMS);
+    ui.setStatus(ACTIVITY_CHANNEL, JSON.stringify({ schemaVersion: ACTIVITY_SCHEMA_VERSION, items: roster }));
+  };
 
   return {
     attach(nextUi) {
       ui = nextUi;
+      mode = "tui";
       ui.setWidget(ACTIVITY_CHANNEL, (tui) => {
         requestRender = () => tui.requestRender();
         return {
@@ -33,6 +43,11 @@ export function createActivitySurface() {
           invalidate() {},
         };
       });
+    },
+    attachRpc(nextUi) {
+      ui = nextUi;
+      mode = "rpc";
+      publishSnapshot();
     },
     update(event) {
       const normalized = normalizeActivityEvent(event);
@@ -44,12 +59,15 @@ export function createActivitySurface() {
         items.set(normalized.item.id, normalized.item);
       }
       requestRender?.();
+      publishSnapshot();
     },
     dispose() {
       items.clear();
-      if (ui !== undefined) ui.setWidget(ACTIVITY_CHANNEL, undefined);
+      if (mode === "tui") ui?.setWidget(ACTIVITY_CHANNEL, undefined);
+      if (mode === "rpc") ui?.setStatus(ACTIVITY_CHANNEL, undefined);
       requestRender = undefined;
       ui = undefined;
+      mode = undefined;
     },
   };
 }

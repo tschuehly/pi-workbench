@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, reservePending, streamToResult } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, reservePending, streamToResult, watchActivity } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -110,6 +110,54 @@ test("emits structured execution telemetry on the shared extension bus", () => {
     executionId: "exec-1",
     task: "Review",
   }]);
+});
+
+test("activity progress retains terminal background children but removes foreground children", async () => {
+  const events = [];
+  const pi = { events: { emit: (channel, event) => events.push([channel, event]) } };
+  const adapter = {
+    async *observe() {
+      yield { type: "tool_progress", detail: { toolName: "bash", action: "running focused tests" } };
+      yield { type: "terminal", detail: { outcome: "success" } };
+    },
+  };
+  const activity = { id: "delegate:child-1", kind: "subagent", role: "implementation", model: "openai/gpt", effort: "medium", objective: "Fix the roster", activity: "starting" };
+
+  await watchActivity(pi, adapter, "child-1", activity, () => true);
+  assert.equal(events.at(-2)[1].item.activity, "running focused tests");
+  assert.equal(events.at(-1)[1].item.activity, "success");
+  assert.equal(events.some(([, event]) => event.type === "remove"), false);
+
+  events.length = 0;
+  await watchActivity(pi, adapter, "child-1", activity);
+  assert.deepEqual(events.at(-1), ["pi-workbench:activity", { type: "remove", id: "delegate:child-1" }]);
+});
+
+test("collection and explicit cancellation remove retained activity", async () => {
+  const events = [];
+  const tools = new Map();
+  const final = {
+    outcome: "success", text: "Done.", kind: "subagent", profile: "implementer", cognitiveRole: "implementation",
+    provider: "openai", model: "gpt", effort: "medium", sessionId: "child-session",
+  };
+  const adapter = {
+    result: async () => final,
+    async *observe() { yield { type: "terminal", at: new Date().toISOString(), detail: { outcome: "success" } }; },
+    list: () => [{ executionId: "child-1", running: false }],
+    cancel: async (executionId) => ({ executionId, outcome: "cancelled" }),
+    cancelAll: async () => [],
+  };
+  subagentExtension({
+    events: { emit: (channel, event) => events.push([channel, event]) },
+    on: () => {},
+    registerTool: (tool) => tools.set(tool.name, tool),
+    registerShortcut: () => {},
+    sendMessage: () => {},
+  }, { adapter });
+
+  await tools.get("subagent_collect").execute("collect", { executionId: "child-1" }, undefined, undefined);
+  await tools.get("subagent_cancel").execute("cancel", { executionId: "child-2" }, undefined, undefined);
+  assert.deepEqual(events.filter(([, event]) => event.type === "remove").map(([, event]) => event.id), ["delegate:child-1", "delegate:child-2"]);
 });
 
 test("a terminal result cites the author model so independentOfModel can quote a receipt", async () => {
