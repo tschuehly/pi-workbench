@@ -143,9 +143,9 @@ Write it for an owner returning after a weekend: concrete nouns, the actor on ev
 Write a checkpoint when meaningful attention changes, without waiting for the user to confirm each
 field. Persist five values:
 
-- `whatChanged`: what now exists or works, naming concrete artifacts;
-- `remains`: what is blocked or still owed;
-- `next`: one obvious owner-facing action;
+- `whatChanged`: what now exists or works, naming concrete artifacts — two to four short sentences, one fact each, anchors (commit, PR, path, count) inside the sentence they belong to;
+- `remains`: what is blocked or still owed — one short sentence per item, the owner's decisions first;
+- `next`: one obvious owner-facing action in one sentence, starting with the actor;
 - `nextSessionPrompt`: the exact prompt to paste into a fresh attended Pi session;
 - `references`: only the concrete paths or identifiers needed to resume.
 
