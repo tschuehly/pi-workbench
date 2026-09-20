@@ -54,8 +54,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         lifecycle.start()
     }
 
+    /// Dock click, `open -a`, or Raycast: give the current desktop its own window instead of jumping to one elsewhere.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { browser.openWindow() }
+        if !flag || !browser.hasWindowOnActiveSpace { browser.openWindow() }
         return true
     }
 
@@ -394,6 +395,10 @@ private final class BrowserCoordinator {
     init(serverURL: URL?, actionHandler: @escaping (LifecycleAction) -> Void) {
         self.serverURL = serverURL
         self.actionHandler = actionHandler
+    }
+
+    var hasWindowOnActiveSpace: Bool {
+        controllers.values.contains { $0.window?.isVisible == true && $0.window?.isOnActiveSpace == true }
     }
 
     @discardableResult
