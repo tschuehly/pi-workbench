@@ -36,7 +36,8 @@ export type WorkstreamRecord =
   | SemanticRecord<"human-task.answered", { taskId: string; answerId: string; answer: HumanTaskAnswer }>
   | SemanticRecord<"human-task.resolved", { taskId: string }>
   | SemanticRecord<"link.upsert", { link: WorkstreamLink }>
-  | SemanticRecord<"link.removed", { linkId: string }>;
+  | SemanticRecord<"link.removed", { linkId: string }>
+  | SemanticRecord<"overview.replaced", { overview: WorkstreamOverview }>;
 
 export interface SemanticRecord<T extends string, P> {
   type: T;
@@ -60,6 +61,18 @@ export interface Checkpoint {
   next: string;
   nextSessionPrompt: string;
   references?: string[];
+}
+
+/** Workstream-level re-entry summary: what it is for and how it got here. Latest wins. */
+export interface WorkstreamOverview {
+  /** What this Workstream is for, in the owner's words. At most 280 characters. */
+  goal: string;
+  /** The observable that ends the Workstream. At most 200 characters. */
+  doneWhen: string;
+  /** Why it exists, what is in and out of scope. At most 600 characters. */
+  description: string;
+  /** 1 to 6 consequential events in order, each dated and anchored (PR, SHA, path, count). At most 200 characters each. */
+  history: string[];
 }
 
 export interface ProjectedCheckpoint {
@@ -142,6 +155,7 @@ export interface WorkstreamSnapshot {
   sessions: WorkstreamSession[];
   humanTasks: HumanTask[];
   links: WorkstreamLink[];
+  overview: (WorkstreamOverview & WorkstreamRecordProvenance) | null;
   closed: boolean;
   closedAt: string | null;
 }

@@ -31,7 +31,9 @@ ledger database in a caller-selected user-local directory. `createUserLocalWorks
 ## Records
 
 The accepted semantic records cover pending/confirmed/failed session associations, checkpoint
-replacement/failure/staleness, durable Human Task changes and answers, and relevant link changes.
+replacement/failure/staleness, durable Human Task changes and answers, relevant link changes, and
+the Workstream-level overview (`overview.replaced`: `goal`, `doneWhen`, `description`, `history`;
+latest wins, projected as `overview` with provenance).
 A confirmation carries either a complete machine/project/workspace anchor or no anchor; when both
 pending and confirmed records omit it, the latter supports self-association by an already-running
 attended session and remains eligible for PI WEB's append-only anchor repair. Partial confirmation anchors are rejected. Raw transcripts and routine

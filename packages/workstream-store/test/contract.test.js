@@ -103,6 +103,30 @@ test("keeps the previous confirmed checkpoint when a later checkpoint fails", as
   assert.equal(snapshot.sessions[0].checkpointFailure, "Persistence interrupted");
 });
 
+test("projects the latest overview and rejects oversized or empty ones", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  const overview = (goal) => ({ type: "overview.replaced", producer: "session", sourceSessionId: "session-1", payload: { overview: { goal, doneWhen: "All five questions answered.", description: "Why and scope.", history: ["2026-09-08: slice 1 merged as PR #36."] } } });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "ov-1", records: [overview("First goal")] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "ov-2", records: [overview("Second goal")] });
+  const snapshot = await store.inspect("ws-1");
+  assert.equal(snapshot.overview.goal, "Second goal");
+  assert.equal(snapshot.overview.revision, 3);
+  assert.equal(snapshot.overview.sourceSessionId, "session-1");
+  assert.equal((await store.create({ ...createRequest, workstreamId: "ws-2", idempotencyKey: "create-2" })) && (await store.inspect("ws-2")).overview, null);
+  for (const bad of [
+    { ...overview("x").payload.overview, goal: "g".repeat(281) },
+    { ...overview("x").payload.overview, history: [] },
+    { ...overview("x").payload.overview, history: Array(7).fill("e") },
+    { ...overview("x").payload.overview, extra: "field" },
+  ]) {
+    await assert.rejects(
+      store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: `bad-${JSON.stringify(bad).length}`, records: [{ type: "overview.replaced", producer: "session", payload: { overview: bad } }] }),
+      (error) => error.code === "INVALID_REQUEST" || error.code === "INVALID_RECORD",
+    );
+  }
+});
+
 test("returns the original receipt for an exact retry and rejects conflicting key reuse", async () => {
   const { store } = memoryStore();
   const first = await store.create(createRequest);

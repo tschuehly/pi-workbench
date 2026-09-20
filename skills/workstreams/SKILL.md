@@ -109,6 +109,7 @@ Inspect immediately before every mutation and use its `revision` as `expectedRev
 
 Supported records and payloads are defined in `packages/workstream-store/src/index.d.ts`. Common records are:
 
+- `overview.replaced` for the Workstream-level re-entry summary (see below);
 - `link.upsert` / `link.removed` for relevant file, repository, plan, Run, or artifact references;
 - `human-task.upsert` for a durable question that needs an answer;
 - `human-task.answered` and then, separately, `human-task.resolved`;
@@ -120,6 +121,21 @@ Set `producer` to `session` for agent-proposed records and `owner` for a mutatio
 On `STALE_REVISION`, inspect again, reconcile the intervening change, and submit a new request with a new idempotency key. On any other error, report the stable error code instead of editing the store file.
 
 **Complete when:** the new snapshot contains the intended semantic change and unrelated state is unchanged.
+
+### Keep the overview current
+
+The overview answers *what is this for and how did it get here*; checkpoints answer *what changed last*. Write `overview.replaced` when the Workstream is created, and rewrite the whole record when the story changes: a pivot, a shipped result, a new blocker, or a stale title. Do not rewrite it for routine checkpoints. When the user asks for the original goal, a summary, or what happened, read the projected `overview` first; if it is missing or stale, write it rather than answering only in chat.
+
+```json
+{"type":"overview.replaced","producer":"session","sourceSessionId":"SESSION_ID","payload":{"overview":{
+  "goal":"What this is for, in the owner's words (<=280).",
+  "doneWhen":"One observable that ends the Workstream (<=200).",
+  "description":"Why it exists; what is in and out of scope; note a stale title here (<=600).",
+  "history":["2026-09-08: one consequential event with a date and a checkable anchor such as a PR, SHA, path, or count (<=200 each, 1-6 items)."]
+}}}
+```
+
+Write it for an owner returning after a weekend: concrete nouns, the actor on every open item (Thomas decides or checks, Pia implements, a named reviewer reviews), what a pull request does and not only its number, and plain words for jargon. Keep numbers, dates, conditions, and uncertainty; when two sessions disagree, say so instead of choosing.
 
 ## 4. Checkpoint automatically
 

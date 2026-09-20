@@ -29,6 +29,7 @@ const RECORD_TYPES = new Set([
   "human-task.resolved",
   "link.upsert",
   "link.removed",
+  "overview.replaced",
 ]);
 
 export function clone(value) {
@@ -212,6 +213,16 @@ function validateRecord(record, limits, field) {
       keys(record.payload, ["linkId"], `${field}.payload`);
       id(record.payload.linkId, `${field}.payload.linkId`, limits);
     },
+    "overview.replaced": () => {
+      keys(record.payload, ["overview"], `${field}.payload`);
+      const overview = object(record.payload.overview, `${field}.payload.overview`);
+      keys(overview, ["goal", "doneWhen", "description", "history"], `${field}.payload.overview`);
+      string(overview.goal, `${field}.payload.overview.goal`, 280);
+      string(overview.doneWhen, `${field}.payload.overview.doneWhen`, 200);
+      string(overview.description, `${field}.payload.overview.description`, 600);
+      if (!Array.isArray(overview.history) || overview.history.length < 1 || overview.history.length > 6) fail("INVALID_REQUEST", `${field}.payload.overview.history must be an array of 1 to 6 strings`);
+      overview.history.forEach((event, index) => string(event, `${field}.payload.overview.history[${index}]`, 200));
+    },
   };
   validators[record.type]();
   if (byteSize(record) > limits.maxRecordBytes) fail("RECORD_TOO_LARGE", `${field} exceeds ${limits.maxRecordBytes} bytes`);
@@ -298,6 +309,7 @@ export function emptySnapshot(created) {
     sessions: [],
     humanTasks: [],
     links: [],
+    overview: null,
     closed: false,
     closedAt: null,
   };
@@ -461,6 +473,15 @@ export function rebuildSnapshot(ledger) {
         break;
       case "link.removed":
         links.delete(payload.linkId);
+        break;
+      case "overview.replaced":
+        snapshot.overview = {
+          ...clone(payload.overview),
+          recordedAt: record.recordedAt,
+          revision: record.revision,
+          producer: record.producer,
+          sourceSessionId: record.sourceSessionId ?? null,
+        };
         break;
       case "workstream.closed":
         snapshot.closed = true;
