@@ -193,11 +193,16 @@ test("lists summaries, preserves unresolved tasks on close, and excludes closed 
   const { store } = memoryStore();
   await store.create(createRequest);
   await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "append-1", records: associationRecords });
-  assert.equal((await store.list())[0].unresolvedHumanTaskCount, 1);
+  await store.create({ ...createRequest, workstreamId: "ws-2", idempotencyKey: "create-2" });
+  assert.equal((await store.list()).find(({ id }) => id === "ws-1").unresolvedHumanTaskCount, 1);
+  assert.deepEqual((await store.list({ sessionId: "session-1" })).map(({ id }) => id), ["ws-1"]);
+  assert.deepEqual(await store.list({ sessionId: "missing-session" }), []);
+  await assert.rejects(store.list({ sessionId: "invalid session" }), (error) => error.code === "INVALID_REQUEST");
 
   await store.close({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "close-1", producer: "owner" });
-  assert.deepEqual(await store.list(), []);
-  assert.equal((await store.list({ includeClosed: true }))[0].closed, true);
+  assert.deepEqual(await store.list({ sessionId: "session-1" }), []);
+  assert.equal((await store.list()).length, 1);
+  assert.equal((await store.list({ includeClosed: true, sessionId: "session-1" }))[0].closed, true);
   assert.equal((await store.inspect("ws-1")).humanTasks.length, 1);
 });
 

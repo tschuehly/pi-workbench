@@ -74,11 +74,12 @@ export class WorkstreamStore {
   }
 
   async list(query = {}) {
-    validateQuery(query);
+    validateQuery(query, this.limits);
     return this.adapter.transaction((database) => {
       const summaries = Object.values(database.workstreams)
         .map(({ ledger }) => rebuildSnapshot(ledger))
         .filter((snapshot) => query.includeClosed === true || !snapshot.closed)
+        .filter((snapshot) => !query.sessionId || snapshot.sessions.some((session) => session.id === query.sessionId))
         .filter((snapshot) => !query.text || snapshot.title.toLocaleLowerCase().includes(query.text.toLocaleLowerCase()))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
         .map(toSummary);
@@ -358,16 +359,21 @@ function toSummary(snapshot) {
 }
 
 function validateWorkstreamId(value, limits) {
+  validateId(value, "workstreamId", limits);
+}
+
+function validateId(value, field, limits) {
   if (typeof value !== "string" || value.length < 1 || value.length > limits.maxIdLength || !/^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/.test(value)) {
-    fail("INVALID_REQUEST", "workstreamId is invalid");
+    fail("INVALID_REQUEST", `${field} is invalid`);
   }
 }
 
-function validateQuery(query) {
+function validateQuery(query, limits) {
   if (!query || typeof query !== "object" || Array.isArray(query)) fail("INVALID_REQUEST", "query must be an object");
-  const unknown = Object.keys(query).filter((key) => !["includeClosed", "text"].includes(key));
+  const unknown = Object.keys(query).filter((key) => !["includeClosed", "sessionId", "text"].includes(key));
   if (unknown.length) fail("INVALID_REQUEST", `query has unknown fields: ${unknown.join(", ")}`);
   if (query.includeClosed !== undefined && typeof query.includeClosed !== "boolean") fail("INVALID_REQUEST", "includeClosed must be boolean");
+  if (query.sessionId !== undefined) validateId(query.sessionId, "sessionId", limits);
   if (query.text !== undefined && (typeof query.text !== "string" || query.text.length > 200)) fail("INVALID_REQUEST", "text must be a string of at most 200 characters");
 }
 

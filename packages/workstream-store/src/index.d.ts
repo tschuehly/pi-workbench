@@ -181,7 +181,7 @@ export interface WorkstreamSummary {
   closed: boolean;
 }
 
-export interface WorkstreamQuery { includeClosed?: boolean; text?: string }
+export interface WorkstreamQuery { includeClosed?: boolean; sessionId?: string; text?: string }
 export interface WorkstreamWatch { afterSequence?: number; workstreamId?: WorkstreamId; limit?: number }
 export type WorkstreamEventBatch =
   | { mode: "replay"; events: WorkstreamEvent[]; nextSequence: number }
