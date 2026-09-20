@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { knownModelFamilies, modelFamily } from "../../../packages/pi-execution-adapter/src/model-family.js";
 
 // Default-path cases must not inherit a run-scoped overlay from the surrounding session; the
 // overlay cases below set the variable explicitly on the child env instead.
@@ -49,6 +50,10 @@ const catalog = [
   "openai-codex gpt-5.6-sol 272K 128K yes yes",
   "openai-codex gpt-6-astra 272K 128K yes yes",
   "github-copilot gpt-5-mini 264K 64K yes yes",
+  "github-copilot claude-sonnet-5 1M 128K yes yes",
+  "github-copilot gemini-3.1-pro-preview 1M 64K yes yes",
+  "github-copilot grok-4.6 1M 64K yes yes",
+  "github-copilot gpt-5.6-sol 1M 64K yes yes",
   "openai gpt-5.6-sol 1M 128K yes yes",
   "openai gpt-6-astra 1M 128K yes yes",
 ].join("\n");
@@ -57,9 +62,19 @@ try {
   fs.writeFileSync(quotaPath, JSON.stringify(quota));
   fs.writeFileSync(catalogPath, catalog);
   fs.writeFileSync(modelMetadataPath, JSON.stringify({
-    "openai-codex": { models: [{ id: "gpt-6-astra", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } }] },
-    anthropic: { models: [{ id: "claude-sonnet-5", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } }] },
-    "github-copilot": { models: [{ id: "gpt-5-mini", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: null, max: null } }] },
+    "openai-codex": { models: [
+      { id: "gpt-5.6-sol", reasoning: true, thinkingLevelMap: { medium: "medium", high: "high", xhigh: "xhigh" } },
+      { id: "gpt-6-astra", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
+    ] },
+    anthropic: { models: [
+      { id: "claude-sonnet-5", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } },
+      { id: "claude-fable-5-1", reasoning: true, thinkingLevelMap: { low: "low", high: "high" } },
+      { id: "claude-opus-5", reasoning: true, thinkingLevelMap: { high: "high" } },
+    ] },
+    "github-copilot": { models: [
+      { id: "gpt-5-mini", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: null, max: null } },
+      { id: "grok-4.6", reasoning: true, thinkingLevelMap: { high: "high" } },
+    ] },
     openai: { models: [
       { id: "gpt-5.6-sol", reasoning: true, thinkingLevelMap: { high: "high", max: "max" } },
       { id: "gpt-6-astra", reasoning: true, thinkingLevelMap: { high: "high", max: "max" } },
@@ -101,36 +116,127 @@ try {
   assert.equal(unsupportedEffort.status, 3);
   assert.match(unsupportedEffort.stderr, /does not support Model Effort 'max'/);
 
-  const independentOverride = spawnSync(process.execPath, [resolver, "independent-review", "--model", "openai-codex/gpt-6-astra", "--independent-of", "anthropic", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.deepEqual(knownModelFamilies, ["anthropic", "openai", "google", "xai", "moonshot", "microsoft"]);
+  assert.equal(modelFamily("anthropic"), "anthropic");
+  assert.equal(modelFamily("openai-codex"), "openai");
+  assert.equal(modelFamily("github-copilot", "claude-sonnet-5"), "anthropic");
+  assert.equal(modelFamily("github-copilot", "gpt-5.6-sol"), "openai");
+  assert.equal(modelFamily("github-copilot", "gemini-3.1-pro-preview"), "google");
+  assert.equal(modelFamily("github-copilot", "grok-4.6"), "xai");
+  assert.equal(modelFamily("github-copilot", "kimi-k3"), "moonshot");
+  assert.equal(modelFamily("github-copilot", "mai-code-1.1-flash"), "microsoft");
+  assert.equal(modelFamily("github-copilot"), undefined);
+  assert.equal(modelFamily("github-copilot", "unknown-1"), undefined);
+  assert.equal(modelFamily("unknown-gateway", "gpt-5.6-sol"), undefined);
+
+  const runIndependent = (args, options = {}) => spawnSync(process.execPath, [resolver, ...args,
+    "--model-metadata", options.metadata ?? modelMetadataPath,
+    "--quota", options.quota ?? quotaPath,
+    "--catalog", options.catalog ?? catalogPath,
+  ], { encoding: "utf8" });
+  const passIndependent = (args, options) => {
+    const run = runIndependent(args, options);
+    assert.equal(run.status, 0, run.stderr);
+    return JSON.parse(run.stdout);
+  };
+
+  const independentOverride = runIndependent(["independent-review", "--model", "openai-codex/gpt-6-astra", "--independent-of", "anthropic"]);
   assert.equal(independentOverride.status, 3);
   assert.match(independentOverride.stderr, /independent role/i);
 
-  const reviewOfOpenAi = JSON.parse(execFileSync(process.execPath, [resolver, "independent-review", "--independent-of", "openai-codex", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const reviewOfOpenAi = passIndependent(["independent-review", "--independent-of", "openai-codex"]);
   assert.equal(reviewOfOpenAi.modelBinding.model, "claude-opus-5");
   assert.equal(reviewOfOpenAi.modelBinding.independence.independentOfFamily, "openai");
   assert.equal(reviewOfOpenAi.modelBinding.independence.selectedFamily, "anthropic");
 
-  const exactModelWithoutOverlay = JSON.parse(execFileSync(process.execPath, [resolver, "independent-review", "--independent-of-model", "openai-codex/gpt-5.6-sol", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
-  assert.deepEqual(exactModelWithoutOverlay.modelBinding.independence, reviewOfOpenAi.modelBinding.independence);
+  const exactModelWithoutOverlay = passIndependent(["independent-review", "--independent-of-model", "openai-codex/gpt-5.6-sol"]);
+  assert.deepEqual(exactModelWithoutOverlay.modelBinding.independence, {
+    ...reviewOfOpenAi.modelBinding.independence,
+    independentOfModel: "openai-codex/gpt-5.6-sol",
+  });
   assert.equal(exactModelWithoutOverlay.modelBinding.model, "claude-opus-5");
 
-  const contradictoryAuthor = spawnSync(process.execPath, [resolver, "independent-review", "--independent-of", "anthropic", "--independent-of-model", "openai-codex/gpt-5.6-sol", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  // Regression: github-copilot is a gateway, so the exact model determines the author family.
+  const copilotAuthors = [
+    ["claude-sonnet-5", "anthropic", "openai"],
+    ["gemini-3.1-pro-preview", "google", "anthropic"],
+    ["grok-4.6", "xai", "anthropic"],
+    ["gpt-5.6-sol", "openai", "anthropic"],
+  ];
+  for (const [model, authorFamily, selectedFamily] of copilotAuthors) {
+    const resolved = passIndependent(["independent-review", "--independent-of-model", `github-copilot/${model}`]);
+    assert.equal(resolved.modelBinding.independence.independentOfFamily, authorFamily, model);
+    assert.equal(resolved.modelBinding.independence.selectedFamily, selectedFamily, model);
+    assert.equal(resolved.modelBinding.independence.independentOfModel, `github-copilot/${model}`, model);
+  }
+
+  // A second CRITICAL reviewer family is selected explicitly; quota/catalog failures never change it.
+  const secondReviewer = passIndependent(["independent-review", "--independent-of-model", "openai-codex/gpt-5.6-sol", "--exclude-family", "anthropic"]);
+  assert.equal(secondReviewer.modelBinding.provider, "github-copilot");
+  assert.equal(secondReviewer.modelBinding.model, "grok-4.6");
+  assert.equal(secondReviewer.modelBinding.effort, "high");
+  assert.equal(secondReviewer.modelBinding.independence.selectedFamily, "xai");
+  assert.deepEqual(secondReviewer.modelBinding.independence.excludedFamilies, ["anthropic"]);
+
+  const noReviewer = runIndependent(["independent-review", "--independent-of", "openai", "--exclude-family", "anthropic", "--exclude-family", "xai"]);
+  assert.equal(noReviewer.status, 3);
+  assert.match(noReviewer.stderr, /no independent candidate/i);
+
+  const bareCopilot = runIndependent(["independent-review", "--independent-of", "github-copilot"]);
+  assert.equal(bareCopilot.status, 3);
+  assert.match(bareCopilot.stderr, /requires --independent-of-model.*exact model/i);
+
+  const unknownCopilot = runIndependent(["independent-review", "--independent-of-model", "github-copilot/unknown-1"]);
+  assert.equal(unknownCopilot.status, 3);
+  assert.match(unknownCopilot.stderr, /cannot determine.*family/i);
+
+  const unknownFamily = runIndependent(["independent-review", "--independent-of", "openai", "--exclude-family", "not-a-family"]);
+  assert.equal(unknownFamily.status, 3);
+  assert.match(unknownFamily.stderr, /unknown model family/i);
+
+  const contradictoryAuthor = runIndependent(["independent-review", "--independent-of", "anthropic", "--independent-of-model", "github-copilot/claude-sonnet-5"]);
   assert.equal(contradictoryAuthor.status, 3);
   assert.match(contradictoryAuthor.stderr, /contradicts --independent-of-model/);
 
-  const reviewOfClaude = JSON.parse(execFileSync(process.execPath, [resolver, "independent-review", "--independent-of", "anthropic", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const reviewOfClaude = passIndependent(["independent-review", "--independent-of", "anthropic"]);
   assert.equal(reviewOfClaude.modelBinding.model, "gpt-5.6-sol");
   assert.equal(reviewOfClaude.modelBinding.independence.selectedFamily, "openai");
 
-  const challengeOfClaude = JSON.parse(execFileSync(process.execPath, [resolver, "challenge", "--independent-of", "anthropic", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const challengeOfClaude = passIndependent(["challenge", "--independent-of", "anthropic"]);
   assert.equal(challengeOfClaude.modelBinding.effort, "xhigh");
 
-  const judgmentOfOpenAi = JSON.parse(execFileSync(process.execPath, [resolver, "independent-judgment", "--independent-of", "openai", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const judgmentOfOpenAi = passIndependent(["independent-judgment", "--independent-of", "openai"]);
   assert.equal(judgmentOfOpenAi.modelBinding.model, "claude-fable-5-1");
 
-  const missingIndependence = spawnSync(process.execPath, [resolver, "independent-review", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  const missingIndependence = runIndependent(["independent-review"]);
   assert.equal(missingIndependence.status, 3);
   assert.match(missingIndependence.stderr, /requires --independent-of/);
+
+  const ordinaryExclusion = spawnSync(process.execPath, [resolver, "investigation", "--exclude-family", "anthropic", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(ordinaryExclusion.status, 3);
+  assert.match(ordinaryExclusion.stderr, /does not use.*exclude-family/i);
+
+  const catalogWithoutGrokPath = path.join(temp, "catalog-without-grok.txt");
+  fs.writeFileSync(catalogWithoutGrokPath, catalog.split("\n").filter((line) => !line.startsWith("github-copilot grok-4.6 ")).join("\n"));
+  const missingSelectedModel = runIndependent(["independent-review", "--independent-of", "openai", "--exclude-family", "anthropic"], { catalog: catalogWithoutGrokPath });
+  assert.equal(missingSelectedModel.status, 3);
+  assert.match(missingSelectedModel.stderr, /github-copilot\/grok-4\.6.*unavailable/i);
+
+  const exhaustedCopilotPath = path.join(temp, "quota-exhausted-copilot.json");
+  const exhaustedCopilot = structuredClone(quota);
+  exhaustedCopilot.providers.find((provider) => provider.provider === "copilot").windows[0].percentRemaining = 0;
+  fs.writeFileSync(exhaustedCopilotPath, JSON.stringify(exhaustedCopilot));
+  const selectedQuotaExhausted = runIndependent(["independent-review", "--independent-of", "openai", "--exclude-family", "anthropic"], { quota: exhaustedCopilotPath });
+  assert.equal(selectedQuotaExhausted.status, 3);
+  assert.match(selectedQuotaExhausted.stderr, /quota exhausted.*copilot/i);
+
+  const unsupportedGrokPath = path.join(temp, "models-unsupported-grok.json");
+  const unsupportedGrok = JSON.parse(fs.readFileSync(modelMetadataPath, "utf8"));
+  unsupportedGrok["github-copilot"].models.find((model) => model.id === "grok-4.6").thinkingLevelMap.high = null;
+  fs.writeFileSync(unsupportedGrokPath, JSON.stringify(unsupportedGrok));
+  const selectedEffortUnsupported = runIndependent(["independent-review", "--independent-of", "openai", "--exclude-family", "anthropic"], { metadata: unsupportedGrokPath });
+  assert.equal(selectedEffortUnsupported.status, 3);
+  assert.match(selectedEffortUnsupported.stderr, /does not support Model Effort 'high'/);
 
   quota.providers[0].windows[0].percentRemaining = 0;
   quota.providers[0].state = {
@@ -277,6 +383,7 @@ try {
 
   const overlayBlocks = [
     [["independent-review", "--independent-of", "openai-codex"], /requires --independent-of-model/, "cross-family independence is not available under the overlay"],
+    [["independent-review", "--independent-of-model", "anthropic/claude-sonnet-5", "--exclude-family", "openai"], /exclude-family.*distinct-model.*overlay/i, "family exclusions are unavailable under the distinct-model overlay"],
     [["independent-review", "--independent-of-model", "anthropic/claude-fable-5-1"], /no independent binding for author model/, "an unmapped author model fails closed"],
     [["investigation", "--independent-of-model", "anthropic/claude-opus-5"], /does not use an independence constraint/, "a non-independent role rejects an author model"],
   ];

@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
+import { modelFamily, knownModelFamilies } from "./model-family.js";
 
 const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
 const INDEPENDENT_ROLES = new Set(["independent-judgment", "challenge", "independent-review"]);
@@ -70,6 +71,7 @@ export class PiRpcExecutionAdapter {
       provider: b.provider,
       model: b.model,
       effort: b.effort,
+      ...(b.independence === undefined ? {} : { independence: structuredClone(b.independence) }),
       kind: state.kind,
       running: !state.done,
       outcome: state.done ? state.result.outcome : undefined,
@@ -459,22 +461,35 @@ function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
     throw typedError("INVALID_BINDING", `Binding model ${binding.provider}/${binding.model} is outside the active routing overlay allowlist.`);
   }
   if (INDEPENDENT_ROLES.has(spec.cognitiveRole)) {
+    if (kind !== "subagent" || spec.continuation !== undefined) throw typedError("INVALID_BINDING", "Independent Cognitive Roles require fresh subagent context.");
     const independence = binding.independence;
     if (independence?.kind === "fresh-context-distinct-model") {
       // Under an explicit overlay, independence is fresh context on a distinct model rather than a
       // second provider family.
       if (overlay === undefined) throw typedError("INVALID_BINDING", "Distinct-model independence requires an active routing overlay.");
-      if (spec.continuation !== undefined) throw typedError("INVALID_BINDING", "Independent Cognitive Roles require fresh context, not a resumed session.");
+      if (independence.excludedFamilies !== undefined) throw typedError("INVALID_BINDING", "Distinct-model overlays do not support family exclusions.");
       const author = `${independence.authorProvider}/${independence.authorModel}`;
       const selected = `${independence.selectedProvider}/${independence.selectedModel}`;
       if (selected !== `${binding.provider}/${binding.model}`) throw typedError("INVALID_BINDING", "Independence metadata does not describe the resolved binding.");
       if (author === selected) throw typedError("INVALID_BINDING", "Independent review must run on a different model than the recorded author model.");
       if (!overlay.allowed.has(author)) throw typedError("INVALID_BINDING", `Recorded author model ${author} is outside the active routing overlay allowlist.`);
     } else {
-      const selectedFamily = providerFamily(binding.provider);
-      const independentOfFamily = providerFamily(independence?.independentOfProvider);
-      if (!independence || independentOfFamily === undefined || independence.independentOfFamily !== independentOfFamily || independence.independentOfFamily === independence.selectedFamily || independence.selectedFamily !== selectedFamily) {
+      let authorModel;
+      if (independence?.independentOfModel !== undefined) {
+        const prefix = `${independence.independentOfProvider}/`;
+        if (typeof independence.independentOfModel !== "string" || !independence.independentOfModel.startsWith(prefix) || independence.independentOfModel.length <= prefix.length) {
+          throw typedError("INVALID_BINDING", "Recorded author model must match its provider.");
+        }
+        authorModel = independence.independentOfModel.slice(prefix.length);
+      }
+      const selectedFamily = modelFamily(binding.provider, binding.model);
+      const independentOfFamily = modelFamily(independence?.independentOfProvider, authorModel);
+      if (!independence || independence.kind !== undefined || independentOfFamily === undefined || selectedFamily === undefined || independence.independentOfFamily !== independentOfFamily || independentOfFamily === selectedFamily || independence.selectedFamily !== selectedFamily) {
         throw typedError("INVALID_BINDING", "Independent Cognitive Roles require a verified cross-family binding.");
+      }
+      const excludedFamilies = independence.excludedFamilies === undefined ? [] : independence.excludedFamilies;
+      if (!Array.isArray(excludedFamilies) || excludedFamilies.some((family) => !Array.from(knownModelFamilies).includes(family)) || excludedFamilies.includes(selectedFamily)) {
+        throw typedError("INVALID_BINDING", "Independent binding violates its panel family exclusions.");
       }
     }
   } else if (binding.independence !== undefined) {
@@ -507,15 +522,11 @@ function resultFor(state, outcome, text = "", diagnostic) {
     profile: state.spec.profile,
     cognitiveRole: state.spec.cognitiveRole,
     provider: b.provider, model: b.model, effort: b.effort,
+    ...(b.independence === undefined ? {} : { independence: structuredClone(b.independence) }),
     quotaAdmission: state.quotaAdmission, quotaTelemetryStatus: state.quotaTelemetryStatus,
     ...(state.sessionId ? { sessionId: state.sessionId } : {}),
     ...(diagnostic ? { diagnostic: bounded(diagnostic, 8_000) } : {}),
   };
-}
-function providerFamily(provider) {
-  if (provider === "anthropic") return "anthropic";
-  if (provider === "openai" || provider === "openai-codex") return "openai";
-  return undefined;
 }
 function assistantText(message) { return Array.isArray(message.content) ? message.content.filter((part) => part?.type === "text").map((part) => part.text).join("\n") : ""; }
 function typedError(code, message) { const error = new Error(message); error.code = code; return error; }

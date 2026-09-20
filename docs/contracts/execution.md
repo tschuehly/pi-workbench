@@ -207,7 +207,7 @@ Models and Model Effort are selected independently by Cognitive Role, task shape
 
 A stronger model does not justify a broader Model Context. A longer-lived session is used only when its semantic Continuity is valuable. Routing effectiveness is evaluated from Run outcomes rather than fixed social heuristics.
 
-For V1, the router resolves bindings for the interactive lead and bounded children by Cognitive Role without changing the attended posture. An attended Worker dispatch may carry an exact owner-requested provider/model override; the role still selects Model Effort, and the resolver validates model/effort availability, mapped quota, and any active routing overlay. Ephemeral Subagents do not accept model overrides.
+For V1, the router resolves bindings for the interactive lead and bounded children by Cognitive Role without changing the attended posture. An attended Worker dispatch may carry an exact owner-requested provider/model override; the role still selects Model Effort, and the resolver validates model/effort availability, mapped quota, and any active routing overlay. Ephemeral Subagents do not accept model overrides. Independent Subagents may exclude already-selected reviewer families; gateway authors require an exact model identity. The resolver selects a policy candidate outside the author and excluded families, and the adapter revalidates that evidence before launch.
 
 A future managed Run would additionally validate resolved bindings against its Workflow Contract, Work Packet, authority, budget, and repository policy.
 

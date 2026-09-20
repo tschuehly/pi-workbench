@@ -3,7 +3,7 @@ export type QuotaAdmission = "fresh-quota" | "degraded-quota-telemetry";
 export type QuotaTelemetryStatus = "fresh" | "stale" | "unavailable";
 export interface QuotaSnapshot { generatedAt: string | null; refreshedAt: string | null; telemetryStatus: QuotaTelemetryStatus; stale: boolean; error: string | null; relevantWindows: unknown[] }
 export type ExecutionKind = "subagent" | "worker";
-export interface CrossFamilyIndependence { independentOfProvider: string; independentOfFamily: string; selectedFamily: string }
+export interface CrossFamilyIndependence { independentOfProvider: string; independentOfModel?: string; independentOfFamily: string; selectedFamily: string; excludedFamilies?: string[] }
 export interface DistinctModelIndependence { kind: "fresh-context-distinct-model"; authorProvider: string; authorModel: string; selectedProvider: string; selectedModel: string }
 export type IndependenceBinding = CrossFamilyIndependence | DistinctModelIndependence;
 export interface RoutingOverlayReceipt { path: string; sha256: string }
@@ -12,9 +12,9 @@ export interface ExecutionContinuation { sessionId: string }
 export interface ResolvedExecutionSpec { task: string; profile: string; cognitiveRole: string; cwd: string; tools: string[]; binding: ModelBinding; kind?: ExecutionKind; parentSessionId?: string; continuation?: ExecutionContinuation }
 export interface ExecutionReceipt { executionId: string; acceptedAt: string }
 export interface ExecutionObservation { executionId: string; sequence: number; at: string; type: string; detail?: unknown }
-export interface ExecutionResult { outcome: ExecutionOutcome; text: string; truncated: boolean; kind: ExecutionKind; profile: string; cognitiveRole: string; provider: string; model: string; effort: string; quotaAdmission: QuotaAdmission; quotaTelemetryStatus: QuotaTelemetryStatus; sessionId?: string; diagnostic?: string }
+export interface ExecutionResult { outcome: ExecutionOutcome; text: string; truncated: boolean; kind: ExecutionKind; profile: string; cognitiveRole: string; provider: string; model: string; effort: string; independence?: IndependenceBinding; quotaAdmission: QuotaAdmission; quotaTelemetryStatus: QuotaTelemetryStatus; sessionId?: string; diagnostic?: string }
 export interface CancellationReceipt { executionId: string; outcome: "cancelled" | "outcome_unknown" }
-export interface ExecutionStatus { executionId: string; profile: string; cognitiveRole: string; kind: ExecutionKind; provider: string; model: string; effort: string; running: boolean; outcome?: ExecutionOutcome; acceptedAt: string; observationCount: number; latestObservation?: { type: string; at: string; detail?: unknown }; sessionId?: string }
+export interface ExecutionStatus { executionId: string; profile: string; cognitiveRole: string; kind: ExecutionKind; provider: string; model: string; effort: string; independence?: IndependenceBinding; running: boolean; outcome?: ExecutionOutcome; acceptedAt: string; observationCount: number; latestObservation?: { type: string; at: string; detail?: unknown }; sessionId?: string }
 export interface ExecutionSummary { executionId: string; profile: string; cognitiveRole: string; kind: ExecutionKind; running: boolean; outcome?: ExecutionOutcome; acceptedAt: string }
 export class PiRpcExecutionAdapter {
   constructor(options?: { command?: string; startupTimeoutMs?: number; bindingMaxAgeMs?: number; hostTools?: string[]; clock?: () => Date; spawn?: Function; killGraceMs?: number; settlementProbeMs?: number; resultMaxChars?: number; routingOverlayPath?: string; ownsProcessGroups?: boolean });

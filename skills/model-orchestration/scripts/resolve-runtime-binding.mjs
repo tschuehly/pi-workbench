@@ -7,13 +7,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readCachedQuotaSnapshot } from "./quota-snapshot-cache.mjs";
+import { knownModelFamilies, modelFamily } from "../../../packages/pi-execution-adapter/src/model-family.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const policy = JSON.parse(fs.readFileSync(path.join(here, "..", "references", "routing-policy.json"), "utf8"));
 const ROUTING_COMMAND_TIMEOUT_MS = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
 
 function usage() {
-  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--model <provider>/<model>] [--independent-of <provider>] [--independent-of-model <provider>/<model>] [--quota <path|->] [--catalog <path>] [--model-metadata <path>] [--format json|env]");
+  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--model <provider>/<model>] [--independent-of <provider>] [--independent-of-model <provider>/<model>] [--exclude-family <family>]... [--quota <path|->] [--catalog <path>] [--model-metadata <path>] [--format json|env]");
   process.exit(2);
 }
 
@@ -108,6 +109,7 @@ if (!role) usage();
 let modelOverride;
 let independentOfProvider;
 let independentOfModel;
+const excludedFamilies = [];
 let quotaInput;
 let catalogInput;
 let modelMetadataInput;
@@ -117,6 +119,11 @@ while (args.length) {
   if (option === "--model") modelOverride = args.shift();
   else if (option === "--independent-of") independentOfProvider = args.shift();
   else if (option === "--independent-of-model") independentOfModel = args.shift();
+  else if (option === "--exclude-family") {
+    const family = args.shift();
+    if (family === undefined) usage();
+    excludedFamilies.push(family);
+  }
   else if (option === "--quota") quotaInput = args.shift();
   else if (option === "--catalog") catalogInput = args.shift();
   else if (option === "--model-metadata") modelMetadataInput = args.shift();
@@ -138,6 +145,12 @@ if (!rolePolicy) {
   process.exit(1);
 }
 
+const knownFamilySet = new Set(knownModelFamilies);
+for (const family of excludedFamilies) {
+  if (!knownFamilySet.has(family)) block(role, `Unknown model family '${family}' in --exclude-family`);
+}
+const uniqueExcludedFamilies = [...new Set(excludedFamilies)];
+
 const overlay = loadRoutingOverlay(role);
 let binding = rolePolicy;
 let independence;
@@ -145,11 +158,13 @@ if (overlay !== undefined) {
   const authorKey = independentOfModel;
   if (rolePolicy.independentBindings === undefined) {
     if (authorKey !== undefined || independentOfProvider !== undefined) block(role, `Role '${role}' does not use an independence constraint`);
+    if (uniqueExcludedFamilies.length > 0) block(role, `Role '${role}' does not use --exclude-family`);
     binding = overlay.doc.roles[role];
     if (binding === undefined) block(role, `Routing overlay does not map cognitive role '${role}'`);
   } else {
     // Independence under the overlay is distinct-model, not cross-family: a single-provider run
     // still gets a fresh child on a different model than the one that authored the bytes.
+    if (uniqueExcludedFamilies.length > 0) block(role, `--exclude-family is unavailable under a distinct-model routing overlay`);
     if (authorKey === undefined) block(role, `Role '${role}' requires --independent-of-model <provider>/<model> while a routing overlay is active`);
     const { provider: authorProvider, model: authorModel } = parseQualifiedModel(role, authorKey);
     if (independentOfProvider !== undefined && independentOfProvider !== authorProvider) {
@@ -160,32 +175,46 @@ if (overlay !== undefined) {
     independence = { kind: "fresh-context-distinct-model", authorProvider, authorModel, selectedProvider: binding.provider, selectedModel: binding.model };
   }
 } else if (rolePolicy.independentBindings !== undefined) {
+  let authorModel;
   if (independentOfModel !== undefined) {
-    const { provider: authorProvider } = parseQualifiedModel(role, independentOfModel);
-    if (independentOfProvider !== undefined && independentOfProvider !== authorProvider) {
+    const author = parseQualifiedModel(role, independentOfModel);
+    if (independentOfProvider !== undefined && independentOfProvider !== author.provider) {
       block(role, `--independent-of '${independentOfProvider}' contradicts --independent-of-model '${independentOfModel}'`);
     }
-    independentOfProvider = authorProvider;
+    independentOfProvider = author.provider;
+    authorModel = author.model;
   }
   if (independentOfProvider === undefined) {
-    console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Role '${role}' requires --independent-of <provider> or --independent-of-model <provider>/<model>`);
-    process.exit(3);
+    block(role, `Role '${role}' requires --independent-of <provider> or --independent-of-model <provider>/<model>`);
   }
-  const independentOfFamily = policy.providerFamilies[independentOfProvider];
-  binding = rolePolicy.independentBindings[independentOfFamily];
-  if (binding === undefined) {
-    console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=No independent binding is configured for provider '${independentOfProvider}'`);
-    process.exit(3);
+  if (independentOfProvider === "github-copilot" && authorModel === undefined) {
+    block(role, `--independent-of github-copilot requires --independent-of-model with the exact model`);
   }
-  const selectedFamily = policy.providerFamilies[binding.provider];
-  if (selectedFamily === independentOfFamily) {
-    console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Resolved provider family is not independent`);
-    process.exit(3);
+  const independentOfFamily = modelFamily(independentOfProvider, authorModel);
+  if (independentOfFamily === undefined) {
+    block(role, `Cannot determine the model family for author '${independentOfModel ?? independentOfProvider}'`);
   }
-  independence = { independentOfProvider, independentOfFamily, selectedFamily };
+  const candidates = rolePolicy.independentBindings.map((candidate) => {
+    const family = modelFamily(candidate.provider, candidate.model);
+    if (family === undefined) block(role, `Cannot determine the model family for configured candidate '${modelKey(candidate)}'`);
+    return { binding: candidate, family };
+  });
+  const selected = candidates.find((candidate) => candidate.family !== independentOfFamily && !uniqueExcludedFamilies.includes(candidate.family));
+  if (selected === undefined) {
+    block(role, `No independent candidate remains for author family '${independentOfFamily}' after exclusions`);
+  }
+  binding = selected.binding;
+  independence = {
+    independentOfProvider,
+    independentOfFamily,
+    selectedFamily: selected.family,
+    ...(independentOfModel === undefined ? {} : { independentOfModel }),
+    ...(uniqueExcludedFamilies.length === 0 ? {} : { excludedFamilies: uniqueExcludedFamilies }),
+  };
 } else if (independentOfProvider !== undefined || independentOfModel !== undefined) {
-  console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Role '${role}' does not use an independence constraint`);
-  process.exit(3);
+  block(role, `Role '${role}' does not use an independence constraint`);
+} else if (uniqueExcludedFamilies.length > 0) {
+  block(role, `Role '${role}' does not use --exclude-family`);
 }
 
 if (modelOverride !== undefined) {
@@ -237,7 +266,9 @@ const availableModels = new Set(rawCatalog.split(/\r?\n/).map((line) => {
   return provider && model ? `${provider}/${model}` : "";
 }).filter(Boolean));
 
-if (modelOverride !== undefined && availableModels.has(modelKey(binding))) validateModelEffort(role, binding, modelMetadataInput);
+if ((modelOverride !== undefined || rolePolicy.independentBindings !== undefined) && availableModels.has(modelKey(binding))) {
+  validateModelEffort(role, binding, modelMetadataInput);
+}
 
 const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
 const provider = providers.find((candidate) => candidate.provider === binding.quotaProvider);
@@ -306,7 +337,8 @@ if (format === "env") {
   console.log(`PI_MODEL=${binding.model}`);
   console.log(`PI_THINKING=${binding.effort}`);
   if (independence?.independentOfProvider !== undefined) console.log(`INDEPENDENT_OF_PROVIDER=${independence.independentOfProvider}`);
-  if (independence?.authorModel !== undefined) console.log(`INDEPENDENT_OF_MODEL=${independence.authorProvider}/${independence.authorModel}`);
+  if (independence?.independentOfModel !== undefined) console.log(`INDEPENDENT_OF_MODEL=${independence.independentOfModel}`);
+  else if (independence?.authorModel !== undefined) console.log(`INDEPENDENT_OF_MODEL=${independence.authorProvider}/${independence.authorModel}`);
   if (overlay !== undefined) console.log(`ROUTING_OVERLAY_SHA256=${overlay.sha256}`);
   console.log(`QUOTA_ADMISSION=${result.modelBinding.admission}`);
   console.log(`QUOTA_TELEMETRY_STATUS=${telemetryStatus}`);

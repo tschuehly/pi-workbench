@@ -4,6 +4,8 @@ Bounded Level 1 process mechanics for one attended child Pi. `PiRpcExecutionAdap
 
 Model routing bounds quota and Pi catalog subprocesses to 15 seconds before dispatch. The adapter then requires Pi RPC to answer its initial `get_state` handshake within 15 seconds. A startup stall terminates before any prompt or model side effect and returns `launch_failed` with a `startup_timeout` observation; late state responses cannot submit a prompt. Tasks run until the child finishes, the lead cancels them, or the attended session shuts down. The adapter normally completes on Pi's `agent_settled` event. If terminal assistant output arrives but that event is lost or delayed, it probes RPC state after a short grace period and completes only when Pi reports no streaming, compaction, or pending messages. After success it closes stdin and escalates process termination if graceful RPC shutdown hangs, preventing completed children from lingering.
 
+Independent bindings are revalidated against the author and selected model's underlying families, including Copilot-hosted models. Unknown or contradictory families, an excluded reviewer family, and reused review context fail before launch. Status and terminal results preserve the independence receipt; runtime provider/model/effort verification remains separate from this family check.
+
 When `parentSessionId` is present, the adapter passes it and the generated execution ID to the child as `PI_TELEMETRY_PARENT_SESSION_ID` and `PI_TELEMETRY_EXECUTION_ID`. The child telemetry extension records that launch-time lineage even when a background result is never collected.
 
 This package keeps live process state only. It is not a Run Controller, scheduler, sandbox, workspace owner, durable actor store, or acceptance authority.

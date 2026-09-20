@@ -73,8 +73,9 @@ const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output" }),
   profile: StringEnum(LEAF_PROFILES, { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
-  independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Defaults to the active parent model provider; set it explicitly for child-authored work." })),
-  independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Safe in every run: default routing uses its provider for cross-family independence, while an active routing overlay uses the exact model." })),
+  independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Use only when the exact author model is genuinely unavailable; explicit providers never inherit the active parent's model." })),
+  independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Independent roles default to the active parent provider/model; distinct-model overlays require this exact value." })),
+  excludeFamilies: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Additional model families to reject during cross-family independent routing; propagated unchanged as repeatable exclusions and unavailable under distinct-model overlays" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true for most delegation: launch without blocking, then reconcile after the coalesced completion signal with subagent_status and subagent_collect. The child still dies when the attended session ends. A Subagent launched inside a Worker must stay in the foreground." })),
 });
@@ -116,8 +117,8 @@ type ForegroundDispatch = { label: string; detach: () => void };
 /** A background Worker's registry receipt settles after its child result, so collection awaits it. */
 type WorkerReceipt = { workerId: string; settled: Promise<{ error: unknown } | undefined> };
 
-export default function subagentExtension(pi: ExtensionAPI) {
-  const adapter = new PiRpcExecutionAdapter();
+export default function subagentExtension(pi: ExtensionAPI, options: { adapter?: PiRpcExecutionAdapter; resolverPath?: string } = {}) {
+  const adapter = options.adapter ?? new PiRpcExecutionAdapter();
   const launched = new Map<string, LaunchMeta>();
   const collected = new Set<string>();
   const foreground = new Map<string, ForegroundDispatch>();
@@ -165,6 +166,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       "Use background:true when the lead has distinct useful work or needs to remain responsive; otherwise run the Subagent in the foreground. One coalesced signal reports that background children finished: answer it with subagent_collect, which reconciles every terminal child when called without an executionId, inspect with subagent_status, and cancel with subagent_cancel.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "Never sleep or poll to wait for a background child: the completion signal reaches a busy lead, and collecting one executionId is the supported way to wait.",
+      "For independent roles, quote the exact author provider/model from its completion receipt when available. Use excludeFamilies only for additional cross-family exclusions; distinct-model overlays reject it, and non-independent roles reject both options.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
     ],
@@ -182,20 +184,25 @@ export default function subagentExtension(pi: ExtensionAPI) {
       }
 
       const needsIndependence = INDEPENDENT_ROLES.has(params.cognitiveRole);
-      if (!needsIndependence && (params.independentOfProvider !== undefined || params.independentOfModel !== undefined)) {
-        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' does not use an independence constraint.`);
+      if (!needsIndependence && (params.independentOfProvider !== undefined || params.independentOfModel !== undefined || params.excludeFamilies !== undefined)) {
+        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' does not use an independence constraint or family exclusion.`);
       }
-      const independentOfProvider = needsIndependence ? (params.independentOfProvider ?? providerOf(params.independentOfModel) ?? ctx.model?.provider) : undefined;
-      if (needsIndependence && independentOfProvider === undefined) {
-        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' requires an author provider for independent routing.`);
+      let independentOfProvider = needsIndependence ? params.independentOfProvider : undefined;
+      let independentOfModel = needsIndependence ? params.independentOfModel : undefined;
+      if (needsIndependence && independentOfProvider === undefined && independentOfModel === undefined) {
+        if (ctx.model?.provider && ctx.model?.id) independentOfModel = `${ctx.model.provider}/${ctx.model.id}`;
+        else independentOfProvider = ctx.model?.provider || undefined;
       }
-      if (needsIndependence && params.independentOfModel !== undefined && providerOf(params.independentOfModel) === undefined) {
-        return failure("preflight_failed", `independentOfModel must be '<provider>/<model>', got '${params.independentOfModel}'.`);
+      if (needsIndependence && independentOfProvider === undefined && independentOfModel === undefined) {
+        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' requires an author provider or model for independent routing.`);
+      }
+      if (needsIndependence && independentOfModel !== undefined && providerOf(independentOfModel) === undefined) {
+        return failure("preflight_failed", `independentOfModel must be '<provider>/<model>', got '${independentOfModel}'.`);
       }
 
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, params.independentOfModel);
+        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, independentOfModel, undefined, params.excludeFamilies, options.resolverPath);
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
       }
@@ -463,7 +470,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       }
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride);
+        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, undefined, options.resolverPath);
       } catch (error) {
         await abandon(errorMessage(error));
         return failure("preflight_failed", errorMessage(error));
@@ -753,7 +760,11 @@ export async function streamToResult(
     : `${final.outcome}: ${final.diagnostic ?? final.text ?? "No diagnostic was reported."}`;
   // The author model must be citable from the completion itself: a later independent review passes
   // it as independentOfModel, and digging it out of a child session log is not a receipt.
-  const receiptLine = `\n\nCompletion receipt: ${final.provider}/${final.model}:${final.effort} · ${final.kind ?? "subagent"} · ${final.profile} · ${final.cognitiveRole} · outcome ${final.outcome}${final.truncated ? " · TRUNCATED, cannot satisfy verification" : ""}`;
+  const independence = final.independence;
+  const familyReceipt = independence && "selectedFamily" in independence
+    ? ` · family ${independence.selectedFamily}${independence.excludedFamilies?.length ? ` · excluded ${independence.excludedFamilies.join(",")}` : ""}`
+    : "";
+  const receiptLine = `\n\nCompletion receipt: ${final.provider}/${final.model}:${final.effort} · ${final.kind ?? "subagent"} · ${final.profile} · ${final.cognitiveRole} · outcome ${final.outcome}${familyReceipt}${final.truncated ? " · TRUNCATED, cannot satisfy verification" : ""}`;
   return {
     content: [{ type: "text", text: `${summary}${receiptLine}` }],
     details: { executionId, ...final, observations },
@@ -846,12 +857,13 @@ export function providerOf(qualifiedModel: string | undefined): string | undefin
   return slash > 0 && slash < qualifiedModel.length - 1 ? qualifiedModel.slice(0, slash) : undefined;
 }
 
-async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string, modelOverride?: string): Promise<any> {
+async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string, modelOverride?: string, excludeFamilies?: string[], resolverPath = resolver): Promise<any> {
   const args = [
-    resolver, cognitiveRole,
+    resolverPath, cognitiveRole,
     ...(modelOverride === undefined ? [] : ["--model", modelOverride]),
     ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider]),
     ...(independentOfModel === undefined ? [] : ["--independent-of-model", independentOfModel]),
+    ...(excludeFamilies ?? []).flatMap((family) => ["--exclude-family", family]),
   ];
   const stdout = await new Promise<string>((resolve, reject) => {
     execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 15_000 }, (error, output, stderr) => {

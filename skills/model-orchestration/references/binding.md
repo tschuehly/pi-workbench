@@ -24,13 +24,22 @@ Assign exactly one role:
 
 In an orchestrated run the lead dispatches `coordination` Workers, one per non-overlapping scope, and keeps only intent, decisions, and compact child evidence in its own context; each coordinator runs the same loop one level down with fresh leaves. Judgment about the run itself (drift, stalled scopes, whether to stop) is `independent-judgment`, not a coordinator's self-report.
 
-Include bounded scope, task risk, required Independence, and the author provider when Independence matters. `independent-judgment`, `challenge`, and `independent-review` require cross-family routing; their model binding is selected dynamically from the author provider rather than fixed to one family. When the author's completion receipt names an exact model, pass it as `independentOfModel`; default routing safely uses its provider.
+Include bounded scope, task risk, required Independence, and author identity. `independent-judgment`,
+`challenge`, and `independent-review` select a policy candidate outside the author's underlying model
+family. Pass the exact author as `independentOfModel` when its completion receipt names one; gateway
+providers such as GitHub Copilot require it. Unknown families fail closed. Without an explicit author,
+the Subagent tool uses the active parent model.
+
+For a distinct-family panel, pass already-selected reviewer families as Subagent `excludeFamilies`.
+Each reviewer must still differ from the author; family exclusions cannot choose an arbitrary model
+or be used on ordinary roles.
 
 ### Run-scoped routing overlay
 
 Set `PI_WORKBENCH_ROUTING_OVERLAY` to an absolute JSON path to narrow a whole run to one declared allowlist; see [`anthropic-opus-sonnet-overlay.json`](anthropic-opus-sonnet-overlay.json). It is the sole activation variable and fails closed: an unmapped role, a model outside the allowlist, or missing, unreadable, invalid, or unpropagated bytes blocks instead of falling back to default routing. Each binding receipt carries the overlay path and content hash, and the execution adapter re-verifies that hash before launch.
 
-While an overlay is active, independence is distinct-model rather than cross-family: `--independent-of-model '<provider>/<model>'` (the Subagent tool's `independentOfModel`) is required, and the overlay selects a different model. The same parameter is safe without an overlay, where routing uses its provider for cross-family independence. Never label same-model review independent.
+While an overlay is active, independence is distinct-model rather than cross-family: `--independent-of-model '<provider>/<model>'` (the Subagent tool's `independentOfModel`) is required, and the overlay selects a different model. The same parameter is safe without an overlay, where routing classifies its underlying model family.
+Family exclusions are rejected under a distinct-model overlay. Never label same-model review independent.
 
 **Complete when:** every proposed Dispatch has exactly one Cognitive Role and a non-overlapping bounded responsibility.
 
@@ -39,10 +48,12 @@ While an overlay is active, independence is distinct-model rather than cross-fam
 Run:
 
 ```bash
-node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--model <provider/model>] [--independent-of <author-provider> | --independent-of-model <provider/model>]
+node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--model <provider/model>] [--independent-of <author-provider> | --independent-of-model <provider/model>] [--exclude-family <family> ...]
 ```
 
-The resolver checks the vendored policy, the current Pi model catalog, and a machine-local `quota-axi --json` snapshot cached for ten minutes. Catalog and quota subprocesses each have a 15-second deadline so routing cannot silently stall a child launch. Concurrent and repeated resolutions share that snapshot, including telemetry failures; the first resolution after the cache expires refreshes it. Fresh quota telemetry with an exhausted relevant window blocks routing. Stale, unavailable, or unreadable quota telemetry produces a `degraded-quota-telemetry` admission instead: the child launch proceeds and Pi's runtime binding verification remains authoritative. An unknown role or absent model still fails closed. Routing never silently substitutes the requested role. Independent roles fail closed without a recognized author provider or a configured binding from another family.
+The resolver checks the vendored policy, the current Pi model catalog, and a machine-local `quota-axi --json` snapshot cached for ten minutes. Catalog and quota subprocesses each have a 15-second deadline so routing cannot silently stall a child launch. Concurrent and repeated resolutions share that snapshot, including telemetry failures; the first resolution after the cache expires refreshes it. Fresh quota telemetry with an exhausted relevant window blocks routing. Stale, unavailable, or unreadable quota telemetry produces a `degraded-quota-telemetry` admission instead: the child launch proceeds and Pi's runtime binding verification remains authoritative. An unknown role or absent model still fails closed. Routing never silently substitutes the requested role. Independent roles fail closed without a recognized author family or a policy candidate outside the
+author and excluded families. Candidate order is deterministic; an unavailable selected model,
+unsupported effort, or fresh exhausted quota blocks rather than silently selecting another candidate.
 
 Resolve before a major fan-out, scarce model call, escalation, or later major phase; resolutions inside the ten-minute window reuse the cached quota snapshot. `--model` is the attended `worker_dispatch` exception: use it only for an exact owner or run-contract request. It accepts `<provider>/<model>`, keeps the role-selected effort, follows the selected provider's mapped quota telemetry, and fails if the provider has no quota mapping, the model or effort is unavailable, or the model is outside an active routing overlay. It is unavailable to independent roles and ephemeral Subagents.
 

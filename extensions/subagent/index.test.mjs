@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -129,6 +129,16 @@ test("a terminal result cites the author model so independentOfModel can quote a
   assert.match(oversized.content[0].text, /TRUNCATED, cannot satisfy verification/);
 });
 
+test("a terminal review receipt exposes verified panel family evidence", async () => {
+  const independence = { independentOfProvider: "openai-codex", independentOfFamily: "openai", selectedFamily: "xai", excludedFamilies: ["anthropic"] };
+  const final = { outcome: "success", text: "Reviewed.", kind: "subagent", profile: "reviewer", cognitiveRole: "challenge", provider: "github-copilot", model: "grok-4.6", effort: "high", independence };
+  const adapter = { result: () => Promise.resolve(final), cancel: () => {}, async *observe() {} };
+  const result = await streamToResult(adapter, "judge-2", "reviewer", "challenge", new Date().toISOString(), undefined, undefined, { cancelOnAbort: true });
+  assert.match(result.content[0].text, /family xai/);
+  assert.match(result.content[0].text, /excluded anthropic/);
+  assert.deepEqual(result.details.independence, independence);
+});
+
 test("a leaf inherits the concept slug of the worker phase that launched it", () => {
   assert.equal(inheritedConcept({ PI_WORKBENCH_TELEMETRY_CONCEPT: "29-printed-cards-giftable" }), "29-printed-cards-giftable");
   assert.equal(inheritedConcept({ PI_WORKBENCH_TELEMETRY_CONCEPT: "  " }), undefined);
@@ -184,6 +194,8 @@ test("exposes no task timeout controls with bounded independence and status para
 
   const leaf = tools.get("subagent").parameters.properties;
   assert.ok(leaf.independentOfModel, "a leaf reviewer carries the recorded author model");
+  assert.equal(leaf.excludeFamilies.type, "array", "only Subagents expose repeatable family exclusions");
+  assert.equal(tools.get("worker_dispatch").parameters.properties.excludeFamilies, undefined, "Workers cannot request family exclusions");
   assert.equal(leaf.timeoutSeconds, undefined);
   assert.equal(tools.get("worker_dispatch").parameters.properties.timeoutSeconds, undefined);
   assert.ok(tools.get("subagent_status").parameters.properties.all, "status defaults to the actionable set");
@@ -193,6 +205,134 @@ test("exposes no task timeout controls with bounded independence and status para
 
   assert.equal(providerOf("anthropic/claude-opus-5"), "anthropic");
   for (const invalid of [undefined, "claude-opus-5", "/claude-opus-5", "anthropic/"]) assert.equal(providerOf(invalid), undefined);
+});
+
+test("rejects family exclusions on non-independent roles before routing", async () => {
+  const tools = new Map();
+  subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} });
+
+  const result = await tools.get("subagent").execute("call", {
+    task: "Inspect routing",
+    profile: "reviewer",
+    cognitiveRole: "investigation",
+    excludeFamilies: ["anthropic"],
+  }, undefined, undefined, { model: { provider: "openai-codex", id: "gpt-6-astra" } });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /does not use.*family exclusion/i);
+});
+
+test("defaults independence to the exact parent model and preserves repeated family exclusions in the adapter binding", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-routing-"));
+  const resolverPath = join(temporary, "resolver.mjs");
+  const argsPath = join(temporary, "args.json");
+  await writeFile(resolverPath, `
+    import { writeFileSync } from "node:fs";
+    writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));
+    const cognitiveRole = process.argv[2];
+    console.log(JSON.stringify({ status: "pass", modelBinding: {
+      cognitiveRole,
+      provider: "github-copilot", model: "gemini-2.5-pro", effort: "high",
+      independence: {
+        independentOfProvider: "github-copilot",
+        independentOfModel: "github-copilot/claude-sonnet-5",
+        independentOfFamily: "anthropic",
+        selectedFamily: "google",
+        excludedFamilies: ["anthropic", "openai"],
+      },
+      admission: "degraded-quota-telemetry",
+      quotaSnapshot: { generatedAt: null, telemetryStatus: "unavailable", relevantWindows: [], stale: false, refreshedAt: null, error: "test" },
+    }}));
+  `);
+
+  let dispatched;
+  const never = new Promise(() => {});
+  const adapter = {
+    dispatch: async (spec) => { dispatched = structuredClone(spec); return { executionId: "execution-1", acceptedAt: "2026-09-01T00:00:00Z" }; },
+    result: () => never,
+    async *observe() {},
+    list: () => [],
+    cancelAll: async () => [],
+  };
+  const tools = new Map();
+  const pi = {
+    events: { emit: () => {} },
+    on: () => {},
+    registerTool: (tool) => tools.set(tool.name, tool),
+    registerShortcut: () => {},
+    sendMessage: () => {},
+  };
+
+  try {
+    subagentExtension(pi, { adapter, resolverPath });
+    const result = await tools.get("subagent").execute("call", {
+      task: "Review the author output",
+      profile: "reviewer",
+      cognitiveRole: "independent-review",
+      excludeFamilies: ["anthropic", "openai"],
+      background: true,
+    }, undefined, undefined, {
+      cwd: "/repo",
+      model: { provider: "github-copilot", id: "claude-sonnet-5" },
+      sessionManager: { getSessionId: () => "lead" },
+    });
+
+    assert.equal(result.details.outcome, "launched");
+    assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), [
+      "independent-review",
+      "--independent-of-model", "github-copilot/claude-sonnet-5",
+      "--exclude-family", "anthropic",
+      "--exclude-family", "openai",
+    ]);
+    assert.equal(dispatched.binding.independence.selectedFamily, "google");
+    assert.deepEqual(dispatched.binding.independence.excludedFamilies, ["anthropic", "openai"]);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("provider-only authors never borrow a parent model and are used only when an exact model is unavailable", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-routing-provider-"));
+  const resolverPath = join(temporary, "resolver.mjs");
+  const argsPath = join(temporary, "args.json");
+  await writeFile(resolverPath, `
+    import { writeFileSync } from "node:fs";
+    writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));
+    console.log(JSON.stringify({ status: "pass", modelBinding: {
+      cognitiveRole: process.argv[2], provider: "openai-codex", model: "gpt-6-astra", effort: "high",
+      independence: { independentOfProvider: "anthropic", independentOfFamily: "anthropic", selectedFamily: "openai" },
+      admission: "degraded-quota-telemetry",
+      quotaSnapshot: { generatedAt: null, telemetryStatus: "unavailable", relevantWindows: [], stale: false, refreshedAt: null, error: "test" },
+    }}));
+  `);
+
+  const never = new Promise(() => {});
+  const adapter = { dispatch: async () => ({ executionId: "execution-2", acceptedAt: "2026-09-01T00:00:00Z" }), result: () => never, async *observe() {}, list: () => [], cancelAll: async () => [] };
+  const tools = new Map();
+  try {
+    subagentExtension({ events: { emit: () => {} }, on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} }, { adapter, resolverPath });
+    await tools.get("subagent").execute("call", {
+      task: "Review the author output", profile: "reviewer", cognitiveRole: "independent-review",
+      independentOfProvider: "anthropic", background: true,
+    }, undefined, undefined, {
+      cwd: "/repo",
+      model: { provider: "unknown-gateway", id: "must-not-be-guessed" },
+      sessionManager: { getSessionId: () => "lead" },
+    });
+
+    assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), ["independent-review", "--independent-of", "anthropic"]);
+
+    await tools.get("subagent").execute("call", {
+      task: "Review the parent output", profile: "reviewer", cognitiveRole: "independent-review", background: true,
+    }, undefined, undefined, {
+      cwd: "/repo",
+      model: { provider: "github-copilot", id: "" },
+      sessionManager: { getSessionId: () => "lead" },
+    });
+    assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), ["independent-review", "--independent-of", "github-copilot"]);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("reports counts and hides collected children from the default status roster", async () => {

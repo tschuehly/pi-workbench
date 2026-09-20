@@ -236,6 +236,59 @@ test("enforces cross-family bindings for independent roles", async () => {
   );
 });
 
+test("verifies gateway model families and records the excluded panel family", async () => {
+  const binding = {
+    ...spec().binding, cognitiveRole: "challenge", provider: "github-copilot", model: "grok-4.6",
+    independence: {
+      independentOfProvider: "github-copilot", independentOfModel: "github-copilot/gpt-5.6-sol",
+      independentOfFamily: "openai", selectedFamily: "xai", excludedFamilies: ["anthropic"],
+    },
+  };
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ provider: binding.provider, model: binding.model }) });
+  const receipt = await adapter.dispatch(spec({ cognitiveRole: "challenge", binding }));
+  const result = await adapter.result(receipt.executionId);
+  assert.equal(result.outcome, "success");
+  assert.deepEqual(result.independence, binding.independence);
+  assert.deepEqual(adapter.status(receipt.executionId).independence, binding.independence);
+});
+
+test("rejects forged gateway families, excluded judges, and ambiguous authors before spawning", async () => {
+  let spawned = 0;
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => { spawned++; return fakeRpc(); } });
+  const binding = {
+    ...spec().binding, cognitiveRole: "challenge",
+    independence: {
+      independentOfProvider: "openai-codex", independentOfModel: "openai-codex/gpt-5.6-sol",
+      independentOfFamily: "openai", selectedFamily: "anthropic", excludedFamilies: ["xai"],
+    },
+  };
+  const invalid = [
+    { ...binding, independence: { ...binding.independence, independentOfProvider: "github-copilot", independentOfModel: "github-copilot/claude-opus-5" } },
+    { ...binding, independence: { ...binding.independence, independentOfModel: "anthropic/claude-opus-5" } },
+    { ...binding, independence: { ...binding.independence, independentOfModel: "malformed" } },
+    { ...binding, independence: { ...binding.independence, independentOfProvider: "github-copilot", independentOfModel: undefined } },
+    { ...binding, independence: { ...binding.independence, excludedFamilies: ["anthropic"] } },
+    { ...binding, independence: { ...binding.independence, excludedFamilies: ["not-a-family"] } },
+    { ...binding, independence: { ...binding.independence, excludedFamilies: "xai" } },
+    { ...binding, provider: "github-copilot", model: "unknown-model" },
+    { ...binding, provider: "github-copilot", model: "gpt-5.6-sol" },
+  ];
+  for (const candidate of invalid) {
+    await assert.rejects(adapter.dispatch(spec({ cognitiveRole: "challenge", binding: candidate })), (error) => error.code === "INVALID_BINDING");
+  }
+  assert.equal(spawned, 0);
+});
+
+test("all independent bindings require fresh subagent context", async () => {
+  let spawned = 0;
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => { spawned++; return fakeRpc(); } });
+  const binding = { ...spec().binding, cognitiveRole: "challenge", independence: { independentOfProvider: "openai-codex", independentOfFamily: "openai", selectedFamily: "anthropic" } };
+  for (const extra of [{ continuation: { sessionId: "prior-review" } }, { kind: "worker" }]) {
+    await assert.rejects(adapter.dispatch(spec({ ...extra, cognitiveRole: "challenge", binding })), (error) => error.code === "INVALID_BINDING");
+  }
+  assert.equal(spawned, 0);
+});
+
 test("fails closed on inconsistent admission, capability expansion, fresh exhaustion, and runtime binding mismatch", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, hostTools: ["read", "bash"], spawn: () => fakeRpc({ model: "wrong" }) });
   await assert.rejects(adapter.dispatch(spec({ tools: ["write"] })), (error) => error.code === "CAPABILITY_EXCEEDED");

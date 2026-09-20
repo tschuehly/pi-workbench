@@ -1,12 +1,6 @@
 {
-  "version": 2,
+  "version": 3,
   "source": "skill-incubator/skills/model-orchestration/references/routing-policy.json",
-  "providerFamilies": {
-    "openai": "openai",
-    "openai-codex": "openai",
-    "github-copilot": "openai",
-    "anthropic": "anthropic"
-  },
   "quotaProviders": {
     "openai-codex": "codex",
     "github-copilot": "copilot",
@@ -50,36 +44,48 @@
       "effort": "medium"
     },
     "independent-judgment": {
-      "independentBindings": {
-        "openai": {
+      "independentBindings": [
+        {
           "provider": "anthropic",
           "quotaProvider": "claude",
           "model": "claude-fable-5-1",
           "effort": "low"
         },
-        "anthropic": {
+        {
           "provider": "openai-codex",
           "quotaProvider": "codex",
           "model": "gpt-5.6-sol",
           "effort": "medium"
+        },
+        {
+          "provider": "github-copilot",
+          "quotaProvider": "copilot",
+          "model": "grok-4.6",
+          "effort": "high"
         }
-      }
+      ]
     },
     "challenge": {
-      "independentBindings": {
-        "openai": {
+      "independentBindings": [
+        {
           "provider": "anthropic",
           "quotaProvider": "claude",
           "model": "claude-fable-5-1",
           "effort": "high"
         },
-        "anthropic": {
+        {
           "provider": "openai-codex",
           "quotaProvider": "codex",
           "model": "gpt-5.6-sol",
           "effort": "xhigh"
+        },
+        {
+          "provider": "github-copilot",
+          "quotaProvider": "copilot",
+          "model": "grok-4.6",
+          "effort": "high"
         }
-      }
+      ]
     },
     "synthesis": {
       "provider": "anthropic",
@@ -88,20 +94,26 @@
       "effort": "high"
     },
     "independent-review": {
-      "independentBindings": {
-        "openai": {
+      "independentBindings": [
+        {
           "provider": "anthropic",
           "quotaProvider": "claude",
           "model": "claude-opus-5",
           "effort": "high"
         },
-        "anthropic": {
+        {
           "provider": "openai-codex",
           "quotaProvider": "codex",
           "model": "gpt-5.6-sol",
           "effort": "high"
+        },
+        {
+          "provider": "github-copilot",
+          "quotaProvider": "copilot",
+          "model": "grok-4.6",
+          "effort": "high"
         }
-      }
+      ]
     },
     "mechanics": {
       "provider": "anthropic",
