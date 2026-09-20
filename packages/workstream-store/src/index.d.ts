@@ -169,7 +169,11 @@ export interface WorkstreamSummary {
   title: string;
   group: string | null;
   revision: Revision;
+  createdAt: string;
+  /** Time of the latest ledger record of any kind. */
   updatedAt: string;
+  /** Time of the newest session checkpoint, or null before the first checkpoint. */
+  lastCheckpointAt: string | null;
   activeSessionCount: number;
   pendingSessionCount: number;
   failedSessionCount: number;

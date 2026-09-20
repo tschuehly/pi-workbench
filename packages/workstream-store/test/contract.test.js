@@ -115,7 +115,10 @@ test("projects the latest overview and rejects oversized or empty ones", async (
   assert.equal(snapshot.overview.sourceSessionId, "session-1");
   await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "group-1", records: [{ type: "group.set", producer: "owner", payload: { group: "Embabel" } }] });
   assert.equal((await store.inspect("ws-1")).group, "Embabel");
-  assert.equal((await store.list()).find((summary) => summary.id === "ws-1").group, "Embabel");
+  const summary = (await store.list()).find((summary) => summary.id === "ws-1");
+  assert.equal(summary.group, "Embabel");
+  assert.equal(summary.createdAt, snapshot.createdAt);
+  assert.equal(summary.lastCheckpointAt, null);
   assert.equal((await store.create({ ...createRequest, workstreamId: "ws-2", idempotencyKey: "create-2" })) && (await store.inspect("ws-2")).overview, null);
   for (const bad of [
     { ...overview("x").payload.overview, goal: "g".repeat(281) },
