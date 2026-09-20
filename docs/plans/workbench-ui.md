@@ -129,11 +129,19 @@ Each slice is about 300 lines, ships alone, and is accepted by Thomas using it i
 | --- | --- | --- |
 | 2a | The chooser lists open Workstreams; each shows a re-entry card (stored goal, one next action with its actor, conflict and open-question warnings, folded Now / So far / About / Continue); **Open session** opens the session that wrote the newest checkpoint | shipped in the PI WEB fork (`7e783b1a`); store `overview.replaced` and `GET /sessions/locate/:sessionId` support it |
 | 2b | Answer open Human Tasks from the card; the answer is recorded in the store, not only in chat | shipped in the PI WEB fork (`2dff591a`); routed Chat reload recovery shipped in `76d859d3` |
-| 1a | `/mode alignment align` works in Chat and never voids an open `ask_user` question | Workbench extension half implemented; PI WEB half remains |
-| 1b | Extensions publish a disposable per-session state snapshot that the client can read | event published with 1a extension half; client read path remains |
-| 1c | Segmented Alignment and Checking buttons in the Chat window | after 1a and 1b |
-| 3 | Running and uncollected child agents visible in the window | after 1b |
+| 1a | `/mode alignment align` works in Chat and never voids an open `ask_user` question | implemented in Workbench (`b20a205`, `0ab9eab`) and PI WEB (`89c31764`); attended check pending |
+| 1b | Extensions publish a disposable per-session state snapshot that the client can read | implemented for Working Mode and child activity (`0ab9eab`, `f1f040c`, `89c31764`); attended check pending |
+| 1c | Segmented Alignment and Checking buttons in the Chat window | implemented in PI WEB (`89c31764`); attended check pending |
+| 3 | Running and uncollected child agents visible in the window | implemented in Workbench and PI WEB (`f1f040c`, `89c31764`); attended check pending |
 | 4 | Mode content that measurably changes behavior | after evidence from the weekly analysis names one change |
+
+Additional owner-requested interaction fixes shipped in the PI WEB fork: Workstream starts now record
+pending/confirmed association and preload the continuation draft; Enter steers while the secondary
+action queues; Stop restores queued text; queue rows can promote one or all messages (`32ed0ad4`).
+The transcript is flat and neutral, keeps thinking visible, and collapses only tool usage (`fe7fbbea`).
+Selected Chats can request desktop notifications for completion, questions, dialogs, and errors
+while the window is unfocused (`a27df255`). These runtime-backed changes need one session-daemon
+restart before attended verification.
 
 Decisions already taken: Resume opens the existing session; modes stay guidance only; the
 Workstream-level overview replaces the earlier `goal.set` idea; the ten-variant launcher prototype
