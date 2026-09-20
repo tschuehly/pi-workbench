@@ -125,6 +125,12 @@ const items = Object.entries(store.workstreams).map(([id, raw]) => {
   });
   const snapshot = JSON.parse(execFileSync("node", [cli, "inspect", JSON.stringify({ workstreamId: id, includeClosed: true })], { encoding: "utf8" }));
   const fallbackCheckpoint = checkpoints.at(-1);
+  const latestBySession = [...new Map(checkpoints.map((cp) => [cp.sessionId, cp])).values()]
+    .sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt));
+  // ponytail: directory = absolute path references of the newest checkpoint only; add a stored workspace once Chat can open one
+  const directories = [...new Set((latestBySession[0]?.references ?? []).filter((ref) => ref.startsWith("/")))]
+    .map((ref) => ({ path: ref, exists: fs.existsSync(ref), directory: fs.existsSync(ref) && fs.statSync(ref).isDirectory() }))
+    .filter((ref) => ref.directory || !ref.exists);
   const [status, explainer, reason] = audit[id] || [
     snapshot.closed ? "closed" : "unreviewed",
     fallbackCheckpoint ? firstSentence(fallbackCheckpoint.whatChanged) : `Workstream: ${created?.title || id}.`,
@@ -146,6 +152,9 @@ const items = Object.entries(store.workstreams).map(([id, raw]) => {
     tasks: snapshot.humanTasks,
     links: snapshot.links,
     checkpoints,
+    overview: snapshot.overview ?? null,
+    latestBySession,
+    directories,
   };
 }).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 

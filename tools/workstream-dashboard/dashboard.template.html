@@ -92,6 +92,20 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .summary-copy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr); gap: 28px; padding: 24px 0 28px; }
 .summary-copy h3, .timeline-heading h3, .questions h3, .references h3 { margin: 0 0 7px; font-size: 0.82rem; }
 .summary-copy p { margin: 0; max-width: 72ch; color: var(--muted); font-size: 0.98rem; text-wrap: pretty; }
+.card { display: grid; gap: 0; margin: 20px 0 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.card-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.card-row:first-child { border-top: 0; }
+.card-row > b { font-size: 0.72rem; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: var(--muted); padding-top: 3px; }
+.card-row > div { min-width: 0; font-size: 0.94rem; text-wrap: pretty; }
+.card-row p { margin: 0; }
+.card-row p + p { margin-top: 6px; }
+.card-row ol { margin: 0; padding-left: 18px; }
+.card-row li + li { margin-top: 4px; }
+.card-row .muted { color: var(--muted); font-size: 0.86rem; }
+.card-row .conflict { color: var(--danger, #b3261e); font-weight: 700; }
+.card-row code { font-size: 0.84rem; }
+.card-row .prompt { margin-top: 8px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px; font-size: 0.86rem; color: var(--muted); }
+.card-missing { padding: 14px 16px; margin: 20px 0 8px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 0.9rem; }
 .reason { padding: 14px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
 .reason p { font-size: 0.86rem; }
 .workstream-region { display: block; }
@@ -276,6 +290,28 @@ function renderCheckpoint(item) {
   </article>`;
 }
 
+function renderCard(item) {
+  const ov = item.overview;
+  const pending = item.tasks.filter(task => task.status !== "resolved");
+  const latest = item.latestBySession[0];
+  const rival = item.latestBySession[1];
+  const conflict = latest && rival && (new Date(latest.recordedAt) - new Date(rival.recordedAt)) < 36 * 3600 * 1000;
+  const now = latest ? `<p><b class="muted">${fmtDate(latest.recordedAt, true)}</b> ${escapeHtml(latest.whatChanged)}</p><p class="muted">Still open: ${escapeHtml(latest.remains)}</p>${conflict ? `<p class="conflict">Another session recorded a different state ${fmtDate(rival.recordedAt, true)}:</p><p class="muted">${escapeHtml(rival.whatChanged)}</p>` : ""}` : `<p class="muted">No checkpoint yet.</p>`;
+  const decision = `${pending.length ? `<ol>${pending.map(task => `<li>${escapeHtml(task.title)} <span class="muted">· ${titleCase(task.status)}</span></li>`).join("")}</ol>` : `<p class="muted">No open Human Task.</p>`}${latest?.next ? `<p><b class="muted">Next:</b> ${escapeHtml(latest.next)}</p>` : ""}`;
+  const dirs = item.directories.length ? item.directories.map(d => `<p><code>${escapeHtml(d.path)}</code> <span class="muted">${d.exists ? "exists" : "missing"}</span></p>`).join("") : `<p class="muted">No local directory in the latest references.</p>`;
+  const prompt = latest?.nextSessionPrompt ? `<div class="prompt">${escapeHtml(latest.nextSessionPrompt)}</div>` : "";
+  const why = ov
+    ? `<div class="card-row"><b>Goal</b><div><p>${escapeHtml(ov.goal)}</p><p class="muted">Done when: ${escapeHtml(ov.doneWhen)}</p></div></div>
+       <div class="card-row"><b>About</b><div><p>${escapeHtml(ov.description)}</p></div></div>
+       <div class="card-row"><b>So far</b><div><ol>${ov.history.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ol></div></div>`
+    : `<div class="card-row"><b>Goal</b><div><p class="muted">No overview stored yet. Ask Pi: “write the overview for ${escapeHtml(item.id)}”.</p><p class="muted">${escapeHtml(item.explainer)}</p></div></div>`;
+  return `<section class="card">${why}
+    <div class="card-row"><b>Now</b><div>${now}</div></div>
+    <div class="card-row"><b>Decision</b><div>${decision}</div></div>
+    <div class="card-row"><b>Continue</b><div>${dirs}${prompt}</div></div>
+  </section>`;
+}
+
 function renderDetail() {
   const item = DATA.items.find(candidate => candidate.id === state.selectedId);
   const detail = document.getElementById("detail");
@@ -284,7 +320,8 @@ function renderDetail() {
   const regionKey = `workstream-${item.id}`;
   detail.innerHTML = `<atelier-region class="detail-inner workstream-region" key="${escapeHtml(regionKey)}" label="${escapeHtml(item.title)}" comments="sheet" style="--status:${statusColor[item.status]}">
     <header class="detail-head"><div><div class="breadcrumb">${escapeHtml(item.group)} · updated ${fmtDate(item.updatedAt)}</div><h2>${escapeHtml(item.title)}</h2><p class="detail-id">${escapeHtml(item.id)}</p></div><div class="status-stack"><span class="status-pill"><span class="status-dot"></span>${escapeHtml(item.status)}</span><span class="lifecycle">${titleCase(item.lifecycle)} · revision ${item.revision} · ${item.sessions} session${item.sessions === 1 ? "" : "s"}</span></div></header>
-    <section class="summary-copy"><div><h3>What this Workstream does</h3><p>${escapeHtml(item.explainer)}</p></div><div class="reason"><h3>Why it has this state</h3><p>${escapeHtml(item.reason)}</p></div></section>
+    ${renderCard(item)}
+    <section class="summary-copy"><div><h3>Why it has this state</h3><p>${escapeHtml(item.reason)}</p></div></section>
     <section class="instruction-box"><div><h3>Tell Pi what to do with this Workstream</h3><p>Write one concrete instruction for this Workstream. Send it here; Pi receives it with the Workstream identity attached.</p></div><atelier-comments for="${escapeHtml(regionKey)}"></atelier-comments></section>
     <section class="timeline-section">${renderTimeline(item)}</section>
     <section class="aux">
