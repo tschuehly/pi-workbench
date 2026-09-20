@@ -147,7 +147,7 @@ field. Persist five values:
 - `remains`: what is blocked or still owed — one short sentence per item, the owner's decisions first;
 - `next`: one obvious owner-facing action in one sentence, starting with the actor;
 - `nextSessionPrompt`: the exact prompt to paste into a fresh attended Pi session;
-- `references`: only the concrete paths or identifiers needed to resume.
+- `references`: the absolute working directory first, then only the concrete paths or identifiers needed to resume.
 
 Lead with the point and make the checkpoint sufficient to resume without rereading chat. Keep `nextSessionPrompt` under 2,000 characters and include only the context, constraints, starting action, and references needed to continue safely; do not turn it into a transcript or execution plan.
 
