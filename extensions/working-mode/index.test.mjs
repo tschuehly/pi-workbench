@@ -63,12 +63,13 @@ function harness(mode = "tui", { cwd = checkoutRoot, loadedSkills = skills } = {
     systemPrompt,
     systemPromptOptions: { cwd, skills: loadedSkills, selectedTools: ["read", "bash"] },
   }, ctx);
+  const command = (args = "") => commands.get("mode").handler(args, ctx);
   const choose = async (...values) => {
     choices.push(...values);
-    await commands.get("mode").handler("", ctx);
+    await command();
   };
   start();
-  return { events, commands, statuses, notifications, choices, pickers, busEvents, ctx, start, prompt, choose, basePrompt };
+  return { events, commands, statuses, notifications, choices, pickers, busEvents, ctx, start, prompt, command, choose, basePrompt };
 }
 
 function catalogNames(prompt) {
@@ -98,14 +99,14 @@ test("starts without a setup dialog; changes each axis independently for subsequ
 
 test("reports selected-next-turn separately from the mode applied by the prompt handler", async () => {
   const h = harness();
-  assert.deepEqual(h.busEvents.at(-1).value, { phase: "selected", selected: { alignment: "Vibe", checking: "unset" }, applied: null });
+  assert.deepEqual(h.busEvents.at(-1).value, { schemaVersion: 1, phase: "selected", selected: { alignment: "Vibe", checking: "unset" }, applied: null });
   await h.choose("Alignment: Vibe", "Plan");
   await h.choose("Checking: unset", "tests");
-  assert.deepEqual(h.busEvents.at(-1).value, { phase: "selected", selected: { alignment: "Plan", checking: "tests" }, applied: null });
+  assert.deepEqual(h.busEvents.at(-1).value, { schemaVersion: 1, phase: "selected", selected: { alignment: "Plan", checking: "tests" }, applied: null });
   h.prompt();
-  assert.deepEqual(h.busEvents.at(-1).value, { phase: "applied", selected: { alignment: "Plan", checking: "tests" }, applied: { alignment: "Plan", checking: "tests" } });
+  assert.deepEqual(h.busEvents.at(-1).value, { schemaVersion: 1, phase: "applied", selected: { alignment: "Plan", checking: "tests" }, applied: { alignment: "Plan", checking: "tests" } });
   await h.choose("Alignment: Plan", "Spec");
-  assert.deepEqual(h.busEvents.at(-1).value, { phase: "selected", selected: { alignment: "Spec", checking: "tests" }, applied: { alignment: "Plan", checking: "tests" } });
+  assert.deepEqual(h.busEvents.at(-1).value, { schemaVersion: 1, phase: "selected", selected: { alignment: "Spec", checking: "tests" }, applied: { alignment: "Plan", checking: "tests" } });
 });
 
 test("all 4x4 dial states apply the reviewed skill mapping with independent axes", async () => {
@@ -250,6 +251,25 @@ test("every choice has guidance, and unset clears the selected Checking floor", 
   assert.doesNotMatch(h.prompt().systemPrompt, /obtain a fresh independent challenge/);
 });
 
+test("direct commands apply every value in TUI and RPC without opening a picker", async () => {
+  for (const mode of ["tui", "rpc"]) {
+    const h = harness(mode);
+    for (const value of ["vibe", "align", "plan", "spec"]) {
+      await h.command(`alignment ${value}`);
+      assert.deepEqual(h.busEvents.at(-1).value.selected.alignment, `${value[0].toUpperCase()}${value.slice(1)}`);
+      assert.match(h.prompt().systemPrompt, new RegExp(`Alignment: ${value[0].toUpperCase()}${value.slice(1)}\\.`));
+    }
+    for (const value of ["unset", "light", "tests", "adversarial"]) {
+      await h.command(`checking ${value}`);
+      assert.equal(h.busEvents.at(-1).value.selected.checking, value);
+      assert.match(h.prompt().systemPrompt, new RegExp(`Checking: ${value}\\.`));
+    }
+    assert.equal(h.pickers.length, 0);
+    h.start("reload");
+    assert.deepEqual(h.busEvents.at(-1).value.selected, { alignment: "Vibe", checking: "unset" });
+  }
+});
+
 test("cancel, invalid selections, and unsupported arguments leave both choices unchanged", async () => {
   const h = harness();
   const original = h.prompt();
@@ -258,8 +278,8 @@ test("cancel, invalid selections, and unsupported arguments leave both choices u
     await h.choose(...choices);
     assert.deepEqual(h.prompt(), original);
   }
-  await h.commands.get("mode").handler("tests", h.ctx);
-  assert.match(h.notifications.at(-1).message, /without arguments/);
+  await h.command("tests");
+  assert.match(h.notifications.at(-1).message, /^\/mode alignment/);
   assert.deepEqual(h.prompt(), original);
 });
 
@@ -276,13 +296,24 @@ test("resets on session replacement and reload without owning tools or persisten
   }
 });
 
-test("non-terminal sessions receive neither filtering, pickers, nor mode prompt guidance", async () => {
-  for (const mode of ["rpc", "print", "json"]) {
+test("RPC no-argument use returns usage without a picker or state change", async () => {
+  const h = harness("rpc");
+  const initialEvent = h.busEvents.at(-1);
+  await h.command();
+  assert.equal(h.pickers.length, 0);
+  assert.match(h.notifications.at(-1).message, /^\/mode alignment/);
+  assert.equal(h.busEvents.at(-1), initialEvent);
+  assert.match(h.prompt().systemPrompt, /Alignment: Vibe\./);
+  assert.ok(catalogNames(h.prompt().systemPrompt).includes("grilling"), "RPC retains the full skill catalog");
+});
+
+test("print and JSON sessions receive neither pickers nor mode prompt guidance", async () => {
+  for (const mode of ["print", "json"]) {
     const h = harness(mode);
-    await h.choose();
+    await h.command();
     assert.equal(h.statuses.size, 0);
     assert.equal(h.pickers.length, 0);
     assert.equal(h.prompt(), undefined);
-    assert.equal(h.notifications.length, mode === "rpc" ? 1 : 0);
+    assert.equal(h.notifications.length, 0);
   }
 });

@@ -1,8 +1,12 @@
-# Working Mode in the Pi terminal
+# Working Mode in Pi
 
-Run `/mode`, choose Alignment or Checking, then choose its value. Escape cancels without changes.
-The footer shows both selections; changing one leaves the other unchanged. Chat instructions still
-apply, but do not update the footer: use `/mode` to change its displayed selection.
+In the terminal, run `/mode`, choose Alignment or Checking, then choose its value. Escape cancels
+without changes. In the terminal or RPC, apply a value directly with
+`/mode alignment <vibe|align|plan|spec>` or
+`/mode checking <unset|light|tests|adversarial>`. Argument-free RPC use returns this usage instead of
+opening a picker. The terminal footer shows both selections; changing one leaves the other unchanged.
+Chat instructions still apply, but do not update the footer: use `/mode` to change its displayed
+selection.
 
 - **Alignment:** Vibe, Align, Plan, Spec. Starts at **Vibe**.
 - **Checking:** light, tests, adversarial, or **unset** to clear the selection. Starts **unset**.
@@ -20,16 +24,20 @@ apply, but do not update the footer: use `/mode` to change its displayed selecti
   task-triggered use, not mandatory invocation.
 - Nothing is saved. Reload, restart, new session, resume, fork, and clone reset both selections.
   Compaction and tree navigation retain the in-memory choices, not historical selections.
-- Terminal only: RPC, print, and JSON sessions are unchanged. No tools or permissions are altered.
+- RPC direct commands apply the same next-prompt guidance without changing the checkout-scoped
+  skill catalog. Print and JSON sessions remain unchanged. No tools or permissions are altered.
+- Each reset, selection, and next-prompt application emits a versioned
+  `pi-workbench:working-mode` snapshot with selected and applied state for session-local consumers.
 
 Load the Workbench package and run `/reload` to discover the command. The behavioral contract is
 [Working Mode](../../docs/foundation/working-mode.md).
 
 ## Verification
 
-Run `npm run test:working-mode-extension` for every 4x4 dial state, next-prompt restoration,
-exact-catalog filtering, installation flags, explicit Pi skill expansion, unknown skills, malformed/non-catalog text,
-real-path scope, defaults, independent choices, lifecycle resets, and non-terminal isolation.
+Run `npm run test:working-mode-extension` for every 4x4 dial state, TUI and RPC commands,
+next-prompt restoration, state snapshots, exact-catalog filtering, installation flags, explicit Pi
+skill expansion, unknown skills, malformed/non-catalog text, real-path scope, defaults, independent
+choices, lifecycle resets, and print/JSON isolation.
 
 For attended use: run `/mode`, change Alignment to Align and Checking to tests independently, then
 send a task. Verify both footer values, the alignment behavior, and reported test evidence. Clear

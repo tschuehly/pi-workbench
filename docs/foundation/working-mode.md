@@ -1,7 +1,7 @@
 # Pi Workbench Working Mode
 
-Status: the owner-approved Pi terminal slice provides `/mode` and a footer indicator. Both axes
-remain prompt-guided behavior, not mechanically enforced gates.
+Status: the owner-approved Pi extension provides `/mode` in the terminal and RPC, plus a terminal
+footer indicator. Both axes remain prompt-guided behavior, not mechanically enforced gates.
 
 Working Mode lets the owner choose how Pi establishes shared understanding and what evidence Pi must
 produce before claiming completion. It has two independent behavioral axes:
@@ -86,9 +86,12 @@ for policy evaluation and port audits. Managed Dispatch remains a future control
 
 ## Start and presentation
 
-In the Pi terminal, `/mode` opens a built-in picker: choose an axis, then its value. The footer
-shows both selections as guidance. Choices apply to the next prompt, not an already-running agent
-loop. Changing either axis leaves the other unchanged; cancelling leaves both unchanged.
+In the Pi terminal, `/mode` opens a built-in picker: choose an axis, then its value. Direct commands
+work in both the terminal and RPC: `/mode alignment <vibe|align|plan|spec>` and
+`/mode checking <unset|light|tests|adversarial>`. An argument-free RPC call returns usage instead of
+opening a picker. The terminal footer shows both selections as guidance. Choices apply to the next
+prompt, not an already-running agent loop. Changing either axis leaves the other unchanged;
+cancelling leaves both unchanged.
 
 Selections exist only in extension memory. Startup, `/reload`, `/new`, `/resume`, and `/fork` or
 `/clone` reset them to `Vibe` and `unset`. Compaction and `/tree` navigation retain the current
@@ -96,11 +99,13 @@ in-memory choices rather than restoring historical ones. Conversation remains or
 context; the control neither parses chat for selections nor removes earlier owner instructions.
 Use `/mode` to change the displayed selection.
 
-The control is terminal-only; RPC, print, and JSON sessions receive no selector or injected Working
-Mode guidance from this extension. No settings or session entries are written. Working Mode does
-not block project mutation mechanically or grant workspace leases, filesystem isolation,
-publication authority, durable execution, or recovery. Those claims require deterministic services
-that enforce them. See the [extension](../../extensions/working-mode/README.md) for use and checks.
+RPC receives direct commands and injected Working Mode guidance without interactive selectors.
+Print and JSON sessions receive no selector or injected guidance. The extension emits a versioned,
+disposable state snapshot after selection, reset, and application; no settings or session entries are
+written. Working Mode does not block project mutation mechanically or grant workspace leases,
+filesystem isolation, publication authority, durable execution, or recovery. Those claims require
+deterministic services that enforce them. See the
+[extension](../../extensions/working-mode/README.md) for use and checks.
 
 ## Skill discovery trial
 

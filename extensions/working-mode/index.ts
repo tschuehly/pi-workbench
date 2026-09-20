@@ -53,13 +53,19 @@ export const checkingGuidance = {
 };
 
 export type WorkingModeState = { alignment: keyof typeof alignmentGuidance; checking: keyof typeof checkingGuidance };
+export type WorkingModeSnapshot = {
+  schemaVersion: 1;
+  phase: "selected" | "applied";
+  selected: WorkingModeState;
+  applied: WorkingModeState | null;
+};
 
 function workingModeSuffix(state: WorkingModeState) {
   return `\n\n# Working Mode (prompt guidance)\nAlignment: ${state.alignment}. ${alignmentGuidance[state.alignment]}\nChecking: ${state.checking}. ${checkingGuidance[state.checking]}\nAlignment and Checking are independent. Preserve explicit owner direction and repository constraints; a selected Checking floor cannot silently remove required checks. These choices change behavior, not permissions, tool availability, authority, Human Attention, delegation, durability, or workspace protection. Keep accepted direction in the conversation rather than a separate mutable plan file.`;
 }
 
-export function renderWorkingModePrompt(systemPrompt: string, options: { cwd: string; skills?: Skill[] }, state: WorkingModeState) {
-  const prompt = isInsideCheckout(options.cwd)
+export function renderWorkingModePrompt(systemPrompt: string, options: { cwd: string; skills?: Skill[] }, state: WorkingModeState, filterSkills = true) {
+  const prompt = filterSkills && isInsideCheckout(options.cwd)
     ? filterSkillCatalog(systemPrompt, options.skills ?? [], state.checking)
     : systemPrompt;
   return `${prompt}${workingModeSuffix(state)}`;
@@ -71,7 +77,28 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   let applied: WorkingModeState | null = null;
 
   const selected = (): WorkingModeState => ({ alignment, checking });
-  const announce = (phase: "selected" | "applied") => pi.events?.emit("pi-workbench:working-mode", { phase, selected: selected(), applied });
+  const announce = (phase: WorkingModeSnapshot["phase"]) => pi.events?.emit("pi-workbench:working-mode", {
+    schemaVersion: 1,
+    phase,
+    selected: selected(),
+    applied,
+  } satisfies WorkingModeSnapshot);
+  const usage = "/mode alignment <vibe|align|plan|spec> | /mode checking <unset|light|tests|adversarial>";
+
+  function applyArgs(args: string) {
+    const [axis, value, ...extra] = args.trim().split(/\s+/);
+    if (extra.length || !axis || !value) return false;
+    if (axis === "alignment") {
+      const match = Object.keys(alignmentGuidance).find((candidate) => candidate.toLowerCase() === value);
+      if (!match) return false;
+      alignment = match as keyof typeof alignmentGuidance;
+    } else if (axis === "checking" && Object.hasOwn(checkingGuidance, value)) {
+      checking = value as keyof typeof checkingGuidance;
+    } else {
+      return false;
+    }
+    return true;
+  }
 
   function showStatus(ctx: ExtensionContext) {
     if (ctx.mode === "tui") {
@@ -90,39 +117,41 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   pi.registerCommand("mode", {
     description: "Choose Alignment and Checking guidance for the next prompt (not saved)",
     handler: async (args, ctx) => {
-      if (ctx.mode !== "tui") {
-        if (ctx.hasUI) ctx.ui.notify("/mode is available in the Pi terminal only.", "warning");
-        return;
-      }
       if (args.trim()) {
-        ctx.ui.notify("Use /mode without arguments to open the picker.", "warning");
+        if (!applyArgs(args)) {
+          if (ctx.hasUI) ctx.ui.notify(usage, "warning");
+          return;
+        }
+      } else if (ctx.mode !== "tui") {
+        if (ctx.hasUI) ctx.ui.notify(usage, "info");
         return;
-      }
-      const axis = await ctx.ui.select("Working Mode — prompt guidance, not permissions", [
-        `Alignment: ${alignment}`,
-        `Checking: ${checking}`,
-      ]);
-      if (axis === `Alignment: ${alignment}`) {
-        const value = await ctx.ui.select("Alignment — shared understanding", Object.keys(alignmentGuidance));
-        if (!value || !Object.hasOwn(alignmentGuidance, value)) return;
-        alignment = value as keyof typeof alignmentGuidance;
-      } else if (axis === `Checking: ${checking}`) {
-        const value = await ctx.ui.select("Checking — minimum completion evidence", Object.keys(checkingGuidance));
-        if (!value || !Object.hasOwn(checkingGuidance, value)) return;
-        checking = value as keyof typeof checkingGuidance;
       } else {
-        return;
+        const axis = await ctx.ui.select("Working Mode — prompt guidance, not permissions", [
+          `Alignment: ${alignment}`,
+          `Checking: ${checking}`,
+        ]);
+        if (axis === `Alignment: ${alignment}`) {
+          const value = await ctx.ui.select("Alignment — shared understanding", Object.keys(alignmentGuidance));
+          if (!value || !Object.hasOwn(alignmentGuidance, value)) return;
+          alignment = value as keyof typeof alignmentGuidance;
+        } else if (axis === `Checking: ${checking}`) {
+          const value = await ctx.ui.select("Checking — minimum completion evidence", Object.keys(checkingGuidance));
+          if (!value || !Object.hasOwn(checkingGuidance, value)) return;
+          checking = value as keyof typeof checkingGuidance;
+        } else {
+          return;
+        }
       }
       showStatus(ctx);
       announce("selected");
-      ctx.ui.notify(`Alignment: ${alignment} · Checking: ${checking}. Applies to the next prompt; not saved.`, "info");
+      if (ctx.hasUI) ctx.ui.notify(`Alignment: ${alignment} · Checking: ${checking}. Applies to the next prompt; not saved.`, "info");
     },
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    if (ctx.mode !== "tui") return;
+    if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
     applied = selected();
     announce("applied");
-    return { systemPrompt: renderWorkingModePrompt(event.systemPrompt, event.systemPromptOptions, applied) };
+    return { systemPrompt: renderWorkingModePrompt(event.systemPrompt, event.systemPromptOptions, applied, ctx.mode === "tui") };
   });
 }

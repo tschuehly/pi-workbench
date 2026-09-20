@@ -1,8 +1,9 @@
 # Working Mode trial and implementation plan
 
-Status: the owner reopened the terminal control and accepted `/mode`, independent built-in
-pickers, a footer indicator, next-prompt guidance, and Vibe / unset defaults. The bounded terminal
-slice is implemented in `extensions/working-mode/`; behavioral evaluation continues in attended use.
+Status: the owner reopened the Working Mode control and accepted `/mode`, independent built-in
+terminal pickers, direct RPC commands, a terminal footer indicator, next-prompt guidance, and Vibe /
+unset defaults. The extension foundation is implemented in `extensions/working-mode/`; behavioral
+evaluation continues in attended use.
 The owner also accepted a checkout-scoped terminal skill-discovery trial on 2026-09-09.
 Persistence, repository configuration, graphical controls, and mutation gates remain deferred.
 
@@ -106,9 +107,10 @@ missing need or acceptance evidence.
 
 ## Terminal slice verification
 
-Automated checks cover defaults, independent changes, cancellation, invalid input, prompt delivery,
-reset behavior, and non-terminal isolation. The extension changes neither tools nor permissions,
-writes no settings or session entries, and labels the footer as guidance.
+Automated checks cover defaults, picker and direct-command changes, cancellation, invalid input,
+TUI and RPC prompt delivery, reset behavior, state snapshots, and print/JSON isolation. The
+extension changes neither tools nor permissions, writes no settings or session entries, and labels
+the footer as guidance.
 
 The next evidence is attended use: can the owner find and change each choice, does Pi act on the
 selected guidance, and do Align questions catch consequential wrong-direction work without adding
