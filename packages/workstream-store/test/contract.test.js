@@ -113,6 +113,9 @@ test("projects the latest overview and rejects oversized or empty ones", async (
   assert.equal(snapshot.overview.goal, "Second goal");
   assert.equal(snapshot.overview.revision, 3);
   assert.equal(snapshot.overview.sourceSessionId, "session-1");
+  await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "group-1", records: [{ type: "group.set", producer: "owner", payload: { group: "Embabel" } }] });
+  assert.equal((await store.inspect("ws-1")).group, "Embabel");
+  assert.equal((await store.list()).find((summary) => summary.id === "ws-1").group, "Embabel");
   assert.equal((await store.create({ ...createRequest, workstreamId: "ws-2", idempotencyKey: "create-2" })) && (await store.inspect("ws-2")).overview, null);
   for (const bad of [
     { ...overview("x").payload.overview, goal: "g".repeat(281) },
@@ -121,7 +124,7 @@ test("projects the latest overview and rejects oversized or empty ones", async (
     { ...overview("x").payload.overview, extra: "field" },
   ]) {
     await assert.rejects(
-      store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: `bad-${JSON.stringify(bad).length}`, records: [{ type: "overview.replaced", producer: "session", payload: { overview: bad } }] }),
+      store.append({ workstreamId: "ws-1", expectedRevision: 4, idempotencyKey: `bad-${JSON.stringify(bad).length}`, records: [{ type: "overview.replaced", producer: "session", payload: { overview: bad } }] }),
       (error) => error.code === "INVALID_REQUEST" || error.code === "INVALID_RECORD",
     );
   }

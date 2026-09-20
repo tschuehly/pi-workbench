@@ -37,7 +37,9 @@ export type WorkstreamRecord =
   | SemanticRecord<"human-task.resolved", { taskId: string }>
   | SemanticRecord<"link.upsert", { link: WorkstreamLink }>
   | SemanticRecord<"link.removed", { linkId: string }>
-  | SemanticRecord<"overview.replaced", { overview: WorkstreamOverview }>;
+  | SemanticRecord<"overview.replaced", { overview: WorkstreamOverview }>
+  /** Owner-chosen grouping label for chooser and dashboard lists, e.g. "Embabel". Latest wins. */
+  | SemanticRecord<"group.set", { group: string }>;
 
 export interface SemanticRecord<T extends string, P> {
   type: T;
@@ -82,6 +84,7 @@ export interface ProjectedCheckpoint {
   next: string;
   nextSessionPrompt: string | null;
   references?: string[];
+  recordedAt: string;
 }
 
 export type HumanTaskAnswerKind = "yes-no" | "choice" | "free-text";
@@ -156,6 +159,7 @@ export interface WorkstreamSnapshot {
   humanTasks: HumanTask[];
   links: WorkstreamLink[];
   overview: (WorkstreamOverview & WorkstreamRecordProvenance) | null;
+  group: string | null;
   closed: boolean;
   closedAt: string | null;
 }
@@ -163,6 +167,7 @@ export interface WorkstreamSnapshot {
 export interface WorkstreamSummary {
   id: WorkstreamId;
   title: string;
+  group: string | null;
   revision: Revision;
   updatedAt: string;
   activeSessionCount: number;

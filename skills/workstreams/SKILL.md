@@ -109,6 +109,7 @@ Inspect immediately before every mutation and use its `revision` as `expectedRev
 
 Supported records and payloads are defined in `packages/workstream-store/src/index.d.ts`. Common records are:
 
+- `group.set` for the owner's grouping label (`Embabel`, `PhotoQuest`, `Pi Workbench`, `Personal`, or a new one the user names); set it at creation;
 - `overview.replaced` for the Workstream-level re-entry summary (see below);
 - `link.upsert` / `link.removed` for relevant file, repository, plan, Run, or artifact references;
 - `human-task.upsert` for a durable question that needs an answer;

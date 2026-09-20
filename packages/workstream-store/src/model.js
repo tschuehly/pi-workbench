@@ -30,6 +30,7 @@ const RECORD_TYPES = new Set([
   "link.upsert",
   "link.removed",
   "overview.replaced",
+  "group.set",
 ]);
 
 export function clone(value) {
@@ -213,6 +214,10 @@ function validateRecord(record, limits, field) {
       keys(record.payload, ["linkId"], `${field}.payload`);
       id(record.payload.linkId, `${field}.payload.linkId`, limits);
     },
+    "group.set": () => {
+      keys(record.payload, ["group"], `${field}.payload`);
+      string(record.payload.group, `${field}.payload.group`, limits.maxTitleLength);
+    },
     "overview.replaced": () => {
       keys(record.payload, ["overview"], `${field}.payload`);
       const overview = object(record.payload.overview, `${field}.payload.overview`);
@@ -310,6 +315,7 @@ export function emptySnapshot(created) {
     humanTasks: [],
     links: [],
     overview: null,
+    group: null,
     closed: false,
     closedAt: null,
   };
@@ -416,7 +422,7 @@ export function rebuildSnapshot(ledger) {
         const session = sessions.get(payload.sessionId);
         if (session) sessions.set(payload.sessionId, {
           ...session,
-          latestCheckpoint: { ...clone(payload.checkpoint), nextSessionPrompt: payload.checkpoint.nextSessionPrompt ?? null },
+          latestCheckpoint: { ...clone(payload.checkpoint), nextSessionPrompt: payload.checkpoint.nextSessionPrompt ?? null, recordedAt: record.recordedAt },
           checkpointFailure: null,
           checkpointStaleness: null,
         });
@@ -473,6 +479,9 @@ export function rebuildSnapshot(ledger) {
         break;
       case "link.removed":
         links.delete(payload.linkId);
+        break;
+      case "group.set":
+        snapshot.group = payload.group;
         break;
       case "overview.replaced":
         snapshot.overview = {

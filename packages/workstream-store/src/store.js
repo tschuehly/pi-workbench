@@ -344,6 +344,7 @@ function toSummary(snapshot) {
   return {
     id: snapshot.id,
     title: snapshot.title,
+    group: snapshot.group,
     revision: snapshot.revision,
     updatedAt: snapshot.updatedAt,
     activeSessionCount: snapshot.sessions.filter((session) => session.status === "active").length,
