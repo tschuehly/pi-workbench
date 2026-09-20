@@ -17,7 +17,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Local workaround for https://github.com/earendil-works/pi/issues/8773.
-// Exposed on this machine as ~/.pi/agent/bin/pi-update.
+// Exposed on this machine as /opt/homebrew/bin/pi-update.
 // Remove the patching code once released Pi passes the probes without it.
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
