@@ -100,7 +100,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .next-box .ago { font-size: 0.78rem; opacity: .8; }
 .warn { padding: 10px 14px; border-radius: 10px; background: oklch(0.96 0.05 60); border: 1px solid oklch(0.8 0.12 60); font-size: 0.9rem; }
 .warn b { color: oklch(0.45 0.15 45); }
-.goal-line { margin: 4px 0 0; font-size: 1.02rem; font-weight: 700; line-height: 1.4; text-wrap: pretty; }
+.goal-line { margin: 0 0 4px; font-size: 1.02rem; font-weight: 700; line-height: 1.4; text-wrap: pretty; }
 .goal-line small { display: block; margin-top: 4px; font-weight: 500; color: var(--muted); font-size: 0.86rem; }
 .card details { border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 .card summary { cursor: pointer; padding: 10px 14px; font-size: 0.9rem; font-weight: 700; list-style: none; display: flex; gap: 10px; align-items: baseline; }
@@ -313,10 +313,10 @@ function renderCard(item) {
   const nextText = latest?.next || (pending[0] ? pending[0].title : "No next move recorded.");
   const section = (label, peek, body, open = false) => `<details${open ? " open" : ""}><summary>${label}<span class="peek">${escapeHtml(peek)}</span></summary><div>${body}</div></details>`;
   const parts = [];
+  parts.push(ov ? `<p class="goal-line">${escapeHtml(ov.goal)}<small>Done when: ${escapeHtml(ov.doneWhen)}</small></p>` : `<div class="card-missing">No overview stored yet. Ask Pi: “write the overview for ${escapeHtml(item.id)}”.</div>`);
   parts.push(`<div class="next-box"><span class="kicker">Do next</span><p><span class="who">${actor(nextText)}</span>${escapeHtml(nextText)}</p>${latest ? `<span class="ago">Last touched ${ago(latest.recordedAt)} · ${fmtDate(latest.recordedAt)}</span>` : ""}</div>`);
   if (conflict) parts.push(`<div class="warn"><b>Two sessions disagree.</b> ${escapeHtml(firstClause(latest.whatChanged))} <i>vs.</i> ${escapeHtml(firstClause(rival.whatChanged))}</div>`);
   if (pending.length) parts.push(`<div class="warn"><b>${pending.length} open question${pending.length > 1 ? "s" : ""} for Thomas:</b> ${escapeHtml(pending.map(t => t.title).join(" · "))}</div>`);
-  parts.push(ov ? `<p class="goal-line">${escapeHtml(ov.goal)}<small>Done when: ${escapeHtml(ov.doneWhen)}</small></p>` : `<div class="card-missing">No overview stored yet. Ask Pi: “write the overview for ${escapeHtml(item.id)}”.</div>`);
   if (latest) parts.push(section("Now", firstClause(latest.whatChanged), `<p>${escapeHtml(latest.whatChanged)}</p><p><b>Still open:</b> ${escapeHtml(latest.remains)}</p>${conflict ? `<p><b>Other session (${fmtDate(rival.recordedAt, true)}):</b> ${escapeHtml(rival.whatChanged)}</p>` : ""}`));
   if (ov) parts.push(section("So far", `${ov.history.length} steps · ${firstClause(ov.history.at(-1), 70)}`, `<ol>${ov.history.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ol>`));
   if (ov) parts.push(section("About", firstClause(ov.description, 90), `<p>${escapeHtml(ov.description)}</p>`));
