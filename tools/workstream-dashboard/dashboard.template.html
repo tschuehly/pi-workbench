@@ -92,20 +92,30 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .summary-copy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr); gap: 28px; padding: 24px 0 28px; }
 .summary-copy h3, .timeline-heading h3, .questions h3, .references h3 { margin: 0 0 7px; font-size: 0.82rem; }
 .summary-copy p { margin: 0; max-width: 72ch; color: var(--muted); font-size: 0.98rem; text-wrap: pretty; }
-.card { display: grid; gap: 0; margin: 20px 0 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
-.card-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 12px 16px; border-top: 1px solid var(--line); }
-.card-row:first-child { border-top: 0; }
-.card-row > b { font-size: 0.72rem; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: var(--muted); padding-top: 3px; }
-.card-row > div { min-width: 0; font-size: 0.94rem; text-wrap: pretty; }
-.card-row p { margin: 0; }
-.card-row p + p { margin-top: 6px; }
-.card-row ol { margin: 0; padding-left: 18px; }
-.card-row li + li { margin-top: 4px; }
-.card-row .muted { color: var(--muted); font-size: 0.86rem; }
-.card-row .conflict { color: var(--danger, #b3261e); font-weight: 700; }
-.card-row code { font-size: 0.84rem; }
-.card-row .prompt { margin-top: 8px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px; font-size: 0.86rem; color: var(--muted); }
-.card-missing { padding: 14px 16px; margin: 20px 0 8px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 0.9rem; }
+.card { display: grid; gap: 10px; margin: 20px 0 8px; }
+.next-box { display: grid; gap: 6px; padding: 16px 18px; border-radius: 12px; background: var(--primary-dark); color: white; box-shadow: var(--shadow); }
+.next-box .kicker { font-size: 0.72rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; opacity: .85; }
+.next-box .who { display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: white; color: var(--primary-dark); font-size: 0.74rem; font-weight: 800; }
+.next-box p { margin: 0; font-size: 1.05rem; line-height: 1.4; text-wrap: pretty; }
+.next-box .ago { font-size: 0.78rem; opacity: .8; }
+.warn { padding: 10px 14px; border-radius: 10px; background: oklch(0.96 0.05 60); border: 1px solid oklch(0.8 0.12 60); font-size: 0.9rem; }
+.warn b { color: oklch(0.45 0.15 45); }
+.goal-line { margin: 4px 0 0; font-size: 1.02rem; font-weight: 700; line-height: 1.4; text-wrap: pretty; }
+.goal-line small { display: block; margin-top: 4px; font-weight: 500; color: var(--muted); font-size: 0.86rem; }
+.card details { border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.card summary { cursor: pointer; padding: 10px 14px; font-size: 0.9rem; font-weight: 700; list-style: none; display: flex; gap: 10px; align-items: baseline; }
+.card summary::-webkit-details-marker { display: none; }
+.card summary::before { content: "▸"; color: var(--muted); font-size: 0.8rem; }
+.card details[open] summary::before { content: "▾"; }
+.card summary .peek { flex: 1; min-width: 0; font-weight: 500; color: var(--muted); font-size: 0.86rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card details > div { padding: 0 14px 12px 30px; font-size: 0.92rem; line-height: 1.5; text-wrap: pretty; }
+.card details p { margin: 0 0 8px; }
+.card details ol { margin: 0; padding-left: 18px; }
+.card details li { margin-bottom: 6px; }
+.chip { display: inline-block; margin: 0 6px 6px 0; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font: 0.82rem ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
+.chip.missing { opacity: .55; text-decoration: line-through; cursor: default; }
+.copy-btn { margin-top: 6px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); font-size: 0.82rem; font-weight: 700; cursor: pointer; }
+.card-missing { padding: 12px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 0.9rem; }
 .reason { padding: 14px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
 .reason p { font-size: 0.86rem; }
 .workstream-region { display: block; }
@@ -290,26 +300,29 @@ function renderCheckpoint(item) {
   </article>`;
 }
 
+const firstClause = (text = "", max = 110) => { const clean = text.replace(/\s+/g, " ").trim(); const m = clean.match(new RegExp(`^(.{1,${max}}?[.;:])(\\s|$)`)); const cut = m ? m[1] : clean.slice(0, max); return cut + (cut.length < clean.length ? "…" : ""); };
+const ago = value => { const h = Math.round((Date.now() - new Date(value)) / 36e5); return h < 1 ? "just now" : h < 24 ? `${h} h ago` : `${Math.round(h / 24)} days ago`; };
+const actor = text => (/^\s*(Thomas|Rod|Pia)\b/.exec(text || "") || [])[1] || (/\bThomas\b/.test(text || "") ? "Thomas" : "Pia");
+
 function renderCard(item) {
   const ov = item.overview;
   const pending = item.tasks.filter(task => task.status !== "resolved");
   const latest = item.latestBySession[0];
   const rival = item.latestBySession[1];
   const conflict = latest && rival && (new Date(latest.recordedAt) - new Date(rival.recordedAt)) < 36 * 3600 * 1000;
-  const now = latest ? `<p><b class="muted">${fmtDate(latest.recordedAt, true)}</b> ${escapeHtml(latest.whatChanged)}</p><p class="muted">Still open: ${escapeHtml(latest.remains)}</p>${conflict ? `<p class="conflict">Another session recorded a different state ${fmtDate(rival.recordedAt, true)}:</p><p class="muted">${escapeHtml(rival.whatChanged)}</p>` : ""}` : `<p class="muted">No checkpoint yet.</p>`;
-  const decision = `${pending.length ? `<ol>${pending.map(task => `<li>${escapeHtml(task.title)} <span class="muted">· ${titleCase(task.status)}</span></li>`).join("")}</ol>` : `<p class="muted">No open Human Task.</p>`}${latest?.next ? `<p><b class="muted">Next:</b> ${escapeHtml(latest.next)}</p>` : ""}`;
-  const dirs = item.directories.length ? item.directories.map(d => `<p><code>${escapeHtml(d.path)}</code> <span class="muted">${d.exists ? "exists" : "missing"}</span></p>`).join("") : `<p class="muted">No local directory in the latest references.</p>`;
-  const prompt = latest?.nextSessionPrompt ? `<div class="prompt">${escapeHtml(latest.nextSessionPrompt)}</div>` : "";
-  const why = ov
-    ? `<div class="card-row"><b>Goal</b><div><p>${escapeHtml(ov.goal)}</p><p class="muted">Done when: ${escapeHtml(ov.doneWhen)}</p></div></div>
-       <div class="card-row"><b>About</b><div><p>${escapeHtml(ov.description)}</p></div></div>
-       <div class="card-row"><b>So far</b><div><ol>${ov.history.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ol></div></div>`
-    : `<div class="card-row"><b>Goal</b><div><p class="muted">No overview stored yet. Ask Pi: “write the overview for ${escapeHtml(item.id)}”.</p><p class="muted">${escapeHtml(item.explainer)}</p></div></div>`;
-  return `<section class="card">${why}
-    <div class="card-row"><b>Now</b><div>${now}</div></div>
-    <div class="card-row"><b>Decision</b><div>${decision}</div></div>
-    <div class="card-row"><b>Continue</b><div>${dirs}${prompt}</div></div>
-  </section>`;
+  const nextText = latest?.next || (pending[0] ? pending[0].title : "No next move recorded.");
+  const section = (label, peek, body, open = false) => `<details${open ? " open" : ""}><summary>${label}<span class="peek">${escapeHtml(peek)}</span></summary><div>${body}</div></details>`;
+  const parts = [];
+  parts.push(`<div class="next-box"><span class="kicker">Do next</span><p><span class="who">${actor(nextText)}</span>${escapeHtml(nextText)}</p>${latest ? `<span class="ago">Last touched ${ago(latest.recordedAt)} · ${fmtDate(latest.recordedAt)}</span>` : ""}</div>`);
+  if (conflict) parts.push(`<div class="warn"><b>Two sessions disagree.</b> ${escapeHtml(firstClause(latest.whatChanged))} <i>vs.</i> ${escapeHtml(firstClause(rival.whatChanged))}</div>`);
+  if (pending.length) parts.push(`<div class="warn"><b>${pending.length} open question${pending.length > 1 ? "s" : ""} for Thomas:</b> ${escapeHtml(pending.map(t => t.title).join(" · "))}</div>`);
+  parts.push(ov ? `<p class="goal-line">${escapeHtml(ov.goal)}<small>Done when: ${escapeHtml(ov.doneWhen)}</small></p>` : `<div class="card-missing">No overview stored yet. Ask Pi: “write the overview for ${escapeHtml(item.id)}”.</div>`);
+  if (latest) parts.push(section("Now", firstClause(latest.whatChanged), `<p>${escapeHtml(latest.whatChanged)}</p><p><b>Still open:</b> ${escapeHtml(latest.remains)}</p>${conflict ? `<p><b>Other session (${fmtDate(rival.recordedAt, true)}):</b> ${escapeHtml(rival.whatChanged)}</p>` : ""}`));
+  if (ov) parts.push(section("So far", `${ov.history.length} steps · ${firstClause(ov.history.at(-1), 70)}`, `<ol>${ov.history.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ol>`));
+  if (ov) parts.push(section("About", firstClause(ov.description, 90), `<p>${escapeHtml(ov.description)}</p>`));
+  const dirs = item.directories.map(d => `<span class="chip${d.exists ? "" : " missing"}" data-copy="${escapeHtml(d.path)}" title="${d.exists ? "click to copy" : "missing on this machine"}">${escapeHtml(d.path.replace(/^\/Users\/[^/]+/, "~"))}</span>`).join("");
+  parts.push(section("Continue", item.directories[0] ? item.directories[0].path.replace(/^\/Users\/[^/]+/, "~") : "no directory recorded", `${dirs || `<p class="muted">No local directory in the latest references.</p>`}${latest?.nextSessionPrompt ? `<p style="margin-top:8px">${escapeHtml(latest.nextSessionPrompt)}</p><button class="copy-btn" data-copy="${escapeHtml(latest.nextSessionPrompt)}">Copy prompt</button>` : ""}`));
+  return `<section class="card">${parts.join("")}</section>`;
 }
 
 function renderDetail() {
@@ -330,6 +343,7 @@ function renderDetail() {
     </section>
   </atelier-region>`;
   detail.querySelectorAll("button[data-cp]").forEach(button => button.addEventListener("click", () => { state.selectedCheckpoint = button.dataset.cp; detail.querySelectorAll("button[data-cp]").forEach(bead => bead.setAttribute("aria-pressed", bead === button)); renderCheckpoint(item); }));
+  detail.querySelectorAll("[data-copy]").forEach(el => el.addEventListener("click", async () => { if (el.classList.contains("missing")) return; await navigator.clipboard.writeText(el.dataset.copy); const was = el.textContent; el.textContent = "Copied"; setTimeout(() => { el.textContent = was; }, 900); }));
   renderCheckpoint(item);
 }
 
