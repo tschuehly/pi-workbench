@@ -33,6 +33,8 @@ The Pi package, prompts, skills, adapters, and configuration are versioned resou
 
 External executables and services are represented as versioned capabilities with supported installation and health checks. Credentials, subscription state, and machine-specific configuration remain local. Target repositories provide overlays for project-specific knowledge, commands, safety policy, and verification.
 
+The local `pi-update` command resolves to `scripts/update-pi-local`. It updates Pi, probes bundled and unbundled runtimes for [Pi issue #8773](https://github.com/earendil-works/pi/issues/8773), and applies the local workaround only while released Pi still needs it. On failure it restores the updated artifacts and reports any rollback failure.
+
 Runtime routing and the interactive startup check share a machine-local quota snapshot for ten minutes, including unavailable telemetry. Repeated child launches do not query provider endpoints again within that window. The startup check may inspect local Claude quota telemetry and offer attended sign-in or macOS Keychain repair when needed. It never:
 
 - stores credentials;

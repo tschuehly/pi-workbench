@@ -1,0 +1,288 @@
+#!/usr/bin/env node
+
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+// Local workaround for https://github.com/earendil-works/pi/issues/8773.
+// Exposed on this machine as ~/.pi/agent/bin/pi-update.
+// Remove the patching code once released Pi passes the probes without it.
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const telemetryExtension = resolve(scriptDir, "../extensions/telemetry/index.ts");
+
+function run(command, args, options = {}) {
+	const result = spawnSync(command, args, {
+		encoding: "utf8",
+		...options,
+	});
+	if (result.error) throw result.error;
+	return result;
+}
+
+function requireSuccess(result, action) {
+	if (result.status === 0) return;
+	process.stderr.write(result.stdout ?? "");
+	process.stderr.write(result.stderr ?? "");
+	throw new Error(`${action} failed with exit code ${result.status}`);
+}
+
+function findPi() {
+	const result = run("which", ["pi"]);
+	requireSuccess(result, "Locating pi");
+	return result.stdout.trim();
+}
+
+function findInstallation(piExecutable) {
+	const cli = realpathSync(piExecutable);
+	const suffix = join("dist", "bundle", "cli.js");
+	if (!cli.endsWith(suffix)) {
+		throw new Error(`Unsupported Pi installation: ${cli}`);
+	}
+	const packageDir = dirname(dirname(dirname(cli)));
+	const core = join(packageDir, "dist", "core", "agent-session.js");
+	const coreCli = join(packageDir, "dist", "cli.js");
+	if (!existsSync(core) || !existsSync(coreCli)) {
+		throw new Error(`Unsupported Pi installation layout: ${packageDir}`);
+	}
+	const chunksDir = join(packageDir, "dist", "bundle", "chunks");
+	const chunks = readdirSync(chunksDir)
+		.filter((name) => /^chunk-[A-Z0-9]+\.js$/.test(name))
+		.map((name) => join(chunksDir, name))
+		.filter((path) => readFileSync(path, "utf8").includes("async sendCustomMessage(message,options)"));
+	if (chunks.length !== 1) {
+		throw new Error(`Expected one AgentSession bundle chunk, found ${chunks.length}`);
+	}
+	const { version } = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+	return { packageDir, version, core, coreCli, bundle: chunks[0] };
+}
+
+function probe(command, args, probeExtension, marker, label, telemetryDir) {
+	rmSync(marker, { force: true });
+	const env = {
+		...process.env,
+		PI_TELEMETRY_DIR: telemetryDir,
+		PI_TRIGGER_PROBE_MARKER: marker,
+	};
+	delete env.PI_TELEMETRY_EXECUTION_ID;
+	delete env.PI_TELEMETRY_PARENT_SESSION_ID;
+	let result;
+	try {
+		result = run(
+			command,
+			[
+				...args,
+				"--no-session",
+				"--no-context-files",
+				"--no-skills",
+				"--no-prompt-templates",
+				"--no-themes",
+				"--no-extensions",
+				"-e",
+				telemetryExtension,
+				"-e",
+				probeExtension,
+				"-p",
+				"/probe-trigger",
+			],
+			{ env, timeout: 30_000 },
+		);
+	} catch (error) {
+		throw new Error(`${label} #8773 probe could not run: ${error.message}`, { cause: error });
+	}
+	if (!existsSync(marker)) {
+		process.stderr.write(result.stdout ?? "");
+		process.stderr.write(result.stderr ?? "");
+		throw new Error(`${label} #8773 probe produced no result`);
+	}
+	const outcome = readFileSync(marker, "utf8").trim();
+	if (outcome === "pass" && result.status === 0) return true;
+	if (outcome === "missing") return false;
+	throw new Error(`${label} #8773 probe failed with result ${JSON.stringify(outcome)} and exit ${result.status}`);
+}
+
+function replaceOnce(source, before, after, label) {
+	const first = source.indexOf(before);
+	if (first === -1 || source.indexOf(before, first + before.length) !== -1) {
+		throw new Error(`Cannot apply #8773 workaround: expected one ${label}`);
+	}
+	return source.slice(0, first) + after + source.slice(first + before.length);
+}
+
+function patchCore(source) {
+	const runMarker = "    async _runAgentPrompt(messages) {\n";
+	const helper = `    async _applyBeforeAgentStart(prompt, images, messages) {
+        const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
+        const result = await this._extensionRunner.emitBeforeAgentStart(prompt, images, this._baseSystemPromptOptions);
+        const handlerEditedTools = result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
+            result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
+        if (!handlerEditedTools)
+            result.systemPromptOptions.selectedTools = this.getActiveToolNames();
+        for (const message of result.messages) {
+            messages.push({
+                role: "custom",
+                customType: message.customType,
+                content: message.content ?? [],
+                display: message.display,
+                details: message.details,
+                timestamp: Date.now(),
+            });
+        }
+        const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
+        this._runSystemPromptOptions = result.systemPromptOptions;
+        if (updateMessage)
+            messages.unshift(updateMessage);
+    }
+`;
+	const oldTrigger = `        else if (options?.triggerTurn) {
+            await this._runAgentPrompt(appMessage);
+        }
+`;
+	const newTrigger = `        else if (options?.triggerTurn) {
+            const messages = [appMessage];
+            const images = typeof appMessage.content === "string"
+                ? undefined
+                : appMessage.content.filter((part) => part.type === "image");
+            await this._applyBeforeAgentStart(contentText(appMessage.content), images, messages);
+            await this._runAgentPrompt(messages);
+        }
+`;
+	const withHelper = replaceOnce(source, runMarker, helper + runMarker, "core run method");
+	return replaceOnce(withHelper, oldTrigger, newTrigger, "core custom-message trigger");
+}
+
+function patchBundle(source) {
+	const runMarker = "async _runAgentPrompt(messages){";
+	const helper = 'async _applyBeforeAgentStart(prompt,images,messages){let selectedToolsBefore=this._baseSystemPromptOptions.selectedTools,result=await this._extensionRunner.emitBeforeAgentStart(prompt,images,this._baseSystemPromptOptions);result.systemPromptOptions.selectedTools.length!==selectedToolsBefore.length||result.systemPromptOptions.selectedTools.some((name,index)=>name!==selectedToolsBefore[index])||(result.systemPromptOptions.selectedTools=this.getActiveToolNames());for(let message of result.messages)messages.push({role:"custom",customType:message.customType,content:message.content??[],display:message.display,details:message.details,timestamp:Date.now()});let updateMessage=this._preparePromptAndToolLoadout(result.systemPromptOptions);this._runSystemPromptOptions=result.systemPromptOptions,updateMessage&&messages.unshift(updateMessage)}';
+	const oldTrigger = "options?.triggerTurn?await this._runAgentPrompt(appMessage):";
+	const newTrigger = "options?.triggerTurn?await this._runTriggeredCustomMessage(appMessage):";
+	const appendMarker = "_appendCustomMessage(appMessage){";
+	const triggerHelper = 'async _runTriggeredCustomMessage(appMessage){let messages=[appMessage],images=typeof appMessage.content=="string"?void 0:appMessage.content.filter(part=>part.type==="image");await this._applyBeforeAgentStart(contentText(appMessage.content),images,messages),await this._runAgentPrompt(messages)}';
+	let patched = replaceOnce(source, runMarker, helper + runMarker, "bundle run method");
+	patched = replaceOnce(patched, oldTrigger, newTrigger, "bundle custom-message trigger");
+	return replaceOnce(patched, appendMarker, triggerHelper + appendMarker, "bundle append method");
+}
+
+function writeChecked(path, content) {
+	const temporary = `${path}.pi-local-patch.mjs`;
+	try {
+		writeFileSync(temporary, content, { mode: statSync(path).mode });
+		requireSuccess(run(process.execPath, ["--check", temporary]), `Checking ${path}`);
+		renameSync(temporary, path);
+	} finally {
+		rmSync(temporary, { force: true });
+	}
+}
+
+const piExecutable = findPi();
+requireSuccess(run(piExecutable, ["update", "--self"], { stdio: "inherit" }), "Updating Pi");
+const installation = findInstallation(piExecutable);
+const temporaryDir = mkdtempSync(join(tmpdir(), "pi-8773-probe-"));
+const probeExtension = join(temporaryDir, "probe.mjs");
+const marker = join(temporaryDir, "result.txt");
+writeFileSync(
+	probeExtension,
+	`import { writeFileSync } from "node:fs";
+const marker = process.env.PI_TRIGGER_PROBE_MARKER;
+export default function (pi) {
+  let armed = false;
+  let beforeSeen = false;
+  pi.on("before_agent_start", () => {
+    if (!armed) return;
+    beforeSeen = true;
+    writeFileSync(marker, "pass\\n");
+    process.exit(0);
+  });
+  pi.on("context", () => {
+    if (armed && !beforeSeen) {
+      writeFileSync(marker, "missing\\n");
+      process.exit(1);
+    }
+  });
+  pi.registerCommand("probe-trigger", {
+    description: "Probe triggerTurn before_agent_start behavior",
+    handler: async () => {
+      armed = true;
+      await pi.sendMessage(
+        { customType: "probe", content: [{ type: "text", text: "probe" }], display: false },
+        { triggerTurn: true },
+      );
+      writeFileSync(marker, "missing\\n");
+      process.exit(1);
+    },
+  });
+}
+`,
+);
+
+try {
+	const telemetryDir = join(temporaryDir, "telemetry");
+	const bundlePasses = probe(piExecutable, [], probeExtension, marker, "Bundled runtime", telemetryDir);
+	const corePasses = probe(process.execPath, [installation.coreCli], probeExtension, marker, "Core runtime", telemetryDir);
+	if (bundlePasses && corePasses) {
+		console.log(`Pi ${installation.version} already has #8773 behavior; no patch needed.`);
+	} else {
+		const patches = [];
+		if (!bundlePasses) {
+			const original = readFileSync(installation.bundle, "utf8");
+			patches.push({ path: installation.bundle, original, patched: patchBundle(original) });
+		}
+		if (!corePasses) {
+			const original = readFileSync(installation.core, "utf8");
+			patches.push({ path: installation.core, original, patched: patchCore(original) });
+		}
+		try {
+			for (const patch of patches) writeChecked(patch.path, patch.patched);
+			const patchedBundlePasses = probe(
+				piExecutable,
+				[],
+				probeExtension,
+				marker,
+				"Patched bundled runtime",
+				telemetryDir,
+			);
+			const patchedCorePasses = probe(
+				process.execPath,
+				[installation.coreCli],
+				probeExtension,
+				marker,
+				"Patched core runtime",
+				telemetryDir,
+			);
+			if (!patchedBundlePasses || !patchedCorePasses) {
+				throw new Error("#8773 workaround failed its bundled or unbundled runtime probe");
+			}
+		} catch (error) {
+			const rollbackFailures = [];
+			for (const patch of patches) {
+				try {
+					writeChecked(patch.path, patch.original);
+				} catch (rollbackError) {
+					rollbackFailures.push(new Error(`Could not restore ${patch.path}`, { cause: rollbackError }));
+				}
+			}
+			if (rollbackFailures.length > 0) {
+				throw new AggregateError(
+					[error, ...rollbackFailures],
+					"#8773 workaround failed and the Pi installation could not be fully restored",
+				);
+			}
+			throw new Error("#8773 workaround failed; restored the updated Pi installation", { cause: error });
+		}
+		console.log(`Updated Pi ${installation.version} and applied the verified #8773 workaround.`);
+	}
+} finally {
+	rmSync(temporaryDir, { recursive: true, force: true });
+}
