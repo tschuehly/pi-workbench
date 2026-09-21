@@ -187,7 +187,7 @@ private enum Health: String, Decodable { case healthy, starting, unhealthy, unkn
 
 private enum StackState {
     case ready
-    case stopped
+    case stopped(String)
     case waiting(String)
     case failed(String)
 }
@@ -201,6 +201,8 @@ private final class LifecycleController {
     private let configuration: PIWebConfiguration?
     private weak var browser: BrowserCoordinator?
     private let queue = DispatchQueue(label: "works.pi.workbench.lifecycle", qos: .userInitiated)
+    private let preparing = NSLock()
+    private var isPreparing = false
 
     init(configuration: PIWebConfiguration?, browser: BrowserCoordinator) {
         self.configuration = configuration
@@ -208,8 +210,21 @@ private final class LifecycleController {
     }
 
     func start() {
+        // Recovery is triggered by every window that loses the server, so collapse concurrent
+        // attempts instead of running several `pi-web start` calls against the same services.
+        preparing.lock()
+        let alreadyPreparing = isPreparing
+        isPreparing = true
+        preparing.unlock()
+        guard !alreadyPreparing else { return }
         onMain { self.browser?.showStartup("Checking installed PI WEB services…") }
-        queue.async { [weak self] in self?.prepareStack() }
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.prepareStack()
+            self.preparing.lock()
+            self.isPreparing = false
+            self.preparing.unlock()
+        }
     }
 
     func restartUI() {
@@ -244,8 +259,8 @@ private final class LifecycleController {
             case .ready:
                 showReady()
                 return
-            case .stopped:
-                onMain { self.browser?.showStartup("Starting installed PI WEB services…") }
+            case .stopped(let message):
+                onMain { self.browser?.showStartup(message) }
                 let start = try runCLI(["start"])
                 guard start.status == 0 else { throw LifecycleError.command(start.output) }
             case .waiting(let message):
@@ -254,24 +269,37 @@ private final class LifecycleController {
                 throw LifecycleError.status(message)
             }
 
-            for _ in 0..<60 {
+            // The dev services restart themselves, so keep waiting instead of giving up: a broken
+            // build or a restarted half heals on its own and the window must follow it back up.
+            var elapsedSeconds = 0
+            while true {
                 Thread.sleep(forTimeInterval: 1)
+                elapsedSeconds += 1
                 status = try typedStatus()
                 switch stackState(status) {
                 case .ready:
                     showReady()
                     return
+                case .stopped(let message):
+                    // launchd keeps the dev services alive, but a job that was unloaded stays down.
+                    _ = try? runCLI(["start"])
+                    report(message, elapsedSeconds)
                 case .waiting(let message):
-                    onMain { self.browser?.showStartup(message) }
-                case .stopped:
-                    throw LifecycleError.status("Installed services stopped again before becoming healthy.")
+                    report(message, elapsedSeconds)
                 case .failed(let message):
                     throw LifecycleError.status(message)
                 }
             }
-            throw LifecycleError.status("PI WEB services did not report healthy UI and session runtime components within 60 seconds.")
         } catch {
             showFailure(error.localizedDescription)
+        }
+    }
+
+    private func report(_ message: String, _ elapsedSeconds: Int) {
+        if elapsedSeconds > 60 {
+            showFailure("\(message)\n\nStill unhealthy after \(elapsedSeconds) seconds. This page reloads by itself once PI WEB reports healthy again.")
+        } else {
+            onMain { self.browser?.showStartup(message) }
         }
     }
 
@@ -303,9 +331,10 @@ private final class LifecycleController {
             return .failed("PI WEB reported \(conflict.ownership.rawValue) ownership for \(conflict.component.rawValue). Run doctor before retrying.")
         }
         if required.allSatisfy({ $0.ownership == .managed && $0.health == .healthy }) { return .ready }
-        if required.allSatisfy({ $0.ownership == .absent }) { return .stopped }
+        if required.allSatisfy({ $0.ownership == .absent }) { return .stopped("Starting installed PI WEB services…") }
         if required.contains(where: { $0.ownership == .absent }) {
-            return .failed("Only part of the installed PI WEB stack is running. Run doctor before retrying.")
+            // One half restarting is normal while its code is being edited; it heals by itself.
+            return .waiting("Waiting for the other half of the PI WEB stack to come back…")
         }
         return .waiting("Waiting for typed PI WEB UI and session runtime health…")
     }
@@ -635,7 +664,10 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        showFailure("PI WEB became unavailable at \(serverURL?.absoluteString ?? "the configured URL").\n\n\(error.localizedDescription)")
+        // The dev server restarts whenever its own code is edited, so treat an unreachable server
+        // as transient: show progress and let the lifecycle gate reload the window once it is back.
+        showStartup("PI WEB is unavailable at \(serverURL?.absoluteString ?? "the configured URL"). Reconnecting\u{2026}\n\n\(error.localizedDescription)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.actionHandler(.retry) }
     }
 
     private func isAllowed(_ url: URL) -> Bool {

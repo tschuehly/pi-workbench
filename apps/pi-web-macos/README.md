@@ -53,7 +53,10 @@ immediately, checks PI WEB lifecycle status, starts installed services when need
 `http://127.0.0.1:8505` after the UI and session daemon are healthy. PI WEB frontend changes continue
 to use Vite hot module replacement.
 
-Startup failures appear in the app window with **Open logs**, **Run doctor**, and **Retry** actions.
+The window recovers on its own. An unreachable server, a restarting half, or a partially running
+stack shows progress and keeps polling lifecycle status, then reloads the page once PI WEB reports
+healthy again. Failures that need a decision still show **Open logs**, **Run doctor**, and
+**Retry**, and the page keeps retrying behind them.
 
 ## Compatibility entry point
 
@@ -79,6 +82,29 @@ PI_WEB_DIR=/path/to/pi-web ./apps/pi-web-macos/Scripts/boot-dev.sh
 - **Restart Session Runtime…** warns before replacing `sessiond`; in-flight turns, asks, and
   terminals cannot migrate.
 - **Open Lifecycle Status** shows typed status and doctor reports.
+
+## Working on the Workbench while using it
+
+Sessions, subagents, and durable workers all live in `sessiond`. The UI service holds no session
+state, so **editing UI or API code is safe**: each half of the UI service restarts itself, and the
+window reconnects without losing sessions, running child Pis, or worker dispatches.
+
+Restarting the session runtime is the destructive boundary. `sessiond` shutdown ends each session,
+which the Subagent extension answers by cancelling every running execution, so a restart drops
+in-flight turns, asks, terminals, background subagent results, and running worker dispatches. Worker
+*identity* survives in the worker registry on disk, and the next dispatch resumes that worker's
+persisted session; the interrupted dispatch does not come back. Session-runtime code therefore
+changes only at a point where losing that work is acceptable.
+
+Two known ceilings, both recoverable with `pi-web restart --component ui`:
+
+- The API watcher can outlive its own server process — a killed child, or the dev port still held
+  when it starts. `tsx watch` then waits for a file change instead of restarting, so the API stays
+  unreachable while the UI serves 502s.
+- `pi-web status` reports `uiDev` from process presence, so it can read `healthy` while the API port
+  answers nothing. Check `curl -sf http://127.0.0.1:8504/api/pi-web/version` when the UI shows 502.
+  An `unmanaged` instance in `pi-web status --json` means a leftover process from an earlier
+  generation is holding the port; stop it before restarting the service.
 
 Use the same controls from a terminal:
 
