@@ -5,8 +5,8 @@
     "plugins": [
       {
         "id": "pi-workbench",
-        "module": "pi-web-integration/pi-web-plugin.js",
-        "service": "pi-web-integration/workstream-service.js"
+        "serverModule": "pi-web-integration/server-plugin.js",
+        "machineSpecific": true
       }
     ]
   }

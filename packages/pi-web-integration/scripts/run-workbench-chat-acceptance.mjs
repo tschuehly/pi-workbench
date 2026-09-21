@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { accessSync, constants } from "node:fs";
-import { appendFile, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -65,6 +65,7 @@ async function main() {
 
   try {
     await prepareFixture(stack);
+    await cp(join(WORKBENCH_ROOT, "packages"), join(stack.paths.data, "plugins/pi-workbench"), { recursive: true, errorOnExist: true });
     const sessiond = startLogged(stack, "sessiond", tsx, ["src/server/sessiond.ts"], piWebRoot);
     await waitForFile(stack.paths.socket, 15_000, sessiond);
     const web = startLogged(stack, "web", tsx, ["src/server/fixtureServer.ts"], piWebRoot);
@@ -116,9 +117,11 @@ async function runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture
   const limitations = controlledFixture.blockers.map((blocker) => ({ ...blocker }));
 
   await waitForDeepText(cdp, "New Chat", 15_000);
+  await waitForBrowserExpression(cdp, `document.querySelector("pi-workbench-app")?.shadowRoot?.querySelector("workstream-chooser")?.loading === false`, 15_000);
   const root = await evaluate(cdp, `(() => {
     const app = document.querySelector("pi-workbench-app");
     const shadow = app?.shadowRoot;
+    const workstreams = shadow?.querySelector("workstream-chooser");
     return {
       title: document.title,
       workbench: app !== null,
@@ -126,9 +129,10 @@ async function runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture
       legacy: document.querySelector("pi-web-app") !== null,
       files: shadow?.querySelector("workspace-files-panel") !== null,
       terminal: shadow?.querySelector("terminal-panel") !== null,
+      workstreamError: workstreams?.shadowRoot?.querySelector(".error")?.textContent?.trim() ?? "",
     };
   })()`);
-  checks.push({ id: "workbench-chat-root", passed: root.title === "Pi Workbench" && root.workbench && root.chooser && !root.legacy && !root.files && !root.terminal, detail: JSON.stringify(root) });
+  checks.push({ id: "workbench-chat-root", passed: root.title === "Pi Workbench" && root.workbench && root.chooser && !root.legacy && !root.files && !root.terminal && root.workstreamError === "", detail: JSON.stringify(root) });
 
   const firstUrl = fixtureUrl(baseUrl, first, "chat");
   await navigate(cdp, firstUrl.href, 20_000);

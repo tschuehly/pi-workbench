@@ -5,16 +5,16 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const PACKAGES_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const BROWSER_PACKAGE_NAMES = ["pi-web-integration", "workstream-session-coordination"];
+const PACKAGE_NAMES = ["pi-web-integration", "workstream-store"];
 
 function inside(root, candidate) {
   const path = relative(root, candidate);
   return path === "" || (!path.startsWith("..") && !path.startsWith(sep));
 }
 
-async function browserModuleGraph(entry) {
+async function moduleGraph(entry) {
   const root = await realpath(PACKAGES_ROOT);
-  const allowedRoots = await Promise.all(BROWSER_PACKAGE_NAMES.map((name) => realpath(resolve(root, name))));
+  const allowedRoots = await Promise.all(PACKAGE_NAMES.map((name) => realpath(resolve(root, name))));
   const queue = [resolve(root, entry)];
   const visited = new Set();
   while (queue.length > 0) {
@@ -32,17 +32,17 @@ async function browserModuleGraph(entry) {
   return visited;
 }
 
-test("the packages PI WEB manifest serves the complete copied browser module graph", async () => {
+test("the packages PI WEB manifest exposes the complete Workstream server module graph", async () => {
   const pluginManifest = JSON.parse(await readFile(resolve(PACKAGES_ROOT, "package.json"), "utf8"));
   const integrationManifest = JSON.parse(await readFile(resolve(PACKAGES_ROOT, "pi-web-integration/package.json"), "utf8"));
   const plugin = pluginManifest.piWeb?.plugins?.find((candidate) => candidate.id === "pi-workbench");
   assert.deepEqual(plugin, {
     id: "pi-workbench",
-    module: "pi-web-integration/pi-web-plugin.js",
-    service: "pi-web-integration/workstream-service.js",
+    serverModule: "pi-web-integration/server-plugin.js",
+    machineSpecific: true,
   });
-  assert.equal(integrationManifest.piWeb, undefined, "the nested package must not advertise an unservable plugin root");
+  assert.equal(integrationManifest.piWeb, undefined, "the nested package must not advertise a second plugin root");
 
-  const modules = await browserModuleGraph(plugin.module);
-  assert.equal(modules.has(await realpath(resolve(PACKAGES_ROOT, "workstream-session-coordination/src/index.js"))), true);
+  const modules = await moduleGraph(plugin.serverModule);
+  assert.equal(modules.has(await realpath(resolve(PACKAGES_ROOT, "workstream-store/src/index.js"))), true);
 });

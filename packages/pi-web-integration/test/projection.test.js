@@ -241,6 +241,17 @@ test("typed Workstream client uses all operations and persists across web-proces
     });
     assert.equal((await first.list()).length, 1);
     assert.equal((await first.inspect("ws-browser")).links.length, 1);
+    const serverPlugin = (await import(`../server-plugin.js?instance=${Date.now()}`)).default;
+    assert.equal(serverPlugin.apiVersion, 3);
+    const serverResult = await serverPlugin.activate().peer.request({
+      operation: "inspect",
+      input: { workstreamId: "ws-browser" },
+      signal: new AbortController().signal,
+      project: { id: "project" },
+      workspace: { id: "workspace" },
+    });
+    assert.equal(serverResult.ok, true);
+    assert.equal(serverResult.value.id, "ws-browser");
     const replay = await first.watch({ afterSequence: created.sequence });
     assert.equal(replay.mode, "replay");
     assert.deepEqual(replay.events.map((event) => event.sequence), [appended.sequence]);
