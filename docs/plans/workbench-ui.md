@@ -161,6 +161,7 @@ second entry for the same want.
 | 23 Legible delegated work | child rows named from the task (`f6bc36a`, takes effect for children launched after a lead restart); child-reported one-line status not built |
 | 24 Fast, durable session entry | routed reload recovery shipped (`76d859d3`); session-open latency not addressed |
 | 25 Readable on every surface | not addressed since the shell replacement; mobile layout last reported broken on 2026-08-27 |
+| 26 Live work visible from the overview | not built |
 
 Decisions already taken: Resume opens the existing session; modes stay guidance only; the
 Workstream-level overview replaces the earlier `goal.set` idea; the ten-variant launcher prototype

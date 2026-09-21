@@ -88,6 +88,9 @@ recorded in the [Workbench UI plan](../plans/workbench-ui.md).
     a client reload or development-server restart to leave me in the same session.
 25. **Readable on every surface.** As a developer, I want Chat to stay usable at narrow widths and on
     a phone, in a light or dark theme I choose.
+26. **Live work visible from the overview.** As a developer choosing where to go, I want the project
+    and Workstream overview to show which sessions are active right now and what they are working
+    on, so I can re-enter the work that is moving.
 
 ## Validation conditions
 
