@@ -12,7 +12,7 @@ import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { createCompletionWakeup, isNormalCompletionAttention, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
-import { activityText, progressText, recordProgress, renderProgressLog } from "./progress-log.mjs";
+import { activityText, progressText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
@@ -86,6 +86,9 @@ const StatusParams = Type.Object({
   all: Type.Optional(Type.Boolean({ description: "Include already-collected children for bounded diagnostics" })),
 });
 const CancelParams = Type.Object({ executionId: Type.String({ minLength: 1 }), reason: Type.Optional(Type.String({ description: "Why the child is being cancelled" })) });
+const ReportStatusParams = Type.Object({
+  status: Type.String({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
+});
 
 const WorkerCreateParams = Type.Object({
   name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),
@@ -379,6 +382,17 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         return `- ${s.executionId} [${state}] ${s.kind} · ${s.profile} · ${s.cognitiveRole}${meta?.workerName !== undefined ? ` · worker \"${meta.workerName}\"` : ""}${meta ? ` — ${meta.taskPreview}` : ""}`;
       });
       return { content: [{ type: "text", text: `${counts}\n${lines.join("\n")}` }], details: { children: summaries, running, uncollected, total: roster.length } };
+    },
+  });
+
+  pi.registerTool({
+    name: "report_status",
+    label: "Report status",
+    description: "Report your own current one-line status for the delegate roster the lead and owner see; a new report replaces your previous one. Call this once when you start real work on your assignment, and again whenever your phase changes materially (for example moving from investigation to implementation, or hitting a blocker). Do not call it on every tool call or minor step.",
+    promptSnippet: "Report your current one-line status to the delegate roster",
+    parameters: ReportStatusParams,
+    async execute(_toolCallId, params) {
+      return { content: [{ type: "text" as const, text: `Reported: ${params.status}` }], details: { outcome: "reported", status: params.status } };
     },
   });
 
@@ -691,10 +705,20 @@ export async function watchActivity(
   retainTerminal: () => boolean = () => false,
 ) {
   let completed = false;
+  // A self-report is sticky across unrelated tool calls: once the child reports, its status
+  // survives until the next report, while the inferred `activity` keeps changing per tool call.
+  let reportedStatus: string | undefined;
   try {
     for await (const observation of adapter.observe(executionId)) {
       const text = activityText(observation);
-      if (text !== undefined) upsertActivity(pi, { ...activity, activity: text });
+      const reported = reportedStatusText(observation);
+      if (reported !== undefined) reportedStatus = reported;
+      if (text === undefined && reported === undefined) continue;
+      upsertActivity(pi, {
+        ...activity,
+        ...(text === undefined ? {} : { activity: text }),
+        ...(reportedStatus === undefined ? {} : { reportedStatus }),
+      });
     }
     completed = true;
   } catch {

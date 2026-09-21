@@ -47,6 +47,14 @@ test("summarizes child tool activity without exposing shell arguments", () => {
   assert.equal(summarizeToolAction("read", { path: "/repo/src/\u001b[2Jauth.ts" }).includes("\u001b"), false);
 });
 
+test("summarizes a child's own report_status call verbatim, bounded", () => {
+  assert.equal(summarizeToolAction("report_status", { status: "Wiring the schema field" }), "Wiring the schema field");
+  assert.equal(summarizeToolAction("report_status", { status: "" }), "reporting status");
+  assert.equal(summarizeToolAction("report_status", {}), "reporting status");
+  assert.equal(summarizeToolAction("report_status", { status: "x".repeat(200) }), `${"x".repeat(120)}\u2026`);
+  assert.equal(summarizeToolAction("report_status", { status: 42 }), "42");
+});
+
 const now = new Date("2026-03-20T12:00:00.000Z");
 function spec(overrides = {}) {
   return {

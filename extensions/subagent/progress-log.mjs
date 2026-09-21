@@ -40,6 +40,18 @@ export function progressText(observation) {
   return observation.type.replaceAll("_", " ");
 }
 
+/**
+ * The child's own self-reported one-line status (from the `report_status` tool), distinct from the
+ * inferred per-tool-call `activityText`: a report is sticky across unrelated tool calls until the
+ * child reports again, so it is threaded separately by the caller instead of overwriting it here.
+ */
+export function reportedStatusText(observation) {
+  if (!observation.type.startsWith("tool_")) return undefined;
+  if (observation.detail?.toolName !== "report_status") return undefined;
+  const action = observation.detail?.action;
+  return typeof action === "string" && action.trim() !== "" ? action : undefined;
+}
+
 export function activityText(observation) {
   if (observation.type.startsWith("tool_")) return String(observation.detail?.action ?? observation.detail?.toolName ?? "tool");
   if (observation.type === "thinking_progress") return "thinking";

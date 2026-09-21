@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activityText, recordProgress, renderProgressLog } from "./progress-log.mjs";
+import { activityText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
 
 const startedAt = Date.parse("2026-08-07T20:00:00.000Z");
 
@@ -45,4 +45,11 @@ test("collapses noisy repeated assistant and tool progress updates", () => {
   assert.equal(activityText({ type: "usage", detail: { input: 10 } }), undefined);
   assert.equal(activityText({ type: "cancellation" }), "stopping");
   assert.equal(activityText({ type: "startup_timeout" }), "timed out");
+});
+
+test("extracts a child's own report_status call, distinct from ordinary tool activity", () => {
+  assert.equal(reportedStatusText({ type: "tool_start", detail: { toolName: "report_status", action: "Investigating the roster bug" } }), "Investigating the roster bug");
+  assert.equal(reportedStatusText({ type: "tool_progress", detail: { toolName: "bash", action: "running npm test" } }), undefined);
+  assert.equal(reportedStatusText({ type: "tool_start", detail: { toolName: "report_status", action: "" } }), undefined);
+  assert.equal(reportedStatusText({ type: "thinking_progress" }), undefined);
 });

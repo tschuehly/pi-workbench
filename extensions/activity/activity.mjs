@@ -158,6 +158,7 @@ function normalizeActivityEvent(value) {
       ...optionalText("effort", value.item.effort, 16),
       ...optionalText("objective", value.item.objective, 240),
       ...optionalText("activity", value.item.activity, 120),
+      ...optionalText("reportedStatus", value.item.reportedStatus, 120),
     },
   };
 }

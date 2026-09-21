@@ -133,6 +133,26 @@ test("activity progress retains terminal background children but removes foregro
   assert.deepEqual(events.at(-1), ["pi-workbench:activity", { type: "remove", id: "delegate:child-1" }]);
 });
 
+test("watchActivity keeps the last self-reported status while inferred activity keeps updating", async () => {
+  const events = [];
+  const pi = { events: { emit: (channel, event) => events.push([channel, event]) } };
+  const adapter = {
+    async *observe() {
+      yield { type: "tool_progress", detail: { toolName: "read", action: "reading roster.ts" } };
+      yield { type: "tool_start", detail: { toolName: "report_status", action: "Investigating the roster bug" } };
+      yield { type: "tool_progress", detail: { toolName: "edit", action: "editing roster.ts" } };
+      yield { type: "tool_start", detail: { toolName: "report_status", action: "Fixing the roster bug" } };
+      yield { type: "tool_progress", detail: { toolName: "bash", action: "running focused tests" } };
+    },
+  };
+  const activity = { id: "delegate:child-2", kind: "subagent", role: "implementation", model: "openai/gpt", effort: "medium", objective: "Fix the roster", activity: "starting" };
+
+  await watchActivity(pi, adapter, "child-2", activity, () => true);
+  const items = events.filter(([channel]) => channel === "pi-workbench:activity").map(([, event]) => event.item);
+  assert.deepEqual(items.map((item) => item.activity), ["reading roster.ts", "Investigating the roster bug", "editing roster.ts", "Fixing the roster bug", "running focused tests"]);
+  assert.deepEqual(items.map((item) => item.reportedStatus), [undefined, "Investigating the roster bug", "Investigating the roster bug", "Fixing the roster bug", "Fixing the roster bug"]);
+});
+
 test("collection and explicit cancellation remove retained activity", async () => {
   const events = [];
   const tools = new Map();

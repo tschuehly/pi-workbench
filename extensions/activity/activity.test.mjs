@@ -95,3 +95,22 @@ test("publishes bounded normalized RPC snapshots as activity changes", () => {
   surface.dispose();
   assert.deepEqual(statuses.at(-1), [ACTIVITY_CHANNEL, undefined]);
 });
+
+test("normalizes a child's self-reported status like its siblings", () => {
+  const statuses = [];
+  const surface = createActivitySurface();
+  surface.attachRpc({ setStatus: (...args) => statuses.push(args) });
+
+  surface.update({ type: "upsert", item: { ...items[0], reportedStatus: `Wiring the schema\u001b[2J field ${"x".repeat(200)}` } });
+  const reported = JSON.parse(statuses.at(-1)[1]).items[0].reportedStatus;
+  assert.equal(reported.includes("\u001b[2J"), false);
+  assert.equal(reported.length, 120);
+
+  surface.update({ type: "upsert", item: { ...items[0], reportedStatus: "   " } });
+  assert.equal(JSON.parse(statuses.at(-1)[1]).items[0].reportedStatus, undefined, "blank reports are dropped, not published");
+
+  surface.update({ type: "upsert", item: { ...items[0], reportedStatus: undefined } });
+  assert.equal(JSON.parse(statuses.at(-1)[1]).items[0].reportedStatus, undefined, "an inferred-only update still normalizes without a self-report");
+
+  surface.dispose();
+});

@@ -432,7 +432,13 @@ export function taskSlug(task, maxLength = 40) {
   return ascii.slice(0, maxLength).replace(/-+$/, "") || "task";
 }
 
+const REPORT_STATUS_MAX = 120;
+
 export function summarizeToolAction(toolName, args) {
+  if (toolName === "report_status") {
+    const status = cleanText(args?.status);
+    return status === "" ? "reporting status" : bounded(status, REPORT_STATUS_MAX);
+  }
   const path = concisePath(args?.path);
   if (toolName === "read") return bounded(`reading ${path ?? "file"}`, 56);
   if (toolName === "edit") return bounded(`editing ${path ?? "file"}`, 56);
