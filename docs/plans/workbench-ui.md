@@ -154,13 +154,13 @@ second entry for the same want.
 | 16 Conversation-shaped transcript | bubbles and secondary thinking shipped in the PI WEB fork (`2e372184`); flat transcript with tool-only folding shipped earlier (`fe7fbbea`); attended check pending |
 | 17 No hidden history | earlier conversation stays expanded (`e70d71a8`); scroll-to-newest control not built |
 | 18 Working Mode in reach | shipped in the PI WEB fork (`b1cc738b`), replacing the separate bar from `89c31764` |
-| 19 Interface scale | in progress; Cmd +, Cmd -, and Cmd 0 bindings not built |
-| 20 Return to an earlier message | session entry ids now reach the client (`10f83ae0`); per-message revert and edit actions and a visible entry point to the session-tree navigator not built |
+| 19 Interface scale | shipped in the PI WEB fork: scale preference and Settings control (`44ee94b6`), Cmd +, Cmd -, and Cmd 0 in the Workbench shell, which also applies the presentation profile at startup for the first time (`5509fe33`); the PI WEB Settings panel stays unreachable from the Workbench shell |
+| 20 Return to an earlier message | session entry ids reach the client (`4aaf0d7a`; an earlier identical commit was lost to a concurrent-writer collision and restored); per-message revert and edit actions in progress; the session-tree navigator is rendered only by the PI WEB shell, so the Workbench shell has no tree UI at all until that slice lands |
 | 21 Truthful queue and steering | Enter-steers, Stop-restores, promote one or all shipped (`32ed0ad4`, `208de9f4`); queue order needs one session-daemon restart before attended verification |
 | 22 Human sessions first | shipped in the PI WEB fork (`d09da87f`) |
-| 23 Legible delegated work | child rows named from the task (`f6bc36a`, takes effect for children launched after a lead restart); child-reported one-line status not built |
+| 23 Legible delegated work | child rows named from the task (`f6bc36a`); children report their own one-line status through a `report_status` tool carried as `reportedStatus` on the activity snapshot (`d9827e1`); both take effect for children launched after a lead restart; the PI WEB roster does not render `reportedStatus` yet |
 | 24 Fast, durable session entry | routed reload recovery shipped (`76d859d3`); session-open latency not addressed |
-| 25 Readable on every surface | not built; the Workbench shell renders hard-coded dark tokens from `src/client/index.html` and never calls `applyPiWebTheme`, so theme choice, system following, and theme-pack contrast fixes do not reach it; PI WEB's own theme system already supports `auto` via `prefers-color-scheme`; border-to-surface contrast is 1.4–1.8:1 across packs, below the 3:1 threshold |
+| 25 Readable on every surface | the Workbench shell now applies the theme and follows `prefers-color-scheme` live (`ece7c4d1`); border-to-surface contrast raised from 1.4–1.8:1 to at least 3:1 in every theme, guarded by a WCAG test (`09a79b07`); `--pi-border-muted` still mixes hairline and interactive use, `index.html` inline fallback tokens match no shipped theme, and the mobile layout is still unverified |
 | 26 Live work visible from the overview | not built |
 | 27 Workstream colour identity | not built |
 
