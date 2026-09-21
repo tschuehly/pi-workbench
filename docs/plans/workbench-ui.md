@@ -151,8 +151,8 @@ second entry for the same want.
 
 | Story | Status |
 | --- | --- |
-| 16 Conversation-shaped transcript | bubbles and secondary thinking shipped in the PI WEB fork (`2e372184`); flat transcript with tool-only folding shipped earlier (`fe7fbbea`); attended check pending |
-| 17 No hidden history | earlier conversation stays expanded (`e70d71a8`); scroll-to-newest control not built |
+| 16 Conversation-shaped transcript | **shipped and accepted.** Bubbles and secondary thinking shipped in the PI WEB fork (`2e372184`); flat transcript with tool-only folding shipped earlier (`fe7fbbea`); Thomas accepted it in attended use on 2026-09-21 |
+| 17 No hidden history | **shipped.** Earlier conversation stays expanded (`e70d71a8`), and the scroll-to-newest control shipped with the live tail in `208de9f4`, appearing only once the transcript is unpinned from the bottom; this row previously recorded it as not built |
 | 18 Working Mode in reach | shipped in the PI WEB fork (`b1cc738b`), replacing the separate bar from `89c31764` |
 | 19 Interface scale | shipped in the PI WEB fork: scale preference and Settings control (`44ee94b6`), Cmd +, Cmd -, and Cmd 0 in the Workbench shell, which also applies the presentation profile at startup for the first time (`5509fe33`); the Workbench shell now has its own settings panel carrying scale, theme, and density (`51349e14`) |
 | 20 Return to an earlier message | shipped in the PI WEB fork: entry ids reach the client (`4aaf0d7a`) and each message carries Revert to here, with Edit and resend on the owner's own messages, alongside the session-tree navigator the Workbench shell never rendered (`63ebdfc8`) |
