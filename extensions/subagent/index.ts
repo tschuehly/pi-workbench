@@ -254,7 +254,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         role: params.cognitiveRole,
         model: `${binding.provider}/${binding.model}`,
         effort: binding.effort,
-        objective: params.task,
+        objective: taskGoal(params.task),
         activity: "starting",
       };
       upsertActivity(pi, activity);
@@ -546,7 +546,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         role: params.cognitiveRole,
         model: `${binding.provider}/${binding.model}`,
         effort: binding.effort,
-        objective: params.task,
+        objective: taskGoal(params.task),
         activity: "starting",
       };
       upsertActivity(pi, activity);
@@ -939,6 +939,10 @@ function registryFailure(error: unknown) {
   const diagnostic = errorMessage(error);
   const coded = typeof code === "string" ? `[${code}] ${diagnostic}` : diagnostic;
   return { content: [{ type: "text" as const, text: `preflight_failed: ${coded}` }], details: { outcome: "preflight_failed", ...(typeof code === "string" ? { code } : {}), diagnostic }, isError: true };
+}
+
+export function taskGoal(task: string): string {
+  return bounded(taskLabel(task.split(/\r?\n/, 1)[0], 160), 160);
 }
 
 function bounded(value: string, max: number): string {

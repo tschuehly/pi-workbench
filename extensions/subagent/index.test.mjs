@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, reservePending, streamToResult, watchActivity } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, reservePending, streamToResult, taskGoal, watchActivity } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -441,6 +441,13 @@ async function dispatchSubagentWithName(params) {
   const activityItem = events.find(([channel, event]) => channel === "pi-workbench:activity" && event.type === "upsert")[1].item;
   return { dispatched, activityName: activityItem.name };
 }
+
+test("derives a bounded delegate goal from the first sentence or line", () => {
+  assert.equal(taskGoal("Fix the roster objective. Preserve every other field."), "Fix the roster objective");
+  assert.equal(taskGoal("Keep the roster goal concise!"), "Keep the roster goal concise");
+  assert.equal(taskGoal(`${"x".repeat(200)}\nIgnore later lines.`), "x".repeat(160));
+  assert.equal(taskGoal("Publish a real delegate goal"), "Publish a real delegate goal");
+});
 
 test("an explicit subagent name wins over the task-derived label and slug", async () => {
   const { dispatched, activityName } = await dispatchSubagentWithName({
