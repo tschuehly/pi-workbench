@@ -22,6 +22,7 @@ test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
   assert.ok(tools.get("worker_dispatch").parameters.properties.telemetryConcept);
   assert.ok(tools.get("worker_dispatch").parameters.properties.modelOverride);
   assert.equal(tools.get("subagent").parameters.properties.modelOverride, undefined, "only Worker dispatches accept an explicit model");
+  assert.ok(tools.get("subagent").parameters.properties.name, "subagent accepts an explicit dispatcher-supplied name");
   assert.ok(tools.get("worker_status").parameters.properties.all);
   let notice;
   shortcuts.get("super+b").handler({ ui: { notify: (...args) => { notice = args; } } });
@@ -401,6 +402,61 @@ test("provider-only authors never borrow a parent model and are used only when a
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
+});
+
+async function dispatchSubagentWithName(params) {
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-name-"));
+  const resolverPath = join(temporary, "resolver.mjs");
+  await writeFile(resolverPath, `
+    console.log(JSON.stringify({ status: "pass", modelBinding: {
+      cognitiveRole: process.argv[2],
+      provider: "anthropic", model: "claude-test", effort: "high",
+      admission: "fresh-quota",
+      quotaSnapshot: { generatedAt: null, telemetryStatus: "unavailable", relevantWindows: [], stale: false, refreshedAt: null, error: "test" },
+    }}));
+  `);
+  let dispatched;
+  const events = [];
+  const never = new Promise(() => {});
+  const adapter = {
+    dispatch: async (spec) => { dispatched = structuredClone(spec); return { executionId: "execution-name", acceptedAt: "2026-09-01T00:00:00Z" }; },
+    result: () => never,
+    async *observe() {},
+    list: () => [],
+    cancelAll: async () => [],
+  };
+  const tools = new Map();
+  const pi = { events: { emit: (channel, event) => events.push([channel, event]) }, on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} };
+  try {
+    subagentExtension(pi, { adapter, resolverPath });
+    await tools.get("subagent").execute("call", {
+      profile: "reviewer",
+      cognitiveRole: "investigation",
+      background: true,
+      ...params,
+    }, undefined, undefined, { cwd: "/repo", model: { provider: "anthropic", id: "claude" }, sessionManager: { getSessionId: () => "lead" } });
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+  const activityItem = events.find(([channel, event]) => channel === "pi-workbench:activity" && event.type === "upsert")[1].item;
+  return { dispatched, activityName: activityItem.name };
+}
+
+test("an explicit subagent name wins over the task-derived label and slug", async () => {
+  const { dispatched, activityName } = await dispatchSubagentWithName({
+    task: "Verification task, read-only with respect to routing. Actually: fix the roster label.",
+    name: "Fix roster label",
+  });
+  assert.equal(dispatched.name, "Fix roster label");
+  assert.equal(activityName, "Fix roster label");
+});
+
+test("an omitted subagent name falls back to the task-derived label, unchanged", async () => {
+  const { dispatched, activityName } = await dispatchSubagentWithName({
+    task: "Fix the roster label. Then verify it.",
+  });
+  assert.equal(dispatched.name, undefined);
+  assert.equal(activityName, "Fix the roster label");
 });
 
 test("reports counts and hides collected children from the default status roster", async () => {

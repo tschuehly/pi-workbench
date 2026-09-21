@@ -143,7 +143,7 @@ export class PiRpcExecutionAdapter {
   #launch(state) {
     const { spec } = state;
     const args = ["--mode", "rpc", "--provider", spec.binding.provider, "--model", spec.binding.model, "--thinking", spec.binding.effort, "--tools", spec.tools.join(",")];
-    if (spec.continuation === undefined) args.push("--name", `workbench-${spec.profile}-${taskSlug(spec.task)}`);
+    if (spec.continuation === undefined) args.push("--name", `workbench-${spec.profile}-${taskSlug(spec.name ?? spec.task)}`);
     else args.push("--session", spec.continuation.sessionId);
     const env = { ...process.env, PI_TELEMETRY_EXECUTION_ID: state.executionId, PI_WORKBENCH_EXECUTION_KIND: state.kind };
     if (spec.parentSessionId === undefined) delete env.PI_TELEMETRY_PARENT_SESSION_ID;
@@ -481,6 +481,9 @@ function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   }
   if (spec.telemetryConcept !== undefined && (typeof spec.telemetryConcept !== "string" || spec.telemetryConcept.trim() === "")) {
     throw typedError("INVALID_SPEC", "telemetryConcept must be a non-empty string when present.");
+  }
+  if (spec.name !== undefined && (typeof spec.name !== "string" || spec.name.trim() === "")) {
+    throw typedError("INVALID_SPEC", "name must be a non-empty string when present.");
   }
   const binding = spec.binding;
   if (!binding || binding.cognitiveRole !== spec.cognitiveRole || !binding.provider || !binding.model || !binding.effort) throw typedError("INVALID_BINDING", "Resolved binding does not match the requested Cognitive Role.");

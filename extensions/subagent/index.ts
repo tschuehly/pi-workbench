@@ -71,6 +71,7 @@ const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed
 
 const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output" }),
+  name: Type.Optional(Type.String({ minLength: 1, description: "Short human-readable label for this child, a few words not a sentence (e.g. 'Fix login redirect'). Names the delegate roster row and the child session; falls back to a label derived from task when omitted." })),
   profile: StringEnum(LEAF_PROFILES, { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
   independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Use only when the exact author model is genuinely unavailable; explicit providers never inherit the active parent's model." })),
@@ -225,6 +226,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           binding,
           parentSessionId,
           kind: "subagent",
+          ...(params.name === undefined ? {} : { name: params.name }),
           ...(telemetryConcept === undefined ? {} : { telemetryConcept }),
         });
       } catch (error) {
@@ -248,7 +250,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       const activity = {
         id: `delegate:${receipt.executionId}`,
         kind: "subagent",
-        name: taskLabel(params.task),
+        name: taskLabel(params.name ?? params.task),
         role: params.cognitiveRole,
         model: `${binding.provider}/${binding.model}`,
         effort: binding.effort,

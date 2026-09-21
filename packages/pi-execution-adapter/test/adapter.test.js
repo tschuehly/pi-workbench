@@ -38,6 +38,20 @@ test("names the launched child session from the task instead of a generic profil
   assert.equal(args[args.indexOf("--name") + 1], "workbench-scout-align-drawer-labels-with-the-design-spec");
 });
 
+test("names the launched child session from an explicit name when the caller supplies one, bypassing the task-derived slug", async () => {
+  const children = [];
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, args) => { const child = fakeRpc(); children.push({ child, args }); return child; } });
+  const receipt = await adapter.dispatch(spec({ task: "Verification task, read-only with respect to routing. Actually: fix the login redirect.", name: "Fix login redirect" }));
+  await adapter.result(receipt.executionId);
+  const args = children[0].args;
+  assert.equal(args[args.indexOf("--name") + 1], "workbench-scout-fix-login-redirect");
+});
+
+test("rejects a blank explicit name instead of silently falling back", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
+  await assert.rejects(adapter.dispatch(spec({ name: "   " })), (error) => error.code === "INVALID_SPEC");
+});
+
 test("summarizes child tool activity without exposing shell arguments", () => {
   assert.equal(summarizeToolAction("read", { path: "/repo/src/auth-service.ts" }), "reading src/auth-service.ts");
   assert.equal(summarizeToolAction("edit", { path: "src/index.ts" }), "editing src/index.ts");
