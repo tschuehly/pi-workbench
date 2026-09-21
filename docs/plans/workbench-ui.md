@@ -160,7 +160,7 @@ second entry for the same want.
 | 22 Human sessions first | shipped in the PI WEB fork (`d09da87f`) |
 | 23 Legible delegated work | child rows named from the task (`f6bc36a`, takes effect for children launched after a lead restart); child-reported one-line status not built |
 | 24 Fast, durable session entry | routed reload recovery shipped (`76d859d3`); session-open latency not addressed |
-| 25 Readable on every surface | not addressed since the shell replacement; mobile layout last reported broken on 2026-08-27; contrast and system-theme following not built |
+| 25 Readable on every surface | not built; the Workbench shell renders hard-coded dark tokens from `src/client/index.html` and never calls `applyPiWebTheme`, so theme choice, system following, and theme-pack contrast fixes do not reach it; PI WEB's own theme system already supports `auto` via `prefers-color-scheme`; border-to-surface contrast is 1.4–1.8:1 across packs, below the 3:1 threshold |
 | 26 Live work visible from the overview | not built |
 | 27 Workstream colour identity | not built |
 
