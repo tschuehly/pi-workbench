@@ -143,6 +143,25 @@ Selected Chats can request desktop notifications for completion, questions, dial
 while the window is unfocused (`a27df255`). These runtime-backed changes need one session-daemon
 restart before attended verification.
 
+## Chat stories from attended use
+
+One row per story in [requirements](../foundation/requirements.md) "Chat presentation and control".
+When Thomas changes a story, rewrite the requirement in place and update this row; do not append a
+second entry for the same want.
+
+| Story | Status |
+| --- | --- |
+| 16 Conversation-shaped transcript | bubbles and secondary thinking shipped in the PI WEB fork (`2e372184`); flat transcript with tool-only folding shipped earlier (`fe7fbbea`); attended check pending |
+| 17 No hidden history | earlier conversation stays expanded (`e70d71a8`); scroll-to-newest control not built |
+| 18 Working Mode in reach | shipped in the PI WEB fork (`b1cc738b`), replacing the separate bar from `89c31764` |
+| 19 Interface scale | in progress; Cmd +, Cmd -, and Cmd 0 bindings not built |
+| 20 Return to an earlier message | session entry ids now reach the client (`10f83ae0`); per-message revert and edit actions and a visible entry point to the session-tree navigator not built |
+| 21 Truthful queue and steering | Enter-steers, Stop-restores, promote one or all shipped (`32ed0ad4`, `208de9f4`); queue order needs one session-daemon restart before attended verification |
+| 22 Human sessions first | shipped in the PI WEB fork (`d09da87f`) |
+| 23 Legible delegated work | child rows named from the task (`f6bc36a`, takes effect for children launched after a lead restart); child-reported one-line status not built |
+| 24 Fast, durable session entry | routed reload recovery shipped (`76d859d3`); session-open latency not addressed |
+| 25 Readable on every surface | not addressed since the shell replacement; mobile layout last reported broken on 2026-08-27 |
+
 Decisions already taken: Resume opens the existing session; modes stay guidance only; the
 Workstream-level overview replaces the earlier `goal.set` idea; the ten-variant launcher prototype
 and the context-view prototypes are superseded by the shipped card and the `agent-audit` explorer.

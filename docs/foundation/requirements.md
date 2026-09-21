@@ -57,6 +57,38 @@ This document defines product outcomes and system-level validation. The
     interaction without claiming managed authority, workspace isolation, publication rights, or
     recovery that no code enforces.
 
+### Chat presentation and control
+
+These outcomes come from attended use of Workbench Chat. When the owner changes what he wants,
+rewrite the story in place rather than appending a new one. What shipped, and in which commit, is
+recorded in the [Workbench UI plan](../plans/workbench-ui.md).
+
+16. **Conversation-shaped transcript.** As a developer reading Chat, I want user and assistant turns
+    to read as distinct chat bubbles, thinking to read as clearly secondary to speech, and only tool
+    usage to fold.
+17. **No hidden history.** As a developer scrolling Chat, I want earlier messages to stay expanded as
+    the conversation advances, and a control that returns me to the newest message.
+18. **Working Mode in reach.** As a developer changing Alignment or Checking, I want segmented
+    controls in the composer action row between Send and the model selector, not a separate bar and
+    not a typed command.
+19. **Interface scale.** As a developer, I want to enlarge or reduce the whole interface with
+    Cmd +, Cmd -, and Cmd 0, persisted across reloads.
+20. **Return to an earlier message.** As a developer, I want to send the session back to any earlier
+    message from the transcript itself, and to edit a message I sent by mistake and continue from
+    there.
+21. **Truthful queue and steering.** As a developer with work in flight, I want Enter to steer, Stop
+    to return queued text to the composer, queued messages to keep the order I wrote them in, and a
+    way to send one or all of them now.
+22. **Human sessions first.** As a developer opening All sessions, I want delegated child sessions
+    hidden by default and revealable by one toggle.
+23. **Legible delegated work.** As a developer watching delegated work, I want each child row to name
+    the child by its task, state the goal it was given, and show what it is doing now — reported by
+    the child in one line, not inferred from its opening prompt.
+24. **Fast, durable session entry.** As a developer, I want opening a session to feel immediate, and
+    a client reload or development-server restart to leave me in the same session.
+25. **Readable on every surface.** As a developer, I want Chat to stay usable at narrow widths and on
+    a phone, in a light or dark theme I choose.
+
 ## Validation conditions
 
 ### First graphical slice
