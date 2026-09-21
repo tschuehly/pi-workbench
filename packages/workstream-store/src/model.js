@@ -341,9 +341,9 @@ export function rebuildSnapshot(ledger) {
           id: key,
           status: "pending",
           associationKey: payload.associationKey,
-          machineId: payload.machineId,
-          projectId: payload.projectId,
-          workspaceId: payload.workspaceId,
+          ...(payload.machineId === undefined ? {} : { machineId: payload.machineId }),
+          ...(payload.projectId === undefined ? {} : { projectId: payload.projectId }),
+          ...(payload.workspaceId === undefined ? {} : { workspaceId: payload.workspaceId }),
           ...(payload.derivationKind === undefined ? {} : { derivationKind: payload.derivationKind }),
           latestCheckpoint: null,
           checkpointFailure: null,
@@ -368,12 +368,15 @@ export function rebuildSnapshot(ledger) {
           id: payload.sessionId,
           status: "active",
           associationKey: payload.associationKey ?? session.associationKey,
-          machineId: payload.machineId,
-          projectId: payload.projectId,
-          workspaceId: payload.workspaceId,
           launchFailure: null,
         };
         delete confirmed.derivationKind;
+        delete confirmed.machineId;
+        delete confirmed.projectId;
+        delete confirmed.workspaceId;
+        if (payload.machineId !== undefined) confirmed.machineId = payload.machineId;
+        if (payload.projectId !== undefined) confirmed.projectId = payload.projectId;
+        if (payload.workspaceId !== undefined) confirmed.workspaceId = payload.workspaceId;
         sessions.set(payload.sessionId, confirmed);
         break;
       }

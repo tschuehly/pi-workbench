@@ -225,6 +225,37 @@ test("copies the exact next-session prompt and falls back when clipboard access 
   assert.equal(fallback, "Resume safely.");
 });
 
+test("server Workstream responses remain strict JSON when a session has no anchor", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-workbench-web-json-"));
+  const previous = process.env.PI_WORKBENCH_WORKSTREAM_DIR;
+  process.env.PI_WORKBENCH_WORKSTREAM_DIR = directory;
+  try {
+    const service = (await import(`../workstream-service.js?json-values-${Date.now()}`)).default;
+    await service.handle({ operation: "create", input: { workstreamId: "ws-json", idempotencyKey: "create-json", title: "JSON values", producer: "owner" } });
+    await service.handle({ operation: "append", input: {
+      workstreamId: "ws-json",
+      expectedRevision: 1,
+      idempotencyKey: "pending-json",
+      records: [{ type: "session.pending", producer: "pi-web", payload: { associationKey: "launch-json" } }],
+    } });
+    await service.handle({ operation: "append", input: {
+      workstreamId: "ws-json",
+      expectedRevision: 2,
+      idempotencyKey: "confirm-json",
+      records: [{ type: "session.confirmed", producer: "pi-web", payload: { sessionId: "session-json", associationKey: "launch-json" } }],
+    } });
+    const response = await service.handle({ operation: "inspect", input: { workstreamId: "ws-json" } });
+    assert.doesNotThrow(() => JSON.stringify(response, (_key, value) => {
+      if (value === undefined) throw new Error("undefined is not a JSON value");
+      return value;
+    }));
+  } finally {
+    if (previous === undefined) delete process.env.PI_WORKBENCH_WORKSTREAM_DIR;
+    else process.env.PI_WORKBENCH_WORKSTREAM_DIR = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("typed Workstream client uses all operations and persists across web-process service replacement", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-workbench-web-client-"));
   const previous = process.env.PI_WORKBENCH_WORKSTREAM_DIR;
