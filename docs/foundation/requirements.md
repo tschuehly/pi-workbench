@@ -87,10 +87,14 @@ recorded in the [Workbench UI plan](../plans/workbench-ui.md).
 24. **Fast, durable session entry.** As a developer, I want opening a session to feel immediate, and
     a client reload or development-server restart to leave me in the same session.
 25. **Readable on every surface.** As a developer, I want Chat to stay usable at narrow widths and on
-    a phone, in a light or dark theme I choose.
+    a phone, with strong contrast, and with the appearance following the system light or dark
+    setting unless I override it.
 26. **Live work visible from the overview.** As a developer choosing where to go, I want the project
     and Workstream overview to show which sessions are active right now and what they are working
     on, so I can re-enter the work that is moving.
+27. **Workstream colour identity.** As a developer with several Workstreams open, I want each
+    Workstream to carry its own colour through the overview and Chat, so I can tell at a glance
+    which one I am looking at.
 
 ## Validation conditions
 
