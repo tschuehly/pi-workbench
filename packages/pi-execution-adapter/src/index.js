@@ -143,7 +143,7 @@ export class PiRpcExecutionAdapter {
   #launch(state) {
     const { spec } = state;
     const args = ["--mode", "rpc", "--provider", spec.binding.provider, "--model", spec.binding.model, "--thinking", spec.binding.effort, "--tools", spec.tools.join(",")];
-    if (spec.continuation === undefined) args.push("--name", `workbench-${spec.profile}-${state.executionId.slice(0, 8)}`);
+    if (spec.continuation === undefined) args.push("--name", `workbench-${spec.profile}-${taskSlug(spec.task)}`);
     else args.push("--session", spec.continuation.sessionId);
     const env = { ...process.env, PI_TELEMETRY_EXECUTION_ID: state.executionId, PI_WORKBENCH_EXECUTION_KIND: state.kind };
     if (spec.parentSessionId === undefined) delete env.PI_TELEMETRY_PARENT_SESSION_ID;
@@ -403,6 +403,33 @@ function createState(executionId, spec, acceptedAt) {
   let resultResolve;
   let closeResolve;
   return { executionId, spec: structuredClone(spec), acceptedAt, observations: [], observationSequence: 0, waiters: new Set(), commands: new Map(), commandSequence: 0, toolActions: new Map(), done: false, closed: false, prompted: false, phase: "starting", completing: false, finalText: "", resultPromise: new Promise((resolve) => { resultResolve = resolve; }), resultResolve, closePromise: new Promise((resolve) => { closeResolve = resolve; }), closeResolve };
+}
+
+// The first sentence- or line-scoped clause of a task, whitespace-collapsed and stripped of
+// trailing punctuation. Shared basis for the human-readable activity label and the on-disk slug.
+function firstClause(task) {
+  const clean = cleanText(task);
+  const stop = clean.search(/[.!?\n]/);
+  return (stop === -1 ? clean : clean.slice(0, stop)).trim();
+}
+
+/** A short human-readable label for a task, for delegate activity display. */
+export function taskLabel(task, maxLength = 40) {
+  const clause = firstClause(task);
+  if (clause === "") return "Untitled task";
+  const truncated = clause.length <= maxLength ? clause : clause.slice(0, maxLength).trim();
+  return truncated.replace(/[\s.,;:!?…-]+$/, "") || "Untitled task";
+}
+
+/** A short lowercase ASCII hyphenated slug for a task, for on-disk session names. */
+export function taskSlug(task, maxLength = 40) {
+  const ascii = firstClause(task)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return ascii.slice(0, maxLength).replace(/-+$/, "") || "task";
 }
 
 export function summarizeToolAction(toolName, args) {

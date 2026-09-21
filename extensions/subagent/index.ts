@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
+import { PiRpcExecutionAdapter, taskLabel } from "../../packages/pi-execution-adapter/src/index.js";
 import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
@@ -245,6 +245,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       const activity = {
         id: `delegate:${receipt.executionId}`,
         kind: "subagent",
+        name: taskLabel(params.task),
         role: params.cognitiveRole,
         model: `${binding.provider}/${binding.model}`,
         effort: binding.effort,

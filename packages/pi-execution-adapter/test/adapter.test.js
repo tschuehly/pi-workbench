@@ -2,12 +2,41 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
-import { PiRpcExecutionAdapter, summarizeToolAction } from "../src/index.js";
+import { PiRpcExecutionAdapter, summarizeToolAction, taskLabel, taskSlug } from "../src/index.js";
 
 // The adapter defaults its overlay path from the environment, so a run-scoped overlay in the
 // surrounding session would silently activate fail-closed validation in the default-path cases.
 // Overlay cases below pass routingOverlayPath explicitly.
 delete process.env.PI_WORKBENCH_ROUTING_OVERLAY;
+
+test("derives a human-readable task label from the first meaningful clause", () => {
+  assert.equal(taskLabel("Fix the login bug. Then write a test."), "Fix the login bug");
+  assert.equal(taskLabel("Align   drawer\nlabels\twith the spec"), "Align drawer labels with the spec");
+  assert.equal(taskLabel("Do the thing!"), "Do the thing");
+  assert.equal(taskLabel(""), "Untitled task");
+  assert.equal(taskLabel("   "), "Untitled task");
+  assert.equal(taskLabel("a".repeat(200)), "a".repeat(40));
+  assert.equal(taskLabel("Investigate why caf\u00e9 orders fail, then report"), "Investigate why caf\u00e9 orders fail, then r");
+});
+
+test("derives an ascii hyphenated session-name slug from the first clause of a task", () => {
+  assert.equal(taskSlug("Scout: align drawer labels with the spec."), "scout-align-drawer-labels-with-the-spec");
+  assert.equal(taskSlug(""), "task");
+  assert.equal(taskSlug("   "), "task");
+  assert.equal(taskSlug("a".repeat(200)), "a".repeat(40));
+  assert.equal(taskSlug("\u00c9tudier le caf\u00e9"), "etudier-le-cafe");
+  assert.equal(taskSlug("\u65e5\u672c\u8a9e\u306e\u30bf\u30b9\u30af"), "task");
+  assert.equal(taskSlug("Fix --dangerous; rm -rf /tmp!!"), "fix-dangerous-rm-rf-tmp");
+});
+
+test("names the launched child session from the task instead of a generic profile counter", async () => {
+  const children = [];
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, args) => { const child = fakeRpc(); children.push({ child, args }); return child; } });
+  const receipt = await adapter.dispatch(spec({ task: "Align drawer labels with the design spec" }));
+  await adapter.result(receipt.executionId);
+  const args = children[0].args;
+  assert.equal(args[args.indexOf("--name") + 1], "workbench-scout-align-drawer-labels-with-the-design-spec");
+});
 
 test("summarizes child tool activity without exposing shell arguments", () => {
   assert.equal(summarizeToolAction("read", { path: "/repo/src/auth-service.ts" }), "reading src/auth-service.ts");
