@@ -39,6 +39,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Workstreams, checkpoints, and session coordination | `docs/contracts/workstreams.md`, `packages/workstream-store/`, `packages/workstream-session-coordination/`, `packages/pi-web-integration/`, `skills/workstreams/` |
 | Attention and graphical interfaces | `docs/contracts/interfaces.md`, `docs/contracts/graphical-attention.md` |
 | Workbench UI and PI WEB reuse | `docs/plans/workbench-ui.md`, `docs/integrations/pi-web/reuse-boundary.md`, `apps/pi-web-macos/`, sibling `../pi-web` checkout |
+| Owner Chat stories and what shipped | `docs/foundation/requirements.md` ("Chat presentation and control"), `docs/plans/workbench-ui.md` ("Chat stories from attended use") |
 | Legacy PI WEB UI evidence or code | `docs/archive/pi-web-ui/`, `packages/pi-web-integration/` |
 | Workflow or repository policy | `docs/contracts/workflow.md`, `workflows/`, `repositories/` |
 | Decision evidence | `docs/research/sources/` |
