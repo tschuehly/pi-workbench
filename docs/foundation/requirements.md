@@ -81,9 +81,12 @@ recorded in the [Workbench UI plan](../plans/workbench-ui.md).
     way to send one or all of them now.
 22. **Human sessions first.** As a developer opening All sessions, I want delegated child sessions
     hidden by default and revealable by one toggle.
-23. **Legible delegated work.** As a developer watching delegated work, I want each child row to name
-    the child by its task, state the goal it was given, and show what it is doing now — reported by
-    the child in one line, not inferred from its opening prompt.
+23. **Legible delegated work.** As a developer watching delegated work, I want each child row to spend
+    its width on what varies — the child's name, the goal it was given, and what it is doing now,
+    reported by the child in one line rather than inferred from its opening prompt — while its role and
+    model stay visible and constant labels such as "Subagent" and "Running" shrink to a compact
+    indicator instead of a column of repeated words. The goal must read as a goal, not as the opening
+    characters of the prompt.
 24. **Fast, durable session entry.** As a developer, I want opening a session to feel immediate, and
     a client reload or development-server restart to leave me in the same session.
 25. **Readable on every surface.** As a developer, I want Chat to stay usable at narrow widths and on
