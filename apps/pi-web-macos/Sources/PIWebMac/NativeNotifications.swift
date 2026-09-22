@@ -19,7 +19,9 @@ Object.defineProperty(window, "piWebNative", {
   value: Object.freeze({
     pickDirectory: () => window.webkit.messageHandlers.piWebDirectoryPicker.postMessage({}),
     requestNotificationPermission: () => window.webkit.messageHandlers.piWebRequestNotificationPermission.postMessage({}),
-    notify: (title, body) => window.webkit.messageHandlers.piWebNotification.postMessage({ title, body })
+    notify: (title, body) => window.webkit.messageHandlers.piWebNotification.postMessage({ title, body }),
+    getSleepDisabled: () => window.webkit.messageHandlers.piWebGetSleepDisabled.postMessage({}),
+    setSleepDisabled: disabled => window.webkit.messageHandlers.piWebSetSleepDisabled.postMessage(disabled)
   })
 });
 """

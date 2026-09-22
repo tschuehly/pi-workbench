@@ -68,6 +68,39 @@ stack shows progress and keeps probing runtime readiness, then reloads the page 
 available again. A prolonged readiness wait shows **Open logs**, **Run doctor**, and **Retry**
 while continuing to probe. Configuration or CLI failures require **Retry** after correction.
 
+## System sleep control
+
+The main PI WEB frame can call `window.piWebNative.getSleepDisabled()` to read the current
+system-wide setting and `window.piWebNative.setSleepDisabled(boolean)` to request a change. Both
+return Promises; reads happen independently of a pending administrator prompt, and the setter
+resolves to the actual state reread from `pmset`, not the requested value. An absent
+`SleepDisabled` key means `false`.
+
+Every rejection has a stable prefix: `SLEEP_CONTROL_READ_FAILED:` for a failed `pmset` read,
+`SLEEP_CONTROL_INVALID_STATE:` for malformed reported state, `SLEEP_CONTROL_CHANGE_FAILED:` for a
+failed change, `SLEEP_CONTROL_USER_CANCELLED:` for a cancelled administrator prompt,
+`SLEEP_CONTROL_CHANGE_IN_PROGRESS:` for a concurrent setter, `SLEEP_CONTROL_INVALID_ARGUMENT:` for
+a non-boolean setter argument, and `SLEEP_CONTROL_TIMEOUT:` for a process deadline. If the
+authenticated setter succeeds but its required reread fails, `SLEEP_CONTROL_STATE_UNVERIFIED:` says
+the setting may have changed; the UI must reread instead of presenting either state as confirmed.
+
+The native privilege boundary accepts sleep-control messages only from the configured PI WEB
+origin's main frame; external navigation opens in the system browser. Current PI WEB markdown
+sanitization strips scripts and event handlers from rendered content, but that is PI WEB behavior,
+not a native-host guarantee. Any script running in the trusted main frame can request the fixed
+change. The client confirms intent, but that web confirmation is not an authorization boundary;
+macOS administrator authentication remains the gate. macOS may reuse cached administrator rights,
+so a change does not necessarily show a fresh prompt.
+
+Thomas selected persistent system-wide `pmset -a` behavior on 2026-09-22 instead of an app-owned
+`caffeinate` assertion. The system-wide setting applies on battery and AC and survives app quit,
+crash, and system reboot; Pi Workbench deliberately performs no automatic cleanup. It does not cache
+the state and rereads it from `pmset`. To restore normal sleep outside the app, run:
+
+```sh
+sudo /usr/bin/pmset -a disablesleep 0
+```
+
 ## Compatibility entry point
 
 The older command still works:
@@ -129,6 +162,7 @@ Regression checks:
 
 ```sh
 bash apps/pi-web-macos/Scripts/native-notifications.test.sh
+bash apps/pi-web-macos/Scripts/native-sleep-control.test.sh
 bash apps/pi-web-macos/Scripts/readiness.test.sh
 bash apps/pi-web-macos/Scripts/install-app.test.sh
 PI_WEB_TEST_URL=http://127.0.0.1:8505 bash apps/pi-web-macos/Scripts/readiness.test.sh

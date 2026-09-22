@@ -316,6 +316,7 @@ private enum LifecycleError: LocalizedError {
 private final class BrowserCoordinator {
     private let serverURL: URL?
     private let actionHandler: (LifecycleAction) -> Void
+    private let sleepControl = NativeSleepControl()
     private var controllers: [ObjectIdentifier: BrowserWindowController] = [:]
     private var ready = false
 
@@ -330,7 +331,7 @@ private final class BrowserCoordinator {
 
     @discardableResult
     func openWindow(url: URL? = nil) -> BrowserWindowController {
-        let controller = BrowserWindowController(serverURL: serverURL, actionHandler: actionHandler) { [weak self] controller in
+        let controller = BrowserWindowController(serverURL: serverURL, sleepControl: sleepControl, actionHandler: actionHandler) { [weak self] controller in
             self?.controllers.removeValue(forKey: ObjectIdentifier(controller))
         }
         controllers[ObjectIdentifier(controller)] = controller
@@ -427,6 +428,30 @@ private final class NotificationMessageHandler: NSObject, WKScriptMessageHandler
     }
 }
 
+private final class SleepControlMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
+    private let command: NativeSleepCommand
+    private let control: NativeSleepControl
+    private let serverURL: URL?
+
+    init(_ command: NativeSleepCommand, control: NativeSleepControl, serverURL: URL?) {
+        self.command = command
+        self.control = control
+        self.serverURL = serverURL
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping NativeSleepReply) {
+        handleNativeSleepMessage(command, isTrustedMainFrame: isTrusted(message.frameInfo), value: message.body, control: control, reply: replyHandler)
+    }
+
+    private func isTrusted(_ frame: WKFrameInfo) -> Bool {
+        guard frame.isMainFrame, let expected = serverURL, let actual = frame.request.url else { return false }
+        func port(_ url: URL) -> Int? { url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80) }
+        return actual.scheme?.lowercased() == expected.scheme?.lowercased()
+            && actual.host?.lowercased() == expected.host?.lowercased()
+            && port(actual) == port(expected)
+    }
+}
+
 private final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private let serverURL: URL?
     private let actionHandler: (LifecycleAction) -> Void
@@ -434,7 +459,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     private let onClose: (BrowserWindowController) -> Void
     private var lastApplicationURL: URL?
 
-    init(serverURL: URL?, actionHandler: @escaping (LifecycleAction) -> Void, onClose: @escaping (BrowserWindowController) -> Void) {
+    init(serverURL: URL?, sleepControl: NativeSleepControl, actionHandler: @escaping (LifecycleAction) -> Void, onClose: @escaping (BrowserWindowController) -> Void) {
         self.serverURL = serverURL
         self.actionHandler = actionHandler
         self.onClose = onClose
@@ -445,6 +470,8 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         userContentController.addScriptMessageHandler(DirectoryPickerMessageHandler(), contentWorld: .page, name: "piWebDirectoryPicker")
         userContentController.addScriptMessageHandler(NotificationMessageHandler(.requestPermission), contentWorld: .page, name: "piWebRequestNotificationPermission")
         userContentController.addScriptMessageHandler(NotificationMessageHandler(.notify), contentWorld: .page, name: "piWebNotification")
+        userContentController.addScriptMessageHandler(SleepControlMessageHandler(.get, control: sleepControl, serverURL: serverURL), contentWorld: .page, name: "piWebGetSleepDisabled")
+        userContentController.addScriptMessageHandler(SleepControlMessageHandler(.set, control: sleepControl, serverURL: serverURL), contentWorld: .page, name: "piWebSetSleepDisabled")
         userContentController.addUserScript(WKUserScript(source: piWebNativeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController = userContentController
         webView = WKWebView(frame: .zero, configuration: configuration)

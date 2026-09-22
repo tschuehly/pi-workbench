@@ -126,11 +126,13 @@ struct NativeNotificationTests {
         guard let context = JSContext() else { preconditionFailure("JavaScriptCore unavailable") }
         context.evaluateScript("""
             var window = this;
-            var permissionPayload, notificationPayload;
+            var permissionPayload, notificationPayload, sleepSetPayload;
             window.webkit = { messageHandlers: {
               piWebRequestNotificationPermission: { postMessage: value => { permissionPayload = value; return Promise.resolve(true); } },
               piWebNotification: { postMessage: value => { notificationPayload = value; return Promise.resolve(true); } },
-              piWebDirectoryPicker: { postMessage: value => Promise.resolve(value) }
+              piWebDirectoryPicker: { postMessage: value => Promise.resolve(value) },
+              piWebGetSleepDisabled: { postMessage: value => Promise.resolve(false) },
+              piWebSetSleepDisabled: { postMessage: value => { sleepSetPayload = value; return Promise.resolve(true); } }
             }};
             """)
         context.evaluateScript(piWebNativeScript)
@@ -138,8 +140,11 @@ struct NativeNotificationTests {
         precondition(context.evaluateScript("Object.keys(permissionPayload).length")?.toInt32() == 0)
         precondition(context.evaluateScript("window.piWebNative.notify('Title', 'Body') instanceof Promise")?.toBool() == true)
         precondition(context.evaluateScript("notificationPayload.title === 'Title' && notificationPayload.body === 'Body'")?.toBool() == true)
+        precondition(context.evaluateScript("window.piWebNative.getSleepDisabled() instanceof Promise")?.toBool() == true)
+        precondition(context.evaluateScript("window.piWebNative.setSleepDisabled(true) instanceof Promise")?.toBool() == true)
+        precondition(context.evaluateScript("sleepSetPayload === true")?.toBool() == true)
         precondition(context.evaluateScript("Object.isFrozen(window.piWebNative)")?.toBool() == true)
 
-        print("PASS: native notification permission, delivery, JS Promise, frame, and click contracts")
+        print("PASS: native notification, sleep-control JS Promise, frame, and click contracts")
     }
 }
