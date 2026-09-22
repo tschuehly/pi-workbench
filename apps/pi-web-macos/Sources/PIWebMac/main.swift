@@ -70,9 +70,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         DispatchQueue.main.async { [weak self] in
-            NSApp.activate(ignoringOtherApps: true)
-            self?.browser.bringExistingWindowForward()
-            completionHandler()
+            activateFromNotificationClick(
+                activateApplication: { NSApp.activate(ignoringOtherApps: true) },
+                bringWindowForward: { self?.browser.bringExistingWindowForward() },
+                complete: completionHandler
+            )
         }
     }
 
@@ -412,18 +414,16 @@ private final class DirectoryPickerMessageHandler: NSObject, WKScriptMessageHand
 }
 
 private final class NotificationMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
+    private let command: NativeNotificationCommand
     private let notifications: NativeNotificationBridge
 
-    init(notifications: NativeNotificationBridge = NativeNotificationBridge()) {
+    init(_ command: NativeNotificationCommand, notifications: NativeNotificationBridge = NativeNotificationBridge()) {
+        self.command = command
         self.notifications = notifications
     }
 
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
-        guard message.frameInfo.isMainFrame else {
-            replyHandler(nil, "Notifications are only available to the main page")
-            return
-        }
-        notifications.notify(message.body, reply: replyHandler)
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping NativeNotificationReply) {
+        handleNativeNotificationMessage(command, isMainFrame: message.frameInfo.isMainFrame, value: message.body, notifications: notifications, reply: replyHandler)
     }
 }
 
@@ -443,16 +443,9 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         configuration.preferences.isElementFullscreenEnabled = true
         let userContentController = WKUserContentController()
         userContentController.addScriptMessageHandler(DirectoryPickerMessageHandler(), contentWorld: .page, name: "piWebDirectoryPicker")
-        userContentController.addScriptMessageHandler(NotificationMessageHandler(), contentWorld: .page, name: "piWebNotification")
-        userContentController.addUserScript(WKUserScript(source: """
-            Object.defineProperty(window, "piWebNative", {
-              configurable: false,
-              value: Object.freeze({
-                pickDirectory: () => window.webkit.messageHandlers.piWebDirectoryPicker.postMessage({}),
-                notify: (title, body) => window.webkit.messageHandlers.piWebNotification.postMessage({ title, body })
-              })
-            });
-            """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        userContentController.addScriptMessageHandler(NotificationMessageHandler(.requestPermission), contentWorld: .page, name: "piWebRequestNotificationPermission")
+        userContentController.addScriptMessageHandler(NotificationMessageHandler(.notify), contentWorld: .page, name: "piWebNotification")
+        userContentController.addUserScript(WKUserScript(source: piWebNativeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController = userContentController
         webView = WKWebView(frame: .zero, configuration: configuration)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
