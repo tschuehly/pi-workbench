@@ -285,8 +285,14 @@ test("bounds the hierarchy to lead → worker → leaf with a delegating coordin
 
   const leafProfiles = tools.get("subagent").parameters.properties.profile.enum;
   const workerProfiles = tools.get("worker_create").parameters.properties.profile.enum;
-  assert.deepEqual(leafProfiles, ["scout", "planner", "reviewer", "implementer"], "coordinator is worker-only");
-  assert.deepEqual(workerProfiles, ["scout", "planner", "reviewer", "implementer", "coordinator"]);
+  assert.deepEqual(leafProfiles, ["scout", "planner", "reviewer", "implementer", "plain"], "coordinator is worker-only");
+  assert.deepEqual(workerProfiles, ["scout", "planner", "reviewer", "implementer", "plain", "coordinator"]);
+  assert.deepEqual(PROFILES.plain.tools, PROFILES.implementer.tools);
+  assert.equal(PROFILES.plain.instruction, "");
+  assert.match(PROFILES.scout.instruction, /unless the assignment says otherwise/);
+  assert.match(PROFILES.planner.instruction, /unless the assignment says otherwise/);
+  assert.match(PROFILES.reviewer.instruction, /unless the assignment says otherwise/);
+  assert.match(PROFILES.implementer.instruction, /Do not commit unless the assignment explicitly authorizes a scope-only commit/);
 
   const delegation = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
   assert.deepEqual(PROFILES.coordinator.tools, ["read", "bash", "grep", "find", "ls", ...delegation]);
@@ -510,6 +516,11 @@ test("an omitted subagent name falls back to the task-derived label, unchanged",
   assert.equal(activityName, "Fix the roster label");
 });
 
+test("plain passes only the assignment contract without an empty profile preamble", async () => {
+  const { dispatched } = await dispatchSubagentWithName({ task: "Use only this contract.", profile: "plain" });
+  assert.equal(dispatched.task, "Use only this contract.");
+});
+
 test("reports counts and hides collected children from the default status roster", async () => {
   const tools = new Map();
   subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} });
@@ -638,6 +649,18 @@ test("collecting without an identifier reconciles every terminal child exactly o
     { executionId: "child-b", outcome: "success" },
   ]);
   assert.deepEqual(aggregate.details.remaining, []);
+});
+
+test("bulk collection flags truncated results as incomplete verification", async () => {
+  const aggregate = await collectAll({
+    pending: ["child-a", "child-b"],
+    running: 0,
+    collectOne: async (executionId) => ({
+      content: [{ type: "text", text: executionId }],
+      details: { outcome: "success", truncated: executionId === "child-a" },
+    }),
+  });
+  assert.match(aggregate.content[0].text, /1 result\(s\) truncated — verification incomplete/);
 });
 
 test("bulk collection stays bounded and leaves what it did not read reconcilable", async () => {

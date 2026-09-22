@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import { PiRpcExecutionAdapter, summarizeToolAction, taskLabel, taskSlug } from "../src/index.js";
@@ -84,6 +87,21 @@ function spec(overrides = {}) {
     ...overrides,
   };
 }
+
+test("defaults the result budget from a positive integer environment value", () => {
+  const previous = process.env.PI_WORKBENCH_RESULT_MAX_CHARS;
+  try {
+    process.env.PI_WORKBENCH_RESULT_MAX_CHARS = "1234";
+    assert.equal(new PiRpcExecutionAdapter().resultMaxChars, 1234);
+    for (const invalid of ["0", "-1", "2.5", "not-a-number"]) {
+      process.env.PI_WORKBENCH_RESULT_MAX_CHARS = invalid;
+      assert.equal(new PiRpcExecutionAdapter().resultMaxChars, 8_000);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.PI_WORKBENCH_RESULT_MAX_CHARS;
+    else process.env.PI_WORKBENCH_RESULT_MAX_CHARS = previous;
+  }
+});
 
 function fakeRpc(options = {}) {
   const child = new EventEmitter();
@@ -474,12 +492,17 @@ test("admits leaf delegation tools for a coordinating worker but nothing beyond 
 });
 
 test("marks an oversized child result truncated so it cannot satisfy verification", async () => {
-  const adapter = new PiRpcExecutionAdapter({ clock: () => now, resultMaxChars: 40, spawn: () => fakeRpc({ text: "x".repeat(500) }) });
+  const child = fakeRpc({ text: "x".repeat(500) });
+  const resultsDir = mkdtempSync(join(tmpdir(), "pi-results-"));
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, resultMaxChars: 40, resultsDir, spawn: () => child });
   const receipt = await adapter.dispatch(spec());
   const result = await adapter.result(receipt.executionId);
   assert.equal(result.truncated, true);
-  assert.match(result.text, /TRUNCATED at 40 characters/);
+  assert.equal(result.fullTextPath, join(resultsDir, `${receipt.executionId}.md`));
+  assert.equal(readFileSync(result.fullTextPath, "utf8"), "x".repeat(500));
+  assert.match(result.text, new RegExp(`TRUNCATED at 40 characters; full text: ${result.fullTextPath.replaceAll("/", "\\/")} \\(child session child-session\\)`));
   assert.equal(result.text.startsWith("x".repeat(40)), true);
+  assert.match(child.commands.find((command) => command.type === "prompt").message, /Your final message is cut after 40 characters\. Lead with findings and cite repository paths; do not paste source or logs\.$/);
 
   const small = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ text: "done" }) });
   assert.equal((await small.result((await small.dispatch(spec())).executionId)).truncated, false);
