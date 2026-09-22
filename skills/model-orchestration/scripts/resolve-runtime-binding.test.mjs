@@ -47,7 +47,10 @@ const catalog = [
   "anthropic claude-sonnet-5 1M 128K yes yes",
   "anthropic claude-fable-5-1 1M 128K yes yes",
   "anthropic claude-opus-5 1M 128K yes yes",
+  "anthropic claude-opus-5-5 1M 128K yes yes",
   "openai-codex gpt-5.6-sol 272K 128K yes yes",
+  "openai-codex gpt-6-sol 272K 128K yes yes",
+  "openai-codex gpt-6-luna 272K 128K yes yes",
   "openai-codex gpt-6-astra 272K 128K yes yes",
   "github-copilot gpt-5-mini 264K 64K yes yes",
   "github-copilot plain-chat 264K 64K no yes",
@@ -65,12 +68,15 @@ try {
   fs.writeFileSync(modelMetadataPath, JSON.stringify({
     "openai-codex": { models: [
       { id: "gpt-5.6-sol", reasoning: true, thinkingLevelMap: { medium: "medium", high: "high", xhigh: "xhigh" } },
+      { id: "gpt-6-sol", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
+      { id: "gpt-6-luna", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
       { id: "gpt-6-astra", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
     ] },
     anthropic: { models: [
       { id: "claude-sonnet-5", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } },
       { id: "claude-fable-5-1", reasoning: true, thinkingLevelMap: { low: "low", high: "high" } },
       { id: "claude-opus-5", reasoning: true, thinkingLevelMap: { high: "high" } },
+      { id: "claude-opus-5-5", reasoning: true, thinkingLevelMap: { high: "high" } },
     ] },
     "github-copilot": { models: [
       { id: "gpt-5-mini", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: null, max: null } },
@@ -85,15 +91,27 @@ try {
 
   const pass = JSON.parse(execFileSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(pass.status, "pass");
-  assert.equal(pass.modelBinding.provider, "anthropic");
+  assert.equal(pass.modelBinding.provider, "openai-codex");
+  assert.equal(pass.modelBinding.model, "gpt-6-luna");
   assert.equal(pass.modelBinding.quotaSnapshot.relevantWindows.length, 1);
+
+  for (const [role, model, effort] of [
+    ["implementation", "gpt-6-sol", "medium"], ["problem-solving", "gpt-6-sol", "high"],
+    ["coordination", "gpt-6-sol", "high"], ["design", "gpt-6-luna", "xhigh"],
+    ["escalation", "gpt-6-luna", "max"], ["mechanics", "gpt-6-luna", "low"],
+  ]) {
+    const resolved = JSON.parse(execFileSync(process.execPath, [resolver, role, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+    assert.equal(resolved.modelBinding.provider, "openai-codex", role);
+    assert.equal(resolved.modelBinding.model, model, role);
+    assert.equal(resolved.modelBinding.effort, effort, role);
+  }
 
   const staged = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(staged.status, 0, staged.stderr);
   assert.match(staged.stderr, /STAGE=policy[\s\S]*STAGE=quota[\s\S]*STAGE=catalog/);
 
   const synthesis = JSON.parse(execFileSync(process.execPath, [resolver, "synthesis", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
-  assert.equal(synthesis.modelBinding.model, "claude-opus-5");
+  assert.equal(synthesis.modelBinding.model, "claude-opus-5-5");
   assert.equal(synthesis.modelBinding.effort, "high");
 
   const astraWorker = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--model", "openai-codex/gpt-6-astra", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
@@ -110,7 +128,7 @@ try {
   assert.equal(crossProviderWorker.modelBinding.quotaSnapshot.relevantWindows[0].id, "five_hour", "quota follows the overridden provider");
 
   const explicitEffort = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--effort", "high", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
-  assert.equal(explicitEffort.modelBinding.model, "gpt-5.6-sol", "the Cognitive Role still selects the model");
+  assert.equal(explicitEffort.modelBinding.model, "gpt-6-sol", "the Cognitive Role still selects the model");
   assert.equal(explicitEffort.modelBinding.effort, "high");
   assert.equal(explicitEffort.modelBinding.effortOverride, "high");
 
@@ -126,7 +144,7 @@ try {
   assert.equal(invalidEffort.status, 3);
   assert.match(invalidEffort.stderr, /--effort must be one of/);
 
-  const unsupportedExplicitEffort = spawnSync(process.execPath, [resolver, "implementation", "--effort", "max", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  const unsupportedExplicitEffort = spawnSync(process.execPath, [resolver, "implementation", "--model", "openai-codex/gpt-5.6-sol", "--effort", "max", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(unsupportedExplicitEffort.status, 3);
   assert.match(unsupportedExplicitEffort.stderr, /does not support Model Effort 'max'/);
 
@@ -172,20 +190,20 @@ try {
   assert.match(independentOverride.stderr, /independent role/i);
 
   const reviewOfOpenAi = passIndependent(["independent-review", "--independent-of", "openai-codex"]);
-  assert.equal(reviewOfOpenAi.modelBinding.model, "claude-opus-5");
+  assert.equal(reviewOfOpenAi.modelBinding.model, "claude-opus-5-5");
   assert.equal(reviewOfOpenAi.modelBinding.independence.independentOfFamily, "openai");
   assert.equal(reviewOfOpenAi.modelBinding.independence.selectedFamily, "anthropic");
 
   const lowerEffortReview = passIndependent(["independent-review", "--independent-of", "openai-codex", "--effort", "medium"]);
-  assert.equal(lowerEffortReview.modelBinding.model, "claude-opus-5");
+  assert.equal(lowerEffortReview.modelBinding.model, "claude-opus-5-5");
   assert.equal(lowerEffortReview.modelBinding.effort, "medium");
 
-  const exactModelWithoutOverlay = passIndependent(["independent-review", "--independent-of-model", "openai-codex/gpt-5.6-sol"]);
+  const exactModelWithoutOverlay = passIndependent(["independent-review", "--independent-of-model", "openai-codex/gpt-6-sol"]);
   assert.deepEqual(exactModelWithoutOverlay.modelBinding.independence, {
     ...reviewOfOpenAi.modelBinding.independence,
-    independentOfModel: "openai-codex/gpt-5.6-sol",
+    independentOfModel: "openai-codex/gpt-6-sol",
   });
-  assert.equal(exactModelWithoutOverlay.modelBinding.model, "claude-opus-5");
+  assert.equal(exactModelWithoutOverlay.modelBinding.model, "claude-opus-5-5");
 
   // Regression: github-copilot is a gateway, so the exact model determines the author family.
   const copilotAuthors = [
@@ -202,7 +220,7 @@ try {
   }
 
   // A second CRITICAL reviewer family is selected explicitly; quota/catalog failures never change it.
-  const secondReviewer = passIndependent(["independent-review", "--independent-of-model", "openai-codex/gpt-5.6-sol", "--exclude-family", "anthropic"]);
+  const secondReviewer = passIndependent(["independent-review", "--independent-of-model", "openai-codex/gpt-6-sol", "--exclude-family", "anthropic"]);
   assert.equal(secondReviewer.modelBinding.provider, "github-copilot");
   assert.equal(secondReviewer.modelBinding.model, "grok-4.6");
   assert.equal(secondReviewer.modelBinding.effort, "high");
@@ -230,11 +248,13 @@ try {
   assert.match(contradictoryAuthor.stderr, /contradicts --independent-of-model/);
 
   const reviewOfClaude = passIndependent(["independent-review", "--independent-of", "anthropic"]);
-  assert.equal(reviewOfClaude.modelBinding.model, "gpt-5.6-sol");
+  assert.equal(reviewOfClaude.modelBinding.model, "gpt-6-sol");
   assert.equal(reviewOfClaude.modelBinding.independence.selectedFamily, "openai");
 
   const challengeOfClaude = passIndependent(["challenge", "--independent-of", "anthropic"]);
+  assert.equal(challengeOfClaude.modelBinding.model, "gpt-6-luna");
   assert.equal(challengeOfClaude.modelBinding.effort, "xhigh");
+  assert.equal(passIndependent(["independent-judgment", "--independent-of", "anthropic"]).modelBinding.model, "gpt-6-luna");
 
   const judgmentOfOpenAi = passIndependent(["independent-judgment", "--independent-of", "openai"]);
   assert.equal(judgmentOfOpenAi.modelBinding.model, "claude-fable-5-1");
@@ -277,7 +297,7 @@ try {
     error: "Claude sign-in required",
   };
   fs.writeFileSync(quotaPath, JSON.stringify(quota));
-  const stale = JSON.parse(execFileSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const stale = JSON.parse(execFileSync(process.execPath, [resolver, "synthesis", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(stale.status, "pass");
   assert.equal(stale.modelBinding.admission, "degraded-quota-telemetry");
   assert.equal(stale.modelBinding.quotaSnapshot.telemetryStatus, "stale");
@@ -286,13 +306,13 @@ try {
 
   quota.providers = quota.providers.filter((provider) => provider.provider !== "claude");
   fs.writeFileSync(quotaPath, JSON.stringify(quota));
-  const unavailable = JSON.parse(execFileSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const unavailable = JSON.parse(execFileSync(process.execPath, [resolver, "synthesis", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(unavailable.modelBinding.admission, "degraded-quota-telemetry");
   assert.equal(unavailable.modelBinding.quotaSnapshot.telemetryStatus, "unavailable");
   assert.match(unavailable.modelBinding.quotaSnapshot.error, /absent/);
 
   fs.writeFileSync(quotaPath, "not-json");
-  const unreadable = JSON.parse(execFileSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const unreadable = JSON.parse(execFileSync(process.execPath, [resolver, "synthesis", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(unreadable.modelBinding.admission, "degraded-quota-telemetry");
   assert.equal(unreadable.modelBinding.quotaSnapshot.telemetryStatus, "unavailable");
   assert.match(unreadable.modelBinding.quotaSnapshot.error, /invalid quota JSON/);
@@ -304,7 +324,7 @@ try {
   const fakeBin = path.join(temp, "bin");
   fs.mkdirSync(fakeBin);
   fs.writeFileSync(path.join(fakeBin, "quota-axi"), `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify(quota))});\nprocess.exit(1);\n`, { mode: 0o755 });
-  const salvaged = JSON.parse(execFileSync(process.execPath, [resolver, "investigation", "--catalog", catalogPath], {
+  const salvaged = JSON.parse(execFileSync(process.execPath, [resolver, "synthesis", "--catalog", catalogPath], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`, PI_WORKBENCH_QUOTA_CACHE: path.join(temp, "salvaged-cache.json") },
   }));
@@ -317,13 +337,13 @@ try {
     state: { status: "fresh", stale: false, refreshedAt: "now" },
   });
   fs.writeFileSync(quotaPath, JSON.stringify(quota));
-  const exhausted = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  const exhausted = spawnSync(process.execPath, [resolver, "synthesis", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(exhausted.status, 3);
   assert.match(exhausted.stderr, /quota exhausted/);
 
   quota.providers[0].windows[0].percentRemaining = 70;
   fs.writeFileSync(quotaPath, JSON.stringify(quota));
-  fs.writeFileSync(catalogPath, "openai-codex gpt-5.6-sol");
+  fs.writeFileSync(catalogPath, "openai-codex gpt-6-sol");
   const absent = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(absent.status, 3);
   assert.match(absent.stderr, /Pi model .* unavailable/);
@@ -374,7 +394,7 @@ try {
     return JSON.parse(run.stdout);
   };
 
-  for (const [role, model] of [["investigation", "claude-sonnet-5"], ["implementation", "claude-sonnet-5"], ["mechanics", "claude-sonnet-5"], ["problem-solving", "claude-sonnet-5"], ["synthesis", "claude-opus-5"], ["coordination", "claude-opus-5"]]) {
+  for (const [role, model] of [["investigation", "claude-sonnet-5"], ["implementation", "claude-sonnet-5"], ["mechanics", "claude-sonnet-5"], ["problem-solving", "claude-sonnet-5"], ["synthesis", "claude-opus-5-5"], ["coordination", "claude-opus-5-5"]]) {
     const resolved = passOverlay([role]);
     assert.equal(resolved.modelBinding.provider, "anthropic", role);
     assert.equal(resolved.modelBinding.model, model, role);
@@ -404,19 +424,19 @@ try {
   assert.equal(sameProviderOverride.modelBinding.quotaSnapshot.relevantWindows[0].id, "seven_day", "same-provider overlay override retains its declared quota provider");
 
   const sonnetAuthored = passOverlay(["independent-review", "--independent-of-model", "anthropic/claude-sonnet-5"]);
-  assert.equal(sonnetAuthored.modelBinding.model, "claude-opus-5");
+  assert.equal(sonnetAuthored.modelBinding.model, "claude-opus-5-5");
   assert.deepEqual(sonnetAuthored.modelBinding.independence, {
     kind: "fresh-context-distinct-model",
     authorProvider: "anthropic", authorModel: "claude-sonnet-5",
-    selectedProvider: "anthropic", selectedModel: "claude-opus-5",
+    selectedProvider: "anthropic", selectedModel: "claude-opus-5-5",
   });
-  assert.equal(passOverlay(["independent-review", "--independent-of-model", "anthropic/claude-opus-5"]).modelBinding.model, "claude-sonnet-5");
+  assert.equal(passOverlay(["independent-review", "--independent-of-model", "anthropic/claude-opus-5-5"]).modelBinding.model, "claude-sonnet-5");
 
   const overlayBlocks = [
     [["independent-review", "--independent-of", "openai-codex"], /requires --independent-of-model/, "cross-family independence is not available under the overlay"],
     [["independent-review", "--independent-of-model", "anthropic/claude-sonnet-5", "--exclude-family", "openai"], /exclude-family.*distinct-model.*overlay/i, "family exclusions are unavailable under the distinct-model overlay"],
     [["independent-review", "--independent-of-model", "anthropic/claude-fable-5-1"], /no independent binding for author model/, "an unmapped author model fails closed"],
-    [["investigation", "--independent-of-model", "anthropic/claude-opus-5"], /does not use an independence constraint/, "a non-independent role rejects an author model"],
+    [["investigation", "--independent-of-model", "anthropic/claude-opus-5-5"], /does not use an independence constraint/, "a non-independent role rejects an author model"],
   ];
   for (const [args, pattern, message] of overlayBlocks) {
     const run = runOverlay(args);
@@ -424,7 +444,7 @@ try {
     assert.match(run.stderr, pattern, message);
   }
 
-  const unrelatedExactModel = spawnSync(process.execPath, [resolver, "investigation", "--independent-of-model", "anthropic/claude-opus-5", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  const unrelatedExactModel = spawnSync(process.execPath, [resolver, "investigation", "--independent-of-model", "anthropic/claude-opus-5-5", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(unrelatedExactModel.status, 3, "a non-independent role rejects an author model without an overlay");
   assert.match(unrelatedExactModel.stderr, /does not use an independence constraint/);
 
@@ -445,7 +465,7 @@ try {
   badOverlay("{not json", /not valid JSON/, "invalid JSON fails closed");
   badOverlay({ ...valid, version: 2 }, /version must be 1/, "an unknown overlay version fails closed");
   badOverlay({ ...valid, allowedModels: [] }, /at least one allowed model/, "an empty allowlist fails closed");
-  badOverlay({ ...valid, roles: { ...valid.roles, investigation: { provider: "openai-codex", model: "gpt-5.6-sol", effort: "medium", quotaProvider: "codex" } } }, /resolves outside its own allowlist/, "a role outside the allowlist fails closed");
+  badOverlay({ ...valid, roles: { ...valid.roles, investigation: { provider: "openai-codex", model: "gpt-6-sol", effort: "medium", quotaProvider: "codex" } } }, /resolves outside its own allowlist/, "a role outside the allowlist fails closed");
   badOverlay({ ...valid, roles: { ...valid.roles, "not-a-role": valid.roles.investigation } }, /unknown cognitive role/, "an unknown mapped role fails closed");
 
   // An unmapped role fails closed rather than falling back to the default openai-codex binding.
@@ -455,8 +475,8 @@ try {
   const unmapped = runOverlay(["investigation"], withoutInvestigation);
   assert.equal(unmapped.status, 3, "an unmapped role fails closed instead of using default routing");
   assert.match(unmapped.stderr, /does not map cognitive role/);
-  assert.equal(passOverlay(["design"], withoutInvestigation).modelBinding.model, "claude-opus-5", "every mapped role stays inside the two-model allowlist");
-  badOverlay({ ...valid, independentReview: { "anthropic/claude-opus-5": { provider: "anthropic", model: "claude-opus-5", effort: "high", quotaProvider: "claude" } } }, /not a distinct model/, "same-model review mapping fails closed");
+  assert.equal(passOverlay(["design"], withoutInvestigation).modelBinding.model, "claude-opus-5-5", "every mapped role stays inside the two-model allowlist");
+  badOverlay({ ...valid, independentReview: { "anthropic/claude-opus-5-5": { provider: "anthropic", model: "claude-opus-5-5", effort: "high", quotaProvider: "claude" } } }, /not a distinct model/, "same-model review mapping fails closed");
 
   console.log("resolve-runtime-binding: PASS");
 } finally {
