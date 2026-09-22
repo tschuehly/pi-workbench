@@ -132,7 +132,7 @@ The active session writes for the owner who will read the checkpoint later and f
 
 `whatChanged` states what now exists or works. `remains` separates what is blocked or still owed. `next` gives one obvious owner-facing action.
 
-The required `nextSessionPrompt` is a separate, paste-ready prompt for a fresh attended Pi session. It carries only the context, constraints, starting action, and references needed to continue safely. It does not restate the conversation or expand into an execution plan. The prompt is persisted with the rest of the checkpoint, remains owner-correctable, and is limited to 2,000 characters.
+The required `nextSessionPrompt` is a separate, paste-ready prompt for a fresh attended Pi session. It carries only the context, constraints, starting action, and references needed to continue safely. It does not restate the conversation or expand into an execution plan. The prompt is persisted with the rest of the checkpoint, remains owner-correctable, and is limited to 2,000 characters. Durable checkpoint and link references must not point into operating-system temporary directories such as `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders; the Store rejects those references instead of creating future stale launch targets.
 
 Checkpoints accepted before `nextSessionPrompt` existed project `nextSessionPrompt: null` rather than inventing a prompt. Every new replacement requires the field.
 

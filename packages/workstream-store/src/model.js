@@ -63,6 +63,16 @@ function string(value, field, max, { optional = false } = {}) {
   }
 }
 
+function isTemporaryPath(value) {
+  return /^(?:\/private)?\/(?:tmp|var\/tmp|var\/folders)(?:\/|$)/.test(value)
+    || /^(?:[A-Za-z]:[\\/])(?:Users[\\/][^\\/]+[\\/]AppData[\\/]Local[\\/]Temp|Temp)(?:[\\/]|$)/i.test(value);
+}
+
+function durableReference(value, field, limits) {
+  string(value, field, limits.maxTextLength);
+  if (isTemporaryPath(value)) fail("INVALID_RECORD", `${field} must not point into a temporary directory`);
+}
+
 function id(value, field, limits) {
   string(value, field, limits.maxIdLength);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/.test(value)) {
@@ -173,7 +183,7 @@ function validateRecord(record, limits, field) {
       string(checkpoint.nextSessionPrompt, `${field}.payload.checkpoint.nextSessionPrompt`, limits.maxCheckpointPromptLength);
       if (checkpoint.references !== undefined) {
         if (!Array.isArray(checkpoint.references) || checkpoint.references.length > 20) fail("INVALID_RECORD", `${field}.payload.checkpoint.references must be an array of at most 20 strings`);
-        checkpoint.references.forEach((reference, index) => string(reference, `${field}.payload.checkpoint.references[${index}]`, limits.maxTextLength));
+        checkpoint.references.forEach((reference, index) => durableReference(reference, `${field}.payload.checkpoint.references[${index}]`, limits));
       }
     },
     "checkpoint.failed": () => {
@@ -207,7 +217,7 @@ function validateRecord(record, limits, field) {
       keys(link, ["id", "kind", "reference", "label"], `${field}.payload.link`);
       id(link.id, `${field}.payload.link.id`, limits);
       string(link.kind, `${field}.payload.link.kind`, limits.maxIdLength);
-      string(link.reference, `${field}.payload.link.reference`, limits.maxTextLength);
+      durableReference(link.reference, `${field}.payload.link.reference`, limits);
       string(link.label, `${field}.payload.link.label`, limits.maxTitleLength, { optional: true });
     },
     "link.removed": () => {

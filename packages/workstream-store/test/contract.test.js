@@ -61,6 +61,30 @@ test("rebuilds an identical deterministic projection from semantic ledger record
   assert.equal(snapshot.links[0].id, "link-1");
 });
 
+test("rejects temporary paths from durable checkpoint and link records", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate-for-path-policy", records: associationRecords.slice(0, 2) });
+
+  const checkpoint = { id: "cp-temp", whatChanged: "Implemented", remains: "Review", next: "Continue", nextSessionPrompt: "Continue from the durable workspace." };
+  for (const [idempotencyKey, record] of [
+    ["checkpoint-temp-path", { type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { ...checkpoint, references: ["/private/tmp/deleted-worktree"] } } }],
+    ["link-temp-path", { type: "link.upsert", producer: "owner", payload: { link: { id: "link-temp", kind: "file", reference: "/tmp/deleted-file" } } }],
+  ]) {
+    await assert.rejects(
+      store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey, records: [record] }),
+      (error) => error.code === "INVALID_RECORD" && error.message.includes("temporary directory"),
+    );
+  }
+  await store.append({
+    workstreamId: "ws-1",
+    expectedRevision: 2,
+    idempotencyKey: "checkpoint-durable-path",
+    records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { ...checkpoint, references: ["/Users/thomas/workbench"] } } }],
+  });
+  assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint.references[0], "/Users/thomas/workbench");
+});
+
 test("requires a concise explicit next-session prompt for every confirmed checkpoint", async () => {
   const { store } = memoryStore();
   await store.create(createRequest);
