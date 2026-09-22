@@ -31,6 +31,7 @@ const RECORD_TYPES = new Set([
   "link.removed",
   "overview.replaced",
   "group.set",
+  "title.set",
 ]);
 
 export function clone(value) {
@@ -227,6 +228,10 @@ function validateRecord(record, limits, field) {
     "group.set": () => {
       keys(record.payload, ["group"], `${field}.payload`);
       string(record.payload.group, `${field}.payload.group`, limits.maxTitleLength);
+    },
+    "title.set": () => {
+      keys(record.payload, ["title"], `${field}.payload`);
+      string(record.payload.title, `${field}.payload.title`, limits.maxTitleLength);
     },
     "overview.replaced": () => {
       keys(record.payload, ["overview"], `${field}.payload`);
@@ -495,6 +500,9 @@ export function rebuildSnapshot(ledger) {
         break;
       case "group.set":
         snapshot.group = payload.group;
+        break;
+      case "title.set":
+        snapshot.title = payload.title;
         break;
       case "overview.replaced":
         snapshot.overview = {

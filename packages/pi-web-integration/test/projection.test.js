@@ -151,6 +151,18 @@ test("fake Workstream client deterministically lists, inspects, and reconciles t
   assert.deepEqual(caughtUp, { mode: "replay", events: [], nextSequence: 16 });
 });
 
+test("fake Workstream client accepts and projects latest-wins title records verbatim", async () => {
+  const client = new DeterministicFakeWorkstreamClient({ version: 1, sequence: 0, snapshots: [] });
+  await client.create({ workstreamId: "ws-title", idempotencyKey: "create-title", title: "Original", producer: "owner" });
+  await client.append({ workstreamId: "ws-title", expectedRevision: 1, idempotencyKey: "title-1", records: [{ type: "title.set", producer: "owner", payload: { title: "First" } }] });
+  await client.append({ workstreamId: "ws-title", expectedRevision: 2, idempotencyKey: "title-2", records: [{ type: "title.set", producer: "session", payload: { title: "  Latest  " } }] });
+  assert.equal((await client.inspect("ws-title")).title, "  Latest  ");
+
+  await assert.rejects(client.append({ workstreamId: "ws-title", expectedRevision: 3, idempotencyKey: "title-blank", records: [{ type: "title.set", producer: "owner", payload: { title: " " } }] }), /non-empty title of at most 200 characters/);
+  await assert.rejects(client.append({ workstreamId: "ws-title", expectedRevision: 3, idempotencyKey: "title-extra", records: [{ type: "title.set", producer: "owner", payload: { title: "Valid", extra: true } }] }), /non-empty title of at most 200 characters/);
+  assert.equal((await client.inspect("ws-title")).revision, 3);
+});
+
 test("fake and typed clients project pending derivation and remove cancelled associations", async () => {
   const client = new DeterministicFakeWorkstreamClient({ version: 1, sequence: 0, snapshots: [] });
   await client.create({ workstreamId: "ws-derived", idempotencyKey: "create-derived", title: "Derived", producer: "owner" });

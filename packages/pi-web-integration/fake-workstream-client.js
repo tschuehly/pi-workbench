@@ -119,6 +119,10 @@ export async function loadDeterministicFakeWorkstreamClient(fetcher = fetch) {
 
 function validateFakeRecord(record) {
   if (!isRecord(record) || !isRecord(record.payload)) throw new Error("Fake Workstream records require an object payload.");
+  if (record.type === "title.set"
+      && (Object.keys(record.payload).length !== 1 || !isString(record.payload.title) || record.payload.title.length > 200)) {
+    throw new Error("title.set requires only a non-empty title of at most 200 characters.");
+  }
   if (record.type === "session.pending"
       && (record.payload.derivationKind !== undefined && !["checkpoint", "fork"].includes(record.payload.derivationKind))) {
     throw new Error("session.pending derivationKind must be checkpoint or fork.");
@@ -157,6 +161,7 @@ function completeLocation(value) {
 
 function applyFakeRecord(snapshot, record, metadata) {
   switch (record.type) {
+    case "title.set": snapshot.title = record.payload.title; break;
     case "link.upsert": upsert(snapshot.links, record.payload.link); break;
     case "link.removed": snapshot.links = snapshot.links.filter((link) => link.id !== record.payload.linkId); break;
     case "human-task.upsert": upsert(snapshot.humanTasks, projectHumanTask(record.payload.task, record)); break;

@@ -157,6 +157,37 @@ test("projects the latest overview and rejects oversized or empty ones", async (
   }
 });
 
+test("projects the latest valid title verbatim while retaining title history and mutation semantics", async () => {
+  const { adapter, store } = memoryStore();
+  await store.create({ ...createRequest, title: "  Original title  " });
+  assert.equal((await store.inspect("ws-1")).title, "  Original title  ");
+  const firstRequest = { workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "title-1", records: [{ type: "title.set", producer: "owner", payload: { title: "First title" } }] };
+  const firstReceipt = await store.append(firstRequest);
+  assert.deepEqual(await store.append(structuredClone(firstRequest)), firstReceipt);
+  await assert.rejects(
+    store.append({ ...firstRequest, records: [{ ...firstRequest.records[0], payload: { title: "Conflicting title" } }] }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "title-2", records: [{ type: "title.set", producer: "session", sourceSessionId: "session-1", payload: { title: "  Latest title  " } }] });
+
+  assert.equal((await store.inspect("ws-1")).title, "  Latest title  ");
+  assert.equal((await store.list())[0].title, "  Latest title  ");
+  const state = await adapter.exportState();
+  assert.equal(state.workstreams["ws-1"].ledger[0].title, "  Original title  ");
+  assert.deepEqual(state.workstreams["ws-1"].ledger.filter((record) => record.type === "title.set").map((record) => ({ title: record.payload.title, producer: record.producer, sourceSessionId: record.sourceSessionId ?? null, revision: record.revision })), [
+    { title: "First title", producer: "owner", sourceSessionId: null, revision: 2 },
+    { title: "  Latest title  ", producer: "session", sourceSessionId: "session-1", revision: 3 },
+  ]);
+
+  for (const [idempotencyKey, title] of [["title-blank", "   "], ["title-long", "x".repeat(201)]]) {
+    await assert.rejects(
+      store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey, records: [{ type: "title.set", producer: "owner", payload: { title } }] }),
+      (error) => error.code === "INVALID_REQUEST" && error.message.includes("at most 200 characters"),
+    );
+  }
+  assert.equal((await store.inspect("ws-1")).revision, 3);
+});
+
 test("returns the original receipt for an exact retry and rejects conflicting key reuse", async () => {
   const { store } = memoryStore();
   const first = await store.create(createRequest);

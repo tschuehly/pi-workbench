@@ -39,7 +39,9 @@ export type WorkstreamRecord =
   | SemanticRecord<"link.removed", { linkId: string }>
   | SemanticRecord<"overview.replaced", { overview: WorkstreamOverview }>
   /** Owner-chosen grouping label for chooser and dashboard lists, e.g. "Embabel". Latest wins. */
-  | SemanticRecord<"group.set", { group: string }>;
+  | SemanticRecord<"group.set", { group: string }>
+  /** Nonblank Workstream title, at most 200 characters. Stored verbatim; latest wins. */
+  | SemanticRecord<"title.set", { title: string }>;
 
 export interface SemanticRecord<T extends string, P> {
   type: T;

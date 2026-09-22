@@ -81,7 +81,7 @@ The Workstreams view calls PI WEB's plugin-scoped JSON service helper through `w
 
 Set `PI_WORKBENCH_WORKSTREAM_DIR` only for isolated tests or an intentional alternate user-local location.
 
-`fake-workstream-client.js` and [`recorded-workstreams.json`](fixtures/recorded-workstreams.json) provide deterministic PI WEB test data. Because the projection format omits cancelled associations, a fake rebuilt from projection alone cannot recover their occupied operation tokens. Durable tombstone conformance belongs to the Store tests.
+`fake-workstream-client.js` and [`recorded-workstreams.json`](fixtures/recorded-workstreams.json) provide deterministic PI WEB test data. The fake is a projection-oriented integration fixture, not a Store contract fake. It supports only the records exercised by this legacy integration: `title.set`, link upsert/removal, Human Task upsert/answer/resolution, session pending/confirm/repair/fail/cancel, and checkpoint replace/fail/stale; every other record fails as unsupported. Authoritative record-union validation and conformance belong to the Store tests. Because the projection format omits cancelled associations, a fake rebuilt from projection alone cannot recover their occupied operation tokens; durable tombstone conformance also belongs to the Store tests.
 
 ## Pure state and projection seams
 

@@ -110,6 +110,7 @@ Inspect immediately before every mutation and use its `revision` as `expectedRev
 Supported records and payloads are defined in `packages/workstream-store/src/index.d.ts`. Common records are:
 
 - `group.set` for the owner's grouping label (`Embabel`, `PhotoQuest`, `Pi Workbench`, `Personal`, or a new one the user names); set it at creation;
+- `title.set` when the owner renames the Workstream or its current title no longer describes it; use `producer: "owner"` for an owner-supplied or approved title and `producer: "session"` for an agent-proposed title;
 - `overview.replaced` for the Workstream-level re-entry summary (see below);
 - `link.upsert` / `link.removed` for relevant file, repository, plan, Run, or artifact references;
 - `human-task.upsert` for a durable question that needs an answer;
@@ -125,13 +126,13 @@ On `STALE_REVISION`, inspect again, reconcile the intervening change, and submit
 
 ### Keep the overview current
 
-The overview answers *what is this for and how did it get here*; checkpoints answer *what changed last*. Write `overview.replaced` when the Workstream is created, and rewrite the whole record when the story changes: a pivot, a shipped result, a new blocker, or a stale title. Do not rewrite it for routine checkpoints. When the user asks for the original goal, a summary, or what happened, read the projected `overview` first; if it is missing or stale, write it rather than answering only in chat.
+The overview answers *what is this for and how did it get here*; checkpoints answer *what changed last*. Write `overview.replaced` when the Workstream is created, and rewrite the whole record when the story changes: a pivot, a shipped result, or a new blocker. Do not rewrite it for routine checkpoints or a title-only rename. When the user asks for the original goal, a summary, or what happened, read the projected `overview` first; if it is missing or stale, write it rather than answering only in chat.
 
 ```json
 {"type":"overview.replaced","producer":"session","sourceSessionId":"SESSION_ID","payload":{"overview":{
   "goal":"What this is for, in the owner's words (<=280).",
   "doneWhen":"One observable that ends the Workstream (<=200).",
-  "description":"Why it exists; what is in and out of scope; note a stale title here (<=600).",
+  "description":"Why it exists; what is in and out of scope (<=600).",
   "history":["2026-09-08: one consequential event with a date and a checkable anchor such as a PR, SHA, path, or count (<=200 each, 1-6 items)."]
 }}}
 ```

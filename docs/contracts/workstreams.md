@@ -76,6 +76,7 @@ Each Workstream has a concise append-only ledger. Agents append only at meaningf
 
 The ledger may record:
 
+- a Workstream title change;
 - session association;
 - explicit launch cancellation;
 - append-only session-anchor repair;
@@ -88,6 +89,7 @@ A pending derived session may identify `checkpoint` or `fork` as its derivation 
 
 Current state is a separate mechanical projection over accepted records. It includes:
 
+- the latest Workstream title;
 - pending, active, and failed session associations and their latest projected anchors;
 - each session's latest confirmed checkpoint, plus explicit failure or staleness;
 - durable Human Tasks and answer receipts;
@@ -95,6 +97,8 @@ Current state is a separate mechanical projection over accepted records. It incl
 - closure state.
 
 Anchor repair updates only the existing session's projected location; it never creates another association. Pi Workbench does not persist a second combined narrative across sessions.
+
+The owner or another producer may append `title.set`. Creation titles and `title.set` values follow the same rule: the string must be nonblank after trimming and at most 200 characters. The Store records and projects the accepted value verbatim, including leading or trailing whitespace; consumers choose any presentation normalization without rewriting ledger payloads. The latest accepted record determines the projected title, while all accepted title changes remain in the ledger with their producer and source-session provenance. Title changes use the same revision and idempotency rules as every other append.
 
 ### Session-anchor repair
 
