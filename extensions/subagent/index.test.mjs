@@ -232,6 +232,113 @@ test("collecting a running child by identifier returns a snapshot without waitin
   assert.deepEqual(roster.details.children.map((child) => child.executionId), ["child-running"], "the child remains terminal-uncollected");
 });
 
+async function settlingWorkerHarness() {
+  const previousHome = process.env.HOME;
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-settling-worker-"));
+  process.env.HOME = temporary;
+  const resolverPath = join(temporary, "resolver.mjs");
+  await writeFile(resolverPath, `
+    console.log(JSON.stringify({ status: "pass", modelBinding: {
+      cognitiveRole: process.argv[2], provider: "anthropic", model: "claude-test", effort: "low",
+      admission: "degraded-quota-telemetry",
+      quotaSnapshot: { generatedAt: null, telemetryStatus: "unavailable", relevantWindows: [], stale: false, refreshedAt: null, error: "test" },
+    }}));
+  `);
+
+  let releaseReceipt;
+  const receiptGate = new Promise((resolve) => { releaseReceipt = resolve; });
+  let resultCalls = 0;
+  const execution = {
+    executionId: "worker-execution", running: false, outcome: "success", kind: "worker",
+    profile: "implementer", cognitiveRole: "implementation", provider: "anthropic", model: "claude-test", effort: "low",
+    acceptedAt: "2026-09-22T00:00:00Z",
+  };
+  const final = { ...execution, text: "Worker done.", sessionId: "worker-session", truncated: false };
+  const adapter = {
+    dispatch: async () => ({ executionId: execution.executionId, acceptedAt: execution.acceptedAt }),
+    result: () => { resultCalls += 1; return Promise.resolve(final); },
+    status: () => execution,
+    list: () => [execution],
+    async *observe() { await receiptGate; },
+    cancelAll: async () => [],
+  };
+  const tools = new Map();
+  const handlers = new Map();
+  const sent = [];
+  let signalWakeup;
+  const wakeup = new Promise((resolve) => { signalWakeup = resolve; });
+  subagentExtension({
+    events: { emit: () => {} },
+    on: (event, handler) => handlers.set(event, handler),
+    registerTool: (tool) => tools.set(tool.name, tool),
+    registerShortcut: () => {},
+    sendMessage: (message, options) => { sent.push({ message, options }); signalWakeup(); },
+  }, { adapter, resolverPath });
+  const ctx = { cwd: "/repo", sessionManager: { getSessionId: () => "lead", getSessionFile: () => "/sessions/lead.jsonl" } };
+  const created = await tools.get("worker_create").execute("create", { name: "Worker", scope: "Test settling receipts", profile: "implementer" }, undefined, undefined, ctx);
+  await tools.get("worker_dispatch").execute("dispatch", {
+    workerId: created.details.workerId, task: "Finish, then wait for the receipt gate.", cognitiveRole: "implementation", background: true,
+  }, undefined, undefined, ctx);
+
+  return {
+    tools, sent, wakeup, releaseReceipt,
+    resultCalls: () => resultCalls,
+    cleanup: async () => {
+      await handlers.get("session_shutdown")();
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      await rm(temporary, { recursive: true, force: true });
+    },
+  };
+}
+
+async function mustResolveImmediately(promise) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("collect blocked on a settling Worker")), 100); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+test("per-id collect returns a settling Worker snapshot without consuming its later wakeup", async () => {
+  const harness = await settlingWorkerHarness();
+  try {
+    const snapshot = await mustResolveImmediately(harness.tools.get("subagent_collect").execute("collect", { executionId: "worker-execution" }, undefined, undefined));
+    assert.equal(harness.resultCalls(), 1, "collect does not read the finished child while its Worker receipt is unsettled");
+    assert.equal(snapshot.details.receiptStatus, "settling");
+    assert.match(snapshot.content[0].text, /worker-execution \[settling\] child finished; Worker receipt not yet settled/);
+
+    harness.releaseReceipt();
+    await harness.wakeup;
+    assert.equal(harness.sent.length, 1, "receipt settlement still emits the normal completion wakeup exactly once");
+    assert.deepEqual(harness.sent[0].message.details, { attention: "terminal-results" });
+  } finally {
+    harness.releaseReceipt();
+    await harness.cleanup();
+  }
+});
+
+test("bulk collect skips a settling Worker and collects it after receipt settlement", async () => {
+  const harness = await settlingWorkerHarness();
+  try {
+    const settling = await mustResolveImmediately(harness.tools.get("subagent_collect").execute("collect", {}, undefined, undefined));
+    assert.equal(harness.resultCalls(), 1, "bulk collect does not read a settling Worker");
+    assert.match(settling.content[0].text, /Nothing terminal to reconcile\. 1 Worker settling: worker-execution\./);
+    assert.deepEqual(settling.details.collected, []);
+
+    harness.releaseReceipt();
+    await harness.wakeup;
+    const collected = await harness.tools.get("subagent_collect").execute("collect", {}, undefined, undefined);
+    assert.equal(harness.resultCalls(), 2, "the settled Worker is collected once after its receipt lands");
+    assert.match(collected.content[0].text, /Reconciled 1 of 1 terminal children/);
+    assert.deepEqual(collected.details.collected, [{ executionId: "worker-execution", outcome: "success" }]);
+    assert.equal(harness.sent.length, 1);
+  } finally {
+    harness.releaseReceipt();
+    await harness.cleanup();
+  }
+});
+
 test("a terminal result cites the author model so independentOfModel can quote a receipt", async () => {
   const final = {
     outcome: "success", text: "Applied the caption fix.", truncated: false, kind: "subagent",

@@ -122,8 +122,8 @@ type Observation = { type: string; at: string; detail?: unknown };
 type ProgressEntry = { at: string; key: string; text: string };
 type LaunchMeta = { profile: string; cognitiveRole: string; taskPreview: string; launchedAt: string; workerId?: string; workerName?: string };
 type ForegroundDispatch = { label: string; detach: () => void };
-/** A background Worker's registry receipt settles after its child result, so collection awaits it. */
-type WorkerReceipt = { workerId: string; settled: Promise<{ error: unknown } | undefined> };
+/** A background Worker's registry receipt settles after its child result. */
+type WorkerReceipt = { workerId: string; settled: Promise<{ error: unknown } | undefined>; isSettled: boolean };
 
 export default function subagentExtension(pi: ExtensionAPI, options: { adapter?: PiRpcExecutionAdapter; resolverPath?: string } = {}) {
   const adapter = options.adapter ?? new PiRpcExecutionAdapter();
@@ -312,10 +312,10 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "subagent_collect",
     label: "Subagent collect",
-    description: "Reconcile background children. Without executionId, collect all terminal-uncollected children. With one, return an immediate bounded snapshot if running or the compact result if terminal. Worker results wait for registry receipts; receipt failures collect as outcome_unknown.",
+    description: "Reconcile background children. On a completion signal, call without executionId first to collect all ready terminal children; repeat only for a reported budget-limited remainder. With one, return an immediate bounded snapshot if running or if a finished Worker receipt is still settling, otherwise the compact terminal result. Receipt failures collect as outcome_unknown.",
     promptSnippet: "Reconcile backgrounded child Pi results",
     promptGuidelines: [
-      "Answer a completion signal with subagent_collect without an executionId; the extension owns the terminal-uncollected set. Name one only for a known-terminal result or running snapshot.",
+      "Answer a completion signal with subagent_collect without an executionId first; the extension owns the terminal-uncollected set. Repeat only for a reported budget-limited remainder. Use subagent_status only if collect reports children still running and you must decide something about them.",
       "Never sleep, poll, or collect to wait. After a background launch, finish genuinely independent work and end the turn; the completion signal starts the next turn.",
     ],
     parameters: CollectParams,
@@ -348,14 +348,24 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
             details: status,
           };
         }
+        const workerReceipt = workerReceipts.get(params.executionId);
+        if (workerReceipt !== undefined && !workerReceipt.isSettled) {
+          return {
+            content: [{ type: "text", text: `${params.executionId} [settling] child finished; Worker receipt not yet settled — end this turn, the completion signal arrives after it settles.` }],
+            details: { ...status, receiptStatus: "settling" },
+          };
+        }
         return collectOne(params.executionId);
       }
       const roster = adapter.list();
       // Reserve the whole set before the first await: parallel tool calls in one batch would
       // otherwise read the same roster and collect the same children twice.
-      const pending = reservePending(roster, collected, reconciling);
+      const settling = roster
+        .filter((child) => !child.running && !collected.has(child.executionId) && !reconciling.has(child.executionId) && workerReceipts.get(child.executionId)?.isSettled === false)
+        .map((child) => child.executionId);
+      const pending = reservePending(roster, collected, reconciling, new Set(settling));
       try {
-        return await collectAll({ pending, running: roster.filter((child) => child.running).length, collectOne });
+        return await collectAll({ pending, running: roster.filter((child) => child.running).length, settling, collectOne });
       } finally {
         for (const executionId of pending) reconciling.delete(executionId);
       }
@@ -368,7 +378,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     description: "Non-blocking snapshot of one child, or the running and terminal-but-uncollected direct children. Pass all:true for the full session roster.",
     promptSnippet: "Inspect backgrounded child Pi progress",
     promptGuidelines: [
-      "Default subagent_status is the actionable set: children still running plus terminal children you have not reconciled. A completion signal arrives once rather than per child: reconcile it with subagent_collect and use status to see what is still running. Use all:true only for bounded diagnostics.",
+      "subagent_status is diagnostic, not a required first step. Answer a completion signal with subagent_collect without an executionId first; use status only if collect reports children still running and you must decide something about them. Use all:true only for bounded diagnostics.",
     ],
     parameters: StatusParams,
     async execute(_toolCallId, params) {
@@ -578,6 +588,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         });
       }
       // Register terminal cleanup before waiting so it wins a same-tick detach race.
+      let receiptSettled = false;
       const completion = (async () => {
         let usage: unknown;
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
@@ -591,19 +602,25 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         await usageWatch;
         clearInterval(heartbeat);
         await settleWorkerReceipt({
-          settle: () => registry.completeDispatch(params.workerId, begin.lockToken, {
-            executionId: receipt.executionId,
-            outcome: final.outcome,
-            cognitiveRole: params.cognitiveRole,
-            provider: final.provider,
-            model: final.model,
-            effort: final.effort,
-            sessionId: final.sessionId,
-            acceptedAt: receipt.acceptedAt,
-            endedAt: new Date().toISOString(),
-            usage,
-            diagnostic: final.diagnostic,
-          }),
+          settle: async () => {
+            try {
+              await registry.completeDispatch(params.workerId, begin.lockToken, {
+                executionId: receipt.executionId,
+                outcome: final.outcome,
+                cognitiveRole: params.cognitiveRole,
+                provider: final.provider,
+                model: final.model,
+                effort: final.effort,
+                sessionId: final.sessionId,
+                acceptedAt: receipt.acceptedAt,
+                endedAt: new Date().toISOString(),
+                usage,
+                diagnostic: final.diagnostic,
+              });
+            } finally {
+              receiptSettled = true;
+            }
+          },
           wakeup: completionWakeup,
           background: backgrounded,
           completion: {
@@ -616,11 +633,15 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           },
         });
       })();
-      const tracked = completion.then(() => undefined, (error: unknown) => {
-        clearInterval(heartbeat);
-        return { error };
-      });
-      workerReceipts.set(receipt.executionId, { workerId: params.workerId, settled: tracked });
+      const tracked = completion.then(
+        () => { receiptSettled = true; return undefined; },
+        (error: unknown) => {
+          receiptSettled = true;
+          clearInterval(heartbeat);
+          return { error };
+        },
+      );
+      workerReceipts.set(receipt.executionId, { workerId: params.workerId, settled: tracked, get isSettled() { return receiptSettled; } });
       pendingWorkerCompletions.add(tracked);
       void tracked.then(() => pendingWorkerCompletions.delete(tracked));
 
@@ -835,10 +856,10 @@ export async function streamToResult(
 const BULK_COLLECT_MAX_CHARS = 24_000;
 const REMAINDER_NAMES = 10;
 
-/** Claims the terminal-uncollected set before the first await so parallel calls cannot double-collect. */
-export function reservePending(roster: { executionId: string; running: boolean }[], collected: Set<string>, reconciling: Set<string>): string[] {
+/** Claims the ready terminal-uncollected set before the first await so parallel calls cannot double-collect. */
+export function reservePending(roster: { executionId: string; running: boolean }[], collected: Set<string>, reconciling: Set<string>, settling: ReadonlySet<string> = new Set()): string[] {
   const pending = roster
-    .filter((child) => !child.running && !collected.has(child.executionId) && !reconciling.has(child.executionId))
+    .filter((child) => !child.running && !collected.has(child.executionId) && !reconciling.has(child.executionId) && !settling.has(child.executionId))
     .map((child) => child.executionId);
   for (const executionId of pending) reconciling.add(executionId);
   return pending;
@@ -850,9 +871,10 @@ export function reservePending(roster: { executionId: string; running: boolean }
  * the budget is spent: a child that was not read stays uncollected and is named, because marking
  * it collected without showing its result is the loss this tool exists to prevent.
  */
-export async function collectAll({ pending, running, collectOne, maxChars = BULK_COLLECT_MAX_CHARS }: {
+export async function collectAll({ pending, running, settling = [], collectOne, maxChars = BULK_COLLECT_MAX_CHARS }: {
   pending: string[];
   running: number;
+  settling?: string[];
   collectOne: (executionId: string) => Promise<any>;
   maxChars?: number;
 }) {
@@ -875,6 +897,7 @@ export async function collectAll({ pending, running, collectOne, maxChars = BULK
   const notes = [
     truncated === 0 ? "" : `${truncated} result(s) truncated — verification incomplete.`,
     remaining.length === 0 ? "" : `Bounded before reading ${remaining.length} more; they stay uncollected, so collect again or name one: ${remaining.slice(0, REMAINDER_NAMES).join(", ")}${remaining.length > REMAINDER_NAMES ? `, and ${remaining.length - REMAINDER_NAMES} more reached by collecting again` : ""}.`,
+    settling.length === 0 ? "" : `${settling.length} ${settling.length === 1 ? "Worker" : "Workers"} settling: ${settling.slice(0, REMAINDER_NAMES).join(", ")}${settling.length > REMAINDER_NAMES ? `, and ${settling.length - REMAINDER_NAMES} more` : ""}.`,
     running === 0 ? "" : `${running} ${running === 1 ? "child is" : "children are"} still running and cannot be collected yet.`,
   ].filter((note) => note !== "");
   const sections = entries.map((entry) => `${entry.executionId} [${entry.outcome}]\n${entry.text}`);
