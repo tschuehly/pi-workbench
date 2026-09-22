@@ -15,14 +15,6 @@ struct SleepProcessResult {
 
 typealias SleepProcessRunner = (_ executable: URL, _ arguments: [String], _ outputLimit: Int, _ timeout: TimeInterval) throws -> SleepProcessResult
 
-private func readBounded(_ handle: FileHandle, limit: Int) -> String {
-    var kept = Data()
-    while let chunk = try? handle.read(upToCount: 4096), !chunk.isEmpty {
-        if kept.count < limit { kept.append(chunk.prefix(limit - kept.count)) }
-    }
-    return String(decoding: kept, as: UTF8.self)
-}
-
 func runSleepProcess(_ executable: URL, _ arguments: [String], outputLimit: Int, timeout: TimeInterval) throws -> SleepProcessResult {
     let process = Process()
     process.executableURL = executable
@@ -32,39 +24,46 @@ func runSleepProcess(_ executable: URL, _ arguments: [String], outputLimit: Int,
     process.standardOutput = stdout
     process.standardError = stderr
     try process.run()
-
-    let drains = DispatchGroup()
-    let lock = NSLock()
-    var capturedStdout = ""
-    var capturedStderr = ""
-    drains.enter()
-    DispatchQueue.global(qos: .utility).async {
-        let value = readBounded(stdout.fileHandleForReading, limit: outputLimit)
-        lock.lock(); capturedStdout = value; lock.unlock()
-        drains.leave()
-    }
-    drains.enter()
-    DispatchQueue.global(qos: .utility).async {
-        let value = readBounded(stderr.fileHandleForReading, limit: outputLimit)
-        lock.lock(); capturedStderr = value; lock.unlock()
-        drains.leave()
+    defer {
+        try? stdout.fileHandleForReading.close()
+        try? stderr.fileHandleForReading.close()
     }
 
-    let finished = DispatchSemaphore(value: 0)
-    DispatchQueue.global(qos: .utility).async {
-        process.waitUntilExit()
-        finished.signal()
-    }
-    let timedOut = finished.wait(timeout: .now() + max(0, timeout)) == .timedOut
-    if timedOut {
-        if process.isRunning { process.terminate() }
-        if finished.wait(timeout: .now() + 1) == .timedOut {
-            kill(process.processIdentifier, SIGKILL)
-            finished.wait()
+    var pipes = [stdout.fileHandleForReading.fileDescriptor, stderr.fileHandleForReading.fileDescriptor]
+    for fd in pipes { _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) }
+    var output = [Data(), Data()]
+    let deadline = ProcessInfo.processInfo.systemUptime + max(0, timeout)
+    var timedOut = false
+    // Nonblocking reads avoid a stuck drain when an exited process leaves pipe writers in descendants.
+    while process.isRunning || pipes.contains(where: { $0 >= 0 }) {
+        if ProcessInfo.processInfo.systemUptime >= deadline { timedOut = true; break }
+        var events = pipes.map { pollfd(fd: $0, events: Int16(POLLIN | POLLHUP | POLLERR), revents: 0) }
+        _ = events.withUnsafeMutableBufferPointer { poll($0.baseAddress, nfds_t($0.count), 50) }
+        for index in pipes.indices where pipes[index] >= 0 && events[index].revents != 0 {
+            var chunk = [UInt8](repeating: 0, count: 4096)
+            let count = chunk.withUnsafeMutableBytes { Darwin.read(pipes[index], $0.baseAddress, $0.count) }
+            if count > 0 {
+                if output[index].count < outputLimit { output[index].append(contentsOf: chunk.prefix(min(count, outputLimit - output[index].count))) }
+            } else if count == 0 || (errno != EAGAIN && errno != EINTR) {
+                pipes[index] = -1
+            }
         }
     }
-    drains.wait()
-    return SleepProcessResult(stdout: capturedStdout, stderr: capturedStderr, status: process.terminationStatus, timedOut: timedOut)
+    if timedOut && process.isRunning {
+        process.terminate()
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async { process.waitUntilExit(); finished.signal() }
+        if finished.wait(timeout: .now() + 1) == .timedOut && process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            _ = finished.wait(timeout: .now() + 1)
+        }
+    }
+    return SleepProcessResult(
+        stdout: String(decoding: output[0], as: UTF8.self),
+        stderr: String(decoding: output[1], as: UTF8.self),
+        status: process.isRunning ? -1 : process.terminationStatus,
+        timedOut: timedOut
+    )
 }
 
 struct NativeSleepRunner {

@@ -34,6 +34,17 @@ struct NativeSleepControlTests {
             sleep(5)
             exit(0)
         }
+        if CommandLine.arguments.last == "--descendant-fixture" { sleep(2); exit(0) }
+        if CommandLine.arguments.last == "--inherited-pipe-fixture" {
+            let child = Process()
+            child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            child.arguments = ["--descendant-fixture"]
+            child.standardOutput = FileHandle.standardOutput
+            child.standardError = FileHandle.standardError
+            try child.run()
+            FileHandle.standardError.write(Data("descendant holds stderr\n".utf8))
+            exit(0)
+        }
 
         let bounded = try runSleepProcess(
             URL(fileURLWithPath: CommandLine.arguments[0]),
@@ -52,6 +63,15 @@ struct NativeSleepControlTests {
         )
         precondition(timedOut.timedOut && timedOut.stderr == "fixture waiting\n")
         precondition(Date().timeIntervalSince(timeoutStarted) < 2)
+        let inheritedStarted = Date()
+        let inherited = try runSleepProcess(
+            URL(fileURLWithPath: CommandLine.arguments[0]),
+            ["--inherited-pipe-fixture"],
+            outputLimit: 32,
+            timeout: 0.2
+        )
+        precondition(inherited.timedOut && inherited.stderr == "descendant holds stderr\n")
+        precondition(Date().timeIntervalSince(inheritedStarted) < 1.5, "Inherited pipe blocked the watchdog")
 
         let missingFixture = try parseSleepDisabled("System-wide power settings:\n currently in use:\n sleep 1\n")
         let enabledFixture = try parseSleepDisabled("System-wide power settings:\n SleepDisabled 0 (default)\n")
