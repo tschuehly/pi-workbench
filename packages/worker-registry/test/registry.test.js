@@ -70,18 +70,33 @@ test("a concurrent dispatch to a live-locked worker fails typed while other work
   assert.equal(typeof grant.lockToken, "string");
 });
 
-test("reclaims a dead-owner lock and rejects the dead owner's stale token afterwards", async () => {
+test("reclaiming a dead-owner lock requires inspection before dispatch", async () => {
   let alive = true;
   const store = registry({ isProcessAlive: () => alive });
   const { workerId } = await store.create(creation());
   const stale = await begin(store, workerId, { pid: 4242 });
   alive = false;
-  const grant = await begin(store, workerId, { pid: 4243 });
-  assert.notEqual(grant.lockToken, stale.lockToken);
+  await assert.rejects(begin(store, workerId, { pid: 4243 }), (error) => error.code === "WORKER_INSPECTION_REQUIRED");
+
+  const diagnostic = "dispatch lock held by dead process 4242 since 2026-08-08T12:00:00.000Z (last heartbeat 2026-08-08T12:00:00.000Z) was reclaimed; the interrupted assignment's outcome is unknown";
   const record = await store.inspect(workerId);
-  assert.equal(record.lastLockRecovery.deadPid, 4242);
+  assert.equal(record.lock, null);
+  assert.deepEqual(record.lastLockRecovery, {
+    at: now.toISOString(),
+    deadPid: 4242,
+    acquiredAt: now.toISOString(),
+    heartbeatAt: now.toISOString(),
+  });
+  assert.deepEqual(record.requiresInspection, { at: now.toISOString(), diagnostic });
+  assert.equal(record.receipts.at(-1).outcome, "outcome_unknown");
+  assert.equal(record.receipts.at(-1).diagnostic, diagnostic);
+  assert.equal((await store.list({ ownerSessionId: "lead-session" }))[0].requiresInspection.diagnostic, diagnostic);
   await assert.rejects(store.completeDispatch(workerId, stale.lockToken, { outcome: "success" }), (error) => error.code === "LOCK_NOT_HELD");
   await assert.rejects(store.heartbeat(workerId, stale.lockToken), (error) => error.code === "LOCK_NOT_HELD");
+
+  const grant = await begin(store, workerId, { pid: 4243, acknowledgeInspection: true });
+  assert.notEqual(grant.lockToken, stale.lockToken);
+  assert.equal((await store.inspect(workerId)).requiresInspection, null);
   await store.completeDispatch(workerId, grant.lockToken, { outcome: "success", sessionId: "session-2" });
 });
 

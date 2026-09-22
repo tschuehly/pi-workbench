@@ -29,7 +29,7 @@ export interface WorkerRecord {
   receipts: WorkerDispatchReceipt[];
   lock: WorkerDispatchLock | null;
   lastLockRecovery: { at: string; deadPid: number; acquiredAt: string; heartbeatAt: string } | null;
-  requiresInspection: { at: string; executionId: string | null; diagnostic: string | null } | null;
+  requiresInspection: { at: string; executionId?: string | null; diagnostic: string | null } | null;
   retired: { at: string; reason: string } | null;
 }
 
@@ -45,7 +45,7 @@ export interface WorkerSummary {
   latestSessionId: string | null;
   latestOutcome: WorkerOutcome | null;
   locked: boolean;
-  requiresInspection: boolean;
+  requiresInspection: WorkerRecord["requiresInspection"];
   retired: boolean;
 }
 
