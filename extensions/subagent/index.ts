@@ -20,19 +20,23 @@ const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "su
 export const PROFILES = {
   scout: {
     tools: ["read", "bash", "grep", "find", "ls"],
-    instruction: "Investigate only. Do not mutate files. Return compact evidence and conclusions to the attending lead.",
+    instruction: "Investigate only. Do not mutate files unless the assignment says otherwise. Return compact evidence and conclusions to the attending lead.",
   },
   planner: {
     tools: ["read", "bash", "grep", "find", "ls"],
-    instruction: "Produce a bounded plan or design judgment. Do not mutate files. Name assumptions, risks, and verification.",
+    instruction: "Produce a bounded plan or design judgment. Do not mutate files unless the assignment says otherwise. Name assumptions, risks, and verification.",
   },
   reviewer: {
     tools: ["read", "bash", "grep", "find", "ls"],
-    instruction: "Review independently. Do not mutate files. Lead with actionable findings and cite repository paths.",
+    instruction: "Review independently. Do not mutate files unless the assignment says otherwise. Lead with actionable findings and cite repository paths.",
   },
   implementer: {
     tools: ["read", "bash", "grep", "find", "ls", "edit", "write"],
-    instruction: "Implement only the bounded assignment. Verify your changes and report files changed, checks, and remaining risks. Do not commit or publish.",
+    instruction: "Implement only the bounded assignment. Verify your changes and report files changed, checks, and remaining risks. Never push or publish. Do not commit unless the assignment explicitly authorizes a scope-only commit; then commit exactly what it names.",
+  },
+  plain: {
+    tools: ["read", "bash", "grep", "find", "ls", "edit", "write"],
+    instruction: "",
   },
   // Worker-only. A coordinator holds one scope's durable context and delegates the work itself to
   // fresh leaf Subagents; it has no edit or write tool, and no Worker lifecycle tool, so the
@@ -43,7 +47,7 @@ export const PROFILES = {
   },
 } as const;
 
-const LEAF_PROFILES = ["scout", "planner", "reviewer", "implementer"] as const;
+const LEAF_PROFILES = ["scout", "planner", "reviewer", "implementer", "plain"] as const;
 const WORKER_PROFILES = [...LEAF_PROFILES, "coordinator"] as const;
 // A leaf launched inside a Worker is the deepest supported level.
 const INSIDE_WORKER = process.env.PI_WORKBENCH_EXECUTION_KIND === "worker";
@@ -213,7 +217,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
 
       const parentSessionId = ctx.sessionManager.getSessionId();
-      const childTask = `${profile.instruction}\n\nAssignment:\n${params.task}`;
+      const childTask = profile.instruction === "" ? params.task : `${profile.instruction}\n\nAssignment:\n${params.task}`;
       const telemetryConcept = params.telemetryConcept ?? inheritedConcept();
       let receipt;
       try {
@@ -515,7 +519,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       const continuing = begin.continuationSessionId !== null;
       const preamble = `You are the durable attended worker \"${begin.name}\" with the semantic scope \"${begin.scope}\".${continuing ? " This dispatch resumes your persisted session; the earlier conversation above is your own prior work in this scope." : " This is your first dispatch in this scope."}`;
-      const childTask = `${profile.instruction}\n\n${preamble}\n\nAssignment:\n${params.task}`;
+      const childTask = [profile.instruction, preamble, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
       let receipt;
       try {
         receipt = await adapter.dispatch({
@@ -852,7 +856,7 @@ export async function collectAll({ pending, running, collectOne, maxChars = BULK
   collectOne: (executionId: string) => Promise<any>;
   maxChars?: number;
 }) {
-  const entries: { executionId: string; outcome: string; text: string; isError: boolean }[] = [];
+  const entries: { executionId: string; outcome: string; text: string; isError: boolean; truncated: boolean }[] = [];
   const remaining: string[] = [];
   let used = 0;
   for (const executionId of pending) {
@@ -860,14 +864,16 @@ export async function collectAll({ pending, running, collectOne, maxChars = BULK
     const result = await collectOne(executionId);
     const text = (result?.content ?? []).filter((part: any) => part?.type === "text").map((part: any) => String(part.text ?? "")).join("\n");
     used += text.length;
-    entries.push({ executionId, outcome: String(result?.details?.outcome ?? "unknown"), text, isError: result?.isError === true });
+    entries.push({ executionId, outcome: String(result?.details?.outcome ?? "unknown"), text, isError: result?.isError === true, truncated: result?.details?.truncated === true });
   }
 
   const total = entries.length + remaining.length;
   const header = total === 0
     ? "Nothing terminal to reconcile."
     : `Reconciled ${entries.length} of ${total} terminal children.`;
+  const truncated = entries.filter((entry) => entry.truncated).length;
   const notes = [
+    truncated === 0 ? "" : `${truncated} result(s) truncated — verification incomplete.`,
     remaining.length === 0 ? "" : `Bounded before reading ${remaining.length} more; they stay uncollected, so collect again or name one: ${remaining.slice(0, REMAINDER_NAMES).join(", ")}${remaining.length > REMAINDER_NAMES ? `, and ${remaining.length - REMAINDER_NAMES} more reached by collecting again` : ""}.`,
     running === 0 ? "" : `${running} ${running === 1 ? "child is" : "children are"} still running and cannot be collected yet.`,
   ].filter((note) => note !== "");

@@ -27,7 +27,7 @@ Each parent tool invocation launches one child with these semantic inputs:
 ```ts
 {
   task: string;
-  profile: "scout" | "planner" | "reviewer" | "implementer";
+  profile: "scout" | "planner" | "reviewer" | "implementer" | "plain";
   cognitiveRole: CognitiveRole;
   independentOfProvider?: string;
   independentOfModel?: string;
@@ -39,7 +39,7 @@ Each parent tool invocation launches one child with these semantic inputs:
 - `task` is a self-contained assignment that names relevant repository paths, constraints, and expected output.
 
 Approved candidate amendment, not yet implemented: cap `task` at 20,000 characters and reject larger input before routing or child launch. The subagent-details implementation must land the schema/preflight check, tests, this plan's current-behavior wording, and extension README together.
-- `profile` selects Workbench-owned child behavior and requested Pi tools. These lowercase Level 1 child profiles are neither managed Execution Profiles nor authority shapes; in particular, `scout` does not grant managed Scout authority. `implementer` avoids overloading the canonical Worker term.
+- `profile` selects Workbench-owned child behavior and requested Pi tools. These lowercase Level 1 child profiles are neither managed Execution Profiles nor authority shapes; in particular, `scout` does not grant managed Scout authority. `implementer` avoids overloading the canonical Worker term. `plain` adds no profile instruction, so its task text is the whole assignment contract.
 - `cognitiveRole` selects the required kind of thinking. It never names a provider or model.
 - `independentOfProvider` identifies a single-family author provider. Gateway providers require an exact author model.
 - `independentOfModel` quotes the exact provider/model from the author's completion receipt. Default routing classifies its underlying family; a single-provider overlay uses the exact model for distinct-model Independence. Without an explicit author, the tool uses the active parent model.
@@ -51,7 +51,7 @@ One invocation maps to one execution request. Decision 99 makes `background: tru
 
 ## Profiles and routing
 
-V1 loads only the four bundled child profiles. Project and user profile discovery is disabled until a trust and validation model exists. Profiles and Cognitive Roles are validated independently: a profile selects child behavior and requested tools, while a Cognitive Role selects the required kind of thinking and its runtime binding. Any known Cognitive Role may be paired with any bundled profile; an unknown profile or unknown Cognitive Role fails preflight.
+V1 loads only the five bundled child profiles. Project and user profile discovery is disabled until a trust and validation model exists. Profiles and Cognitive Roles are validated independently: a profile selects child behavior and requested tools, while a Cognitive Role selects the required kind of thinking and its runtime binding. Any known Cognitive Role may be paired with any bundled profile; an unknown profile or unknown Cognitive Role fails preflight.
 
 The extension invokes the package-relative `skills/model-orchestration/scripts/resolve-runtime-binding.mjs` for every child launch and validates its JSON response. Independent roles pass the author identity and optional reviewer-family exclusions so the resolver selects a policy candidate outside those underlying families, or a different allowed model under a single-provider overlay. Missing, unknown, contradictory, or unsatisfiable independence fails preflight. The resolved binding contains a Cognitive Role, provider-qualified model, Model Effort, optional Independence metadata, quota admission, and quota telemetry. Quota telemetry is shared through a ten-minute machine-local cache, so repeated and concurrent child launches do not repeatedly query provider endpoints. Fresh confirmed exhaustion, an unknown role, and an unavailable catalog model stop before Pi Execution. Stale, unavailable, or unreadable quota telemetry is admitted explicitly as `degraded-quota-telemetry`; it is visible in observations and does not prevent a verified launch.
 
@@ -71,7 +71,7 @@ Persisting a child session is evidence and the continuity primitive reused by th
 
 Level 1 children share the attended parent's local machine trust boundary. The adapter applies explicit Pi tool allowlists, but V1 has no filesystem, process, or network sandbox and makes no confinement claim.
 
-Analysis-oriented profiles request analysis tools and are instructed not to mutate. Because unrestricted shell access can write, that non-mutation behavior is not presented as a security guarantee. The `implementer` profile additionally requests Pi editing and writing tools. The effective tool set is the intersection of profile requests and the host ceiling; it can narrow but never expand at runtime.
+Analysis-oriented profiles request analysis tools and are instructed not to mutate unless the assignment says otherwise. Because unrestricted shell access can write, that non-mutation behavior is not presented as a security guarantee. The `implementer` and `plain` profiles additionally request Pi editing and writing tools; `plain` adds no profile instruction. The effective tool set is the intersection of profile requests and the host ceiling; it can narrow but never expand at runtime.
 
 A later sandbox adapter must fail preflight whenever a requested filesystem, process, or network restriction cannot be enforced. V1 does not add that policy prematurely or represent prompt instructions as authority enforcement.
 

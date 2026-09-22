@@ -1,6 +1,8 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
 import { modelFamily, knownModelFamilies } from "./model-family.js";
@@ -20,7 +22,9 @@ export class PiRpcExecutionAdapter {
     this.spawn = options.spawn ?? nodeSpawn;
     this.killGraceMs = options.killGraceMs ?? 2_000;
     this.settlementProbeMs = options.settlementProbeMs ?? 5_000;
-    this.resultMaxChars = options.resultMaxChars ?? 8_000;
+    this.resultMaxChars = options.resultMaxChars ?? ((value) => Number.isSafeInteger(value) && value > 0 ? value : 8_000)(Number(process.env.PI_WORKBENCH_RESULT_MAX_CHARS));
+    // A child's bounded result is a summary; the full final message is kept as a plain file the lead can read on demand.
+    this.resultsDir = options.resultsDir ?? process.env.PI_WORKBENCH_RESULTS_DIR ?? join(homedir(), ".pi-workbench", "results");
     this.routingOverlayPath = options.routingOverlayPath ?? process.env.PI_WORKBENCH_ROUTING_OVERLAY;
     // A lead adapter puts each child in its own process group so cancelling a Worker also removes
     // the leaves it launched. Inside a Worker, leaves stay in the Worker's group instead, so an
@@ -281,7 +285,8 @@ export class PiRpcExecutionAdapter {
       return;
     }
     this.#emit(state, "binding_verified", { provider: reportedProvider, model: reportedModel, effort: reportedEffort });
-    this.#finish(state, { ...resultFor(state, "success", state.finalText), sessionId: current.sessionId });
+    const fullTextPath = state.finalText.length > (state.resultMaxChars ?? 8_000) ? this.#spillFullText(state, state.finalText) : undefined;
+    this.#finish(state, { ...resultFor(state, "success", state.finalText, undefined, fullTextPath), sessionId: current.sessionId });
     state.child?.stdin?.end();
     void this.#retireSuccessfulProcess(state);
   }
@@ -360,7 +365,8 @@ export class PiRpcExecutionAdapter {
     state.prompted = true;
     const id = `${state.executionId}:${String(++state.commandSequence)}`;
     state.commands.set(id, { command: "prompt", resolve: () => {}, reject: (error) => { if (!state.done) this.#finish(state, resultFor(state, "execution_failed", "", errorMessage(error))); } });
-    state.child.stdin.write(`${JSON.stringify({ id, type: "prompt", message: state.spec.task })}\n`);
+    const resultBudget = `Your final message is cut after ${state.resultMaxChars} characters. Lead with findings and cite repository paths; do not paste source or logs.`;
+    state.child.stdin.write(`${JSON.stringify({ id, type: "prompt", message: `${state.spec.task}\n\n${resultBudget}` })}\n`);
   }
 
   async #terminate(state) {
@@ -381,6 +387,18 @@ export class PiRpcExecutionAdapter {
     if (state.observations.length > 200) state.observations.shift();
     for (const waiter of state.waiters) waiter();
     state.waiters.clear();
+  }
+
+  /** Best effort: the bounded result stays valid when the spill fails, it just loses the path. */
+  #spillFullText(state, text) {
+    try {
+      mkdirSync(this.resultsDir, { recursive: true });
+      const path = join(this.resultsDir, `${state.executionId}.md`);
+      writeFileSync(path, text);
+      return path;
+    } catch {
+      return undefined;
+    }
   }
 
   #finish(state, result) {
@@ -546,13 +564,15 @@ function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   }
 }
 
-function resultFor(state, outcome, text = "", diagnostic) {
+function resultFor(state, outcome, text = "", diagnostic, fullTextPath) {
   const b = state.spec.binding;
   const max = state.resultMaxChars ?? 8_000;
   const truncated = text.length > max;
+  const fullText = fullTextPath === undefined ? `child session ${state.sessionId}` : `${fullTextPath} (child session ${state.sessionId})`;
   return {
     outcome,
-    text: truncated ? `${text.slice(0, max)}…\n\n[TRUNCATED at ${max} characters. A truncated result is evidence of an oversized assignment and cannot satisfy verification; re-run a narrower bounded task.]` : text,
+    text: truncated ? `${text.slice(0, max)}…\n\n[TRUNCATED at ${max} characters; full text: ${fullText}. A truncated result cannot satisfy verification; read the full text with offsets or request a bounded follow-up.]` : text,
+    ...(fullTextPath === undefined ? {} : { fullTextPath }),
     truncated,
     kind: state.kind ?? "subagent",
     profile: state.spec.profile,
