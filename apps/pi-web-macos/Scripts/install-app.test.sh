@@ -22,17 +22,13 @@ cat >"${fake_bin}/pi-web" <<'FAKE_CLI'
 set -Eeuo pipefail
 printf '%s\n' "$*" >>"${PI_WEB_FAKE_CLI_LOG}"
 case "${1:-}" in
-  status)
-    cat <<'JSON'
-{"schemaVersion":1,"generatedAt":"2026-01-01T00:00:00Z","platform":"darwin","backend":"launchd","installMode":"not-installed","components":[{"component":"sessiond","ownership":"absent","health":"unhealthy","instances":[],"diagnostics":[],"processTrees":[]}]}
-JSON
-    ;;
   install)
     if [[ "${PI_WEB_FAKE_FAIL_INSTALL:-0}" == 1 ]]; then
       echo "simulated install preflight failure" >&2
       exit 42
     fi
     ;;
+  *) echo "unexpected lifecycle command: $*" >&2; exit 43 ;;
 esac
 FAKE_CLI
 chmod +x "${fake_bin}/pi-web"
@@ -50,14 +46,14 @@ run_installer() {
   TMPDIR="${test_root}/tmp" \
   PATH="${fake_bin}:${PATH}" \
   SWIFTPM_BUILD_DIR="${test_root}/swift-build" \
-  PI_WEB_DIR="${fake_checkout}" \
-  PI_WEB_CLI="${fake_bin}/pi-web" \
+  PI_WEB_DIR="${PI_WEB_TEST_DIR-${fake_checkout}}" \
+  PI_WEB_CLI="${PI_WEB_TEST_CLI-${fake_bin}/pi-web}" \
   PI_WEB_COMMAND_DIR="${command_dir}" \
   PI_WEB_DATA_DIR="${test_root}/state" \
   PI_WEB_LAUNCH_AGENTS_DIR="${test_root}/launch-agents" \
   PI_WEB_FAKE_CLI_LOG="${fake_cli_log}" \
   PI_WEB_FAKE_FAIL_INSTALL="${PI_WEB_FAKE_FAIL_INSTALL:-0}" \
-    bash "${script_dir}/install-app.sh" "${app_path}" >/dev/null
+    bash "${script_dir}/install-app.sh" "$@" "${app_path}" >/dev/null
 }
 
 run_installer
@@ -95,12 +91,20 @@ check_true "the detached shell launcher is not installed" test ! -e "${app_path}
 check_equal "bundle config records CLI" "${fake_bin}/pi-web" "$(/usr/libexec/PlistBuddy -c 'Print :CLIPath' "${bundle_config}")"
 check_equal "bundle config records checkout" "${fake_checkout}" "$(/usr/libexec/PlistBuddy -c 'Print :CheckoutPath' "${bundle_config}")"
 check_equal "bundle config records development URL" "http://127.0.0.1:8505" "$(/usr/libexec/PlistBuddy -c 'Print :ServerURL' "${bundle_config}")"
-check_equal "installer preflights and then installs through typed lifecycle" $'status --json\ninstall --dev' "$(cat "${fake_cli_log}")"
+check_equal "installer delegates directly to development install without a status-format gate" 'install --dev' "$(cat "${fake_cli_log}")"
 check_true "pi-web-mac command is installed" test -x "${command_dir}/pi-web-mac"
 
 PI_WEB_OPEN="${fake_bin}/open" PI_WEB_FAKE_OPEN_LOG="${fake_open_log}" "${command_dir}/pi-web-mac"
 check_equal "pi-web-mac activates only the installed app through open" "${app_path}" "$(cat "${fake_open_log}")"
-check_equal "pi-web-mac does not invoke lifecycle CLI" $'status --json\ninstall --dev' "$(cat "${fake_cli_log}")"
+check_equal "pi-web-mac does not invoke lifecycle CLI" 'install --dev' "$(cat "${fake_cli_log}")"
+
+printf 'replace-this-app\n' >"${app_path}/atomic-marker"
+: >"${fake_cli_log}"
+PI_WEB_TEST_DIR= PI_WEB_TEST_CLI= run_installer --app-only
+check_equal "app-only refresh preserves recorded checkout" "${fake_checkout}" "$(/usr/libexec/PlistBuddy -c 'Print :CheckoutPath' "${bundle_config}")"
+check_equal "app-only refresh preserves recorded CLI" "${fake_bin}/pi-web" "$(/usr/libexec/PlistBuddy -c 'Print :CLIPath' "${bundle_config}")"
+check_equal "app-only install invokes no lifecycle commands" "" "$(cat "${fake_cli_log}")"
+check_true "app-only install replaces the existing bundle" test ! -e "${app_path}/atomic-marker"
 
 printf 'preserve-existing-app\n' >"${app_path}/atomic-marker"
 if PI_WEB_FAKE_FAIL_INSTALL=1 run_installer 2>/dev/null; then

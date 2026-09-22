@@ -66,19 +66,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func reload(_ sender: Any?) { browser.reloadKeyWindow() }
     @objc private func goBack(_ sender: Any?) { browser.goBackInKeyWindow() }
     @objc private func goForward(_ sender: Any?) { browser.goForwardInKeyWindow() }
-    @objc private func restartUI(_ sender: Any?) { lifecycle.restartUI() }
+    @objc private func showRestartHelp(_ sender: Any?) { lifecycle.showRestartHelp() }
     @objc private func openLifecycleStatus(_ sender: Any?) { lifecycle.showStatus() }
-
-    @objc private func restartSessionRuntime(_ sender: Any?) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Restart the PI WEB session runtime?"
-        alert.informativeText = "This can abort in-flight turns, asks, and terminals. The UI is restarted separately and normally does not require this action."
-        alert.addButton(withTitle: "Restart Session Runtime")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        lifecycle.restartSessionRuntime()
-    }
 
     private func handle(_ action: LifecycleAction) {
         switch action {
@@ -144,8 +133,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(lifecycleItem)
         let lifecycleMenu = NSMenu(title: "PI WEB")
         lifecycleItem.submenu = lifecycleMenu
-        lifecycleMenu.addItem(withTitle: "Restart PI WEB UI", action: #selector(restartUI(_:)), keyEquivalent: "")
-        lifecycleMenu.addItem(withTitle: "Restart Session Runtime…", action: #selector(restartSessionRuntime(_:)), keyEquivalent: "")
+        lifecycleMenu.addItem(withTitle: "About Service Restarts…", action: #selector(showRestartHelp(_:)), keyEquivalent: "")
         lifecycleMenu.addItem(.separator())
         lifecycleMenu.addItem(withTitle: "Open Lifecycle Status", action: #selector(openLifecycleStatus(_:)), keyEquivalent: "")
 
@@ -159,39 +147,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-private struct NativeStatusReport: Decodable {
-    let schemaVersion: Int
-    let installMode: InstallMode
-    let components: [NativeComponentStatus]
-}
-
-private enum InstallMode: String, Decodable {
-    case notInstalled = "not-installed"
-    case development
-    case developmentIncomplete = "development-incomplete"
-    case production
-    case productionIncomplete = "production-incomplete"
-    case mixed
-    case partial
-}
-
-private struct NativeComponentStatus: Decodable {
-    let component: Component
-    let ownership: Ownership
-    let health: Health
-}
-
-private enum Component: String, Decodable { case sessiond, web, uiDev }
-private enum Ownership: String, Decodable { case managed, unmanaged, conflict, absent }
-private enum Health: String, Decodable { case healthy, starting, unhealthy, unknown }
-
-private enum StackState {
-    case ready
-    case stopped(String)
-    case waiting(String)
-    case failed(String)
-}
-
 private struct CommandResult {
     let output: String
     let status: Int32
@@ -201,8 +156,8 @@ private final class LifecycleController {
     private let configuration: PIWebConfiguration?
     private weak var browser: BrowserCoordinator?
     private let queue = DispatchQueue(label: "works.pi.workbench.lifecycle", qos: .userInitiated)
-    private let preparing = NSLock()
-    private var isPreparing = false
+    // Owned by the serial lifecycle queue; a retry supersedes scheduled probes.
+    private var generation = 0
 
     init(configuration: PIWebConfiguration?, browser: BrowserCoordinator) {
         self.configuration = configuration
@@ -210,85 +165,52 @@ private final class LifecycleController {
     }
 
     func start() {
-        // Recovery is triggered by every window that loses the server, so collapse concurrent
-        // attempts instead of running several `pi-web start` calls against the same services.
-        preparing.lock()
-        let alreadyPreparing = isPreparing
-        isPreparing = true
-        preparing.unlock()
-        guard !alreadyPreparing else { return }
         onMain { self.browser?.showStartup("Checking installed PI WEB services…") }
         queue.async { [weak self] in
             guard let self else { return }
-            self.prepareStack()
-            self.preparing.lock()
-            self.isPreparing = false
-            self.preparing.unlock()
+            self.generation += 1
+            self.prepareStack(generation: self.generation, startedAt: Date())
         }
     }
 
-    func restartUI() {
-        runRestart(component: "ui", message: "Restarting PI WEB UI…")
-    }
+    func showStatus() { showReport(command: ["status"], title: "PI WEB Lifecycle Status") }
+    func showDoctor() { showReport(command: ["doctor"], title: "PI WEB Doctor") }
 
-    func restartSessionRuntime() {
-        runRestart(component: "sessiond", message: "Restarting session runtime…")
-    }
-
-    func showStatus() { showReport(command: ["status", "--json"], title: "PI WEB Lifecycle Status") }
-    func showDoctor() { showReport(command: ["doctor", "--json"], title: "PI WEB Doctor") }
-
-    private func runRestart(component: String, message: String) {
-        onMain { self.browser?.showStartup(message) }
-        queue.async { [weak self] in
-            guard let self else { return }
-            do {
-                let result = try self.runCLI(["restart", "--component", component])
-                guard result.status == 0 else { throw LifecycleError.command(result.output) }
-                self.prepareStack()
-            } catch {
-                self.showFailure(error.localizedDescription)
-            }
+    func showRestartHelp() {
+        // The current CLI ignores --component and restarts the entire stack. Fail closed.
+        onMain {
+            self.browser?.showReport(title: "Component restart unavailable", text:
+                "This PI WEB CLI does not support component-only restarts. No services were restarted.\n\nUse pi-web restart in a terminal only when interrupting all active sessions is acceptable.")
         }
     }
 
-    private func prepareStack() {
+    private func prepareStack(generation: Int, startedAt: Date, attempt: Int = 0) {
+        guard generation == self.generation else { return }
         do {
-            var status = try typedStatus()
-            switch stackState(status) {
+            guard let configuration else { throw LifecycleError.configuration }
+            switch PIWebReadiness.check(serverURL: configuration.serverURL, checkoutURL: configuration.checkoutURL) {
             case .ready:
                 showReady()
                 return
-            case .stopped(let message):
-                onMain { self.browser?.showStartup(message) }
-                let start = try runCLI(["start"])
-                guard start.status == 0 else { throw LifecycleError.command(start.output) }
-            case .waiting(let message):
-                onMain { self.browser?.showStartup(message) }
             case .failed(let message):
-                throw LifecycleError.status(message)
-            }
-
-            // The dev services restart themselves, so keep waiting instead of giving up: a broken
-            // build or a restarted half heals on its own and the window must follow it back up.
-            var elapsedSeconds = 0
-            while true {
-                Thread.sleep(forTimeInterval: 1)
-                elapsedSeconds += 1
-                status = try typedStatus()
-                switch stackState(status) {
-                case .ready:
-                    showReady()
-                    return
-                case .stopped(let message):
-                    // launchd keeps the dev services alive, but a job that was unloaded stays down.
-                    _ = try? runCLI(["start"])
-                    report(message, elapsedSeconds)
-                case .waiting(let message):
-                    report(message, elapsedSeconds)
-                case .failed(let message):
-                    throw LifecycleError.status(message)
+                showFailure(message)
+                return
+            case .waiting(let message):
+                // Status is display text; only its exit code reports whether services are running.
+                // `start` starts missing services without replacing a running session daemon.
+                if attempt % 10 == 0 {
+                    let status = try runCLI(["status"])
+                    if status.status != 0 {
+                        onMain { self.browser?.showStartup("Starting installed PI WEB services…") }
+                        let start = try runCLI(["start"])
+                        guard start.status == 0 else { throw LifecycleError.command(start.output) }
+                    }
                 }
+                report(message, Int(Date().timeIntervalSince(startedAt)))
+            }
+            // Yield the queue so doctor/status and explicit retries still work while unhealthy.
+            queue.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.prepareStack(generation: generation, startedAt: startedAt, attempt: attempt + 1)
             }
         } catch {
             showFailure(error.localizedDescription)
@@ -301,42 +223,6 @@ private final class LifecycleController {
         } else {
             onMain { self.browser?.showStartup(message) }
         }
-    }
-
-    private func typedStatus() throws -> NativeStatusReport {
-        let result = try runCLI(["status", "--json"])
-        guard result.status == 0 else { throw LifecycleError.command(result.output) }
-        guard let data = result.output.data(using: .utf8) else { throw LifecycleError.invalidStatus }
-        let report: NativeStatusReport
-        do { report = try JSONDecoder().decode(NativeStatusReport.self, from: data) }
-        catch { throw LifecycleError.invalidStatus }
-        guard report.schemaVersion == 1 else { throw LifecycleError.invalidStatus }
-        let ids = report.components.map(\.component)
-        guard Set(ids).count == ids.count else { throw LifecycleError.invalidStatus }
-        return report
-    }
-
-    private func stackState(_ report: NativeStatusReport) -> StackState {
-        guard report.installMode == .development || report.installMode == .mixed else {
-            return .failed(report.installMode == .notInstalled
-                ? "PI WEB development services are not installed. Re-run the Pi Workbench installer."
-                : "The installed PI WEB services are not a complete development installation. Run PI WEB doctor, then re-run the installer.")
-        }
-        guard
-            let sessiond = report.components.first(where: { $0.component == .sessiond }),
-            let ui = report.components.first(where: { $0.component == .uiDev }) ?? report.components.first(where: { $0.component == .web })
-        else { return .failed("Typed lifecycle status omitted the UI or session runtime component. Re-run the installer.") }
-        let required = [sessiond, ui]
-        if let conflict = required.first(where: { $0.ownership == .conflict || $0.ownership == .unmanaged }) {
-            return .failed("PI WEB reported \(conflict.ownership.rawValue) ownership for \(conflict.component.rawValue). Run doctor before retrying.")
-        }
-        if required.allSatisfy({ $0.ownership == .managed && $0.health == .healthy }) { return .ready }
-        if required.allSatisfy({ $0.ownership == .absent }) { return .stopped("Starting installed PI WEB services…") }
-        if required.contains(where: { $0.ownership == .absent }) {
-            // One half restarting is normal while its code is being edited; it heals by itself.
-            return .waiting("Waiting for the other half of the PI WEB stack to come back…")
-        }
-        return .waiting("Waiting for typed PI WEB UI and session runtime health…")
     }
 
     private func runCLI(_ arguments: [String]) throws -> CommandResult {
@@ -399,18 +285,14 @@ private final class LifecycleController {
 
 private enum LifecycleError: LocalizedError {
     case configuration
-    case invalidStatus
     case command(String)
     case launch(String)
-    case status(String)
 
     var errorDescription: String? {
         switch self {
         case .configuration: return "The generated PI WEB bundle configuration is missing or invalid. Re-run the Pi Workbench installer."
-        case .invalidStatus: return "PI WEB returned an invalid typed lifecycle status. Run doctor or reinstall PI WEB services."
         case .command(let output): return output.isEmpty ? "The PI WEB lifecycle command failed." : output
         case .launch(let message): return "The configured PI WEB CLI could not be launched: \(message)"
-        case .status(let message): return message
         }
     }
 }

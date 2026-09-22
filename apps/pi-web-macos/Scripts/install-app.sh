@@ -13,7 +13,7 @@ else
 fi
 pi_web_dir="${PI_WEB_DIR:-${default_pi_web_dir}}"
 pi_web_url="${PI_WEB_URL:-http://127.0.0.1:8505}"
-destination="${1:-${PI_WEB_APP_PATH:-${HOME}/Applications/Pi Workbench.app}}"
+destination="${PI_WEB_APP_PATH:-${HOME}/Applications/Pi Workbench.app}"
 command_dir="${PI_WEB_COMMAND_DIR:-${HOME}/.local/bin}"
 app_icon="${app_dir}/Resources/AppIcon.icns"
 stage=""
@@ -25,6 +25,29 @@ fail() {
   exit 1
 }
 
+app_only=0
+destination_set=0
+for argument in "$@"; do
+  case "${argument}" in
+    --app-only) app_only=1 ;;
+    --*) fail "Unknown option: ${argument}" ;;
+    *)
+      (( destination_set == 0 )) || fail "Only one destination may be specified."
+      destination="${argument}"
+      destination_set=1
+      ;;
+  esac
+done
+
+# An app-only refresh keeps the installed service binding unless explicitly overridden.
+pi_web_cli_override="${PI_WEB_CLI:-}"
+existing_config="${destination}/Contents/Resources/PIWebConfig.plist"
+if (( app_only )) && [[ -f "${existing_config}" ]]; then
+  pi_web_dir="${PI_WEB_DIR:-$(/usr/libexec/PlistBuddy -c 'Print :CheckoutPath' "${existing_config}")}" || fail "Cannot read installed checkout."
+  pi_web_url="${PI_WEB_URL:-$(/usr/libexec/PlistBuddy -c 'Print :ServerURL' "${existing_config}")}" || fail "Cannot read installed server URL."
+  pi_web_cli_override="${PI_WEB_CLI:-$(/usr/libexec/PlistBuddy -c 'Print :CLIPath' "${existing_config}")}" || fail "Cannot read installed CLI."
+fi
+
 absolute_executable() {
   local value="$1"
   local directory
@@ -34,8 +57,8 @@ absolute_executable() {
 
 resolve_cli() {
   local candidate=""
-  if [[ -n "${PI_WEB_CLI:-}" ]]; then
-    candidate="${PI_WEB_CLI}"
+  if [[ -n "${pi_web_cli_override}" ]]; then
+    candidate="${pi_web_cli_override}"
   elif candidate="$(command -v pi-web 2>/dev/null)"; then
     :
   elif [[ -f "${pi_web_dir}/dist/cli.js" ]]; then
@@ -54,27 +77,6 @@ run_cli() {
   else
     (cd "${pi_web_dir}" && node "${pi_web_cli}" "$@")
   fi
-}
-
-validate_status_json() {
-  local path="$1"
-  local schema install_mode count index component ownership health instances
-  schema="$(/usr/bin/plutil -extract schemaVersion raw "${path}" 2>/dev/null)" || return 1
-  [[ "${schema}" == 1 ]] || return 1
-  install_mode="$(/usr/bin/plutil -extract installMode raw "${path}" 2>/dev/null)" || return 1
-  [[ "${install_mode}" =~ ^(not-installed|development|development-incomplete|production|production-incomplete|mixed|partial)$ ]] || return 1
-  count="$(/usr/bin/plutil -extract components raw "${path}" 2>/dev/null)" || return 1
-  [[ "${count}" =~ ^[0-9]+$ ]] || return 1
-  for ((index = 0; index < count; index++)); do
-    component="$(/usr/bin/plutil -extract "components.${index}.component" raw "${path}" 2>/dev/null)" || return 1
-    ownership="$(/usr/bin/plutil -extract "components.${index}.ownership" raw "${path}" 2>/dev/null)" || return 1
-    health="$(/usr/bin/plutil -extract "components.${index}.health" raw "${path}" 2>/dev/null)" || return 1
-    instances="$(/usr/bin/plutil -extract "components.${index}.instances" raw "${path}" 2>/dev/null)" || return 1
-    [[ "${component}" =~ ^(sessiond|web|uiDev)$ ]] || return 1
-    [[ "${ownership}" =~ ^(managed|unmanaged|conflict|absent)$ ]] || return 1
-    [[ "${health}" =~ ^(healthy|starting|unhealthy|unknown)$ ]] || return 1
-    [[ "${instances}" =~ ^[0-9]+$ ]] || return 1
-  done
 }
 
 cleanup() {
@@ -156,14 +158,10 @@ bundle_config="${resources_dir}/PIWebConfig.plist"
 /usr/bin/plutil -insert ServerURL -string "${pi_web_url}" "${bundle_config}"
 /usr/bin/plutil -lint "${contents_dir}/Info.plist" "${bundle_config}" >/dev/null
 
-status_file="${stage}/status.json"
-if ! run_cli status --json >"${status_file}"; then
-  fail "PI WEB lifecycle status preflight failed; the existing app was not changed."
-fi
-validate_status_json "${status_file}" || fail "PI WEB lifecycle returned an invalid typed status; the existing app was not changed."
-rm "${status_file}"
-if ! run_cli install --dev; then
-  fail "PI WEB development service installation failed; the existing app was not changed."
+if (( ! app_only )); then
+  if ! run_cli install --dev; then
+    fail "PI WEB development service installation failed; the existing app was not changed."
+  fi
 fi
 
 mkdir -p "${command_dir}"
