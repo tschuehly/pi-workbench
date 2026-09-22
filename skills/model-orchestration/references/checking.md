@@ -15,7 +15,7 @@ consequence by the impact of a wrong conclusion, not by implementation difficult
 |---|---|
 | `low` | The selected Checking floor only; at `adversarial`, one cross-family `challenge` |
 | `medium` | One `independent-judgment` or `challenge` |
-| `high` | Two parallel `challenge` assignments from distinct non-author model families |
+| `high` | Two parallel `challenge` assignments from distinct non-author model families; when only one non-author family has quota (see below), one `challenge` from that family, disclosed as single-family |
 | `critical` | The `high` panel, then one `independent-review` at the evidence-bearing boundary and a separate `synthesis` |
 
 Give parallel challengers the same distilled claim, constraints, and Primary Evidence, but distinct challenge lenses. Keep their answers hidden from one another and collect all terminal results before synthesis. Independence follows the underlying model family, not the gateway provider; two models routed through GitHub Copilot are independent only when their underlying families differ from the author and from each other.
@@ -25,7 +25,14 @@ tests or adversarial review. Resolve the panel before launching: retain the same
 `modelBinding.independence.selectedFamily` from subsequent resolutions with repeatable
 `--exclude-family` flags (Subagent `excludeFamilies`). Required fan-out does not degrade silently when
 quota or a binding is unavailable; reduce scope, defer, or return `ROUTING=BLOCKED` with the missing
-family. Repeated selections of the same family do not satisfy a distinct-family panel.
+family.
+
+One explicit degradation exists for `high`: the policy's third family is `github-copilot/grok-4.6`. When
+its quota window is exhausted or Copilot is unavailable (the resolver blocks the second `challenge`),
+run the `high` panel as one `challenge` from the remaining non-author family and record
+"single-family: Copilot quota unavailable" in the checking plan and the final report. Do not substitute a
+second reviewer from the author's family or the already-selected family, and do not apply this
+degradation to `critical`. Repeated selections of the same family do not satisfy a distinct-family panel.
 
 Resolve each role through [Binding](binding.md), including its explicit run-scoped routing-overlay
 exception to default cross-family independence. Report the independence actually provided.
