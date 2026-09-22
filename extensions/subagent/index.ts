@@ -69,6 +69,7 @@ const COGNITIVE_ROLES = [
   "implementation", "problem-solving", "design", "escalation", "investigation",
   "independent-judgment", "challenge", "synthesis", "independent-review", "mechanics", "coordination",
 ] as const;
+const MODEL_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const INDEPENDENT_ROLES = new Set<string>(["independent-judgment", "challenge", "independent-review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
 const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
@@ -78,6 +79,8 @@ const Params = Type.Object({
   name: Type.Optional(Type.String({ minLength: 1, description: "Short human-readable label for this child, a few words not a sentence (e.g. 'Fix login redirect'). Names the delegate roster row and the child session; falls back to a label derived from task when omitted." })),
   profile: StringEnum(LEAF_PROFILES, { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
+  modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'; unavailable to independent roles" })),
+  effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
   independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Use only when the exact author model is genuinely unavailable; explicit providers never inherit the active parent's model." })),
   independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Independent roles default to the active parent provider/model; distinct-model overlays require this exact value." })),
   excludeFamilies: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Additional model families to reject during cross-family independent routing; propagated unchanged as repeatable exclusions and unavailable under distinct-model overlays" })),
@@ -104,7 +107,8 @@ const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
-  modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Optional exact '<provider>/<model>' requested by the owner; the Cognitive Role still selects Model Effort" })),
+  modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'" })),
+  effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Prefer true. Finish genuinely independent work, then end the turn; the completion signal starts the next turn. Never collect to wait. Omit only for a result that is the immediate next input when nothing useful can happen first." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
@@ -176,6 +180,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "Never sleep, poll, or call subagent_collect to wait for a background child.",
       "For independent roles, quote the exact author provider/model from its completion receipt when available. Use excludeFamilies only for additional cross-family exclusions; distinct-model overlays reject it, and non-independent roles reject both options.",
+      "Use modelOverride only for an exact model requested by the owner; this exception is unavailable to independent roles. Roles describe the work; effort is its own knob—do not pick a role for its effort.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
     ],
@@ -211,7 +216,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
 
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, independentOfModel, undefined, params.excludeFamilies, options.resolverPath);
+        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, independentOfModel, params.modelOverride, params.effort, params.excludeFamilies, options.resolverPath);
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
       }
@@ -480,7 +485,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "worker_dispatch",
     label: "Worker dispatch",
-    description: "Dispatch one bounded assignment to a durable worker with scoped session continuity. Prefer background:true; omit only for a result that is the immediate next input when nothing useful can happen first. Owner-requested modelOverride changes the model, not role-selected effort. One dispatch at a time; none survives the attended session.",
+    description: "Dispatch one bounded assignment to a durable worker with scoped session continuity. Prefer background:true; omit only for a result that is the immediate next input when nothing useful can happen first. Owner-requested modelOverride changes the model; effort may be set independently. One dispatch at a time; none survives the attended session.",
     promptSnippet: "Dispatch one bounded assignment to a durable attended worker",
     promptGuidelines: [
       "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
@@ -489,7 +494,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
       "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
-      "Use worker_dispatch modelOverride only when the owner or run contract requests an exact model; Cognitive Role routing remains the default.",
+      "Use worker_dispatch modelOverride only when the owner or run contract requests an exact model; Cognitive Role routing remains the default. Roles describe the work; effort is its own knob—do not pick a role for its effort.",
     ],
     parameters: WorkerDispatchParams,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -522,7 +527,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, undefined, options.resolverPath);
+        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, params.effort, undefined, options.resolverPath);
       } catch (error) {
         await abandon(errorMessage(error));
         return failure("preflight_failed", errorMessage(error));
@@ -942,18 +947,24 @@ export function providerOf(qualifiedModel: string | undefined): string | undefin
   return slash > 0 && slash < qualifiedModel.length - 1 ? qualifiedModel.slice(0, slash) : undefined;
 }
 
-async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string, modelOverride?: string, excludeFamilies?: string[], resolverPath = resolver): Promise<any> {
+async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string, modelOverride?: string, effort?: string, excludeFamilies?: string[], resolverPath = resolver): Promise<any> {
   const args = [
     resolverPath, cognitiveRole,
     ...(modelOverride === undefined ? [] : ["--model", modelOverride]),
+    ...(effort === undefined ? [] : ["--effort", effort]),
     ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider]),
     ...(independentOfModel === undefined ? [] : ["--independent-of-model", independentOfModel]),
     ...(excludeFamilies ?? []).flatMap((family) => ["--exclude-family", family]),
   ];
+  const innerTimeout = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
+  const startedAt = Date.now();
   const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 15_000 }, (error, output, stderr) => {
-      if (error !== null) reject(new Error(String(stderr || output || error.message).trim()));
-      else resolve(output);
+    execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: innerTimeout * 2 + 5_000 }, (error, output, stderr) => {
+      if (error !== null) {
+        const stderrText = String(stderr).trim();
+        const stages = [...stderrText.matchAll(/^STAGE=(\S+)$/gm)];
+        reject(new Error(`Routing resolver failed: elapsedMs=${Date.now() - startedAt} killed=${error.killed === true} signal=${error.signal ?? "none"} exitCode=${error.code ?? "none"} lastStage=${stages.at(-1)?.[1] ?? "unknown"}\nresolver stderr:\n${stderrText || "(empty)"}${stderrText === "" ? `\n${String(output || error.message).trim()}` : ""}`));
+      } else resolve(output);
     });
   });
   let value: any;
@@ -988,6 +999,11 @@ export function taskGoal(task: string): string {
 
 function bounded(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}…`;
+}
+
+function positiveTimeout(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 function errorMessage(error: unknown): string {

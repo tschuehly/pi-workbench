@@ -50,6 +50,7 @@ const catalog = [
   "openai-codex gpt-5.6-sol 272K 128K yes yes",
   "openai-codex gpt-6-astra 272K 128K yes yes",
   "github-copilot gpt-5-mini 264K 64K yes yes",
+  "github-copilot plain-chat 264K 64K no yes",
   "github-copilot claude-sonnet-5 1M 128K yes yes",
   "github-copilot gemini-3.1-pro-preview 1M 64K yes yes",
   "github-copilot grok-4.6 1M 64K yes yes",
@@ -73,6 +74,7 @@ try {
     ] },
     "github-copilot": { models: [
       { id: "gpt-5-mini", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: null, max: null } },
+      { id: "plain-chat", reasoning: false },
       { id: "grok-4.6", reasoning: true, thinkingLevelMap: { high: "high" } },
     ] },
     openai: { models: [
@@ -85,6 +87,10 @@ try {
   assert.equal(pass.status, "pass");
   assert.equal(pass.modelBinding.provider, "anthropic");
   assert.equal(pass.modelBinding.quotaSnapshot.relevantWindows.length, 1);
+
+  const staged = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(staged.status, 0, staged.stderr);
+  assert.match(staged.stderr, /STAGE=policy[\s\S]*STAGE=quota[\s\S]*STAGE=catalog/);
 
   const synthesis = JSON.parse(execFileSync(process.execPath, [resolver, "synthesis", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(synthesis.modelBinding.model, "claude-opus-5");
@@ -102,6 +108,27 @@ try {
   assert.equal(crossProviderWorker.modelBinding.model, "claude-sonnet-5");
   assert.equal(crossProviderWorker.modelBinding.effort, "medium");
   assert.equal(crossProviderWorker.modelBinding.quotaSnapshot.relevantWindows[0].id, "five_hour", "quota follows the overridden provider");
+
+  const explicitEffort = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--effort", "high", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(explicitEffort.modelBinding.model, "gpt-5.6-sol", "the Cognitive Role still selects the model");
+  assert.equal(explicitEffort.modelBinding.effort, "high");
+  assert.equal(explicitEffort.modelBinding.effortOverride, "high");
+
+  const reasoningOff = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--model", "github-copilot/plain-chat", "--effort", "off", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(reasoningOff.modelBinding.model, "plain-chat");
+  assert.equal(reasoningOff.modelBinding.effort, "off");
+
+  const explicitModelAndEffort = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--model", "openai-codex/gpt-6-astra", "--effort", "max", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(explicitModelAndEffort.modelBinding.model, "gpt-6-astra");
+  assert.equal(explicitModelAndEffort.modelBinding.effort, "max");
+
+  const invalidEffort = spawnSync(process.execPath, [resolver, "implementation", "--effort", "ultra", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(invalidEffort.status, 3);
+  assert.match(invalidEffort.stderr, /--effort must be one of/);
+
+  const unsupportedExplicitEffort = spawnSync(process.execPath, [resolver, "implementation", "--effort", "max", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  assert.equal(unsupportedExplicitEffort.status, 3);
+  assert.match(unsupportedExplicitEffort.stderr, /does not support Model Effort 'max'/);
 
   for (const requested of ["gpt-6-astra", "/gpt-6-astra", "openai-codex/", "openai-codex/not-installed"]) {
     const rejected = spawnSync(process.execPath, [resolver, "coordination", "--model", requested, "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
@@ -148,6 +175,10 @@ try {
   assert.equal(reviewOfOpenAi.modelBinding.model, "claude-opus-5");
   assert.equal(reviewOfOpenAi.modelBinding.independence.independentOfFamily, "openai");
   assert.equal(reviewOfOpenAi.modelBinding.independence.selectedFamily, "anthropic");
+
+  const lowerEffortReview = passIndependent(["independent-review", "--independent-of", "openai-codex", "--effort", "medium"]);
+  assert.equal(lowerEffortReview.modelBinding.model, "claude-opus-5");
+  assert.equal(lowerEffortReview.modelBinding.effort, "medium");
 
   const exactModelWithoutOverlay = passIndependent(["independent-review", "--independent-of-model", "openai-codex/gpt-5.6-sol"]);
   assert.deepEqual(exactModelWithoutOverlay.modelBinding.independence, {
