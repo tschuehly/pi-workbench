@@ -52,6 +52,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - Working Mode configures behavior, not permission. Never claim a guarantee the code does not enforce.
 - Describe only the supported current workflow and intended state.
 - Treat every file under `docs/archive/` as outdated historical evidence, never current behavior or intended state.
+- Keep durable Workstream checkpoint and link references in persistent workspace paths; use a persistent checkout instead of `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
 - Commit each coherent unit after it is complete and needs no further human input.
 - Before changing sibling PI WEB, fetch `upstream` and the `origin` fork. Work on a fork branch and
