@@ -70,20 +70,20 @@ a grep the child claimed, a file that must exist), run it outside both arms and 
 
 ## (d) First candidate pairs
 
-1. **P1 — investigation: Sonnet 5 medium vs Luna high** (H1). 589 requests in two weeks is the
-   biggest lever we have; Luna high scores above Sonnet 5 medium on the index at ~1/25 the price
-   proxy and moves the role off claude quota. Also carries H2 (truncation is brief-driven, not
-   model-driven) at no extra cost.
+1. **P1 — investigation: GPT-6 Luna medium vs GPT-6 Sol medium** (H1). Investigation is now bound
+   to Luna; paired evidence must show whether Luna's role specialization beats the Sol execution
+   baseline without increasing corrections or truncation. Also carries H2 (truncation is
+   brief-driven, not model-driven) at no extra cost.
 2. **P2 — profile sentence: `scout` vs sentence-free `plain`, both on the P1 winner** (H7/Q-M2).
    Same role, same brief; tests whether the sentence adds compliance, subtracts capability, or does
    nothing. Needs Thomas to approve the `plain` arm first.
-3. **P3 — independent-review of OpenAI-authored diffs: Opus 5 high vs Fable 5.1 medium** (H4). 237
-   requests, 15 truncations; Fable medium is +1 index at lower price proxy and half the latency on
-   the same claude quota, so a match would buy latency and quota headroom without touching the
-   cross-family rule.
+3. **P3 — independent-review of OpenAI-authored diffs: Opus 5.5 high vs Fable 5.1 high** (H4).
+   Opus 5.5 is the current review binding; the pair tests whether Fable matches its correction rate
+   with lower latency while preserving the cross-family rule.
 
-Later, in order: mechanics Haiku 4.5 low vs Terra low (H3, quota rebalancing), challenge Fable 5.1
-high vs medium (H5), design Sol xhigh vs Astra (H6, contract exception — Astra is override-only).
+Later, in order: mechanics GPT-6 Luna low vs Terra low (H3, quota rebalancing), challenge Fable 5.1
+high vs GPT-6 Luna xhigh when the author family permits (H5), design GPT-6 Luna xhigh vs Astra (H6,
+contract exception — Astra is override-only).
 
 ## (e) Sample size and elapsed time
 
