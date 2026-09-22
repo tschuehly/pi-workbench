@@ -67,7 +67,7 @@ The subagent extension gains four worker tools beside the existing `subagent` fa
 ```ts
 worker_create   { name: string; scope: string; profile: Profile }        // record only, no process
 worker_dispatch { workerId: string; task: string;
-                  cognitiveRole: CognitiveRole; modelOverride?: string;
+                  cognitiveRole: CognitiveRole; modelOverride?: string; effort?: ModelEffort;
                   background?: boolean }                                 // one bounded execution
 worker_status   { workerId?: string; all?: boolean }                     // session-active by default; all for diagnostics
 worker_retire   { workerId: string; reason: string }                     // immutable retirement
@@ -100,12 +100,13 @@ Every other known Cognitive Role may be dispatched to a worker.
 Every worker dispatch resolves a fresh binding through the same
 `skills/model-orchestration/scripts/resolve-runtime-binding.mjs` path used by subagents, with
 identical quota admission and degraded-telemetry semantics. By default the Cognitive Role selects
-the model and Model Effort. An optional owner-requested `modelOverride` selects one available
-`<provider>/<model>` for that dispatch while retaining the role-selected effort; it fails closed on
-invalid syntax, missing quota-provider mappings, unavailable models or role-selected effort,
-independent roles, exhausted fresh quota, or a model outside an active routing overlay. Ephemeral Subagents have no override. Continuity of context never pins a
-model: the adapter sets and verifies the resolved binding on every resumed dispatch, so one worker
-may use different models across dispatches.
+the model and Model Effort. As with a Subagent, an optional owner-requested `modelOverride` selects
+one available `<provider>/<model>` for that dispatch; an optional `effort` independently overrides
+the role effort while the role still selects the model. Routing fails closed on invalid syntax,
+missing quota-provider mappings, unavailable models or effort, independent-role model overrides,
+exhausted fresh quota, or a model outside an active routing overlay. Continuity of context never
+pins a model: the adapter sets and verifies the resolved binding on every resumed dispatch, so one
+worker may use different models across dispatches.
 
 ## Continuation mechanics
 
@@ -184,7 +185,7 @@ Accept the implementation only after tests prove:
    restatement, across a simulated parent-session restart;
 4. worker identity survives reload or process restart of its owning persisted lead session while no child process survives session shutdown;
 5. Independence roles fail worker preflight and remain accepted for subagents;
-6. every dispatch uses a fresh verified binding, including a changed model on a resumed session; an explicit Worker model override retains role-selected effort, follows mapped selected-provider quota telemetry, rejects unsupported role effort, respects an active overlay, and appears in launch and terminal evidence;
+6. every dispatch uses a fresh verified binding, including a changed model or effort on a resumed session; an explicit model override follows mapped selected-provider quota telemetry, explicit effort is validated against the selected model, active overlays remain enforced, and the resolved binding appears in launch and terminal evidence;
 7. a concurrent dispatch to a busy worker fails with a typed diagnostic; distinct workers run
    concurrently and remain independently cancellable;
 8. the dispatch lock releases on success, failure, cancellation, and forced termination,

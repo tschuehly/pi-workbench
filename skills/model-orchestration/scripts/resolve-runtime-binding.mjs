@@ -12,9 +12,10 @@ import { knownModelFamilies, modelFamily } from "../../../packages/pi-execution-
 const here = path.dirname(fileURLToPath(import.meta.url));
 const policy = JSON.parse(fs.readFileSync(path.join(here, "..", "references", "routing-policy.json"), "utf8"));
 const ROUTING_COMMAND_TIMEOUT_MS = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
+const MODEL_EFFORTS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function usage() {
-  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--model <provider>/<model>] [--independent-of <provider>] [--independent-of-model <provider>/<model>] [--exclude-family <family>]... [--quota <path|->] [--catalog <path>] [--model-metadata <path>] [--format json|env]");
+  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--model <provider>/<model>] [--effort <level>] [--independent-of <provider>] [--independent-of-model <provider>/<model>] [--exclude-family <family>]... [--quota <path|->] [--catalog <path>] [--model-metadata <path>] [--format json|env]");
   process.exit(2);
 }
 
@@ -96,10 +97,13 @@ function validateModelEffort(role, binding, metadataInput) {
   const model = doc?.[binding.provider]?.models?.find((candidate) => candidate.id === binding.model);
   if (model === undefined) block(role, `Pi model metadata has no entry for '${modelKey(binding)}'`);
   const levelMap = isPlainObject(model.thinkingLevelMap) ? model.thinkingLevelMap : {};
-  // Pi maps absent standard levels normally; absent xhigh/max levels are unsupported.
-  const supported = Object.hasOwn(levelMap, binding.effort)
-    ? levelMap[binding.effort] !== null
-    : model.reasoning === true && binding.effort !== "xhigh" && binding.effort !== "max";
+  // Pi exposes only off for non-reasoning models, maps absent standard reasoning levels normally,
+  // and requires xhigh/max to be explicitly mapped.
+  const supported = model.reasoning !== true
+    ? binding.effort === "off"
+    : Object.hasOwn(levelMap, binding.effort)
+      ? levelMap[binding.effort] !== null
+      : binding.effort !== "xhigh" && binding.effort !== "max";
   if (!supported) block(role, `Pi model '${modelKey(binding)}' does not support Model Effort '${binding.effort}'`);
 }
 
@@ -107,6 +111,7 @@ const args = process.argv.slice(2);
 const role = args.shift();
 if (!role) usage();
 let modelOverride;
+let effortOverride;
 let independentOfProvider;
 let independentOfModel;
 const excludedFamilies = [];
@@ -117,6 +122,7 @@ let format = "json";
 while (args.length) {
   const option = args.shift();
   if (option === "--model") modelOverride = args.shift();
+  else if (option === "--effort") effortOverride = args.shift();
   else if (option === "--independent-of") independentOfProvider = args.shift();
   else if (option === "--independent-of-model") independentOfModel = args.shift();
   else if (option === "--exclude-family") {
@@ -131,6 +137,7 @@ while (args.length) {
   else usage();
 }
 if ((modelOverride === undefined && process.argv.includes("--model")) ||
+    (effortOverride === undefined && process.argv.includes("--effort")) ||
     (independentOfProvider === undefined && process.argv.includes("--independent-of")) ||
     (independentOfModel === undefined && process.argv.includes("--independent-of-model")) ||
     (quotaInput === undefined && process.argv.includes("--quota")) ||
@@ -138,11 +145,15 @@ if ((modelOverride === undefined && process.argv.includes("--model")) ||
     (modelMetadataInput === undefined && process.argv.includes("--model-metadata")) ||
     !["json", "env"].includes(format)) usage();
 
+console.error("STAGE=policy");
 const rolePolicy = policy.bindings[role];
 if (!rolePolicy) {
   console.error(`Unknown cognitive role: ${role}`);
   console.error(`Valid roles: ${Object.keys(policy.bindings).join(", ")}`);
   process.exit(1);
+}
+if (effortOverride !== undefined && !MODEL_EFFORTS.has(effortOverride)) {
+  block(role, `--effort must be one of ${[...MODEL_EFFORTS].join(", ")}, got '${effortOverride}'`);
 }
 
 const knownFamilySet = new Set(knownModelFamilies);
@@ -227,7 +238,9 @@ if (modelOverride !== undefined) {
   if (quotaProvider === undefined) block(role, `Provider '${requested.provider}' has no quota provider mapping for model overrides`);
   binding = { ...binding, provider: requested.provider, model: requested.model, quotaProvider };
 }
+if (effortOverride !== undefined) binding = { ...binding, effort: effortOverride };
 
+console.error("STAGE=quota");
 let rawQuota;
 let quotaError;
 try {
@@ -252,6 +265,7 @@ if (rawQuota !== undefined) {
   }
 }
 
+console.error("STAGE=catalog");
 let rawCatalog;
 try {
   rawCatalog = catalogInput
@@ -266,7 +280,7 @@ const availableModels = new Set(rawCatalog.split(/\r?\n/).map((line) => {
   return provider && model ? `${provider}/${model}` : "";
 }).filter(Boolean));
 
-if ((modelOverride !== undefined || rolePolicy.independentBindings !== undefined) && availableModels.has(modelKey(binding))) {
+if ((modelOverride !== undefined || effortOverride !== undefined || rolePolicy.independentBindings !== undefined) && availableModels.has(modelKey(binding))) {
   validateModelEffort(role, binding, modelMetadataInput);
 }
 
@@ -306,6 +320,7 @@ const result = {
     effort: binding.effort,
     ...(independence === undefined ? {} : { independence }),
     ...(modelOverride === undefined ? {} : { modelOverride }),
+    ...(effortOverride === undefined ? {} : { effortOverride }),
     ...(overlay === undefined ? {} : { routingOverlay: { path: overlay.path, sha256: overlay.sha256 } }),
     admission: telemetryStatus === "fresh" ? "fresh-quota" : "degraded-quota-telemetry",
     quotaSnapshot: {

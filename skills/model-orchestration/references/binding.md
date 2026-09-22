@@ -1,6 +1,6 @@
 # Model binding
 
-Propose one Pi binding per Cognitive Role. An attended Worker dispatch may carry an explicit owner-requested model override; the Cognitive Role still selects Model Effort. The Run Controller remains authoritative for future managed Dispatch validation and launch.
+Propose one Pi binding per Cognitive Role. An attended Subagent or Worker dispatch may carry an explicit owner-requested model override; this is an exception accepted from the caller, not a mechanically attested owner request. Roles describe the work; effort is its own knob — do not pick a role for its effort. The Run Controller remains authoritative for future managed Dispatch validation and launch.
 
 Set `SKILL_DIR` to the `model-orchestration` skill directory, not this `references` directory.
 
@@ -48,14 +48,16 @@ Family exclusions are rejected under a distinct-model overlay. Never label same-
 Run:
 
 ```bash
-node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--model <provider/model>] [--independent-of <author-provider> | --independent-of-model <provider/model>] [--exclude-family <family> ...]
+node "$SKILL_DIR/scripts/resolve-runtime-binding.mjs" <cognitive-role> [--model <provider/model>] [--effort <level>] [--independent-of <author-provider> | --independent-of-model <provider/model>] [--exclude-family <family> ...]
 ```
 
 The resolver checks the vendored policy, the current Pi model catalog, and a machine-local `quota-axi --json` snapshot cached for ten minutes. Catalog and quota subprocesses each have a 15-second deadline so routing cannot silently stall a child launch. Concurrent and repeated resolutions share that snapshot, including telemetry failures; the first resolution after the cache expires refreshes it. Fresh quota telemetry with an exhausted relevant window blocks routing. Stale, unavailable, or unreadable quota telemetry produces a `degraded-quota-telemetry` admission instead: the child launch proceeds and Pi's runtime binding verification remains authoritative. An unknown role or absent model still fails closed. Routing never silently substitutes the requested role. Independent roles fail closed without a recognized author family or a policy candidate outside the
 author and excluded families. Candidate order is deterministic; an unavailable selected model,
 unsupported effort, or fresh exhausted quota blocks rather than silently selecting another candidate.
 
-Resolve before a major fan-out, scarce model call, escalation, or later major phase; resolutions inside the ten-minute window reuse the cached quota snapshot. `--model` is the attended `worker_dispatch` exception: use it only for an exact owner or run-contract request. It accepts `<provider>/<model>`, keeps the role-selected effort, follows the selected provider's mapped quota telemetry, and fails if the provider has no quota mapping, the model or effort is unavailable, or the model is outside an active routing overlay. It is unavailable to independent roles and ephemeral Subagents.
+Resolve before a major fan-out, scarce model call, escalation, or later major phase; resolutions inside the ten-minute window reuse the cached quota snapshot. `--model` is an attended Subagent or Worker exception: use it only for an exact owner or run-contract request. It accepts `<provider>/<model>`, follows the selected provider's mapped quota telemetry, and fails if the provider has no quota mapping, the model or effort is unavailable, or the model is outside an active routing overlay. It is unavailable to independent roles.
+
+`--effort` explicitly overrides the role's Model Effort while the Cognitive Role still selects the model. It accepts Pi's `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` levels and fails when the selected model does not expose the requested level. Roles describe the work; effort is its own knob — do not pick a role for its effort.
 
 Identify windows by `windowSeconds` and `resetsAt`; labels are secondary. A model-scoped window applies only to that model. Compare percentages only within one provider.
 
@@ -63,7 +65,7 @@ Identify windows by `windowSeconds` and `resetsAt`; labels are secondary. A mode
 
 ## 3. Submit the proposed binding
 
-Place the complete `modelBinding` in the Work Packet without changing it. For an attended Worker, pass any owner-requested exact model to the resolver and keep its returned binding unchanged. The controller resolves a future managed Dispatch's named Execution Profile, checks authority, permissions, workspace, skills, budget, and expected Episode schema, then accepts or rejects it. A child Pi process never inherits its caller's skills, permissions, evidence, or authority implicitly.
+Place the complete `modelBinding` in the Work Packet without changing it. For an attended Subagent or Worker, pass any owner-requested exact model and explicit effort to the resolver and keep its returned binding unchanged. The controller resolves a future managed Dispatch's named Execution Profile, checks authority, permissions, workspace, skills, budget, and expected Episode schema, then accepts or rejects it. A child Pi process never inherits its caller's skills, permissions, evidence, or authority implicitly.
 
 For an interactive Pi lead outside a managed Run, the harness launcher provides the same routing gate:
 

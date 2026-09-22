@@ -21,7 +21,9 @@ test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
   assert.ok(tools.get("subagent").parameters.properties.telemetryConcept);
   assert.ok(tools.get("worker_dispatch").parameters.properties.telemetryConcept);
   assert.ok(tools.get("worker_dispatch").parameters.properties.modelOverride);
-  assert.equal(tools.get("subagent").parameters.properties.modelOverride, undefined, "only Worker dispatches accept an explicit model");
+  assert.ok(tools.get("subagent").parameters.properties.modelOverride, "Subagents accept an owner-requested exact model");
+  assert.deepEqual(tools.get("subagent").parameters.properties.effort.enum, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(tools.get("worker_dispatch").parameters.properties.effort.enum, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
   assert.ok(tools.get("subagent").parameters.properties.name, "subagent accepts an explicit dispatcher-supplied name");
   assert.ok(tools.get("worker_status").parameters.properties.all);
   let notice;
@@ -63,6 +65,8 @@ test("worker tools isolate mutations and default status by persisted lead sessio
 
     const invalidOverride = await execute("worker_dispatch", { workerId: owned.details.workerId, task: "none", cognitiveRole: "coordination", modelOverride: "gpt-6-astra" }, ctx("lead-a"));
     assert.match(invalidOverride.content[0].text, /--model must be '<provider>\/<model>'/, "worker_dispatch forwards its override to routing");
+    const invalidEffort = await execute("worker_dispatch", { workerId: owned.details.workerId, task: "none", cognitiveRole: "coordination", effort: "ultra" }, ctx("lead-a"));
+    assert.match(invalidEffort.content[0].text, /--effort must be one of/, "worker_dispatch forwards explicit effort to routing");
 
     const foreignStatus = await execute("worker_status", { workerId: foreign.details.workerId }, ctx("lead-a"));
     assert.match(foreignStatus.content[0].text, /belongs to another lead session/);
@@ -451,7 +455,10 @@ test("provider-only authors never borrow a parent model and are used only when a
 async function dispatchSubagentWithName(params) {
   const temporary = await mkdtemp(join(tmpdir(), "subagent-name-"));
   const resolverPath = join(temporary, "resolver.mjs");
+  const argsPath = join(temporary, "args.json");
   await writeFile(resolverPath, `
+    import { writeFileSync } from "node:fs";
+    writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));
     console.log(JSON.stringify({ status: "pass", modelBinding: {
       cognitiveRole: process.argv[2],
       provider: "anthropic", model: "claude-test", effort: "high",
@@ -460,6 +467,7 @@ async function dispatchSubagentWithName(params) {
     }}));
   `);
   let dispatched;
+  let resolverArgs;
   const events = [];
   const never = new Promise(() => {});
   const adapter = {
@@ -479,11 +487,12 @@ async function dispatchSubagentWithName(params) {
       background: true,
       ...params,
     }, undefined, undefined, { cwd: "/repo", model: { provider: "anthropic", id: "claude" }, sessionManager: { getSessionId: () => "lead" } });
+    resolverArgs = JSON.parse(await readFile(argsPath, "utf8"));
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
   const activityItem = events.find(([channel, event]) => channel === "pi-workbench:activity" && event.type === "upsert")[1].item;
-  return { dispatched, activityName: activityItem.name };
+  return { dispatched, activityName: activityItem.name, resolverArgs };
 }
 
 test("derives a bounded delegate goal from the first sentence or line", () => {
@@ -494,12 +503,15 @@ test("derives a bounded delegate goal from the first sentence or line", () => {
 });
 
 test("an explicit subagent name wins over the task-derived label and slug", async () => {
-  const { dispatched, activityName } = await dispatchSubagentWithName({
+  const { dispatched, activityName, resolverArgs } = await dispatchSubagentWithName({
     task: "Verification task, read-only with respect to routing. Actually: fix the roster label.",
     name: "Fix roster label",
+    modelOverride: "openai-codex/gpt-6-astra",
+    effort: "xhigh",
   });
   assert.equal(dispatched.name, "Fix roster label");
   assert.equal(activityName, "Fix roster label");
+  assert.deepEqual(resolverArgs, ["investigation", "--model", "openai-codex/gpt-6-astra", "--effort", "xhigh"]);
 });
 
 test("an omitted subagent name falls back to the task-derived label, unchanged", async () => {
@@ -508,6 +520,29 @@ test("an omitted subagent name falls back to the task-derived label, unchanged",
   });
   assert.equal(dispatched.name, undefined);
   assert.equal(activityName, "Fix the roster label");
+});
+
+test("preflight failures retain resolver stage and process diagnostics", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-routing-failure-"));
+  const resolverPath = join(temporary, "resolver.mjs");
+  await writeFile(resolverPath, `
+    console.error("STAGE=quota");
+    console.error("STAGE=catalog");
+    console.error("ROUTING=BLOCKED\\nROLE=investigation\\nREASON=catalog fixture failed");
+    process.exit(3);
+  `);
+  const tools = new Map();
+  try {
+    subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} }, { resolverPath });
+    const result = await tools.get("subagent").execute("call", {
+      task: "Inspect routing", profile: "scout", cognitiveRole: "investigation",
+    }, undefined, undefined, { model: { provider: "anthropic", id: "claude-test" } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /elapsedMs=\d+ killed=false signal=none exitCode=3 lastStage=catalog/);
+    assert.match(result.content[0].text, /resolver stderr:[\s\S]*REASON=catalog fixture failed/);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("reports counts and hides collected children from the default status roster", async () => {
