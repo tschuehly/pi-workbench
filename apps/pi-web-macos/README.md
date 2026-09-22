@@ -189,3 +189,7 @@ Same-origin links stay inside the app. Other links open in the default browser.
 - `Command-[` and `Command-]` — browser history
 
 Native tabs and their menu commands are disabled so one macOS window always represents one Chat.
+
+## Titlebar geometry
+
+The Chat window uses a standard titled `NSWindow` with a `WKWebView` as its content view; it does not use `fullSizeContentView`. A read-only AppKit probe found `fullSizeContentView == false` and a 32px titlebar inset on the tested system. The web content starts below the titlebar in this configuration, so do not add safe-area padding or change the window style for an unconfirmed overlap. Visual confirmation in the installed app remains an owner gate.
