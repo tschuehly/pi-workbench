@@ -64,6 +64,13 @@ test("worker tools isolate mutations and default status by persisted lead sessio
     const invalidOverride = await execute("worker_dispatch", { workerId: owned.details.workerId, task: "none", cognitiveRole: "coordination", modelOverride: "gpt-6-astra" }, ctx("lead-a"));
     assert.match(invalidOverride.content[0].text, /--model must be '<provider>\/<model>'/, "worker_dispatch forwards its override to routing");
 
+    const registryFile = join(temporaryHome, ".pi-workbench", "workers", "workers.json");
+    const database = JSON.parse(await readFile(registryFile, "utf8"));
+    database.workers[owned.details.workerId].requiresInspection = { at: "2026-08-08T12:00:00.000Z", diagnostic: "dead dispatch reclaimed" };
+    await writeFile(registryFile, JSON.stringify(database), "utf8");
+    assert.match((await execute("worker_status", {}, ctx("lead-a"))).content[0].text, /dead dispatch reclaimed/);
+    assert.match((await execute("worker_status", { workerId: owned.details.workerId }, ctx("lead-a"))).content[0].text, /dead dispatch reclaimed/);
+
     const foreignStatus = await execute("worker_status", { workerId: foreign.details.workerId }, ctx("lead-a"));
     assert.match(foreignStatus.content[0].text, /belongs to another lead session/);
     const foreignDispatch = await execute("worker_dispatch", { workerId: foreign.details.workerId, task: "Inspect only", cognitiveRole: "investigation" }, ctx("lead-a"));

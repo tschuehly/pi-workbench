@@ -76,15 +76,13 @@ export class WorkerRegistry {
     requireBoundedString("ownerSessionId", ownerSessionId, NAME_LIMIT);
     ownerSessionId = ownerSessionId.trim();
     const now = this.clock().toISOString();
-    return this.adapter.transaction((database) => {
+    const result = await this.adapter.transaction((database) => {
       const worker = this.#worker(database, workerId);
       this.#requireOwner(worker, workerId, ownerSessionId);
       if (worker.retired !== null) fail("WORKER_RETIRED", `worker ${workerId} was retired at ${worker.retired.at}: ${worker.retired.reason}`);
       if (worker.repositoryRoot !== repositoryRoot) fail("REPOSITORY_MISMATCH", `worker ${workerId} is bound to ${worker.repositoryRoot}, not ${repositoryRoot}`);
-      if (worker.requiresInspection !== null && acknowledgeInspection !== true) {
-        fail("WORKER_INSPECTION_REQUIRED", `worker ${workerId} had an unknown outcome at ${worker.requiresInspection.at} (${worker.requiresInspection.diagnostic ?? "no diagnostic"}); inspect it, then dispatch with acknowledgeInspection`);
-      }
       this.#reclaimDeadLock(worker, now);
+      if (worker.requiresInspection !== null && acknowledgeInspection !== true) return { inspectionRequired: worker.requiresInspection };
       if (worker.lock !== null) fail("WORKER_BUSY", `worker ${workerId} has an active dispatch held by live process ${worker.lock.pid} since ${worker.lock.acquiredAt}`);
       if (acknowledgeInspection === true) worker.requiresInspection = null;
       worker.lock = { token: randomUUID(), pid, acquiredAt: now, heartbeatAt: now };
@@ -96,6 +94,10 @@ export class WorkerRegistry {
         profile: worker.profile,
       };
     });
+    if (result.inspectionRequired !== undefined) {
+      fail("WORKER_INSPECTION_REQUIRED", `worker ${workerId} had an unknown outcome at ${result.inspectionRequired.at} (${result.inspectionRequired.diagnostic ?? "no diagnostic"}); inspect it, then dispatch with acknowledgeInspection`);
+    }
+    return result;
   }
 
   async heartbeat(workerId, lockToken) {
@@ -182,7 +184,24 @@ export class WorkerRegistry {
   #reclaimDeadLock(worker, now) {
     if (worker.lock === null) return;
     if (this.isProcessAlive(worker.lock.pid)) return;
-    worker.lastLockRecovery = { at: now, deadPid: worker.lock.pid, acquiredAt: worker.lock.acquiredAt, heartbeatAt: worker.lock.heartbeatAt };
+    const { pid, acquiredAt, heartbeatAt } = worker.lock;
+    const diagnostic = `dispatch lock held by dead process ${pid} since ${acquiredAt} (last heartbeat ${heartbeatAt}) was reclaimed; the interrupted assignment's outcome is unknown`;
+    worker.lastLockRecovery = { at: now, deadPid: pid, acquiredAt, heartbeatAt };
+    worker.requiresInspection = { at: now, diagnostic };
+    worker.receipts.push({
+      executionId: null,
+      outcome: "outcome_unknown",
+      cognitiveRole: null,
+      provider: null,
+      model: null,
+      effort: null,
+      sessionId: null,
+      acceptedAt: null,
+      endedAt: now,
+      usage: null,
+      diagnostic,
+    });
+    if (worker.receipts.length > RECEIPT_LIMIT) worker.receipts.shift();
     worker.lock = null;
   }
 }
@@ -201,7 +220,7 @@ function summarize(worker) {
     latestSessionId: worker.sessionLineage.length === 0 ? null : worker.sessionLineage[worker.sessionLineage.length - 1],
     latestOutcome: latest?.outcome ?? null,
     locked: worker.lock !== null,
-    requiresInspection: worker.requiresInspection !== null,
+    requiresInspection: worker.requiresInspection === null ? null : structuredClone(worker.requiresInspection),
     retired: worker.retired !== null,
   };
 }

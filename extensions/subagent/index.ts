@@ -682,7 +682,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
             : "No active durable workers are recorded for this session. Use all:true for machine-wide diagnostics.";
           return { content: [{ type: "text", text }], details: { workers: [] } };
         }
-        const lines = summaries.map((s) => `- ${s.workerId} \"${s.name}\" (${s.profile}) [${s.retired ? "retired" : s.locked ? "dispatching" : s.requiresInspection ? "needs inspection" : "idle"}] ${s.dispatchCount} dispatch(es), last ${s.latestOutcome ?? "none"} — ${s.scope}`);
+        const lines = summaries.map((s) => `- ${s.workerId} \"${s.name}\" (${s.profile}) [${s.retired ? "retired" : s.locked ? "dispatching" : s.requiresInspection ? "needs inspection" : "idle"}] ${s.dispatchCount} dispatch(es), last ${s.latestOutcome ?? "none"} — ${s.scope}${s.requiresInspection === null ? "" : ` — ${s.requiresInspection.diagnostic ?? "unknown outcome"}`}`);
         return { content: [{ type: "text", text: lines.join("\n") }], details: { workers: summaries } };
       } catch (error) {
         return registryFailure(error);
