@@ -79,8 +79,13 @@ progress, while `background: true` returns a handle reconciled through the exist
 `background: true` the system-prompt preference for most Worker dispatches; foreground blocking is
 only for a result that is the lead's immediate next input when nothing useful can happen first.
 After a background dispatch, the lead finishes any genuinely independent work and ends the turn;
-the completion signal starts the next turn. The lead never calls collect to wait. Collect-by-ID on
-a running dispatch returns a bounded snapshot immediately without marking it collected.
+the completion signal starts the next turn. The lead never calls collect to wait. On that signal,
+the lead calls `subagent_collect` without an execution ID first, repeating only for a reported
+budget-limited remainder; `subagent_status` is diagnostic and is used only if collect reports
+children still running and the lead must decide something about them. Collect-by-ID on a running
+dispatch or a finished dispatch whose Worker receipt is still settling returns a bounded snapshot
+immediately without marking it collected. Bulk collect reports and skips settling Workers; each
+receipt settlement sends the normal completion signal.
 The extension performs no batches, chains, retries, or synthesis; the attended lead remains
 accountable for what it delegates to a worker and for reconciling every result. Worker mutation is
 restricted to the owning lead session. Status defaults to that session's active workers; `all: true`

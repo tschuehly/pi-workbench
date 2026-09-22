@@ -55,9 +55,10 @@ test("sends one coalesced steer signal for terminal background children", () => 
   assert.deepEqual(sent[0].options, { deliverAs: "steer", triggerTurn: true });
   assert.equal(sent[0].message.customType, "pi-workbench:child-completion");
   assert.match(sent[0].message.content, /Background children finished/);
-  assert.match(sent[0].message.content, /subagent_status/);
-  assert.match(sent[0].message.content, /collect and reconcile each terminal-uncollected child once/);
+  assert.match(sent[0].message.content, /subagent_collect` without an executionId once/);
+  assert.match(sent[0].message.content, /repeat only if it reports a budget-limited remainder/);
   assert.match(sent[0].message.content, /resume the run that launched them at its next incomplete step/);
+  assert.match(sent[0].message.content, /Use `subagent_status` only if collect reports children still running and you must decide something about them/);
   assert.match(sent[0].message.content, /authorizes no retry, relaunch, publication, or acceptance/);
   assert.match(sent[0].message.content, /existing authorization/);
   assert.deepEqual(sent[0].message.details, { attention: "terminal-results" });
