@@ -278,6 +278,10 @@ Per-session evaluations are working evidence under `~/.pi-workbench/compound/`. 
 
 ## Explicitly separate work
 
+Which model and Model Effort each Cognitive Role should get, and whether the profile instruction
+sentences change outcomes, are evaluated in [Model–role and profile-instruction evaluation](model-role-evaluation.md),
+not in this roadmap; that plan reuses these Evaluation Questions and `/skill:workbench-compound`.
+
 Stateless Model Calls are evaluated in `ws-stateless-model-call`, not in this roadmap. Workstream checkpoint continuation is useful session infrastructure, but it is not a substitute for Subagent and Worker monitoring, wakeup, communication, or conflict safety.
 
 ## Boundaries that remain in force
