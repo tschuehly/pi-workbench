@@ -32,7 +32,7 @@ test("collection returns the child result unchanged when no receipt can fail", a
   assert.equal(await receiptSafeResult({ result, executionId: "execution-1", terminal: true, receipt: undefined }), result, "a Subagent has no receipt to await");
 
   const pending = { workerId: "worker-1", settled: new Promise(() => {}) };
-  assert.equal(await receiptSafeResult({ result, executionId: "execution-1", terminal: false, receipt: pending }), result, "aborting collect on a running child never waits for a receipt");
+  assert.equal(await receiptSafeResult({ result, executionId: "execution-1", terminal: false, receipt: pending }), result, "a running snapshot never waits for a receipt");
 });
 
 function harness() {
@@ -124,7 +124,7 @@ test("keeps receipt-failure attention outside normal coalescing", async () => {
   assert.equal(sent.length, 2, "receipt-failure delivery does not re-arm normal attention");
 });
 
-test("re-arms wakeup when collection detaches before terminal", () => {
+test("re-arms wakeup when terminal collection detaches before delivering its result", () => {
   const { wakeup, sent } = harness();
 
   wakeup.beginReconciliation("exec-1");

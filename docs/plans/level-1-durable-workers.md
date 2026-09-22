@@ -77,7 +77,10 @@ worker_retire   { workerId: string; reason: string }                     // immu
 progress, while `background: true` returns a handle reconciled through the existing
 `subagent_status`, `subagent_collect`, and `subagent_cancel` tools. Decision 99 makes
 `background: true` the system-prompt preference for most Worker dispatches; foreground blocking is
-reserved for an immediate dependency when no useful lead work or attended response can continue.
+only for a result that is the lead's immediate next input when nothing useful can happen first.
+After a background dispatch, the lead finishes any genuinely independent work and ends the turn;
+the completion signal starts the next turn. The lead never calls collect to wait. Collect-by-ID on
+a running dispatch returns a bounded snapshot immediately without marking it collected.
 The extension performs no batches, chains, retries, or synthesis; the attended lead remains
 accountable for what it delegates to a worker and for reconciling every result. Worker mutation is
 restricted to the owning lead session. Status defaults to that session's active workers; `all: true`

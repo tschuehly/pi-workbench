@@ -108,8 +108,8 @@ export async function settleWorkerReceipt({ settle, wakeup, background, completi
 
 /**
  * Collection must not report a Worker success before its registry receipt settles: the child
- * process ending and the receipt landing are separate events. A non-terminal result never waits,
- * so aborting collect on a running child stays immediate.
+ * process ending and the receipt landing are separate events. A running snapshot never waits for
+ * a receipt.
  */
 export async function receiptSafeResult({ result, executionId, terminal, receipt }) {
   if (!terminal || receipt === undefined) return result;

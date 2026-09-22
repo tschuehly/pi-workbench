@@ -163,6 +163,7 @@ test("collection and explicit cancellation remove retained activity", async () =
   };
   const adapter = {
     result: async () => final,
+    status: () => ({ executionId: "child-1", running: false, outcome: "success", provider: "openai", model: "gpt", effort: "medium" }),
     async *observe() { yield { type: "terminal", at: new Date().toISOString(), detail: { outcome: "success" } }; },
     list: () => [{ executionId: "child-1", running: false }],
     cancel: async (executionId) => ({ executionId, outcome: "cancelled" }),
@@ -179,6 +180,49 @@ test("collection and explicit cancellation remove retained activity", async () =
   await tools.get("subagent_collect").execute("collect", { executionId: "child-1" }, undefined, undefined);
   await tools.get("subagent_cancel").execute("cancel", { executionId: "child-2" }, undefined, undefined);
   assert.deepEqual(events.filter(([, event]) => event.type === "remove").map(([, event]) => event.id), ["delegate:child-1", "delegate:child-2"]);
+});
+
+test("collecting a running child by identifier returns a snapshot without waiting or collecting it", async () => {
+  const tools = new Map();
+  const never = new Promise(() => {});
+  let resultCalls = 0;
+  const running = {
+    executionId: "child-running",
+    profile: "scout",
+    cognitiveRole: "investigation",
+    kind: "subagent",
+    provider: "anthropic",
+    model: "claude-test",
+    effort: "low",
+    running: true,
+    acceptedAt: "2026-09-01T00:00:00Z",
+    observationCount: 1,
+    latestObservation: { type: "tool_progress", at: "2026-09-01T00:00:01Z", detail: { toolName: "read", action: "reading index.ts" } },
+  };
+  const adapter = {
+    status: () => running,
+    list: () => [running],
+    result: () => { resultCalls += 1; return never; },
+    async *observe() { await never; },
+    cancelAll: async () => [],
+  };
+  subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} }, { adapter });
+
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("collect blocked")), 100); });
+  const snapshot = await Promise.race([
+    tools.get("subagent_collect").execute("collect", { executionId: "child-running" }, undefined, undefined),
+    timeout,
+  ]).finally(() => clearTimeout(timer));
+  assert.equal(resultCalls, 0, "a running collect must not await the terminal result");
+  assert.equal(snapshot.details.running, true);
+  assert.match(snapshot.content[0].text, /\[running\] anthropic\/claude-test:low — reading index\.ts/);
+  assert.match(snapshot.content[0].text, /completion signal wakes the lead for the next turn/);
+
+  running.running = false;
+  running.outcome = "success";
+  const roster = await tools.get("subagent_status").execute("status", {}, undefined, undefined);
+  assert.deepEqual(roster.details.children.map((child) => child.executionId), ["child-running"], "the child remains terminal-uncollected");
 });
 
 test("a terminal result cites the author model so independentOfModel can quote a receipt", async () => {
