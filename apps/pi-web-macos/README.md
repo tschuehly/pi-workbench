@@ -128,6 +128,7 @@ pi-web doctor
 Regression checks:
 
 ```sh
+bash apps/pi-web-macos/Scripts/native-notifications.test.sh
 bash apps/pi-web-macos/Scripts/readiness.test.sh
 bash apps/pi-web-macos/Scripts/install-app.test.sh
 PI_WEB_TEST_URL=http://127.0.0.1:8505 bash apps/pi-web-macos/Scripts/readiness.test.sh

@@ -38,6 +38,13 @@ struct NativeNotificationTests {
         }
         precondition(invalid.authorizationRequests == 0)
 
+        var unbundledError: String?
+        NativeNotificationBridge().notify(["title": "Title", "body": "Body"]) { result, error in
+            precondition(result == nil)
+            unbundledError = error
+        }
+        precondition(unbundledError?.contains("installed app") == true)
+
         let denied = FakeCenter()
         denied.granted = false
         NativeNotificationBridge(center: denied).notify(["title": "Title", "body": "Body"]) { result, error in
@@ -63,6 +70,7 @@ struct NativeNotificationTests {
         }
         precondition(success.request?.content.title == "Title")
         precondition(success.request?.content.body == "Body")
+        precondition(success.request?.content.sound == .default)
         precondition(success.request?.trigger == nil)
         print("PASS: native notifications validate input and surface authorization and delivery outcomes")
     }

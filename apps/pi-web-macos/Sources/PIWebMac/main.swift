@@ -49,7 +49,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
     private lazy var lifecycle = LifecycleController(configuration: configuration, browser: browser)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        UNUserNotificationCenter.current().delegate = self
+        currentUserNotificationCenter()?.delegate = self
         buildMainMenu()
         browser.openWindow()
         NSApp.activate(ignoringOtherApps: true)
@@ -66,6 +66,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            NSApp.activate(ignoringOtherApps: true)
+            self?.browser.bringExistingWindowForward()
+            completionHandler()
+        }
     }
 
     @objc private func newWindow(_ sender: Any?) { browser.openWindow() }
@@ -349,6 +357,12 @@ private final class BrowserCoordinator {
     func reloadKeyWindow() { keyController?.reload() }
     func goBackInKeyWindow() { keyController?.goBack() }
     func goForwardInKeyWindow() { keyController?.goForward() }
+
+    func bringExistingWindowForward() {
+        guard let window = (keyController ?? controllers.values.first)?.window else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+    }
 
     func showReport(title: String, text: String) {
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 720, height: 480))

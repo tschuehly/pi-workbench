@@ -8,10 +8,15 @@ protocol UserNotificationCenter {
 
 extension UNUserNotificationCenter: UserNotificationCenter {}
 
-final class NativeNotificationBridge {
-    private let center: UserNotificationCenter
+func currentUserNotificationCenter() -> UNUserNotificationCenter? {
+    guard Bundle.main.bundleIdentifier != nil else { return nil }
+    return .current()
+}
 
-    init(center: UserNotificationCenter = UNUserNotificationCenter.current()) {
+final class NativeNotificationBridge {
+    private let center: UserNotificationCenter?
+
+    init(center: UserNotificationCenter? = nil) {
         self.center = center
     }
 
@@ -26,6 +31,11 @@ final class NativeNotificationBridge {
             return
         }
 
+        guard let center = center ?? currentUserNotificationCenter() else {
+            reply(nil, "Native notifications require the installed app bundle")
+            return
+        }
+
         center.requestAuthorization(options: [.alert, .sound]) { [center] granted, error in
             if let error {
                 reply(nil, "Notification authorization failed: \(error.localizedDescription)")
@@ -35,6 +45,7 @@ final class NativeNotificationBridge {
                 let content = UNMutableNotificationContent()
                 content.title = title
                 content.body = body
+                content.sound = .default
                 center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) { error in
                     if let error { reply(nil, "Notification delivery failed: \(error.localizedDescription)") }
                     else { reply(true, nil) }

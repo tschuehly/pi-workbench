@@ -157,6 +157,7 @@ bundle_config="${resources_dir}/PIWebConfig.plist"
 /usr/bin/plutil -insert CheckoutPath -string "${pi_web_dir}" "${bundle_config}"
 /usr/bin/plutil -insert ServerURL -string "${pi_web_url}" "${bundle_config}"
 /usr/bin/plutil -lint "${contents_dir}/Info.plist" "${bundle_config}" >/dev/null
+/usr/bin/codesign --force --sign - --timestamp=none "${stage}" >/dev/null
 
 if (( ! app_only )); then
   if ! run_cli install --dev; then
