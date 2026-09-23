@@ -19,6 +19,18 @@ export function ask(x) {
   }
   return x;
 }
+export function imageAttachments(items) {
+  if (!Array.isArray(items) || items.length > 16) fail('image attachments');
+  const references = new Set(); let total = 0;
+  for (const item of items) {
+    if (!record(item) || item.kind !== 'image' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(item.mimeType) || !/^\[PIC_[1-9]\d*\]$/.test(item.reference) || references.has(item.reference) || typeof item.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(item.data) || (item.name !== undefined && (typeof item.name !== 'string' || item.name.length > 256))) fail('image attachment');
+    references.add(item.reference);
+    const size = Math.floor(item.data.length * 3 / 4) - (item.data.endsWith('==') ? 2 : item.data.endsWith('=') ? 1 : 0);
+    total += size;
+    if (size > 4 * 1024 * 1024 || total > 4 * 1024 * 1024) fail('image attachment size');
+  }
+  return items;
+}
 export function dialog(x) {
   if (!record(x) || !text(x.dialogId) || x.dialogId.length > 128 || !['confirm', 'select', 'input'].includes(x.kind) || !text(x.title) || x.title.length > 1000 || !text(x.askedAt) || typeof x.runScoped !== 'boolean') fail('dialog');
   if (x.timeoutAt !== undefined && !text(x.timeoutAt)) fail('dialog timeout');
@@ -92,7 +104,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
   const emit = () => { if (current) changed({ ...current.view, messages: [...current.view.messages] }); };
   async function json(url, options) {
     const response = await request(url, options);
-    if (!response.ok) throw new Error(`${response.status} ${url}: ${await response.text()}`);
+    if (!response.ok) { const error = new Error(`${response.status} ${url}: ${await response.text()}`); error.status = response.status; throw error; }
     return response.json();
   }
   function stop() { generation++; current?.ws?.close(); current = undefined; }
@@ -101,7 +113,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
     if (!text(id) || !text(cwd) || !text(machine)) throw new Error('Session id, cwd and machine are required');
     const token = generation, base = `/api/machines/${encodeURIComponent(machine)}/sessions/${encodeURIComponent(id)}`;
     const url = path => `${base}/${path}?cwd=${encodeURIComponent(cwd)}`;
-    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, pendingDialogs: [], dialogBusy: false, sending: false, queueBusy: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
+    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, pendingDialogs: [], dialogBusy: false, sending: false, sendUnknown: false, queueBusy: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
     const alive = () => current === c && token === generation;
     function apply(e) {
       if (e.seq <= c.seq) return;
@@ -157,7 +169,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
         c.view.pendingDialogs = state.pendingDialogs ?? [];
         c.view.partial = stream.partial;
         c.seq = stream.seq;
-        c.view.error = null;
+        c.view.error = c.view.sendUnknown ? 'Prompt outcome unknown. Check transcript before another send.' : null;
         c.view.connection = 'connected';
         c.joining = false;
         const frames = c.pending.splice(0).sort((a, b) => a.seq - b.seq);
@@ -209,18 +221,20 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
       c.view.messages = [...p.messages, ...c.view.messages]; c.view.start = p.start; c.view.total = p.total; emit();
     } catch (e) { if (current === c) { c.view.error = String(e); emit(); } }
   }
-  async function send(text, streamingBehavior) {
+  async function send(text, streamingBehavior, attachments = []) {
     const c = current;
-    if (!c || typeof text !== 'string' || !text.trim() || c.view.sending) return false;
+    if (!c || c.view.sending || c.view.sendUnknown || c.view.connection !== 'connected') return false;
+    imageAttachments(attachments);
+    if (typeof text !== 'string' || (!text.trim() && !attachments.length)) return false;
     if (streamingBehavior !== undefined && !['steer', 'followUp'].includes(streamingBehavior)) throw new Error('Invalid streaming behavior');
     c.view.sending = true; c.view.error = null; emit();
     try {
       const behavior = streamingBehavior ?? (c.view.status?.isStreaming && !c.view.status?.isCompacting ? 'steer' : undefined);
-      const result = await json(`${c.base}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: c.cwd, text, ...(behavior === undefined ? {} : { streamingBehavior: behavior }) }) });
+      const result = await json(`${c.base}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: c.cwd, text, ...(behavior === undefined ? {} : { streamingBehavior: behavior }), ...(attachments.length ? { attachments } : {}) }) });
       if (!record(result) || result.accepted !== true) throw new Error('Invalid prompt response');
       return true;
     } catch (e) {
-      if (current === c) { c.view.error = String(e); emit(); }
+      if (current === c) { c.view.sendUnknown = e.status === undefined; c.view.error = c.view.sendUnknown ? `Prompt outcome unknown: ${String(e)}. Check transcript before another send.` : String(e); emit(); }
       return false;
     } finally { if (current === c) { c.view.sending = false; emit(); } }
   }
@@ -301,5 +315,6 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
       if (current === c) { c.view.pendingAsk = updated.pendingAsk ?? null; c.view.status = updated; emit(); }
     } catch (e) { if (current === c) { c.view.error = String(e); emit(); } }
   }
-  return { select, stop, earlier, answer, answerDialog: (id, value) => closeDialog(id, value), cancelDialog: id => closeDialog(id, undefined, true), send, stopTurn, changeModel: value => changeControl('model', value), changeThinking: value => changeControl('thinking', value), promoteQueued: target => queueAction('promote', target), promoteAll: () => queueAction('promote-all'), clearQueue: () => queueAction('clear') };
+  function acknowledgeSendUnknown() { if (!current?.view.sendUnknown) return; current.view.sendUnknown = false; current.view.error = null; emit(); }
+  return { select, stop, earlier, answer, acknowledgeSendUnknown, answerDialog: (id, value) => closeDialog(id, value), cancelDialog: id => closeDialog(id, undefined, true), send, stopTurn, changeModel: value => changeControl('model', value), changeThinking: value => changeControl('thinking', value), promoteQueued: target => queueAction('promote', target), promoteAll: () => queueAction('promote-all'), clearQueue: () => queueAction('clear') };
 }

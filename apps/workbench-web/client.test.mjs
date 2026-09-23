@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createChat, ask, dialog, event, page, snapshot, status, models, thinkingLevels } from './client.mjs';
+import { createChat, ask, dialog, imageAttachments, event, page, snapshot, status, models, thinkingLevels } from './client.mjs';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const msg = (text, entryId) => ({ role: 'assistant', content: [{ type: 'text', text }], entryId });
 const pending = { askId: 'a', askedAt: 'now', questions: [{ id: 'q', question: 'Why?', options: [] }] };
@@ -9,11 +9,12 @@ const state = (id, extra = {}) => ({ sessionId: id, isStreaming: true, isCompact
 function fake() {
   const sockets = [], requests = [], views = [], retries = [];
   const chat = createChat({
-    fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
+    fetch: (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
     socket: url => { const ws = { url, readyState: 0, close() { this.closed = true; this.readyState = 3; }, frame(e) { this.onmessage({ data: JSON.stringify(e) }); }, open() { this.readyState = 1; this.onopen(); }, drop() { this.readyState = 3; this.onclose(); } }; sockets.push(ws); return ws; },
     changed: v => views.push(v), retry: fn => retries.push(fn),
   });
   const reply = (suffix, body, code = 200) => { const i = requests.findIndex(r => r.url.includes(suffix)); assert.notEqual(i, -1, suffix); requests.splice(i, 1)[0].resolve({ ok: code === 200, status: code, json: async () => body, text: async () => String(body) }); };
+  const fail = (suffix, error = new Error('connection lost')) => { const i = requests.findIndex(r => r.url.includes(suffix)); assert.notEqual(i, -1, suffix); requests.splice(i, 1)[0].reject(error); };
   const seed = async (id, overrides = {}) => {
     reply('/stream-snapshot?', overrides.snapshot ?? { seq: 2, partial: msg('seed') });
     await tick();
@@ -24,7 +25,7 @@ function fake() {
     if (requests.some(r => r.url.includes('/thinking-levels?'))) reply('/thinking-levels?', overrides.levels ?? { levels: ['off', 'high'] });
     await tick();
   };
-  return { chat, sockets, requests, views, retries, reply, seed, last: () => views.at(-1) };
+  return { chat, sockets, requests, views, retries, reply, fail, seed, last: () => views.at(-1) };
 }
 test('buffer, sort, discard watermark, dedupe, gap reseed, page and reconnect', async () => {
   const f = fake(); f.chat.select('s', '/repo'); const ws = f.sockets[0]; ws.open();
@@ -63,6 +64,32 @@ test('composer keeps failed draft, binds send/stop to origin, and validates resp
   await f.seed('new', { status: state('new') });
 });
 
+test('image-only attachment sends bind to original session, reject unsafe input and preserve retry on failure', async () => {
+  const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open(); await f.seed('s');
+  const image = { kind: 'image', reference: '[PIC_1]', name: 'small.png', mimeType: 'image/png', data: 'AQID' };
+  assert.throws(() => imageAttachments([{ ...image, kind: 'file' }]));
+  assert.throws(() => imageAttachments([{ ...image, mimeType: 'image/svg+xml' }]));
+  assert.throws(() => imageAttachments([image, image]));
+  assert.throws(() => imageAttachments([{ ...image, data: 'A'.repeat(6 * 1024 * 1024) }]));
+  assert.equal(await f.chat.send('', undefined, []), false);
+  const sent = f.chat.send('', undefined, [image]);
+  assert.deepEqual(JSON.parse(f.requests[0].options.body), { cwd: '/repo', text: '', streamingBehavior: 'steer', attachments: [image] });
+  f.reply('/prompt', { accepted: true }); assert.equal(await sent, true);
+  const failure = f.chat.send('again', 'followUp', [image]);
+  assert.deepEqual(JSON.parse(f.requests[0].options.body), { cwd: '/repo', text: 'again', streamingBehavior: 'followUp', attachments: [image] });
+  f.reply('/prompt', 'denied', 400); assert.equal(await failure, false); assert.match(f.last().error, /400/);
+  assert.equal(f.last().sendUnknown, false);
+  const unknown = f.chat.send('possibly accepted', undefined, [image]); f.fail('/prompt');
+  assert.equal(await unknown, false); assert.equal(f.last().sendUnknown, true);
+  assert.match(f.last().error, /Check transcript/);
+  assert.equal(await f.chat.send('blocked', undefined, [image]), false); assert.equal(f.requests.length, 0);
+  f.sockets[0].drop(); f.retries.shift()(); f.sockets[1].open(); await f.seed('s');
+  assert.equal(f.last().sendUnknown, true); assert.match(f.last().error, /Check transcript/);
+  f.chat.acknowledgeSendUnknown(); assert.equal(f.last().sendUnknown, false);
+  const stale = f.chat.send('old', undefined, [image]); f.chat.select('other', '/elsewhere'); f.sockets[2].open();
+  f.reply('/prompt', { accepted: true }); assert.equal(await stale, true);
+  await f.seed('other'); assert.equal(f.last().id, 'other'); assert.equal(f.last().sending, false);
+});
 test('ask answer uses original identity, handles stale response and errors', async () => {
   const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open(); await f.seed('s');
   f.chat.answer([{ id: 'q', values: [], otherText: 'because' }]);

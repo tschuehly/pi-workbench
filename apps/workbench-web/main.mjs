@@ -1,16 +1,58 @@
-import { createChat } from './client.mjs';
+import { createChat, imageAttachments } from './client.mjs';
 import { createCatalog } from './catalog.mjs';
 const $ = id => document.getElementById(id);
 const params = new URL(location.href).searchParams;
 const messageText = message => typeof message.content === 'string' ? message.content : (message.content ?? []).map(part => part?.type === 'text' ? part.text : '').join('');
 const draft = $('draft');
-let draftKey = null;
+let draftKey = null, images = [], imageEpoch = 0, nextImage = 1, imageBusy = false, chatView = null;
 const storage = (() => { try { return sessionStorage; } catch { return undefined; } })();
 const saveDraft = () => { if (!draftKey) return; try { if (draft.value) storage?.setItem(draftKey, draft.value); else storage?.removeItem(draftKey); } catch { /* Editing still works without storage. */ } };
 draft.addEventListener('input', saveDraft);
 const chat = createChat({ fetch: (...args) => fetch(...args), socket: path => new WebSocket(new URL(path, location.href).href.replace(/^http/, 'ws')), changed: renderChat });
 const catalog = createCatalog({ fetch: (...args) => fetch(...args), storage, changed: renderCatalog });
 const button = (label, action) => { const node = document.createElement('button'); node.type = 'button'; node.textContent = label; node.onclick = action; return node; };
+function imageControls() {
+  $('image-input').disabled = !draftKey || imageBusy || chatView?.sending || chatView?.connection !== 'connected';
+  $('send').disabled = imageBusy || chatView?.sending || chatView?.sendUnknown || chatView?.connection !== 'connected';
+  $('queue').disabled = imageBusy || chatView?.sending || chatView?.sendUnknown || chatView?.connection !== 'connected';
+  for (const remove of $('images').querySelectorAll('button')) remove.disabled = imageBusy || chatView?.sending;
+}
+function renderImages() {
+  $('images').replaceChildren(...images.map(image => {
+    const row = document.createElement('div'); row.textContent = `${image.reference} ${image.name} `;
+    row.append(button('Remove', () => { images = images.filter(other => other !== image); row.remove(); imageControls(); }));
+    return row;
+  }));
+  imageControls();
+}
+function resetImages() { imageEpoch++; images = []; nextImage = 1; imageBusy = false; $('image-error').textContent = ''; renderImages(); }
+function readImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('Image read failed'));
+    reader.onload = () => {
+      if (typeof reader.result !== 'string' || !reader.result.includes(';base64,')) reject(new Error('Image read failed'));
+      else resolve(reader.result.split(';base64,')[1]);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+$('image-input').onchange = async event => {
+  const files = [...(event.target.files ?? [])], epoch = imageEpoch;
+  event.target.value = '';
+  if (!draftKey || imageBusy || !files.length) return;
+  if (images.length + files.length > 16 || files.some(file => !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) || images.reduce((sum, image) => sum + image.size, 0) + files.reduce((sum, file) => sum + file.size, 0) > 4 * 1024 * 1024 || files.some(file => !file.size)) {
+    $('image-error').textContent = 'Only non-empty PNG, JPEG, GIF and WebP images are supported (16 images, 4 MiB total). Other files cannot be attached yet.'; return;
+  }
+  imageBusy = true; $('image-error').textContent = ''; imageControls();
+  try {
+    const added = await Promise.all(files.map(async (file, index) => ({ kind: 'image', name: file.name, mimeType: file.type, data: await readImage(file), size: file.size, reference: `[PIC_${nextImage + index}]` })));
+    if (epoch !== imageEpoch) return;
+    imageAttachments([...images, ...added]);
+    images = [...images, ...added]; nextImage += added.length; renderImages();
+  } catch (error) { if (epoch === imageEpoch) $('image-error').textContent = `Could not stage images: ${String(error)}`; }
+  finally { if (epoch === imageEpoch) { imageBusy = false; imageControls(); } }
+};
 
 function renderCatalog(view) {
   const host = $('catalog'); host.replaceChildren();
@@ -46,14 +88,14 @@ function renderCatalog(view) {
   }));
 }
 function clearChat() {
-  chat.stop(); saveDraft(); draftKey = null; draft.value = '';
+  chat.stop(); saveDraft(); draftKey = null; draft.value = ''; chatView = null; resetImages();
   $('connection').textContent = 'Choose a session'; $('error').textContent = '';
   for (const id of ['history', 'partial', 'queued', 'ask', 'dialogs']) $(id).replaceChildren();
-  $('earlier').hidden = true; $('stop').hidden = true; $('queue').hidden = true; $('send').disabled = true;
+  $('earlier').hidden = true; $('stop').hidden = true; $('queue').hidden = true; $('retry-send').hidden = true; $('send').disabled = true;
   for (const id of ['model', 'thinking']) { $(id).replaceChildren(); $(id).disabled = true; $(id).dataset.options = ''; }
 }
 function openSession(identity) {
-  saveDraft();
+  saveDraft(); resetImages();
   const url = new URL(location.href);
   for (const [key, value] of Object.entries({ machine: identity.machineId, project: identity.projectId, workspace: identity.workspaceId, cwd: identity.cwd, id: identity.sessionId })) url.searchParams.set(key, value);
   history.replaceState(null, '', url);
@@ -71,11 +113,13 @@ async function chooseWorkspace(projectId, workspaceId) {
 }
 async function startSession() { const identity = await catalog.create(); if (identity) openSession(identity); }
 function renderChat(view) {
+  chatView = view;
   $('connection').textContent = `${view.id} · ${view.connection}`;
   $('error').textContent = view.error ?? '';
   $('earlier').hidden = !view.start;
-  $('send').disabled = view.sending || view.connection !== 'connected';
+  imageControls();
   $('queue').hidden = !view.status?.isStreaming && !view.status?.isCompacting;
+  $('retry-send').hidden = !view.sendUnknown;
   $('stop').hidden = !view.status?.isStreaming;
   $('send').textContent = view.status?.isStreaming && !view.status?.isCompacting ? 'Steer' : 'Send';
   const choices = [
@@ -160,11 +204,12 @@ $('model').onchange = event => { if (event.target.value) void chat.changeModel(J
 $('thinking').onchange = event => { if (event.target.value) void chat.changeThinking(event.target.value); };
 $('earlier').onclick = () => void chat.earlier();
 $('stop').onclick = () => void chat.stopTurn();
+$('retry-send').onclick = () => { if (window.confirm('First check the transcript or session status: this prompt may have been accepted. Allow another send?')) chat.acknowledgeSendUnknown(); };
 async function submit(behavior) {
-  const text = draft.value, key = draftKey;
-  if (!text.trim() || !key) return;
-  const accepted = await chat.send(text, behavior);
-  if (accepted && draftKey === key && draft.value === text) { draft.value = ''; saveDraft(); }
+  const text = draft.value, key = draftKey, epoch = imageEpoch, attachments = images.map(({ kind, name, mimeType, data, reference }) => ({ kind, name, mimeType, data, reference }));
+  if ((!text.trim() && !attachments.length) || !key || imageBusy) return;
+  const accepted = await chat.send(text, behavior, attachments);
+  if (accepted && draftKey === key && draft.value === text && imageEpoch === epoch) { draft.value = ''; saveDraft(); resetImages(); }
 }
 $('composer').onsubmit = event => { event.preventDefault(); void submit(); };
 $('queue').onclick = () => void submit('followUp');
