@@ -397,6 +397,8 @@ function renderChat(view) {
 }
 $('file-refresh').onclick = () => void files.list();
 $('workstream-refresh').onclick = () => { const w = catalog.view.selectedWorkspace; if (w) void workstreams.load({ machineId: catalog.machineId, projectId: w.projectId, workspaceId: w.id }); };
+$('workstream-check').onclick = () => void workstreams.checkUpdates();
+setInterval(() => { if (!document.hidden) void workstreams.checkUpdates(); }, 15_000);
 $('model').onchange = event => { if (event.target.value) void chat.changeModel(JSON.parse(event.target.value)); };
 $('thinking').onchange = event => { if (event.target.value) void chat.changeThinking(event.target.value); };
 $('earlier').onclick = () => void chat.earlier();

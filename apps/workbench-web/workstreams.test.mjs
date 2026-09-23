@@ -39,6 +39,7 @@ function harness(overrides = {}) {
     assert.equal(revision, 'fixture-revision');
     if (path.endsWith('/list')) return ok({ ok: true, value: [{ id: snapshot.id, title: snapshot.title, revision: snapshot.revision, updatedAt: snapshot.updatedAt, activeSessionCount: 1, pendingSessionCount: 0, failedSessionCount: 0, unresolvedHumanTaskCount: 1, closed: false }] });
     if (path.endsWith('/inspect')) return ok({ ok: true, value: overrides.inspect ?? snapshot });
+    if (path.endsWith('/watch')) return ok({ ok: true, value: overrides.watch ?? { mode: 'replay', events: [], nextSequence: 10 } });
     assert.fail(`Unexpected operation: ${path} ${JSON.stringify(input)}`);
   };
   return { calls, client: createWorkstreams({ fetch, validateClient: createWorkbenchWorkstreamClient }) };
@@ -51,6 +52,17 @@ test('loads a validated scoped Workstream and never uses another project/workspa
   assert.equal(client.view.error, null);
   assert.equal(calls.length, 3);
   for (const call of calls.slice(1)) assert.match(call.path, /^\/api\/paired-plugin-backends\/pi-workbench\/projects\/registered-project\/workspaces\/registered-workspace\/(list|inspect)$/);
+});
+test('watching a newer authoritative revision locks a stale Human Task answer until refresh', async () => {
+  const { client, calls } = harness({ watch: { mode: 'replay', events: [{ sequence: 11, workstreamId: snapshot.id, revision: snapshot.revision + 1, recordedAt: snapshot.updatedAt, records: [] }], nextSequence: 11 } });
+  await client.load(scope);
+  await client.checkUpdates();
+  assert.equal(client.view.needsRefresh, true);
+  assert.match(client.view.error, /refresh and review/);
+  assert.equal(JSON.parse(calls.at(-1).options.body).input.afterSequence, 0);
+  await assert.rejects(client.answer('task-review-interface', { kind: 'yes-no', optionId: 'yes' }), /Refresh or reconcile/);
+  await client.load(scope);
+  assert.equal(client.view.needsRefresh, false);
 });
 test('clearing a workspace invalidates an outstanding inspect result', async () => {
   let release;

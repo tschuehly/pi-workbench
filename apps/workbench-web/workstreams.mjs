@@ -24,7 +24,7 @@ export function createTaskDrafts(storage) {
 
 // Scoped PI WEB transport; snapshot semantics and validation stay in Workbench's workstream-client.
 export function createWorkstreams({ fetch: request, validateClient, storage, changed = () => {} }) {
-  let generation = 0, client = null;
+  let generation = 0, client = null, watchSequence = 0;
   let view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, needsRefresh: false, error: null, scope: null };
   let pendingRequest = null;
   const emit = () => changed({ ...view });
@@ -42,6 +42,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     const epoch = ++generation;
     client = null;
     pendingRequest = null;
+    watchSequence = 0;
     view = { summaries: [], snapshot: null, loading: true, answering: false, pendingAnswer: false, needsRefresh: false, error: null, scope }; emit();
     try {
       if (scope.machineId !== 'local' || !nonempty(scope.projectId) || !nonempty(scope.workspaceId)) throw new Error('Choose a registered local workspace first');
@@ -70,6 +71,19 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       if (snapshot.id !== id) throw new Error('Workstream identity mismatch');
       if (epoch === generation) { reconcileAnswer(snapshot); view = { ...view, snapshot, loading: false, pendingAnswer: pendingRequest !== null, needsRefresh: false }; emit(); }
     } catch (error) { if (epoch === generation) { view = { ...view, snapshot: null, loading: false, error: String(error) }; emit(); } }
+  }
+  async function checkUpdates() {
+    if (!client || !view.snapshot || view.loading || view.answering || view.needsRefresh) return;
+    const epoch = generation, selectedClient = client;
+    try {
+      const batch = await selectedClient.watch({ afterSequence: watchSequence });
+      if (epoch !== generation || selectedClient !== client || !view.snapshot) return;
+      watchSequence = batch.nextSequence;
+      const newer = batch.mode === 'snapshot'
+        ? batch.snapshots.some(item => item.id === view.snapshot.id && item.revision > view.snapshot.revision)
+        : batch.events.some(item => item.workstreamId === view.snapshot.id && item.revision > view.snapshot.revision);
+      if (newer) { view = { ...view, needsRefresh: true, error: 'Workstream changed; refresh and review the latest task before answering.' }; emit(); }
+    } catch (error) { if (epoch === generation) { view = { ...view, error: `Could not check Workstream updates: ${String(error)}` }; emit(); } }
   }
   function answerKey(id) { return `workbench:workstream:answer:${JSON.stringify([view.scope.machineId, view.scope.projectId, view.scope.workspaceId, id])}`; }
   function reconcileAnswer(snapshot) {
@@ -111,7 +125,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       const receipt = await selectedClient.append(submission);
       if (receipt.workstreamId !== submission.workstreamId || receipt.idempotencyKey !== submission.idempotencyKey || receipt.acceptedRevision !== submission.expectedRevision + 1) throw new Error('Answer receipt does not match the submitted request.');
       const snapshot = await selectedClient.inspect(submission.workstreamId);
-      if (epoch === generation) { reconcileAnswer(snapshot); view = { ...view, snapshot, answering: false, pendingAnswer: pendingRequest !== null }; emit(); }
+      if (epoch === generation) { reconcileAnswer(snapshot); view = { ...view, snapshot, answering: false, pendingAnswer: pendingRequest !== null, needsRefresh: false }; emit(); }
     } catch (error) {
       if (error?.code === 'STALE_REVISION' || error?.code === 'INVALID_TRANSITION') {
         storage.removeItem(key);
@@ -119,8 +133,8 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       } else if (epoch === generation) { view = { ...view, answering: false, pendingAnswer: true, error: `Answer outcome unknown: ${String(error)}. Refresh to check it, or retry the exact saved request.` }; emit(); }
     }
   }
-  function clear() { ++generation; client = null; pendingRequest = null; view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, needsRefresh: false, error: null, scope: null }; emit(); }
-  return { load, select, clear, answer, retryAnswer, get view() { return view; } };
+  function clear() { ++generation; client = null; pendingRequest = null; watchSequence = 0; view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, needsRefresh: false, error: null, scope: null }; emit(); }
+  return { load, select, checkUpdates, clear, answer, retryAnswer, get view() { return view; } };
 }
 function validSavedAnswer(answer) {
   if (!answer || !['yes-no', 'choice', 'free-text'].includes(answer.kind)) return false;
