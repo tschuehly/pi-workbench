@@ -47,9 +47,9 @@ not in the authoritative decision record.
 
 ## Current work and implemented plans
 
-- [`plans/workbench-owned-client.md`](plans/workbench-owned-client.md) — proposed extraction of the
-  Workbench client into this repository, capability simplification, and controlled PI WEB updates;
-  owner acceptance and independent review are still pending.
+- [`plans/workbench-owned-client.md`](plans/workbench-owned-client.md) — selected protocol-only frontend
+  direction with familiar Chat, Workstreams, delegation roster, Files and Terminal; delivery sequence
+  remains proposed, with implementation approval and independent review pending.
 - [`plans/workbench-ui.md`](plans/workbench-ui.md) — current graphical-client plan: fix text input,
   then add files beside Chat.
 - [`integrations/pi-web/reuse-boundary.md`](integrations/pi-web/reuse-boundary.md) — what the new

@@ -1,150 +1,175 @@
-# A minimal Workbench client with controlled PI WEB updates
+# An owned Workbench frontend over PI WEB's protocol
 
-**Status: proposed for Thomas's review.** This plan authorizes no implementation, deletion, model-policy change, installation, or service restart. It develops the owner's requested direction; it does not supersede existing contracts until accepted.
+**Status: architecture and daily-use scope selected; delivery plan proposed.** Thomas selected the protocol-only direction, preservation of familiar Chat, and the four surrounding capabilities below. These are planning decisions, not authorization to implement, delete features, change model policy, install, or restart services.
 
-## Outcome
+This revision replaces the draft's proposal to keep importing PI WEB's internal frontend modules. Existing contracts still describe the current implementation; align their ownership wording before implementing this selected direction.
 
-Own Workbench's UI and agent capability choices in this repository. Reuse useful PI WEB runtime and UI modules at an explicitly selected revision, without automatically adopting its product hierarchy or new agent tools.
+## Selected outcome
 
-Success means Thomas can do his existing daily work, leave, and resume; Workbench changes no longer require editing its application root inside PI WEB; and one subsequent PI WEB update can be evaluated, adopted, or rejected without redesigning the harness.
+Own the frontend in this repository and communicate with PI WEB through its HTTP and WebSocket protocol. Preserve the familiar Chat/composer experience. Port useful code and tests deliberately rather than rebuilding everything or retaining ongoing imports of upstream UI internals.
 
-This is an extraction followed by selective simplification, not a clean-room rewrite. A separate repository, replacement session daemon, public component framework, and managed Run system are out of scope.
+The daily-use replacement must include:
 
-## Evidence and starting point
+| Required capability | Scope |
+| --- | --- |
+| Chat and session selection | Existing/new sessions, composer, transcript, attachments, model/effort controls, steer/stop, queues, questions/dialogs, drafts, paging, and reconnect |
+| Workstreams | Find and resume work through checkpoints, Human Tasks, links, and correctly associated sessions |
+| Delegation roster | Worker/Subagent identity, goal, status, actual binding, and results awaiting collection; execution remains owned by the harness |
+| Files beside Chat | Workspace viewing and editing, with save-safety verification required before cutover |
+| Embedded Terminal | Interactive shell access without leaving the app; preserve backend process ownership |
 
-- The PI WEB fork already mounts `WorkbenchApp` rather than `PiWebApp`. Its root imports internal session/auth controllers, transport, routing, themes, Chat, composer, and Workbench-specific screens. Moving one file will not remove those dependencies.
-- `buildApp` in PI WEB's `src/server/app.ts` accepts `clientDist`; ordinary startup in `src/server/index.ts` does not expose that choice. Separate client serving is a candidate seam, not a proven installable configuration.
-- PI WEB's Vite configuration also owns proxying, assets, and a workaround that prevents its development reload transport from blocking application WebSockets. These behaviors need explicit disposition during extraction.
-- PI WEB tracked subsessions and Workbench Subagents/Workers have separate launch, completion, ownership, and result paths. `subsessions: false` is an existing PI WEB control; it does not disable standalone `spawn_session`. The reported hierarchy regression has not been reproduced.
-- At planning time, the canonical PI WEB checkout is at `f17b8aebdbf5c59c4974f653d717f69584eb697a`; the hosting checkout is at `bc52ac151a8fe659509410d35079d2bb5f8c11ea`. Checkout HEAD is not proof of the running daemon or served assets. Neither SHA is selected as the new baseline by this plan.
-- The UI dogfooding Workstream records the Files save-security review and installed-app acceptance as unfinished. Source completion is not deployment or owner acceptance.
-- Some introductions still describe graphical features as unimplemented, while the [UI plan](workbench-ui.md) records shipped behavior. Preserve verified behavior, not stale scope statements.
+**Git UI is deferred**, not deleted from the current app or backend. The first technical proof can be smaller than this list; the daily-use cutover cannot silently omit a selected capability.
 
-Inputs: [requirements](../foundation/requirements.md), [reuse boundary](../integrations/pi-web/reuse-boundary.md), [session-use evidence](../research/reports/session-interactions-2026-09-20.md), [UI reset evidence](../research/reports/workbench-ui-reset-2026-08-28.md), [native lifecycle instructions](../../apps/pi-web-macos/README.md), and the inspected Workstream checkpoints. Historical audits explain a need; they are not current runtime verification.
+Success means Thomas can do this work, leave, and resume; the frontend builds without PI WEB's frontend source tree; and a subsequent backend revision can be assessed without automatically changing Workbench's UI. A clean-room rewrite, new daemon, generic plugin shell, public frontend SDK, managed Run system, and new UI framework are not goals.
 
-## Proposed ownership
+## Ownership and reuse
+
+```text
+Workbench-owned frontend and protocol client
+                 |
+       existing HTTP + WebSocket routes
+                 |
+PI WEB web/API gateway -> session daemon and backend plugins
+                         + Workbench backend/extensions
+```
 
 | Owner | Responsibility |
 | --- | --- |
-| `apps/workbench-web/` (new) | HTML/TypeScript entry, Workbench composition, owned screens, client build, focused UI tests |
-| Existing `apps/pi-web-macos/` | Native windows, menus, trusted native bridge, readiness, installation integration |
-| Existing Workbench packages/extensions | Workstream state and coordination, delegation, Worker identity, Working Mode, telemetry |
-| Pinned PI WEB source/build | Session daemon, server, authentication, session persistence, transport, validated clients, selected reusable UI modules |
-| Workbench integration configuration/tests | Exact upstream/fork revision, approved capabilities, compatibility checks, controlled adoption |
+| `apps/workbench-web/` (proposed) | Screens, browser state, protocol calls/validation, rendering, client build and tests |
+| Existing `apps/pi-web-macos/` | Windows, menus, native bridge, readiness and installation integration |
+| Existing Workbench packages/extensions | Workstream Store and coordination, delegation, Worker identity, Working Mode and telemetry |
+| Pinned PI WEB backend and required plugins | Sessions, execution, persistence, authentication, files, terminal processes and wire behavior |
+| Workbench integration checks | Tested backend revisions, approved agent capabilities, compatibility evidence and rollback |
 
-Keep server and browser same-origin from the user's perspective. Do not solve extraction by weakening authentication, origin checks, content security policy, or the native bridge's trusted-main-frame restriction.
+The browser uses the existing gateway, not the daemon's internal socket. Keep the browser and API same-origin; do not weaken authentication, origin checks, content security policy, or the native bridge's trusted-main-frame restriction to make separation work.
 
-Reuse current internal modules initially, with a small explicit import surface. This remains version-coupled reuse, not a claim that PI WEB exports a stable frontend SDK. Preserve licenses and attribution for moved or copied source.
+Reuse mature libraries and port useful implementation together with its tests, license and source provenance. Copied code becomes Workbench-maintained code; upstream fixes must be deliberately adopted. Do not load upstream browser plugins as a shortcut that restores automatic UI coupling.
 
-## Sequence
+An owned protocol client needs only the operations used by these screens. It is not a second protocol, a replacement server, or a backend-independent framework. Validate incoming data, preserve complete identities and error semantics, and do not import upstream controllers, app state, or source types indirectly through a convenience wrapper. Packaged protocol artifacts could be evaluated later; they are not a prerequisite.
 
-### 1. Establish a trustworthy baseline
+Protocol-only does not mean version-independent. Pin the backend and required plugins, including necessary fork patches. Server-side tools and prompts still require explicit configuration and checking.
 
-**Deliver:** an agreed preservation list and reproducible build inputs, before moving code.
+## What source inspection establishes
 
-- Inspect running checkout/build identity, loaded Pi version, effective configuration, and agent-visible tools and prompt contributions. Separate disk, installed, and running state.
-- Trace Workbench-owned files and their transitive imports. Identify shared modules, server patches still required, and legacy shell code reachable from the current entry.
-- Select an exact tested PI WEB integration commit, retaining its upstream base and required fork patches. Record exact dependency inputs through the existing package/lockfile machinery; a moving branch or arbitrary sibling checkout is not a pin.
-- Keep unresolved Files work separate: either baseline the accepted deployed capability or finish its existing review/acceptance first. Do not silently ship that work through this migration.
-- Preserve local prototypes, pending changes, sessions, Workstream data, and Worker records. Record existing test failures separately from migration regressions.
-
-**Exit evidence:** Thomas accepts the preservation list; a clean isolated build identifies its inputs; relevant existing checks have recorded results. No live service changes.
-
-### 2. Prove the client can live here
-
-**Deliver:** one complete existing Chat path built from `apps/workbench-web/` against the pinned PI WEB revision.
-
-- Move the Workbench entry/composition and necessary owned screens with minimal behavior changes. Keep shared Chat, composer, and runtime modules upstream where practical. Do not redesign the UI or prune features in the same change.
-- Prove deterministic dependency resolution across the two source trees, including one compatible Lit runtime, styles, assets, dynamic imports, and shared types. Refuse a mismatched dependency checkout rather than silently using it.
-- Prefer the existing static-client serving seam. If it cannot support production startup, propose the smallest explicit integration change. Do not add another server or duplicate the protocol by default.
-- Carry forward only necessary Vite proxy, asset, and WebSocket behavior. Verify development and production separately rather than assuming a successful dev page proves packaging.
-- Update the existing acceptance runner to accept the separately built Workbench client. Reuse its isolated runtime fixtures.
-
-**Exit evidence:** clean build; existing/new session selection, Chat, composer, asks/dialogs, reconnect, and two-window isolation work through the real routes. The live app remains unchanged.
-
-**Stop condition:** if reuse requires copying a substantial runtime or building a broad component framework, return with the concrete dependency and two bounded alternatives before continuing.
-
-### 3. Make agent capabilities deliberate
-
-**Deliver:** an explicit Workbench launch configuration and regression check for what the agent receives.
-
-- Trial `subsessions: false` in the isolated runtime. Verify the five tracked-subsession tools and their guidance are absent, while Workbench Subagent/Worker tools remain usable. Decide standalone `spawn_session` separately; do not change it by implication.
-- Inspect lead, Worker, and leaf tool sets in their actual launch paths. Test Workbench's foreground-only nested leaf rule, unsupported nesting rejection, cancellation, result collection, and completion wakeups. Do not assume the host's tools propagate into RPC children.
-- Check the compaction/wakeup barrier and interrupted Worker receipt behavior. Keep these safeguards while reducing duplicate instructions.
-- Capture approved tool names/schemas and host/extension prompt contributions in bounded deterministic fixtures. An upstream addition or change must produce a reviewable diff, not silently become Workbench policy. This is an update gate, not a new permissions framework or sandbox.
-- Inventory optional packages and project skills. Use native resource selection where it fits; avoid another Working Mode-dependent catalog engine. Check terminal and RPC separately, preserve explicit invocation and required guidance, and obtain approval before removing a used capability.
-
-**Exit evidence:** one understood delegation path by default, proven lead/Worker/leaf exposure, and an isolated end-to-end smoke. Thomas accepts the loss of any intentionally disabled workflow before live activation.
-
-### 4. Prune only demonstrated duplication
-
-**Deliver:** small removals, each with its own evidence and reversible commit.
-
-| Candidate | Condition before removal or simplification |
+| Area | Evidence and consequence |
 | --- | --- |
-| Legacy plugin-owned application shell | Reachability audit proves the new entry does not need it; retain live plugin services, typed clients, session coordination, and fixtures |
-| Separate Workstream Atlas surface | Thomas confirms no unique history/review workflow is lost; retain canonical Store data and useful history access |
-| Repeated model names and routing prose | Keep binding truth in the routing policy; retain concise role/independence guidance and update stale examples |
-| Broad standing skill discovery | Compare actual catalogs and real tasks; retain project capabilities on demand rather than deleting their implementation |
-| Stale product/status documentation | Reconcile verified current state in README, PRODUCT, foundations, relevant contracts, UI plan, and reuse instructions without turning proposals into shipped facts |
+| Chat | PI WEB's `src/server/sessions/sessionRoutes.ts` exposes creation, history, status, stream snapshots, prompts, queue operations, answers and cancellation. Most needed operations already have routes. |
+| Recovery | `src/client/src/controllers/sessionController.ts` combines history, a partial-response snapshot and buffered events using a sequence watermark. Owning the frontend means owning this recovery logic, not merely opening a WebSocket. |
+| Delegation | `SessionStatus.extensionStatuses` carries the activity used by `DelegateRoster.ts`. This is disposable runtime status, not durable execution authority; missing status must not mean successful completion. |
+| Workstreams | The existing validating client in `packages/pi-web-integration/workstream-client.js` is reusable. Current UI transport uses scoped, revision-aware backend requests; replacing its shell does not require replacing the Store. |
+| Files | `workspaceExplorerRoutes.ts` exposes viewing and version-checked writing. The earlier dogfooding checkpoint still had save-security review and installed acceptance unfinished. Required scope is not evidence of readiness. |
+| Terminal | `pi-web-plugins/terminal/terminalProtocol.ts` defines list/create/close/attach operations and input, resize, output/replay and exit frames. It explicitly calls this a private peer protocol. The generic paired-plugin transport supplies revision checks and bounded channel framing; neither is a stable external-client guarantee. |
+| Serving | `buildApp` accepts `clientDist`, but ordinary startup does not expose that choice. Production serving/install integration still needs proof. |
 
-Keep current Working Mode behavior during extraction. Do not promote the four-axis preview, Stateless Model Calls, or managed-Run concepts as part of this work. Keep input auditing opt-in; it already captures nothing by default. Empty placeholder directories are not meaningful runtime savings.
+Terminal's existing UI uses xterm; there is no reason to write a terminal emulator or PTY manager. Its backend detaches channel listeners separately from closing a terminal process. The new frontend must preserve that distinction and prove independent access to the revision-aware transport without loading the upstream plugin UI.
 
-**Exit evidence:** each removal names its replacement or absence of need, callers checked, checks run, and rollback. No percentage or line-count reduction target; less maintenance and fewer competing concepts are the outcomes.
+At initial inspection, the canonical PI WEB checkout was at `f17b8aebdbf5c59c4974f653d717f69584eb697a` and the hosting checkout at `bc52ac151a8fe659509410d35079d2bb5f8c11ea`. Neither is selected as the baseline. Checkout HEAD is not proof of running code or served assets. No separate-client build or live protocol acceptance has yet been performed.
+
+Inputs: [requirements](../foundation/requirements.md), [current reuse boundary](../integrations/pi-web/reuse-boundary.md), [UI plan](workbench-ui.md), [session-use evidence](../research/reports/session-interactions-2026-09-20.md), [UI reset evidence](../research/reports/workbench-ui-reset-2026-08-28.md), [native lifecycle instructions](../../apps/pi-web-macos/README.md), and inspected Workstream checkpoints. Historical audits explain needs, not present runtime guarantees.
+
+## Delivery sequence
+
+### 1. Establish the baseline and consumed protocol
+
+**Deliver:** reproducible inputs and a bounded preservation/compatibility checklist.
+
+- Verify running checkout, served build, Pi version, effective configuration and loaded tools/prompts. Separate source, installation and live state.
+- Trace the selected workflows into their routes, frames, error responses and state ownership. Check authentication and backend-plugin discovery without the upstream application shell.
+- Select an exact tested backend integration revision with its required plugins and fork patches. Record client dependencies separately; no moving branch or accidental sibling checkout is a build input.
+- Trace source worth porting and its dependencies. Do not turn preservation of Chat behavior into wholesale copying of the old application state/controller graph.
+- Resolve how ad-hoc Chat directories map to registered project/workspace identities required by Files and Terminal. Do not invent catalog identities or silently register new projects to hide a mismatch.
+- Identify existing failures and unfinished Files review. Preserve sessions, Workstream data, Worker records, prototypes and unrelated changes.
+
+**Exit:** owner-confirmed behavior checklist, exact inputs, route evidence, and named gaps. Any material workflow restriction returns to Thomas before implementation depends on it.
+
+### 2. Prove recovery and independent protocol access
+
+**Deliver:** a small owned frontend using an isolated backend, not a daily-use replacement.
+
+- Port only enough Chat and transport code to open an active fixture conversation, display history and partial output, answer a pending interaction, disconnect and recover.
+- Preserve the existing ordering between socket subscription, snapshots and buffered events. Test failed joins, reconnect during generation, stale replies after session switches, and daemon-instance changes where relevant. Do not infer an exactly-once guarantee merely from sequence fields.
+- Verify drafts, questions and events cannot leak between two windows or sessions. Keep authoritative session state on the server.
+- Prove a Terminal request/channel handshake from the owned client with backend revision and complete workspace identity. Check missing plugin, stale revision and connection failure explicitly before building the full panel.
+- Build without upstream frontend source imports or runtime browser modules. Port validation/types needed by consumed operations; test schema failures at the wire seam.
+- Prove production static serving as well as development proxy/assets/WebSockets. Prefer the existing serving seam; propose a small backend integration change if necessary rather than adding a new server by default.
+
+**Exit:** deterministic recovery and Terminal transport evidence, isolated build, no live changes. Return for direction if an independent client requires broad backend changes or substantial runtime copying.
+
+### 3. Rehearse an update before completing the UI
+
+**Deliver:** evidence that the selected separation is maintainable.
+
+- Fetch upstream and the fork into an isolated checkout. Keep mirror `main` clean, retain required patches on a fork branch, and never trial an upgrade in the running checkout.
+- Select one real candidate revision. Compare consumed wire types, snapshot/event behavior, authentication, plugin transport/revisions, Pi SDK, defaults, tool/prompt contributions and persisted formats.
+- Run the same owned client and fixtures against the baseline and candidate. Keep UI code unchanged initially so backend compatibility is observable.
+- Adopt, adapt or reject the candidate with explicit evidence. A material protocol gap returns to Thomas; do not silently retreat to importing the upstream UI.
+
+**Exit:** one real update decision before investing in all screens. Re-run the expanded checks after later features are added. An early Chat-only pass does not establish Files or Terminal compatibility.
+
+### 4. Complete the selected daily-use workflows
+
+**Deliver:** five usable capabilities in small, separately verified slices.
+
+1. Finish familiar Chat, composer and session navigation without redesigning them. Preserve validated rendering, attachment handling, paging, scroll and focus behavior, controls, asks and extension dialogs.
+2. Port Workstream surfaces onto the existing typed operations and session coordinator. Retain revisions, idempotency, unknown-outcome reconciliation and session-location repair; do not reconstruct Store state in the browser.
+3. Port the delegation roster over extension activity. Keep Worker/Subagent lifecycle rules in the existing harness; this selection does not authorize new graphical execution controls.
+4. Complete Files with workspace confinement, dirty-edit protection, stale-save rejection and bounded I/O. Obtain independent security review and installed acceptance; Files can no longer be dropped from cutover without owner agreement.
+5. Add the terminal renderer and workspace-scoped backend operations. Verify resize, keyboard/clipboard behavior, bounded replay, reconnect and explicit close. Disconnecting or hiding a panel must not accidentally kill its process; reconnect must not create a new shell or replay uncertain input blindly.
+
+Keep Terminal workspace identity distinct from Chat session identity. Exact placement, selection and multi-window behavior remain design details to resolve from the current workflow before implementation; the plan does not promise a fresh terminal per Chat or automatic shared input.
+
+**Also required before cutover: deliberate agent capabilities.** Trial `subsessions: false` in isolation, verifying that the five tracked-subsession tools and their guidance disappear while Workbench delegation remains usable. Decide standalone `spawn_session` separately. Test actual lead/Worker/leaf exposure, supported nesting, cancellation, collection, compaction/wakeup coordination and interrupted Worker receipts. Snapshot approved tool schemas and relevant prompt contributions for update review; these checks are not a new permissions sandbox.
+
+**Exit:** the complete preservation matrix passes. Thomas approves any intentional capability loss; required workflows are not substituted with placeholders.
 
 ### 5. Accept and switch the installed app
 
-**Deliver:** the Workbench-owned client in daily use, with a known rollback.
+**Deliver:** the owned frontend in daily use with a rehearsed rollback.
 
-- Run the preservation matrix below, relevant deterministic checks, and independent review of changed authentication, file, lifecycle, and capability boundaries.
-- Verify native readiness and installation against the selected runtime and client identities. Replace UI/app artifacts without restarting the session daemon wherever supported.
-- Before any unavoidable daemon restart, request explicit authorization and warn that running turns, children, terminals, and asks may be interrupted. A plan approval is not restart permission. If both services require restart, the web/API process goes first.
-- Retain the previous client, runtime revision, configuration, and compatible state backup. A UI rollback must not overwrite session or Workstream data. Runtime rollback requires a persisted-format compatibility check; otherwise stop rather than downgrade blindly.
-- Thomas exercises the installed app in normal work, then accepts the slice. Preserve the previous working deployment until that check passes.
+- Run the expanded protocol checks against the selected backend. Independently review changed authentication, Files, terminal, lifecycle and capability-sensitive paths.
+- Verify native readiness and installation against separate frontend/backend identities. Preserve native notifications, trusted controls and accepted narrow-layout behavior.
+- Replace UI/app artifacts without restarting the session daemon wherever supported. If a daemon restart is unavoidable, request explicit authorization and warn that turns, children, asks and terminals may be interrupted. Planning approval is not restart permission. Restart web/API before sessiond if both require it.
+- Retain the prior client, backend revision, configuration and compatible state backup. UI rollback must not overwrite session or Workstream data. Check persisted-format compatibility before a backend downgrade; otherwise stop rather than downgrade blindly.
+- Keep the current working app available until Thomas accepts the replacement in normal work. Rehearse rollback using isolated state, not the live session store.
 
-**Exit evidence:** installed identity matches the tested inputs; daily workflows pass; rollback is rehearsed in isolation; remaining issues are explicit rather than hidden behind a green build.
+**Exit:** installed inputs match tested inputs; every selected workflow works; rollback and remaining limitations are explicit.
 
-### 6. Rehearse one controlled PI WEB update
+### 6. Simplify and maintain deliberately
 
-**Deliver:** a repeatable update procedure exercised on a real candidate revision.
+**Deliver:** fewer competing surfaces and instructions, without losing selected workflows.
 
-1. Fetch upstream and the fork into an isolated checkout. Keep upstream-mirror `main` clean and use the fork integration branch for required patches; never modify the running checkout to try an update.
-2. Review changes since the accepted pin: imported UI modules, wire types, session lifecycle, configuration defaults, tools/prompts, Pi SDK, dependency/security changes, and persisted formats. New product features are candidates, not automatic adoption.
-3. Build the candidate with the same Workbench source and approved configuration. Run baseline acceptance plus targeted checks for affected behavior and compare agent-input fixtures.
-4. Investigate regressions or changed defaults. Thomas accepts material behavior changes; no new tools, model bindings, or skill policy enter unnoticed.
-5. Adopt the candidate by advancing the recorded pin and required integration changes together, or reject it and keep the working version. Cutover follows phase 5's safety rules.
+- Retire old shell code only after caller tracing and acceptance of the replacement. Preserve backend services, typed clients, coordination and useful fixtures; do not delete `packages/pi-web-integration` wholesale.
+- Retire Workstream Atlas only after confirming no unique history/review workflow is lost.
+- Keep model bindings in the routing policy, remove stale duplicated model names, and preserve concise role/independence guidance. Do not turn migration into a new model-evaluation program.
+- Inspect actual skill catalogs in terminal and RPC. Prefer existing resource-selection mechanisms; obtain approval before removing a used capability. Keep Working Mode behavior and opt-in input auditing unchanged unless separately selected.
+- Reconcile README, PRODUCT, foundations, relevant contracts, UI/reuse plans and installation instructions with verified behavior. Do not promote previews or future managed-Run concepts to shipped scope.
 
-Evaluate revisions we choose to adopt, not every upstream commit. Prioritize security fixes rather than leaving a pin indefinitely unexamined. Do not add an automatic upgrade service or a generalized dependency-management framework.
+For each chosen backend update, repeat phase 3 with the full consumed protocol and agent-input checks, then use phase 5's cutover rules. For owned frontend code, selectively port worthwhile upstream fixes with regression tests and attribution. Prioritize security fixes; a pin is not permission to leave known vulnerabilities unexamined. No automatic upgrade service or generalized compatibility framework is needed.
 
-**Exit evidence:** one candidate update is adopted or rejected with inspectable evidence, and the accepted build remains reproducible.
+**Exit:** each removal has evidence and rollback, or is explicitly deferred. Measure reduced maintenance and competing concepts, not arbitrary deleted-line targets.
 
-## Preservation and verification matrix
+## Preservation and verification
 
-| Workflow to preserve | Required evidence |
+| Area | Required evidence |
 | --- | --- |
-| Choose workspace; start/resume a Chat | Complete machine/project/workspace/session identity; uncertain launch cannot duplicate sessions |
-| Compose and control work | Editing, drafts, attachments, model/effort controls, queue ordering, steer, stop, live questions, extension dialogs |
-| Read and navigate conversation | Paging, message actions, thinking/tool presentation, scroll restoration, reload and reconnect |
-| Resume a Workstream | Stored overview, per-session checkpoints, Human Tasks, revision-safe answers, correct session association |
-| Observe delegated work | Child name/goal/status, actual binding, completion, cancellation, collection, Worker resumption and nesting limits |
-| Use multiple windows and phone/narrow views | No draft/session/event leakage; keyboard access, focus, contrast, and accepted narrow-layout behavior |
-| Use Files, if accepted into the baseline | Workspace confinement, dirty-edit protection, stale-save rejection, bounded I/O, and independent security review |
-| Replace UI/native artifacts | Other sessions and daemon keep running; trusted origins, notifications, and native controls retain accepted behavior |
+| Identity and creation | Complete machine/project/workspace/session identity; uncertain creation does not create duplicates |
+| Chat recovery | History and in-flight content reconcile; pending questions/dialogs survive reconnect; stale selection work cannot update another Chat |
+| Familiar interaction | Drafts, attachments, editing, model/effort, queues, steer/stop, paging, scroll, message actions, thinking/tool presentation |
+| Workstreams | Confirmed checkpoints, Human Tasks, links, revision-safe mutations, correct association and repair |
+| Delegation | Activity reflects actual bindings/status; absence is not invented completion; cancellation, collection and nesting remain correct |
+| Files | Path confinement, version conflicts, dirty edits, bounded reads/writes, untrusted-content handling and independent review |
+| Terminal | Correct workspace/process, revision handshake, bounded frames/replay, input/resize/exit, detach versus close, uncertain-operation handling |
+| Browser/native lifecycle | Window isolation, keyboard/focus, narrow views, reduced motion, trusted origins, notifications, reload without daemon restart |
+| Ownership | Build has no upstream frontend-source dependency; backend changes are checked through consumed routes/events, not UI imports |
 
-Start with `npm test`, the relevant PI WEB tests, and `packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs`; adapt that runner rather than inventing a parallel suite. Native checks are listed in `apps/pi-web-macos/README.md`. Record exact commands/results and known baseline failures; do not waive failures on the changed path as unrelated.
+Use existing Workbench tests, relevant PI WEB route/recovery/plugin tests, and `packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs`. Adapt its isolated runner for the separately built client; port the relevant behavior tests rather than importing the old controllers just to make tests pass. Native checks are listed in `apps/pi-web-macos/README.md`.
 
-Ordinary compatibility checks use deterministic no-model fixtures. Use a bounded live model smoke for tool choice, delegation, and completion behavior that fixtures cannot establish. Compare only the binding or prompt behavior that changed; a few tasks screen regressions, not statistical superiority across all models.
+Ordinary checks use deterministic no-model fixtures; record exact commands, results and known baseline failures. Use a bounded live-model smoke for tool selection/delegation that fixtures cannot establish, not a broad model benchmark. Delegate visual inspection and keep source evidence distinct from installed owner acceptance.
 
-Every isolated instance needs its own HOME/state, data directory, session-daemon socket or port, web port, and owned process cleanup. Never inherit the live instance's `PI_WEB_*` endpoints. Delegate visual inspection; preserve source assertions separately from installed owner acceptance.
+Every isolated instance needs its own HOME/state, data directory, daemon socket or port, web port, and owned-process cleanup. Do not inherit the live instance's endpoints. Keep persistent evidence and workspace references outside temporary directories.
 
-## Decisions and stopping points
+## Approval and review status
 
-Thomas approves this direction and the phase-1 preservation list before implementation. Later decisions stay local: selected baseline and serving/build seam, each capability loss, Files readiness, and live cutover. Routine implementation within an accepted slice stays agent-owned.
+The architecture, familiar Chat, and required surrounding capabilities are selected. Implementation, deployment and feature removal are not authorized. Resolve material protocol gaps and workflow restrictions with Thomas; keep routine implementation details agent-owned once a bounded slice is accepted. Commit coherent verified units and serialize writers sharing a checkout.
 
-Each phase ends with evidence and one coherent commit or small reviewable series; no next phase starts merely because a plan lists it. Shared checkout writers remain serialized. Deletion follows a working replacement, and a failed gate leaves the current app untouched.
-
-The whole effort is complete when the owned client is accepted, approved pruning is finished or explicitly deferred, the active agent surface is checked, one upstream-update rehearsal is complete, and rollback and documentation match what actually runs.
-
-## Review status
-
-The preceding read-only inventory had two source scouts; neither was an independent architectural verdict. A fresh independent review of this plan failed preflight with `ROUTING=BLOCKED`: Claude quota exhausted. Author checks passed for local links, six-phase structure, absence of machine-local paths, and whitespace. These checks do not substitute for independent architectural review; the plan remains a draft, not implementation-ready.
+Previous independent-review attempts failed preflight with `ROUTING=BLOCKED`: Claude quota exhausted. This materially revised plan has not received independent review. Author checks cover documentation consistency, links and whitespace only; they do not establish architecture feasibility or runtime correctness.
