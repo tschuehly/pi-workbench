@@ -179,6 +179,14 @@ function renderWorkstreams(view) {
   if (!snapshot) return;
   if (view.pendingAnswer) detail.append(button(view.answering ? 'Saving answer…' : 'Retry the exact saved answer', () => void workstreams.retryAnswer().catch(error => { $('workstream-error').textContent = String(error); })));
   if (view.pendingAnswer) detail.lastChild.disabled = view.answering;
+  if (view.answerConflict) {
+    const saved = view.answerConflict.records[0].payload;
+    const notice = document.createElement('p'); notice.textContent = `Another answer was recorded for task ${saved.taskId}. This saved answer was not submitted successfully. Copy it before dismissing:`;
+    const content = document.createElement('pre'); content.textContent = saved.answer.kind === 'free-text' ? saved.answer.text : saved.answer.optionId;
+    detail.append(notice, content, button('I copied it; discard saved answer', () => {
+      if (window.confirm('Discard your saved answer? The other recorded answer will remain.')) workstreams.dismissAnswerConflict();
+    }));
+  }
   const heading = document.createElement('h3'); heading.textContent = `${snapshot.title} · revision ${snapshot.revision}${snapshot.closed ? ' · closed' : ''}`; detail.append(heading);
   if (snapshot.overview) { const goal = document.createElement('p'); goal.textContent = `${snapshot.overview.goal}\n${snapshot.overview.description}`; detail.append(goal); }
   for (const session of snapshot.sessions) {
@@ -208,13 +216,13 @@ function renderWorkstreams(view) {
             if (taskDrafts.volatile) $('workstream-error').textContent = 'This draft could not be stored. Keep this tab open until you copy or submit it.';
           };
           label.append(text);
-          const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = 'Submit answer'; submit.disabled = view.answering || view.pendingAnswer || view.needsRefresh;
+          const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = 'Submit answer'; submit.disabled = view.answering || view.pendingAnswer || view.answerConflict || view.needsRefresh;
           form.append(label, submit);
           form.onsubmit = event => { event.preventDefault(); void workstreams.answer(task.id, { kind: 'free-text', text: text.value }).catch(error => { $('workstream-error').textContent = String(error); }); };
           item.append(form);
         } else for (const option of task.options) {
           const choice = button(option.label, () => void workstreams.answer(task.id, { kind: task.answerKind, optionId: option.id }).catch(error => { $('workstream-error').textContent = String(error); }));
-          choice.disabled = view.answering || view.pendingAnswer || view.needsRefresh; item.append(choice);
+          choice.disabled = view.answering || view.pendingAnswer || view.answerConflict || view.needsRefresh; item.append(choice);
         }
       } else if (task.answer) { const answer = document.createElement('p'); answer.textContent = `Answer: ${task.answer.kind === 'free-text' ? task.answer.text : task.options.find(option => option.id === task.answer.optionId)?.label ?? task.answer.optionId} · revision ${task.answerReceipt.acceptedRevision}`; item.append(answer); }
       if (task.status !== 'pending' && saved && saved !== task.answer?.text) {

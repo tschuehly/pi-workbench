@@ -25,7 +25,7 @@ export function createTaskDrafts(storage) {
 // Scoped PI WEB transport; snapshot semantics and validation stay in Workbench's workstream-client.
 export function createWorkstreams({ fetch: request, validateClient, storage, changed = () => {} }) {
   let generation = 0, client = null, watchSequence = 0;
-  let view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, needsRefresh: false, error: null, scope: null };
+  let view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope: null };
   let pendingRequest = null;
   const emit = () => changed({ ...view });
   const nonempty = x => typeof x === 'string' && x.trim() !== '';
@@ -43,7 +43,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     client = null;
     pendingRequest = null;
     watchSequence = 0;
-    view = { summaries: [], snapshot: null, loading: true, answering: false, pendingAnswer: false, needsRefresh: false, error: null, scope }; emit();
+    view = { summaries: [], snapshot: null, loading: true, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope }; emit();
     try {
       if (scope.machineId !== 'local' || !nonempty(scope.projectId) || !nonempty(scope.workspaceId)) throw new Error('Choose a registered local workspace first');
       const plugins = await json('/api/plugins');
@@ -69,7 +69,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     try {
       const snapshot = await selectedClient.inspect(id);
       if (snapshot.id !== id) throw new Error('Workstream identity mismatch');
-      if (epoch === generation) { reconcileAnswer(snapshot); view = { ...view, snapshot, loading: false, pendingAnswer: pendingRequest !== null, needsRefresh: false }; emit(); }
+      if (epoch === generation) { const answerConflict = reconcileAnswer(snapshot); view = { ...view, snapshot, loading: false, pendingAnswer: pendingRequest !== null, answerConflict, needsRefresh: false, error: answerConflict ? 'Another answer was recorded. Your different saved answer is preserved below; copy it before dismissing.' : null }; emit(); }
     } catch (error) { if (epoch === generation) { view = { ...view, snapshot: null, loading: false, error: String(error) }; emit(); } }
   }
   async function checkUpdates() {
@@ -96,15 +96,15 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     if (saved.workstreamId !== snapshot.id || !Number.isSafeInteger(saved.expectedRevision) || saved.expectedRevision < 1 || typeof saved.idempotencyKey !== 'string' || !saved.idempotencyKey || saved.records?.length !== 1 || record?.type !== 'human-task.answered' || record.producer !== 'workbench-web' || typeof record.payload?.taskId !== 'string' || typeof record.payload?.answerId !== 'string' || !record.payload.answerId || !validSavedAnswer(record.payload.answer)) throw new Error('Saved answer request is invalid; do not answer again until it is recovered.');
     const task = snapshot.humanTasks.find(item => item.id === record.payload.taskId);
     if (task && task.status !== 'pending') {
+      if (task.answerReceipt?.answerId !== record.payload.answerId) return saved;
       storage.removeItem(answerKey(snapshot.id));
-      if (task.answerReceipt?.answerId !== record.payload.answerId) throw new Error('Another answer was recorded. Review the task before proceeding.');
       return;
     }
     pendingRequest = saved;
   }
   async function answer(taskId, answerValue) {
     const snapshot = view.snapshot;
-    if (!client || !snapshot || view.loading || view.answering || view.needsRefresh || pendingRequest) throw new Error('Refresh or reconcile the pending answer before submitting another.');
+    if (!client || !snapshot || view.loading || view.answering || view.needsRefresh || pendingRequest || view.answerConflict) throw new Error('Refresh or reconcile the pending answer before submitting another.');
     const task = snapshot.humanTasks.find(item => item.id === taskId);
     if (snapshot.closed || !validAnswer(task, answerValue)) throw new Error('This task is not open with that answer.');
     if (!storage) throw new Error('Browser storage is unavailable; an answer cannot safely be submitted.');
@@ -113,6 +113,11 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     storage.setItem(answerKey(snapshot.id), JSON.stringify(submission));
     pendingRequest = submission;
     return submitAnswer(submission);
+  }
+  function dismissAnswerConflict() {
+    if (!view.answerConflict || !view.snapshot || view.loading) throw new Error('No conflicting saved answer can be dismissed.');
+    storage.removeItem(answerKey(view.snapshot.id));
+    view = { ...view, answerConflict: null, error: null }; emit();
   }
   async function retryAnswer() {
     if (!pendingRequest || !client || !view.snapshot || view.answering || view.loading) throw new Error('No pending answer can be retried.');
@@ -125,7 +130,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       const receipt = await selectedClient.append(submission);
       if (receipt.workstreamId !== submission.workstreamId || receipt.idempotencyKey !== submission.idempotencyKey || receipt.acceptedRevision !== submission.expectedRevision + 1) throw new Error('Answer receipt does not match the submitted request.');
       const snapshot = await selectedClient.inspect(submission.workstreamId);
-      if (epoch === generation) { reconcileAnswer(snapshot); view = { ...view, snapshot, answering: false, pendingAnswer: pendingRequest !== null, needsRefresh: false }; emit(); }
+      if (epoch === generation) { const answerConflict = reconcileAnswer(snapshot); view = { ...view, snapshot, answering: false, pendingAnswer: pendingRequest !== null, answerConflict, needsRefresh: false, error: answerConflict ? 'Another answer was recorded. Your different saved answer is preserved below; copy it before dismissing.' : null }; emit(); }
     } catch (error) {
       if (error?.code === 'STALE_REVISION' || error?.code === 'INVALID_TRANSITION') {
         storage.removeItem(key);
@@ -133,8 +138,8 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       } else if (epoch === generation) { view = { ...view, answering: false, pendingAnswer: true, error: `Answer outcome unknown: ${String(error)}. Refresh to check it, or retry the exact saved request.` }; emit(); }
     }
   }
-  function clear() { ++generation; client = null; pendingRequest = null; watchSequence = 0; view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, needsRefresh: false, error: null, scope: null }; emit(); }
-  return { load, select, checkUpdates, clear, answer, retryAnswer, get view() { return view; } };
+  function clear() { ++generation; client = null; pendingRequest = null; watchSequence = 0; view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope: null }; emit(); }
+  return { load, select, checkUpdates, clear, answer, retryAnswer, dismissAnswerConflict, get view() { return view; } };
 }
 function validSavedAnswer(answer) {
   if (!answer || !['yes-no', 'choice', 'free-text'].includes(answer.kind)) return false;

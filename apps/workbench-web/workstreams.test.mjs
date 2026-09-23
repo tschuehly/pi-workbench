@@ -42,7 +42,7 @@ function harness(overrides = {}) {
     if (path.endsWith('/watch')) return ok({ ok: true, value: overrides.watch ?? { mode: 'replay', events: [], nextSequence: 10 } });
     assert.fail(`Unexpected operation: ${path} ${JSON.stringify(input)}`);
   };
-  return { calls, client: createWorkstreams({ fetch, validateClient: createWorkbenchWorkstreamClient }) };
+  return { calls, client: createWorkstreams({ fetch, validateClient: createWorkbenchWorkstreamClient, storage: overrides.storage }) };
 }
 test('loads a validated scoped Workstream and never uses another project/workspace', async () => {
   const { client, calls } = harness();
@@ -125,6 +125,24 @@ test('answers with the viewed revision, persists the exact retry, and reconciles
   assert.equal(saved.size, 0);
   assert.equal(appended.length, 1);
   disconnect = false;
+});
+test('a competing answer preserves the unknown saved payload until explicit dismissal', async () => {
+  const saved = new Map();
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  const request = { workstreamId: snapshot.id, expectedRevision: snapshot.revision - 1, idempotencyKey: 'workbench-answer-saved', records: [{ type: 'human-task.answered', producer: 'workbench-web', payload: { taskId: 'task-review-interface', answerId: 'saved', answer: { kind: 'yes-no', optionId: 'no' } } }] };
+  storage.setItem(`workbench:workstream:answer:${JSON.stringify([scope.machineId, scope.projectId, scope.workspaceId, snapshot.id])}`, JSON.stringify(request));
+  const task = { ...snapshot.humanTasks[0], status: 'answered', answer: { kind: 'yes-no', optionId: 'yes' }, answerReceipt: { answerId: 'other', taskId: 'task-review-interface', acceptedRevision: snapshot.revision, recordedAt: snapshot.updatedAt, producer: 'owner', sourceSessionId: null } };
+  const { client } = harness({ storage, inspect: { ...snapshot, humanTasks: [task, ...snapshot.humanTasks.slice(1)] } });
+  await client.load(scope);
+  assert.equal(client.view.snapshot?.id, snapshot.id);
+  assert.equal(client.view.answerConflict?.records[0].payload.answer.optionId, 'no');
+  assert.equal(client.view.pendingAnswer, false);
+  assert.equal(saved.size, 1);
+  await assert.rejects(client.retryAnswer(), /No pending answer/);
+  await assert.rejects(client.answer('task-density-choice', { kind: 'choice', optionId: 'compact' }), /reconcile/);
+  client.dismissAnswerConflict();
+  assert.equal(saved.size, 0);
+  assert.equal(client.view.answerConflict, null);
 });
 test('an unknown uncommitted answer retries the exact request; stale revisions require a new review', async () => {
   const saved = new Map(), appended = [];
