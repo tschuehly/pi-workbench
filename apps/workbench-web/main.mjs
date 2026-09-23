@@ -48,7 +48,7 @@ function renderCatalog(view) {
 function clearChat() {
   chat.stop(); saveDraft(); draftKey = null; draft.value = '';
   $('connection').textContent = 'Choose a session'; $('error').textContent = '';
-  for (const id of ['history', 'partial', 'queued', 'ask']) $(id).replaceChildren();
+  for (const id of ['history', 'partial', 'queued', 'ask', 'dialogs']) $(id).replaceChildren();
   $('earlier').hidden = true; $('stop').hidden = true; $('queue').hidden = true; $('send').disabled = true;
   for (const id of ['model', 'thinking']) { $(id).replaceChildren(); $(id).disabled = true; $(id).dataset.options = ''; }
 }
@@ -127,6 +127,33 @@ function renderChat(view) {
     const submit = document.createElement('button'); submit.textContent = 'Answer'; form.append(submit);
     form.onsubmit = event => { event.preventDefault(); void chat.answer(view.pendingAsk.questions.map(q => ({ id: q.id, values: [...form.querySelectorAll('input:checked')].filter(input => input.name === `choice-${q.id}`).map(input => input.value), otherText: form.elements.namedItem(`other-${q.id}`).value }))); };
     target.append(form);
+  }
+  const dialogs = $('dialogs'), pending = view.pendingDialogs?.[0];
+  if (!pending) { dialogs.replaceChildren(); dialogs.dataset.dialogId = ''; }
+  else {
+    if (dialogs.dataset.dialogId !== pending.dialogId) {
+      const form = document.createElement('form'); form.dataset.dialogId = pending.dialogId;
+      const heading = document.createElement('h2'); heading.textContent = pending.title; form.append(heading);
+      if (pending.message) { const detail = document.createElement('p'); detail.textContent = pending.message; form.append(detail); }
+      if (pending.kind === 'select') {
+        const label = document.createElement('label'); label.textContent = 'Choose '; const select = document.createElement('select'); select.name = 'answer'; select.setAttribute('aria-label', pending.title);
+        for (const option of pending.options) { const entry = document.createElement('option'); entry.value = option; entry.textContent = option; select.append(entry); }
+        label.append(select); form.append(label);
+      } else if (pending.kind === 'input') {
+        const label = document.createElement('label'); label.textContent = 'Answer '; const input = document.createElement('input'); input.name = 'answer'; input.type = 'text'; input.maxLength = 4000; input.placeholder = pending.placeholder ?? ''; input.setAttribute('aria-label', pending.title); label.append(input); form.append(label);
+      }
+      if (pending.kind === 'confirm') {
+        form.append(button('Yes', () => void chat.answerDialog(pending.dialogId, true)), button('No', () => void chat.answerDialog(pending.dialogId, false)));
+      } else { const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = 'Answer'; form.append(submit); }
+      form.append(button('Cancel dialog', () => void chat.cancelDialog(pending.dialogId)));
+      form.onsubmit = event => { event.preventDefault(); if (pending.kind !== 'confirm') void chat.answerDialog(pending.dialogId, form.elements.namedItem('answer').value); };
+      dialogs.replaceChildren(form); dialogs.dataset.dialogId = pending.dialogId;
+    }
+    for (const control of dialogs.querySelectorAll('button, input, select')) control.disabled = view.dialogBusy || view.connection !== 'connected';
+    let remaining = dialogs.querySelector('small'); if (view.pendingDialogs.length > 1) {
+      if (!remaining) { remaining = document.createElement('small'); dialogs.append(remaining); }
+      remaining.textContent = `${view.pendingDialogs.length - 1} more extension ${view.pendingDialogs.length === 2 ? 'dialog' : 'dialogs'} waiting`;
+    } else remaining?.remove();
   }
 }
 $('model').onchange = event => { if (event.target.value) void chat.changeModel(JSON.parse(event.target.value)); };

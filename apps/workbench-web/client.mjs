@@ -19,10 +19,23 @@ export function ask(x) {
   }
   return x;
 }
+export function dialog(x) {
+  if (!record(x) || !text(x.dialogId) || x.dialogId.length > 128 || !['confirm', 'select', 'input'].includes(x.kind) || !text(x.title) || x.title.length > 1000 || !text(x.askedAt) || typeof x.runScoped !== 'boolean') fail('dialog');
+  if (x.timeoutAt !== undefined && !text(x.timeoutAt)) fail('dialog timeout');
+  if (x.kind === 'confirm' && x.message !== undefined && (typeof x.message !== 'string' || x.message.length > 1000)) fail('dialog message');
+  if (x.kind === 'select' && (!Array.isArray(x.options) || !x.options.length || x.options.length > 24 || x.options.some(option => !text(option) || option.length > 1000) || new Set(x.options).size !== x.options.length)) fail('dialog options');
+  if (x.kind === 'input' && x.placeholder !== undefined && (typeof x.placeholder !== 'string' || x.placeholder.length > 1000)) fail('dialog placeholder');
+  return x;
+}
 export function status(x, id) {
   if (!record(x) || x.sessionId !== id || typeof x.isStreaming !== 'boolean' || typeof x.isCompacting !== 'boolean' || typeof x.isBashRunning !== 'boolean' || !seq(x.pendingMessageCount) || !Array.isArray(x.queuedMessages) || !record(x.tokens) || !['input','output','cacheRead','cacheWrite','total'].every(k => typeof x.tokens[k] === 'number' && Number.isFinite(x.tokens[k])) || typeof x.cost !== 'number' || !Number.isFinite(x.cost)) fail('status');
   if (x.queuedMessages.some(m => !record(m) || !['steer', 'followUp'].includes(m.kind) || typeof m.text !== 'string')) fail('queued messages');
   if (x.pendingAsk !== undefined) ask(x.pendingAsk);
+  if (x.pendingDialogs !== undefined) {
+    if (!Array.isArray(x.pendingDialogs)) fail('pending dialogs');
+    x.pendingDialogs.forEach(dialog);
+    if (new Set(x.pendingDialogs.map(item => item.dialogId)).size !== x.pendingDialogs.length) fail('duplicate dialogs');
+  }
   if (x.model !== undefined && (!record(x.model) || (x.model.provider !== undefined && !text(x.model.provider)) || (x.model.id !== undefined && !text(x.model.id)) || (x.model.name !== undefined && typeof x.model.name !== 'string'))) fail('status model');
   if (x.thinkingLevel !== undefined && typeof x.thinkingLevel !== 'string') fail('status thinking level');
   return x;
@@ -65,6 +78,10 @@ export function event(x, id) {
     case 'status.update': status(x.status, id); break;
     case 'ask.opened': ask(x.ask); break;
     case 'ask.closed': if (!text(x.askId) || !['submitted','superseded','cancelled'].includes(x.reason)) fail('event ask close'); break;
+    case 'dialog.opened': dialog(x.dialog); break;
+    case 'dialog.closed':
+      if (!text(x.dialogId) || !['answered', 'cancelled', 'timeout', 'aborted', 'session-ended'].includes(x.reason) || (x.reason === 'answered' && typeof x.answer !== 'boolean' && typeof x.answer !== 'string')) fail('event dialog close');
+      break;
     default: break; // Other PI WEB frames are intentionally not rendered by this proof.
   }
   return x;
@@ -84,7 +101,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
     if (!text(id) || !text(cwd) || !text(machine)) throw new Error('Session id, cwd and machine are required');
     const token = generation, base = `/api/machines/${encodeURIComponent(machine)}/sessions/${encodeURIComponent(id)}`;
     const url = path => `${base}/${path}?cwd=${encodeURIComponent(cwd)}`;
-    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, sending: false, queueBusy: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
+    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, pendingDialogs: [], dialogBusy: false, sending: false, queueBusy: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
     const alive = () => current === c && token === generation;
     function apply(e) {
       if (e.seq <= c.seq) return;
@@ -103,7 +120,9 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
         }
         case 'ask.opened': c.view.pendingAsk = e.ask; break;
         case 'ask.closed': if (c.view.pendingAsk?.askId === e.askId) c.view.pendingAsk = null; break;
-        case 'status.update': c.view.pendingAsk = e.status.pendingAsk ?? null; c.view.status = e.status; break;
+        case 'dialog.opened': if (!c.view.pendingDialogs.some(d => d.dialogId === e.dialog.dialogId)) c.view.pendingDialogs = [...c.view.pendingDialogs, e.dialog]; break;
+        case 'dialog.closed': c.view.pendingDialogs = c.view.pendingDialogs.filter(d => d.dialogId !== e.dialogId); break;
+        case 'status.update': c.view.pendingAsk = e.status.pendingAsk ?? null; c.view.pendingDialogs = e.status.pendingDialogs ?? []; c.view.status = e.status; break;
       }
       emit();
     }
@@ -135,6 +154,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
         c.view.total = history.total;
         c.view.status = state;
         c.view.pendingAsk = state.pendingAsk ?? null;
+        c.view.pendingDialogs = state.pendingDialogs ?? [];
         c.view.partial = stream.partial;
         c.seq = stream.seq;
         c.view.error = null;
@@ -204,6 +224,22 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
       return false;
     } finally { if (current === c) { c.view.sending = false; emit(); } }
   }
+  async function closeDialog(dialogId, value, cancel = false) {
+    const c = current, pending = c?.view.pendingDialogs.find(d => d.dialogId === dialogId);
+    if (!c || !pending || c.view.dialogBusy || c.view.connection !== 'connected') return false;
+    if (!cancel && !(pending.kind === 'confirm' && typeof value === 'boolean' || pending.kind === 'select' && pending.options.includes(value) || pending.kind === 'input' && typeof value === 'string' && value.length <= 4000)) throw new Error('Invalid dialog answer');
+    c.view.dialogBusy = true; c.view.error = null; emit();
+    try {
+      const result = await json(`${c.base}/dialogs/${cancel ? 'cancel' : 'answer'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: c.cwd, dialogId, ...(cancel ? {} : { value }) }) });
+      if (!record(result) || !['closed', 'stale'].includes(result.result)) fail('dialog close');
+      const updated = status(result.sessionStatus, c.id);
+      if (current === c) { c.view.pendingDialogs = updated.pendingDialogs ?? []; c.view.status = updated; c.view.pendingAsk = updated.pendingAsk ?? null; emit(); }
+      return result.result;
+    } catch (e) {
+      if (current === c) { c.view.error = `Dialog outcome unknown: ${String(e)}. Refresh Chat status before answering again.`; emit(); }
+      return false;
+    } finally { if (current === c) { c.view.dialogBusy = false; emit(); } }
+  }
   async function queueAction(action, target) {
     const c = current;
     if (!c || c.view.queueBusy || c.view.connection !== 'connected') return false;
@@ -265,5 +301,5 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
       if (current === c) { c.view.pendingAsk = updated.pendingAsk ?? null; c.view.status = updated; emit(); }
     } catch (e) { if (current === c) { c.view.error = String(e); emit(); } }
   }
-  return { select, stop, earlier, answer, send, stopTurn, changeModel: value => changeControl('model', value), changeThinking: value => changeControl('thinking', value), promoteQueued: target => queueAction('promote', target), promoteAll: () => queueAction('promote-all'), clearQueue: () => queueAction('clear') };
+  return { select, stop, earlier, answer, answerDialog: (id, value) => closeDialog(id, value), cancelDialog: id => closeDialog(id, undefined, true), send, stopTurn, changeModel: value => changeControl('model', value), changeThinking: value => changeControl('thinking', value), promoteQueued: target => queueAction('promote', target), promoteAll: () => queueAction('promote-all'), clearQueue: () => queueAction('clear') };
 }

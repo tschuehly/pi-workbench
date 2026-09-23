@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { accessSync, constants } from "node:fs";
-import { appendFile, cp, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -72,6 +72,8 @@ async function main() {
     let sessiond;
     let web;
     if (ownedClientDist !== undefined) {
+      await mkdir(join(stack.paths.agent, "extensions"), { recursive: true });
+      await cp(join(SCRIPT_DIR, "controlled-dialog-extension.ts"), join(stack.paths.agent, "extensions/controlled-dialog-extension.ts"));
       web = startLogged(stack, "web", tsx, [join(SCRIPT_DIR, "owned-chat-fixture-server.mjs")], piWebRoot);
       await waitForHttp(`http://127.0.0.1:${webPort}/api/pi-web/health`, 20_000, web);
       await waitForFile(stack.paths.fixtureManifest, 10_000, web);
@@ -142,6 +144,26 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#ask form') !== null`, 10_000);
   const mounted = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask')?.textContent ?? '', earlier: document.querySelector('#earlier')?.hidden, queued: document.querySelector('#queued')?.textContent ?? '', queueHidden: document.querySelector('#queue')?.hidden })`);
   checks.push({ id: "owned-chat-history-and-question", passed: mounted.history.includes(first.transcriptMarker) && mounted.ask.includes("Which controlled fixture answer?") && mounted.earlier === false, detail: JSON.stringify({ marker: mounted.history.includes(first.transcriptMarker), ask: mounted.ask, earlier: mounted.earlier }) });
+  await waitForBrowserExpression(cdp, `document.querySelector('#dialogs h2')?.textContent === 'Controlled extension confirmation'`, 15_000);
+  const openDialogs = await requestJson(statusUrl);
+  checks.push({ id: "owned-chat-real-extension-dialogs", passed: JSON.stringify(openDialogs.pendingDialogs?.map(dialog => dialog.kind)) === JSON.stringify(['confirm', 'select', 'input']) && openDialogs.pendingDialogs.every(dialog => dialog.runScoped === false), detail: JSON.stringify(openDialogs.pendingDialogs?.map(dialog => ({ id: dialog.dialogId, kind: dialog.kind }))) });
+  const pendingReload = cdp.waitForEvent("Page.loadEventFired", 20_000);
+  await cdp.send("Page.reload"); await pendingReload;
+  await waitForBrowserExpression(cdp, `document.querySelector('#connection')?.textContent?.includes('connected') === true && document.querySelector('#dialogs h2')?.textContent === 'Controlled extension confirmation'`, 20_000);
+  checks.push({ id: "owned-chat-dialog-rehydrates-on-reload", passed: (await evaluate(cdp, `({ ask: document.querySelector('#ask form') !== null, count: document.querySelector('#dialogs small')?.textContent ?? '' })`)).ask && (await requestJson(statusUrl)).pendingDialogs?.length === 3, detail: "Pending ask and three daemon-owned dialogs survive browser reload" });
+  await evaluate(cdp, `(() => { const original = window.fetch; window.__dialogCalls = []; window.fetch = (...args) => original(...args).then(async response => { if (args[1]?.method === 'POST' && String(args[0]).includes('/dialogs/')) window.__dialogCalls.push({ path: String(args[0]).split('/').at(-1), body: JSON.parse(args[1].body), status: response.status, result: (await response.clone().json()).result }); return response; }); })()`);
+  await evaluate(cdp, `([...document.querySelectorAll('#dialogs button')].find(button => button.textContent === 'Yes')).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#dialogs h2')?.textContent === 'Controlled extension choice' && document.querySelector('#dialogs select')?.disabled === false`, 15_000);
+  const afterConfirm = await requestJson(statusUrl);
+  checks.push({ id: "owned-chat-confirm-through-real-daemon", passed: afterConfirm.pendingDialogs?.length === 2 && !afterConfirm.pendingDialogs.some(dialog => dialog.kind === 'confirm'), detail: JSON.stringify(afterConfirm.pendingDialogs?.map(dialog => dialog.kind)) });
+  await evaluate(cdp, `(() => { document.querySelector('#dialogs select').value = 'Second'; document.querySelector('#dialogs button[type="submit"]').click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#dialogs h2')?.textContent === 'Controlled extension input' && document.querySelector('#dialogs input')?.disabled === false`, 15_000);
+  const afterSelect = await requestJson(statusUrl);
+  checks.push({ id: "owned-chat-select-through-real-daemon", passed: afterSelect.pendingDialogs?.length === 1 && afterSelect.pendingDialogs[0].kind === 'input', detail: JSON.stringify(afterSelect.pendingDialogs?.map(dialog => dialog.kind)) });
+  await evaluate(cdp, `([...document.querySelectorAll('#dialogs button')].find(button => button.textContent === 'Cancel dialog')).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#dialogs form') === null`, 15_000);
+  const dialogCalls = await evaluate(cdp, `window.__dialogCalls`);
+  checks.push({ id: "owned-chat-cancel-through-real-daemon", passed: !(await requestJson(statusUrl)).pendingDialogs?.length && JSON.stringify(dialogCalls.map(call => [call.path, call.body.value, call.status, call.result])) === JSON.stringify([['answer', true, 200, 'closed'], ['answer', 'Second', 200, 'closed'], ['cancel', undefined, 200, 'closed']]) && dialogCalls.every((call, index) => call.body.cwd === first.cwd && call.body.dialogId === openDialogs.pendingDialogs[index].dialogId), detail: JSON.stringify(dialogCalls) });
   const modelUrl = new URL(`api/machines/local/sessions/${encodeURIComponent(first.sessionId)}/models?cwd=${encodeURIComponent(first.cwd)}`, base);
   const levelsUrl = new URL(`api/machines/local/sessions/${encodeURIComponent(first.sessionId)}/thinking-levels?cwd=${encodeURIComponent(first.cwd)}`, base);
   const [availableModels, availableLevels] = await Promise.all([requestJson(modelUrl), requestJson(levelsUrl)]);

@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createChat, ask, event, page, snapshot, status, models, thinkingLevels } from './client.mjs';
+import { createChat, ask, dialog, event, page, snapshot, status, models, thinkingLevels } from './client.mjs';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const msg = (text, entryId) => ({ role: 'assistant', content: [{ type: 'text', text }], entryId });
 const pending = { askId: 'a', askedAt: 'now', questions: [{ id: 'q', question: 'Why?', options: [] }] };
+const openDialog = { dialogId: 'dlg-1', kind: 'confirm', title: 'Proceed?', message: 'Do you approve?', askedAt: '2026-09-23T10:00:00.000Z', runScoped: false };
 const state = (id, extra = {}) => ({ sessionId: id, isStreaming: true, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0, ...extra });
 function fake() {
   const sockets = [], requests = [], views = [], retries = [];
@@ -72,6 +73,41 @@ test('ask answer uses original identity, handles stale response and errors', asy
   f.sockets[0].frame({ type: 'ask.opened', seq: 3, ask: pending });
   f.chat.answer([]); f.reply('/ask/submit', 'denied', 403); await tick();
   assert.match(f.last().error, /403/); assert.equal(f.last().pendingAsk.askId, 'a');
+});
+test('extension dialogs recover from status, handle events, close races and stale selection', async () => {
+  const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open();
+  await f.seed('s', { status: state('s', { pendingDialogs: [openDialog] }) });
+  assert.deepEqual(f.last().pendingDialogs, [openDialog]);
+  assert.rejects(f.chat.answerDialog('dlg-1', 'wrong'), /Invalid dialog answer/);
+  const answer = f.chat.answerDialog('dlg-1', false);
+  assert.deepEqual(JSON.parse(f.requests[0].options.body), { cwd: '/repo', dialogId: 'dlg-1', value: false });
+  assert.equal(await f.chat.cancelDialog('dlg-1'), false);
+  f.reply('/dialogs/answer', { result: 'stale', sessionStatus: state('s') });
+  assert.equal(await answer, 'stale'); assert.deepEqual(f.last().pendingDialogs, []);
+  const select = { ...openDialog, dialogId: 'dlg-2', kind: 'select', options: ['one', 'two'] };
+  f.sockets[0].frame({ type: 'dialog.opened', seq: 3, dialog: select });
+  assert.equal(f.last().pendingDialogs[0].kind, 'select');
+  const rejected = f.chat.answerDialog('dlg-2', 'three'); await assert.rejects(rejected, /Invalid dialog answer/);
+  const cancel = f.chat.cancelDialog('dlg-2'); f.reply('/dialogs/cancel', { result: 'closed', sessionStatus: state('s') });
+  assert.equal(await cancel, 'closed'); assert.deepEqual(f.last().pendingDialogs, []);
+  f.sockets[0].frame({ type: 'dialog.opened', seq: 4, dialog: { ...openDialog, dialogId: 'dlg-3', kind: 'input', placeholder: 'Enter text' } });
+  const stale = f.chat.answerDialog('dlg-3', 'answer'); f.chat.select('other', '/other'); f.sockets[1].open();
+  f.reply('/dialogs/answer', { result: 'closed', sessionStatus: state('s') });
+  assert.equal(await stale, 'closed'); await f.seed('other'); assert.equal(f.last().id, 'other'); assert.deepEqual(f.last().pendingDialogs, []);
+  f.sockets[1].drop(); f.retries.shift()(); f.sockets[2].open();
+  await f.seed('other', { status: state('other', { pendingDialogs: [openDialog] }) });
+  assert.deepEqual(f.last().pendingDialogs, [openDialog]);
+});
+test('dialog opened during join follows snapshot watermark and status', async () => {
+  const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open();
+  f.sockets[0].frame({ type: 'dialog.opened', seq: 3, dialog: openDialog });
+  await f.seed('s', { status: state('s') });
+  assert.deepEqual(f.last().pendingDialogs, [openDialog]);
+  f.sockets[0].frame({ type: 'dialog.closed', seq: 4, dialogId: openDialog.dialogId, reason: 'timeout' });
+  assert.deepEqual(f.last().pendingDialogs, []);
+  f.sockets[0].drop(); f.retries.shift()(); f.sockets[1].open();
+  await f.seed('s', { snapshot: { seq: 5, partial: null }, status: state('s', { pendingDialogs: [openDialog] }) });
+  assert.deepEqual(f.last().pendingDialogs, [openDialog]);
 });
 test('history after snapshot retains a completion at the watermark without duplication', async () => {
   const f = fake(); f.chat.select('s', '/repo'); const ws = f.sockets[0]; ws.open();
@@ -154,6 +190,11 @@ test('rejects malformed consumed data and ignores stale session HTTP/socket', as
   assert.throws(() => thinkingLevels({ levels: ['off', 1] }));
   assert.throws(() => status(state('s', { thinkingLevel: 3 }), 's'));
   assert.throws(() => status(state('s', { queuedMessages: [{ kind: 'future', text: 'bad' }] }), 's'));
+  assert.throws(() => dialog({ ...openDialog, title: 'x'.repeat(1001) }));
+  assert.throws(() => dialog({ ...openDialog, kind: 'select', options: ['same', 'same'] }));
+  assert.throws(() => status(state('s', { pendingDialogs: [openDialog, openDialog] }), 's'));
+  assert.throws(() => event({ type: 'dialog.opened', seq: 9, dialog: { ...openDialog, kind: 'select', options: [] } }, 's'));
+  assert.throws(() => event({ type: 'dialog.closed', seq: 9, dialogId: 'dlg-1', reason: 'unknown' }, 's'));
   assert.throws(() => page({ messages: [], start: -1, total: 0 }));
   assert.throws(() => page({ messages: [{ content: [{ type: 'text', text: 3 }] }], start: 0, total: 1 }));
   assert.throws(() => snapshot({ seq: 1.5, partial: null }));
