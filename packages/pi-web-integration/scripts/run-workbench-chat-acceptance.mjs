@@ -159,6 +159,29 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   const afterReload = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask form') !== null, draft: document.querySelector('#draft')?.value ?? '' })`);
   assertChildAlive(runtime.sessiond);
   checks.push({ id: "owned-chat-reload-and-daemon-continuity", passed: afterReload.history.includes(first.transcriptMarker) && !afterReload.ask && afterReload.draft === 'first line\nsecond line', detail: JSON.stringify({ history: afterReload.history.includes(first.transcriptMarker), ask: afterReload.ask, draft: afterReload.draft, sessiondPid: runtime.sessiond.pid }) });
+  const initialIdentity = await evaluate(cdp, `({ project: new URL(location.href).searchParams.get('project'), workspace: new URL(location.href).searchParams.get('workspace'), session: new URL(location.href).searchParams.get('id') })`);
+  checks.push({ id: "owned-chat-catalog-identity", passed: initialIdentity.project === first.projectId && initialIdentity.workspace === first.workspaceId && initialIdentity.session === first.sessionId, detail: JSON.stringify(initialIdentity) });
+  const second = fixture.anchors[1];
+  await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Controlled project 2') ?? (() => { throw Error('No second project') })()).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#catalog')?.textContent?.includes('Borealis files') === true`, 15_000);
+  const chosen = await evaluate(cdp, `({ workspace: document.querySelector('#catalog select')?.value, session: new URL(location.href).searchParams.get('id') })`);
+  checks.push({ id: "owned-chat-workspace-navigation", passed: chosen.workspace === second.workspaceId && chosen.session === null, detail: JSON.stringify(chosen) });
+  await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Borealis files') ?? (() => { throw Error('No second session') })()).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#history')?.textContent?.includes(${JSON.stringify(second.transcriptMarker)}) === true`, 20_000);
+  const existing = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), project: new URL(location.href).searchParams.get('project'), workspace: new URL(location.href).searchParams.get('workspace') })`);
+  checks.push({ id: "owned-chat-existing-session-navigation", passed: existing.id === second.sessionId && existing.project === second.projectId && existing.workspace === second.workspaceId, detail: JSON.stringify(existing) });
+  await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Controlled project 1')).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#catalog')?.textContent?.includes('Atlas transcript') === true`, 15_000);
+  await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'New Chat')).click()`);
+  await waitForBrowserExpression(cdp, `new URL(location.href).searchParams.get('id') !== null`, 30_000);
+  const created = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), project: new URL(location.href).searchParams.get('project'), workspace: new URL(location.href).searchParams.get('workspace'), error: document.querySelector('#catalog-error')?.textContent })`);
+  const createdStatus = await requestJson(new URL(`api/machines/local/sessions/${encodeURIComponent(created.id)}/status?cwd=${encodeURIComponent(first.cwd)}`, base));
+  checks.push({ id: "owned-chat-new-session-identity", passed: created.id !== first.sessionId && created.project === first.projectId && created.workspace === first.workspaceId && createdStatus.sessionId === created.id && !created.error, detail: JSON.stringify(created) });
+  const reloadNew = cdp.waitForEvent("Page.loadEventFired", 20_000);
+  await cdp.send("Page.reload"); await reloadNew;
+  await waitForBrowserExpression(cdp, `document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000);
+  const resumed = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), listed: document.querySelector('#catalog')?.textContent?.includes('New Chat (not yet saved)'), error: document.querySelector('#catalog-error')?.textContent })`);
+  checks.push({ id: "owned-chat-transient-session-reload", passed: resumed.id === created.id && resumed.listed && !resumed.error, detail: JSON.stringify(resumed) });
   return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations: [] };
 }
 
@@ -455,7 +478,7 @@ async function openExistingPage(port, requestedUrl, expectedTitle = "Pi Workbenc
   let pages = [];
   while (Date.now() - started < 15_000) {
     pages = await requestJson(new URL(`http://127.0.0.1:${port}/json/list`));
-    const info = pages.find((candidate) => candidate.type === "page" && candidate.url === requestedUrl);
+    const info = pages.find((candidate) => candidate.type === "page" && sameApplicationPage(candidate.url, requestedUrl));
     if (info?.webSocketDebuggerUrl !== undefined && info.title === expectedTitle) {
       if (process.env.PI_WEB_ACCEPTANCE_TRACE === "1") process.stderr.write(`[cdp-open] ${JSON.stringify({ requested: requestedUrl, actual: info.url })}\n`);
       return CDP.connect(info.webSocketDebuggerUrl);
@@ -463,6 +486,14 @@ async function openExistingPage(port, requestedUrl, expectedTitle = "Pi Workbenc
     await delay(100);
   }
   throw new Error(`Chromium did not open the owned application page: ${JSON.stringify(pages.map((page) => page.url))}`);
+}
+function sameApplicationPage(actual, requested) {
+  if (actual === requested) return true;
+  try {
+    const a = new URL(actual), r = new URL(requested);
+    return a.origin === r.origin && a.pathname === r.pathname && r.searchParams.has("id")
+      && ["id", "cwd", "machine"].every(key => a.searchParams.get(key) === r.searchParams.get(key));
+  } catch { return false; }
 }
 async function navigate(cdp, url, timeout) { const loaded = cdp.waitForEvent("Page.loadEventFired", timeout).catch(() => undefined); await withTimeout(cdp.send("Runtime.evaluate", { expression: `location.assign(${JSON.stringify(url)}); true`, returnByValue: true }), Math.min(timeout, 10_000), "CDP navigation evaluation did not respond"); await loaded; }
 async function evaluate(cdp, expression) { const response = await withTimeout(cdp.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }), 10_000, "CDP Runtime.evaluate did not respond"); if (response.exceptionDetails) throw new Error(`Browser evaluation failed: ${JSON.stringify(response.exceptionDetails)}`); return response.result?.value; }
