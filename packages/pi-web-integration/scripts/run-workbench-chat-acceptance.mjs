@@ -305,6 +305,35 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#delegation')?.textContent?.includes('Files review · Running') === true`, 15_000);
   const roster = await evaluate(cdp, `({ text: document.querySelector('#delegation').textContent, rows: document.querySelectorAll('#delegation article').length, unsafeElements: document.querySelectorAll('#delegation img').length, injected: window.__rosterInjected === 1 })`);
   checks.push({ id: "owned-roster-isolated-status-projection", passed: roster.rows === 2 && roster.text.includes('anthropic/claude-sonnet · high') && roster.text.includes('Subagent · QA · Uncollected') && roster.text.includes('openai/gpt-6-luna · medium') && roster.text.includes('Reported: Checking paths') && roster.unsafeElements === 0 && !roster.injected, detail: JSON.stringify(roster) });
+  await evaluate(cdp, `([...document.querySelectorAll('#file-tree button')].find(x => x.textContent.includes('README.md')) ?? (() => { throw Error('README missing') })()).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#file-detail pre')?.textContent?.includes('fixture-file-2') === true`, 15_000);
+  const source = await evaluate(cdp, `({ editable: document.querySelector('#file-detail textarea')?.disabled === false, text: document.querySelector('#file-detail pre')?.textContent, path: document.querySelector('#file-detail h3')?.textContent })`);
+  checks.push({ id: 'owned-files-real-workspace-read', passed: source.editable && source.text.includes('fixture-file-2') && source.path.includes('README.md'), detail: JSON.stringify(source) });
+  await evaluate(cdp, `(() => { const editor = document.querySelector('#file-detail textarea'); editor.value = '# Browser edit\\n'; editor.dispatchEvent(new Event('input', { bubbles: true })); window.confirm = () => false; [...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Controlled project 1').click(); })()`);
+  const dirty = await evaluate(cdp, `({ text: document.querySelector('#file-detail textarea')?.value, workspace: document.querySelector('#catalog select')?.value, saveDisabled: [...document.querySelectorAll('#file-detail button')].find(x => x.textContent === 'Save file')?.disabled })`);
+  checks.push({ id: 'owned-files-dirty-workspace-switch-blocked', passed: dirty.text === '# Browser edit\n' && dirty.workspace === second.workspaceId && dirty.saveDisabled === false, detail: JSON.stringify(dirty) });
+  await evaluate(cdp, `([...document.querySelectorAll('#file-detail button')].find(x => x.textContent === 'Save file')).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#file-detail h3')?.textContent?.includes('Unsaved changes') === false && document.querySelector('#file-detail pre')?.textContent === '# Browser edit\\n'`, 15_000);
+  const savedFile = await readFile(join(second.cwd, 'README.md'), 'utf8');
+  checks.push({ id: 'owned-files-versioned-write-real-backend', passed: savedFile === '# Browser edit\n', detail: JSON.stringify({ savedFile }) });
+  await writeFile(join(second.cwd, 'README.md'), '# External change\n');
+  await evaluate(cdp, `(() => { const editor = document.querySelector('#file-detail textarea'); editor.value = '# Preserve my edit\\n'; editor.dispatchEvent(new Event('input', { bubbles: true })); [...document.querySelectorAll('#file-detail button')].find(x => x.textContent === 'Save file').click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#file-error')?.textContent?.includes('Conflict:') === true`, 15_000);
+  const conflict = await evaluate(cdp, `({ draft: document.querySelector('#file-detail textarea')?.value, error: document.querySelector('#file-error')?.textContent })`);
+  checks.push({ id: 'owned-files-stale-version-rejected', passed: conflict.draft === '# Preserve my edit\n' && (await readFile(join(second.cwd, 'README.md'), 'utf8')) === '# External change\n', detail: JSON.stringify(conflict) });
+  await writeFile(join(second.cwd, 'danger.md'), '<img src=x onerror=window.__fileInjected=1>\\n');
+  await writeFile(join(second.cwd, 'large.md'), 'L'.repeat(512 * 1024 + 1));
+  await evaluate(cdp, `(() => { window.confirm = () => true; document.querySelector('#file-refresh').click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#file-tree')?.textContent?.includes('danger.md') === true`, 15_000);
+  await evaluate(cdp, `([...document.querySelectorAll('#file-tree button')].find(x => x.textContent.includes('danger.md'))).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#file-detail pre')?.textContent?.includes('<img src=x') === true`, 15_000);
+  const inert = await evaluate(cdp, `({ escaped: document.querySelector('#file-detail pre').textContent, images: document.querySelectorAll('#file-detail img').length, injected: window.__fileInjected === 1 })`);
+  checks.push({ id: 'owned-files-untrusted-text-inert', passed: inert.images === 0 && !inert.injected && inert.escaped.includes('<img src=x'), detail: JSON.stringify(inert) });
+  await evaluate(cdp, `([...document.querySelectorAll('#file-tree button')].find(x => x.textContent.includes('large.md'))).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#file-detail h3')?.textContent?.includes('Truncated view') === true`, 15_000);
+  const large = await evaluate(cdp, `({ disabled: document.querySelector('#file-detail textarea')?.disabled, bytes: document.querySelector('#file-detail pre')?.textContent?.length, saveDisabled: [...document.querySelectorAll('#file-detail button')].find(x => x.textContent === 'Save file')?.disabled })`);
+  const traversal = await fetch(new URL(`api/machines/local/projects/${encodeURIComponent(second.projectId)}/workspaces/${encodeURIComponent(second.workspaceId)}/file?path=${encodeURIComponent('../README.md')}`, base));
+  checks.push({ id: 'owned-files-bounded-and-confined', passed: large.disabled && large.saveDisabled && large.bytes <= 512 * 1024 && traversal.status === 400, detail: JSON.stringify({ ...large, traversal: traversal.status }) });
   return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations };
 }
 

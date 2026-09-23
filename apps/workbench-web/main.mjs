@@ -3,6 +3,7 @@ import { createCatalog } from './catalog.mjs';
 import { createWorkstreams } from './workstreams.mjs';
 import { createWorkbenchWorkstreamClient } from './workstream-client.js';
 import { delegates } from './roster.mjs';
+import { createFiles } from './files.mjs';
 const $ = id => document.getElementById(id);
 const params = new URL(location.href).searchParams;
 function renderMessage(message, streaming = false) {
@@ -36,7 +37,48 @@ draft.addEventListener('input', saveDraft);
 const chat = createChat({ fetch: (...args) => fetch(...args), socket: path => new WebSocket(new URL(path, location.href).href.replace(/^http/, 'ws')), changed: renderChat });
 const catalog = createCatalog({ fetch: (...args) => fetch(...args), storage, changed: renderCatalog });
 const workstreams = createWorkstreams({ fetch: (...args) => fetch(...args), validateClient: createWorkbenchWorkstreamClient, storage: answerStorage, changed: renderWorkstreams });
+const files = createFiles({ fetch: (...args) => fetch(...args), changed: renderFiles, confirm: message => window.confirm(message) });
+window.addEventListener('beforeunload', files.unload);
 let workstreamScope = '', workstreamNavigation = 0;
+function renderFiles(view) {
+  const host = $('file-tree'); host.replaceChildren();
+  $('file-error').textContent = view.error;
+  const list = (entries, depth = 0) => {
+    for (const entry of entries) {
+      if (entry.type === 'symlink') continue; // Never navigate a symlink from this surface.
+      const row = button(`${entry.type === 'directory' ? view.directories[entry.path] ? '▾' : '▸' : '·'} ${entry.name}`, () => void (entry.type === 'directory' ? files.toggle(entry.path) : files.open(entry.path)));
+      row.style.marginLeft = `${Math.min(depth, 20)}rem`;
+      if (entry.type === 'file' && view.loaded?.path === entry.path) row.setAttribute('aria-current', 'true');
+      host.append(row, document.createElement('br'));
+      if (entry.type === 'directory' && view.directories[entry.path]) list(view.directories[entry.path], depth + 1);
+    }
+  };
+  if (!view.scope) host.textContent = 'Choose a registered local workspace.';
+  else { list(view.entries); if (view.treeTruncated) host.append(document.createTextNode('Only the first 1000 entries are shown.')); }
+  const detail = $('file-detail');
+  if (!view.loaded) { detail.replaceChildren(); detail.dataset.path = ''; return; }
+  if (detail.dataset.path !== view.loaded.path) {
+    detail.replaceChildren(); detail.dataset.path = view.loaded.path;
+    detail.append(document.createElement('h3'));
+    if (!view.loaded.binary) {
+      detail.append(document.createElement('pre'));
+      const source = document.createElement('textarea'); source.setAttribute('aria-label', 'File source'); source.oninput = () => files.edit(source.value); detail.append(source);
+      detail.append(button('Save file', () => void files.save()));
+    }
+    detail.append(button('Reload file', () => void files.open(view.loaded.path, true)));
+  }
+  detail.querySelector('h3').textContent = `${view.loaded.path} · ${view.loaded.size} bytes${view.dirty ? ' · Unsaved changes' : ''}${view.loaded.truncated ? ' · Truncated view (read-only)' : ''}${view.loaded.binary ? ' · Binary file (read-only)' : ''}${!view.loaded.binary && !view.loaded.truncated && !view.loaded.editable ? ' · Unverified text (read-only)' : ''}`;
+  const source = detail.querySelector('textarea');
+  if (source) {
+    if (document.activeElement !== source) source.value = view.buffer;
+    source.disabled = !view.loaded.editable || view.saving || view.loading || view.unknown;
+    detail.querySelector('pre').textContent = view.buffer;
+    const save = source.nextElementSibling; save.textContent = view.saving ? 'Saving…' : 'Save file'; save.disabled = !view.dirty || !view.loaded.editable || view.saving || view.loading || view.unknown;
+  }
+  detail.lastElementChild.disabled = view.saving;
+  detail.querySelector('[data-recheck]')?.remove();
+  if (view.unknown) { const recheck = button('Recheck saved file', () => void files.recheck()); recheck.dataset.recheck = 'true'; detail.append(recheck); }
+}
 const button = (label, action) => { const node = document.createElement('button'); node.type = 'button'; node.textContent = label; node.onclick = action; return node; };
 function imageControls() {
   $('image-input').disabled = !draftKey || imageBusy || chatView?.sending || chatView?.connection !== 'connected';
@@ -82,6 +124,7 @@ $('image-input').onchange = async event => {
 };
 
 function renderCatalog(view) {
+  files.select(view.selectedWorkspace && catalog.machineId === 'local' ? { ...view.selectedWorkspace, machineId: 'local' } : undefined);
   const scope = view.selectedWorkspace && JSON.stringify([catalog.machineId, view.selectedWorkspace.projectId, view.selectedWorkspace.id]);
   if (!scope && workstreamScope) { workstreamScope = ''; workstreams.clear(); }
   if (scope && scope !== workstreamScope) {
@@ -173,6 +216,7 @@ function renderWorkstreams(view) {
   }
 }
 async function openAssociatedSession(session) {
+  if ((catalog.view.selectedWorkspace?.id !== session.workspaceId || catalog.view.selectedWorkspace?.projectId !== session.projectId) && !files.canLeave()) return;
   const seq = ++workstreamNavigation;
   const error = message => { if (seq === workstreamNavigation) $('workstream-error').textContent = message; };
   if (!session.machineId || !session.projectId || !session.workspaceId) { error('Session location is missing; repair its association before opening Chat.'); return; }
@@ -202,7 +246,7 @@ function openSession(identity) {
   chat.select(identity.sessionId, identity.cwd, identity.machineId);
 }
 async function chooseWorkspace(projectId, workspaceId) {
-  if (!workspaceId) return;
+  if (!workspaceId || (catalog.view.selectedWorkspace?.id !== workspaceId || catalog.view.selectedWorkspace?.projectId !== projectId) && !files.canLeave()) return;
   clearChat();
   const url = new URL(location.href);
   for (const key of ['id', 'cwd', 'project', 'workspace']) url.searchParams.delete(key);
@@ -313,6 +357,7 @@ function renderChat(view) {
     } else remaining?.remove();
   }
 }
+$('file-refresh').onclick = () => void files.list();
 $('workstream-refresh').onclick = () => { const w = catalog.view.selectedWorkspace; if (w) void workstreams.load({ machineId: catalog.machineId, projectId: w.projectId, workspaceId: w.id }); };
 $('model').onchange = event => { if (event.target.value) void chat.changeModel(JSON.parse(event.target.value)); };
 $('thinking').onchange = event => { if (event.target.value) void chat.changeThinking(event.target.value); };
