@@ -1,0 +1,27 @@
+# Trial Firstmate's primary in Workbench Chat
+
+**Status: proposed experiment, not approval to install tools, register a project, or change Workbench or PI WEB.** Test Firstmate with its coordinating Pi session in Workbench Chat and its crew in an owner-chosen **non-tmux** backend. This is an external tool trial, not the rejected [Workbench coordination-mate plan](firstmate-coordination-mate.md) or a change to [Decision 103](../foundation/decisions.md). A separate [PI WEB crew-backend plan](firstmate-pi-web-crew-backend.md) investigates Workbench-hosted workers without requiring this live trial to succeed.
+
+## What this answers
+
+Can the owner use Workbench Chat as Firstmate's main conversation, receive reliable crew decisions there, and resume supervision after the coordinating Pi session stops? Closing a Chat window is **not** a coordinator-stop test: PI WEB normally keeps its hosted session alive for reconnect. Workbench's attended Subagents and Workers do not survive lead-session shutdown; Firstmate's separate crew backend is intended to do so. See the [Workbench system overview](../foundation/system-overview.md) and [Firstmate architecture at `1e0e773`](https://github.com/kunchenguid/firstmate/blob/1e0e773/docs/architecture.md). This host compatibility has not been tested here.
+
+A toy repository is **not necessary** for this trial. Start with a bounded, read-only Scout investigation of `pi-workbench` in Firstmate's isolated clone/worktree, so the trial does useful work without giving Firstmate mutation or delivery authority over the real project. If that works and the owner wants to test Ship, agree on a separate concrete change and delivery posture first. Never use the owner's working checkout as a crew workspace.
+
+## Limits and prerequisites
+
+- Choose an external non-tmux backend **with the owner** before any crew dispatch. Herdr is Firstmate's verified alternative and requires another app and license review; Orca and cmux are experimental alternatives. None was installed at the initial inspection. If a second app is unacceptable, stop after the host-compatibility audit; do not silently fall back to tmux.
+- Pin the Firstmate revision and use a persistent isolated checkout and private home. Confirm how PI WEB loads/trusts the checkout's four `.pi/extensions`, reports failures, and delivers watcher wakeups. Audit required dependencies and ask before installing them; `treehouse`, `tasks-axi`, `no-mistakes`, `gh-axi`, and `chrome-devtools-axi` were absent at the initial inspection. Recheck the actual toolchain and versions.
+- Do not restart the PI WEB session daemon hosting this session. Do not push, open a PR, merge, enable `+yolo`, register secondmates, or enable public Relay. Keep generated fleet data and credentials out of Git. Firstmate owns its private task ledger, lock, watcher, and decisions; Workbench Chat is only the primary's client.
+- This experiment does not change the sibling PI WEB checkout. If a later fix does, first fetch `upstream` and `origin`, use a fork branch, and seek separate authorization before deployment.
+
+## Checks, in order
+
+1. **Primary compatibility:** open one Workbench Chat in the isolated Firstmate checkout/home, without registering `pi-workbench` yet. Verify that the required project extensions load, one primary holds the home lock after `bin/fm-session-start.sh`, and watcher/turn-end behavior can be observed without a terminal-only assumption. Stop on an extension, lock, dialog, or wake mismatch rather than patching the live host.
+2. **Useful Scout:** after the owner accepts the exact investigation, register only `pi-workbench` in Firstmate's private clone inventory. Launch one Scout in a separate worktree. Verify its project and worktree identity, current state, actionable wake, report, and decision delivery if any. Its report lives in Firstmate's private home; no change lands in the owner's checkout.
+3. **Two distinct recovery checks:** while the Scout is live, close/reopen its primary Workbench window and confirm it remains the *same* hosted Pi session. Separately stop only the pilot primary Pi session, leaving the external crew endpoint running; reopen a primary on the same Firstmate home and verify reconciliation finds one task, any open decision, and the Scout's eventual report without redispatch. Never stop the hosting PI WEB daemon as a proxy for this test.
+4. **Assess and clean up:** measure setup and owner interventions, missed or repeated wakes, recovery clarity, and whether a separate crew app is acceptable compared with Workbench's attended delegation. Follow Firstmate's own cleanup guards; retain any worktree it refuses to release. A Ship trial needs fresh owner direction and is **not** part of this gate.
+
+**Pass:** Workbench Chat hosts the primary, one useful Scout report is attributable to the isolated `pi-workbench` worktree, and window reconnect plus primary-session restart lose no actionable decision or task while creating no duplicate. **Stop:** missing tools or permissions are unacceptable; the host cannot prove required extension/watcher behavior; or the second app defeats the desired experience. Passing does not prove that PI WEB can host crew endpoints.
+
+Report pinned versions, backend and setup cost, observed session/task/worktree IDs, wake and recovery evidence, cleanup state, and the next decision. A Scout report or fleet snapshot alone is not proof of managed recovery.
