@@ -249,6 +249,7 @@ function clearChat() {
   chat.stop(); saveDraft(); draftKey = null; draft.value = ''; chatView = null; resetImages();
   $('connection').textContent = 'Choose a session'; $('error').textContent = '';
   for (const id of ['delegation', 'history', 'partial', 'queued', 'ask', 'dialogs']) $(id).replaceChildren();
+  renderedHistory = []; renderedHistorySession = null;
   $('ask').dataset.askKey = '';
   $('earlier').hidden = true; $('stop').hidden = true; $('queue').hidden = true; $('retry-send').hidden = true; $('send').disabled = true;
   for (const id of ['model', 'thinking']) { $(id).replaceChildren(); $(id).disabled = true; $(id).dataset.options = ''; }
@@ -288,6 +289,23 @@ function renderRoster(view) {
     host.append(row);
   }
 }
+let renderedHistory = [], renderedHistorySession = null;
+function renderHistory(view) {
+  const host = $('history'), next = view.messages, prior = renderedHistory;
+  const same = (a, b) => a.every((item, index) => item === b[index]);
+  if (renderedHistorySession === view.id && next.length >= prior.length && same(prior, next.slice(0, prior.length))) {
+    if (next.length > prior.length) {
+      const atBottom = innerHeight + scrollY >= document.documentElement.scrollHeight - 80;
+      host.append(...next.slice(prior.length).map(message => renderMessage(message)));
+      if (atBottom) scrollTo(0, document.documentElement.scrollHeight);
+    }
+  } else if (renderedHistorySession === view.id && next.length > prior.length && same(prior, next.slice(next.length - prior.length))) {
+    const anchor = host.firstElementChild, before = anchor?.getBoundingClientRect().top;
+    host.prepend(...next.slice(0, next.length - prior.length).map(message => renderMessage(message)));
+    if (before !== undefined) scrollBy(0, anchor.getBoundingClientRect().top - before);
+  } else host.replaceChildren(...next.map(message => renderMessage(message)));
+  renderedHistory = [...next]; renderedHistorySession = view.id;
+}
 function renderChat(view) {
   chatView = view;
   renderRoster(view);
@@ -314,7 +332,7 @@ function renderChat(view) {
     select.value = choice.options.some(([value]) => value === choice.value) ? choice.value : '';
     select.disabled = view.controlsLoading || view.controlBusy || view.connection !== 'connected' || !choice.options.length;
   }
-  $('history').replaceChildren(...view.messages.map(message => renderMessage(message)));
+  renderHistory(view);
   $('partial').replaceChildren(...(view.partial ? [renderMessage({ ...view.partial, role: 'assistant' }, true)] : []));
   const queue = $('queued'); queue.replaceChildren();
   const queued = view.status?.queuedMessages ?? [];
