@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createChat, ask, event, page, snapshot, status } from './client.mjs';
+import { createChat, ask, event, page, snapshot, status, models, thinkingLevels } from './client.mjs';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const msg = (text, entryId) => ({ role: 'assistant', content: [{ type: 'text', text }], entryId });
 const pending = { askId: 'a', askedAt: 'now', questions: [{ id: 'q', question: 'Why?', options: [] }] };
@@ -18,6 +18,9 @@ function fake() {
     await tick();
     reply('/messages?', overrides.page ?? { messages: [msg('old', 'm1')], start: 1, total: 2 });
     reply('/status?', overrides.status ?? state(id, { pendingAsk: pending }));
+    await tick();
+    if (requests.some(r => r.url.includes('/models?'))) reply('/models?', overrides.models ?? { models: [{ provider: 'fixture', id: 'mock', name: 'Fixture model' }] });
+    if (requests.some(r => r.url.includes('/thinking-levels?'))) reply('/thinking-levels?', overrides.levels ?? { levels: ['off', 'high'] });
     await tick();
   };
   return { chat, sockets, requests, views, retries, reply, seed, last: () => views.at(-1) };
@@ -60,7 +63,7 @@ test('composer keeps failed draft, binds send/stop to origin, and validates resp
 });
 
 test('ask answer uses original identity, handles stale response and errors', async () => {
-  const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open(); f.seed('s'); await tick();
+  const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open(); await f.seed('s');
   f.chat.answer([{ id: 'q', values: [], otherText: 'because' }]);
   const req = f.requests[0]; assert.equal(JSON.parse(req.options.body).askId, 'a'); assert.equal(JSON.parse(req.options.body).cwd, '/repo');
   f.reply('/ask/submit', { result: 'stale', sessionStatus: state('s') }); await tick();
@@ -100,7 +103,33 @@ test('old join cannot overwrite a newer reconnect', async () => {
   await f.seed('s', { snapshot: { seq: 6, partial: msg('new') } });
   assert.equal(f.last().partial.content[0].text, 'new');
 });
+test('model/thinking controls use offered values, bind to original session and consume server status', async () => {
+  const f = fake(); f.chat.select('s', '/repo', 'local'); f.sockets[0].open(); await f.seed('s', { status: state('s', { model: { provider: 'fixture', id: 'mock' }, thinkingLevel: 'off' }) });
+  assert.deepEqual(f.last().models, [{ provider: 'fixture', id: 'mock', name: 'Fixture model' }]);
+  assert.deepEqual(f.last().thinkingLevels, ['off', 'high']);
+  await assert.rejects(f.chat.changeModel(['unknown', 'model']), /not available/);
+  await assert.rejects(f.chat.changeThinking('impossible'), /not available/);
+  const thinking = f.chat.changeThinking('high');
+  assert.equal(f.last().controlBusy, true);
+  assert.equal(await f.chat.changeModel(['fixture', 'mock']), false);
+  assert.deepEqual(JSON.parse(f.requests[0].options.body), { cwd: '/repo', level: 'high' });
+  f.reply('/thinking-level', state('s', { thinkingLevel: 'high' }));
+  assert.equal(await thinking, true); assert.equal(f.last().status.thinkingLevel, 'high');
+  const failed = f.chat.changeThinking('off'); f.reply('/thinking-level', 'unavailable', 503);
+  assert.equal(await failed, false); assert.match(f.last().error, /outcome unknown.*503/);
+  const model = f.chat.changeModel(['fixture', 'mock']);
+  assert.deepEqual(JSON.parse(f.requests[0].options.body), { cwd: '/repo', provider: 'fixture', modelId: 'mock' });
+  f.chat.select('other', '/other'); f.sockets[1].open();
+  f.reply('/model', state('s', { model: { provider: 'fixture', id: 'mock' } }));
+  assert.equal(await model, true); assert.equal(f.last().id, 'other');
+  await f.seed('other');
+  assert.equal(f.last().status.model, undefined);
+});
 test('rejects malformed consumed data and ignores stale session HTTP/socket', async () => {
+  assert.throws(() => models({ models: [{ provider: '', id: 'x' }] }));
+  assert.throws(() => models({ models: [{ provider: 'a', id: 'b' }, { provider: 'a', id: 'b' }] }));
+  assert.throws(() => thinkingLevels({ levels: ['off', 1] }));
+  assert.throws(() => status(state('s', { thinkingLevel: 3 }), 's'));
   assert.throws(() => page({ messages: [], start: -1, total: 0 }));
   assert.throws(() => page({ messages: [{ content: [{ type: 'text', text: 3 }] }], start: 0, total: 1 }));
   assert.throws(() => snapshot({ seq: 1.5, partial: null }));

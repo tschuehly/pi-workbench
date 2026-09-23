@@ -142,6 +142,24 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#ask form') !== null`, 10_000);
   const mounted = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask')?.textContent ?? '', earlier: document.querySelector('#earlier')?.hidden })`);
   checks.push({ id: "owned-chat-history-and-question", passed: mounted.history.includes(first.transcriptMarker) && mounted.ask.includes("Which controlled fixture answer?") && mounted.earlier === false, detail: JSON.stringify({ marker: mounted.history.includes(first.transcriptMarker), ask: mounted.ask, earlier: mounted.earlier }) });
+  const modelUrl = new URL(`api/machines/local/sessions/${encodeURIComponent(first.sessionId)}/models?cwd=${encodeURIComponent(first.cwd)}`, base);
+  const levelsUrl = new URL(`api/machines/local/sessions/${encodeURIComponent(first.sessionId)}/thinking-levels?cwd=${encodeURIComponent(first.cwd)}`, base);
+  const [availableModels, availableLevels] = await Promise.all([requestJson(modelUrl), requestJson(levelsUrl)]);
+  const limitations = [];
+  if (!availableModels.models.length) limitations.push({ code: "NO_FIXTURE_MODELS", state: "partial", message: "Credential-free fixture offers no model: real model mutation is untested; deterministic client tests cover selection and server response." });
+  if (availableLevels.levels.length < 2) limitations.push({ code: "SINGLE_FIXTURE_THINKING_LEVEL", state: "partial", message: "Only one thinking level is available: mutation verifies the real route and response but not a value transition." });
+  await waitForBrowserExpression(cdp, `document.querySelector('#thinking option')?.textContent !== 'Loading…' && document.querySelector('#thinking')?.disabled === ${availableLevels.levels.length === 0}`, 15_000);
+  const controlView = await evaluate(cdp, `({ models: [...document.querySelector('#model').options].slice(1).map(o => JSON.parse(o.value)), levels: [...document.querySelector('#thinking').options].slice(1).map(o => o.value), modelDisabled: document.querySelector('#model').disabled, thinkingDisabled: document.querySelector('#thinking').disabled })`);
+  checks.push({ id: "owned-chat-model-thinking-options", passed: JSON.stringify(controlView.models) === JSON.stringify(availableModels.models.map(m => [m.provider, m.id])) && JSON.stringify(controlView.levels) === JSON.stringify(availableLevels.levels) && controlView.modelDisabled === (availableModels.models.length === 0) && controlView.thinkingDisabled === (availableLevels.levels.length === 0), detail: JSON.stringify(controlView) });
+  if (availableLevels.levels.length) {
+    await evaluate(cdp, `(() => { const original = window.fetch; window.__controlCalls = []; window.fetch = (...args) => original(...args).then(response => { if (args[1]?.method === 'POST' && String(args[0]).endsWith('/thinking-level')) window.__controlCalls.push({ status: response.status, body: JSON.parse(args[1].body) }); return response; }); })()`);
+    const chosenLevel = availableLevels.levels.find(level => level !== serverStatus.thinkingLevel) ?? availableLevels.levels[0];
+    await evaluate(cdp, `(() => { const select = document.querySelector('#thinking'); select.value = ${JSON.stringify(chosenLevel)}; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await waitForBrowserExpression(cdp, `window.__controlCalls?.length === 1 && document.querySelector('#thinking')?.disabled === false`, 15_000);
+    const result = await evaluate(cdp, `({ call: window.__controlCalls[0], selected: document.querySelector('#thinking').value, error: document.querySelector('#error').textContent })`);
+    const updatedStatus = await requestJson(statusUrl);
+    checks.push({ id: "owned-chat-thinking-mutation", passed: result.call.status === 200 && result.call.body.cwd === first.cwd && result.call.body.level === chosenLevel && result.selected === chosenLevel && updatedStatus.thinkingLevel === chosenLevel && !result.error, detail: JSON.stringify({ ...result, serverThinking: updatedStatus.thinkingLevel }) });
+  }
   await evaluate(cdp, `document.querySelector('#earlier').click()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#earlier')?.hidden === true`, 10_000);
   const page = await evaluate(cdp, `document.querySelector('#history')?.textContent ?? ''`);
@@ -182,7 +200,7 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000);
   const resumed = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), listed: document.querySelector('#catalog')?.textContent?.includes('New Chat (not yet saved)'), error: document.querySelector('#catalog-error')?.textContent })`);
   checks.push({ id: "owned-chat-transient-session-reload", passed: resumed.id === created.id && resumed.listed && !resumed.error, detail: JSON.stringify(resumed) });
-  return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations: [] };
+  return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations };
 }
 
 async function runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture, runtime) {

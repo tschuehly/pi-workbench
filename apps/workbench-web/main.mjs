@@ -50,6 +50,7 @@ function clearChat() {
   $('connection').textContent = 'Choose a session'; $('error').textContent = '';
   for (const id of ['history', 'partial', 'ask']) $(id).replaceChildren();
   $('earlier').hidden = true; $('stop').hidden = true; $('queue').hidden = true; $('send').disabled = true;
+  for (const id of ['model', 'thinking']) { $(id).replaceChildren(); $(id).disabled = true; $(id).dataset.options = ''; }
 }
 function openSession(identity) {
   saveDraft();
@@ -76,6 +77,21 @@ function renderChat(view) {
   $('send').disabled = view.sending || view.connection !== 'connected';
   $('queue').hidden = !view.status?.isStreaming;
   $('stop').hidden = !view.status?.isStreaming;
+  const choices = [
+    { id: 'model', options: view.models.map(m => [JSON.stringify([m.provider, m.id]), `${m.provider}/${m.name || m.id}`]), value: JSON.stringify([view.status?.model?.provider, view.status?.model?.id]), empty: 'No available models' },
+    { id: 'thinking', options: view.thinkingLevels.map(level => [level, level]), value: view.status?.thinkingLevel, empty: 'No thinking levels' },
+  ];
+  for (const choice of choices) {
+    const select = $(choice.id), signature = JSON.stringify([view.controlsLoading, choice.options]);
+    if (select.dataset.options !== signature) {
+      select.replaceChildren();
+      const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = view.controlsLoading ? 'Loading…' : choice.empty; select.append(placeholder);
+      for (const [value, label] of choice.options) { const option = document.createElement('option'); option.value = value; option.textContent = label; select.append(option); }
+      select.dataset.options = signature;
+    }
+    select.value = choice.options.some(([value]) => value === choice.value) ? choice.value : '';
+    select.disabled = view.controlsLoading || view.controlBusy || view.connection !== 'connected' || !choice.options.length;
+  }
   $('history').replaceChildren(...view.messages.map(message => {
     const item = document.createElement('article'); item.textContent = `${message.role ?? 'message'}: ${messageText(message)}`; return item;
   }));
@@ -100,6 +116,8 @@ function renderChat(view) {
     target.append(form);
   }
 }
+$('model').onchange = event => { if (event.target.value) void chat.changeModel(JSON.parse(event.target.value)); };
+$('thinking').onchange = event => { if (event.target.value) void chat.changeThinking(event.target.value); };
 $('earlier').onclick = () => void chat.earlier();
 $('stop').onclick = () => void chat.stopTurn();
 async function submit(behavior) {

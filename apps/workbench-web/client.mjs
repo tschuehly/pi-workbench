@@ -22,7 +22,24 @@ export function ask(x) {
 export function status(x, id) {
   if (!record(x) || x.sessionId !== id || typeof x.isStreaming !== 'boolean' || typeof x.isCompacting !== 'boolean' || typeof x.isBashRunning !== 'boolean' || !seq(x.pendingMessageCount) || !Array.isArray(x.queuedMessages) || !record(x.tokens) || !['input','output','cacheRead','cacheWrite','total'].every(k => typeof x.tokens[k] === 'number' && Number.isFinite(x.tokens[k])) || typeof x.cost !== 'number' || !Number.isFinite(x.cost)) fail('status');
   if (x.pendingAsk !== undefined) ask(x.pendingAsk);
+  if (x.model !== undefined && (!record(x.model) || (x.model.provider !== undefined && !text(x.model.provider)) || (x.model.id !== undefined && !text(x.model.id)) || (x.model.name !== undefined && typeof x.model.name !== 'string'))) fail('status model');
+  if (x.thinkingLevel !== undefined && typeof x.thinkingLevel !== 'string') fail('status thinking level');
   return x;
+}
+export function models(x) {
+  if (!record(x) || !Array.isArray(x.models)) fail('models');
+  const keys = new Set();
+  for (const m of x.models) {
+    if (!record(m) || !text(m.provider) || !text(m.id) || (m.name !== undefined && typeof m.name !== 'string')) fail('model');
+    const key = JSON.stringify([m.provider, m.id]);
+    if (keys.has(key)) fail('duplicate model');
+    keys.add(key);
+  }
+  return x.models;
+}
+export function thinkingLevels(x) {
+  if (!record(x) || !Array.isArray(x.levels) || x.levels.some(level => !text(level)) || new Set(x.levels).size !== x.levels.length) fail('thinking levels');
+  return x.levels;
 }
 function message(m) {
   if (!record(m) || (m.entryId !== undefined && !text(m.entryId)) || (m.content !== undefined && typeof m.content !== 'string' && (!Array.isArray(m.content) || m.content.some(p => !record(p) || (p.type === 'text' && typeof p.text !== 'string'))))) fail('message');
@@ -66,7 +83,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
     if (!text(id) || !text(cwd) || !text(machine)) throw new Error('Session id, cwd and machine are required');
     const token = generation, base = `/api/machines/${encodeURIComponent(machine)}/sessions/${encodeURIComponent(id)}`;
     const url = path => `${base}/${path}?cwd=${encodeURIComponent(cwd)}`;
-    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, sending: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0 };
+    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, sending: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
     const alive = () => current === c && token === generation;
     function apply(e) {
       if (e.seq <= c.seq) return;
@@ -88,6 +105,19 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
         case 'status.update': c.view.pendingAsk = e.status.pendingAsk ?? null; c.view.status = e.status; break;
       }
       emit();
+    }
+    async function loadControls() {
+      const epoch = ++c.controlsEpoch;
+      c.view.controlsLoading = true; emit();
+      try {
+        const [availableModels, availableLevels] = await Promise.all([json(url('models')), json(url('thinking-levels'))]);
+        if (!alive() || epoch !== c.controlsEpoch) return;
+        c.view.models = models(availableModels);
+        c.view.thinkingLevels = thinkingLevels(availableLevels);
+        c.view.controlsLoading = false; emit();
+      } catch (e) {
+        if (alive() && epoch === c.controlsEpoch) { c.view.controlsLoading = false; c.view.error = `Model/thinking controls unavailable: ${String(e)}`; emit(); }
+      }
     }
     async function seed() {
       const epoch = c.epoch;
@@ -112,6 +142,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
         const frames = c.pending.splice(0).sort((a, b) => a.seq - b.seq);
         for (const frame of frames) { if (c.joining) break; apply(frame); }
         emit();
+        void loadControls();
       } catch (e) {
         if (alive() && epoch === c.epoch) {
           c.view.error = String(e); c.view.connection = 'error'; emit();
@@ -171,6 +202,25 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
       return false;
     } finally { if (current === c) { c.view.sending = false; emit(); } }
   }
+  async function changeControl(kind, value) {
+    const c = current;
+    if (!c || c.view.controlsLoading || c.view.controlBusy || c.view.connection !== 'connected') return false;
+    if (kind === 'model') {
+      if (!Array.isArray(value) || value.length !== 2 || !c.view.models.some(m => m.provider === value[0] && m.id === value[1])) throw new Error('Model is not available in this session');
+    } else if (kind === 'thinking') {
+      if (!c.view.thinkingLevels.includes(value)) throw new Error('Thinking level is not available in this session');
+    } else throw new Error('Invalid control');
+    c.view.controlBusy = true; c.view.error = null; emit();
+    try {
+      const body = kind === 'model' ? { cwd: c.cwd, provider: value[0], modelId: value[1] } : { cwd: c.cwd, level: value };
+      const result = status(await json(`${c.base}/${kind === 'model' ? 'model' : 'thinking-level'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), c.id);
+      if (current === c) { c.view.status = result; c.view.pendingAsk = result.pendingAsk ?? null; emit(); }
+      return true;
+    } catch (e) {
+      if (current === c) { c.view.error = `Control update outcome unknown: ${String(e)}. Check the displayed status before another change.`; emit(); }
+      return false;
+    } finally { if (current === c) { c.view.controlBusy = false; emit(); } }
+  }
   async function stopTurn() {
     const c = current;
     if (!c) return;
@@ -190,5 +240,5 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
       if (current === c) { c.view.pendingAsk = updated.pendingAsk ?? null; c.view.status = updated; emit(); }
     } catch (e) { if (current === c) { c.view.error = String(e); emit(); } }
   }
-  return { select, stop, earlier, answer, send, stopTurn };
+  return { select, stop, earlier, answer, send, stopTurn, changeModel: value => changeControl('model', value), changeThinking: value => changeControl('thinking', value) };
 }
