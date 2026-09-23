@@ -26,11 +26,14 @@ async function json(response) {
 }
 function tree(data, requested) {
   if (data?.path !== requested || !Array.isArray(data.entries) || data.entries.length > 1000 || typeof data.truncated !== 'boolean') fail('Invalid file tree');
+  const entries = []; let skipped = 0;
   for (const entry of data.entries) {
-    if (!entry || !['file', 'directory', 'symlink'].includes(entry.type) || !safePath(entry.path) || !safePath(entry.name)
+    if (!entry || !['file', 'directory', 'symlink'].includes(entry.type) || typeof entry.path !== 'string' || typeof entry.name !== 'string'
       || entry.name.includes('/') || entry.path !== (requested ? `${requested}/` : '') + entry.name) fail('Invalid file tree entry');
+    if (!safePath(entry.path) || !safePath(entry.name)) { skipped++; continue; }
+    entries.push(entry);
   }
-  return data;
+  return { ...data, entries, skipped };
 }
 async function file(data, requested) {
   if (data?.path !== requested || !Number.isSafeInteger(data.size) || data.size < 0 || typeof data.content !== 'string'
@@ -61,7 +64,8 @@ export function createFiles({ fetch, changed, confirm }) {
       if (current !== generation || seq !== treeSeq) return;
       if (path) state.directories[path] = data.entries;
       else { state.entries = data.entries; state.treeTruncated = data.truncated; }
-      if (data.truncated) state.error = 'File list is incomplete; some entries are not shown.';
+      if (data.truncated || data.skipped) state.error = `${data.truncated ? 'File list is incomplete; some entries are not shown. ' : ''}${data.skipped ? `Skipped ${data.skipped} file names this viewer cannot safely open.` : ''}`;
+      else if (/^(File list is incomplete|Skipped )/.test(state.error)) state.error = '';
       emit();
     } catch (error) { if (current === generation && seq === treeSeq) { state.error = `Could not list files: ${String(error)}`; emit(); } }
   }

@@ -148,7 +148,7 @@ function renderCatalog(view) {
     const option = document.createElement('option'); option.value = w.id; option.textContent = `${w.label} · ${w.path}`; picker.append(option);
   }
   picker.value = view.selectedWorkspace.id;
-  picker.onchange = () => void chooseWorkspace(view.selectedProject.id, picker.value);
+  picker.onchange = () => void chooseWorkspace(view.selectedProject.id, picker.value).then(accepted => { if (!accepted) picker.value = view.selectedWorkspace.id; });
   label.append(picker); host.append(label);
   const list = document.createElement('ul');
   for (const s of view.sessions) {
@@ -272,12 +272,13 @@ function openSession(identity) {
   chat.select(identity.sessionId, identity.cwd, identity.machineId);
 }
 async function chooseWorkspace(projectId, workspaceId) {
-  if (!workspaceId || (catalog.view.selectedWorkspace?.id !== workspaceId || catalog.view.selectedWorkspace?.projectId !== projectId) && !files.canLeave()) return;
+  if (!workspaceId || (catalog.view.selectedWorkspace?.id !== workspaceId || catalog.view.selectedWorkspace?.projectId !== projectId) && !files.canLeave()) return false;
   clearChat();
   const url = new URL(location.href);
   for (const key of ['id', 'cwd', 'project', 'workspace']) url.searchParams.delete(key);
   history.replaceState(null, '', url);
   await catalog.choose(projectId, workspaceId);
+  return true;
 }
 async function startSession() { const identity = await catalog.create(); if (identity) openSession(identity); }
 function renderRoster(view) {

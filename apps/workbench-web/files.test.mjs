@@ -72,6 +72,15 @@ test('an in-flight file switch does not accept a later edit that would be overwr
   files.edit('Later edit'); assert.equal(files.state.buffer, 'Dirty');
   release(); await pending; assert.equal(files.state.loaded.path, 'next.txt');
 });
+test('an unrequestable filename cannot hide other safe files in its directory', async () => {
+  const files = createFiles({ changed: () => {}, confirm: () => false, fetch: async () => reply({ path: '', truncated: false, entries: [
+    { name: 'normal.txt', path: 'normal.txt', type: 'file' },
+    { name: 'bad\\name.txt', path: 'bad\\name.txt', type: 'file' },
+  ] }) });
+  files.select(workspace); await files.list();
+  assert.deepEqual(files.state.entries.map(entry => entry.name), ['normal.txt']);
+  assert.match(files.state.error, /skipped/i);
+});
 test('rejects non-UTF-8 version mismatch, traversal entries and oversized saves', async () => {
   const bad = createFiles({ changed: () => {}, confirm: () => false, fetch: async url => {
     if (url.includes('/tree?')) return reply({ path: '', truncated: false, entries: [{ name: 'escape', path: '../escape', type: 'file' }] });
