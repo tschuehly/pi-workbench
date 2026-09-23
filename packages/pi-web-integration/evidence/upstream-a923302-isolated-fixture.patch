@@ -1,0 +1,363 @@
+diff --git a/src/server/controlledPendingAskFixture.ts b/src/server/controlledPendingAskFixture.ts
+new file mode 100644
+index 00000000..776a12d2
+--- /dev/null
++++ b/src/server/controlledPendingAskFixture.ts
+@@ -0,0 +1,44 @@
++import { readFile, realpath } from "node:fs/promises";
++import { dirname, isAbsolute, join, relative } from "node:path";
++import type { PiSessionService } from "./sessions/piSessionService.js";
++
++/** Only called by an explicitly opted-in, separately launched fixture daemon. */
++export async function openControlledPendingAskFixture(sessions: Pick<PiSessionService, "status" | "openAsk">, env: NodeJS.ProcessEnv): Promise<void> {
++  const ref = await validateControlledPendingAskFixture(env);
++  // Open the persisted session in this daemon first; status and ask mutations
++  // then share the same runtime and the service's daemon-memory ask store.
++  const status = await sessions.status(ref);
++  if (status.sessionId !== ref.id) throw new Error("Controlled fixture session identity mismatch");
++  await sessions.openAsk({ sessionId: ref.id, questions: [{ id: "fixture-choice", question: "Which controlled fixture answer?", options: [{ value: "one", label: "One" }, { value: "two", label: "Two" }] }] });
++}
++
++export async function validateControlledPendingAskFixture(env: NodeJS.ProcessEnv): Promise<{ id: string; cwd: string }> {
++  const root = env["PI_WEB_FIXTURE_OWNED_ROOT"];
++  const manifest = env["PI_WEB_FIXTURE_PENDING_ASK_MANIFEST"];
++  const sessionDir = env["PI_CODING_AGENT_SESSION_DIR"];
++  const agentDir = env["PI_CODING_AGENT_DIR"];
++  const dataDir = env["PI_WEB_DATA_DIR"];
++  const socket = env["PI_WEB_SESSIOND_SOCKET"];
++  if (root === undefined || manifest === undefined || sessionDir === undefined || agentDir === undefined || dataDir === undefined || socket === undefined
++    || ![root, manifest, sessionDir, agentDir, dataDir, socket].every(isAbsolute)) {
++    throw new Error("Pending ask fixture requires absolute owned root, manifest, agent dir, session dir, data dir, and daemon socket paths");
++  }
++  const ownedRoot = await realpath(root);
++  if (ownedRoot === "/") throw new Error("Pending ask fixture requires a non-root owned directory");
++  for (const [name, path] of [["manifest", manifest], ["agent dir", agentDir], ["session dir", sessionDir], ["data dir", dataDir], ["daemon socket", socket]] as const) {
++    const target = name === "daemon socket" ? join(await realpath(dirname(path)), "sessiond.sock") : await realpath(path);
++    const rel = relative(ownedRoot, target);
++    if (rel === "" || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) throw new Error(`Pending ask fixture ${name} must be strictly inside its owned root`);
++  }
++  if (socket !== join(dirname(socket), "sessiond.sock")) throw new Error("Pending ask fixture requires its own sessiond.sock");
++  const parsed: unknown = JSON.parse(await readFile(manifest, "utf8"));
++  if (typeof parsed !== "object" || parsed === null || !("anchors" in parsed) || !Array.isArray(parsed.anchors)) throw new Error("Invalid controlled fixture manifest");
++  const anchor: unknown = parsed.anchors[0];
++  if (typeof anchor !== "object" || anchor === null || !("sessionId" in anchor) || !("cwd" in anchor)
++    || typeof anchor.sessionId !== "string" || typeof anchor.cwd !== "string") throw new Error("Missing controlled fixture anchor");
++  if (anchor.sessionId !== "019c8f10-1000-7000-8000-000000000001") throw new Error("Unexpected controlled fixture session identity");
++  const cwd = await realpath(anchor.cwd);
++  const rel = relative(ownedRoot, cwd);
++  if (rel !== join("workspaces", "anchor-1")) throw new Error("Pending ask fixture workspace must be the first owned anchor");
++  return { id: anchor.sessionId, cwd };
++}
+diff --git a/src/server/controlledSessionFixture.ts b/src/server/controlledSessionFixture.ts
+new file mode 100644
+index 00000000..b6a8f43b
+--- /dev/null
++++ b/src/server/controlledSessionFixture.ts
+@@ -0,0 +1,185 @@
++import { execFile } from "node:child_process";
++import { mkdir, realpath, writeFile } from "node:fs/promises";
++import { createHash } from "node:crypto";
++import { dirname, isAbsolute, join, relative, resolve } from "node:path";
++import { promisify } from "node:util";
++import { SessionManager } from "@earendil-works/pi-coding-agent";
++
++const execFileAsync = promisify(execFile);
++export const CONTROLLED_FIXTURE_CLOCK = "2026-08-08T07:02:41.000Z";
++
++const SESSION_IDS = [
++  "019c8f10-1000-7000-8000-000000000001",
++  "019c8f10-2000-7000-8000-000000000002",
++  "019c8f10-3000-7000-8000-000000000003",
++  "019c8f10-4000-7000-8000-000000000004",
++  "019c8f10-5000-7000-8000-000000000005",
++] as const;
++const DISPLAY_NAMES = ["Atlas transcript", "Borealis files", "Cygnus git", "Draco terminal", "Equinox paging"] as const;
++
++export interface ControlledSessionFixtureOptions {
++  root: string;
++  projectsFile: string;
++  machinesFile: string;
++  sessionDir: string;
++}
++
++export interface ControlledSessionAnchor {
++  sessionId: string;
++  machineId: "local";
++  projectId: string;
++  workspaceId: string;
++  cwd: string;
++  displayName: string;
++  transcriptMarker: string;
++}
++
++export interface ControlledSessionFixture {
++  fixedClock: string;
++  anchors: ControlledSessionAnchor[];
++  blockers: readonly ControlledFixtureBlocker[];
++}
++
++export interface ControlledFixtureBlocker {
++  code: "LIVE_ASK_UNREACHABLE";
++  state: "partial";
++  message: string;
++}
++
++/**
++ * Creates only ordinary persisted Pi sessions and registered git workspaces.
++ * There is deliberately no fixture HTTP route: production project, workspace,
++ * session, Files, Git, and Terminal controllers observe these files normally.
++ */
++export async function buildControlledSessionFixture(options: ControlledSessionFixtureOptions): Promise<ControlledSessionFixture> {
++  const root = requireOwnedRoot(options.root);
++  requireOwnedPath(root, options.projectsFile, "projectsFile");
++  requireOwnedPath(root, options.machinesFile, "machinesFile");
++  requireOwnedPath(root, options.sessionDir, "sessionDir");
++  await Promise.all([mkdir(options.sessionDir, { recursive: true, mode: 0o700 }), mkdir(dirname(options.projectsFile), { recursive: true, mode: 0o700 })]);
++
++  const anchors: ControlledSessionAnchor[] = [];
++  const projects = [];
++  for (let index = 0; index < SESSION_IDS.length; index += 1) {
++    const ordinal = index + 1;
++    const projectId = `fixture-project-${String(ordinal)}`;
++    const projectDir = join(root, "workspaces", `anchor-${String(ordinal)}`);
++    const cwd = await createDeterministicRepository(projectDir, ordinal);
++    const workspaceId = workspaceIdentity(projectId, cwd);
++    const sessionId = SESSION_IDS[index];
++    const displayName = DISPLAY_NAMES[index];
++    if (sessionId === undefined || displayName === undefined) throw new Error("Controlled fixture identity table is incomplete");
++    const transcriptMarker = `controlled-transcript-${String(ordinal)}`;
++    writeControlledSession(options.sessionDir, { sessionId, cwd, displayName, transcriptMarker, ordinal });
++    projects.push({ id: projectId, name: `Controlled project ${String(ordinal)}`, path: cwd, createdAt: CONTROLLED_FIXTURE_CLOCK });
++    anchors.push({ sessionId, machineId: "local", projectId, workspaceId, cwd, displayName, transcriptMarker });
++  }
++  await writeJson(options.projectsFile, { projects });
++  await writeJson(options.machinesFile, { machines: [] });
++
++  return {
++    fixedClock: CONTROLLED_FIXTURE_CLOCK,
++    anchors,
++    blockers: [{
++      code: "LIVE_ASK_UNREACHABLE",
++      state: "partial",
++      message: "Persisted sessions alone cannot hold a live pending ask. Start a separate, owned fixture session daemon with PI_WEB_FIXTURE_PENDING_ASK_MANIFEST pointing to this manifest to open one daemon-memory ask; never point this fixture at a live daemon.",
++    }],
++  };
++}
++
++async function createDeterministicRepository(path: string, ordinal: number): Promise<string> {
++  await mkdir(path, { recursive: true, mode: 0o700 });
++  await writeFile(join(path, "README.md"), `# Controlled workspace ${String(ordinal)}\n\nFiles surface marker: fixture-file-${String(ordinal)}\n`, "utf8");
++  await writeFile(join(path, "tracked.txt"), `committed-${String(ordinal)}\n`, "utf8");
++  const gitEnv = {
++    PATH: process.env["PATH"] ?? "",
++    HOME: process.env["HOME"] ?? path,
++    GIT_CONFIG_NOSYSTEM: "1",
++    GIT_CONFIG_GLOBAL: join(dirname(path), ".controlled-fixture-gitconfig"),
++    GIT_AUTHOR_NAME: "PI WEB Fixture",
++    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
++    GIT_COMMITTER_NAME: "PI WEB Fixture",
++    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
++    GIT_AUTHOR_DATE: CONTROLLED_FIXTURE_CLOCK,
++    GIT_COMMITTER_DATE: CONTROLLED_FIXTURE_CLOCK,
++  };
++  await execFileAsync("git", ["init", "--quiet", "--initial-branch=controlled"], { cwd: path, env: gitEnv });
++  await execFileAsync("git", ["add", "README.md", "tracked.txt"], { cwd: path, env: gitEnv });
++  await execFileAsync("git", ["commit", "--quiet", "-m", `Controlled fixture ${String(ordinal)}`], { cwd: path, env: gitEnv });
++  await writeFile(join(path, "tracked.txt"), `committed-${String(ordinal)}\nworking-tree-change-${String(ordinal)}\n`, "utf8");
++  await writeFile(join(path, `untracked-${String(ordinal)}.txt`), `git-surface-marker-${String(ordinal)}\n`, "utf8");
++  return realpath(path);
++}
++
++function writeControlledSession(sessionDir: string, input: { sessionId: string; cwd: string; displayName: string; transcriptMarker: string; ordinal: number }): void {
++  // SessionManager is the canonical Pi persistence writer. The fixture supplies
++  // only its documented id option and append/branch APIs; no private JSONL
++  // shape is fabricated. Message clocks are explicit and the manager's entry
++  // clock is bounded to the same fixed instant for the duration of this write.
++  withFixedDate(CONTROLLED_FIXTURE_CLOCK, () => {
++    const manager = SessionManager.create(input.cwd, sessionDir, { id: input.sessionId });
++    manager.appendModelChange("controlled-fixture", "no-model");
++    manager.appendThinkingLevelChange("off");
++    manager.appendSessionInfo(input.displayName);
++    const baseMs = Date.parse(CONTROLLED_FIXTURE_CLOCK) + input.ordinal * 60_000;
++    for (let turn = 0; turn < 64; turn += 1) {
++      const userId = manager.appendMessage({
++        role: "user",
++        content: [{ type: "text", text: `${input.transcriptMarker} page ${String(turn + 1)}` }],
++        timestamp: baseMs + 100 + turn * 20,
++      });
++      manager.appendMessage({
++        role: "assistant",
++        content: [{ type: "text", text: `Deterministic reply ${String(turn + 1)} for anchor ${String(input.ordinal)}.` }],
++        api: "anthropic-messages",
++        provider: "controlled-fixture",
++        model: "no-model",
++        usage: usage(100 + turn, 20),
++        stopReason: "stop",
++        timestamp: baseMs + 110 + turn * 20,
++      });
++      if (turn === 20) {
++        manager.branch(userId);
++        manager.appendMessage({
++          role: "assistant",
++          content: [{ type: "text", text: `Alternate deterministic branch for anchor ${String(input.ordinal)}.` }],
++          api: "anthropic-messages",
++          provider: "controlled-fixture",
++          model: "no-model",
++          usage: usage(10, 5),
++          stopReason: "stop",
++          timestamp: baseMs + 115 + turn * 20,
++        });
++      }
++    }
++  });
++}
++
++function usage(input: number, output: number) {
++  return { input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
++}
++
++function withFixedDate<T>(timestamp: string, operation: () => T): T {
++  const NativeDate = Date;
++  const fixedMs = NativeDate.parse(timestamp);
++  class FixedDate extends NativeDate {
++    constructor(value?: string | number | Date) { super(value ?? fixedMs); }
++    static override now(): number { return fixedMs; }
++  }
++  Object.defineProperty(globalThis, "Date", { configurable: true, writable: true, value: FixedDate });
++  try { return operation(); }
++  finally { Object.defineProperty(globalThis, "Date", { configurable: true, writable: true, value: NativeDate }); }
++}
++function workspaceIdentity(projectId: string, path: string): string { return createHash("sha1").update(`${projectId}:${path}`).digest("hex").slice(0, 12); }
++async function writeJson(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true }); await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8"); }
++function requireOwnedRoot(value: string): string {
++  if (!isAbsolute(value)) throw new Error("Controlled fixture root must be absolute");
++  return resolve(value);
++}
++function requireOwnedPath(root: string, value: unknown, label: string): string {
++  if (typeof value !== "string" || !isAbsolute(value)) throw new Error(`${label} must be an absolute path`);
++  const rel = relative(root, resolve(value));
++  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return value;
++  throw new Error(`${label} must stay under the controlled fixture root`);
++}
+diff --git a/src/server/fixtureServer.ts b/src/server/fixtureServer.ts
+new file mode 100644
+index 00000000..013f0803
+--- /dev/null
++++ b/src/server/fixtureServer.ts
+@@ -0,0 +1,88 @@
++#!/usr/bin/env node
++import { mkdir, writeFile } from "node:fs/promises";
++import { dirname, isAbsolute, relative, resolve } from "node:path";
++import { pathToFileURL } from "node:url";
++import type { FastifyInstance } from "fastify";
++import { buildApp, type AppDependencies } from "./app.js";
++import { MachineService } from "./machines/machineService.js";
++import { MachineStore } from "./machines/machineStore.js";
++import { ProjectService } from "./projects/projectService.js";
++import { ProjectStore } from "./storage/projectStore.js";
++import type { WorkspaceListing } from "../shared/apiTypes.js";
++import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
++import { buildControlledSessionFixture, type ControlledSessionFixture } from "./controlledSessionFixture.js";
++
++export interface ControlledFixtureServerOptions {
++  root: string;
++  projectsFile: string;
++  machinesFile: string;
++  sessionDir: string;
++  manifestFile: string;
++  clientDist: string | false;
++  appDependencies?: Omit<AppDependencies, "clientDist">;
++}
++
++export async function buildControlledFixtureServer(options: ControlledFixtureServerOptions): Promise<{ app: FastifyInstance; fixture: ControlledSessionFixture }> {
++  const fixture = await buildControlledSessionFixture(options);
++  assertOwnedManifest(options.root, options.manifestFile);
++  await mkdir(dirname(options.manifestFile), { recursive: true });
++  await writeFile(options.manifestFile, `${JSON.stringify(fixture, null, 2)}\n`, "utf8");
++  const app = await buildApp({
++    projects: new ProjectService(new ProjectStore(options.projectsFile)),
++    workspaceCatalog: controlledWorkspaceCatalog(fixture),
++    machines: new MachineService(new MachineStore(options.machinesFile)),
++    ...options.appDependencies,
++    clientDist: options.clientDist,
++  });
++  return { app, fixture };
++}
++
++function controlledWorkspaceCatalog(fixture: ControlledSessionFixture): WorkspaceCatalog {
++  const byProject = new Map(fixture.anchors.map((anchor) => [anchor.projectId, { id: anchor.workspaceId, projectId: anchor.projectId, path: anchor.cwd, label: "main", isMain: true } satisfies WorkspaceListing]));
++  const list = (projectId: string): WorkspaceListing[] => {
++    const workspace = byProject.get(projectId);
++    return workspace === undefined ? [] : [workspace];
++  };
++  return {
++    resolveProject: (projectId) => Promise.resolve({ status: "folder", projectId, workspaces: list(projectId), diagnostics: [] }),
++    list: (projectId) => Promise.resolve(list(projectId)),
++    resolve: (projectId, workspaceId) => {
++      const workspace = byProject.get(projectId);
++      return workspace?.id === workspaceId ? Promise.resolve(workspace) : Promise.reject(new Error(`Unknown controlled workspace: ${projectId}/${workspaceId}`));
++    },
++  };
++}
++
++export function controlledFixtureServerOptionsFromEnvironment(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): ControlledFixtureServerOptions {
++  return {
++    root: requiredEnv(env, "PI_WEB_FIXTURE_OWNED_ROOT"),
++    projectsFile: requiredEnv(env, "PI_WEB_PROJECTS_FILE"),
++    machinesFile: requiredEnv(env, "PI_WEB_MACHINES_FILE"),
++    sessionDir: requiredEnv(env, "PI_WEB_AGENT_SESSION_DIR"),
++    manifestFile: requiredEnv(env, "PI_WEB_FIXTURE_MANIFEST"),
++    clientDist: resolve(cwd, "dist/client"),
++  };
++}
++
++async function main(): Promise<void> {
++  const options = controlledFixtureServerOptionsFromEnvironment();
++  const { app, fixture } = await buildControlledFixtureServer(options);
++  for (const blocker of fixture.blockers) process.stdout.write(`${JSON.stringify({ type: "FIXTURE_BLOCKER", ...blocker })}\n`);
++  const port = Number(requiredEnv(process.env, "PI_WEB_PORT"));
++  await app.listen({ port, host: "127.0.0.1" });
++}
++
++function assertOwnedManifest(root: string, manifestFile: string): void {
++  if (!isAbsolute(manifestFile)) throw new Error("manifestFile must be an absolute path");
++  const rel = relative(resolve(root), resolve(manifestFile));
++  if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("manifestFile must stay under the controlled fixture root");
++}
++
++function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
++  const value = env[key];
++  if (value === undefined || value === "") throw new Error(`${key} is required by the controlled fixture server`);
++  return value;
++}
++
++const invokedPath = process.argv[1] === undefined ? undefined : pathToFileURL(resolve(process.argv[1])).href;
++if (invokedPath === import.meta.url) await main();
+diff --git a/src/server/sessiond.ts b/src/server/sessiond.ts
+index f8fe8851..2403ac56 100644
+--- a/src/server/sessiond.ts
++++ b/src/server/sessiond.ts
+@@ -155,6 +155,11 @@ app.log.info({ scrubbedEnvKeys }, "daemon-only environment keys hidden from agen
+ // restarts briefly overlap the outgoing daemon, so the claim waits out a short
+ // grace for it to release first. The web/API process of this instance shares
+ // the data directory but never claims it.
++if (daemonEnvironment["PI_WEB_FIXTURE_PENDING_ASK_MANIFEST"] !== undefined) {
++  if (daemonEnvironment["PI_CODING_AGENT_DIR"] !== activeAgentProfile.dir) throw new Error("Pending ask fixture requires an explicitly owned active agent dir");
++  const { validateControlledPendingAskFixture } = await import("./controlledPendingAskFixture.js");
++  await validateControlledPendingAskFixture(daemonEnvironment);
++}
+ const stateOwnership = await claimSessiondStateOwnership({ env: daemonEnvironment, logger: app.log });
+ 
+ const runtime = await createSessionDaemonRuntime();
+@@ -304,6 +309,11 @@ async function createSessionDaemonRuntime() {
+       }),
+     }));
+     sessionsForFailedConstruction = sessions;
++    // Test-only, owned fixture; no HTTP route or live daemon change.
++    if (daemonEnvironment["PI_WEB_FIXTURE_PENDING_ASK_MANIFEST"] !== undefined) {
++      const { openControlledPendingAskFixture } = await import("./controlledPendingAskFixture.js");
++      await openControlledPendingAskFixture(sessions, daemonEnvironment);
++    }
+     auth.subscribe((change) => { sessions.applyAuthChange(change); });
+     // Current workspace authority and session ownership become available at
+     // one atomic late boundary, so no dependent can start against a partial host.

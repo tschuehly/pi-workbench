@@ -181,7 +181,7 @@ export async function verifyChildHomedir(env, root) {
 }
 
 export async function terminateOwnedProcess(child, graceMs = 2_500) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise((resolveExit) => child.once("exit", resolveExit));
   signalOwned(child, "SIGTERM");
   const timedOut = await Promise.race([exited.then(() => false), delay(graceMs).then(() => true)]);

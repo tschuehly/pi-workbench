@@ -420,7 +420,8 @@ function startLogged(stack, name, command, args, cwd) {
   const child = stack.spawnOwned(name, command, args, { cwd });
   const chunks = [];
   for (const stream of [child.stdout, child.stderr]) stream?.on("data", (chunk) => { chunks.push(Buffer.from(chunk)); if (chunks.length > 200) chunks.shift(); void appendFile(join(stack.paths.logs, `${name}.log`), chunk).catch(() => undefined); });
-  child.recentOutput = () => Buffer.concat(chunks).toString("utf8");
+  child.on("error", (error) => { child.spawnError = error; });
+  child.recentOutput = () => `${child.spawnError?.message ?? ""}\n${Buffer.concat(chunks).toString("utf8")}`;
   return child;
 }
 
@@ -441,7 +442,7 @@ async function waitForFile(path, timeoutMs, child) {
   }
   throw new Error(`Timed out waiting for ${path}\n${child.recentOutput?.() ?? ""}`);
 }
-function assertChildAlive(child) { if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Owned process exited early\n${child.recentOutput?.() ?? ""}`); }
+function assertChildAlive(child) { if (child.spawnError || child.exitCode !== null || child.signalCode !== null) throw new Error(`Owned process exited early\n${child.recentOutput?.() ?? ""}`); }
 
 async function allocateDistinctPorts() { const first = await freePort(); let second = await freePort(); while (second === first) second = await freePort(); return [first, second]; }
 function freePort() { return new Promise((resolvePort, reject) => { const server = createServer(); server.once("error", reject); server.listen(0, "127.0.0.1", () => { const address = server.address(); server.close(() => typeof address === "object" && address !== null ? resolvePort(address.port) : reject(new Error("Could not allocate port"))); }); }); }
