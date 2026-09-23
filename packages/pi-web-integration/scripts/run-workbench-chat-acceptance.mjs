@@ -371,6 +371,12 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#file-error')?.textContent?.includes('Conflict:') === true`, 15_000);
   const conflict = await evaluate(cdp, `({ draft: document.querySelector('#file-detail textarea')?.value, error: document.querySelector('#file-error')?.textContent })`);
   checks.push({ id: 'owned-files-stale-version-rejected', passed: conflict.draft === '# Preserve my edit\n' && (await readFile(join(second.cwd, 'README.md'), 'utf8')) === '# External change\n', detail: JSON.stringify(conflict) });
+  // Safari can retain textarea focus across a disabled save/reload. Emulate that
+  // focus behavior in Chromium so a stale DOM value cannot regain a fresh version.
+  await evaluate(cdp, `(() => { const editor = document.querySelector('#file-detail textarea'); Object.defineProperty(document, 'activeElement', { configurable: true, get: () => editor }); window.confirm = () => true; [...document.querySelectorAll('#file-detail button')].find(x => x.textContent === 'Reload file').click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#file-detail pre')?.textContent === '# External change\\n'`, 15_000);
+  const reloaded = await evaluate(cdp, `(() => { const editor = document.querySelector('#file-detail textarea'); const result = { source: editor.value, preview: document.querySelector('#file-detail pre').textContent, dirty: document.querySelector('#file-detail h3').textContent.includes('Unsaved changes') }; delete document.activeElement; return result; })()`);
+  checks.push({ id: 'owned-files-focused-editor-shows-confirmed-reload', passed: reloaded.source === '# External change\n' && reloaded.preview === '# External change\n' && !reloaded.dirty, detail: JSON.stringify(reloaded) });
   await writeFile(join(second.cwd, 'danger.md'), '<img src=x onerror=window.__fileInjected=1>\\n');
   await writeFile(join(second.cwd, 'large.md'), 'L'.repeat(512 * 1024 + 1));
   await evaluate(cdp, `(() => { window.confirm = () => true; document.querySelector('#file-refresh').click(); })()`);

@@ -72,7 +72,7 @@ function renderFiles(view) {
   detail.querySelector('h3').textContent = `${view.loaded.path} · ${view.loaded.size} bytes${view.dirty ? ' · Unsaved changes' : ''}${view.loaded.truncated ? ' · Truncated view (read-only)' : ''}${view.loaded.binary ? ' · Binary file (read-only)' : ''}${!view.loaded.binary && !view.loaded.truncated && !view.loaded.editable ? ' · Unverified text (read-only)' : ''}`;
   const source = detail.querySelector('textarea');
   if (source) {
-    if (document.activeElement !== source) source.value = view.buffer;
+    if (!view.dirty || document.activeElement !== source) source.value = view.buffer;
     source.disabled = !view.loaded.editable || view.saving || view.loading || view.unknown;
     detail.querySelector('pre').textContent = view.buffer;
     const save = source.nextElementSibling; save.textContent = view.saving ? 'Saving…' : 'Save file'; save.disabled = !view.dirty || !view.loaded.editable || view.saving || view.loading || view.unknown;
