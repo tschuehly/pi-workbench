@@ -1,4 +1,4 @@
-const PRODUCERS = new Set(["pi-web", "pi-extension"]);
+const PRODUCERS = new Set(["pi-web", "pi-extension", "workbench-web"]);
 const MAX_OPERATION_ID_LENGTH = 80;
 const SELECTION_PREFIX = "workstream-continuation:v1:";
 const IN_FLIGHT_OPERATION_TOKENS = new Set();
@@ -20,7 +20,7 @@ export class WorkstreamSessionCoordination {
     if (!attendedSession || typeof attendedSession.checkLocation !== "function" || typeof attendedSession.launch !== "function" || typeof attendedSession.lookup !== "function") {
       throw new TypeError("attendedSession must provide checkLocation, launch, and lookup");
     }
-    if (!PRODUCERS.has(producer)) throw new TypeError("producer must be pi-web or pi-extension");
+    if (!PRODUCERS.has(producer)) throw new TypeError("producer must be pi-web, pi-extension, or workbench-web");
     if (sourceSessionId !== undefined) requireId(sourceSessionId, "sourceSessionId");
     if (!Number.isSafeInteger(maxRevisionRetries) || maxRevisionRetries < 1 || maxRevisionRetries > 10) {
       throw new TypeError("maxRevisionRetries must be an integer between 1 and 10");

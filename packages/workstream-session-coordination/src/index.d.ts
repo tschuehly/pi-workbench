@@ -130,7 +130,7 @@ export interface AttendedSessionAdapter {
 export interface WorkstreamSessionCoordinationOptions {
   withWorkstreamClient<T>(callback: (client: WorkstreamClient) => Promise<T>): Promise<T>;
   attendedSession: AttendedSessionAdapter;
-  producer: "pi-web" | "pi-extension";
+  producer: "pi-web" | "pi-extension" | "workbench-web";
   sourceSessionId?: string;
   maxRevisionRetries?: number;
   ownsAssociationKey?: (associationKey: string) => boolean;
