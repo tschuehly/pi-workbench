@@ -21,6 +21,7 @@ export function ask(x) {
 }
 export function status(x, id) {
   if (!record(x) || x.sessionId !== id || typeof x.isStreaming !== 'boolean' || typeof x.isCompacting !== 'boolean' || typeof x.isBashRunning !== 'boolean' || !seq(x.pendingMessageCount) || !Array.isArray(x.queuedMessages) || !record(x.tokens) || !['input','output','cacheRead','cacheWrite','total'].every(k => typeof x.tokens[k] === 'number' && Number.isFinite(x.tokens[k])) || typeof x.cost !== 'number' || !Number.isFinite(x.cost)) fail('status');
+  if (x.queuedMessages.some(m => !record(m) || !['steer', 'followUp'].includes(m.kind) || typeof m.text !== 'string')) fail('queued messages');
   if (x.pendingAsk !== undefined) ask(x.pendingAsk);
   if (x.model !== undefined && (!record(x.model) || (x.model.provider !== undefined && !text(x.model.provider)) || (x.model.id !== undefined && !text(x.model.id)) || (x.model.name !== undefined && typeof x.model.name !== 'string'))) fail('status model');
   if (x.thinkingLevel !== undefined && typeof x.thinkingLevel !== 'string') fail('status thinking level');
@@ -83,7 +84,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
     if (!text(id) || !text(cwd) || !text(machine)) throw new Error('Session id, cwd and machine are required');
     const token = generation, base = `/api/machines/${encodeURIComponent(machine)}/sessions/${encodeURIComponent(id)}`;
     const url = path => `${base}/${path}?cwd=${encodeURIComponent(cwd)}`;
-    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, sending: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
+    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, sending: false, queueBusy: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
     const alive = () => current === c && token === generation;
     function apply(e) {
       if (e.seq <= c.seq) return;
@@ -194,13 +195,37 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
     if (streamingBehavior !== undefined && !['steer', 'followUp'].includes(streamingBehavior)) throw new Error('Invalid streaming behavior');
     c.view.sending = true; c.view.error = null; emit();
     try {
-      const result = await json(`${c.base}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: c.cwd, text, ...(streamingBehavior === undefined ? {} : { streamingBehavior }) }) });
+      const behavior = streamingBehavior ?? (c.view.status?.isStreaming && !c.view.status?.isCompacting ? 'steer' : undefined);
+      const result = await json(`${c.base}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: c.cwd, text, ...(behavior === undefined ? {} : { streamingBehavior: behavior }) }) });
       if (!record(result) || result.accepted !== true) throw new Error('Invalid prompt response');
       return true;
     } catch (e) {
       if (current === c) { c.view.error = String(e); emit(); }
       return false;
     } finally { if (current === c) { c.view.sending = false; emit(); } }
+  }
+  async function queueAction(action, target) {
+    const c = current;
+    if (!c || c.view.queueBusy || c.view.connection !== 'connected') return false;
+    const queued = c.view.status?.queuedMessages ?? [];
+    if (action === 'promote') {
+      if (!record(target) || target.kind !== 'followUp' || !queued.some(m => m.kind === target.kind && m.text === target.text)) return false;
+    } else if (action === 'promote-all') {
+      if (c.view.status?.isCompacting || !queued.some(m => m.kind === 'followUp')) return false;
+    } else if (action === 'clear') {
+      if (!queued.length && !c.view.status?.pendingMessageCount) return false;
+    } else throw new Error('Invalid queue action');
+    if (c.view.status?.isCompacting && action !== 'clear') return false;
+    c.view.queueBusy = true; c.view.error = null; emit();
+    try {
+      const body = action === 'promote' ? { cwd: c.cwd, kind: target.kind, text: target.text } : { cwd: c.cwd };
+      const result = status(await json(`${c.base}/queue/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), c.id);
+      if (current === c) { c.view.status = result; c.view.pendingAsk = result.pendingAsk ?? null; emit(); }
+      return true;
+    } catch (e) {
+      if (current === c) { c.view.error = `Queue update outcome unknown: ${String(e)}. Refresh Chat status before another change.`; emit(); }
+      return false;
+    } finally { if (current === c) { c.view.queueBusy = false; emit(); } }
   }
   async function changeControl(kind, value) {
     const c = current;
@@ -240,5 +265,5 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
       if (current === c) { c.view.pendingAsk = updated.pendingAsk ?? null; c.view.status = updated; emit(); }
     } catch (e) { if (current === c) { c.view.error = String(e); emit(); } }
   }
-  return { select, stop, earlier, answer, send, stopTurn, changeModel: value => changeControl('model', value), changeThinking: value => changeControl('thinking', value) };
+  return { select, stop, earlier, answer, send, stopTurn, changeModel: value => changeControl('model', value), changeThinking: value => changeControl('thinking', value), promoteQueued: target => queueAction('promote', target), promoteAll: () => queueAction('promote-all'), clearQueue: () => queueAction('clear') };
 }

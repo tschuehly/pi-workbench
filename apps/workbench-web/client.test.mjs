@@ -103,6 +103,29 @@ test('old join cannot overwrite a newer reconnect', async () => {
   await f.seed('s', { snapshot: { seq: 6, partial: msg('new') } });
   assert.equal(f.last().partial.content[0].text, 'new');
 });
+test('server queue remains authoritative for steer, promote and clear', async () => {
+  const f = fake(), queued = [{ kind: 'followUp', text: 'later' }, { kind: 'steer', text: 'now' }];
+  f.chat.select('s', '/repo'); f.sockets[0].open(); await f.seed('s', { status: state('s', { queuedMessages: queued, pendingMessageCount: 2 }) });
+  const steer = f.chat.send('intervene');
+  assert.equal(JSON.parse(f.requests[0].options.body).streamingBehavior, 'steer');
+  f.reply('/prompt', { accepted: true }); assert.equal(await steer, true);
+  const followUp = f.chat.send('wait', 'followUp');
+  assert.equal(JSON.parse(f.requests[0].options.body).streamingBehavior, 'followUp');
+  f.reply('/prompt', { accepted: true }); assert.equal(await followUp, true);
+  assert.equal(await f.chat.promoteQueued({ kind: 'followUp', text: 'absent' }), false);
+  const promoted = f.chat.promoteQueued(queued[0]);
+  assert.deepEqual(JSON.parse(f.requests[0].options.body), { cwd: '/repo', kind: 'followUp', text: 'later' });
+  assert.equal(await f.chat.clearQueue(), false);
+  f.reply('/queue/promote', state('s', { queuedMessages: [{ kind: 'steer', text: 'later' }, queued[1]], pendingMessageCount: 2 }));
+  assert.equal(await promoted, true); assert.equal(f.last().status.queuedMessages[0].kind, 'steer');
+  const clear = f.chat.clearQueue(); f.reply('/queue/clear', state('s'));
+  assert.equal(await clear, true); assert.deepEqual(f.last().status.queuedMessages, []);
+  const failed = f.chat.promoteAll(); assert.equal(await failed, false);
+  f.sockets[0].frame({ type: 'status.update', seq: 3, status: state('s', { queuedMessages: [queued[0]], pendingMessageCount: 1 }) });
+  const all = f.chat.promoteAll(); f.chat.select('other', '/other'); f.sockets[1].open();
+  f.reply('/queue/promote-all', state('s', { queuedMessages: [{ kind: 'steer', text: 'later' }], pendingMessageCount: 1 }));
+  assert.equal(await all, true); await f.seed('other'); assert.equal(f.last().id, 'other');
+});
 test('model/thinking controls use offered values, bind to original session and consume server status', async () => {
   const f = fake(); f.chat.select('s', '/repo', 'local'); f.sockets[0].open(); await f.seed('s', { status: state('s', { model: { provider: 'fixture', id: 'mock' }, thinkingLevel: 'off' }) });
   assert.deepEqual(f.last().models, [{ provider: 'fixture', id: 'mock', name: 'Fixture model' }]);
@@ -130,6 +153,7 @@ test('rejects malformed consumed data and ignores stale session HTTP/socket', as
   assert.throws(() => models({ models: [{ provider: 'a', id: 'b' }, { provider: 'a', id: 'b' }] }));
   assert.throws(() => thinkingLevels({ levels: ['off', 1] }));
   assert.throws(() => status(state('s', { thinkingLevel: 3 }), 's'));
+  assert.throws(() => status(state('s', { queuedMessages: [{ kind: 'future', text: 'bad' }] }), 's'));
   assert.throws(() => page({ messages: [], start: -1, total: 0 }));
   assert.throws(() => page({ messages: [{ content: [{ type: 'text', text: 3 }] }], start: 0, total: 1 }));
   assert.throws(() => snapshot({ seq: 1.5, partial: null }));

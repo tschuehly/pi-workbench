@@ -48,7 +48,7 @@ function renderCatalog(view) {
 function clearChat() {
   chat.stop(); saveDraft(); draftKey = null; draft.value = '';
   $('connection').textContent = 'Choose a session'; $('error').textContent = '';
-  for (const id of ['history', 'partial', 'ask']) $(id).replaceChildren();
+  for (const id of ['history', 'partial', 'queued', 'ask']) $(id).replaceChildren();
   $('earlier').hidden = true; $('stop').hidden = true; $('queue').hidden = true; $('send').disabled = true;
   for (const id of ['model', 'thinking']) { $(id).replaceChildren(); $(id).disabled = true; $(id).dataset.options = ''; }
 }
@@ -75,8 +75,9 @@ function renderChat(view) {
   $('error').textContent = view.error ?? '';
   $('earlier').hidden = !view.start;
   $('send').disabled = view.sending || view.connection !== 'connected';
-  $('queue').hidden = !view.status?.isStreaming;
+  $('queue').hidden = !view.status?.isStreaming && !view.status?.isCompacting;
   $('stop').hidden = !view.status?.isStreaming;
+  $('send').textContent = view.status?.isStreaming && !view.status?.isCompacting ? 'Steer' : 'Send';
   const choices = [
     { id: 'model', options: view.models.map(m => [JSON.stringify([m.provider, m.id]), `${m.provider}/${m.name || m.id}`]), value: JSON.stringify([view.status?.model?.provider, view.status?.model?.id]), empty: 'No available models' },
     { id: 'thinking', options: view.thinkingLevels.map(level => [level, level]), value: view.status?.thinkingLevel, empty: 'No thinking levels' },
@@ -97,6 +98,18 @@ function renderChat(view) {
   }));
   $('partial').replaceChildren();
   if (view.partial) { const item = document.createElement('article'); item.textContent = `assistant (streaming): ${messageText(view.partial)}`; $('partial').append(item); }
+  const queue = $('queued'); queue.replaceChildren();
+  const queued = view.status?.queuedMessages ?? [];
+  if (queued.length || view.status?.pendingMessageCount) {
+    const heading = document.createElement('h2'); heading.textContent = `Queued messages (${view.status?.pendingMessageCount ?? queued.length})`; queue.append(heading);
+    for (const [index, message] of queued.entries()) {
+      const row = document.createElement('article'); row.textContent = `${message.kind === 'steer' ? 'Steer' : 'Follow-up'} ${index + 1}: ${message.text}`;
+      if (message.kind === 'followUp') { const promote = button('Send now', () => void chat.promoteQueued(message)); promote.disabled = view.queueBusy || view.status?.isCompacting; row.append(promote); }
+      queue.append(row);
+    }
+    if (queued.some(message => message.kind === 'followUp')) { const all = button('Send all now', () => void chat.promoteAll()); all.disabled = view.queueBusy || view.status?.isCompacting; queue.append(all); }
+    const clear = button('Clear queue', () => { if (window.confirm('Remove all queued messages? Active work will continue.')) void chat.clearQueue(); }); clear.disabled = view.queueBusy; queue.append(clear);
+  }
   const target = $('ask'); target.replaceChildren();
   if (view.pendingAsk) {
     const form = document.createElement('form');
