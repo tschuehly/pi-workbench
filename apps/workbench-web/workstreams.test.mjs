@@ -1,13 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createWorkstreams } from './workstreams.mjs';
+import { createWorkstreams, createTaskDrafts } from './workstreams.mjs';
 import { createWorkbenchWorkstreamClient } from '../../packages/pi-web-integration/workstream-client.js';
 
 const fixture = JSON.parse(await readFile(new URL('../../packages/pi-web-integration/fixtures/recorded-workstreams.json', import.meta.url)));
 const snapshot = fixture.snapshots[0];
 const scope = { machineId: 'local', projectId: 'registered-project', workspaceId: 'registered-workspace' };
 const ok = value => ({ ok: true, headers: new Headers(), text: async () => JSON.stringify(value) });
+test('free-text drafts survive reload and follow a Workstream across registered workspaces', () => {
+  const saved = new Map();
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  const first = createTaskDrafts(storage);
+  first.set(scope, 'ws-one', 'task-a', 'Unsubmitted <img onerror=evil()>');
+  assert.equal(createTaskDrafts(storage).get(scope, 'ws-one', 'task-a'), 'Unsubmitted <img onerror=evil()>');
+  assert.equal(first.get({ ...scope, workspaceId: 'other' }, 'ws-one', 'task-a'), 'Unsubmitted <img onerror=evil()>');
+  assert.equal(first.get({ ...scope, machineId: 'remote' }, 'ws-one', 'task-a'), '');
+  assert.equal(first.get(scope, 'ws-other', 'task-a'), '');
+  assert.equal(first.get(scope, 'ws-one', 'task-b'), '');
+  first.set(scope, 'ws-one', 'task-a', '');
+  assert.equal(createTaskDrafts(storage).get(scope, 'ws-one', 'task-a'), '');
+  assert.equal(first.volatile, false);
+});
+test('storage failure keeps a volatile draft visible in the current tab', () => {
+  const drafts = createTaskDrafts({ getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('full'); }, removeItem: () => { throw new Error('blocked'); } });
+  drafts.set(scope, 'ws-one', 'task-a', 'Do not lose this');
+  assert.equal(drafts.get(scope, 'ws-one', 'task-a'), 'Do not lose this');
+  assert.equal(drafts.volatile, true);
+  drafts.set(scope, 'ws-one', 'task-a', '');
+  assert.equal(drafts.volatile, false);
+});
 function harness(overrides = {}) {
   const calls = [];
   const fetch = async (path, options) => {

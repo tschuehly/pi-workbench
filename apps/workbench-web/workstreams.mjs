@@ -1,3 +1,27 @@
+// Unsubmitted answers follow their Workstream across registered workspaces in this browser tab.
+export function createTaskDrafts(storage) {
+  const fallback = new Map();
+  const key = (scope, workstreamId, taskId) => `workbench:workstream:draft:${JSON.stringify([scope.machineId, workstreamId, taskId])}`;
+  return {
+    get(scope, workstreamId, taskId) {
+      const id = key(scope, workstreamId, taskId);
+      if (fallback.has(id)) return fallback.get(id);
+      try { return storage?.getItem(id) ?? ''; } catch { return ''; }
+    },
+    set(scope, workstreamId, taskId, text) {
+      const id = key(scope, workstreamId, taskId);
+      try {
+        if (text) storage?.setItem(id, text);
+        else storage?.removeItem(id);
+        if (storage) fallback.delete(id);
+        else if (text) fallback.set(id, text);
+        else fallback.delete(id);
+      } catch { if (text) fallback.set(id, text); else fallback.delete(id); }
+    },
+    get volatile() { return fallback.size > 0; },
+  };
+}
+
 // Scoped PI WEB transport; snapshot semantics and validation stay in Workbench's workstream-client.
 export function createWorkstreams({ fetch: request, validateClient, storage, changed = () => {} }) {
   let generation = 0, client = null;

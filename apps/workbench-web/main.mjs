@@ -1,6 +1,6 @@
 import { createChat, imageAttachments } from './client.mjs';
 import { createCatalog } from './catalog.mjs';
-import { createWorkstreams } from './workstreams.mjs';
+import { createWorkstreams, createTaskDrafts } from './workstreams.mjs';
 import { createWorkbenchWorkstreamClient } from './workstream-client.js';
 import { delegates } from './roster.mjs';
 import { createFiles } from './files.mjs';
@@ -36,9 +36,11 @@ const saveDraft = () => { if (!draftKey) return; try { if (draft.value) storage?
 draft.addEventListener('input', saveDraft);
 const chat = createChat({ fetch: (...args) => fetch(...args), socket: path => new WebSocket(new URL(path, location.href).href.replace(/^http/, 'ws')), changed: renderChat });
 const catalog = createCatalog({ fetch: (...args) => fetch(...args), storage, changed: renderCatalog });
+const taskDrafts = createTaskDrafts(storage);
 const workstreams = createWorkstreams({ fetch: (...args) => fetch(...args), validateClient: createWorkbenchWorkstreamClient, storage: answerStorage, changed: renderWorkstreams });
 const files = createFiles({ fetch: (...args) => fetch(...args), changed: renderFiles, confirm: message => window.confirm(message) });
 window.addEventListener('beforeunload', files.unload);
+window.addEventListener('beforeunload', event => { if (taskDrafts.volatile) { event.preventDefault(); event.returnValue = ''; } });
 let workstreamScope = '', workstreamNavigation = 0;
 function renderFiles(view) {
   const host = $('file-tree'); host.replaceChildren();
@@ -193,11 +195,19 @@ function renderWorkstreams(view) {
   if (snapshot.humanTasks.length) {
     const title = document.createElement('h4'); title.textContent = 'Human Tasks'; detail.append(title);
     for (const task of snapshot.humanTasks) {
+      const scope = view.scope;
+      const saved = taskDrafts.get(scope, snapshot.id, task.id);
+      if (task.answer?.kind === 'free-text' && saved === task.answer.text) taskDrafts.set(scope, snapshot.id, task.id, '');
       const item = document.createElement('article'); item.textContent = `${task.title} · ${task.status}${task.detail ? `\n${task.detail}` : ''}`;
       if (task.status === 'pending' && task.answerKind && !snapshot.closed) {
         if (task.answerKind === 'free-text') {
           const form = document.createElement('form'), label = document.createElement('label'), text = document.createElement('textarea');
-          label.textContent = 'Answer'; text.maxLength = 4000; text.required = true; label.append(text);
+          label.textContent = 'Answer'; text.maxLength = 4000; text.required = true; text.value = saved;
+          text.oninput = () => {
+            taskDrafts.set(scope, snapshot.id, task.id, text.value);
+            if (taskDrafts.volatile) $('workstream-error').textContent = 'This draft could not be stored. Keep this tab open until you copy or submit it.';
+          };
+          label.append(text);
           const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = 'Submit answer'; submit.disabled = view.answering || view.pendingAnswer || view.needsRefresh;
           form.append(label, submit);
           form.onsubmit = event => { event.preventDefault(); void workstreams.answer(task.id, { kind: 'free-text', text: text.value }).catch(error => { $('workstream-error').textContent = String(error); }); };
@@ -207,6 +217,12 @@ function renderWorkstreams(view) {
           choice.disabled = view.answering || view.pendingAnswer || view.needsRefresh; item.append(choice);
         }
       } else if (task.answer) { const answer = document.createElement('p'); answer.textContent = `Answer: ${task.answer.kind === 'free-text' ? task.answer.text : task.options.find(option => option.id === task.answer.optionId)?.label ?? task.answer.optionId} · revision ${task.answerReceipt.acceptedRevision}`; item.append(answer); }
+      if (task.status !== 'pending' && saved && saved !== task.answer?.text) {
+        const note = document.createElement('p'); note.textContent = 'Your unsent draft was preserved. Copy it before discarding.';
+        const text = document.createElement('pre'); text.textContent = saved;
+        const discard = button('Discard unsent draft', () => { taskDrafts.set(scope, snapshot.id, task.id, ''); note.remove(); text.remove(); discard.remove(); });
+        item.append(note, text, discard);
+      }
       detail.append(item);
     }
   }
