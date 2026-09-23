@@ -101,6 +101,23 @@ test('ask answer uses original identity, handles stale response and errors', asy
   f.chat.answer([]); f.reply('/ask/submit', 'denied', 403); await tick();
   assert.match(f.last().error, /403/); assert.equal(f.last().pendingAsk.askId, 'a');
 });
+test('question submits once and an older reply cannot replace a newer pending question', async () => {
+  const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open(); await f.seed('s');
+  const first = f.chat.answer([{ id: 'q', values: [], otherText: 'first' }]);
+  assert.equal(f.last().answerBusy, true);
+  await f.chat.answer([{ id: 'q', values: [], otherText: 'duplicate' }]);
+  assert.equal(f.requests.filter(r => r.url.includes('/ask/submit')).length, 1);
+  const newer = { askId: 'b', askedAt: 'later', questions: [{ id: 'bq', question: 'New question?', options: [] }] };
+  f.sockets[0].frame({ type: 'ask.opened', seq: 3, ask: newer });
+  f.reply('/ask/submit', { result: 'closed', sessionStatus: state('s', { pendingAsk: pending }) });
+  await first;
+  assert.equal(f.last().pendingAsk.askId, 'b');
+  assert.equal(f.last().answerBusy, false);
+  const second = f.chat.answer([{ id: 'bq', values: [], otherText: 'new' }]);
+  assert.equal(JSON.parse(f.requests[0].options.body).askId, 'b');
+  f.reply('/ask/submit', { result: 'closed', sessionStatus: state('s') }); await second;
+  assert.equal(f.last().pendingAsk, null);
+});
 test('extension dialogs recover from status, handle events, close races and stale selection', async () => {
   const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open();
   await f.seed('s', { status: state('s', { pendingDialogs: [openDialog] }) });

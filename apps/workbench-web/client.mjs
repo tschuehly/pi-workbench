@@ -113,7 +113,7 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
     if (!text(id) || !text(cwd) || !text(machine)) throw new Error('Session id, cwd and machine are required');
     const token = generation, base = `/api/machines/${encodeURIComponent(machine)}/sessions/${encodeURIComponent(id)}`;
     const url = path => `${base}/${path}?cwd=${encodeURIComponent(cwd)}`;
-    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, pendingDialogs: [], dialogBusy: false, sending: false, sendUnknown: false, queueBusy: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
+    const c = current = { id, cwd, base, url, view: { id, cwd, messages: [], start: 0, total: 0, partial: null, pendingAsk: null, answerBusy: false, pendingDialogs: [], dialogBusy: false, sending: false, sendUnknown: false, queueBusy: false, models: [], thinkingLevels: [], controlsLoading: true, controlBusy: false, connection: 'connecting', error: null }, seq: 0, pending: [], joining: true, ws: null, epoch: 0, controlsEpoch: 0 };
     const alive = () => current === c && token === generation;
     function apply(e) {
       if (e.seq <= c.seq) return;
@@ -306,14 +306,16 @@ export function createChat({ fetch: request, socket: connect, changed = () => {}
   }
   async function answer(answers) {
     const c = current, pending = c?.view.pendingAsk;
-    if (!c || !pending) return;
+    if (!c || !pending || c.view.answerBusy || c.view.connection !== 'connected') return;
     if (!Array.isArray(answers) || answers.some(a => !record(a) || !pending.questions.some(q => q.id === a.id) || !Array.isArray(a.values) || !a.values.every(text) || (a.otherText !== undefined && typeof a.otherText !== 'string'))) throw new Error('Invalid answers');
+    c.view.answerBusy = true; emit();
     try {
       const result = await json(`${c.base}/ask/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: c.cwd, askId: pending.askId, answers }) });
       if (!record(result) || !['closed','stale'].includes(result.result)) throw new Error('Invalid ask response');
       const updated = status(result.sessionStatus, c.id);
-      if (current === c) { c.view.pendingAsk = updated.pendingAsk ?? null; c.view.status = updated; emit(); }
+      if (current === c && c.view.pendingAsk?.askId === pending.askId) { c.view.pendingAsk = updated.pendingAsk ?? null; c.view.status = updated; emit(); }
     } catch (e) { if (current === c) { c.view.error = String(e); emit(); } }
+    finally { if (current === c) { c.view.answerBusy = false; emit(); } }
   }
   function acknowledgeSendUnknown() { if (!current?.view.sendUnknown) return; current.view.sendUnknown = false; current.view.error = null; emit(); }
   return { select, stop, earlier, answer, acknowledgeSendUnknown, answerDialog: (id, value) => closeDialog(id, value), cancelDialog: id => closeDialog(id, undefined, true), send, stopTurn, changeModel: value => changeControl('model', value), changeThinking: value => changeControl('thinking', value), promoteQueued: target => queueAction('promote', target), promoteAll: () => queueAction('promote-all'), clearQueue: () => queueAction('clear') };

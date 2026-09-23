@@ -374,7 +374,7 @@ function renderChat(view) {
     form.onsubmit = event => { event.preventDefault(); void chat.answer(view.pendingAsk.questions.map(q => ({ id: q.id, values: [...form.querySelectorAll('input:checked')].filter(input => input.name === `choice-${q.id}`).map(input => input.value), otherText: form.elements.namedItem(`other-${q.id}`).value }))); };
     target.append(form);
   }
-  if (target.firstChild) target.querySelector('button').disabled = view.connection !== 'connected';
+  if (target.firstChild) target.querySelector('button').disabled = view.answerBusy || view.connection !== 'connected';
   const dialogs = $('dialogs'), pending = view.pendingDialogs?.[0];
   if (!pending) { dialogs.replaceChildren(); dialogs.dataset.dialogId = ''; }
   else {
