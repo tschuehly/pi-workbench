@@ -72,6 +72,51 @@ try {
       assert.equal(component.stale, false);
       assert.equal(resolve(component.installation.path), piWebRoot);
     }
+    // The exact Workstream token is reserved before construction. A blank Pi
+    // session is only live until an assistant message persists its transcript.
+    const launchCwd = join(root, 'launch-workspace');
+    await mkdir(launchCwd);
+    const launchToken = `pi-web:${randomUUID()}`;
+    const sessionApi = `http://127.0.0.1:${port}/api/machines/local/sessions`;
+    const launch = await fetch(sessionApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: launchCwd, startupToken: launchToken }) });
+    assert.equal(launch.status, 200, launch.status === 200 ? '' : await launch.text());
+    const launched = await launch.json();
+    const lookupUrl = `${sessionApi}/workstream-launch/${encodeURIComponent(launchToken)}?cwd=${encodeURIComponent(launchCwd)}`;
+    const liveLookup = await (await fetch(lookupUrl)).json();
+    assert.deepEqual(liveLookup, { status: 'found', sessionId: launched.id, cwd: launchCwd });
+    const wrongLookup = await (await fetch(`${sessionApi}/workstream-launch/${encodeURIComponent(launchToken)}?cwd=${encodeURIComponent(root)}`)).json();
+    assert.deepEqual(wrongLookup, { status: 'unknown' });
+    const duplicate = await fetch(sessionApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: launchCwd, startupToken: launchToken }) });
+    assert.equal(duplicate.status, 400, 'A retry must not start another session');
+    const transientToken = `pi-web:${randomUUID()}`;
+    const transient = await fetch(sessionApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: launchCwd, startupToken: transientToken }) });
+    assert.equal(transient.status, 200);
+    const transientId = (await transient.json()).id;
+    const transientLookup = `${sessionApi}/workstream-launch/${encodeURIComponent(transientToken)}?cwd=${encodeURIComponent(launchCwd)}`;
+    assert.deepEqual(await (await fetch(transientLookup)).json(), { status: 'found', sessionId: transientId, cwd: launchCwd });
+    const launchLedger = join(stack.paths.data, 'workstream-launches');
+    assert.equal((await readdir(launchLedger)).length, 2);
+    const { SessionManager } = await import(pathToFileURL(join(piWebRoot, 'node_modules/@earendil-works/pi-coding-agent/dist/index.js')).href);
+    // Seed an assistant transcript deterministically, matching Pi's real save
+    // boundary without using a model or mutating an installed session.
+    const seeded = SessionManager.create(launchCwd, stack.paths.sessions, { id: launched.id });
+    seeded.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Persisted isolated launch' }], api: 'anthropic-messages', provider: 'fixture', model: 'no-model', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: 'stop', timestamp: Date.now() });
+    await terminateOwnedProcess(daemonProcess);
+    daemonProcess = stack.spawnOwned('sessiond-restarted', tsx, ['src/server/sessiond.ts'], { cwd: piWebRoot });
+    daemonProcess.stderr.on('data', chunk => log.push(String(chunk).slice(-2000)));
+    let reopened;
+    for (let i = 0; i < 120; i++) {
+      if (daemonProcess.exitCode !== null) throw new Error(`Isolated sessiond restart exited: ${log.join('').slice(-3000)}`);
+      try { reopened = await fetch(`http://127.0.0.1:${port}/api/machines/local/sessiond/health`, { signal: AbortSignal.timeout(1000) }); if (reopened.status === 200) break; }
+      catch { /* Wait only for the isolated daemon. */ }
+      await delay(100);
+    }
+    assert.equal(reopened?.status, 200, 'Isolated sessiond did not restart');
+    assert.deepEqual(await (await fetch(lookupUrl)).json(), { status: 'found', sessionId: launched.id, cwd: launchCwd });
+    assert.deepEqual(await (await fetch(transientLookup)).json(), { status: 'unknown' }, 'A session without a saved transcript is not resumable after restart');
+    assert.equal((await fetch(sessionApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: launchCwd, startupToken: launchToken }) })).status, 400);
+    assert.equal((await fetch(sessionApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: launchCwd, startupToken: transientToken }) })).status, 400);
+    console.log(JSON.stringify({ type: 'WORKSTREAM_LAUNCH_SMOKE', status: 'passed', exactLookup: true, wrongWorkspaceUnknown: true, retryRejected: true, persistedAcrossIsolatedDaemonRestart: true, unpersistedUnknown: true }));
     const fakeCli = join(root, 'status-only-cli');
     const forbidden = join(root, 'forbidden-cli-command');
     await writeFile(fakeCli, `#!/bin/sh\nif [ "$1" = status ]; then exit 0; fi\nprintf '%s\\n' "$*" > '${forbidden}'\nexit 1\n`, { mode: 0o700 });
@@ -104,20 +149,20 @@ try {
     assert.notEqual(priorIndex, expectedIndex, 'Rollback requires a distinct previous client');
     const sessionCwd = join(root, 'workspace');
     await mkdir(sessionCwd);
-    const { SessionManager } = await import(pathToFileURL(join(piWebRoot, 'node_modules/@earendil-works/pi-coding-agent/dist/index.js')).href);
     const sessionId = randomUUID();
     const session = SessionManager.create(sessionCwd, stack.paths.sessions, { id: sessionId });
     session.appendMessage({ role: 'user', content: [{ type: 'text', text: 'Rollback preserves this session' }], timestamp: Date.now() });
     session.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Stored before client rollback' }], api: 'anthropic-messages', provider: 'fixture', model: 'no-model', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: 'stop', timestamp: Date.now() });
     const store = createUserLocalWorkstreamStore({ directory: stack.paths.workstreams });
     const created = await store.create({ workstreamId: 'ws-isolated-rollback', idempotencyKey: 'rollback-create', title: 'Rollback state', producer: 'fixture' });
-    const before = await Promise.all([directoryDigest(stack.paths.sessions), directoryDigest(stack.paths.workstreams)]);
+    const before = await Promise.all([directoryDigest(stack.paths.sessions), directoryDigest(stack.paths.workstreams), directoryDigest(launchLedger)]);
     const configBefore = await readFile(stack.paths.config);
     const backendBefore = await readFile(join(piWebRoot, 'src/server/index.ts'));
     const backup = join(root, 'state-backup');
     await mkdir(backup);
     await cp(stack.paths.sessions, join(backup, 'sessions'), { recursive: true });
     await cp(stack.paths.workstreams, join(backup, 'workstreams'), { recursive: true });
+    await cp(launchLedger, join(backup, 'workstream-launches'), { recursive: true });
     await cp(stack.paths.config, join(backup, 'config.json'));
     await access(stack.paths.socket);
     await terminateOwnedProcess(web);
@@ -133,8 +178,8 @@ try {
     }
     assert.equal(restored?.status, 200);
     assert.equal(await restored.text(), priorIndex);
-    assert.deepEqual(await Promise.all([directoryDigest(stack.paths.sessions), directoryDigest(stack.paths.workstreams)]), before);
-    assert.deepEqual(await Promise.all([directoryDigest(join(backup, 'sessions')), directoryDigest(join(backup, 'workstreams'))]), before);
+    assert.deepEqual(await Promise.all([directoryDigest(stack.paths.sessions), directoryDigest(stack.paths.workstreams), directoryDigest(launchLedger)]), before);
+    assert.deepEqual(await Promise.all([directoryDigest(join(backup, 'sessions')), directoryDigest(join(backup, 'workstreams')), directoryDigest(join(backup, 'workstream-launches'))]), before);
     assert.deepEqual(await readFile(stack.paths.config), configBefore);
     assert.deepEqual(await readFile(join(backup, 'config.json')), configBefore);
     assert.deepEqual(await readFile(join(piWebRoot, 'src/server/index.ts')), backendBefore);
@@ -143,7 +188,7 @@ try {
     await access(stack.paths.socket);
     assert.equal(daemonProcess.exitCode, null, 'Session daemon must remain running throughout rollback');
     await assert.rejects(access(forbidden), { code: 'ENOENT' });
-    console.log(JSON.stringify({ type: 'ROLLBACK_SMOKE', status: 'passed', priorClientRestored: true, stateBackupMatches: true, sessionBytesUnchanged: true, workstreamBytesUnchanged: true, configurationUnchanged: true, sameBackendRevision: true, daemonSocketRetained: true, lifecycleCommand: false }));
+    console.log(JSON.stringify({ type: 'ROLLBACK_SMOKE', status: 'passed', priorClientRestored: true, stateBackupMatches: true, sessionBytesUnchanged: true, workstreamBytesUnchanged: true, launchLedgerBytesUnchanged: true, configurationUnchanged: true, sameBackendRevision: true, daemonSocketRetained: true, lifecycleCommand: false }));
   }
   console.log(JSON.stringify({ type: 'STATIC_SMOKE', status: 'passed', productionEntrypoint: 'src/server/index.ts', ownedIndex: true, ownedModule: true, api: true, invalidRootRejected: true }));
 } finally {
