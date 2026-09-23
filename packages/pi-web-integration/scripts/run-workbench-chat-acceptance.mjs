@@ -286,13 +286,21 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Controlled checkpoint result') === true`, 15_000);
   const workstream = await evaluate(cdp, `({ text: document.querySelector('#workstreams').textContent, revision: document.querySelector('#workstream-detail h3')?.textContent, injected: window.__workstreamInjected === 1, unsafeElements: document.querySelectorAll('#workstreams img').length, error: document.querySelector('#workstream-error').textContent })`);
   checks.push({ id: "owned-workstreams-real-service-projection", passed: workstream.text.includes('Controlled owner decision · pending') && workstream.text.includes('Controlled reference') && workstream.text.includes('Controlled next step') && workstream.revision.includes('revision 2') && workstream.unsafeElements === 0 && !workstream.injected && !workstream.error, detail: JSON.stringify({ revision: workstream.revision, task: workstream.text.includes('Controlled owner decision · pending'), link: workstream.text.includes('Controlled reference'), error: workstream.error, unsafeElements: workstream.unsafeElements }) });
+  await evaluate(cdp, `Array.from(document.querySelectorAll('#workstream-detail article')).find(item => item.textContent.includes('Controlled owner decision')).querySelector('button').click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Controlled owner decision · answered') === true`, 15_000);
+  const answered = await evaluate(cdp, `({ heading: document.querySelector('#workstream-detail h3').textContent, task: Array.from(document.querySelectorAll('#workstream-detail article')).find(item => item.textContent.includes('Controlled owner decision')).textContent, error: document.querySelector('#workstream-error').textContent })`);
+  checks.push({ id: "owned-workstreams-human-task-real-store-answer", passed: answered.heading.includes('revision 3') && answered.task.includes('Answer: Yes · revision 3') && !answered.error, detail: JSON.stringify(answered) });
   await evaluate(cdp, `document.querySelector('#workstream-refresh').click()`);
-  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail h3')?.textContent?.includes('revision 2') === true`, 15_000);
-  checks.push({ id: "owned-workstreams-manual-refresh", passed: (await evaluate(cdp, `document.querySelector('#workstream-error').textContent`)) === '', detail: 'Scoped service re-read after refresh' });
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail h3')?.textContent?.includes('revision 3') === true`, 15_000);
+  checks.push({ id: "owned-workstreams-manual-refresh", passed: (await evaluate(cdp, `document.querySelector('#workstream-error').textContent`)) === '', detail: 'Scoped service re-read after answer' });
   await evaluate(cdp, `document.querySelector('#workstream-detail button').click()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#history')?.textContent?.includes(${JSON.stringify(second.transcriptMarker)}) === true`, 20_000);
   const association = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), project: new URL(location.href).searchParams.get('project'), workspace: new URL(location.href).searchParams.get('workspace'), error: document.querySelector('#workstream-error').textContent })`);
   checks.push({ id: "owned-workstreams-confirmed-session-navigation", passed: association.id === second.sessionId && association.project === second.projectId && association.workspace === second.workspaceId && !association.error, detail: JSON.stringify(association) });
+  await navigate(cdp, await evaluate(cdp, 'location.href'), 20_000);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Controlled owner decision · answered') === true`, 15_000);
+  const restored = await evaluate(cdp, `({ heading: document.querySelector('#workstream-detail h3')?.textContent, error: document.querySelector('#workstream-error')?.textContent, task: Array.from(document.querySelectorAll('#workstream-detail article')).find(item => item.textContent.includes('Controlled owner decision'))?.textContent })`);
+  checks.push({ id: "owned-workstreams-answer-persists-after-reload", passed: restored.heading?.includes('revision 3') && restored.task?.includes('Answer: Yes') && !restored.error, detail: JSON.stringify(restored) });
   return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations };
 }
 

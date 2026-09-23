@@ -29,11 +29,12 @@ function renderMessage(message, streaming = false) {
 const draft = $('draft');
 let draftKey = null, images = [], imageEpoch = 0, nextImage = 1, imageBusy = false, chatView = null;
 const storage = (() => { try { return sessionStorage; } catch { return undefined; } })();
+const answerStorage = (() => { try { return localStorage; } catch { return undefined; } })();
 const saveDraft = () => { if (!draftKey) return; try { if (draft.value) storage?.setItem(draftKey, draft.value); else storage?.removeItem(draftKey); } catch { /* Editing still works without storage. */ } };
 draft.addEventListener('input', saveDraft);
 const chat = createChat({ fetch: (...args) => fetch(...args), socket: path => new WebSocket(new URL(path, location.href).href.replace(/^http/, 'ws')), changed: renderChat });
 const catalog = createCatalog({ fetch: (...args) => fetch(...args), storage, changed: renderCatalog });
-const workstreams = createWorkstreams({ fetch: (...args) => fetch(...args), validateClient: createWorkbenchWorkstreamClient, changed: renderWorkstreams });
+const workstreams = createWorkstreams({ fetch: (...args) => fetch(...args), validateClient: createWorkbenchWorkstreamClient, storage: answerStorage, changed: renderWorkstreams });
 let workstreamScope = '', workstreamNavigation = 0;
 const button = (label, action) => { const node = document.createElement('button'); node.type = 'button'; node.textContent = label; node.onclick = action; return node; };
 function imageControls() {
@@ -130,6 +131,8 @@ function renderWorkstreams(view) {
   const detail = $('workstream-detail'); detail.replaceChildren();
   const snapshot = view.snapshot;
   if (!snapshot) return;
+  if (view.pendingAnswer) detail.append(button(view.answering ? 'Saving answer…' : 'Retry the exact saved answer', () => void workstreams.retryAnswer().catch(error => { $('workstream-error').textContent = String(error); })));
+  if (view.pendingAnswer) detail.lastChild.disabled = view.answering;
   const heading = document.createElement('h3'); heading.textContent = `${snapshot.title} · revision ${snapshot.revision}${snapshot.closed ? ' · closed' : ''}`; detail.append(heading);
   if (snapshot.overview) { const goal = document.createElement('p'); goal.textContent = `${snapshot.overview.goal}\n${snapshot.overview.description}`; detail.append(goal); }
   for (const session of snapshot.sessions) {
@@ -145,7 +148,23 @@ function renderWorkstreams(view) {
   }
   if (snapshot.humanTasks.length) {
     const title = document.createElement('h4'); title.textContent = 'Human Tasks'; detail.append(title);
-    for (const task of snapshot.humanTasks) { const item = document.createElement('article'); item.textContent = `${task.title} · ${task.status}${task.detail ? `\n${task.detail}` : ''}${task.options.length ? `\nOptions: ${task.options.map(option => option.label).join(', ')}` : ''}`; detail.append(item); }
+    for (const task of snapshot.humanTasks) {
+      const item = document.createElement('article'); item.textContent = `${task.title} · ${task.status}${task.detail ? `\n${task.detail}` : ''}`;
+      if (task.status === 'pending' && task.answerKind && !snapshot.closed) {
+        if (task.answerKind === 'free-text') {
+          const form = document.createElement('form'), label = document.createElement('label'), text = document.createElement('textarea');
+          label.textContent = 'Answer'; text.maxLength = 4000; text.required = true; label.append(text);
+          const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = 'Submit answer'; submit.disabled = view.answering || view.pendingAnswer || view.needsRefresh;
+          form.append(label, submit);
+          form.onsubmit = event => { event.preventDefault(); void workstreams.answer(task.id, { kind: 'free-text', text: text.value }).catch(error => { $('workstream-error').textContent = String(error); }); };
+          item.append(form);
+        } else for (const option of task.options) {
+          const choice = button(option.label, () => void workstreams.answer(task.id, { kind: task.answerKind, optionId: option.id }).catch(error => { $('workstream-error').textContent = String(error); }));
+          choice.disabled = view.answering || view.pendingAnswer || view.needsRefresh; item.append(choice);
+        }
+      } else if (task.answer) { const answer = document.createElement('p'); answer.textContent = `Answer: ${task.answer.kind === 'free-text' ? task.answer.text : task.options.find(option => option.id === task.answer.optionId)?.label ?? task.answer.optionId} · revision ${task.answerReceipt.acceptedRevision}`; item.append(answer); }
+      detail.append(item);
+    }
   }
   if (snapshot.links.length) {
     const title = document.createElement('h4'); title.textContent = 'Links'; detail.append(title);

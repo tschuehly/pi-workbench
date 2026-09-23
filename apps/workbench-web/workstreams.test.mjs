@@ -58,6 +58,68 @@ test('requires an active revision-paired service and rejects invalid snapshots',
   assert.equal(invalid.client.view.snapshot, null);
   assert.match(invalid.client.view.error, /INVALID_RESPONSE|invalid inspect value/);
 });
+test('answers with the viewed revision, persists the exact retry, and reconciles an unknown committed answer', async () => {
+  const saved = new Map(), appended = [];
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  let current = structuredClone(snapshot), disconnect = true;
+  const fetch = async (path, options) => {
+    if (path === '/api/plugins') return ok({ plugins: [{ id: 'pi-workbench', server: { state: 'active', activeRevision: 'fixture-revision' } }] });
+    const { input } = JSON.parse(options.body);
+    if (path.endsWith('/list')) return ok({ ok: true, value: [{ id: snapshot.id, title: snapshot.title, revision: snapshot.revision, updatedAt: snapshot.updatedAt, activeSessionCount: 1, pendingSessionCount: 0, failedSessionCount: 0, unresolvedHumanTaskCount: 1, closed: false }] });
+    if (path.endsWith('/inspect')) return ok({ ok: true, value: current });
+    if (path.endsWith('/append')) {
+      appended.push(input);
+      assert.equal(input.expectedRevision, snapshot.revision);
+      const { taskId, answerId, answer } = input.records[0].payload;
+      current = { ...current, revision: snapshot.revision + 1, humanTasks: current.humanTasks.map(task => task.id === taskId ? { ...task, status: 'answered', answer, answerReceipt: { answerId, taskId, acceptedRevision: snapshot.revision + 1, recordedAt: current.updatedAt, producer: 'workbench-web', sourceSessionId: null } } : task) };
+      if (disconnect) throw new Error('socket disconnected after commit');
+      return ok({ ok: true, value: { workstreamId: snapshot.id, acceptedRevision: current.revision, snapshotReference: { workstreamId: snapshot.id, revision: current.revision }, sequence: 3, idempotencyKey: input.idempotencyKey, recordedAt: current.updatedAt } });
+    }
+    assert.fail(`Unexpected ${path}`);
+  };
+  const make = () => createWorkstreams({ fetch, storage, validateClient: createWorkbenchWorkstreamClient });
+  const first = make(); await first.load(scope);
+  await assert.rejects(first.answer('task-density-choice', { kind: 'choice', optionId: 'compact' }), /not open/);
+  await first.answer('task-review-interface', { kind: 'yes-no', optionId: 'yes' });
+  assert.match(first.view.error, /outcome unknown/);
+  assert.equal(first.view.pendingAnswer, true);
+  assert.equal(appended.length, 1);
+  await assert.rejects(first.answer('task-review-interface', { kind: 'yes-no', optionId: 'no' }), /reconcile/);
+  const reloaded = make(); await reloaded.load(scope);
+  assert.equal(reloaded.view.snapshot.humanTasks[0].status, 'answered');
+  assert.equal(reloaded.view.pendingAnswer, false);
+  assert.equal(saved.size, 0);
+  assert.equal(appended.length, 1);
+  disconnect = false;
+});
+test('an unknown uncommitted answer retries the exact request; stale revisions require a new review', async () => {
+  const saved = new Map(), appended = [];
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  let revision = snapshot.revision, mode = 'disconnect', taskChanged = false;
+  const fetch = async (path, options) => {
+    if (path === '/api/plugins') return ok({ plugins: [{ id: 'pi-workbench', server: { state: 'active', activeRevision: 'fixture-revision' } }] });
+    const { input } = JSON.parse(options.body);
+    if (path.endsWith('/list')) return ok({ ok: true, value: [{ id: snapshot.id, title: snapshot.title, revision: snapshot.revision, updatedAt: snapshot.updatedAt, activeSessionCount: 1, pendingSessionCount: 0, failedSessionCount: 0, unresolvedHumanTaskCount: 1, closed: false }] });
+    if (path.endsWith('/inspect')) return ok({ ok: true, value: { ...snapshot, revision, humanTasks: taskChanged ? snapshot.humanTasks.map(task => task.id === 'task-review-interface' ? { ...task, answerKind: 'choice', options: [{ id: 'later', label: 'Later' }] } : task) : snapshot.humanTasks } });
+    appended.push(input);
+    if (mode === 'disconnect') throw new Error('disconnected before commit');
+    return ok({ ok: false, error: { code: 'STALE_REVISION', message: 'revision changed', details: { currentRevision: ++revision } } });
+  };
+  const first = createWorkstreams({ fetch, storage, validateClient: createWorkbenchWorkstreamClient });
+  await first.load(scope);
+  await first.answer('task-review-interface', { kind: 'yes-no', optionId: 'yes' });
+  taskChanged = true;
+  const reloaded = createWorkstreams({ fetch, storage, validateClient: createWorkbenchWorkstreamClient });
+  await reloaded.load(scope);
+  assert.equal(reloaded.view.pendingAnswer, true);
+  mode = 'stale'; await reloaded.retryAnswer();
+  assert.deepEqual(appended[0], appended[1]);
+  assert.equal(reloaded.view.pendingAnswer, false);
+  assert.match(reloaded.view.error, /refresh and review/);
+  assert.equal(reloaded.view.needsRefresh, true);
+  await assert.rejects(reloaded.answer('task-review-interface', { kind: 'yes-no', optionId: 'no' }), /Refresh or reconcile/);
+  assert.equal(saved.size, 0);
+});
 test('does not invent remote scope or accept mismatched inspected identity', async () => {
   const { client, calls } = harness();
   await client.load({ ...scope, machineId: 'remote' });
