@@ -160,7 +160,33 @@ function patchCore(source) {
         }
 `;
 	const withHelper = replaceOnce(source, runMarker, helper + runMarker, "core run method");
-	return replaceOnce(withHelper, oldTrigger, newTrigger, "core custom-message trigger");
+	if (withHelper.includes(oldTrigger)) {
+		return replaceOnce(withHelper, oldTrigger, newTrigger, "core custom-message trigger");
+	}
+	const settledTrigger = `        else if (options?.triggerTurn) {
+            if (this._isEmittingAgentSettled) {
+                this._deferredSettledActions.push(async () => await this._runAgentPrompt(appMessage));
+                return;
+            }
+            await this._runAgentPrompt(appMessage);
+        }
+`;
+	const settledReplacement = settledTrigger.replaceAll("this._runAgentPrompt(appMessage)", "this._runTriggeredCustomMessage(appMessage)");
+	const triggerHelper = `    async _runTriggeredCustomMessage(appMessage) {
+        const messages = [appMessage];
+        const images = typeof appMessage.content === "string"
+            ? undefined
+            : appMessage.content.filter((part) => part.type === "image");
+        await this._applyBeforeAgentStart(contentText(appMessage.content), images, messages);
+        await this._runAgentPrompt(messages);
+    }
+`;
+	return replaceOnce(
+		replaceOnce(withHelper, settledTrigger, settledReplacement, "core settled custom-message trigger"),
+		"    _appendCustomMessage(appMessage) {",
+		triggerHelper + "    _appendCustomMessage(appMessage) {",
+		"core triggered custom-message helper",
+	);
 }
 
 function patchBundle(source) {
@@ -171,7 +197,17 @@ function patchBundle(source) {
 	const appendMarker = "_appendCustomMessage(appMessage){";
 	const triggerHelper = 'async _runTriggeredCustomMessage(appMessage){let messages=[appMessage],images=typeof appMessage.content=="string"?void 0:appMessage.content.filter(part=>part.type==="image");await this._applyBeforeAgentStart(contentText(appMessage.content),images,messages),await this._runAgentPrompt(messages)}';
 	let patched = replaceOnce(source, runMarker, helper + runMarker, "bundle run method");
-	patched = replaceOnce(patched, oldTrigger, newTrigger, "bundle custom-message trigger");
+	if (patched.includes(oldTrigger)) {
+		patched = replaceOnce(patched, oldTrigger, newTrigger, "bundle custom-message trigger");
+	} else {
+		const settledTrigger = 'else if(options?.triggerTurn){if(this._isEmittingAgentSettled){this._deferredSettledActions.push(async()=>await this._runAgentPrompt(appMessage));return}await this._runAgentPrompt(appMessage)}';
+		patched = replaceOnce(
+			patched,
+			settledTrigger,
+			settledTrigger.replaceAll("this._runAgentPrompt(appMessage)", "this._runTriggeredCustomMessage(appMessage)"),
+			"bundle settled custom-message trigger",
+		);
+	}
 	return replaceOnce(patched, appendMarker, triggerHelper + appendMarker, "bundle append method");
 }
 
