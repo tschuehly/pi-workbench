@@ -128,12 +128,12 @@ test('answers with the viewed revision, persists the exact retry, and reconciles
 });
 test('a competing answer preserves the unknown saved payload until explicit dismissal', async () => {
   const saved = new Map();
-  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key), key: index => [...saved.keys()][index] ?? null, get length() { return saved.size; } };
   const request = { workstreamId: snapshot.id, expectedRevision: snapshot.revision - 1, idempotencyKey: 'workbench-answer-saved', records: [{ type: 'human-task.answered', producer: 'workbench-web', payload: { taskId: 'task-review-interface', answerId: 'saved', answer: { kind: 'yes-no', optionId: 'no' } } }] };
   storage.setItem(`workbench:workstream:answer:${JSON.stringify([scope.machineId, scope.projectId, scope.workspaceId, snapshot.id])}`, JSON.stringify(request));
   const task = { ...snapshot.humanTasks[0], status: 'answered', answer: { kind: 'yes-no', optionId: 'yes' }, answerReceipt: { answerId: 'other', taskId: 'task-review-interface', acceptedRevision: snapshot.revision, recordedAt: snapshot.updatedAt, producer: 'owner', sourceSessionId: null } };
   const { client } = harness({ storage, inspect: { ...snapshot, humanTasks: [task, ...snapshot.humanTasks.slice(1)] } });
-  await client.load(scope);
+  await client.load({ ...scope, workspaceId: 'another-registered-workspace' });
   assert.equal(client.view.snapshot?.id, snapshot.id);
   assert.equal(client.view.answerConflict?.records[0].payload.answer.optionId, 'no');
   assert.equal(client.view.pendingAnswer, false);
@@ -143,6 +143,18 @@ test('a competing answer preserves the unknown saved payload until explicit dism
   client.dismissAnswerConflict();
   assert.equal(saved.size, 0);
   assert.equal(client.view.answerConflict, null);
+});
+test('unknown answer in a Workstream follows the exact request across workspace switches', async () => {
+  const saved = new Map();
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key), key: index => [...saved.keys()][index] ?? null, get length() { return saved.size; } };
+  const request = { workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: 'workbench-answer-across-workspaces', records: [{ type: 'human-task.answered', producer: 'workbench-web', payload: { taskId: 'task-review-interface', answerId: 'across-workspaces', answer: { kind: 'yes-no', optionId: 'yes' } } }] };
+  storage.setItem(`workbench:workstream:answer:${JSON.stringify([scope.machineId, snapshot.id])}`, JSON.stringify(request));
+  const { client } = harness({ storage });
+  await client.load({ ...scope, workspaceId: 'another-registered-workspace' });
+  assert.equal(client.view.pendingAnswer, true);
+  assert.equal(client.view.answerConflict, null);
+  await assert.rejects(client.answer('task-review-interface', { kind: 'yes-no', optionId: 'no' }), /reconcile/);
+  assert.equal(saved.size, 1);
 });
 test('an unknown uncommitted answer retries the exact request; stale revisions require a new review', async () => {
   const saved = new Map(), appended = [];

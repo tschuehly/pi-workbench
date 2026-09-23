@@ -26,7 +26,7 @@ export function createTaskDrafts(storage) {
 export function createWorkstreams({ fetch: request, validateClient, storage, changed = () => {} }) {
   let generation = 0, client = null, watchSequence = 0;
   let view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope: null };
-  let pendingRequest = null;
+  let pendingRequest = null, pendingKey = null;
   const emit = () => changed({ ...view });
   const nonempty = x => typeof x === 'string' && x.trim() !== '';
   async function json(path, options) {
@@ -41,7 +41,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
   async function load(scope) {
     const epoch = ++generation;
     client = null;
-    pendingRequest = null;
+    pendingRequest = null; pendingKey = null;
     watchSequence = 0;
     view = { summaries: [], snapshot: null, loading: true, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope }; emit();
     try {
@@ -85,11 +85,29 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       if (newer) { view = { ...view, needsRefresh: true, error: 'Workstream changed; refresh and review the latest task before answering.' }; emit(); }
     } catch (error) { if (epoch === generation) { view = { ...view, error: `Could not check Workstream updates: ${String(error)}` }; emit(); } }
   }
-  function answerKey(id) { return `workbench:workstream:answer:${JSON.stringify([view.scope.machineId, view.scope.projectId, view.scope.workspaceId, id])}`; }
+  const answerPrefix = 'workbench:workstream:answer:';
+  function answerKey(id) { return `${answerPrefix}${JSON.stringify([view.scope.machineId, id])}`; }
+  function savedAnswer(snapshot) {
+    const keys = [answerKey(snapshot.id)];
+    // Earlier proof builds stored retry requests under the selected workspace. A Workstream may
+    // span registered workspaces, so find those exact requests before allowing a new answer.
+    for (let i = 0; i < (storage?.length ?? 0); i++) {
+      const key = storage.key(i);
+      if (!key?.startsWith(answerPrefix)) continue;
+      let parts;
+      try { parts = JSON.parse(key.slice(answerPrefix.length)); } catch { continue; }
+      if (Array.isArray(parts) && parts.length === 4 && parts[0] === view.scope.machineId && parts[3] === snapshot.id) keys.push(key);
+    }
+    const found = keys.map(key => [key, storage?.getItem(key)]).filter(([, value]) => value);
+    if (found.length > 1) throw new Error('Multiple saved answer requests exist for this Workstream. Copy and reconcile them before answering again.');
+    return found[0];
+  }
   function reconcileAnswer(snapshot) {
-    pendingRequest = null;
-    const raw = storage?.getItem(answerKey(snapshot.id));
-    if (!raw) return;
+    pendingRequest = null; pendingKey = null;
+    const found = savedAnswer(snapshot);
+    if (!found) return null;
+    const [key, raw] = found;
+    pendingKey = key;
     let saved;
     try { saved = JSON.parse(raw); } catch { throw new Error('Saved answer request is damaged; do not answer again until it is recovered.'); }
     const record = saved?.records?.[0];
@@ -97,10 +115,11 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     const task = snapshot.humanTasks.find(item => item.id === record.payload.taskId);
     if (task && task.status !== 'pending') {
       if (task.answerReceipt?.answerId !== record.payload.answerId) return saved;
-      storage.removeItem(answerKey(snapshot.id));
-      return;
+      storage.removeItem(key); pendingKey = null;
+      return null;
     }
     pendingRequest = saved;
+    return null;
   }
   async function answer(taskId, answerValue) {
     const snapshot = view.snapshot;
@@ -110,13 +129,15 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     if (!storage) throw new Error('Browser storage is unavailable; an answer cannot safely be submitted.');
     const answerId = globalThis.crypto.randomUUID();
     const submission = { workstreamId: snapshot.id, expectedRevision: snapshot.revision, idempotencyKey: `workbench-answer-${answerId}`, records: [{ type: 'human-task.answered', producer: 'workbench-web', payload: { taskId, answerId, answer: answerValue } }] };
-    storage.setItem(answerKey(snapshot.id), JSON.stringify(submission));
+    pendingKey = answerKey(snapshot.id);
+    storage.setItem(pendingKey, JSON.stringify(submission));
     pendingRequest = submission;
     return submitAnswer(submission);
   }
   function dismissAnswerConflict() {
     if (!view.answerConflict || !view.snapshot || view.loading) throw new Error('No conflicting saved answer can be dismissed.');
-    storage.removeItem(answerKey(view.snapshot.id));
+    storage.removeItem(pendingKey);
+    pendingKey = null;
     view = { ...view, answerConflict: null, error: null }; emit();
   }
   async function retryAnswer() {
@@ -124,7 +145,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     return submitAnswer(pendingRequest);
   }
   async function submitAnswer(submission) {
-    const epoch = generation, selectedClient = client, key = answerKey(submission.workstreamId);
+    const epoch = generation, selectedClient = client, key = pendingKey;
     view = { ...view, answering: true, pendingAnswer: true, error: null }; emit();
     try {
       const receipt = await selectedClient.append(submission);
@@ -134,11 +155,11 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
     } catch (error) {
       if (error?.code === 'STALE_REVISION' || error?.code === 'INVALID_TRANSITION') {
         storage.removeItem(key);
-        if (epoch === generation) { pendingRequest = null; view = { ...view, answering: false, pendingAnswer: false, needsRefresh: true, error: 'Workstream changed; refresh and review the task before answering again.' }; emit(); }
+        if (epoch === generation) { pendingRequest = null; pendingKey = null; view = { ...view, answering: false, pendingAnswer: false, needsRefresh: true, error: 'Workstream changed; refresh and review the task before answering again.' }; emit(); }
       } else if (epoch === generation) { view = { ...view, answering: false, pendingAnswer: true, error: `Answer outcome unknown: ${String(error)}. Refresh to check it, or retry the exact saved request.` }; emit(); }
     }
   }
-  function clear() { ++generation; client = null; pendingRequest = null; watchSequence = 0; view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope: null }; emit(); }
+  function clear() { ++generation; client = null; pendingRequest = null; pendingKey = null; watchSequence = 0; view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope: null }; emit(); }
   return { load, select, checkUpdates, clear, answer, retryAnswer, dismissAnswerConflict, get view() { return view; } };
 }
 function validSavedAnswer(answer) {
