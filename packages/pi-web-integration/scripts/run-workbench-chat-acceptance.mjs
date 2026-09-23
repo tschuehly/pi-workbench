@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createIsolatedPiWebStack, assertExecutable } from "./lib/isolated-pi-web-stack.mjs";
+import { createUserLocalWorkstreamStore } from "../../workstream-store/src/index.js";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const WORKBENCH_ROOT = resolve(SCRIPT_DIR, "../../..");
@@ -78,6 +79,7 @@ async function main() {
       await waitForHttp(`http://127.0.0.1:${webPort}/api/pi-web/health`, 20_000, web);
       await waitForFile(stack.paths.fixtureManifest, 10_000, web);
       await seedOwnedTranscript(stack, piWebRoot);
+      await seedOwnedWorkstream(stack);
       sessiond = startLogged(stack, "sessiond", tsx, ["src/server/sessiond.ts"], piWebRoot);
       await waitForFile(stack.paths.socket, 20_000, sessiond);
     } else {
@@ -132,6 +134,20 @@ async function seedOwnedTranscript(stack, piWebRoot) {
     { type: "text", text: "Controlled structured reply" },
   ], api: "anthropic-messages", provider: "controlled-fixture", model: "no-model", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp });
   manager.appendMessage({ role: "toolResult", toolCallId: "controlled-read", toolName: "read", content: [{ type: "text", text: '<script>window.__transcriptInjected=1</script> Controlled tool output' }], isError: false, timestamp: timestamp + 1 });
+}
+
+async function seedOwnedWorkstream(stack) {
+  const fixture = JSON.parse(await readFile(stack.paths.fixtureManifest, "utf8"));
+  const second = fixture.anchors[1];
+  const store = createUserLocalWorkstreamStore({ directory: stack.paths.workstreams });
+  const created = await store.create({ workstreamId: "ws-controlled-owned", idempotencyKey: "fixture-create", title: "Controlled Workstream", producer: "fixture" });
+  await store.append({ workstreamId: "ws-controlled-owned", expectedRevision: created.acceptedRevision, idempotencyKey: "fixture-associate", records: [
+    { type: "session.pending", producer: "fixture", sourceSessionId: second.sessionId, payload: { sessionId: second.sessionId, associationKey: "fixture-association", machineId: second.machineId, projectId: second.projectId, workspaceId: second.workspaceId } },
+    { type: "session.confirmed", producer: "fixture", sourceSessionId: second.sessionId, payload: { sessionId: second.sessionId, associationKey: "fixture-association", machineId: second.machineId, projectId: second.projectId, workspaceId: second.workspaceId } },
+    { type: "checkpoint.replaced", producer: "fixture", sourceSessionId: second.sessionId, payload: { sessionId: second.sessionId, checkpoint: { id: "controlled-checkpoint", whatChanged: "Controlled checkpoint result", remains: "Controlled remaining work", next: "Controlled next step", nextSessionPrompt: "Resume controlled work", references: [] } } },
+    { type: "human-task.upsert", producer: "fixture", sourceSessionId: second.sessionId, payload: { task: { id: "controlled-task", title: "Controlled owner decision", detail: "Should the isolated fixture proceed?", answerKind: "yes-no", materiality: "material", options: [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }] } } },
+    { type: "link.upsert", producer: "fixture", sourceSessionId: second.sessionId, payload: { link: { id: "controlled-link", kind: "file", reference: '<img src=x onerror="window.__workstreamInjected=1">', label: "Controlled reference" } } },
+  ] });
 }
 
 async function prepareFixture(stack) {
@@ -267,6 +283,16 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000);
   const resumed = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), listed: document.querySelector('#catalog')?.textContent?.includes('New Chat (not yet saved)'), error: document.querySelector('#catalog-error')?.textContent })`);
   checks.push({ id: "owned-chat-transient-session-reload", passed: resumed.id === created.id && resumed.listed && !resumed.error, detail: JSON.stringify(resumed) });
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Controlled checkpoint result') === true`, 15_000);
+  const workstream = await evaluate(cdp, `({ text: document.querySelector('#workstreams').textContent, revision: document.querySelector('#workstream-detail h3')?.textContent, injected: window.__workstreamInjected === 1, unsafeElements: document.querySelectorAll('#workstreams img').length, error: document.querySelector('#workstream-error').textContent })`);
+  checks.push({ id: "owned-workstreams-real-service-projection", passed: workstream.text.includes('Controlled owner decision · pending') && workstream.text.includes('Controlled reference') && workstream.text.includes('Controlled next step') && workstream.revision.includes('revision 2') && workstream.unsafeElements === 0 && !workstream.injected && !workstream.error, detail: JSON.stringify({ revision: workstream.revision, task: workstream.text.includes('Controlled owner decision · pending'), link: workstream.text.includes('Controlled reference'), error: workstream.error, unsafeElements: workstream.unsafeElements }) });
+  await evaluate(cdp, `document.querySelector('#workstream-refresh').click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail h3')?.textContent?.includes('revision 2') === true`, 15_000);
+  checks.push({ id: "owned-workstreams-manual-refresh", passed: (await evaluate(cdp, `document.querySelector('#workstream-error').textContent`)) === '', detail: 'Scoped service re-read after refresh' });
+  await evaluate(cdp, `document.querySelector('#workstream-detail button').click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#history')?.textContent?.includes(${JSON.stringify(second.transcriptMarker)}) === true`, 20_000);
+  const association = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), project: new URL(location.href).searchParams.get('project'), workspace: new URL(location.href).searchParams.get('workspace'), error: document.querySelector('#workstream-error').textContent })`);
+  checks.push({ id: "owned-workstreams-confirmed-session-navigation", passed: association.id === second.sessionId && association.project === second.projectId && association.workspace === second.workspaceId && !association.error, detail: JSON.stringify(association) });
   return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations };
 }
 

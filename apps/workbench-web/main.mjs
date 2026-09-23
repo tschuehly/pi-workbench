@@ -1,5 +1,7 @@
 import { createChat, imageAttachments } from './client.mjs';
 import { createCatalog } from './catalog.mjs';
+import { createWorkstreams } from './workstreams.mjs';
+import { createWorkbenchWorkstreamClient } from './workstream-client.js';
 const $ = id => document.getElementById(id);
 const params = new URL(location.href).searchParams;
 function renderMessage(message, streaming = false) {
@@ -31,6 +33,8 @@ const saveDraft = () => { if (!draftKey) return; try { if (draft.value) storage?
 draft.addEventListener('input', saveDraft);
 const chat = createChat({ fetch: (...args) => fetch(...args), socket: path => new WebSocket(new URL(path, location.href).href.replace(/^http/, 'ws')), changed: renderChat });
 const catalog = createCatalog({ fetch: (...args) => fetch(...args), storage, changed: renderCatalog });
+const workstreams = createWorkstreams({ fetch: (...args) => fetch(...args), validateClient: createWorkbenchWorkstreamClient, changed: renderWorkstreams });
+let workstreamScope = '', workstreamNavigation = 0;
 const button = (label, action) => { const node = document.createElement('button'); node.type = 'button'; node.textContent = label; node.onclick = action; return node; };
 function imageControls() {
   $('image-input').disabled = !draftKey || imageBusy || chatView?.sending || chatView?.connection !== 'connected';
@@ -76,6 +80,12 @@ $('image-input').onchange = async event => {
 };
 
 function renderCatalog(view) {
+  const scope = view.selectedWorkspace && JSON.stringify([catalog.machineId, view.selectedWorkspace.projectId, view.selectedWorkspace.id]);
+  if (!scope && workstreamScope) { workstreamScope = ''; workstreams.clear(); }
+  if (scope && scope !== workstreamScope) {
+    workstreamScope = scope;
+    void workstreams.load({ machineId: catalog.machineId, projectId: view.selectedWorkspace.projectId, workspaceId: view.selectedWorkspace.id });
+  }
   const host = $('catalog'); host.replaceChildren();
   $('catalog-error').textContent = view.error ?? (view.creationUnknown ? 'Creation outcome unknown. Refresh the list and check for a new session before trying again.' : '');
   if (view.loading && !view.selectedWorkspace) host.append(document.createTextNode('Loading workspaces…'));
@@ -107,6 +117,53 @@ function renderCatalog(view) {
   if (view.creationUnknown) host.append(button('I verified no new session exists; allow another attempt', () => {
     if (window.confirm('Check the refreshed session list and any other windows first. The prior request may still create a session. Unlock another attempt?')) catalog.acknowledgeUnknown();
   }));
+}
+function renderWorkstreams(view) {
+  $('workstream-error').textContent = view.error ?? '';
+  const list = $('workstream-list'); list.replaceChildren();
+  if (view.loading) list.append(document.createTextNode('Loading Workstreams…'));
+  for (const summary of view.summaries) {
+    const select = button(`${summary.title} · ${summary.unresolvedHumanTaskCount} open tasks`, () => void workstreams.select(summary.id));
+    if (summary.id === view.snapshot?.id) select.setAttribute('aria-current', 'true');
+    list.append(select);
+  }
+  const detail = $('workstream-detail'); detail.replaceChildren();
+  const snapshot = view.snapshot;
+  if (!snapshot) return;
+  const heading = document.createElement('h3'); heading.textContent = `${snapshot.title} · revision ${snapshot.revision}${snapshot.closed ? ' · closed' : ''}`; detail.append(heading);
+  if (snapshot.overview) { const goal = document.createElement('p'); goal.textContent = `${snapshot.overview.goal}\n${snapshot.overview.description}`; detail.append(goal); }
+  for (const session of snapshot.sessions) {
+    const item = document.createElement('article');
+    const title = document.createElement('strong'); title.textContent = `Session ${session.id} · ${session.status}`; item.append(title);
+    if (session.latestCheckpoint) {
+      const note = document.createElement('p'); note.textContent = `Checkpoint: ${session.latestCheckpoint.whatChanged}\nRemaining: ${session.latestCheckpoint.remains}\nNext: ${session.latestCheckpoint.next}`; item.append(note);
+      if (session.latestCheckpoint.nextSessionPrompt) { const prompt = document.createElement('details'); const label = document.createElement('summary'); label.textContent = 'Continuation prompt'; const text = document.createElement('pre'); text.textContent = session.latestCheckpoint.nextSessionPrompt; prompt.append(label, text); item.append(prompt); }
+      if (session.checkpointStaleness) { const stale = document.createElement('p'); stale.textContent = `Stale: ${session.checkpointStaleness.reason}`; item.append(stale); }
+    }
+    if (session.status === 'active') item.append(button('Open associated Chat', () => void openAssociatedSession(session)));
+    detail.append(item);
+  }
+  if (snapshot.humanTasks.length) {
+    const title = document.createElement('h4'); title.textContent = 'Human Tasks'; detail.append(title);
+    for (const task of snapshot.humanTasks) { const item = document.createElement('article'); item.textContent = `${task.title} · ${task.status}${task.detail ? `\n${task.detail}` : ''}${task.options.length ? `\nOptions: ${task.options.map(option => option.label).join(', ')}` : ''}`; detail.append(item); }
+  }
+  if (snapshot.links.length) {
+    const title = document.createElement('h4'); title.textContent = 'Links'; detail.append(title);
+    for (const link of snapshot.links) { const item = document.createElement('p'); item.textContent = `${link.label ?? link.kind}: ${link.reference}`; detail.append(item); }
+  }
+}
+async function openAssociatedSession(session) {
+  const seq = ++workstreamNavigation;
+  const error = message => { if (seq === workstreamNavigation) $('workstream-error').textContent = message; };
+  if (!session.machineId || !session.projectId || !session.workspaceId) { error('Session location is missing; repair its association before opening Chat.'); return; }
+  if (session.machineId !== 'local' || catalog.machineId !== 'local') { error('This Workstream panel only resumes local Chat sessions.'); return; }
+  if (!catalog.view.workspaces.some(w => w.projectId === session.projectId && w.id === session.workspaceId)) { error('Associated workspace is not in the registered catalog.'); return; }
+  clearChat();
+  await catalog.choose(session.projectId, session.workspaceId);
+  if (seq !== workstreamNavigation) return;
+  if (catalog.view.selectedWorkspace?.id !== session.workspaceId || catalog.view.error || !catalog.view.sessions.some(s => s.id === session.id)) { error('Associated session was not found in the registered workspace. No Chat was selected.'); return; }
+  $('workstream-error').textContent = '';
+  openSession(catalog.select(session.id));
 }
 function clearChat() {
   chat.stop(); saveDraft(); draftKey = null; draft.value = ''; chatView = null; resetImages();
@@ -218,6 +275,7 @@ function renderChat(view) {
     } else remaining?.remove();
   }
 }
+$('workstream-refresh').onclick = () => { const w = catalog.view.selectedWorkspace; if (w) void workstreams.load({ machineId: catalog.machineId, projectId: w.projectId, workspaceId: w.id }); };
 $('model').onchange = event => { if (event.target.value) void chat.changeModel(JSON.parse(event.target.value)); };
 $('thinking').onchange = event => { if (event.target.value) void chat.changeThinking(event.target.value); };
 $('earlier').onclick = () => void chat.earlier();
