@@ -2,6 +2,7 @@ import { createChat, imageAttachments } from './client.mjs';
 import { createCatalog } from './catalog.mjs';
 import { createWorkstreams } from './workstreams.mjs';
 import { createWorkbenchWorkstreamClient } from './workstream-client.js';
+import { delegates } from './roster.mjs';
 const $ = id => document.getElementById(id);
 const params = new URL(location.href).searchParams;
 function renderMessage(message, streaming = false) {
@@ -187,7 +188,7 @@ async function openAssociatedSession(session) {
 function clearChat() {
   chat.stop(); saveDraft(); draftKey = null; draft.value = ''; chatView = null; resetImages();
   $('connection').textContent = 'Choose a session'; $('error').textContent = '';
-  for (const id of ['history', 'partial', 'queued', 'ask', 'dialogs']) $(id).replaceChildren();
+  for (const id of ['delegation', 'history', 'partial', 'queued', 'ask', 'dialogs']) $(id).replaceChildren();
   $('earlier').hidden = true; $('stop').hidden = true; $('queue').hidden = true; $('retry-send').hidden = true; $('send').disabled = true;
   for (const id of ['model', 'thinking']) { $(id).replaceChildren(); $(id).disabled = true; $(id).dataset.options = ''; }
 }
@@ -209,8 +210,26 @@ async function chooseWorkspace(projectId, workspaceId) {
   await catalog.choose(projectId, workspaceId);
 }
 async function startSession() { const identity = await catalog.create(); if (identity) openSession(identity); }
+function renderRoster(view) {
+  const host = $('delegation'); host.replaceChildren();
+  const heading = document.createElement('h2'); heading.textContent = 'Workers and Subagents'; host.append(heading);
+  const current = view.connection === 'connected';
+  const snapshot = delegates(view.status);
+  if (!snapshot.available) { const notice = document.createElement('p'); notice.textContent = 'Delegate status unavailable; no completion is inferred.'; host.append(notice); return; }
+  if (!current) { const notice = document.createElement('p'); notice.textContent = 'Disconnected · last reported delegate status (not live)'; host.append(notice); }
+  if (!snapshot.items.length) { const notice = document.createElement('p'); notice.textContent = 'No active Workers, Subagents, or uncollected results reported.'; host.append(notice); return; }
+  for (const item of snapshot.items) {
+    const row = document.createElement('article');
+    const title = document.createElement('strong'); title.textContent = `${item.kind === 'worker' ? 'Worker' : 'Subagent'} · ${item.name || item.id} · ${item.terminal ? 'Uncollected' : 'Running'}`; row.append(title);
+    const binding = document.createElement('p'); binding.textContent = [item.role, item.model, item.effort].filter(Boolean).join(' · ') || 'Binding not reported'; row.append(binding);
+    if (item.objective) { const objective = document.createElement('p'); objective.textContent = item.objective; row.append(objective); }
+    const activity = document.createElement('p'); activity.textContent = item.reportedStatus ? `Reported: ${item.reportedStatus}` : `No status report · ${item.activity || 'starting'}`; row.append(activity);
+    host.append(row);
+  }
+}
 function renderChat(view) {
   chatView = view;
+  renderRoster(view);
   $('connection').textContent = `${view.id} · ${view.connection}`;
   $('error').textContent = view.error ?? '';
   $('earlier').hidden = !view.start;
