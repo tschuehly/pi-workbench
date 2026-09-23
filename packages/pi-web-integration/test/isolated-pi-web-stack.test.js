@@ -49,6 +49,7 @@ test("opt-in ask fixture remains inside owned root and only explicitly chosen cl
   try {
     assert.equal(stack.env.PI_WEB_FIXTURE_PENDING_ASK_MANIFEST, stack.paths.fixtureManifest);
     assert.equal(stack.env.PI_WEB_OWNED_CLIENT_DIST, "/workbench-owned-client");
+    assert.equal(stack.env.PI_WEB_CLIENT_DIST, "/workbench-owned-client");
     assert.throws(() => assertIsolatedEnvironment({ ...stack.env, PI_WEB_FIXTURE_PENDING_ASK_MANIFEST: "/foreign/manifest.json" }, { root, webPort: 18509 }), IsolationError);
   } finally { await stack.cleanup(); }
 });

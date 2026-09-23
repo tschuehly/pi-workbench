@@ -61,6 +61,7 @@ export async function createIsolatedPiWebStack(options) {
   if (options?.ownedClientDist !== undefined) {
     if (!isAbsolute(options.ownedClientDist)) throw new IsolationError("Owned client dist must be absolute");
     env.PI_WEB_OWNED_CLIENT_DIST = resolve(options.ownedClientDist);
+    env.PI_WEB_CLIENT_DIST = resolve(options.ownedClientDist);
   }
   assertIsolatedEnvironment(env, { root: ownedRoot, webPort, browserPort });
   await verifyChildHomedir(env, ownedRoot);
