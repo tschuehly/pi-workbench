@@ -27,9 +27,9 @@ The browser check starts separate web/API, daemon and Chromium processes with is
 
 ## Limits before daily-use acceptance
 
-- Browser roster status is injected into a real isolated daemon response; actual Worker/Subagent execution/status binding still needs a bounded live-model smoke. The credential-free fixture has no model, so model switching, an actual model stream, and model consumption of an image are unproven.
+- Browser roster status is injected into a real isolated daemon response. A read-only status GET during a real Subagent run returned its running role, actual model/effort binding and activity; the owned roster parser classified it as running. Actual Worker/leaf lifecycle and uncollected-results presentation still need an end-to-end check. The credential-free fixture has no model, so model switching, an actual model stream, and model consumption of an image are unproven.
 - In-memory pending dialogs are not demonstrated across daemon restart. Staged image bytes do not survive tab reload; unsent Chat text survives same-tab reload, not a proven app restart. Remote machine selection, general file attachment/delivery, and rich extension tool presentation are absent.
-- The independent Files review is at `packages/pi-web-integration/evidence/owned-files-security-review-2026-09-23.md`. The fork now pins no-follow reads/listing below the granted root, but installed Files security acceptance, local-writer race review and the owner's external-root policy decision remain open.
+- The [initial cross-family Files review](../../packages/pi-web-integration/evidence/owned-files-security-review-2026-09-23.md) covers older revisions; the [final-patch read-only review and Linux check](../../packages/pi-web-integration/evidence/owned-files-postfix-review-2026-09-23.md) are separate-context, not cross-family post-fix sign-off. No-follow reads/listing and bounded enumeration have tests; a directory with over 1,000 entries is explicitly incomplete. Installed Files acceptance and the owner's external-root policy decision remain open.
 - Isolated native interaction and data-safe rollback are **not** an installed daily-use trial. Thomas must inspect the installed client and explicitly accept it before a live switch.
 
 See `NOTICE.md` for copied UI provenance and license.
