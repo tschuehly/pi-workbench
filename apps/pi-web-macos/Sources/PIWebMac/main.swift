@@ -666,11 +666,82 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
                     print(line)
                     fflush(stdout)
                 }
+                if ProcessInfo.processInfo.environment["PI_WEB_NATIVE_FILES_ACCEPTANCE"] == "1" { self.probeFiles() }
             } else if self.nativeProbeAttempts < 40, self.isOwnedProbePage {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.probeOwnedPage() }
             } else {
                 self.nativeProbeFinished = true
                 fputs("NATIVE_UI_PROBE failed: \(error?.localizedDescription ?? String(describing: value))\n", stderr)
+            }
+        }
+    }
+
+    private func probeFiles() {
+        guard nativeProbeEnabled, isOwnedProbePage else { return }
+        // Exercise the real owned Files UI against a registered workspace in the offline fixture.
+        // The direct versioned PUT simulates a second writer; the UI must reject its stale save.
+        let script = """
+        const waitFor = async (predicate, stage) => {
+          for (let i = 0; i < 80; i++) {
+            const value = predicate();
+            if (value) return value;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          throw new Error(`${stage} did not settle: ${document.querySelector('#catalog')?.textContent?.slice(0, 180)}`);
+        };
+        const projects = await (await fetch('/api/machines/local/projects')).json();
+        const project = projects.find(item => item.name === 'Native Files isolated');
+        if (!project) throw new Error('Isolated Files project missing');
+        const listing = await (await fetch(`/api/machines/local/projects/${encodeURIComponent(project.id)}/workspaces`)).json();
+        const workspace = listing.workspaces.find(item => item.isMain);
+        if (!workspace) throw new Error('Isolated Files workspace missing');
+        const fileURL = `/api/machines/local/projects/${encodeURIComponent(project.id)}/workspaces/${encodeURIComponent(workspace.id)}/file?path=README.md`;
+        const initial = await (await fetch(fileURL)).json();
+        if (initial.content !== '# Native fixture v1\\n' || !initial.version) throw new Error('Initial version not readable');
+        const chat = await waitFor(() => [...document.querySelectorAll('#catalog li button')].find(item => item.textContent.includes('Native Files fixture Chat')), 'fixture Chat');
+        chat.click();
+        await waitFor(() => document.querySelector('.shell.chat-active'), 'Chat view');
+        document.querySelector('#files-toggle').click();
+        await waitFor(() => getComputedStyle(document.querySelector('#files')).display !== 'none', 'Files pane');
+        const row = await waitFor(() => [...document.querySelectorAll('#file-tree button')].find(item => item.textContent.includes('README.md')), 'file tree');
+        row.click();
+        await waitFor(() => document.querySelector('#file-detail pre')?.textContent === initial.content, 'file read');
+        const editor = document.querySelector('#file-detail textarea');
+        if (!editor || editor.disabled) throw new Error('Native editor not available');
+        editor.value = '# Native retained draft\\n';
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        const save = [...document.querySelectorAll('#file-detail button')].find(item => item.textContent === 'Save file');
+        const edited = !save?.disabled && document.querySelector('#file-detail h3')?.textContent.includes('Unsaved changes');
+        if (!edited) throw new Error('Native edit not reflected in UI');
+        const outside = await fetch(`${fileURL}&expectedVersion=${initial.version}&createDirs=false`, {
+          method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: '# Native external v2\\n'
+        });
+        if (!outside.ok) throw new Error(`Competing isolated write failed: ${outside.status}`);
+        save.click();
+        await waitFor(() => document.querySelector('#file-error')?.textContent.includes('Conflict:'), 'save conflict');
+        const current = await (await fetch(fileURL)).json();
+        return { read: true, edited, conflict: true,
+          draftPreserved: editor.value === '# Native retained draft\\n',
+          serverKeptExternal: current.content === '# Native external v2\\n',
+          filesVisible: document.querySelector('#files').getBoundingClientRect().width > 0,
+          panelDisplay: getComputedStyle(document.querySelector('#files')).display,
+          shellClass: document.querySelector('.shell').className,
+          filesExpanded: document.querySelector('#files-toggle').getAttribute('aria-expanded'),
+          viewport: innerWidth };
+        """
+        webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
+            switch result {
+            case .success(let value):
+                if let fields = value as? [String: Any] {
+                    var evidence = fields
+                    evidence["type"] = "NATIVE_FILES_PROBE"
+                    if let data = try? JSONSerialization.data(withJSONObject: evidence), let line = String(data: data, encoding: .utf8) {
+                        print(line)
+                        fflush(stdout)
+                    }
+                } else { fputs("NATIVE_FILES_PROBE returned invalid evidence\n", stderr) }
+            case .failure(let error):
+                fputs("NATIVE_FILES_PROBE failed: \(String(describing: error)) \((error as NSError).userInfo)\n", stderr)
             }
         }
     }

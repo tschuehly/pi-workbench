@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { access, cp, mkdir, mkdtemp, readFile, readdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, realpath, symlink, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -117,6 +117,17 @@ try {
     assert.equal((await fetch(sessionApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: launchCwd, startupToken: launchToken }) })).status, 400);
     assert.equal((await fetch(sessionApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: launchCwd, startupToken: transientToken }) })).status, 400);
     console.log(JSON.stringify({ type: 'WORKSTREAM_LAUNCH_SMOKE', status: 'passed', exactLookup: true, wrongWorkspaceUnknown: true, retryRejected: true, persistedAcrossIsolatedDaemonRestart: true, unpersistedUnknown: true }));
+    const filesCwd = join(root, 'native-files');
+    await mkdir(filesCwd);
+    await writeFile(join(filesCwd, 'README.md'), '# Native fixture v1\n');
+    const registered = await fetch(`http://127.0.0.1:${port}/api/machines/local/projects`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Native Files isolated', path: filesCwd }) });
+    assert.equal(registered.status, 200, 'Isolated native Files project registration failed');
+    const project = await registered.json();
+    const workspaces = await (await fetch(`http://127.0.0.1:${port}/api/machines/local/projects/${encodeURIComponent(project.id)}/workspaces`)).json();
+    assert.equal(workspaces.workspaces.find(workspace => workspace.isMain)?.path, await realpath(filesCwd), 'Native Files must use the registered fixture workspace');
+    const filesSession = SessionManager.create(await realpath(filesCwd), stack.paths.sessions, { id: randomUUID() });
+    filesSession.appendMessage({ role: 'user', content: [{ type: 'text', text: 'Native Files fixture Chat' }], timestamp: Date.now() });
+    filesSession.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Open Files in this fixture' }], api: 'anthropic-messages', provider: 'fixture', model: 'no-model', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: 'stop', timestamp: Date.now() + 1 });
     const fakeCli = join(root, 'status-only-cli');
     const forbidden = join(root, 'forbidden-cli-command');
     await writeFile(fakeCli, `#!/bin/sh\nif [ "$1" = status ]; then exit 0; fi\nprintf '%s\\n' "$*" > '${forbidden}'\nexit 1\n`, { mode: 0o700 });
@@ -130,24 +141,30 @@ try {
     const bundle = join(appPath, 'Contents/MacOS/PIWebMac');
     await access(bundle);
     const priorLog = log.length;
-    const app = spawn(bundle, [], { cwd: root, env: { ...stack.env, PI_WEB_NATIVE_ACCEPTANCE: '1' }, detached: true });
+    const app = spawn(bundle, [], { cwd: root, env: { ...stack.env, PI_WEB_NATIVE_ACCEPTANCE: '1', PI_WEB_NATIVE_FILES_ACCEPTANCE: '1' }, detached: true });
     let evidence = '';
     app.stdout.on('data', chunk => { evidence += String(chunk); });
     app.stderr.on('data', chunk => log.push(String(chunk).slice(-2000)));
     try {
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 300; i++) {
         if (app.exitCode !== null || app.signalCode !== null) throw new Error(`Native app exited: ${log.join('').slice(-3000)}`);
-        if (evidence.includes('\n')) break;
+        if (evidence.split('\n').slice(0, -1).some(line => line.includes('NATIVE_FILES_PROBE'))) break;
+        if (log.slice(priorLog).some(line => line.includes('NATIVE_FILES_PROBE failed'))) throw new Error(`Native Files probe failed: ${log.join('').slice(-3000)}`);
         await delay(100);
       }
-      const probe = evidence.split('\n').filter(Boolean).map(line => JSON.parse(line)).find(line => line.type === 'NATIVE_UI_PROBE');
+      const reports = evidence.split('\n').filter(Boolean).map(line => JSON.parse(line));
+      const probe = reports.find(line => line.type === 'NATIVE_UI_PROBE');
       assert.ok(probe, `Native owned UI probe timed out: ${log.join('').slice(-3000)}`);
       assert.equal(probe.rendered, true);
       assert.equal(probe.action, true);
       assert.ok(probe.width > 0 && probe.height > 0);
+      const filesProbe = reports.find(line => line.type === 'NATIVE_FILES_PROBE');
+      assert.ok(filesProbe, `Native Files probe timed out: ${log.join('').slice(-3000)}`);
+      for (const field of ['read', 'edited', 'conflict', 'draftPreserved', 'serverKeptExternal', 'filesVisible']) assert.equal(filesProbe[field], true, `Native Files ${field} failed: ${JSON.stringify(filesProbe)}`);
+      assert.equal(await readFile(join(filesCwd, 'README.md'), 'utf8'), '# Native external v2\n');
       assert.match(log.slice(priorLog).join(''), /"url":"\/main\.mjs"/, 'Native WKWebView did not load owned module');
       await assert.rejects(access(forbidden), { code: 'ENOENT' });
-      console.log(JSON.stringify({ type: 'NATIVE_SMOKE', status: 'passed', appOnly: true, isolatedReadiness: true, nativeOwnedModuleRequest: true, nativeUI: probe, lifecycleCommand: false }));
+      console.log(JSON.stringify({ type: 'NATIVE_SMOKE', status: 'passed', appOnly: true, isolatedReadiness: true, nativeOwnedModuleRequest: true, nativeUI: probe, nativeFiles: filesProbe, lifecycleCommand: false }));
     } finally {
       await terminateOwnedProcess(app);
     }
@@ -168,6 +185,7 @@ try {
     const created = await store.create({ workstreamId: 'ws-isolated-rollback', idempotencyKey: 'rollback-create', title: 'Rollback state', producer: 'fixture' });
     const before = await Promise.all([directoryDigest(stack.paths.sessions), directoryDigest(stack.paths.workstreams), directoryDigest(launchLedger)]);
     const configBefore = await readFile(stack.paths.config);
+    const projectsBefore = await readFile(stack.paths.projects);
     const backendBefore = await readFile(join(piWebRoot, 'src/server/index.ts'));
     const backup = join(root, 'state-backup');
     await mkdir(backup);
@@ -175,6 +193,7 @@ try {
     await cp(stack.paths.workstreams, join(backup, 'workstreams'), { recursive: true });
     await cp(launchLedger, join(backup, 'workstream-launches'), { recursive: true });
     await cp(stack.paths.config, join(backup, 'config.json'));
+    await cp(stack.paths.projects, join(backup, 'projects.json'));
     await access(stack.paths.socket);
     await terminateOwnedProcess(web);
     await unlink(selectedClient);
@@ -193,13 +212,16 @@ try {
     assert.deepEqual(await Promise.all([directoryDigest(join(backup, 'sessions')), directoryDigest(join(backup, 'workstreams')), directoryDigest(join(backup, 'workstream-launches'))]), before);
     assert.deepEqual(await readFile(stack.paths.config), configBefore);
     assert.deepEqual(await readFile(join(backup, 'config.json')), configBefore);
+    assert.deepEqual(await readFile(stack.paths.projects), projectsBefore);
+    assert.deepEqual(await readFile(join(backup, 'projects.json')), projectsBefore);
+    assert.equal(await readFile(join(filesCwd, 'README.md'), 'utf8'), '# Native external v2\n');
     assert.deepEqual(await readFile(join(piWebRoot, 'src/server/index.ts')), backendBefore);
     assert.equal((await store.inspect('ws-isolated-rollback')).revision, created.acceptedRevision);
     assert.ok((await SessionManager.list(sessionCwd, stack.paths.sessions)).some(entry => entry.id === sessionId));
     await access(stack.paths.socket);
     assert.equal(daemonProcess.exitCode, null, 'Session daemon must remain running throughout rollback');
     await assert.rejects(access(forbidden), { code: 'ENOENT' });
-    console.log(JSON.stringify({ type: 'ROLLBACK_SMOKE', status: 'passed', priorClientRestored: true, stateBackupMatches: true, sessionBytesUnchanged: true, workstreamBytesUnchanged: true, launchLedgerBytesUnchanged: true, configurationUnchanged: true, sameBackendRevision: true, daemonSocketRetained: true, lifecycleCommand: false }));
+    console.log(JSON.stringify({ type: 'ROLLBACK_SMOKE', status: 'passed', priorClientRestored: true, stateBackupMatches: true, sessionBytesUnchanged: true, workstreamBytesUnchanged: true, launchLedgerBytesUnchanged: true, projectRegistryUnchanged: true, fixtureFileUnchanged: true, configurationUnchanged: true, sameBackendRevision: true, daemonSocketRetained: true, lifecycleCommand: false }));
   }
   console.log(JSON.stringify({ type: 'STATIC_SMOKE', status: 'passed', productionEntrypoint: 'src/server/index.ts', ownedIndex: true, ownedModule: true, api: true, invalidRootRejected: true }));
 } finally {
