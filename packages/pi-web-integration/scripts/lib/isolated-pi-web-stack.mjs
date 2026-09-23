@@ -57,6 +57,11 @@ export async function createIsolatedPiWebStack(options) {
   for (const path of ownedDirectories) assertOwnedPath(ownedRoot, await realpath(path));
 
   const env = buildIsolatedEnvironment(paths, webPort, options?.baseEnv);
+  if (options?.pendingAskFixture === true) env.PI_WEB_FIXTURE_PENDING_ASK_MANIFEST = paths.fixtureManifest;
+  if (options?.ownedClientDist !== undefined) {
+    if (!isAbsolute(options.ownedClientDist)) throw new IsolationError("Owned client dist must be absolute");
+    env.PI_WEB_OWNED_CLIENT_DIST = resolve(options.ownedClientDist);
+  }
   assertIsolatedEnvironment(env, { root: ownedRoot, webPort, browserPort });
   await verifyChildHomedir(env, ownedRoot);
   const children = new Set();
@@ -143,6 +148,9 @@ export function assertIsolatedEnvironment(env, ownership) {
   }
   assertOwnedPath(root, env.PI_WEB_FIXTURE_OWNED_ROOT, "PI_WEB_FIXTURE_OWNED_ROOT");
   assertOwnedPath(root, env.PI_WEB_FIXTURE_ROOT, "PI_WEB_FIXTURE_ROOT");
+  if (env.PI_WEB_FIXTURE_PENDING_ASK_MANIFEST !== undefined && resolve(env.PI_WEB_FIXTURE_PENDING_ASK_MANIFEST) !== resolve(root, "fixture/manifest.json")) {
+    throw new IsolationError("Pending ask manifest must be owned by this fixture");
+  }
   if (env.PI_WEB_SESSIOND_URL !== undefined || env.PI_WEB_SESSIOND_PORT !== undefined) {
     throw new IsolationError("TCP/URL sessiond overrides are forbidden; the owned socket is required");
   }

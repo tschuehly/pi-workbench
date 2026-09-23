@@ -43,6 +43,16 @@ test("rejects paths, daemon overrides, credential variables, and foreign ports",
   }
 });
 
+test("opt-in ask fixture remains inside owned root and only explicitly chosen client assets are used", async () => {
+  const root = await mkdtemp(join(tmpdir(), "isolated-pi-web-test-"));
+  const stack = await createIsolatedPiWebStack({ root, webPort: 18509, pendingAskFixture: true, ownedClientDist: "/workbench-owned-client", baseEnv: { PATH: "/bin" } });
+  try {
+    assert.equal(stack.env.PI_WEB_FIXTURE_PENDING_ASK_MANIFEST, stack.paths.fixtureManifest);
+    assert.equal(stack.env.PI_WEB_OWNED_CLIENT_DIST, "/workbench-owned-client");
+    assert.throws(() => assertIsolatedEnvironment({ ...stack.env, PI_WEB_FIXTURE_PENDING_ASK_MANIFEST: "/foreign/manifest.json" }, { root, webPort: 18509 }), IsolationError);
+  } finally { await stack.cleanup(); }
+});
+
 test("refuses to adopt and later delete a pre-existing non-empty root", async () => {
   const root = await mkdtemp(join(tmpdir(), "isolated-pi-web-test-"));
   await writeFile(join(root, "foreign-marker"), "do not adopt\n", "utf8");

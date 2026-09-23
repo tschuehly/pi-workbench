@@ -47,13 +47,14 @@ async function main() {
     await assertExecutable(join(piWebRoot, `node_modules/node-pty/prebuilds/darwin-${architecture}/spawn-helper`), "PI WEB node-pty helper is not executable; repair the owned dependency installation");
   }
   await assertExecutable(chrome, "Chromium is unavailable");
-  const clientIndex = join(piWebRoot, "dist/client/index.html");
-  await readFile(clientIndex).catch(() => { throw new Error(`Built PI WEB client assets are required: ${clientIndex}`); });
+  const ownedClientDist = args.ownedClientDist === undefined ? undefined : resolve(args.ownedClientDist);
+  const clientIndex = join(ownedClientDist ?? join(piWebRoot, "dist/client"), "index.html");
+  await readFile(clientIndex).catch(() => { throw new Error(`Built client assets are required: ${clientIndex}`); });
 
   // Keep the owned root short enough for macOS's Unix-domain socket limit.
   const root = args.root ?? await mkdtemp(join(tmpdir(), "pw-accept-"));
   const [webPort, browserPort] = await allocateDistinctPorts();
-  const stack = await createIsolatedPiWebStack({ root: resolve(root), webPort, browserPort });
+  const stack = await createIsolatedPiWebStack({ root: resolve(root), webPort, browserPort, pendingAskFixture: ownedClientDist !== undefined, ...(ownedClientDist === undefined ? {} : { ownedClientDist }) });
   process.stdout.write(`${JSON.stringify({ type: "ISOLATION_PREFLIGHT", freshRoot: true, socketOnlySessiond: true, credentialVariables: 0, ownedPorts: 2 })}\n`);
   let interruptedExit;
   const onSignal = (signal) => {
@@ -66,24 +67,38 @@ async function main() {
   try {
     await prepareFixture(stack);
     await cp(join(WORKBENCH_ROOT, "packages"), join(stack.paths.data, "plugins/pi-workbench"), { recursive: true, errorOnExist: true });
-    const sessiond = startLogged(stack, "sessiond", tsx, ["src/server/sessiond.ts"], piWebRoot);
-    await waitForFile(stack.paths.socket, 15_000, sessiond);
-    const web = startLogged(stack, "web", tsx, ["src/server/fixtureServer.ts"], piWebRoot);
+    // The owned proof seeds a real daemon-memory ask from the fixture manifest,
+    // so its web fixture must write that manifest before sessiond starts.
+    let sessiond;
+    let web;
+    if (ownedClientDist !== undefined) {
+      web = startLogged(stack, "web", tsx, [join(SCRIPT_DIR, "owned-chat-fixture-server.mjs")], piWebRoot);
+      await waitForHttp(`http://127.0.0.1:${webPort}/api/pi-web/health`, 20_000, web);
+      await waitForFile(stack.paths.fixtureManifest, 10_000, web);
+      sessiond = startLogged(stack, "sessiond", tsx, ["src/server/sessiond.ts"], piWebRoot);
+      await waitForFile(stack.paths.socket, 20_000, sessiond);
+    } else {
+      sessiond = startLogged(stack, "sessiond", tsx, ["src/server/sessiond.ts"], piWebRoot);
+      await waitForFile(stack.paths.socket, 15_000, sessiond);
+      web = startLogged(stack, "web", tsx, ["src/server/fixtureServer.ts"], piWebRoot);
+      await waitForFile(stack.paths.fixtureManifest, 10_000, web);
+    }
     await waitForHttp(`http://127.0.0.1:${webPort}/api/projects`, 20_000, web);
     await waitForHttp(`http://127.0.0.1:${webPort}/`, 20_000, web);
-    await waitForFile(stack.paths.fixtureManifest, 10_000, web);
     const controlledFixture = JSON.parse(await readFile(stack.paths.fixtureManifest, "utf8"));
-    const initialUrl = `http://127.0.0.1:${webPort}/`;
+    const initialUrl = ownedClientDist === undefined ? `http://127.0.0.1:${webPort}/` : ownedFixtureUrl(webPort, controlledFixture.anchors[0]).href;
     const browser = startLogged(stack, "chromium", chrome, chromeArgs(browserPort, stack.paths.chromeProfile, initialUrl), piWebRoot);
     await waitForHttp(`http://127.0.0.1:${browserPort}/json/version`, 15_000, browser);
     await delay(1_000);
 
-    const cdp = await openExistingPage(browserPort, initialUrl);
+    const cdp = await openExistingPage(browserPort, initialUrl, ownedClientDist === undefined ? "Pi Workbench" : "Workbench Chat proof");
     try {
       await cdp.send("Page.enable");
       await cdp.send("Runtime.enable");
       await cdp.send("Log.enable");
-      const result = await withTimeout(runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture, { sessiond, web }), 90_000, "Browser acceptance exceeded its owned 90-second deadline");
+      const result = await withTimeout(ownedClientDist === undefined
+        ? runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture, { sessiond, web })
+        : runOwnedBrowserAcceptance(cdp, webPort, controlledFixture, { sessiond, web }), 90_000, "Browser acceptance exceeded its owned 90-second deadline");
       for (const limitation of result.limitations) process.stdout.write(`${JSON.stringify({ type: "FIXTURE_LIMITATION", ...limitation })}\n`);
       for (const check of result.checks) process.stdout.write(`${JSON.stringify({ type: "ACCEPTANCE_CHECK", ...check })}\n`);
       process.stdout.write(`${JSON.stringify({ type: "ACCEPTANCE_RESULT", status: result.status, failures: result.checks.filter((check) => !check.passed).length, limitations: result.limitations.length })}\n`);
@@ -105,6 +120,43 @@ async function prepareFixture(stack) {
     pathAccess: { allowedPaths: [stack.root] }, plugins: {},
   }, null, 2)}\n`, "utf8");
   await writeFile(stack.paths.machines, '{"machines":[]}\n', { encoding: "utf8", mode: 0o600 });
+}
+
+function ownedFixtureUrl(webPort, anchor) {
+  if (anchor === undefined) throw new Error("Controlled fixture needs a Chat anchor");
+  const url = new URL(`http://127.0.0.1:${webPort}/`);
+  url.searchParams.set("id", anchor.sessionId);
+  url.searchParams.set("cwd", anchor.cwd);
+  url.searchParams.set("machine", anchor.machineId);
+  return url;
+}
+
+async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
+  const first = fixture.anchors[0];
+  const base = ownedFixtureUrl(webPort, first);
+  const statusUrl = new URL(`api/machines/local/sessions/${encodeURIComponent(first.sessionId)}/status`, base);
+  statusUrl.searchParams.set("cwd", first.cwd);
+  const serverStatus = await requestJson(statusUrl);
+  const checks = [{ id: "real-daemon-pending-ask", passed: serverStatus.pendingAsk?.questions?.[0]?.id === "fixture-choice", detail: JSON.stringify({ sessionId: serverStatus.sessionId, askId: serverStatus.pendingAsk?.askId }) }];
+  await waitForBrowserExpression(cdp, `document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000);
+  await waitForBrowserExpression(cdp, `document.querySelector('#ask form') !== null`, 10_000);
+  const mounted = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask')?.textContent ?? '', earlier: document.querySelector('#earlier')?.hidden })`);
+  checks.push({ id: "owned-chat-history-and-question", passed: mounted.history.includes(first.transcriptMarker) && mounted.ask.includes("Which controlled fixture answer?") && mounted.earlier === false, detail: JSON.stringify({ marker: mounted.history.includes(first.transcriptMarker), ask: mounted.ask, earlier: mounted.earlier }) });
+  await evaluate(cdp, `document.querySelector('#earlier').click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#earlier')?.hidden === true`, 10_000);
+  const page = await evaluate(cdp, `document.querySelector('#history')?.textContent ?? ''`);
+  checks.push({ id: "owned-chat-history-paging", passed: page.includes(`${first.transcriptMarker} page 1`), detail: JSON.stringify({ firstPagePresent: page.includes(`${first.transcriptMarker} page 1`) }) });
+  await evaluate(cdp, `(() => { const input = document.querySelector('#ask input[value="one"]'); if (!input) throw Error('Fixture ask option missing'); input.click(); document.querySelector('#ask button').click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#ask form') === null`, 15_000);
+  const closed = await requestJson(statusUrl);
+  checks.push({ id: "owned-chat-answer-through-real-daemon", passed: closed.pendingAsk === undefined, detail: JSON.stringify({ sessionId: closed.sessionId, pendingAsk: closed.pendingAsk?.askId }) });
+  const reload = cdp.waitForEvent("Page.loadEventFired", 20_000);
+  await cdp.send("Page.reload"); await reload;
+  await waitForBrowserExpression(cdp, `document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000);
+  const afterReload = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask form') !== null })`);
+  assertChildAlive(runtime.sessiond);
+  checks.push({ id: "owned-chat-reload-and-daemon-continuity", passed: afterReload.history.includes(first.transcriptMarker) && !afterReload.ask, detail: JSON.stringify({ history: afterReload.history.includes(first.transcriptMarker), ask: afterReload.ask, sessiondPid: runtime.sessiond.pid }) });
+  return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations: [] };
 }
 
 async function runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture, runtime) {
@@ -394,13 +446,13 @@ function assertChildAlive(child) { if (child.exitCode !== null || child.signalCo
 async function allocateDistinctPorts() { const first = await freePort(); let second = await freePort(); while (second === first) second = await freePort(); return [first, second]; }
 function freePort() { return new Promise((resolvePort, reject) => { const server = createServer(); server.once("error", reject); server.listen(0, "127.0.0.1", () => { const address = server.address(); server.close(() => typeof address === "object" && address !== null ? resolvePort(address.port) : reject(new Error("Could not allocate port"))); }); }); }
 function chromeArgs(port, profile, initialUrl) { return ["--headless=new", `--remote-debugging-port=${port}`, "--remote-debugging-address=127.0.0.1", `--user-data-dir=${profile}`, "--window-size=1440,900", "--force-device-scale-factor=1", "--disable-background-networking", "--disable-dev-shm-usage", "--disable-gpu", "--disable-extensions", "--disable-features=Translate,MediaRouter,OptimizationHints", "--use-mock-keychain", "--password-store=basic", "--no-proxy-server", "--disable-component-update", "--disable-domain-reliability", "--disable-sync", "--metrics-recording-only", "--no-default-browser-check", "--no-first-run", "--no-sandbox", initialUrl]; }
-async function openExistingPage(port, requestedUrl) {
+async function openExistingPage(port, requestedUrl, expectedTitle = "Pi Workbench") {
   const started = Date.now();
   let pages = [];
   while (Date.now() - started < 15_000) {
     pages = await requestJson(new URL(`http://127.0.0.1:${port}/json/list`));
     const info = pages.find((candidate) => candidate.type === "page" && candidate.url === requestedUrl);
-    if (info?.webSocketDebuggerUrl !== undefined && info.title === "Pi Workbench") {
+    if (info?.webSocketDebuggerUrl !== undefined && info.title === expectedTitle) {
       if (process.env.PI_WEB_ACCEPTANCE_TRACE === "1") process.stderr.write(`[cdp-open] ${JSON.stringify({ requested: requestedUrl, actual: info.url })}\n`);
       return CDP.connect(info.webSocketDebuggerUrl);
     }
@@ -419,7 +471,7 @@ class CDP {
   onMessage(event) { const message = JSON.parse(String(event.data)); if (process.env.PI_WEB_ACCEPTANCE_TRACE === "1") process.stderr.write(`[cdp] ${JSON.stringify({ id: message.id, method: message.method, error: message.error, ...(message.method === "Runtime.exceptionThrown" || message.method === "Log.entryAdded" ? { params: message.params } : {}) })}\n`); if (message.id !== undefined) { const pending = this.pending.get(message.id); if (!pending) return; this.pending.delete(message.id); if (message.error) pending.reject(new Error(JSON.stringify(message.error))); else pending.resolve(message.result ?? {}); return; } for (const listener of this.listeners.get(message.method) ?? []) listener(message.params ?? {}); }
 }
 
-function parseArgs(argv) { const parsed = {}; for (let index = 0; index < argv.length; index += 1) { const arg = argv[index]; if (arg === "--keep-temp") parsed.keepTemp = true; else if (["--root", "--pi-web-root", "--chrome-bin"].includes(arg)) { const value = argv[++index]; if (!value) throw new Error(`${arg} requires a value`); parsed[arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value; } else if (arg === "--help") { process.stdout.write("Usage: node packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs [--pi-web-root PATH] [--chrome-bin PATH] [--root TEMP] [--keep-temp]\n"); process.exit(0); } else throw new Error(`Unknown argument: ${arg}`); } return parsed; }
+function parseArgs(argv) { const parsed = {}; for (let index = 0; index < argv.length; index += 1) { const arg = argv[index]; if (arg === "--keep-temp") parsed.keepTemp = true; else if (["--root", "--pi-web-root", "--chrome-bin", "--owned-client-dist"].includes(arg)) { const value = argv[++index]; if (!value) throw new Error(`${arg} requires a value`); parsed[arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value; } else if (arg === "--help") { process.stdout.write("Usage: node packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs [--pi-web-root PATH] [--owned-client-dist PATH] [--chrome-bin PATH] [--root TEMP] [--keep-temp]\n"); process.exit(0); } else throw new Error(`Unknown argument: ${arg}`); } return parsed; }
 function executableFile(path) { try { accessSync(path, constants.X_OK); return true; } catch { return false; } }
 function delay(ms) { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 function withTimeout(promise, timeoutMs, message) {
