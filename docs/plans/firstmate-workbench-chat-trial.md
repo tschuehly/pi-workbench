@@ -1,6 +1,6 @@
 # Trial Firstmate's primary in Workbench Chat
 
-**Status: proposed experiment, not approval to install tools, register a project, or change Workbench or PI WEB.** Test Firstmate with its coordinating Pi session in Workbench Chat and its crew in an owner-chosen **non-tmux** backend. This is an external tool trial, not the rejected [Workbench coordination-mate plan](firstmate-coordination-mate.md) or a change to [Decision 103](../foundation/decisions.md). A separate [PI WEB crew-backend plan](firstmate-pi-web-crew-backend.md) investigates Workbench-hosted workers without requiring this live trial to succeed.
+**Status: authorized isolated trial; primary compatibility failed before crew dispatch.** Test Firstmate with its coordinating Pi session in Workbench Chat and its crew in an owner-chosen **non-tmux** backend. The owner selected Herdr and approved private tool installation; this does not authorize Ship, publication, or deployment. This is an external tool trial, not the rejected [Workbench coordination-mate plan](firstmate-coordination-mate.md) or a change to [Decision 103](../foundation/decisions.md). A separate [PI WEB crew-backend plan](firstmate-pi-web-crew-backend.md) investigates Workbench-hosted workers without requiring this live trial to succeed.
 
 ## What this answers
 
@@ -25,3 +25,9 @@ A toy repository is **not necessary** for this trial. Start with a bounded, read
 **Pass:** Workbench Chat hosts the primary, one useful Scout report is attributable to the isolated `pi-workbench` worktree, and window reconnect plus primary-session restart lose no actionable decision or task while creating no duplicate. **Stop:** missing tools or permissions are unacceptable; the host cannot prove required extension/watcher behavior; or the second app defeats the desired experience. Passing does not prove that PI WEB can host crew endpoints.
 
 Report pinned versions, backend and setup cost, observed session/task/worktree IDs, wake and recovery evidence, cleanup state, and the next decision. A Scout report or fleet snapshot alone is not proof of managed recovery.
+
+## Isolated host observation — 2026-09-23
+
+The pilot used Firstmate `1e0e773`, Herdr, and a separate PI WEB build at `f17b8aeb` with the correctly installed Pi SDK `0.85.1`. Its own daemon, data directory, session directory, and port `18504` were separate from the live host. A new Workbench Chat (`01a0cded-be3e-75fe-a026-5ac689bd534b`) loaded Firstmate's startup digest, but the digest reported **“cannot locate harness process in ancestry.”** The lock script requires a verified per-session harness process; PI WEB's session is hosted inside a shared `node dist/server/sessiond.js` process, which is not a per-session Pi ancestor. The private home had no `state/.lock`, session-start completion, or Firstmate watcher. Extension marker files identify the shared daemon PID and are not ownership evidence.
+
+One diagnostic prompt persisted this Chat's transcript and confirmed the read-only refusal; the Chat was then stopped through the pilot host. The previous empty Chat vanished from the session catalog after the earlier test-daemon restart because it had never persisted. **No Scout was dispatched**, and neither the window reconnect nor primary-session recovery gates passed. Do not bypass Firstmate's lock with the shared daemon PID or interpret an extension marker as readiness. The next compatibility slice needs a host-verifiable, per-session identity and liveness contract for Firstmate; until then this primary trial stops safely.

@@ -1,6 +1,6 @@
 # Investigate PI WEB as a Firstmate crew backend
 
-**Status: proposed feasibility experiment, not authorization to implement or deploy a backend.** Determine whether Firstmate workers can run as PI WEB-hosted Pi sessions and appear in Workbench Chat without tmux or another crew app. The separate [primary-in-Workbench-Chat trial](firstmate-workbench-chat-trial.md) tests a faster external-backend route; its live crew trial is **not** a prerequisite for this audit. Product adoption would require a separate owner decision to revisit [Decision 103](../foundation/decisions.md) and the [current UI scope](workbench-ui.md).
+**Status: isolated feasibility work in progress; no backend is deployed or safe for crew dispatch.** Determine whether Firstmate workers can run as PI WEB-hosted Pi sessions and appear in Workbench Chat without tmux or another crew app. The separate [primary-in-Workbench-Chat trial](firstmate-workbench-chat-trial.md) tests a faster external-backend route; its live crew trial is **not** a prerequisite for this audit. Product adoption would require a separate owner decision to revisit [Decision 103](../foundation/decisions.md) and the [current UI scope](workbench-ui.md).
 
 ## Ownership and the hard question
 
@@ -29,3 +29,9 @@ Firstmate's [`fm-backend.sh` at `1e0e773`](https://github.com/kunchenguid/firstm
 Only after Phase B passes and the owner approves a useful bounded task, run a read-only Scout against `pi-workbench` in an isolated worktree. A guarded `local-only` Ship is a separate owner-approved step with explicit landing authority. If the experience merits a Workbench view, consume Firstmate's observational [`fm-fleet-snapshot.sh --json`](https://github.com/kunchenguid/firstmate/blob/1e0e773/bin/fm-fleet-snapshot.sh) and label the fleet **externally managed**; all control actions must pass through Firstmate's guarded path and return receipts. A successful view is not proof of supervision or authority.
 
 At the end, recommend one of: keep Firstmate external, build the PI WEB backend under its own authority, translate one mechanism into Workbench's future managed modules, or stop. This experiment grants no unattended Workbench Run guarantees.
+
+## Capability finding — 2026-09-23
+
+The isolated PI WEB pilot at `f17b8aeb` installs Pi SDK `0.85.1`. Its `pi-sessions` plugin capability can create a hosted session, but returns a randomly generated ID only after startup. `POST /sessions` also lacks an operation key. If the create succeeds and its response is lost, retrying can create a second session; neither existing path is a safe Firstmate crew backend. Firstmate's current `fm-backend.sh` has no `pi-web` adapter.
+
+The separate Pi SDK branch `experiment/firstmate-empty-session-persist-20260923` at `5a961639b` adds `SessionManager.materialize()` on SDK `0.87.1`: exclusive creation and sync before the first assistant turn. This alone does not supply host idempotency, and it does not match the pilot's locked SDK version. A safe isolated host spike still needs a durable operation-to-session reservation, caller-preidentified ID, workspace and file-header validation on recovery, and failure-window tests before any Firstmate adapter or Scout. The primary Chat trial also failed to establish Firstmate's per-session lock; even a working crew host would not yet prove an integrated Workbench experience.
