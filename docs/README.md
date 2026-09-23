@@ -48,8 +48,9 @@ not in the authoritative decision record.
 ## Current work and implemented plans
 
 - [`plans/workbench-owned-client.md`](plans/workbench-owned-client.md) — selected protocol-only frontend
-  direction with familiar Chat, Workstreams, delegation roster, Files and Terminal; delivery sequence
-  remains proposed, with implementation approval and independent review pending.
+  direction with familiar Chat, Workstreams, delegation roster and Files; manual shell work stays in an
+  external terminal. Delivery sequence remains proposed; implementation approval and independent review
+  are pending.
 - [`plans/workbench-ui.md`](plans/workbench-ui.md) — current graphical-client plan: fix text input,
   then add files beside Chat.
 - [`integrations/pi-web/reuse-boundary.md`](integrations/pi-web/reuse-boundary.md) — what the new

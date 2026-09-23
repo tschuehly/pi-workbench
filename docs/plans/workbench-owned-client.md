@@ -1,6 +1,6 @@
 # An owned Workbench frontend over PI WEB's protocol
 
-**Status: architecture and daily-use scope selected; delivery plan proposed.** Thomas selected the protocol-only direction, preservation of familiar Chat, and the four surrounding capabilities below. These are planning decisions, not authorization to implement, delete features, change model policy, install, or restart services.
+**Status: architecture and daily-use scope selected; delivery plan proposed.** Thomas selected the protocol-only direction, preservation of familiar Chat, and the three surrounding capabilities below. Manual shell work stays in his external terminal app. These are planning decisions, not authorization to implement, delete features, change model policy, install, or restart services.
 
 This revision replaces the draft's proposal to keep importing PI WEB's internal frontend modules. Existing contracts still describe the current implementation; align their ownership wording before implementing this selected direction.
 
@@ -16,13 +16,18 @@ The daily-use replacement must include:
 | Workstreams | Find and resume work through checkpoints, Human Tasks, links, and correctly associated sessions |
 | Delegation roster | Worker/Subagent identity, goal, status, actual binding, and results awaiting collection; execution remains owned by the harness |
 | Files beside Chat | Workspace viewing and editing, with save-safety verification required before cutover |
-| Embedded Terminal | Interactive shell access without leaving the app; preserve backend process ownership |
 
-**Git UI is deferred**, not deleted from the current app or backend. The first technical proof can be smaller than this list; the daily-use cutover cannot silently omit a selected capability.
+**Embedded Terminal and Git UI are deferred**, not deleted from the current app or backend. Thomas's external terminal covers manual shell work. Agent shell tools and their output in Chat remain available; this decision does not remove PI WEB's terminal backend or required plugins. An “Open workspace in terminal” action is a separate optional proposal, not a cutover requirement.
+
+The first technical proof can be smaller than this list; the daily-use cutover cannot silently omit a selected capability.
 
 Success means Thomas can do this work, leave, and resume; the frontend builds without PI WEB's frontend source tree; and a subsequent backend revision can be assessed without automatically changing Workbench's UI. A clean-room rewrite, new daemon, generic plugin shell, public frontend SDK, managed Run system, and new UI framework are not goals.
 
 ## Ownership and reuse
+
+**PI WEB is the initial backend choice, not the permanent definition of Workbench.** The purpose of owning the frontend is to choose, omit or replace supporting capabilities when actual needs justify it. Terminal can live in an external app now and use a different integration later; that choice should not dictate Chat or Workstream design.
+
+Keep backend-specific transport and validation localized in the owned protocol client. Introduce a replacement where a real need appears, rather than building a generic provider/plugin framework or multiple implementations in advance. Replacement is possible, not necessarily free: changing session backends would still require preserving history, identity and lifecycle semantics.
 
 ```text
 Workbench-owned frontend and protocol client
@@ -58,10 +63,7 @@ Protocol-only does not mean version-independent. Pin the backend and required pl
 | Delegation | `SessionStatus.extensionStatuses` carries the activity used by `DelegateRoster.ts`. This is disposable runtime status, not durable execution authority; missing status must not mean successful completion. |
 | Workstreams | The existing validating client in `packages/pi-web-integration/workstream-client.js` is reusable. Current UI transport uses scoped, revision-aware backend requests; replacing its shell does not require replacing the Store. |
 | Files | `workspaceExplorerRoutes.ts` exposes viewing and version-checked writing. The earlier dogfooding checkpoint still had save-security review and installed acceptance unfinished. Required scope is not evidence of readiness. |
-| Terminal | `pi-web-plugins/terminal/terminalProtocol.ts` defines list/create/close/attach operations and input, resize, output/replay and exit frames. It explicitly calls this a private peer protocol. The generic paired-plugin transport supplies revision checks and bounded channel framing; neither is a stable external-client guarantee. |
 | Serving | `buildApp` accepts `clientDist`, but ordinary startup does not expose that choice. Production serving/install integration still needs proof. |
-
-Terminal's existing UI uses xterm; there is no reason to write a terminal emulator or PTY manager. Its backend detaches channel listeners separately from closing a terminal process. The new frontend must preserve that distinction and prove independent access to the revision-aware transport without loading the upstream plugin UI.
 
 At initial inspection, the canonical PI WEB checkout was at `f17b8aebdbf5c59c4974f653d717f69584eb697a` and the hosting checkout at `bc52ac151a8fe659509410d35079d2bb5f8c11ea`. Neither is selected as the baseline. Checkout HEAD is not proof of running code or served assets. No separate-client build or live protocol acceptance has yet been performed.
 
@@ -77,7 +79,7 @@ Inputs: [requirements](../foundation/requirements.md), [current reuse boundary](
 - Trace the selected workflows into their routes, frames, error responses and state ownership. Check authentication and backend-plugin discovery without the upstream application shell.
 - Select an exact tested backend integration revision with its required plugins and fork patches. Record client dependencies separately; no moving branch or accidental sibling checkout is a build input.
 - Trace source worth porting and its dependencies. Do not turn preservation of Chat behavior into wholesale copying of the old application state/controller graph.
-- Resolve how ad-hoc Chat directories map to registered project/workspace identities required by Files and Terminal. Do not invent catalog identities or silently register new projects to hide a mismatch.
+- Resolve how ad-hoc Chat directories map to registered project/workspace identities required by Files. Do not invent catalog identities or silently register new projects to hide a mismatch.
 - Identify existing failures and unfinished Files review. Preserve sessions, Workstream data, Worker records, prototypes and unrelated changes.
 
 **Exit:** owner-confirmed behavior checklist, exact inputs, route evidence, and named gaps. Any material workflow restriction returns to Thomas before implementation depends on it.
@@ -89,11 +91,10 @@ Inputs: [requirements](../foundation/requirements.md), [current reuse boundary](
 - Port only enough Chat and transport code to open an active fixture conversation, display history and partial output, answer a pending interaction, disconnect and recover.
 - Preserve the existing ordering between socket subscription, snapshots and buffered events. Test failed joins, reconnect during generation, stale replies after session switches, and daemon-instance changes where relevant. Do not infer an exactly-once guarantee merely from sequence fields.
 - Verify drafts, questions and events cannot leak between two windows or sessions. Keep authoritative session state on the server.
-- Prove a Terminal request/channel handshake from the owned client with backend revision and complete workspace identity. Check missing plugin, stale revision and connection failure explicitly before building the full panel.
 - Build without upstream frontend source imports or runtime browser modules. Port validation/types needed by consumed operations; test schema failures at the wire seam.
 - Prove production static serving as well as development proxy/assets/WebSockets. Prefer the existing serving seam; propose a small backend integration change if necessary rather than adding a new server by default.
 
-**Exit:** deterministic recovery and Terminal transport evidence, isolated build, no live changes. Return for direction if an independent client requires broad backend changes or substantial runtime copying.
+**Exit:** deterministic Chat recovery evidence, isolated build, no live changes. Return for direction if an independent client requires broad backend changes or substantial runtime copying.
 
 ### 3. Rehearse an update before completing the UI
 
@@ -104,20 +105,16 @@ Inputs: [requirements](../foundation/requirements.md), [current reuse boundary](
 - Run the same owned client and fixtures against the baseline and candidate. Keep UI code unchanged initially so backend compatibility is observable.
 - Adopt, adapt or reject the candidate with explicit evidence. A material protocol gap returns to Thomas; do not silently retreat to importing the upstream UI.
 
-**Exit:** one real update decision before investing in all screens. Re-run the expanded checks after later features are added. An early Chat-only pass does not establish Files or Terminal compatibility.
+**Exit:** one real update decision before investing in all screens. Re-run the expanded checks after later features are added. An early Chat-only pass does not establish Files or Workstream compatibility.
 
 ### 4. Complete the selected daily-use workflows
 
-**Deliver:** five usable capabilities in small, separately verified slices.
+**Deliver:** four usable capabilities in small, separately verified slices.
 
 1. Finish familiar Chat, composer and session navigation without redesigning them. Preserve validated rendering, attachment handling, paging, scroll and focus behavior, controls, asks and extension dialogs.
 2. Port Workstream surfaces onto the existing typed operations and session coordinator. Retain revisions, idempotency, unknown-outcome reconciliation and session-location repair; do not reconstruct Store state in the browser.
 3. Port the delegation roster over extension activity. Keep Worker/Subagent lifecycle rules in the existing harness; this selection does not authorize new graphical execution controls.
 4. Complete Files with workspace confinement, dirty-edit protection, stale-save rejection and bounded I/O. Obtain independent security review and installed acceptance; Files can no longer be dropped from cutover without owner agreement.
-5. Add the terminal renderer and workspace-scoped backend operations. Verify resize, keyboard/clipboard behavior, bounded replay, reconnect and explicit close. Disconnecting or hiding a panel must not accidentally kill its process; reconnect must not create a new shell or replay uncertain input blindly.
-
-Keep Terminal workspace identity distinct from Chat session identity. Exact placement, selection and multi-window behavior remain design details to resolve from the current workflow before implementation; the plan does not promise a fresh terminal per Chat or automatic shared input.
-
 **Also required before cutover: deliberate agent capabilities.** Trial `subsessions: false` in isolation, verifying that the five tracked-subsession tools and their guidance disappear while Workbench delegation remains usable. Decide standalone `spawn_session` separately. Test actual lead/Worker/leaf exposure, supported nesting, cancellation, collection, compaction/wakeup coordination and interrupted Worker receipts. Snapshot approved tool schemas and relevant prompt contributions for update review; these checks are not a new permissions sandbox.
 
 **Exit:** the complete preservation matrix passes. Thomas approves any intentional capability loss; required workflows are not substituted with placeholders.
@@ -126,7 +123,7 @@ Keep Terminal workspace identity distinct from Chat session identity. Exact plac
 
 **Deliver:** the owned frontend in daily use with a rehearsed rollback.
 
-- Run the expanded protocol checks against the selected backend. Independently review changed authentication, Files, terminal, lifecycle and capability-sensitive paths.
+- Run the expanded protocol checks against the selected backend. Independently review changed authentication, Files, lifecycle and capability-sensitive paths.
 - Verify native readiness and installation against separate frontend/backend identities. Preserve native notifications, trusted controls and accepted narrow-layout behavior.
 - Replace UI/app artifacts without restarting the session daemon wherever supported. If a daemon restart is unavoidable, request explicit authorization and warn that turns, children, asks and terminals may be interrupted. Planning approval is not restart permission. Restart web/API before sessiond if both require it.
 - Retain the prior client, backend revision, configuration and compatible state backup. UI rollback must not overwrite session or Workstream data. Check persisted-format compatibility before a backend downgrade; otherwise stop rather than downgrade blindly.
@@ -158,7 +155,6 @@ For each chosen backend update, repeat phase 3 with the full consumed protocol a
 | Workstreams | Confirmed checkpoints, Human Tasks, links, revision-safe mutations, correct association and repair |
 | Delegation | Activity reflects actual bindings/status; absence is not invented completion; cancellation, collection and nesting remain correct |
 | Files | Path confinement, version conflicts, dirty edits, bounded reads/writes, untrusted-content handling and independent review |
-| Terminal | Correct workspace/process, revision handshake, bounded frames/replay, input/resize/exit, detach versus close, uncertain-operation handling |
 | Browser/native lifecycle | Window isolation, keyboard/focus, narrow views, reduced motion, trusted origins, notifications, reload without daemon restart |
 | Ownership | Build has no upstream frontend-source dependency; backend changes are checked through consumed routes/events, not UI imports |
 
