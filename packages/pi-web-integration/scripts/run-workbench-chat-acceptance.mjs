@@ -150,12 +150,15 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#ask form') === null`, 15_000);
   const closed = await requestJson(statusUrl);
   checks.push({ id: "owned-chat-answer-through-real-daemon", passed: closed.pendingAsk === undefined, detail: JSON.stringify({ sessionId: closed.sessionId, pendingAsk: closed.pendingAsk?.askId }) });
+  await evaluate(cdp, `(() => { const draft = document.querySelector('#draft'); draft.value = 'first line\\nsecond line'; draft.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  const composer = await evaluate(cdp, `({ nativeEditor: document.querySelector('#draft') instanceof HTMLTextAreaElement, send: document.querySelector('#send') instanceof HTMLButtonElement, stop: document.querySelector('#stop') instanceof HTMLButtonElement })`);
+  checks.push({ id: "owned-chat-composer-controls", passed: composer.nativeEditor && composer.send && composer.stop, detail: JSON.stringify(composer) });
   const reload = cdp.waitForEvent("Page.loadEventFired", 20_000);
   await cdp.send("Page.reload"); await reload;
   await waitForBrowserExpression(cdp, `document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000);
-  const afterReload = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask form') !== null })`);
+  const afterReload = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask form') !== null, draft: document.querySelector('#draft')?.value ?? '' })`);
   assertChildAlive(runtime.sessiond);
-  checks.push({ id: "owned-chat-reload-and-daemon-continuity", passed: afterReload.history.includes(first.transcriptMarker) && !afterReload.ask, detail: JSON.stringify({ history: afterReload.history.includes(first.transcriptMarker), ask: afterReload.ask, sessiondPid: runtime.sessiond.pid }) });
+  checks.push({ id: "owned-chat-reload-and-daemon-continuity", passed: afterReload.history.includes(first.transcriptMarker) && !afterReload.ask && afterReload.draft === 'first line\nsecond line', detail: JSON.stringify({ history: afterReload.history.includes(first.transcriptMarker), ask: afterReload.ask, draft: afterReload.draft, sessiondPid: runtime.sessiond.pid }) });
   return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations: [] };
 }
 

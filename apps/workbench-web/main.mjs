@@ -3,10 +3,18 @@ const $ = id => document.getElementById(id);
 const params = new URL(location.href).searchParams;
 const messageText = message => typeof message.content === 'string' ? message.content : (message.content ?? []).map(part => part?.type === 'text' ? part.text : '').join('');
 const chat = createChat({ fetch: (...args) => fetch(...args), socket: path => new WebSocket(new URL(path, location.href).href.replace(/^http/, 'ws')), changed: render });
+const draftKey = `workbench:chat-proof:draft:${params.get('machine') ?? 'local'}:${params.get('id') ?? ''}:${params.get('cwd') ?? ''}`;
+const draft = $('draft');
+try { draft.value = sessionStorage.getItem(draftKey) ?? ''; } catch { /* Browser storage may be disabled. */ }
+const saveDraft = () => { try { if (draft.value) sessionStorage.setItem(draftKey, draft.value); else sessionStorage.removeItem(draftKey); } catch { /* Editing still works without storage. */ } };
+draft.addEventListener('input', saveDraft);
 function render(view) {
   $('connection').textContent = `${view.id} · ${view.connection}`;
   $('error').textContent = view.error ?? '';
   $('earlier').hidden = !view.start;
+  $('send').disabled = view.sending || view.connection !== 'connected';
+  $('queue').hidden = !view.status?.isStreaming;
+  $('stop').hidden = !view.status?.isStreaming;
   $('history').replaceChildren(...view.messages.map(message => {
     const item = document.createElement('article');
     item.textContent = `${message.role ?? 'message'}: ${messageText(message)}`;
@@ -39,5 +47,19 @@ function render(view) {
   }
 }
 $('earlier').onclick = () => void chat.earlier();
+$('stop').onclick = () => void chat.stopTurn();
+async function submit(behavior) {
+  const text = draft.value;
+  if (!text.trim()) return;
+  const accepted = await chat.send(text, behavior);
+  if (accepted && draft.value === text) { draft.value = ''; saveDraft(); }
+}
+$('composer').onsubmit = event => { event.preventDefault(); void submit(); };
+$('queue').onclick = () => void submit('followUp');
+draft.onkeydown = event => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  if (!event.repeat) void submit();
+};
 try { chat.select(params.get('id'), params.get('cwd'), params.get('machine') ?? 'local'); }
 catch (error) { $('error').textContent = String(error); }

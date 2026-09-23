@@ -41,6 +41,24 @@ test('buffer, sort, discard watermark, dedupe, gap reseed, page and reconnect', 
   await f.seed('s', { snapshot: { seq: 9, partial: msg('resumed') } });
   assert.equal(f.last().partial.content[0].text, 'resumed');
 });
+test('composer keeps failed draft, binds send/stop to origin, and validates responses', async () => {
+  const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open(); await f.seed('s');
+  assert.equal(await f.chat.send('   '), false);
+  const send = f.chat.send('first line\nsecond line', 'steer');
+  assert.equal(f.last().sending, true);
+  assert.deepEqual(JSON.parse(f.requests[0].options.body), { cwd: '/repo', text: 'first line\nsecond line', streamingBehavior: 'steer' });
+  f.reply('/prompt', { accepted: true }); assert.equal(await send, true);
+  assert.equal(f.last().sending, false);
+  const stop = f.chat.stopTurn(); f.reply('/stop', { stopped: true }); await stop;
+  const failed = f.chat.send('keep draft'); f.reply('/prompt', 'unavailable', 503);
+  assert.equal(await failed, false); assert.match(f.last().error, /503/);
+  const stale = f.chat.send('old session');
+  f.chat.select('new', '/other'); f.sockets[1].open();
+  f.reply('/prompt', { accepted: true }); await stale;
+  assert.equal(f.last().id, 'new'); assert.equal(f.last().sending, false);
+  await f.seed('new', { status: state('new') });
+});
+
 test('ask answer uses original identity, handles stale response and errors', async () => {
   const f = fake(); f.chat.select('s', '/repo'); f.sockets[0].open(); f.seed('s'); await tick();
   f.chat.answer([{ id: 'q', values: [], otherText: 'because' }]);
