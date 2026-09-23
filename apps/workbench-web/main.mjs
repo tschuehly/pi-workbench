@@ -249,6 +249,7 @@ function clearChat() {
   chat.stop(); saveDraft(); draftKey = null; draft.value = ''; chatView = null; resetImages();
   $('connection').textContent = 'Choose a session'; $('error').textContent = '';
   for (const id of ['delegation', 'history', 'partial', 'queued', 'ask', 'dialogs']) $(id).replaceChildren();
+  $('ask').dataset.askKey = '';
   $('earlier').hidden = true; $('stop').hidden = true; $('queue').hidden = true; $('retry-send').hidden = true; $('send').disabled = true;
   for (const id of ['model', 'thinking']) { $(id).replaceChildren(); $(id).disabled = true; $(id).dataset.options = ''; }
 }
@@ -327,8 +328,10 @@ function renderChat(view) {
     if (queued.some(message => message.kind === 'followUp')) { const all = button('Send all now', () => void chat.promoteAll()); all.disabled = view.queueBusy || view.status?.isCompacting; queue.append(all); }
     const clear = button('Clear queue', () => { if (window.confirm('Remove all queued messages? Active work will continue.')) void chat.clearQueue(); }); clear.disabled = view.queueBusy; queue.append(clear);
   }
-  const target = $('ask'); target.replaceChildren();
-  if (view.pendingAsk) {
+  const target = $('ask');
+  const askKey = view.pendingAsk ? JSON.stringify([view.id, view.pendingAsk.askId, view.pendingAsk.questions]) : '';
+  if (target.dataset.askKey !== askKey) { target.replaceChildren(); target.dataset.askKey = askKey; }
+  if (view.pendingAsk && !target.firstChild) {
     const form = document.createElement('form');
     for (const question of view.pendingAsk.questions) {
       const label = document.createElement('fieldset');
@@ -345,6 +348,7 @@ function renderChat(view) {
     form.onsubmit = event => { event.preventDefault(); void chat.answer(view.pendingAsk.questions.map(q => ({ id: q.id, values: [...form.querySelectorAll('input:checked')].filter(input => input.name === `choice-${q.id}`).map(input => input.value), otherText: form.elements.namedItem(`other-${q.id}`).value }))); };
     target.append(form);
   }
+  if (target.firstChild) target.querySelector('button').disabled = view.connection !== 'connected';
   const dialogs = $('dialogs'), pending = view.pendingDialogs?.[0];
   if (!pending) { dialogs.replaceChildren(); dialogs.dataset.dialogId = ''; }
   else {

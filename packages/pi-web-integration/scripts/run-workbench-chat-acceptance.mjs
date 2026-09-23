@@ -229,8 +229,11 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
     const updatedStatus = await requestJson(statusUrl);
     checks.push({ id: "owned-chat-thinking-mutation", passed: result.call.status === 200 && result.call.body.cwd === first.cwd && result.call.body.level === chosenLevel && result.selected === chosenLevel && updatedStatus.thinkingLevel === chosenLevel && !result.error, detail: JSON.stringify({ ...result, serverThinking: updatedStatus.thinkingLevel }) });
   }
-  await evaluate(cdp, `document.querySelector('#earlier').click()`);
+  await evaluate(cdp, `(() => { window.__askDraftForm = document.querySelector('#ask form'); document.querySelector('#ask input[type="text"]').value = 'Unsubmitted answer'; document.querySelector('#ask input[value="one"]').click(); document.querySelector('#earlier').click(); })()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#earlier')?.hidden === true`, 10_000);
+  const askDraft = await evaluate(cdp, `({ sameForm: window.__askDraftForm === document.querySelector('#ask form'), text: document.querySelector('#ask input[type="text"]')?.value, chosen: document.querySelector('#ask input[value="one"]')?.checked })`);
+  checks.push({ id: "owned-chat-pending-answer-survives-history-and-status-rerender", passed: askDraft.sameForm && askDraft.text === 'Unsubmitted answer' && askDraft.chosen === true, detail: JSON.stringify(askDraft) });
+  await evaluate(cdp, `document.querySelector('#ask input[type="text"]').value = ''`);
   const page = await evaluate(cdp, `document.querySelector('#history')?.textContent ?? ''`);
   checks.push({ id: "owned-chat-history-paging", passed: page.includes(`${first.transcriptMarker} page 1`), detail: JSON.stringify({ firstPagePresent: page.includes(`${first.transcriptMarker} page 1`) }) });
   await evaluate(cdp, `(() => { const input = document.querySelector('#ask input[value="one"]'); if (!input) throw Error('Fixture ask option missing'); input.click(); document.querySelector('#ask button').click(); })()`);
