@@ -2,7 +2,28 @@ import { createChat, imageAttachments } from './client.mjs';
 import { createCatalog } from './catalog.mjs';
 const $ = id => document.getElementById(id);
 const params = new URL(location.href).searchParams;
-const messageText = message => typeof message.content === 'string' ? message.content : (message.content ?? []).map(part => part?.type === 'text' ? part.text : '').join('');
+function renderMessage(message, streaming = false) {
+  const item = document.createElement('article');
+  const heading = document.createElement('strong');
+  heading.textContent = `${message.role === 'toolResult' ? `Tool result${typeof message.toolName === 'string' ? ` · ${message.toolName}` : ''}` : message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Assistant' : 'Message'}${streaming ? ' · streaming' : ''}`;
+  item.append(heading);
+  const body = (target, text, tag = 'p') => { const node = document.createElement(tag); node.textContent = text; target.append(node); };
+  const content = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : Array.isArray(message.content) ? message.content : [];
+  for (const part of content) {
+    if (part?.type === 'text' && typeof part.text === 'string') body(item, part.text);
+    else if (part?.type === 'image') body(item, '[Image]'); // Never place untrusted base64 in the DOM.
+    else if (part?.type === 'thinking' && typeof part.thinking === 'string') {
+      const detail = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = 'Thinking'; detail.append(summary); body(detail, part.thinking, 'pre'); item.append(detail);
+    } else if (part?.type === 'toolCall' && typeof part.name === 'string') {
+      const detail = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = `Tool call · ${part.name}`; detail.append(summary);
+      if (part.arguments !== undefined) body(detail, JSON.stringify(part.arguments, null, 2)?.slice(0, 8000) ?? '', 'pre');
+      item.append(detail);
+    }
+  }
+  if (message.role === 'toolResult' && content.length) item.classList.add(message.isError === true ? 'tool-error' : 'tool-result');
+  if (message.role === 'assistant' && message.stopReason === 'error') body(item, typeof message.errorMessage === 'string' ? message.errorMessage : 'Assistant error');
+  return item;
+}
 const draft = $('draft');
 let draftKey = null, images = [], imageEpoch = 0, nextImage = 1, imageBusy = false, chatView = null;
 const storage = (() => { try { return sessionStorage; } catch { return undefined; } })();
@@ -137,11 +158,8 @@ function renderChat(view) {
     select.value = choice.options.some(([value]) => value === choice.value) ? choice.value : '';
     select.disabled = view.controlsLoading || view.controlBusy || view.connection !== 'connected' || !choice.options.length;
   }
-  $('history').replaceChildren(...view.messages.map(message => {
-    const item = document.createElement('article'); item.textContent = `${message.role ?? 'message'}: ${messageText(message)}`; return item;
-  }));
-  $('partial').replaceChildren();
-  if (view.partial) { const item = document.createElement('article'); item.textContent = `assistant (streaming): ${messageText(view.partial)}`; $('partial').append(item); }
+  $('history').replaceChildren(...view.messages.map(message => renderMessage(message)));
+  $('partial').replaceChildren(...(view.partial ? [renderMessage({ ...view.partial, role: 'assistant' }, true)] : []));
   const queue = $('queued'); queue.replaceChildren();
   const queued = view.status?.queuedMessages ?? [];
   if (queued.length || view.status?.pendingMessageCount) {

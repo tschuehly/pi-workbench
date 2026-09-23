@@ -77,6 +77,7 @@ async function main() {
       web = startLogged(stack, "web", tsx, [join(SCRIPT_DIR, "owned-chat-fixture-server.mjs")], piWebRoot);
       await waitForHttp(`http://127.0.0.1:${webPort}/api/pi-web/health`, 20_000, web);
       await waitForFile(stack.paths.fixtureManifest, 10_000, web);
+      await seedOwnedTranscript(stack, piWebRoot);
       sessiond = startLogged(stack, "sessiond", tsx, ["src/server/sessiond.ts"], piWebRoot);
       await waitForFile(stack.paths.socket, 20_000, sessiond);
     } else {
@@ -116,6 +117,23 @@ async function main() {
   }
 }
 
+async function seedOwnedTranscript(stack, piWebRoot) {
+  // Add real persisted Pi messages before the isolated daemon opens the fixture session.
+  const fixture = JSON.parse(await readFile(stack.paths.fixtureManifest, "utf8"));
+  const first = fixture.anchors[0];
+  const { SessionManager } = await import(pathToFileURL(join(piWebRoot, "node_modules/@earendil-works/pi-coding-agent/dist/index.js")).href);
+  const entry = (await SessionManager.list(first.cwd, stack.paths.sessions)).find(session => session.id === first.sessionId);
+  if (!entry) throw new Error("Isolated fixture session not found for transcript seed");
+  const manager = SessionManager.open(entry.path, stack.paths.sessions);
+  const timestamp = Date.parse(fixture.fixedClock) + 900_000;
+  manager.appendMessage({ role: "assistant", content: [
+    { type: "thinking", thinking: "Controlled thought block" },
+    { type: "toolCall", id: "controlled-read", name: "read", arguments: { path: '<img src=x onerror="window.__transcriptInjected=1">' } },
+    { type: "text", text: "Controlled structured reply" },
+  ], api: "anthropic-messages", provider: "controlled-fixture", model: "no-model", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp });
+  manager.appendMessage({ role: "toolResult", toolCallId: "controlled-read", toolName: "read", content: [{ type: "text", text: '<script>window.__transcriptInjected=1</script> Controlled tool output' }], isError: false, timestamp: timestamp + 1 });
+}
+
 async function prepareFixture(stack) {
   await writeFile(stack.paths.config, `${JSON.stringify({
     host: "127.0.0.1", port: stack.ports.web, allowedHosts: true, spawnSessions: false, subsessions: false, askUser: true,
@@ -144,6 +162,11 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#ask form') !== null`, 10_000);
   const mounted = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask')?.textContent ?? '', earlier: document.querySelector('#earlier')?.hidden, queued: document.querySelector('#queued')?.textContent ?? '', queueHidden: document.querySelector('#queue')?.hidden })`);
   checks.push({ id: "owned-chat-history-and-question", passed: mounted.history.includes(first.transcriptMarker) && mounted.ask.includes("Which controlled fixture answer?") && mounted.earlier === false, detail: JSON.stringify({ marker: mounted.history.includes(first.transcriptMarker), ask: mounted.ask, earlier: mounted.earlier }) });
+  const seededPageUrl = new URL(`api/machines/local/sessions/${encodeURIComponent(first.sessionId)}/messages?cwd=${encodeURIComponent(first.cwd)}&limit=20`, base);
+  const seededPage = await requestJson(seededPageUrl);
+  const structured = await evaluate(cdp, `({ headings: [...document.querySelectorAll('#history article strong')].slice(-2).map(node => node.textContent), thoughts: [...document.querySelectorAll('#history summary')].map(node => node.textContent), text: document.querySelector('#history').textContent, unsafeElements: document.querySelectorAll('#history img, #history script').length, injected: window.__transcriptInjected === 1 })`);
+  const persistedAssistant = seededPage.messages.find(message => message.role === 'assistant' && message.content?.some?.(part => part.type === 'toolCall' && part.id === 'controlled-read'));
+  checks.push({ id: "owned-chat-structured-tool-thinking-history", passed: persistedAssistant?.content.some(part => part.type === 'thinking' && part.thinking === 'Controlled thought block') && seededPage.messages.some(message => message.role === 'toolResult' && message.toolName === 'read') && structured.headings[0] === 'Assistant' && structured.headings[1] === 'Tool result · read' && structured.thoughts.includes('Thinking') && structured.thoughts.includes('Tool call · read') && structured.text.includes('Controlled structured reply') && structured.text.includes('Controlled tool output') && structured.unsafeElements === 0 && !structured.injected, detail: JSON.stringify({ headings: structured.headings, summaries: structured.thoughts, persisted: !!persistedAssistant, unsafeElements: structured.unsafeElements, injected: structured.injected }) });
   await waitForBrowserExpression(cdp, `document.querySelector('#dialogs h2')?.textContent === 'Controlled extension confirmation'`, 15_000);
   const openDialogs = await requestJson(statusUrl);
   checks.push({ id: "owned-chat-real-extension-dialogs", passed: JSON.stringify(openDialogs.pendingDialogs?.map(dialog => dialog.kind)) === JSON.stringify(['confirm', 'select', 'input']) && openDialogs.pendingDialogs.every(dialog => dialog.runScoped === false), detail: JSON.stringify(openDialogs.pendingDialogs?.map(dialog => ({ id: dialog.dialogId, kind: dialog.kind }))) });
