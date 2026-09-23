@@ -25,8 +25,18 @@ export function createTaskDrafts(storage) {
 // Scoped PI WEB transport; snapshot semantics and validation stay in Workbench's workstream-client.
 export function createWorkstreams({ fetch: request, validateClient, storage, changed = () => {} }) {
   let generation = 0, client = null, watchSequence = 0;
-  let view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope: null };
-  let pendingRequest = null, pendingKey = null;
+  const emptyView = (scope = null, loading = false) => ({ summaries: [], snapshot: null, loading, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, creating: false, pendingCreate: false, error: null, scope });
+  let view = emptyView();
+  let pendingRequest = null, pendingKey = null, createRequest = null;
+  const createKey = machineId => `workbench:workstream:create:${machineId}`;
+  function savedCreate(machineId) {
+    const raw = storage?.getItem(createKey(machineId));
+    if (!raw) return null;
+    let saved;
+    try { saved = JSON.parse(raw); } catch { throw new Error('Saved Workstream creation is damaged; recover it before creating another.'); }
+    if (saved?.producer !== 'workbench-web' || !/^ws-[0-9a-f-]{36}$/i.test(saved.workstreamId) || !/^workbench-create-[0-9a-f-]{36}$/i.test(saved.idempotencyKey) || typeof saved.title !== 'string' || !saved.title.trim() || saved.title.length > 200) throw new Error('Saved Workstream creation is invalid; recover it before creating another.');
+    return saved;
+  }
   const emit = () => changed({ ...view });
   const nonempty = x => typeof x === 'string' && x.trim() !== '';
   async function json(path, options) {
@@ -41,9 +51,9 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
   async function load(scope) {
     const epoch = ++generation;
     client = null;
-    pendingRequest = null; pendingKey = null;
+    pendingRequest = null; pendingKey = null; createRequest = null;
     watchSequence = 0;
-    view = { summaries: [], snapshot: null, loading: true, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope }; emit();
+    view = emptyView(scope, true); emit();
     try {
       if (scope.machineId !== 'local' || !nonempty(scope.projectId) || !nonempty(scope.workspaceId)) throw new Error('Choose a registered local workspace first');
       const plugins = await json('/api/plugins');
@@ -57,19 +67,32 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       const summaries = await validated.list();
       if (epoch !== generation) return;
       client = validated;
-      view = { ...view, summaries, loading: false }; emit();
-      if (summaries.length) await select(summaries[0].id);
+      createRequest = savedCreate(scope.machineId);
+      view = { ...view, summaries, loading: false, pendingCreate: createRequest !== null }; emit();
+      if (createRequest) {
+        const saved = createRequest;
+        try {
+          const existing = await validated.inspect(saved.workstreamId);
+          if (existing.title !== saved.title) throw new Error('An unrelated Workstream has the saved creation identity. Do not retry.');
+          if (epoch !== generation) return;
+          storage.removeItem(createKey(scope.machineId)); createRequest = null;
+          view = { ...view, pendingCreate: false }; emit();
+        } catch (error) {
+          if (error?.code !== 'WORKSTREAM_NOT_FOUND' && epoch === generation) { view = { ...view, error: `Could not reconcile saved Workstream creation: ${String(error)}` }; emit(); }
+        }
+      }
+      if (epoch === generation && summaries.length) await select(summaries[0].id);
     } catch (error) { if (epoch === generation) { view = { ...view, loading: false, error: String(error) }; emit(); } }
   }
   async function select(id) {
     if (!view.summaries.some(item => item.id === id) || !client) throw new Error('Unknown Workstream');
     const epoch = ++generation;
     const selectedClient = client;
-    view = { ...view, snapshot: null, loading: true, error: null }; emit();
+    view = { ...view, snapshot: null, loading: true, error: view.pendingCreate ? view.error : null }; emit();
     try {
       const snapshot = await selectedClient.inspect(id);
       if (snapshot.id !== id) throw new Error('Workstream identity mismatch');
-      if (epoch === generation) { const answerConflict = reconcileAnswer(snapshot); view = { ...view, snapshot, loading: false, pendingAnswer: pendingRequest !== null, answerConflict, needsRefresh: false, error: answerConflict ? 'Another answer was recorded. Your different saved answer is preserved below; copy it before dismissing.' : null }; emit(); }
+      if (epoch === generation) { const answerConflict = reconcileAnswer(snapshot); view = { ...view, snapshot, loading: false, pendingAnswer: pendingRequest !== null, answerConflict, needsRefresh: false, error: answerConflict ? 'Another answer was recorded. Your different saved answer is preserved below; copy it before dismissing.' : view.pendingCreate ? view.error : null }; emit(); }
     } catch (error) { if (epoch === generation) { view = { ...view, snapshot: null, loading: false, error: String(error) }; emit(); } }
   }
   async function checkUpdates() {
@@ -84,6 +107,40 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
         : batch.events.some(item => item.workstreamId === view.snapshot.id && item.revision > view.snapshot.revision);
       if (newer) { view = { ...view, needsRefresh: true, error: 'Workstream changed; refresh and review the latest task before answering.' }; emit(); }
     } catch (error) { if (epoch === generation) { view = { ...view, error: `Could not check Workstream updates: ${String(error)}` }; emit(); } }
+  }
+  async function create(title) {
+    if (!client || !view.scope || view.loading || view.creating || view.pendingCreate) throw new Error('A pending creation must be reconciled before creating another Workstream.');
+    if (typeof title !== 'string' || !title.trim() || title.length > 200) throw new Error('Workstream title must be 1–200 characters.');
+    if (!storage) throw new Error('Browser storage is unavailable; creation cannot be tracked safely.');
+    if (savedCreate(view.scope.machineId)) throw new Error('A pending creation must be reconciled before creating another Workstream.');
+    const id = crypto.randomUUID();
+    const request = { workstreamId: `ws-${id}`, idempotencyKey: `workbench-create-${id}`, title: title.trim(), producer: 'workbench-web' };
+    storage.setItem(createKey(view.scope.machineId), JSON.stringify(request));
+    createRequest = request;
+    view = { ...view, pendingCreate: true }; emit();
+    return submitCreate();
+  }
+  async function retryCreate() {
+    if (!client || !view.scope || view.loading || view.creating || !createRequest) throw new Error('No exact saved Workstream creation can be retried.');
+    return submitCreate();
+  }
+  async function submitCreate() {
+    const epoch = generation, selectedClient = client, request = createRequest, machineId = view.scope.machineId;
+    view = { ...view, creating: true, error: null }; emit();
+    try {
+      const receipt = await selectedClient.create(request);
+      if (receipt.workstreamId !== request.workstreamId || receipt.idempotencyKey !== request.idempotencyKey || receipt.acceptedRevision !== 1) throw new Error('Creation receipt does not match the saved request.');
+      storage.removeItem(createKey(machineId));
+      if (epoch !== generation) return;
+      createRequest = null;
+      const summaries = await selectedClient.list();
+      if (epoch !== generation) return;
+      view = { ...view, summaries, creating: false, pendingCreate: false }; emit();
+      if (!summaries.some(item => item.id === request.workstreamId)) throw new Error('Created Workstream is not in the current list. Refresh before trying again.');
+      await select(request.workstreamId);
+    } catch (error) {
+      if (epoch === generation) { view = { ...view, creating: false, pendingCreate: createRequest !== null, error: `${createRequest ? 'Creation outcome unknown' : 'Created Workstream could not be loaded'}: ${String(error)}` }; emit(); }
+    }
   }
   const answerPrefix = 'workbench:workstream:answer:';
   function answerKey(id) { return `${answerPrefix}${JSON.stringify([view.scope.machineId, id])}`; }
@@ -159,8 +216,8 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       } else if (epoch === generation) { view = { ...view, answering: false, pendingAnswer: true, error: `Answer outcome unknown: ${String(error)}. Refresh to check it, or retry the exact saved request.` }; emit(); }
     }
   }
-  function clear() { ++generation; client = null; pendingRequest = null; pendingKey = null; watchSequence = 0; view = { summaries: [], snapshot: null, loading: false, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, error: null, scope: null }; emit(); }
-  return { load, select, checkUpdates, clear, answer, retryAnswer, dismissAnswerConflict, get view() { return view; } };
+  function clear() { ++generation; client = null; pendingRequest = null; pendingKey = null; createRequest = null; watchSequence = 0; view = emptyView(); emit(); }
+  return { load, select, checkUpdates, clear, create, retryCreate, answer, retryAnswer, dismissAnswerConflict, get view() { return view; } };
 }
 function validSavedAnswer(answer) {
   if (!answer || !['yes-no', 'choice', 'free-text'].includes(answer.kind)) return false;

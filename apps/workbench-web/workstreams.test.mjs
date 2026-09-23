@@ -194,3 +194,54 @@ test('does not invent remote scope or accept mismatched inspected identity', asy
   assert.equal(invalid.client.view.snapshot, null);
   assert.match(invalid.client.view.error, /identity mismatch/);
 });
+test('Workstream creation reuses one saved request after an unknown response, including after reload', async () => {
+  const saved = new Map(), attempts = [];
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  let committed = false;
+  const fetch = async (path, options) => {
+    if (path === '/api/plugins') return ok({ plugins: [{ id: 'pi-workbench', server: { state: 'active', activeRevision: 'fixture-revision' } }] });
+    const { input } = JSON.parse(options.body);
+    if (path.endsWith('/list')) return ok({ ok: true, value: committed ? [{ id: attempts[0].workstreamId, title: attempts[0].title, revision: 1, updatedAt: snapshot.updatedAt, activeSessionCount: 0, pendingSessionCount: 0, failedSessionCount: 0, unresolvedHumanTaskCount: 0, closed: false }] : [] });
+    if (path.endsWith('/inspect')) return committed ? ok({ ok: true, value: { ...snapshot, id: input.workstreamId, title: attempts[0].title, revision: 1, sessions: [], humanTasks: [] } }) : ok({ ok: false, error: { code: 'WORKSTREAM_NOT_FOUND', message: 'Not found' } });
+    if (path.endsWith('/create')) {
+      attempts.push(input);
+      if (!committed) throw new Error('Lost before commit');
+      return ok({ ok: true, value: { workstreamId: input.workstreamId, acceptedRevision: 1, snapshotReference: { workstreamId: input.workstreamId, revision: 1 }, sequence: 1, idempotencyKey: input.idempotencyKey, recordedAt: snapshot.updatedAt } });
+    }
+    assert.fail(`Unexpected ${path}`);
+  };
+  const make = () => createWorkstreams({ fetch, storage, validateClient: createWorkbenchWorkstreamClient });
+  const first = make(); await first.load(scope);
+  await first.create('Daily work');
+  assert.equal(first.view.pendingCreate, true);
+  await assert.rejects(first.create('Duplicate'), /pending creation/);
+  assert.equal(saved.size, 1);
+  const reloaded = make(); await reloaded.load(scope);
+  assert.equal(reloaded.view.pendingCreate, true);
+  committed = true;
+  await reloaded.retryCreate();
+  assert.deepEqual(attempts[1], attempts[0]);
+  assert.equal(saved.size, 0);
+  assert.equal(reloaded.view.snapshot?.id, attempts[0].workstreamId);
+  assert.equal(reloaded.view.pendingCreate, false);
+});
+test('a lost create response is reconciled by exact Workstream identity without another create', async () => {
+  const saved = new Map(), attempts = [];
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
+  const fetch = async (path, options) => {
+    if (path === '/api/plugins') return ok({ plugins: [{ id: 'pi-workbench', server: { state: 'active', activeRevision: 'fixture-revision' } }] });
+    const { input } = JSON.parse(options.body);
+    if (path.endsWith('/list')) return ok({ ok: true, value: attempts.length ? [{ id: attempts[0].workstreamId, title: attempts[0].title, revision: 1, updatedAt: snapshot.updatedAt, activeSessionCount: 0, pendingSessionCount: 0, failedSessionCount: 0, unresolvedHumanTaskCount: 0, closed: false }] : [] });
+    if (path.endsWith('/inspect')) return ok({ ok: true, value: { ...snapshot, id: input.workstreamId, title: attempts[0].title, revision: 1, sessions: [], humanTasks: [] } });
+    if (path.endsWith('/create')) { attempts.push(input); throw new Error('Lost after commit'); }
+    assert.fail(`Unexpected ${path}`);
+  };
+  const make = () => createWorkstreams({ fetch, storage, validateClient: createWorkbenchWorkstreamClient });
+  const first = make(); await first.load(scope); await first.create('Recovered work');
+  assert.equal(first.view.pendingCreate, true);
+  const reloaded = make(); await reloaded.load(scope);
+  assert.equal(reloaded.view.pendingCreate, false);
+  assert.equal(reloaded.view.snapshot?.id, attempts[0].workstreamId);
+  assert.equal(attempts.length, 1);
+  assert.equal(saved.size, 0);
+});

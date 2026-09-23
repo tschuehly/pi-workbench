@@ -167,7 +167,12 @@ function renderCatalog(view) {
 }
 function renderWorkstreams(view) {
   $('workstream-error').textContent = view.error ?? '';
+  $('workstream-create').querySelector('button').disabled = view.loading || view.creating || view.pendingCreate || !view.scope;
   const list = $('workstream-list'); list.replaceChildren();
+  if (view.pendingCreate) {
+    const retry = button(view.creating ? 'Creating…' : 'Retry exact saved Workstream creation', () => void workstreams.retryCreate().catch(error => { $('workstream-error').textContent = String(error); }));
+    retry.disabled = view.creating; list.append(retry);
+  }
   if (view.loading) list.append(document.createTextNode('Loading Workstreams…'));
   for (const summary of view.summaries) {
     const select = button(`${summary.title} · ${summary.unresolvedHumanTaskCount} open tasks`, () => void workstreams.select(summary.id));
@@ -405,6 +410,7 @@ function renderChat(view) {
   }
 }
 $('file-refresh').onclick = () => void files.list();
+$('workstream-create').onsubmit = event => { event.preventDefault(); const title = $('workstream-title'); void workstreams.create(title.value).then(() => { if (!workstreams.view.pendingCreate) title.value = ''; }).catch(error => { $('workstream-error').textContent = String(error); }); };
 $('workstream-refresh').onclick = () => { const w = catalog.view.selectedWorkspace; if (w) void workstreams.load({ machineId: catalog.machineId, projectId: w.projectId, workspaceId: w.id }); };
 $('workstream-check').onclick = () => void workstreams.checkUpdates();
 setInterval(() => { if (!document.hidden) void workstreams.checkUpdates(); }, 15_000);
