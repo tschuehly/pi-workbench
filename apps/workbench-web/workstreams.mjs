@@ -24,7 +24,7 @@ export function createTaskDrafts(storage) {
 
 // Scoped PI WEB transport; snapshot semantics and validation stay in Workbench's workstream-client.
 export function createWorkstreams({ fetch: request, validateClient, storage, changed = () => {} }) {
-  let generation = 0, client = null, watchSequence = 0;
+  let generation = 0, client = null, scopedService = null, watchSequence = 0;
   const emptyView = (scope = null, loading = false) => ({ summaries: [], snapshot: null, loading, answering: false, pendingAnswer: false, answerConflict: null, needsRefresh: false, creating: false, pendingCreate: false, error: null, scope });
   let view = emptyView();
   let pendingRequest = null, pendingKey = null, createRequest = null;
@@ -50,7 +50,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
   }
   async function load(scope) {
     const epoch = ++generation;
-    client = null;
+    client = null; scopedService = null;
     pendingRequest = null; pendingKey = null; createRequest = null;
     watchSequence = 0;
     view = emptyView(scope, true); emit();
@@ -66,7 +66,7 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       const validated = validateClient(service);
       const summaries = await validated.list();
       if (epoch !== generation) return;
-      client = validated;
+      client = validated; scopedService = service;
       createRequest = savedCreate(scope.machineId);
       view = { ...view, summaries, loading: false, pendingCreate: createRequest !== null }; emit();
       if (createRequest) {
@@ -216,8 +216,8 @@ export function createWorkstreams({ fetch: request, validateClient, storage, cha
       } else if (epoch === generation) { view = { ...view, answering: false, pendingAnswer: true, error: `Answer outcome unknown: ${String(error)}. Refresh to check it, or retry the exact saved request.` }; emit(); }
     }
   }
-  function clear() { ++generation; client = null; pendingRequest = null; pendingKey = null; createRequest = null; watchSequence = 0; view = emptyView(); emit(); }
-  return { load, select, checkUpdates, clear, create, retryCreate, answer, retryAnswer, dismissAnswerConflict, get view() { return view; } };
+  function clear() { ++generation; client = null; scopedService = null; pendingRequest = null; pendingKey = null; createRequest = null; watchSequence = 0; view = emptyView(); emit(); }
+  return { load, select, checkUpdates, clear, create, retryCreate, answer, retryAnswer, dismissAnswerConflict, get view() { return view; }, get service() { return scopedService; } };
 }
 function validSavedAnswer(answer) {
   if (!answer || !['yes-no', 'choice', 'free-text'].includes(answer.kind)) return false;

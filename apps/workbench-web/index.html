@@ -1,5 +1,58 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workbench Chat proof</title>
-<style>body{font:16px system-ui;max-width:70ch;margin:2rem auto;padding:0 1rem;background:#161b22;color:#eee}button,input,textarea,select{font:inherit}textarea{box-sizing:border-box;width:100%;background:#202833;color:inherit;border:1px solid #667;padding:.6rem}select{max-width:100%}nav{border:1px solid #667;padding:.6rem}nav [aria-current]{outline:2px solid #8cf}nav ul{list-style:none;padding:0;margin:0}nav li{margin:.2rem 0}button{margin:.4rem;padding:.4rem}article{border:1px solid #667;padding:.7rem;margin:.7rem 0;white-space:pre-wrap;overflow-wrap:anywhere}article p{margin:.5rem 0}article pre{white-space:pre-wrap;overflow-wrap:anywhere}article details{border-left:2px solid #667;padding:.4rem;margin:.5rem 0}article.tool-error{border-color:#e77}#files nav{max-height:16rem;overflow:auto}#files pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:20rem;overflow:auto}#files textarea{min-height:16rem}label{display:block;margin:.6rem 0}input{max-width:100%} :focus-visible{outline:3px solid #8cf}</style>
-<main><h1>Chat proof</h1><nav aria-label="Chat selection"><div id="catalog"></div><p id="catalog-error" role="alert"></p></nav><section id="workstreams" aria-label="Workstreams"><h2>Workstreams</h2><button id="workstream-refresh" type="button">Refresh Workstreams</button><button id="workstream-check" type="button">Check updates</button><form id="workstream-create"><label>New Workstream <input id="workstream-title" type="text" maxlength="200" required></label><button type="submit">Create Workstream</button></form><p id="workstream-error" role="alert"></p><div id="workstream-list"></div><div id="workstream-detail"></div></section><section id="files" aria-label="Workspace Files"><h2>Files</h2><button id="file-refresh" type="button">Refresh files</button><p id="file-error" role="alert"></p><nav id="file-tree" aria-label="Workspace file tree"></nav><div id="file-detail"></div></section><p id="connection" role="status"></p><p id="error" role="alert"></p><button id="earlier" type="button">Earlier messages</button><section id="delegation" aria-label="Worker and Subagent roster"></section><section id="history" aria-label="Transcript"></section><section id="partial" aria-label="Streaming assistant"></section><section id="queued" aria-label="Queued messages" aria-live="polite"></section><section id="ask" aria-label="Pending question"></section><section id="dialogs" aria-label="Extension dialogs" aria-live="polite"></section><section id="controls" aria-label="Model controls"><label for="model">Model <select id="model" disabled></select></label><label for="thinking">Thinking <select id="thinking" disabled></select></label></section><form id="composer"><label for="image-input">Attach images (PNG, JPEG, GIF or WebP; 4 MiB total). Staged images are lost on reload; sent images enter session history. General files are not supported. <input id="image-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple disabled></label><div id="images" aria-label="Staged images"></div><p id="image-error" role="alert"></p><label for="draft">Message</label><textarea id="draft" rows="4" aria-label="Message" placeholder="Message Pi · Enter to send, Shift+Enter for a new line"></textarea><div><button id="send" type="submit">Send</button><button id="queue" type="button" hidden>Queue for later</button><button id="stop" type="button" hidden>Stop</button><button id="retry-send" type="button" hidden>I checked the transcript; allow another send</button></div></form></main>
-<script type="module" src="./main.mjs"></script></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0d1117">
+  <title>Pi Workbench</title>
+  <link rel="stylesheet" href="./pi-web-shell.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="navigation-panel" aria-label="Navigation">
+      <header class="panel-header"><strong>Pi Workbench</strong><span>Workspaces</span></header>
+      <nav class="session-navigation" aria-label="Chat selection">
+        <div id="catalog"></div>
+        <p id="catalog-error" role="alert"></p>
+      </nav>
+      <section id="workstreams" aria-label="Workstreams">
+        <header class="section-header"><h2>Workstreams</h2><div><button id="workstream-refresh" type="button">Refresh</button><button id="workstream-check" type="button">Check updates</button></div></header>
+        <form id="workstream-create"><label for="workstream-title">New Workstream</label><div><input id="workstream-title" type="text" maxlength="200" required placeholder="Title"><button type="submit">Create</button></div></form>
+        <p id="workstream-error" role="alert"></p>
+        <div id="workstream-list"></div>
+        <div id="workstream-detail"></div>
+      </section>
+    </aside>
+    <main class="conversation-panel" aria-label="Chat">
+      <header class="conversation-header"><button id="chat-back" type="button" aria-label="Back to sessions">←</button><button id="workstreams-toggle" type="button" aria-expanded="false" aria-controls="workstreams">Workstreams</button><strong>Chat</strong><span id="connection" role="status">Choose a session</span><button id="files-toggle" type="button" aria-expanded="false" aria-controls="files">Files</button></header>
+      <p id="error" role="alert"></p>
+      <details class="delegate-drawer"><summary>Workers and Subagents</summary><section id="delegation" aria-label="Worker and Subagent roster"></section></details>
+      <div id="transcript-scroll" class="chat-scroll">
+        <button id="earlier" type="button">Earlier messages</button>
+        <section id="history" aria-label="Transcript"></section>
+        <section id="partial" aria-label="Streaming assistant"></section>
+        <section id="queued" aria-label="Queued messages" aria-live="polite"></section>
+        <section id="ask" aria-label="Pending question"></section>
+        <section id="dialogs" aria-label="Extension dialogs" aria-live="polite"></section>
+      </div>
+      <div class="composer-shell">
+        <section id="controls" aria-label="Model controls"><label for="model">Model <select id="model" disabled></select></label><label for="thinking">Thinking <select id="thinking" disabled></select></label></section>
+        <form id="composer">
+          <label class="attachment-label" for="image-input">Attach images (PNG, JPEG, GIF or WebP; 4 MiB total). Staged images are lost on reload; sent images enter session history. General files are not supported. <input id="image-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple disabled></label>
+          <div id="images" aria-label="Staged images"></div><p id="image-error" role="alert"></p>
+          <label class="visually-hidden" for="draft">Message</label>
+          <textarea id="draft" rows="4" aria-label="Message" placeholder="Message Pi · Enter to send, Shift+Enter for a new line"></textarea>
+          <div class="composer-actions"><button id="send" type="submit">Send</button><button id="queue" type="button" hidden>Queue for later</button><button id="stop" type="button" hidden>Stop</button><button id="retry-send" type="button" hidden>I checked the transcript; allow another send</button></div>
+        </form>
+      </div>
+    </main>
+    <aside id="files" class="workspace-panel" aria-label="Workspace Files">
+      <header class="section-header"><h2>Files</h2><button id="file-refresh" type="button">Refresh</button></header>
+      <p id="file-error" role="alert"></p>
+      <nav id="file-tree" aria-label="Workspace file tree"></nav>
+      <div id="file-detail"></div>
+    </aside>
+  </div>
+  <script type="module" src="./main.mjs"></script>
+</body>
+</html>

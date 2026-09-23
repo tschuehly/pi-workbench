@@ -49,6 +49,9 @@ async function main() {
   }
   await assertExecutable(chrome, "Chromium is unavailable");
   const ownedClientDist = args.ownedClientDist === undefined ? undefined : resolve(args.ownedClientDist);
+  const screenshotsDir = args.screenshotsDir === undefined ? undefined : resolve(args.screenshotsDir);
+  if (screenshotsDir !== undefined && ownedClientDist === undefined) throw new Error('Screenshots require the owned client');
+  if (screenshotsDir !== undefined) await mkdir(screenshotsDir, { recursive: true });
   const clientIndex = join(ownedClientDist ?? join(piWebRoot, "dist/client"), "index.html");
   await readFile(clientIndex).catch(() => { throw new Error(`Built client assets are required: ${clientIndex}`); });
 
@@ -76,12 +79,12 @@ async function main() {
       await mkdir(join(stack.paths.agent, "extensions"), { recursive: true });
       await cp(join(SCRIPT_DIR, "controlled-dialog-extension.ts"), join(stack.paths.agent, "extensions/controlled-dialog-extension.ts"));
       web = startLogged(stack, "web", tsx, [join(SCRIPT_DIR, "owned-chat-fixture-server.mjs")], piWebRoot);
-      await waitForHttp(`http://127.0.0.1:${webPort}/api/pi-web/health`, 20_000, web);
+      await waitForHttp(`http://127.0.0.1:${webPort}/api/pi-web/health`, 60_000, web);
       await waitForFile(stack.paths.fixtureManifest, 10_000, web);
       await seedOwnedTranscript(stack, piWebRoot);
       await seedOwnedWorkstream(stack);
       sessiond = startLogged(stack, "sessiond", tsx, ["src/server/sessiond.ts"], piWebRoot);
-      await waitForFile(stack.paths.socket, 20_000, sessiond);
+      await waitForFile(stack.paths.socket, 60_000, sessiond);
     } else {
       sessiond = startLogged(stack, "sessiond", tsx, ["src/server/sessiond.ts"], piWebRoot);
       await waitForFile(stack.paths.socket, 15_000, sessiond);
@@ -96,14 +99,14 @@ async function main() {
     await waitForHttp(`http://127.0.0.1:${browserPort}/json/version`, 15_000, browser);
     await delay(1_000);
 
-    const cdp = await openExistingPage(browserPort, initialUrl, ownedClientDist === undefined ? "Pi Workbench" : "Workbench Chat proof");
+    const cdp = await openExistingPage(browserPort, initialUrl, "Pi Workbench");
     try {
       await cdp.send("Page.enable");
       await cdp.send("Runtime.enable");
       await cdp.send("Log.enable");
       const result = await withTimeout(ownedClientDist === undefined
         ? runBrowserAcceptance(cdp, browserPort, webPort, controlledFixture, { sessiond, web })
-        : runOwnedBrowserAcceptance(cdp, webPort, controlledFixture, { sessiond, web, workstreamsDirectory: stack.paths.workstreams }), 90_000, "Browser acceptance exceeded its owned 90-second deadline");
+        : runOwnedBrowserAcceptance(cdp, webPort, controlledFixture, { sessiond, web, workstreamsDirectory: stack.paths.workstreams, screenshotsDir }), 90_000, "Browser acceptance exceeded its owned 90-second deadline");
       for (const limitation of result.limitations) process.stdout.write(`${JSON.stringify({ type: "FIXTURE_LIMITATION", ...limitation })}\n`);
       for (const check of result.checks) process.stdout.write(`${JSON.stringify({ type: "ACCEPTANCE_CHECK", ...check })}\n`);
       process.stdout.write(`${JSON.stringify({ type: "ACCEPTANCE_RESULT", status: result.status, failures: result.checks.filter((check) => !check.passed).length, limitations: result.limitations.length })}\n`);
@@ -169,6 +172,11 @@ function ownedFixtureUrl(webPort, anchor) {
 }
 
 async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
+  async function capture(name) {
+    if (runtime.screenshotsDir === undefined) return;
+    const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    await writeFile(join(runtime.screenshotsDir, `${name}.png`), Buffer.from(data, 'base64'));
+  }
   const first = fixture.anchors[0];
   const base = ownedFixtureUrl(webPort, first);
   const statusUrl = new URL(`api/machines/local/sessions/${encodeURIComponent(first.sessionId)}/status`, base);
@@ -179,6 +187,9 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#ask form') !== null`, 10_000);
   const mounted = await evaluate(cdp, `({ history: document.querySelector('#history')?.textContent ?? '', ask: document.querySelector('#ask')?.textContent ?? '', earlier: document.querySelector('#earlier')?.hidden, queued: document.querySelector('#queued')?.textContent ?? '', queueHidden: document.querySelector('#queue')?.hidden })`);
   checks.push({ id: "owned-chat-history-and-question", passed: mounted.history.includes(first.transcriptMarker) && mounted.ask.includes("Which controlled fixture answer?") && mounted.earlier === false, detail: JSON.stringify({ marker: mounted.history.includes(first.transcriptMarker), ask: mounted.ask, earlier: mounted.earlier }) });
+  const shell = await evaluate(cdp, `({ active: document.querySelector('.shell').classList.contains('chat-active'), chatWidth: document.querySelector('.conversation-panel').getBoundingClientRect().width, filesHidden: getComputedStyle(document.querySelector('#files')).display === 'none', composerVisible: document.querySelector('#composer').getBoundingClientRect().height > 0 })`);
+  checks.push({ id: 'owned-chat-pi-web-style-shell', passed: shell.active && shell.chatWidth > 600 && shell.filesHidden && shell.composerVisible, detail: JSON.stringify(shell) });
+  await capture('chat-desktop');
   const seededPageUrl = new URL(`api/machines/local/sessions/${encodeURIComponent(first.sessionId)}/messages?cwd=${encodeURIComponent(first.cwd)}&limit=20`, base);
   const seededPage = await requestJson(seededPageUrl);
   const structured = await evaluate(cdp, `({ headings: [...document.querySelectorAll('#history article strong')].slice(-2).map(node => node.textContent), thoughts: [...document.querySelectorAll('#history summary')].map(node => node.textContent), text: document.querySelector('#history').textContent, unsafeElements: document.querySelectorAll('#history img, #history script').length, injected: window.__transcriptInjected === 1 })`);
@@ -224,7 +235,8 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
     await evaluate(cdp, `(() => { const original = window.fetch; window.__controlCalls = []; window.fetch = (...args) => original(...args).then(response => { if (args[1]?.method === 'POST' && String(args[0]).endsWith('/thinking-level')) window.__controlCalls.push({ status: response.status, body: JSON.parse(args[1].body) }); return response; }); })()`);
     const chosenLevel = availableLevels.levels.find(level => level !== serverStatus.thinkingLevel) ?? availableLevels.levels[0];
     await evaluate(cdp, `(() => { const select = document.querySelector('#thinking'); select.value = ${JSON.stringify(chosenLevel)}; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-    await waitForBrowserExpression(cdp, `window.__controlCalls?.length === 1 && document.querySelector('#thinking')?.disabled === false`, 15_000);
+    try { await waitForBrowserExpression(cdp, `window.__controlCalls?.length === 1 && document.querySelector('#thinking')?.disabled === false`, 15_000); }
+    catch (error) { throw new Error(`Thinking mutation did not settle: ${JSON.stringify(await evaluate(cdp, `({ calls: window.__controlCalls, disabled: document.querySelector('#thinking')?.disabled, value: document.querySelector('#thinking')?.value, error: document.querySelector('#error')?.textContent, connection: document.querySelector('#connection')?.textContent })`))}`, { cause: error }); }
     const result = await evaluate(cdp, `({ call: window.__controlCalls[0], selected: document.querySelector('#thinking').value, error: document.querySelector('#error').textContent })`);
     const updatedStatus = await requestJson(statusUrl);
     checks.push({ id: "owned-chat-thinking-mutation", passed: result.call.status === 200 && result.call.body.cwd === first.cwd && result.call.body.level === chosenLevel && result.selected === chosenLevel && updatedStatus.thinkingLevel === chosenLevel && !result.error, detail: JSON.stringify({ ...result, serverThinking: updatedStatus.thinkingLevel }) });
@@ -246,7 +258,7 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   checks.push({ id: "owned-chat-rejects-unsupported-attachment", passed: (await evaluate(cdp, `({ error: document.querySelector('#image-error').textContent, staged: document.querySelector('#images').children.length })`)).staged === 0 && (await evaluate(cdp, `document.querySelector('#image-error').textContent`)).includes('Other files cannot be attached yet'), detail: "SVG file rejected without staging or a server request" });
   await evaluate(cdp, `(async () => { const canvas = document.createElement('canvas'); canvas.width = 2; canvas.height = 2; const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png')); const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'isolated.png', { type: 'image/png' })); const input = document.querySelector('#image-input'); input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#images')?.textContent?.includes('[PIC_1] isolated.png') === true`, 10_000);
-  await evaluate(cdp, `(() => { const original = window.fetch; window.__attachmentCalls = []; window.__rejectImageOnce = true; window.__disconnectImageOnce = false; window.fetch = (...args) => { if (args[1]?.method === 'POST' && String(args[0]).endsWith('/prompt')) { const body = JSON.parse(args[1].body); window.__attachmentCalls.push({ cwd: body.cwd, text: body.text, kind: body.attachments?.[0]?.kind, reference: body.attachments?.[0]?.reference, mimeType: body.attachments?.[0]?.mimeType, name: body.attachments?.[0]?.name, dataLength: body.attachments?.[0]?.data?.length }); if (window.__rejectImageOnce) { window.__rejectImageOnce = false; return Promise.resolve(new Response('{"error":"controlled rejection"}', { status: 400 })); } if (window.__disconnectImageOnce) { window.__disconnectImageOnce = false; return Promise.reject(new Error('controlled disconnect')); } } return original(...args); }; const draft = document.querySelector('#draft'); draft.value = 'Image from isolated fixture'; draft.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#send').click(); })()`);
+  await evaluate(cdp, `(() => { const original = window.fetch; window.__attachmentCalls = []; window.__promptResponses = []; window.__rejectImageOnce = true; window.__disconnectImageOnce = false; window.fetch = (...args) => { if (args[1]?.method === 'POST' && String(args[0]).endsWith('/prompt')) { const body = JSON.parse(args[1].body); window.__attachmentCalls.push({ cwd: body.cwd, text: body.text, kind: body.attachments?.[0]?.kind, reference: body.attachments?.[0]?.reference, mimeType: body.attachments?.[0]?.mimeType, name: body.attachments?.[0]?.name, dataLength: body.attachments?.[0]?.data?.length }); if (window.__rejectImageOnce) { window.__rejectImageOnce = false; return Promise.resolve(new Response('{"error":"controlled rejection"}', { status: 400 })); } if (window.__disconnectImageOnce) { window.__disconnectImageOnce = false; return Promise.reject(new Error('controlled disconnect')); } } return original(...args).then(async response => { if (String(args[0]).endsWith('/prompt')) window.__promptResponses.push({ status: response.status, contentType: response.headers.get('content-type'), text: await response.clone().text() }); return response; }); }; const draft = document.querySelector('#draft'); draft.value = 'Image from isolated fixture'; draft.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#send').click(); })()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#error')?.textContent?.includes('400') === true`, 10_000);
   const retained = await evaluate(cdp, `({ draft: document.querySelector('#draft').value, staged: document.querySelector('#images').textContent, calls: window.__attachmentCalls.length })`);
   checks.push({ id: "owned-chat-image-rejection-keeps-draft", passed: retained.draft === 'Image from isolated fixture' && retained.staged.includes('[PIC_1] isolated.png') && retained.calls === 1, detail: JSON.stringify(retained) });
@@ -256,7 +268,7 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   checks.push({ id: "owned-chat-unknown-image-send-locks-retry", passed: uncertain.calls === 2 && uncertain.draft === 'Image from isolated fixture' && uncertain.staged.includes('[PIC_1]') && uncertain.error.includes('Check transcript'), detail: JSON.stringify(uncertain) });
   await evaluate(cdp, `(() => { const original = window.confirm; window.confirm = () => true; document.querySelector('#retry-send').click(); window.confirm = original; document.querySelector('#send').click(); })()`);
   await waitForBrowserExpression(cdp, `window.__attachmentCalls?.length === 3 && document.querySelector('#images')?.children.length === 0`, 15_000);
-  const imageSend = await evaluate(cdp, `({ calls: window.__attachmentCalls, draft: document.querySelector('#draft').value, error: document.querySelector('#error').textContent })`);
+  const imageSend = await evaluate(cdp, `({ calls: window.__attachmentCalls, draft: document.querySelector('#draft').value, error: document.querySelector('#error').textContent, responses: window.__promptResponses })`);
   checks.push({ id: "owned-chat-image-through-real-daemon", passed: imageSend.calls.every(call => call.cwd === first.cwd && call.text === 'Image from isolated fixture' && call.kind === 'image' && call.reference === '[PIC_1]' && call.mimeType === 'image/png' && call.name === 'isolated.png' && call.dataLength > 40) && imageSend.draft === '' && !imageSend.error, detail: JSON.stringify(imageSend) });
   await evaluate(cdp, `(() => { const draft = document.querySelector('#draft'); draft.value = 'first line\\nsecond line'; draft.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
   const composer = await evaluate(cdp, `({ nativeEditor: document.querySelector('#draft') instanceof HTMLTextAreaElement, send: document.querySelector('#send') instanceof HTMLButtonElement, stop: document.querySelector('#stop') instanceof HTMLButtonElement })`);
@@ -272,6 +284,10 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   const initialIdentity = await evaluate(cdp, `({ project: new URL(location.href).searchParams.get('project'), workspace: new URL(location.href).searchParams.get('workspace'), session: new URL(location.href).searchParams.get('id') })`);
   checks.push({ id: "owned-chat-catalog-identity", passed: initialIdentity.project === first.projectId && initialIdentity.workspace === first.workspaceId && initialIdentity.session === first.sessionId, detail: JSON.stringify(initialIdentity) });
   const second = fixture.anchors[1];
+  await evaluate(cdp, `document.querySelector('#chat-back').click()`);
+  const chooser = await evaluate(cdp, `(() => { const card = document.querySelector('.navigation-panel').getBoundingClientRect(); const controls = [...document.querySelectorAll('#workstreams .section-header button')].map(node => node.getBoundingClientRect().right); return { visible: card.width > 0, chatHidden: getComputedStyle(document.querySelector('.conversation-panel')).display === 'none', cardRight: card.right, controlRight: Math.max(...controls) }; })()`);
+  checks.push({ id: 'owned-chat-chooser-back-navigation', passed: chooser.visible && chooser.chatHidden && chooser.controlRight <= chooser.cardRight, detail: JSON.stringify(chooser) });
+  await capture('chooser-desktop');
   await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Controlled project 2') ?? (() => { throw Error('No second project') })()).click()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#catalog')?.textContent?.includes('Borealis files') === true`, 15_000);
   const chosen = await evaluate(cdp, `({ workspace: document.querySelector('#catalog select')?.value, session: new URL(location.href).searchParams.get('id') })`);
@@ -280,6 +296,7 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#history')?.textContent?.includes(${JSON.stringify(second.transcriptMarker)}) === true`, 20_000);
   const existing = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), project: new URL(location.href).searchParams.get('project'), workspace: new URL(location.href).searchParams.get('workspace') })`);
   checks.push({ id: "owned-chat-existing-session-navigation", passed: existing.id === second.sessionId && existing.project === second.projectId && existing.workspace === second.workspaceId, detail: JSON.stringify(existing) });
+  await evaluate(cdp, `document.querySelector('#chat-back').click()`);
   await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Controlled project 1')).click()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#catalog')?.textContent?.includes('Atlas transcript') === true`, 15_000);
   await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'New Chat')).click()`);
@@ -292,8 +309,10 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await waitForBrowserExpression(cdp, `document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000);
   const resumed = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), listed: document.querySelector('#catalog')?.textContent?.includes('New Chat (not yet saved)'), error: document.querySelector('#catalog-error')?.textContent })`);
   checks.push({ id: "owned-chat-transient-session-reload", passed: resumed.id === created.id && resumed.listed && !resumed.error, detail: JSON.stringify(resumed) });
+  await evaluate(cdp, `document.querySelector('#workstreams-toggle').click()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Controlled checkpoint result') === true`, 15_000);
   const workstream = await evaluate(cdp, `({ text: document.querySelector('#workstreams').textContent, revision: document.querySelector('#workstream-detail h3')?.textContent, injected: window.__workstreamInjected === 1, unsafeElements: document.querySelectorAll('#workstreams img').length, error: document.querySelector('#workstream-error').textContent })`);
+  await capture('workstreams-desktop');
   checks.push({ id: "owned-workstreams-real-service-projection", passed: workstream.text.includes('Controlled owner decision · pending') && workstream.text.includes('Controlled reference') && workstream.text.includes('Controlled next step') && workstream.revision.includes('revision 2') && workstream.unsafeElements === 0 && !workstream.injected && !workstream.error, detail: JSON.stringify({ revision: workstream.revision, task: workstream.text.includes('Controlled owner decision · pending'), link: workstream.text.includes('Controlled reference'), error: workstream.error, unsafeElements: workstream.unsafeElements }) });
   await evaluate(cdp, `Array.from(document.querySelectorAll('#workstream-detail article')).find(item => item.textContent.includes('Controlled owner decision')).querySelector('button').click()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Controlled owner decision · answered') === true`, 15_000);
@@ -305,7 +324,7 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   await evaluate(cdp, `(() => { const draft = document.querySelector('#workstream-detail textarea'); draft.value = '<img src=x onerror=window.__taskInjected=1> preserved answer'; draft.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#workstream-refresh').click(); })()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail textarea')?.value?.includes('preserved answer') === true`, 15_000);
   checks.push({ id: "owned-workstreams-unsubmitted-draft-survives-refresh", passed: (await evaluate(cdp, `({ text: document.querySelector('#workstream-detail textarea')?.value, unsafe: document.querySelectorAll('#workstream-detail img').length, injected: window.__taskInjected === 1 })`)).unsafe === 0 && !(await evaluate(cdp, `window.__taskInjected === 1`)), detail: 'Free-text draft remains inert across scoped service refresh' });
-  await evaluate(cdp, `document.querySelector('#workstream-detail button').click()`);
+  await evaluate(cdp, `([...document.querySelectorAll('#workstream-detail button')].find(x => x.textContent === 'Open associated Chat')).click()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#history')?.textContent?.includes(${JSON.stringify(second.transcriptMarker)}) === true`, 20_000);
   const association = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), project: new URL(location.href).searchParams.get('project'), workspace: new URL(location.href).searchParams.get('workspace'), error: document.querySelector('#workstream-error').textContent })`);
   checks.push({ id: "owned-workstreams-confirmed-session-navigation", passed: association.id === second.sessionId && association.project === second.projectId && association.workspace === second.workspaceId && !association.error, detail: JSON.stringify(association) });
@@ -356,17 +375,84 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   const createdWorkstream = await evaluate(cdp, `({ title: document.querySelector('#workstream-detail h3')?.textContent, stored: [...Array(localStorage.length).keys()].map(index => localStorage.key(index)).filter(key => key.startsWith('workbench:workstream:create:')).length, unsafe: document.querySelectorAll('#workstreams img').length, injected: window.__createdTitleInjected === 1, error: document.querySelector('#workstream-error').textContent })`);
   const createdSummaries = await externalStore.list();
   checks.push({ id: 'owned-workstreams-lost-create-response-reconciles-real-store', passed: createdWorkstream.title?.includes('revision 1') && createdWorkstream.stored === 0 && !createdWorkstream.unsafe && !createdWorkstream.injected && !createdWorkstream.error && createdSummaries.filter(item => item.title?.includes('Owned creation')).length === 1, detail: JSON.stringify(createdWorkstream) });
+  const createdWorkstreamId = createdSummaries.find(item => item.title?.includes('Owned creation'))?.id;
+  if (!createdWorkstreamId) throw new Error('Owned Workstream creation identity missing');
+  await evaluate(cdp, `(() => { const original = window.fetch; window.__launchPostCount = 0; window.fetch = async (...args) => { if (args[1]?.method === 'POST' && String(args[0]) === '/api/machines/local/sessions') { window.__launchPostCount++; const created = await original(...args); window.__launchPostStatus = created.status; window.__launchPostBody = await created.clone().text(); throw Error('Controlled lost launch response after creation'); } return original(...args); }; [...document.querySelectorAll('#workstream-detail button')].find(x => x.textContent === 'Start Workstream Chat').click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Reconcile launch (no new session POST)') === true`, 20_000);
+  const uncertainLaunch = await evaluate(cdp, `({ posts: window.__launchPostCount, status: window.__launchPostStatus, body: window.__launchPostBody, stored: [...Array(localStorage.length).keys()].map(i => localStorage.key(i)).filter(key => key.startsWith('workbench:workstream:launch-prompt:')).length, urlId: new URL(location.href).searchParams.get('id') })`);
+  const pendingLaunchSnapshot = await externalStore.inspect(createdWorkstreamId);
+  const lookupUrl = new URL(`api/machines/local/sessions/workstream-launch/${encodeURIComponent(pendingLaunchSnapshot.sessions[0].associationKey)}?cwd=${encodeURIComponent(first.cwd)}`, base);
+  const launchLookup = await requestJson(lookupUrl);
+  checks.push({ id: 'owned-workstreams-lost-session-response-preserves-exact-launch', passed: uncertainLaunch.posts === 1 && uncertainLaunch.status === 200 && uncertainLaunch.stored === 1 && uncertainLaunch.urlId === null && pendingLaunchSnapshot.sessions.length === 1 && pendingLaunchSnapshot.sessions[0].status === 'pending' && launchLookup.status === 'found', detail: JSON.stringify({ ...uncertainLaunch, launchLookup, sessionStatuses: pendingLaunchSnapshot.sessions.map(item => item.status) }) });
+  await navigate(cdp, await evaluate(cdp, 'location.href'), 20_000);
+  try { await waitForBrowserExpression(cdp, `document.querySelector('#workstream-list')?.textContent?.includes('Owned creation') === true`, 20_000); }
+  catch (error) { throw new Error(`Lost-launch reload failed: ${JSON.stringify(await evaluate(cdp, `({ connection: document.querySelector('#connection')?.textContent, error: document.querySelector('#error')?.textContent, catalog: document.querySelector('#catalog-error')?.textContent, url: location.href })`))}`, { cause: error }); }
+  await evaluate(cdp, `([...document.querySelectorAll('#workstream-list button')].find(x => x.textContent.includes('Owned creation'))).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Reconcile launch (no new session POST)') === true`, 15_000);
+  await evaluate(cdp, `(() => { const original = window.fetch; window.__reconcilePosts = 0; window.fetch = (...args) => { if (args[1]?.method === 'POST' && String(args[0]) === '/api/machines/local/sessions') window.__reconcilePosts++; return original(...args); }; [...document.querySelectorAll('#workstream-detail button')].find(x => x.textContent.includes('Reconcile launch')).click(); })()`);
+  try { await waitForBrowserExpression(cdp, `document.querySelector('#draft')?.value?.includes('You are pairing in Pi Workbench Workstream') === true && document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000); }
+  catch (error) { throw new Error(`Launch reconcile did not open reviewable Chat: ${JSON.stringify(await evaluate(cdp, `({ draft: document.querySelector('#draft')?.value?.slice(0, 200), connection: document.querySelector('#connection')?.textContent, error: document.querySelector('#workstream-error')?.textContent, catalog: document.querySelector('#catalog-error')?.textContent, url: location.href })`))}`, { cause: error }); }
+  const launched = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), draft: document.querySelector('#draft').value, posts: window.__reconcilePosts, sendUnknown: document.querySelector('#retry-send')?.hidden === false })`);
+  const confirmedLaunch = await externalStore.inspect(createdWorkstreamId);
+  checks.push({ id: 'owned-workstreams-reconciles-session-with-reviewable-draft-no-send', passed: launched.id && launched.id !== second.sessionId && launched.draft.includes(createdWorkstreamId) && !launched.sendUnknown && launched.posts === 0 && confirmedLaunch.sessions.length === 1 && confirmedLaunch.sessions[0].status === 'active' && confirmedLaunch.sessions[0].id === launched.id, detail: JSON.stringify({ id: launched.id, draftBytes: launched.draft.length, posts: launched.posts, sessions: confirmedLaunch.sessions.map(item => [item.id, item.status]) }) });
+  await navigate(cdp, await evaluate(cdp, 'location.href'), 20_000);
+  await waitForBrowserExpression(cdp, `document.querySelector('#draft')?.value?.includes('You are pairing in Pi Workbench Workstream') === true`, 20_000);
+  checks.push({ id: 'owned-workstreams-exact-launch-draft-survives-reload', passed: (await evaluate(cdp, `document.querySelector('#draft').value`)) === launched.draft, detail: `Stored exact draft length: ${launched.draft.length}` });
+  await evaluate(cdp, `document.querySelector('#chat-back').click()`);
+  await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Controlled project 2')).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-list')?.textContent?.includes('Controlled Workstream') === true`, 15_000);
   await evaluate(cdp, `([...document.querySelectorAll('#workstream-list button')].find(x => x.textContent.includes('Controlled Workstream')) ?? (() => { throw Error('Original Workstream missing') })()).click()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail h3')?.textContent?.includes('Controlled Workstream') === true`, 15_000);
   await evaluate(cdp, `([...document.querySelectorAll('#workstream-detail button')].find(x => x.textContent === 'Open associated Chat')).click()`);
+  await waitForBrowserExpression(cdp, `new URL(location.href).searchParams.get('id') === '${fixture.anchors[1].sessionId}' && document.querySelector('#connection')?.textContent?.includes('connected') === true`, 15_000);
+  await evaluate(cdp, `(() => { const original = window.fetch; window.__continuationPromptPosts = 0; window.fetch = (...args) => { if (args[1]?.method === 'POST' && String(args[0]).includes('/sessions/') && String(args[0]).endsWith('/prompt')) window.__continuationPromptPosts++; return original(...args); }; document.querySelector('#workstreams-toggle').click(); })()`);
+  await waitForBrowserExpression(cdp, `[...document.querySelectorAll('#workstream-detail button')].some(x => x.textContent === 'Continue checkpoint controlled-checkpoint')`, 15_000);
+  await evaluate(cdp, `(() => { window.__staleCheckpointConfirmations = 0; window.confirm = () => { window.__staleCheckpointConfirmations++; return true; }; [...document.querySelectorAll('#workstream-detail button')].find(x => x.textContent === 'Continue checkpoint controlled-checkpoint').click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#draft')?.value?.includes('--- BEGIN OWNER-CONFIRMED NEXT-SESSION PROMPT ---') === true && document.querySelector('#connection')?.textContent?.includes('connected') === true`, 20_000);
+  const continued = await evaluate(cdp, `({ id: new URL(location.href).searchParams.get('id'), draft: document.querySelector('#draft')?.value, promptPosts: window.__continuationPromptPosts, confirmations: window.__staleCheckpointConfirmations })`);
+  const continuedSnapshot = await externalStore.inspect('ws-controlled-owned');
+  checks.push({ id: 'owned-workstreams-checkpoint-continuation-exact-draft-and-association', passed: continued.id && continued.id !== second.sessionId && continued.draft.includes('Resume controlled work') && continued.draft.includes('controlled-checkpoint') && continued.promptPosts === 0 && continuedSnapshot.sessions.some(item => item.id === continued.id && item.status === 'active' && item.workspaceId === second.workspaceId), detail: JSON.stringify({ id: continued.id, promptPosts: continued.promptPosts, confirmations: continued.confirmations, matches: continuedSnapshot.sessions.filter(item => item.id === continued.id).map(item => [item.id, item.status, item.workspaceId]) }) });
+  await evaluate(cdp, `document.querySelector('#workstreams-toggle').click()`);
+  await evaluate(cdp, `([...document.querySelectorAll('#workstream-detail article')].find(item => item.textContent.includes(${JSON.stringify(second.sessionId)}))?.querySelector('button'))?.click()`);
+  await waitForBrowserExpression(cdp, `new URL(location.href).searchParams.get('id') === '${fixture.anchors[1].sessionId}' && document.querySelector('#connection')?.textContent?.includes('connected') === true`, 15_000);
+  const anchorlessId = 'ws-controlled-anchorless';
+  await externalStore.create({ workstreamId: anchorlessId, idempotencyKey: 'fixture-anchorless-create', title: 'Anchor repair fixture', producer: 'fixture' });
+  await externalStore.append({ workstreamId: anchorlessId, expectedRevision: 1, idempotencyKey: 'fixture-anchorless-session', records: [
+    { type: 'session.pending', producer: 'fixture', payload: { associationKey: 'fixture-legacy', sessionId: first.sessionId } },
+    { type: 'session.confirmed', producer: 'fixture', payload: { associationKey: 'fixture-legacy', sessionId: first.sessionId } },
+  ] });
+  await evaluate(cdp, `(() => { document.querySelector('#workstreams-toggle').click(); document.querySelector('#workstream-refresh').click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-list')?.textContent?.includes('Anchor repair fixture') === true`, 15_000);
+  await evaluate(cdp, `([...document.querySelectorAll('#workstream-list button')].find(x => x.textContent.includes('Anchor repair fixture'))).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Find registered local location') === true`, 15_000);
+  await evaluate(cdp, `([...document.querySelectorAll('#workstream-detail button')].find(x => x.textContent === 'Find registered local location')).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes('Repair to') === true`, 15_000);
+  await evaluate(cdp, `(() => { window.confirm = () => true; [...document.querySelectorAll('#workstream-detail button')].find(x => x.textContent.startsWith('Repair to')).click(); })()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail h3')?.textContent?.includes('revision 3') === true && document.querySelector('#workstream-detail')?.textContent?.includes('Open associated Chat') === true`, 15_000);
+  const repairedAnchor = (await externalStore.inspect(anchorlessId)).sessions.find(session => session.id === first.sessionId);
+  checks.push({ id: 'owned-workstreams-repairs-verified-registered-location', passed: repairedAnchor?.status === 'active' && repairedAnchor.machineId === 'local' && repairedAnchor.projectId === first.projectId && repairedAnchor.workspaceId === first.workspaceId, detail: JSON.stringify({ status: repairedAnchor?.status, project: repairedAnchor?.projectId, workspace: repairedAnchor?.workspaceId }) });
+  await evaluate(cdp, `([...document.querySelectorAll('#workstream-detail button')].find(x => x.textContent === 'Open associated Chat')).click()`);
+  await waitForBrowserExpression(cdp, `new URL(location.href).searchParams.get('id') === '${fixture.anchors[0].sessionId}' && document.querySelector('#connection')?.textContent?.includes('connected') === true`, 15_000);
+  checks.push({ id: 'owned-workstreams-repaired-session-opens-registered-chat', passed: (await evaluate(cdp, `new URL(location.href).searchParams.get('workspace')`)) === first.workspaceId, detail: `Verified workspace: ${first.workspaceId}` });
+  await evaluate(cdp, `document.querySelector('#chat-back').click()`);
+  await evaluate(cdp, `([...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Controlled project 2')).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-list')?.textContent?.includes('Controlled Workstream') === true`, 15_000);
+  await evaluate(cdp, `([...document.querySelectorAll('#workstream-list button')].find(x => x.textContent.includes('Controlled Workstream'))).click()`);
+  await waitForBrowserExpression(cdp, `document.querySelector('#workstream-detail')?.textContent?.includes(${JSON.stringify(second.sessionId)}) === true`, 15_000);
+  await evaluate(cdp, `([...document.querySelectorAll('#workstream-detail article')].find(item => item.textContent.includes(${JSON.stringify(second.sessionId)}))?.querySelector('button'))?.click()`);
   await waitForBrowserExpression(cdp, `new URL(location.href).searchParams.get('id') === '${fixture.anchors[1].sessionId}' && document.querySelector('#connection')?.textContent?.includes('connected') === true`, 15_000);
   await evaluate(cdp, `(() => { const original = window.fetch; window.fetch = async (...args) => { const response = await original(...args); if (!String(args[0]).includes('/sessions/') || !String(args[0]).includes('/status?')) return response; const status = await response.clone().json(); status.extensionStatuses = { 'pi-workbench:activity': JSON.stringify({ schemaVersion: 1, items: [{ id: 'delegate:worker-one', kind: 'worker', name: 'Files review', role: 'independent-review', model: 'anthropic/claude-sonnet', effort: 'high', objective: '<img src=x onerror=window.__rosterInjected=1>', activity: 'reading files', reportedStatus: 'Checking paths' }, { id: 'delegate:child-two', kind: 'subagent', name: 'QA', role: 'investigation', model: 'openai/gpt-6-luna', effort: 'medium', objective: 'Verify browser', activity: 'success' }] }) }; return new Response(JSON.stringify(status), { status: response.status, headers: { 'Content-Type': 'application/json' } }); }; document.querySelector('#catalog li button[aria-current="page"]').click(); })()`);
   await waitForBrowserExpression(cdp, `document.querySelector('#delegation')?.textContent?.includes('Files review · Running') === true`, 15_000);
   const roster = await evaluate(cdp, `({ text: document.querySelector('#delegation').textContent, rows: document.querySelectorAll('#delegation article').length, unsafeElements: document.querySelectorAll('#delegation img').length, injected: window.__rosterInjected === 1 })`);
   checks.push({ id: "owned-roster-isolated-status-projection", passed: roster.rows === 2 && roster.text.includes('anthropic/claude-sonnet · high') && roster.text.includes('Subagent · QA · Uncollected') && roster.text.includes('openai/gpt-6-luna · medium') && roster.text.includes('Reported: Checking paths') && roster.unsafeElements === 0 && !roster.injected, detail: JSON.stringify(roster) });
+  await evaluate(cdp, `document.querySelector('#files-toggle').click()`);
+  const filesPanel = await evaluate(cdp, `({ visible: document.querySelector('#files').getBoundingClientRect().width > 0, expanded: document.querySelector('#files-toggle').getAttribute('aria-expanded') })`);
+  checks.push({ id: 'owned-files-pi-web-style-toggle', passed: filesPanel.visible && filesPanel.expanded === 'true', detail: JSON.stringify(filesPanel) });
   await evaluate(cdp, `([...document.querySelectorAll('#file-tree button')].find(x => x.textContent.includes('README.md')) ?? (() => { throw Error('README missing') })()).click()`);
-  await waitForBrowserExpression(cdp, `document.querySelector('#file-detail pre')?.textContent?.includes('fixture-file-2') === true`, 15_000);
+  try { await waitForBrowserExpression(cdp, `document.querySelector('#file-detail pre')?.textContent?.includes('fixture-file-2') === true`, 15_000); }
+  catch (error) { throw new Error(`Files read did not settle: ${JSON.stringify(await evaluate(cdp, `({ error: document.querySelector('#file-error')?.textContent, detail: document.querySelector('#file-detail')?.textContent?.slice(0, 500), selected: document.querySelector('#catalog select')?.value, tree: document.querySelector('#file-tree')?.textContent?.slice(0, 500) })`))}`, { cause: error }); }
   const source = await evaluate(cdp, `({ editable: document.querySelector('#file-detail textarea')?.disabled === false, text: document.querySelector('#file-detail pre')?.textContent, path: document.querySelector('#file-detail h3')?.textContent })`);
+  await capture('files-desktop');
   checks.push({ id: 'owned-files-real-workspace-read', passed: source.editable && source.text.includes('fixture-file-2') && source.path.includes('README.md'), detail: JSON.stringify(source) });
   await evaluate(cdp, `(() => { const editor = document.querySelector('#file-detail textarea'); editor.value = '# Browser edit\\n'; editor.dispatchEvent(new Event('input', { bubbles: true })); window.confirm = () => false; [...document.querySelectorAll('#catalog button')].find(x => x.textContent === 'Controlled project 1').click(); })()`);
   const dirty = await evaluate(cdp, `({ text: document.querySelector('#file-detail textarea')?.value, workspace: document.querySelector('#catalog select')?.value, saveDisabled: [...document.querySelectorAll('#file-detail button')].find(x => x.textContent === 'Save file')?.disabled })`);
@@ -404,6 +490,30 @@ async function runOwnedBrowserAcceptance(cdp, webPort, fixture, runtime) {
   const large = await evaluate(cdp, `({ disabled: document.querySelector('#file-detail textarea')?.disabled, bytes: document.querySelector('#file-detail pre')?.textContent?.length, saveDisabled: [...document.querySelectorAll('#file-detail button')].find(x => x.textContent === 'Save file')?.disabled })`);
   const traversal = await fetch(new URL(`api/machines/local/projects/${encodeURIComponent(second.projectId)}/workspaces/${encodeURIComponent(second.workspaceId)}/file?path=${encodeURIComponent('../README.md')}`, base));
   checks.push({ id: 'owned-files-bounded-and-confined', passed: large.disabled && large.saveDisabled && large.bytes <= 512 * 1024 && traversal.status === 400, detail: JSON.stringify({ ...large, traversal: traversal.status }) });
+  if (runtime.screenshotsDir !== undefined) {
+    await evaluate(cdp, `([...document.querySelectorAll('#file-tree button')].find(x => x.textContent.includes('README.md'))).click()`);
+    await waitForBrowserExpression(cdp, `document.querySelector('#file-detail h3')?.textContent?.includes('README.md') === true && document.querySelector('#file-detail pre')?.textContent?.length > 0`, 15_000);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 480, height: 820, deviceScaleFactor: 1, mobile: false });
+    const narrowFiles = await evaluate(cdp, `({ header: document.querySelector('.conversation-header').getBoundingClientRect().height, filesHeight: document.querySelector('.workspace-panel').getBoundingClientRect().height, composerHidden: getComputedStyle(document.querySelector('.composer-shell')).display === 'none' })`);
+    checks.push({ id: 'owned-files-narrow-full-pane', passed: narrowFiles.header > 0 && narrowFiles.filesHeight > 650 && narrowFiles.composerHidden, detail: JSON.stringify(narrowFiles) });
+    await capture('chat-files-narrow');
+    await evaluate(cdp, `document.querySelector('#files-toggle').click()`);
+    const narrowChat = await evaluate(cdp, `(() => { const composer = document.querySelector('.composer-shell'); return { chatHeight: document.querySelector('.conversation-panel').getBoundingClientRect().height, composerVisible: getComputedStyle(composer).display !== 'none', composerHeight: composer.getBoundingClientRect().height, composerScroll: composer.scrollHeight - composer.clientHeight, sendBottom: document.querySelector('#send').getBoundingClientRect().bottom, viewportHeight: innerHeight, filesHidden: getComputedStyle(document.querySelector('.workspace-panel')).display === 'none' }; })()`);
+    checks.push({ id: 'owned-chat-narrow-restored-after-files', passed: narrowChat.chatHeight > 750 && narrowChat.composerVisible && narrowChat.filesHidden && narrowChat.sendBottom <= narrowChat.viewportHeight, detail: JSON.stringify(narrowChat) });
+    await capture('chat-narrow');
+    await evaluate(cdp, `document.querySelector('#workstreams-toggle').click()`);
+    await waitForBrowserExpression(cdp, `document.querySelector('.navigation-panel')?.getBoundingClientRect().height > 650 && getComputedStyle(document.querySelector('.conversation-panel')).order === '-1'`, 10_000);
+    const narrowWorkstreams = await evaluate(cdp, `({ height: document.querySelector('.navigation-panel').getBoundingClientRect().height, header: document.querySelector('.conversation-header').getBoundingClientRect().height, composerHidden: getComputedStyle(document.querySelector('.composer-shell')).display === 'none' })`);
+    checks.push({ id: 'owned-workstreams-narrow-full-pane', passed: narrowWorkstreams.height > 650 && narrowWorkstreams.header > 0 && narrowWorkstreams.composerHidden, detail: JSON.stringify(narrowWorkstreams) });
+    await capture('workstreams-narrow');
+    await evaluate(cdp, `document.querySelector('#files-toggle').click()`);
+    await waitForBrowserExpression(cdp, `document.querySelector('#files')?.getBoundingClientRect().height > 650 && !document.querySelector('.shell')?.classList.contains('show-workstreams')`, 10_000);
+    checks.push({ id: 'owned-narrow-panel-switch-exclusive', passed: await evaluate(cdp, `document.querySelector('#workstreams-toggle').getAttribute('aria-expanded') === 'false' && document.querySelector('#files-toggle').getAttribute('aria-expanded') === 'true'`), detail: 'Files replaces Workstreams without splitting the narrow pane.' });
+    await evaluate(cdp, `document.querySelector('#files-toggle').click()`);
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+    const reducedMotion = await evaluate(cdp, `parseFloat(getComputedStyle(document.querySelector('#send')).animationDuration)`);
+    checks.push({ id: 'owned-shell-reduced-motion', passed: reducedMotion < 0.001, detail: `Computed Send animation duration: ${reducedMotion}s` });
+  }
   return { status: checks.every(check => check.passed) ? "passed" : "failed", checks, limitations };
 }
 
@@ -728,7 +838,7 @@ class CDP {
   onMessage(event) { const message = JSON.parse(String(event.data)); if (process.env.PI_WEB_ACCEPTANCE_TRACE === "1") process.stderr.write(`[cdp] ${JSON.stringify({ id: message.id, method: message.method, error: message.error, ...(message.method === "Runtime.exceptionThrown" || message.method === "Log.entryAdded" ? { params: message.params } : {}) })}\n`); if (message.id !== undefined) { const pending = this.pending.get(message.id); if (!pending) return; this.pending.delete(message.id); if (message.error) pending.reject(new Error(JSON.stringify(message.error))); else pending.resolve(message.result ?? {}); return; } for (const listener of this.listeners.get(message.method) ?? []) listener(message.params ?? {}); }
 }
 
-function parseArgs(argv) { const parsed = {}; for (let index = 0; index < argv.length; index += 1) { const arg = argv[index]; if (arg === "--keep-temp") parsed.keepTemp = true; else if (["--root", "--pi-web-root", "--chrome-bin", "--owned-client-dist"].includes(arg)) { const value = argv[++index]; if (!value) throw new Error(`${arg} requires a value`); parsed[arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value; } else if (arg === "--help") { process.stdout.write("Usage: node packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs [--pi-web-root PATH] [--owned-client-dist PATH] [--chrome-bin PATH] [--root TEMP] [--keep-temp]\n"); process.exit(0); } else throw new Error(`Unknown argument: ${arg}`); } return parsed; }
+function parseArgs(argv) { const parsed = {}; for (let index = 0; index < argv.length; index += 1) { const arg = argv[index]; if (arg === "--keep-temp") parsed.keepTemp = true; else if (["--root", "--pi-web-root", "--chrome-bin", "--owned-client-dist", "--screenshots-dir"].includes(arg)) { const value = argv[++index]; if (!value) throw new Error(`${arg} requires a value`); parsed[arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value; } else if (arg === "--help") { process.stdout.write("Usage: node packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs [--pi-web-root PATH] [--owned-client-dist PATH] [--chrome-bin PATH] [--root TEMP] [--screenshots-dir PATH] [--keep-temp]\n"); process.exit(0); } else throw new Error(`Unknown argument: ${arg}`); } return parsed; }
 function executableFile(path) { try { accessSync(path, constants.X_OK); return true; } catch { return false; } }
 function delay(ms) { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 function withTimeout(promise, timeoutMs, message) {

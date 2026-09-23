@@ -9,13 +9,13 @@ async function fixture() {
   const store = new WorkstreamStore({ adapter: new InMemoryWorkstreamAdapter() });
   await store.create({ workstreamId: 'ws-1', idempotencyKey: 'create', title: 'Test', producer: 'owner' });
   const values = new Map(), calls = [];
-  const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key), key: index => [...values.keys()][index] ?? null, get length() { return values.size; } };
   const catalog = { machineId: 'local', view: { loading: false, selectedProject: { id: 'p' }, selectedWorkspace: { id: 'w', path: '/repo' }, workspaces: [{ id: 'w', projectId: 'p', path: '/repo' }] } };
   let respond = () => ({ ok: true, json: async () => ({ id: 'new', cwd: '/repo', path: '', created: 'now', modified: 'now', messageCount: 0, firstMessage: '' }) });
   const host = createWorkstreamHost({ catalog, storage, fetch: async (url, options) => { calls.push({ url, options }); return respond(url, options); }, open: () => {} });
   const service = { request: async (operation, input) => { try { return { ok: true, value: await store[operation](operation === 'inspect' ? input.workstreamId : input) }; } catch (error) { return { ok: false, error: { code: error.code ?? 'ERROR', message: error.message } }; } } };
   const make = () => createWorkstreamLaunch({ service, host, storage });
-  return { store, storage, calls, catalog, make, setRespond: fn => { respond = fn; } };
+  return { store, storage, calls, catalog, host, make, setRespond: fn => { respond = fn; } };
 }
 test('blank preflight, exact persisted prompt and confirmed identity; retry does not POST', async () => {
   const f = await fixture(), launch = f.make();
@@ -60,6 +60,51 @@ test('lost creation response reconciles via lookup without duplicate POST', asyn
   assert.equal(f.calls.filter(c => c.options?.method === 'POST').length, 1);
   assert.equal((await f.store.inspect('ws-1')).sessions.find(s => s.associationKey === 'workbench-web:lost').status, 'active');
 });
+test('a different operation cannot start while a saved launch has unknown outcome', async () => {
+  const f = await fixture();
+  f.setRespond(() => Promise.reject(new Error('lost response')));
+  const first = { kind: 'blank', workstreamId: 'ws-1', operationId: 'first', location };
+  assert.equal((await f.make().launch(first)).type, 'pending');
+  const second = { ...first, operationId: 'second' };
+  await assert.rejects(f.make().launch(second), /saved launch is unresolved/);
+  assert.equal(f.calls.filter(call => call.options?.method === 'POST').length, 1);
+  f.setRespond((url) => url.includes('workstream-launch/') ? { ok: true, json: async () => ({ status: 'found', sessionId: 'created', cwd: '/repo' }) } : { ok: true, json: async () => ({ id: 'second-session', cwd: '/repo', path: '', created: 'now', modified: 'now', messageCount: 0, firstMessage: '' }) });
+  assert.equal((await f.make().resume('first')).type, 'confirmed');
+  assert.equal(f.make().unresolved(await f.store.inspect('ws-1')), false);
+  assert.equal((await f.make().launch(second)).type, 'confirmed');
+  assert.equal(f.calls.filter(call => call.options?.method === 'POST').length, 2);
+});
+
+test('repairs an anchorless session only after an exact registered-scope recheck', async () => {
+  const f = await fixture();
+  await f.store.append({ workstreamId: 'ws-1', expectedRevision: 1, idempotencyKey: 'legacy', records: [
+    { type: 'session.pending', producer: 'owner', payload: { associationKey: 'legacy', sessionId: 'old' } },
+    { type: 'session.confirmed', producer: 'owner', payload: { associationKey: 'legacy', sessionId: 'old' } },
+  ] });
+  const saved = await f.store.inspect('ws-1');
+  f.setRespond(() => ({ ok: true, json: async () => [{ id: 'old', cwd: '/repo', path: '/old.jsonl', created: 'now', modified: 'now', messageCount: 0, firstMessage: '' }] }));
+  const found = await f.make().resolveAnchor('old');
+  assert.equal(found.type, 'found');
+  const repaired = await f.make().repairAnchor(saved, 'old', found);
+  assert.equal(repaired.sessions.find(session => session.id === 'old').workspaceId, 'w');
+  await assert.rejects(f.make().repairAnchor(saved, 'old', found), /changed/);
+});
+
+test('rejects changed complete-scan evidence without appending an anchor', async () => {
+  const f = await fixture();
+  await f.store.append({ workstreamId: 'ws-1', expectedRevision: 1, idempotencyKey: 'legacy', records: [
+    { type: 'session.pending', producer: 'owner', payload: { associationKey: 'legacy', sessionId: 'old' } },
+    { type: 'session.confirmed', producer: 'owner', payload: { associationKey: 'legacy', sessionId: 'old' } },
+  ] });
+  const saved = await f.store.inspect('ws-1');
+  const one = { id: 'old', cwd: '/repo', path: '/old.jsonl', created: 'now', modified: 'now', messageCount: 0, firstMessage: '' };
+  f.setRespond(() => ({ ok: true, json: async () => [one] }));
+  const found = await f.make().resolveAnchor('old');
+  f.setRespond(() => ({ ok: true, json: async () => [one, { ...one, id: 'another' }] }));
+  await assert.rejects(f.make().repairAnchor(saved, 'old', found), /evidence changed/);
+  assert.equal((await f.store.inspect('ws-1')).revision, saved.revision);
+});
+
 test('checkpoint prompt is persisted verbatim and never sent; saved request survives reload', async () => {
   const f = await fixture();
   await f.store.append({ workstreamId: 'ws-1', expectedRevision: 1, idempotencyKey: 'source', records: [

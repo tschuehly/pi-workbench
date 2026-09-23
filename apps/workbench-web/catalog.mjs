@@ -126,5 +126,5 @@ export function createCatalog({ fetch: request, storage, changed = () => {}, tok
     try { storage.removeItem(key(w)); view.creationUnknown = pending(w) !== null; view.error = null; emit(); }
     catch (e) { view.error = String(e); emit(); }
   }
-  return { load, choose, select, refresh, create, acknowledgeUnknown, get view() { return view; }, get machineId() { return machine; } };
+  return { load, choose, select, selectActive, refresh, create, acknowledgeUnknown, get view() { return view; }, get machineId() { return machine; } };
 }

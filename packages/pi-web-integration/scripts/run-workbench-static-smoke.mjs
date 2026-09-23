@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { access, cp, mkdir, mkdtemp, readFile, readdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -124,22 +124,33 @@ try {
     const install = spawnSync('bash', ['apps/pi-web-macos/Scripts/install-app.sh', '--app-only'], {
       cwd: resolve(import.meta.dirname, '../../..'),
       env: { ...stack.env, PI_WEB_APP_PATH: appPath, PI_WEB_COMMAND_DIR: join(root, 'bin'), PI_WEB_DIR: piWebRoot, PI_WEB_CLI: fakeCli, PI_WEB_URL: `http://127.0.0.1:${port}`, SWIFTPM_BUILD_DIR: join(root, 'swift-build') },
-      encoding: 'utf8', timeout: 120_000,
+      encoding: 'utf8', timeout: 240_000,
     });
     assert.equal(install.status, 0, `Isolated app-only install failed: ${install.stderr}`);
     const bundle = join(appPath, 'Contents/MacOS/PIWebMac');
     await access(bundle);
     const priorLog = log.length;
-    const app = stack.spawnOwned('native-app', bundle, [], { cwd: root });
+    const app = spawn(bundle, [], { cwd: root, env: { ...stack.env, PI_WEB_NATIVE_ACCEPTANCE: '1' }, detached: true });
+    let evidence = '';
+    app.stdout.on('data', chunk => { evidence += String(chunk); });
     app.stderr.on('data', chunk => log.push(String(chunk).slice(-2000)));
-    for (let i = 0; i < 200; i++) {
-      if (app.exitCode !== null) throw new Error(`Native app exited: ${log.join('').slice(-3000)}`);
-      if (log.slice(priorLog).join('').includes('"url":"/main.mjs"')) break;
-      await delay(100);
+    try {
+      for (let i = 0; i < 200; i++) {
+        if (app.exitCode !== null || app.signalCode !== null) throw new Error(`Native app exited: ${log.join('').slice(-3000)}`);
+        if (evidence.includes('\n')) break;
+        await delay(100);
+      }
+      const probe = evidence.split('\n').filter(Boolean).map(line => JSON.parse(line)).find(line => line.type === 'NATIVE_UI_PROBE');
+      assert.ok(probe, `Native owned UI probe timed out: ${log.join('').slice(-3000)}`);
+      assert.equal(probe.rendered, true);
+      assert.equal(probe.action, true);
+      assert.ok(probe.width > 0 && probe.height > 0);
+      assert.match(log.slice(priorLog).join(''), /"url":"\/main\.mjs"/, 'Native WKWebView did not load owned module');
+      await assert.rejects(access(forbidden), { code: 'ENOENT' });
+      console.log(JSON.stringify({ type: 'NATIVE_SMOKE', status: 'passed', appOnly: true, isolatedReadiness: true, nativeOwnedModuleRequest: true, nativeUI: probe, lifecycleCommand: false }));
+    } finally {
+      await terminateOwnedProcess(app);
     }
-    assert.match(log.slice(priorLog).join(''), /"url":"\/main\.mjs"/, 'Native WKWebView did not load owned module');
-    await assert.rejects(access(forbidden), { code: 'ENOENT' });
-    console.log(JSON.stringify({ type: 'NATIVE_SMOKE', status: 'passed', appOnly: true, isolatedReadiness: true, nativeOwnedModuleRequest: true, lifecycleCommand: false }));
 
     // Revert only the static client selection. Keep the same native bundle, backend
     // revision, socket-bound daemon, and durable state; never downgrade a data format.

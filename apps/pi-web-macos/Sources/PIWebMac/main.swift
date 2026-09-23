@@ -458,6 +458,27 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     private let webView: WKWebView
     private let onClose: (BrowserWindowController) -> Void
     private var lastApplicationURL: URL?
+    private var nativeProbeAttempts = 0
+    private var isOwnedProbePage: Bool {
+        guard let url = webView.url else { return false }
+        return isAllowed(url) && (url.path.isEmpty || url.path == "/") && url.query == nil && url.fragment == nil
+    }
+    private var nativeProbeFinished = false
+
+    // Only the isolated, offline smoke may drive the owned main frame. Normal launches never evaluate page JS.
+    private var nativeProbeEnabled: Bool {
+        let env = ProcessInfo.processInfo.environment
+        guard env["PI_WEB_NATIVE_ACCEPTANCE"] == "1", env["PI_WEB_OFFLINE"] == "1", env["PI_OFFLINE"] == "1",
+              let root = env["PI_WEB_FIXTURE_OWNED_ROOT"], root.hasPrefix("/"),
+              let home = env["HOME"], let data = env["PI_WEB_DATA_DIR"],
+              let fixture = env["PI_WEB_FIXTURE_ROOT"], let serverURL,
+              serverURL.scheme == "http", serverURL.host == "127.0.0.1", serverURL.port != nil else { return false }
+        let owned = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath().path
+        guard owned != "/", owned != FileManager.default.homeDirectoryForCurrentUser.path else { return false }
+        return [home, data, fixture].allSatisfy {
+            URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path.hasPrefix(owned + "/")
+        }
+    }
 
     init(serverURL: URL?, sleepControl: NativeSleepControl, actionHandler: @escaping (LifecycleAction) -> Void, onClose: @escaping (BrowserWindowController) -> Void) {
         self.serverURL = serverURL
@@ -539,6 +560,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let current = webView.url, isAllowed(current) { lastApplicationURL = current }
         window?.title = webView.title?.isEmpty == false ? webView.title! : "Pi Workbench"
+        if nativeProbeEnabled, isOwnedProbePage { probeOwnedPage() }
     }
 
     func webView(
@@ -610,6 +632,47 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         // as transient: show progress and let the lifecycle gate reload the window once it is back.
         showStartup("PI WEB is unavailable at \(serverURL?.absoluteString ?? "the configured URL"). Reconnecting\u{2026}\n\n\(error.localizedDescription)")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.actionHandler(.retry) }
+    }
+
+    private func probeOwnedPage() {
+        guard nativeProbeEnabled, isOwnedProbePage, let port = serverURL?.port,
+              !nativeProbeFinished, nativeProbeAttempts < 40 else { return }
+        nativeProbeAttempts += 1
+        // The only action is an unsent Workstream-title edit. No model, session, or live state is changed.
+        let script = """
+        (() => {
+          if (location.protocol !== 'http:' || location.hostname !== '127.0.0.1' || location.port !== '\(port)'
+              || location.pathname !== '/' || location.search || location.hash) return null;
+          const chooser = document.querySelector('aside[aria-label="Navigation"]') || document.querySelector('.navigation-panel');
+          const catalog = document.querySelector('nav[aria-label="Chat selection"] #catalog');
+          const title = document.querySelector('#workstream-create input#workstream-title');
+          if (document.title !== 'Pi Workbench' || !chooser || !catalog || !title || !title.form?.onsubmit) return null;
+          title.focus();
+          title.value = 'isolated native title';
+          title.dispatchEvent(new Event('input', { bubbles: true }));
+          return { rendered: chooser.getBoundingClientRect().width > 0 && catalog.getBoundingClientRect().width > 0
+                            && title.getBoundingClientRect().width > 0,
+                   action: document.activeElement === title && title.value === 'isolated native title',
+                   width: Math.round(innerWidth), height: Math.round(innerHeight) };
+        })()
+        """
+        webView.evaluateJavaScript(script) { [weak self] value, error in
+            guard let self, !self.nativeProbeFinished else { return }
+            if let result = value as? [String: Any], result["rendered"] as? Bool == true, result["action"] as? Bool == true {
+                self.nativeProbeFinished = true
+                let evidence: [String: Any] = ["type": "NATIVE_UI_PROBE", "rendered": true, "action": true,
+                                               "width": result["width"] ?? 0, "height": result["height"] ?? 0]
+                if let data = try? JSONSerialization.data(withJSONObject: evidence), let line = String(data: data, encoding: .utf8) {
+                    print(line)
+                    fflush(stdout)
+                }
+            } else if self.nativeProbeAttempts < 40, self.isOwnedProbePage {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.probeOwnedPage() }
+            } else {
+                self.nativeProbeFinished = true
+                fputs("NATIVE_UI_PROBE failed: \(error?.localizedDescription ?? String(describing: value))\n", stderr)
+            }
+        }
     }
 
     private func isAllowed(_ url: URL) -> Bool {
