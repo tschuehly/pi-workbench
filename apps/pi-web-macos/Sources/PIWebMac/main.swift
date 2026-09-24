@@ -51,7 +51,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
     func applicationDidFinishLaunching(_ notification: Notification) {
         currentUserNotificationCenter()?.delegate = self
         buildMainMenu()
-        browser.openWindow()
+        browser.restoreWindows()
         NSApp.activate(ignoringOtherApps: true)
         lifecycle.start()
     }
@@ -63,6 +63,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationWillTerminate(_ notification: Notification) { browser.isQuitting = true; browser.saveWindows() }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound])
@@ -319,6 +320,8 @@ private final class BrowserCoordinator {
     private let sleepControl = NativeSleepControl()
     private var controllers: [ObjectIdentifier: BrowserWindowController] = [:]
     private var ready = false
+    var isQuitting = false
+    private var restoring = false
 
     init(serverURL: URL?, actionHandler: @escaping (LifecycleAction) -> Void) {
         self.serverURL = serverURL
@@ -329,15 +332,41 @@ private final class BrowserCoordinator {
         controllers.values.contains { $0.window?.isVisible == true && $0.window?.isOnActiveSpace == true }
     }
 
+    func restoreWindows() {
+        guard let serverURL else { openWindow(); return }
+        let saved = WindowRestoration.read(from: .standard, server: serverURL, screens: NSScreen.screens.map(\.visibleFrame))
+        restoring = true
+        if saved.isEmpty { openWindow() }
+        else { saved.forEach { openWindow(url: $0.url, frame: $0.frame) } }
+        restoring = false
+        saveWindows()
+    }
+
+    func saveWindows() {
+        guard !restoring, let serverURL else { return }
+        let windows = controllers.values.compactMap { controller -> RestoredWindow? in
+            guard let window = controller.window,
+                  let url = controller.applicationURL.flatMap({ WindowRestoration.applicationURL($0, server: serverURL) }) else { return nil }
+            return RestoredWindow(url: url, frame: window.frame)
+        }
+        WindowRestoration.save(windows, to: .standard)
+    }
+
     @discardableResult
-    func openWindow(url: URL? = nil) -> BrowserWindowController {
-        let controller = BrowserWindowController(serverURL: serverURL, sleepControl: sleepControl, actionHandler: actionHandler) { [weak self] controller in
+    func openWindow(url: URL? = nil, frame: NSRect? = nil) -> BrowserWindowController {
+        let controller = BrowserWindowController(serverURL: serverURL, sleepControl: sleepControl, actionHandler: actionHandler, onChange: { [weak self] in
+            self?.saveWindows()
+        }) { [weak self] controller in
             self?.controllers.removeValue(forKey: ObjectIdentifier(controller))
+            if self?.isQuitting == false { self?.saveWindows() }
         }
         controllers[ObjectIdentifier(controller)] = controller
+        if let frame { controller.window?.setFrame(frame, display: false) }
+        controller.loadTarget = url ?? serverURL
         controller.showWindow(nil)
         if ready, let target = url ?? serverURL { controller.load(target) }
         else { controller.showStartup("Checking installed PI WEB services…") }
+        saveWindows()
         return controller
     }
 
@@ -452,12 +481,31 @@ private final class SleepControlMessageHandler: NSObject, WKScriptMessageHandler
     }
 }
 
+private final class RouteMessageHandler: NSObject, WKScriptMessageHandler {
+    private let report: (URL) -> Void
+    init(_ report: @escaping (URL) -> Void) { self.report = report }
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, let urlText = message.body as? String,
+              let url = URL(string: urlText), let frameURL = message.frameInfo.request.url,
+              url.scheme?.lowercased() == frameURL.scheme?.lowercased(),
+              url.host?.lowercased() == frameURL.host?.lowercased(),
+              (url.port ?? (url.scheme == "https" ? 443 : 80)) == (frameURL.port ?? (frameURL.scheme == "https" ? 443 : 80)) else { return }
+        report(url)
+    }
+}
+
 private final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private let serverURL: URL?
     private let actionHandler: (LifecycleAction) -> Void
     private let webView: WKWebView
     private let onClose: (BrowserWindowController) -> Void
     private var lastApplicationURL: URL?
+    var loadTarget: URL? {
+        get { lastApplicationURL }
+        set { lastApplicationURL = newValue }
+    }
+    var applicationURL: URL? { lastApplicationURL }
+    private let onChange: () -> Void
     private var nativeProbeAttempts = 0
     private var isOwnedProbePage: Bool {
         guard let url = webView.url else { return false }
@@ -480,10 +528,11 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         }
     }
 
-    init(serverURL: URL?, sleepControl: NativeSleepControl, actionHandler: @escaping (LifecycleAction) -> Void, onClose: @escaping (BrowserWindowController) -> Void) {
+    init(serverURL: URL?, sleepControl: NativeSleepControl, actionHandler: @escaping (LifecycleAction) -> Void, onChange: @escaping () -> Void, onClose: @escaping (BrowserWindowController) -> Void) {
         self.serverURL = serverURL
         self.actionHandler = actionHandler
         self.onClose = onClose
+        self.onChange = onChange
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.preferences.isElementFullscreenEnabled = true
@@ -493,6 +542,16 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         userContentController.addScriptMessageHandler(NotificationMessageHandler(.notify), contentWorld: .page, name: "piWebNotification")
         userContentController.addScriptMessageHandler(SleepControlMessageHandler(.get, control: sleepControl, serverURL: serverURL), contentWorld: .page, name: "piWebGetSleepDisabled")
         userContentController.addScriptMessageHandler(SleepControlMessageHandler(.set, control: sleepControl, serverURL: serverURL), contentWorld: .page, name: "piWebSetSleepDisabled")
+        userContentController.addUserScript(WKUserScript(source: """
+            (() => {
+              const report = () => window.webkit.messageHandlers.piWebRoute.postMessage(location.href);
+              for (const name of ['pushState', 'replaceState']) {
+                const original = history[name];
+                history[name] = function(...args) { const result = original.apply(this, args); report(); return result; };
+              }
+              addEventListener('popstate', report);
+            })();
+            """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         userContentController.addUserScript(WKUserScript(source: piWebNativeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController = userContentController
         webView = WKWebView(frame: .zero, configuration: configuration)
@@ -504,6 +563,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         window.center()
         window.contentView = webView
         super.init(window: window)
+        userContentController.add(RouteMessageHandler { [weak self] url in self?.remember(url) }, contentWorld: .page, name: "piWebRoute")
         window.delegate = self
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -512,17 +572,26 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func load(_ url: URL) {
-        if isAllowed(url) { lastApplicationURL = url }
+        remember(url)
         webView.load(URLRequest(url: url))
     }
     func resume(fallback: URL) {
-        if let current = webView.url, isAllowed(current) { lastApplicationURL = current }
+        if let current = webView.url { remember(current) }
         load(lastApplicationURL ?? fallback)
     }
     func reload() { webView.reload() }
     func goBack() { if webView.canGoBack { webView.goBack() } }
     func goForward() { if webView.canGoForward { webView.goForward() } }
     func windowWillClose(_ notification: Notification) { onClose(self) }
+    func windowDidMove(_ notification: Notification) { onChange() }
+    func windowDidEndLiveResize(_ notification: Notification) { onChange() }
+    func windowDidResize(_ notification: Notification) { onChange() }
+
+    private func remember(_ url: URL) {
+        guard let serverURL, let safe = WindowRestoration.applicationURL(url, server: serverURL), safe != lastApplicationURL else { return }
+        lastApplicationURL = safe
+        onChange()
+    }
 
     func showStartup(_ message: String) {
         showLifecyclePage(title: "Starting Pi Workbench", message: message, actions: "")
@@ -541,7 +610,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     }
 
     private func showLifecyclePage(title: String, message: String, actions: String) {
-        if let current = webView.url, isAllowed(current) { lastApplicationURL = current }
+        if let current = webView.url { remember(current) }
         let html = """
         <!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
@@ -558,7 +627,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let current = webView.url, isAllowed(current) { lastApplicationURL = current }
+        if let current = webView.url { remember(current) }
         window?.title = webView.title?.isEmpty == false ? webView.title! : "Pi Workbench"
         if nativeProbeEnabled, isOwnedProbePage { probeOwnedPage() }
     }

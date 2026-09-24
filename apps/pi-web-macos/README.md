@@ -6,7 +6,10 @@ The file pane remains deferred to the next [Workbench UI checkpoint](../../docs/
 
 The app uses AppKit and `WKWebView` for native windows, shared website data, lifecycle status, and
 same-origin navigation. PI WEB owns sessions and runtime state. The wrapper owns neither Pi
-sessions, Workstreams, nor Runs.
+sessions, Workstreams, nor Runs. Native preferences retain the open windows' chooser or committed
+Chat URLs and frames across quits and app-only reinstalls. Closing a window removes its record.
+Restoration rejects other origins, non-Chat routes, and URL parameters outside PI WEB's Chat identity;
+missing or unusable screen geometry falls back to a centered window.
 
 ## Install the app
 
@@ -161,6 +164,7 @@ pi-web doctor
 Regression checks:
 
 ```sh
+bash apps/pi-web-macos/Scripts/window-restoration.test.sh
 bash apps/pi-web-macos/Scripts/native-notifications.test.sh
 bash apps/pi-web-macos/Scripts/native-sleep-control.test.sh
 bash apps/pi-web-macos/Scripts/readiness.test.sh
