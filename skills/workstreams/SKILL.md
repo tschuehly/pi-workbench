@@ -112,7 +112,7 @@ Supported records and payloads are defined in `packages/workstream-store/src/ind
 - `group.set` for the owner's grouping label (`Embabel`, `PhotoQuest`, `Pi Workbench`, `Personal`, or a new one the user names); set it at creation;
 - `title.set` when the owner renames the Workstream or its current title no longer describes it; use `producer: "owner"` for an owner-supplied or approved title and `producer: "session"` for an agent-proposed title;
 - `overview.replaced` for the Workstream-level re-entry summary (see below);
-- `link.upsert` / `link.removed` for relevant file, repository, plan, Run, or artifact references;
+- `link.upsert` / `link.removed` for relevant file, repository, plan, Run, or artifact references; for lasting Git evidence, link the repository identity and full commit ID, not just a worktree path;
 - `human-task.upsert` for a durable question that needs an answer;
 - `human-task.answered` and then, separately, `human-task.resolved`;
 - `checkpoint.replaced` for a checkpoint, written automatically at a meaningful attention change;
@@ -148,7 +148,7 @@ field. Persist five values:
 - `remains`: what is blocked or still owed — one short sentence per item, the owner's decisions first;
 - `next`: one obvious owner-facing action in one sentence, starting with the actor;
 - `nextSessionPrompt`: the exact prompt to paste into a fresh attended Pi session;
-- `references`: the absolute working directory first, then only the concrete paths or identifiers needed to resume.
+- `references`: the current absolute working directory first while it is a live continuation target, then only the concrete paths or identifiers needed to resume; use repository identity plus full commit ID for lasting Git evidence.
 
 Lead with the point and make the checkpoint sufficient to resume without rereading chat. Keep `nextSessionPrompt` under 2,000 characters and include only the context, constraints, starting action, and references needed to continue safely; do not turn it into a transcript or execution plan.
 
@@ -165,3 +165,9 @@ Before closing, inspect and report unresolved Human Tasks and scratch-file links
 ```
 
 **Complete when:** the inspected Workstream is closed and any proposed cleanup remains subject to separate human confirmation.
+
+### Retire a linked worktree
+
+Before owner-approved removal, check the worktree is clean, its unique changes are landed or deliberately retained, and Pi has no stored sessions under its exact working directory. Check open Workstreams for current checkpoint or link references to that directory and move live continuation to a valid workspace before removal. Preserve repository identity and a reachable full commit ID (or retained artifact) for evidence. A closed Workstream is immutable: its old directory link records a historical location, not a promise the checkout still exists. Report the missing historical path as such rather than rewriting the ledger or keeping an otherwise unused worktree forever. `git worktree remove` never migrates a Pi session.
+
+**Complete when:** no Pi session or open Workstream needs the worktree as a live target, and the retained evidence remains resolvable after removal.

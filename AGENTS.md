@@ -53,7 +53,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - Describe only the supported current workflow and intended state.
 - For issue-tracking work, keep an issue ledger: record each distinct issue on discovery, update its entry whenever diagnosis, implementation, verification, or status changes, and mark unverified outcomes as pending.
 - Treat every file under `docs/archive/` as outdated historical evidence, never current behavior or intended state.
-- Keep durable Workstream checkpoint and link references in persistent workspace paths; use a persistent checkout instead of `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders.
+- Keep Workstream continuation paths outside OS temporary folders; anchor lasting evidence to a repository revision or retained artifact rather than a disposable worktree. Follow `docs/contracts/workstreams.md` before retiring a linked worktree.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
 - Commit each coherent unit after it is complete and needs no further human input.
 - Before changing sibling PI WEB, fetch `upstream` and the `origin` fork. Work on a fork branch and

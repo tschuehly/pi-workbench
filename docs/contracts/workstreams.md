@@ -138,6 +138,8 @@ The active session writes for the owner who will read the checkpoint later and f
 
 The required `nextSessionPrompt` is a separate, paste-ready prompt for a fresh attended Pi session. It carries only the context, constraints, starting action, and references needed to continue safely. It does not restate the conversation or expand into an execution plan. The prompt is persisted with the rest of the checkpoint, remains owner-correctable, and is limited to 2,000 characters. Durable checkpoint and link references must not point into operating-system temporary directories such as `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders; the Store rejects those references instead of creating future stale launch targets.
 
+For lasting Git evidence, record repository identity and a full commit ID (or a retained artifact), not only a worktree directory: a persistent-path worktree can still be removed. A worktree path in a checkpoint is a live continuation location, not a promise that the directory will outlive the work. Before removing it, check for Pi sessions stored under that working directory and replace current continuation targets in open Workstreams. Closed Workstreams remain immutable; their old directory links are historical locations and may no longer exist. Preserve the referenced commit or artifact before cleanup.
+
 Checkpoints accepted before `nextSessionPrompt` existed project `nextSessionPrompt: null` rather than inventing a prompt. Every new replacement requires the field.
 
 A failed, rejected, or abandoned proposal remains visible as a checkpoint failure when applicable. It does not invent continuation state or replace the latest confirmed checkpoint.
@@ -163,4 +165,4 @@ Closing a Workstream freezes that context as completed. Later work on the same t
 
 Before closure, Pi Workbench recommends reviewing unresolved Human Tasks and linked scratch files. Closure does not require that review. Unresolved items remain visible in the closed projection.
 
-Cleanup is proposed rather than automatic. Files are deleted only after human confirmation.
+Cleanup is proposed rather than automatic. Files are deleted only after human confirmation. Removing a worktree does not rebind Pi sessions that were created there; a stored session is a cleanup blocker until the owner chooses a supported migration or retention path. A closed Workstream's historical directory link alone does not require retaining an otherwise unused worktree when its evidence remains reachable by repository revision or artifact.
