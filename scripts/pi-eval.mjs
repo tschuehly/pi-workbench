@@ -19,6 +19,13 @@ const TOOLS = "read,bash,edit,write,grep,find,ls";
 const ADMISSION_ROLE = { routine: "investigation", implementation: "implementation", frontier: "escalation", "independent-review": "problem-solving", judge: "problem-solving" };
 
 const sh = (cmd, opts = {}) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", maxBuffer: 1 << 28, ...opts });
+// Gradle reuses daemons across invocations. A daemon started inside one trial's sandbox can read only that
+// trial, so reuse by a later trial or by the unsandboxed check breaks builds and could leak state. Give the
+// candidate and the check separate per-trial registries with a short idle timeout.
+const gradleEnv = (dir) => ({ GRADLE_OPTS: `${process.env.GRADLE_OPTS ?? ""} -Dorg.gradle.daemon.registry.base=${dir} -Dorg.gradle.daemon.idletimeout=120000`.trim() });
+function stopGradle(ws, dir) {
+  if (existsSync(dir) && existsSync(path.join(ws, "gradlew"))) sh("./gradlew --stop -q", { cwd: ws, env: { ...process.env, ...gradleEnv(dir) }, timeout: 120_000 });
+}
 const stamp = () => new Date().toISOString().replace(/[:.]/g, "-");
 
 function profileInstruction(name) {
@@ -83,7 +90,7 @@ function runPi({ model, effort, prompt, cwd, sessionDir, timeoutMs, trialDir, to
   return new Promise((resolve) => {
     const started = Date.now();
     const args = ["-p", "--mode", "json", "--model", model, "--thinking", effort, "--session-dir", sessionDir, tools ? "--tools" : "--no-tools", ...(tools ? [tools] : []), prompt];
-    const env = { ...process.env };
+    const env = { ...process.env, ...gradleEnv(path.join(trialDir, "gradle-agent")) };
     delete env.PI_WORKBENCH_ROUTING_OVERLAY;
     const child = spawn("sandbox-exec", ["-p", sandboxProfile(trialDir), "pi", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let out = "", err = "", timedOut = false;
@@ -138,7 +145,7 @@ async function runArm(c, arm, trialDir) {
 async function check(c, ws, finalText, trialDir, judges) {
   writeFileSync(path.join(trialDir, "final.txt"), finalText ?? "");
   if (c.check.type === "script") {
-    const r = sh(`bash ${JSON.stringify(path.join(c.dir, c.check.script))}`, { cwd: ws, timeout: (c.check.timeoutMinutes ?? 20) * 60_000, env: { ...process.env, CASE_DIR: c.dir, FINAL_TEXT: path.join(trialDir, "final.txt"), SOURCE_REPO: c.repo ? repoPath(c.repo) : "" } });
+    const r = sh(`bash ${JSON.stringify(path.join(c.dir, c.check.script))}`, { cwd: ws, timeout: (c.check.timeoutMinutes ?? 20) * 60_000, env: { ...process.env, ...gradleEnv(path.join(trialDir, "gradle-check")), CASE_DIR: c.dir, FINAL_TEXT: path.join(trialDir, "final.txt"), SOURCE_REPO: c.repo ? repoPath(c.repo) : "" } });
     writeFileSync(path.join(trialDir, "check.log"), `${r.stdout}\n${r.stderr}`);
     return { pass: r.status === 0, detail: r.stdout.trim().split("\n").slice(-3).join(" | ") };
   }
@@ -206,6 +213,7 @@ async function run(campaignPath, flags) {
         sh("git reset -q", { cwd: ws });
         record.check = await check(c, ws, last.finalText, trialDir, campaign.judges ?? []);
         record.status = runs.some((r) => r.timedOut) ? "timeout" : runs.some((r) => r.error) ? "error" : "done";
+        for (const w of new Set([ws, ...runs.map((x) => x.ws)])) for (const d of ["gradle-agent", "gradle-check"]) stopGradle(w, path.join(trialDir, d));
         if (!flags.keep) for (const r of new Set([ws, ...runs.map((x) => x.ws)])) rmSync(r, { recursive: true, force: true });
       } catch (error) {
         Object.assign(record, { status: "harness-error", reason: String(error?.message ?? error).slice(0, 1000) });
