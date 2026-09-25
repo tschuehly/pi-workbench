@@ -51,6 +51,12 @@ The owner uses Pi Workbench and PI WEB for daily work while they are developed. 
 
 A change goes live by promotion: merge into the integration branch, trial it in a second PI WEB instance with its own `PI_WEB_DATA_DIR`, socket, and port (or `pi -e <worktree>` for terminal checks), then run `scripts/promote-installed switch <workbench-rev> <pi-web-rev>`. Promotion builds both revisions in new worktrees (`prepare` does only this, safely at any time), then a detached launchd job repoints both links together and reinstalls both PI WEB services, because the session daemon keeps the code it loaded at start. The job restores the previous services if PI WEB does not become healthy; its log is under `~/.pi-workbench/installed/jobs/`. Restarting interrupts every open session and kills everything sessions started under the session daemon (subagents, workers, background jobs, and servers), so promotion requires the owner's explicit go-ahead and time, and `switch` refuses while any such process runs, listing each one (`--force` overrides). Roll back by promoting the previous revisions.
 
+A pi-workbench change that leaves the PI WEB server plugin untouched can go live without that
+restart: `scripts/promote-installed switch-workbench <workbench-rev>` builds the revision and
+atomically repoints only `pi-workbench.installed`. Open sessions keep the code they loaded; new
+sessions and `/reload` load the new revision, so reload a session before relying on changed tools
+or roles in it. It prints the command that switches back.
+
 ## Skill Capability and Interface Layer
 
 Skills are self-contained agent capabilities with concise instructions and bundled scripts, references, and assets. The harness gives skills common ways to expose progress, decisions, artifacts, inputs, outputs, and relevant actions; each skill does not need a separate application.
