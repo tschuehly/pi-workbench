@@ -357,13 +357,15 @@ try {
   assert.equal(slowQuota.modelBinding.admission, "degraded-quota-telemetry");
   assert.match(slowQuota.modelBinding.quotaSnapshot.error, /timed out|ETIMEDOUT/i);
 
+  // Without --catalog the model list comes from Pi's model store; a slow `pi` is never started.
   fs.writeFileSync(path.join(fakeBin, "pi"), "#!/usr/bin/env node\nsetTimeout(() => process.stdout.write('anthropic claude-sonnet-5\\n'), 1000);\n", { mode: 0o755 });
-  const slowCatalog = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath], {
-    encoding: "utf8",
-    env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`, PI_WORKBENCH_ROUTING_TIMEOUT_MS: "20" },
-  });
-  assert.equal(slowCatalog.status, 3);
-  assert.match(slowCatalog.stderr, /model catalog unavailable/i);
+  const storeEnv = { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`, PI_WORKBENCH_ROUTING_TIMEOUT_MS: "20", PI_CODING_AGENT_DIR: temp };
+  const fromStore = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath], { encoding: "utf8", env: storeEnv });
+  assert.equal(fromStore.status, 0, fromStore.stderr);
+  assert.equal(JSON.parse(fromStore.stdout).modelBinding.model, "gpt-6-luna");
+  const missingStore = spawnSync(process.execPath, [resolver, "investigation", "--quota", quotaPath], { encoding: "utf8", env: { ...storeEnv, PI_CODING_AGENT_DIR: path.join(temp, "missing") } });
+  assert.equal(missingStore.status, 3);
+  assert.match(missingStore.stderr, /model catalog unavailable/i);
 
   const cachePath = path.join(temp, "quota-cache.json");
   const callCountPath = path.join(temp, "quota-call-count");

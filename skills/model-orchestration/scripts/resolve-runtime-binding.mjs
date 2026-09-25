@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,7 +10,6 @@ import { knownModelFamilies, modelFamily } from "../../../packages/pi-execution-
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const policy = JSON.parse(fs.readFileSync(path.join(here, "..", "references", "routing-policy.json"), "utf8"));
-const ROUTING_COMMAND_TIMEOUT_MS = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
 const MODEL_EFFORTS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function usage() {
@@ -86,8 +84,10 @@ function modelKey(binding) {
   return `${binding.provider}/${binding.model}`;
 }
 
+const defaultMetadataPath = () => path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"), "models-store.json");
+
 function validateModelEffort(role, binding, metadataInput) {
-  const metadataPath = metadataInput ?? path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"), "models-store.json");
+  const metadataPath = metadataInput ?? defaultMetadataPath();
   let doc;
   try {
     doc = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
@@ -268,9 +268,13 @@ if (rawQuota !== undefined) {
 console.error("STAGE=catalog");
 let rawCatalog;
 try {
+  // Pi's own model store lists the same models as `pi --list-models` without starting Pi, which
+  // loads every extension and can exceed the routing timeout on a busy host.
   rawCatalog = catalogInput
     ? fs.readFileSync(catalogInput, "utf8")
-    : execFileSync("pi", ["--list-models"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: ROUTING_COMMAND_TIMEOUT_MS });
+    : Object.entries(JSON.parse(fs.readFileSync(modelMetadataInput ?? defaultMetadataPath(), "utf8")))
+      .flatMap(([provider, entry]) => (Array.isArray(entry?.models) ? entry.models : []).map((model) => `${provider} ${model.id}`))
+      .join("\n");
 } catch (error) {
   console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Pi model catalog unavailable: ${error.message}`);
   process.exit(3);
@@ -339,11 +343,6 @@ const result = {
     },
   },
 };
-
-function positiveTimeout(value, fallback) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-}
 
 if (format === "env") {
   console.log("ROUTING=PASS");
