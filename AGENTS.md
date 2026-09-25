@@ -32,7 +32,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |
 | Subagent and Worker evaluation | `docs/plans/subagent-worker-iterative-improvement.md`, `docs/plans/model-role-evaluation.md`, `skills/compound/` |
 | Working Mode (Alignment, Attention, Checking, Orchestration) | `extensions/working-mode/`, `docs/foundation/working-mode.md`, `docs/plans/working-mode.md` |
-| Model routing and unmanaged lead launch | `skills/model-orchestration/`, `scripts/pi-role` |
+| Model routing and unmanaged lead launch | `skills/model-orchestration/`, `scripts/pi-role`, `docs/plans/model-orchestration-redesign.md` |
 | Controller lifecycle and protocol | `docs/contracts/controller.md`, `packages/controller/`, `schemas/` |
 | Pi dispatch and actors | `docs/contracts/execution.md`, `packages/pi-execution/` |
 | Workspaces and delivery | `docs/contracts/controller.md`, `packages/repository-workspace/` |
