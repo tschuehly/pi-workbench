@@ -170,12 +170,24 @@ extracted from the private repository at run time rather than copied into the ca
 
 | Case type | Source | Check | Roles |
 | --- | --- | --- | --- |
-| Commit replay | Recent PhotoQuest fixes with tests, e.g. `8f133a3bd`, `27caf4b98`, `ac311d9fb`, `2c113fd94` | The commit's tests pass | `implementation` |
-| Symptom-only bug | Harder fixes given only the symptom, e.g. `2fb53ef0a`, `49c49534b` | The regression test passes | `frontier` |
-| Seeded defect | A diff that reintroduces a fixed bug, e.g. `bb84c6651` | The review names file and line | `independent-review` |
+| Feature replay | Multi-file PhotoQuest features with Playwright coverage, e.g. `1f3f6ca68`, `bd93f69a0`, `e747790de`, `3f8c7d8ff`, `b426d8225`; the brief states behavior and only the labels and selectors a user-level test needs | E2E outcome check | `implementation` |
+| Symptom-only bug | Production bugs whose root cause sits away from the symptom, e.g. `2fb53ef0a`, `aaf4760c2`, `009de008e`, `f4bfe5f6e`, `abca5da91`; the brief gives only the user-visible symptom | E2E outcome check | `frontier` |
+| Seeded defects | A diff that reintroduces several fixed bugs, plus a clean control diff | Defects found out of those planted, by file and line; findings on the control count as false positives | `independent-review` |
 | Evidence retrieval | Facts in `docs/business` (ICPs, competitors, product knowledge) | Exact answer | `routine` |
 | Data conclusion | Questions computable from `docs/business` CSV data | A script computes the answer | `routine`, panels |
 | Decision replay | A recorded business decision, given only the facts known before it | Blinded judges from both families score each answer without seeing its model; disagreements go to Thomas | `frontier`, panels |
+
+Code cases are proven by browser behavior, not by the fix's own unit tests. Each E2E check runs:
+
+1. **Outcome test**: a Playwright test that drives the browser and asserts what the user sees. It
+   fails on the fix's parent and passes on the fix. A commit test that calls endpoints directly or
+   depends on how the fix was built is replaced by a user-level test written from the symptom,
+   because it would fail other correct fixes.
+2. **Flow smoke test**: one fast happy-path test of the affected flow, run only after the outcome
+   test passes. Slow resilience tests run only when the symptom concerns resilience.
+
+A case enters a campaign only after its check passes on the fix commit and fails on its parent.
+Early smoke-run measurements: about 2.7 minutes to build and start, then the tests themselves.
 
 ### Arms
 
