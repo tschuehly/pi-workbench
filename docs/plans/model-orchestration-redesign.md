@@ -142,18 +142,29 @@ shapes in the [evaluation campaign proposal](../research/reports/model-evaluatio
 
 ### Runner
 
-`scripts/pi-eval` runs a campaign: every case × arm × repetition as one trial, sequentially.
+`node scripts/pi-eval.mjs run <campaign.json>` runs a campaign: every case × arm × repetition as
+one trial, sequentially. `report <results.jsonl>` prints the comparison table.
 
-1. Create a disposable PhotoQuest worktree at the case's frozen commit under
-   `~/.pi-workbench/evals/`. Cases name the repository and commit, never a local path.
-2. Run headless Pi: `pi -p --mode json --model <provider/model> --thinking <level>` with the case
-   prompt and a trial session directory. Normal extension discovery loads telemetry.
+1. Admit each arm's model and effort through the routing resolver; a blocked binding is recorded
+   as a blocked trial, never substituted.
+2. Extract a history-free snapshot of the case's repository at its frozen commit (optionally only
+   named paths) into the trial directory, so a later fix cannot be found through Git. A case setup
+   script may prepare it further, for example by committing a change under review. Cases name the
+   repository and commit; the runner resolves a sibling checkout or `PI_EVAL_REPO_<NAME>`.
+3. Run headless Pi: `pi -p --mode json --model <provider/model> --thinking <level>` limited to the
+   built-in file and shell tools, with the case's profile sentence prepended to the brief. Normal
+   extension discovery loads telemetry and subscription authentication.
 3. For a panel arm, run each member independently, then give their answers to the combining model.
 4. Run the case check outside every model.
 5. Append one result: pass or score, elapsed time, turns, tokens, quota before and after, and the
    exact binding.
 
 Results stay under `~/.pi-workbench/evals/results/` and never change routing policy.
+
+PhotoQuest is private and this repository is public, so PhotoQuest cases and campaigns live outside
+the repository under `~/.pi-workbench/evals/{cases,campaigns}/`. A case is `case.json` (role,
+profile, repository, commit, brief, check) plus its setup and check scripts; judge references are
+extracted from the private repository at run time rather than copied into the case.
 
 ### Cases
 
