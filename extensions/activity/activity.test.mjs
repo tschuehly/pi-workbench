@@ -4,7 +4,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ACTIVITY_CHANNEL, ACTIVITY_MAX_ITEMS, createActivitySurface, renderActivityLines, shortModel } from "./activity.mjs";
 
 const items = [
-  { id: "sub-1", kind: "subagent", role: "independent-review", model: "anthropic/claude-opus-5", effort: "high", objective: "Review PR embabel/me#993", activity: "reading monitor/runtime.ts" },
+  { id: "sub-1", kind: "subagent", role: "review", model: "anthropic/claude-opus-5", effort: "high", objective: "Review PR embabel/me#993", activity: "reading monitor/runtime.ts" },
   { id: "work-1", kind: "worker", name: "Catalog", role: "implementation", model: "openai-codex/gpt-5.6-terra", effort: "medium", objective: "Run focused tests", activity: "running npm test" },
   { id: "monitor-1", kind: "monitor", name: "build", objective: "waiting for CI", activity: "watching" },
   { id: "shell-1", kind: "shell", objective: "npm test", activity: "running" },

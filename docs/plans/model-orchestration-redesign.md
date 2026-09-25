@@ -1,9 +1,9 @@
 # Model orchestration redesign
 
-Status: specification, 2026-09-25. Thomas set the direction and settled the role names, tier
-fallback, and judged cases in an attended session. Current routing in
-[`skills/model-orchestration/`](../../skills/model-orchestration/SKILL.md) stays unchanged until the
-[evaluation](#evaluation) reports and Thomas accepts the resulting bindings.
+Status: design implemented 2026-09-25 in
+[`skills/model-orchestration/`](../../skills/model-orchestration/SKILL.md), the resolver, and the
+Subagent tool. Thomas set the direction, tiers, roles, and defaults in an attended session. The
+[evaluation](#evaluation) decides only the bindings marked "evaluated against".
 
 ## Problem
 
@@ -28,20 +28,25 @@ alternative on real work.
 
 ## Design
 
-### Open decisions select the tier
+### Latitude selects the tier
 
-Tiers are named by model strength. The tier follows how much the model must decide for itself:
-how unclear the problem is and how little the brief specifies. Each tier pairs one Anthropic and
-one OpenAI model, so a cross-family partner always exists at the same strength.
+**Latitude** is how much the model must decide for itself: how unclear the problem is and how little
+the brief specifies. Tiers are named by model strength. Each tier has a default model and a partner
+from the other family at the same strength.
 
-| Tier | Anthropic | OpenAI | Use when the model must decide |
+| Tier | Default | Partner | Latitude |
 | --- | --- | --- | --- |
-| Strong | Claude Fable 5.1 | GPT-6 Astra | The problem, approach, and finish line: unclear, novel, or stuck work; a symptom-only bug; a thin brief |
-| Standard | Claude Opus 5.5 | GPT-6 Sol | The approach, against a clear objective and an ordinary brief; coordination; independent checks |
-| Light | Claude Sonnet 5 | GPT-6 Luna | Little or nothing: a detailed brief, an accepted plan, mechanical edits, broad evidence collection |
+| Strong | GPT-6 Astra | Claude Opus 5.5 | Wide: the problem, approach, and finish line are open; unclear, novel, or stuck work; a symptom-only bug; a thin brief |
+| Standard | Claude Opus 5.5 | GPT-6 Sol | Normal: the approach is open against a clear objective and an ordinary brief; coordination; independent checks |
+| Light | GPT-6 Luna | Claude Sonnet 5 | Narrow: a detailed brief, an accepted plan, mechanical edits, broad evidence collection |
+| Reserve | Claude Fable 5.1 | — | Only by name: the second member of a frontier panel |
 
-A detailed brief or an accepted Plan or Spec moves the same work to a lighter tier; a vague brief
-moves it to a stronger one.
+A detailed brief or an accepted Plan or Spec narrows latitude and moves the same work to a lighter
+tier; a vague brief moves it to a stronger one.
+
+Fable has far less quota than Astra and is only marginally stronger than Opus, so routing never
+selects it. For the hardest problems, wide-latitude and consequential or already failed once, the
+lead runs a **frontier panel**: the same frozen brief to Astra and to Fable, combined by the lead.
 
 ### Roles
 
@@ -49,16 +54,18 @@ moves it to a stronger one.
 | --- | --- | --- | --- | --- |
 | `routine` | `mechanics`, `investigation` | Light | GPT-6 Luna `xhigh` | Luna `max`; Sonnet 5 `high` |
 | `implementation` | `implementation`, `problem-solving` | Standard | Claude Opus 5.5 `high` | Sol `high`, to test whether Opus is worth its Claude quota; Luna `max` for AFK work with an accepted plan |
-| `frontier` | `design`, `escalation` | Strong | GPT-6 Astra `xhigh` | Fable 5.1 `xhigh` |
+| `frontier` | `design`, `escalation` | Strong | GPT-6 Astra `xhigh` | Fable 5.1 `xhigh`; the Astra + Fable panel |
 | `coordination` | `coordination` | Standard | Claude Opus 5.5 `high` | — |
-| `independent-review` | `independent-review`, `challenge`, `independent-judgment` | Standard | Opus 5.5 or Sol `xhigh`, whichever family differs from the author | Sol vs Opus on the same review |
+| `review` | `independent-review`, `challenge`, `independent-judgment` | Standard or above | Opus 5.5 or Sol `xhigh`, whichever family differs from the author; for frontier work, the other family's strong model by name | Sol vs Opus on the same review |
+
+The old role names are removed, not aliased.
 
 Thomas set `implementation` to Opus 5.5 `high` on 2026-09-25; the evaluation checks it against Sol.
 
 The lead session is Claude Opus 5.5 `high`; it is configured in Pi settings, not routed. The lead
 also combines panel answers, replacing the `synthesis` role.
 
-`independent-review` carries its lens in the brief: judge a compact claim, challenge a
+`review` carries its lens in the brief: judge a compact claim, challenge a
 conclusion, or review a diff. Its independence rules are unchanged: the reviewer's underlying model
 family differs from the author's, unknown families fail closed, and same-family review is never
 labeled independent.
@@ -73,6 +80,8 @@ still answers simple steps quickly. Choose effort by latency tolerance and remai
 - Avoid `low`: well-defined tasks still meet ambiguous context.
 - `max` may force thinking on every request. It is an evaluation arm, not a default.
 
+`frontier` and `review` have an `xhigh` floor: an effort override may raise it, never lower it.
+
 ### Working Mode opens model slots
 
 The dials decide which slots a task opens; the roles decide which model fills each slot.
@@ -81,24 +90,24 @@ The dials decide which slots a task opens; the roles decide which model fills ea
 | --- | --- | --- |
 | Alignment | `Plan`, `Spec` | Planning without an accepted plan is `frontier` work; after acceptance, execution can move to `implementation` or `routine`. |
 | Attention | `Focused` | The lead must respond quickly; keep lead effort at `high` or lower. |
-| Attention | `AFK` | Latency is irrelevant: `routine` and plan-backed `implementation` may use Luna at `max`. Advisors are `independent-review` children with a judgment lens. |
+| Attention | `AFK` | Latency is irrelevant: `routine` and plan-backed `implementation` may use Luna at `max`. Advisors are `review` children with a judgment lens. |
 | Orchestration | `Main` | Only the lead runs, apart from checks and advisors the other dials require. |
 | Orchestration | `Subagents` | Leaf children use `routine`, `implementation`, or `frontier`. |
 | Orchestration | `Workers` | Workers use `coordination`; their leaves use the leaf roles. Worker continuity is never independent review. |
 | Checking | `Exercise`, `Test` | No independent model slot. |
-| Checking | `Challenge` | At least one cross-family `independent-review`; consequence may require a panel. |
+| Checking | `Challenge` | At least one cross-family `review`; consequence may require a panel. |
 
 The resolver does not read the dials. The lead applies them when it chooses the role and any
 `--effort` override.
 
 ### Tier-partner fallback
 
-When fresh quota telemetry shows the default model's provider exhausted, the resolver selects the
-other model in the same tier at the same effort. The receipt records the fallback and its reason.
-The binding's author family is the model that actually ran, so later independence checks route away
-from it. An `independent-review` fallback must still differ from the author's family; if the partner
-shares it, routing blocks. Unknown roles, unavailable models or efforts, and exhausted quota for both
-tier models still fail closed.
+When the default model is unavailable, lacks the effort, or has fresh exhausted quota, the resolver
+selects the tier partner at the same effort. Routing never moves to another tier. The receipt and
+the launch message record the fallback and its reason. The author family is the model that actually
+ran, so later independence checks route away from it. A `review` fallback skips candidates from the
+author's family and ends at the third family (Grok through Copilot). An explicit model has no
+fallback. Unknown roles and both tier models unavailable fail closed.
 
 ### Panels
 
@@ -182,7 +191,7 @@ extracted from the private repository at run time rather than copied into the ca
 | --- | --- | --- | --- |
 | Feature replay | Multi-file PhotoQuest features with Playwright coverage, e.g. `1f3f6ca68`, `bd93f69a0`, `e747790de`, `3f8c7d8ff`, `b426d8225`; the brief states behavior and only the labels and selectors a user-level test needs | E2E outcome check | `implementation` |
 | Symptom-only bug | Production bugs whose root cause sits away from the symptom, e.g. `2fb53ef0a`, `aaf4760c2`, `009de008e`, `f4bfe5f6e`, `abca5da91`; the brief gives only the user-visible symptom | E2E outcome check | `frontier` |
-| Seeded defects | A diff that reintroduces several fixed bugs, plus a clean control diff | Defects found out of those planted, by file and line; findings on the control count as false positives | `independent-review` |
+| Seeded defects | A diff that reintroduces several fixed bugs, plus a clean control diff | Defects found out of those planted, by file and line; findings on the control count as false positives | `review` |
 | Evidence retrieval | Facts in `docs/business` (ICPs, competitors, product knowledge) | Exact answer | `routine` |
 | Data conclusion | Questions computable from `docs/business` CSV data | A script computes the answer | `routine`, panels |
 | Decision replay | A recorded business decision, given only the facts known before it | Blinded judges from both families score each answer without seeing its model; disagreements go to Thomas | `frontier`, panels |
@@ -206,7 +215,7 @@ Early smoke-run measurements: about 2.7 minutes to build and start, then the tes
 | `implementation` | Sol `high` · Opus 5.5 `high` |
 | `routine` | Luna `xhigh` · Luna `max` · Sonnet 5 `high` |
 | `frontier` | Astra `xhigh` · Fable 5.1 `xhigh` |
-| `independent-review` | Sol `xhigh` · Opus 5.5 `xhigh` |
+| `review` | Sol `xhigh` · Opus 5.5 `xhigh` |
 | Panel | Sol + Opus combined by Opus · each alone |
 | Prompt | Each role's profile sentence · `plain` without it, on the same model |
 | Review effort | Opus 5.5 `low` · Opus 5.5 `xhigh` |

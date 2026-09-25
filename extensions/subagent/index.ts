@@ -67,12 +67,13 @@ export function harnessRevision(files: string[] = HARNESS_SOURCES): string {
 }
 const LOADED_HARNESS_REVISION = harnessRevision();
 
-const COGNITIVE_ROLES = [
-  "implementation", "problem-solving", "design", "escalation", "investigation",
-  "independent-judgment", "challenge", "synthesis", "independent-review", "mechanics", "coordination",
-] as const;
+const COGNITIVE_ROLES = ["routine", "implementation", "frontier", "coordination", "review"] as const;
+// Latitude is how much the child must decide for itself: how unclear the problem is and how little
+// the brief specifies. It selects the model tier; skills/model-orchestration/references/routing-policy.json
+// names the models.
+const ROLE_GUIDE = "Pick by latitude, how much the child must decide itself. routine: narrow latitude (detailed brief, accepted plan, mechanical edits, evidence collection); light tier. implementation: normal latitude (clear goal, ordinary brief); standard tier. frontier: wide latitude (unclear or novel problem, symptom-only bug, thin brief); strong tier. coordination: a Worker owning one scope. review: independent judgment, challenge, or diff review from the other model family; state the lens in the brief";
 const MODEL_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-const INDEPENDENT_ROLES = new Set<string>(["independent-judgment", "challenge", "independent-review"]);
+const INDEPENDENT_ROLES = new Set<string>(["review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
 const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
 
@@ -80,10 +81,10 @@ const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …' (a checkable finish line), 'Stop and ask only if …', and the expected output" }),
   name: Type.Optional(Type.String({ minLength: 1, description: "Short human-readable label for this child, a few words not a sentence (e.g. 'Fix login redirect'). Names the delegate roster row and the child session; falls back to a label derived from task when omitted." })),
   profile: StringEnum(LEAF_PROFILES, { description: "Bundled Level 1 child behavior profile" }),
-  cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
-  modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'; unavailable to independent roles" })),
+  cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: ROLE_GUIDE }),
+  modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Exact '<provider>/<model>': an owner request, the reserve model claude-fable-5-1 as second frontier panel member, or the other family's strong model for review of frontier work; review still checks the family" })),
   effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
-  independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for independent-judgment, challenge, or independent-review. Use only when the exact author model is genuinely unavailable; explicit providers never inherit the active parent's model." })),
+  independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for review. Use only when the exact author model is genuinely unavailable; explicit providers never inherit the active parent's model." })),
   independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Independent roles default to the active parent provider/model; distinct-model overlays require this exact value." })),
   excludeFamilies: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Additional model families to reject during cross-family independent routing; propagated unchanged as repeatable exclusions and unavailable under distinct-model overlays" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
@@ -108,7 +109,7 @@ const WorkerCreateParams = Type.Object({
 const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …', 'Stop and ask only if …', and the expected output. Continuity supplements explicit tasking; it never replaces it." }),
-  cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
+  cognitiveRole: StringEnum(WORKER_ROLES, { description: `${ROLE_GUIDE}. review is subagent-only because independence requires fresh context` }),
   modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'" })),
   effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
@@ -183,7 +184,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "Never sleep, poll, or call subagent_collect to wait for a background child.",
       "For independent roles, quote the exact author provider/model from its completion receipt when available. Use excludeFamilies only for additional cross-family exclusions; distinct-model overlays reject it, and non-independent roles reject both options.",
-      "Use modelOverride only for an exact model requested by the owner; this exception is unavailable to independent roles. Roles describe the work; effort is its own knob—do not pick a role for its effort.",
+      "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Roles describe the work; effort is a ceiling the role sets, and frontier and review never go below xhigh.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
     ],
@@ -301,7 +302,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       pendingSubagentCompletions.add(tracked);
       void tracked.then(() => pendingSubagentCompletions.delete(tracked));
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background (${params.profile} · ${params.cognitiveRole}). Finish genuinely independent work, then end the turn. The completion signal starts the next turn; answer it with subagent_collect without an executionId. Inspect with subagent_status; stop with subagent_cancel.` }],
+        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background on ${binding.provider}/${binding.model}:${binding.effort}${binding.fallback ? ` (fallback from ${binding.fallback.from}: ${binding.fallback.reason})` : ""} (${params.profile} · ${params.cognitiveRole}). Finish genuinely independent work, then end the turn. The completion signal starts the next turn; answer it with subagent_collect without an executionId. Inspect with subagent_status; stop with subagent_cancel.` }],
         details: { outcome: "launched", executionId: receipt.executionId, profile: params.profile, cognitiveRole: params.cognitiveRole, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Launched");

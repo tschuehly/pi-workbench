@@ -1,40 +1,26 @@
 # Independent checking
 
-The target checking contract is `Cognitive Role + Checking + consequence → required bindings`.
-The resolver accepts one Cognitive Role, author identity, and reviewer-family exclusions per
-invocation. The lead assembles the panel; the resolver does not enforce the selected Checking value. See
-[Working Mode](../../../docs/foundation/working-mode.md).
+Consequence is the impact of a wrong conclusion, not the difficulty of the work. It sets how many
+`review` children a conclusion needs. The owner's Checking value is a floor: consequence may add
+reviewers, never remove required tests or review.
 
-## Size independent checking by consequence
+| Consequence | Required review |
+| --- | --- |
+| `low` | The Checking floor only; at `Challenge`, one `review` |
+| `medium` | One `review` |
+| `high` | Two parallel `review` children from distinct non-author families |
+| `critical` | The `high` panel, then one `review` of the evidence-bearing diff; combine the results yourself |
 
-A Cognitive Role says what one assignment does. Consequence says how many independent assignments
-are required by the owner-selected Checking value, repository policy, or material risk. Judge
-consequence by the impact of a wrong conclusion, not by implementation difficulty.
+For a panel, give every reviewer the same distilled claim, constraints, and Primary Evidence with a
+distinct lens, keep their answers hidden from each other, and pass each already-selected family as
+`excludeFamilies` to the next launch. Independence follows the underlying model family, not the
+gateway provider.
 
-| Consequence | Minimum independent checking |
-|---|---|
-| `low` | The selected Checking floor only; at `Challenge`, one cross-family `challenge` |
-| `medium` | One `independent-judgment` or `challenge` |
-| `high` | Two parallel `challenge` assignments from distinct non-author model families; when only one non-author family has quota (see below), one `challenge` from that family, disclosed as single-family |
-| `critical` | The `high` panel, then one `independent-review` at the evidence-bearing boundary and a separate `synthesis` |
+With Anthropic and OpenAI, only one non-author family exists. The policy's third family (Grok
+through GitHub Copilot) supplies the second `high` reviewer when Copilot quota is available.
+Otherwise run the `high` panel as one reviewer and record "single-family: Copilot quota
+unavailable" in the checking plan and the final report. `critical` never accepts that reduction.
+A second reviewer from the author's or an already-selected family never counts.
 
-Give parallel challengers the same distilled claim, constraints, and Primary Evidence, but distinct challenge lenses. Keep their answers hidden from one another and collect all terminal results before synthesis. Independence follows the underlying model family, not the gateway provider; two models routed through GitHub Copilot are independent only when their underlying families differ from the author and from each other.
-
-The owner-selected Checking value is a floor: consequence may add checking but never remove required
-tests or adversarial review. Resolve the panel before launching: retain the same author identity and exclude each already-selected
-`modelBinding.independence.selectedFamily` from subsequent resolutions with repeatable
-`--exclude-family` flags (Subagent `excludeFamilies`). Required fan-out does not degrade silently when
-quota or a binding is unavailable; reduce scope, defer, or return `ROUTING=BLOCKED` with the missing
-family.
-
-One explicit degradation exists for `high`: the policy's third family is `github-copilot/grok-4.6`. When
-its quota window is exhausted or Copilot is unavailable (the resolver blocks the second `challenge`),
-run the `high` panel as one `challenge` from the remaining non-author family and record
-"single-family: Copilot quota unavailable" in the checking plan and the final report. Do not substitute a
-second reviewer from the author's family or the already-selected family, and do not apply this
-degradation to `critical`. Repeated selections of the same family do not satisfy a distinct-family panel.
-
-Resolve each role through [Binding](binding.md), including its explicit run-scoped routing-overlay
-exception to default cross-family independence. Report the independence actually provided.
-
-**Complete when:** the checking plan names its consequence, required roles, and any unavailable required binding; a panel also names its distinct underlying families, challenge lenses, and synthesis point.
+**Complete when:** the checking plan names its consequence, each reviewer's family and lens, and
+any reviewer that could not be launched.

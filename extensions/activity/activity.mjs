@@ -172,19 +172,7 @@ function requiredText(value, max) {
 }
 
 function shortRole(value) {
-  const roles = {
-    "independent-review": "review",
-    "independent-judgment": "judge",
-    implementation: "build",
-    "problem-solving": "solve",
-    investigation: "inspect",
-    design: "design",
-    escalation: "escalate",
-    challenge: "challenge",
-    synthesis: "synthesize",
-    mechanics: "mechanics",
-    coordination: "coordinate",
-  };
+  const roles = { routine: "routine", implementation: "build", frontier: "frontier", coordination: "coordinate", review: "review" };
   return typeof value === "string" && Object.hasOwn(roles, value) ? roles[value] : value?.replaceAll("-", " ");
 }
 

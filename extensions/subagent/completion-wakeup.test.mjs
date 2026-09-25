@@ -43,7 +43,7 @@ function harness() {
   return { wakeup, sent };
 }
 
-const subagent = { executionId: "exec-1", outcome: "success", profile: "scout", cognitiveRole: "investigation" };
+const subagent = { executionId: "exec-1", outcome: "success", profile: "scout", cognitiveRole: "routine" };
 
 test("sends one coalesced steer signal for terminal background children", () => {
   const { wakeup, sent } = harness();

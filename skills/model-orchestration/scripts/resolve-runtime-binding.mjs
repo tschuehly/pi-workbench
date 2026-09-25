@@ -12,8 +12,25 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const policy = JSON.parse(fs.readFileSync(path.join(here, "..", "references", "routing-policy.json"), "utf8"));
 const MODEL_EFFORTS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
+const HELP = `usage: resolve-runtime-binding.mjs <cognitive-role> [--model <provider>/<model>] [--effort <level>]
+  [--independent-of <provider> | --independent-of-model <provider>/<model>] [--exclude-family <family>]...
+  [--quota <path|->] [--catalog <path>] [--model-metadata <path>] [--format json|env]
+
+Roles (references/routing-policy.json): ${Object.entries(policy.roles).map(([r, p]) => `${r}=${p.tier}:${p.effort}`).join(", ")}
+Tiers, default first: ${Object.entries(policy.tiers).map(([t, m]) => `${t}=${m.join("/")}`).join(", ")}; reserve=${policy.reserve.join("/")} (only by --model)
+
+- The role's tier supplies the default model. When it is unavailable, lacks the effort, or has fresh
+  exhausted quota, the other model of the same tier runs and the receipt records the fallback.
+  Routing never moves to another tier; with both tier models unavailable it blocks.
+- review: needs the author (--independent-of-model, or --independent-of). It selects the tier model
+  of the other family, then the third family; --model is allowed when its family differs.
+- --effort may not go below a role's minEffort (frontier and review: xhigh).
+- --model selects one exact model with no fallback; the reserve tier is reachable only this way.
+- PI_WORKBENCH_ROUTING_OVERLAY=<abs path> narrows routing to an allowlist; see references/*-overlay.json.
+Exit: 0 pass (JSON or env on stdout), 1 unknown role, 2 usage, 3 ROUTING=BLOCKED with REASON.`;
+
 function usage() {
-  console.error("usage: resolve-runtime-binding.mjs <cognitive-role> [--model <provider>/<model>] [--effort <level>] [--independent-of <provider>] [--independent-of-model <provider>/<model>] [--exclude-family <family>]... [--quota <path|->] [--catalog <path>] [--model-metadata <path>] [--format json|env]");
+  console.error(HELP);
   process.exit(2);
 }
 
@@ -58,7 +75,7 @@ function loadRoutingOverlay(role) {
   }
   if (!isPlainObject(doc.roles) || Object.keys(doc.roles).length === 0) block(role, "Routing overlay must map at least one cognitive role");
   for (const [mappedRole, target] of Object.entries(doc.roles)) {
-    if (policy.bindings[mappedRole] === undefined) block(role, `Routing overlay maps unknown cognitive role '${mappedRole}'`);
+    if (policy.roles[mappedRole] === undefined) block(role, `Routing overlay maps unknown cognitive role '${mappedRole}'`);
     if (!isBinding(target)) block(role, `Routing overlay role '${mappedRole}' needs provider, model, effort, and quotaProvider`);
     if (!allowed.has(modelKey(target))) block(role, `Routing overlay role '${mappedRole}' resolves outside its own allowlist`);
   }
@@ -84,18 +101,20 @@ function modelKey(binding) {
   return `${binding.provider}/${binding.model}`;
 }
 
+// Returns a reason when the model cannot run at this effort, or undefined when it can. Without
+// readable metadata, only explicitly requested models or efforts fail closed.
 const defaultMetadataPath = () => path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"), "models-store.json");
 
-function validateModelEffort(role, binding, metadataInput) {
+function effortProblem(binding, metadataInput, explicit) {
   const metadataPath = metadataInput ?? defaultMetadataPath();
   let doc;
   try {
     doc = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
   } catch (error) {
-    block(role, `Pi model metadata is unavailable: ${error.message}`);
+    return explicit ? `Pi model metadata is unavailable: ${error.message}` : undefined;
   }
   const model = doc?.[binding.provider]?.models?.find((candidate) => candidate.id === binding.model);
-  if (model === undefined) block(role, `Pi model metadata has no entry for '${modelKey(binding)}'`);
+  if (model === undefined) return explicit ? `Pi model metadata has no entry for '${modelKey(binding)}'` : undefined;
   const levelMap = isPlainObject(model.thinkingLevelMap) ? model.thinkingLevelMap : {};
   // Pi exposes only off for non-reasoning models, maps absent standard reasoning levels normally,
   // and requires xhigh/max to be explicitly mapped.
@@ -104,10 +123,11 @@ function validateModelEffort(role, binding, metadataInput) {
     : Object.hasOwn(levelMap, binding.effort)
       ? levelMap[binding.effort] !== null
       : binding.effort !== "xhigh" && binding.effort !== "max";
-  if (!supported) block(role, `Pi model '${modelKey(binding)}' does not support Model Effort '${binding.effort}'`);
+  return supported ? undefined : `Pi model '${modelKey(binding)}' does not support Model Effort '${binding.effort}'`;
 }
 
 const args = process.argv.slice(2);
+if (args[0] === "--help" || args[0] === "-h") { console.log(HELP); process.exit(0); }
 const role = args.shift();
 if (!role) usage();
 let modelOverride;
@@ -146,46 +166,73 @@ if ((modelOverride === undefined && process.argv.includes("--model")) ||
     !["json", "env"].includes(format)) usage();
 
 console.error("STAGE=policy");
-const rolePolicy = policy.bindings[role];
+const rolePolicy = policy.roles[role];
 if (!rolePolicy) {
   console.error(`Unknown cognitive role: ${role}`);
-  console.error(`Valid roles: ${Object.keys(policy.bindings).join(", ")}`);
+  console.error(`Valid roles: ${Object.keys(policy.roles).join(", ")}`);
   process.exit(1);
 }
 if (effortOverride !== undefined && !MODEL_EFFORTS.has(effortOverride)) {
   block(role, `--effort must be one of ${[...MODEL_EFFORTS].join(", ")}, got '${effortOverride}'`);
 }
+const effortRank = [...MODEL_EFFORTS];
+if (effortOverride !== undefined && rolePolicy.minEffort !== undefined && effortRank.indexOf(effortOverride) < effortRank.indexOf(rolePolicy.minEffort)) {
+  block(role, `Role '${role}' needs at least Model Effort '${rolePolicy.minEffort}', got '${effortOverride}'`);
+}
+const effort = effortOverride ?? rolePolicy.effort;
 
 const knownFamilySet = new Set(knownModelFamilies);
 for (const family of excludedFamilies) {
   if (!knownFamilySet.has(family)) block(role, `Unknown model family '${family}' in --exclude-family`);
 }
 const uniqueExcludedFamilies = [...new Set(excludedFamilies)];
+const independent = rolePolicy.independent === true;
+if (!independent && (independentOfProvider !== undefined || independentOfModel !== undefined)) block(role, `Role '${role}' does not use an independence constraint`);
+if (!independent && uniqueExcludedFamilies.length > 0) block(role, `Role '${role}' does not use --exclude-family`);
 
+const named = (key) => {
+  const entry = policy.models[key];
+  if (entry === undefined) block(role, `Routing policy names unknown model '${key}'`);
+  return { ...entry, effort };
+};
+const familyOf = (binding) => {
+  const family = modelFamily(binding.provider, binding.model);
+  if (family === undefined) block(role, `Cannot determine the model family for '${modelKey(binding)}'`);
+  return family;
+};
+const overrideBinding = (base) => {
+  const requested = parseQualifiedModel(role, modelOverride, "--model");
+  const quotaProvider = requested.provider === base?.provider ? base.quotaProvider : policy.quotaProviders?.[requested.provider];
+  if (quotaProvider === undefined) block(role, `Provider '${requested.provider}' has no quota provider mapping for model overrides`);
+  return { provider: requested.provider, model: requested.model, quotaProvider, effort: effortOverride ?? base?.effort ?? effort };
+};
+
+// Candidates in preference order. Only the first is the role's choice; later ones are fallbacks.
 const overlay = loadRoutingOverlay(role);
-let binding = rolePolicy;
+let candidates;
 let independence;
 if (overlay !== undefined) {
-  const authorKey = independentOfModel;
-  if (rolePolicy.independentBindings === undefined) {
-    if (authorKey !== undefined || independentOfProvider !== undefined) block(role, `Role '${role}' does not use an independence constraint`);
-    if (uniqueExcludedFamilies.length > 0) block(role, `Role '${role}' does not use --exclude-family`);
-    binding = overlay.doc.roles[role];
-    if (binding === undefined) block(role, `Routing overlay does not map cognitive role '${role}'`);
+  if (modelOverride !== undefined && !overlay.allowed.has(modelOverride)) block(role, `Model '${modelOverride}' is outside the active routing overlay`);
+  if (!independent) {
+    const target = overlay.doc.roles[role];
+    if (target === undefined) block(role, `Routing overlay does not map cognitive role '${role}'`);
+    candidates = [modelOverride !== undefined ? overrideBinding(target) : { ...target, ...(effortOverride === undefined ? {} : { effort }) }];
   } else {
     // Independence under the overlay is distinct-model, not cross-family: a single-provider run
     // still gets a fresh child on a different model than the one that authored the bytes.
     if (uniqueExcludedFamilies.length > 0) block(role, `--exclude-family is unavailable under a distinct-model routing overlay`);
-    if (authorKey === undefined) block(role, `Role '${role}' requires --independent-of-model <provider>/<model> while a routing overlay is active`);
-    const { provider: authorProvider, model: authorModel } = parseQualifiedModel(role, authorKey);
+    if (independentOfModel === undefined) block(role, `Role '${role}' requires --independent-of-model <provider>/<model> while a routing overlay is active`);
+    const { provider: authorProvider, model: authorModel } = parseQualifiedModel(role, independentOfModel);
     if (independentOfProvider !== undefined && independentOfProvider !== authorProvider) {
-      block(role, `--independent-of '${independentOfProvider}' contradicts --independent-of-model '${authorKey}'`);
+      block(role, `--independent-of '${independentOfProvider}' contradicts --independent-of-model '${independentOfModel}'`);
     }
-    binding = overlay.doc.independentReview[authorKey];
-    if (binding === undefined) block(role, `Routing overlay has no independent binding for author model '${authorKey}'`);
-    independence = { kind: "fresh-context-distinct-model", authorProvider, authorModel, selectedProvider: binding.provider, selectedModel: binding.model };
+    const target = modelOverride !== undefined ? overrideBinding() : overlay.doc.independentReview[independentOfModel];
+    if (target === undefined) block(role, `Routing overlay has no independent binding for author model '${independentOfModel}'`);
+    if (modelKey(target) === independentOfModel) block(role, `Model '${modelOverride}' authored the work under review`);
+    candidates = [{ ...target, ...(effortOverride === undefined ? {} : { effort }) }];
+    independence = { kind: "fresh-context-distinct-model", authorProvider, authorModel, selectedProvider: target.provider, selectedModel: target.model };
   }
-} else if (rolePolicy.independentBindings !== undefined) {
+} else if (independent) {
   let authorModel;
   if (independentOfModel !== undefined) {
     const author = parseQualifiedModel(role, independentOfModel);
@@ -195,50 +242,31 @@ if (overlay !== undefined) {
     independentOfProvider = author.provider;
     authorModel = author.model;
   }
-  if (independentOfProvider === undefined) {
-    block(role, `Role '${role}' requires --independent-of <provider> or --independent-of-model <provider>/<model>`);
-  }
+  if (independentOfProvider === undefined) block(role, `Role '${role}' requires --independent-of <provider> or --independent-of-model <provider>/<model>`);
   if (independentOfProvider === "github-copilot" && authorModel === undefined) {
     block(role, `--independent-of github-copilot requires --independent-of-model with the exact model`);
   }
   const independentOfFamily = modelFamily(independentOfProvider, authorModel);
-  if (independentOfFamily === undefined) {
-    block(role, `Cannot determine the model family for author '${independentOfModel ?? independentOfProvider}'`);
+  if (independentOfFamily === undefined) block(role, `Cannot determine the model family for author '${independentOfModel ?? independentOfProvider}'`);
+  const eligible = (binding) => familyOf(binding) !== independentOfFamily && !uniqueExcludedFamilies.includes(familyOf(binding));
+  if (modelOverride !== undefined) {
+    const requested = overrideBinding();
+    if (!eligible(requested)) block(role, `Model '${modelOverride}' is not independent of author family '${independentOfFamily}'${uniqueExcludedFamilies.length ? ` or excluded families ${uniqueExcludedFamilies.join(", ")}` : ""}`);
+    candidates = [requested];
+  } else {
+    const keys = [...policy.tiers[rolePolicy.tier], ...(rolePolicy.thirdFamily ? [rolePolicy.thirdFamily] : [])];
+    candidates = keys.map(named).filter(eligible);
+    if (candidates.length === 0) block(role, `No independent candidate remains for author family '${independentOfFamily}' after exclusions`);
   }
-  const candidates = rolePolicy.independentBindings.map((candidate) => {
-    const family = modelFamily(candidate.provider, candidate.model);
-    if (family === undefined) block(role, `Cannot determine the model family for configured candidate '${modelKey(candidate)}'`);
-    return { binding: candidate, family };
-  });
-  const selected = candidates.find((candidate) => candidate.family !== independentOfFamily && !uniqueExcludedFamilies.includes(candidate.family));
-  if (selected === undefined) {
-    block(role, `No independent candidate remains for author family '${independentOfFamily}' after exclusions`);
-  }
-  binding = selected.binding;
   independence = {
     independentOfProvider,
     independentOfFamily,
-    selectedFamily: selected.family,
     ...(independentOfModel === undefined ? {} : { independentOfModel }),
     ...(uniqueExcludedFamilies.length === 0 ? {} : { excludedFamilies: uniqueExcludedFamilies }),
   };
-} else if (independentOfProvider !== undefined || independentOfModel !== undefined) {
-  block(role, `Role '${role}' does not use an independence constraint`);
-} else if (uniqueExcludedFamilies.length > 0) {
-  block(role, `Role '${role}' does not use --exclude-family`);
+} else {
+  candidates = modelOverride !== undefined ? [overrideBinding()] : policy.tiers[rolePolicy.tier].map(named);
 }
-
-if (modelOverride !== undefined) {
-  if (rolePolicy.independentBindings !== undefined) block(role, "An independent role cannot use an explicit model override");
-  const requested = parseQualifiedModel(role, modelOverride, "--model");
-  if (overlay !== undefined && !overlay.allowed.has(modelOverride)) block(role, `Model '${modelOverride}' is outside the active routing overlay`);
-  const quotaProvider = requested.provider === binding.provider
-    ? binding.quotaProvider
-    : policy.quotaProviders?.[requested.provider];
-  if (quotaProvider === undefined) block(role, `Provider '${requested.provider}' has no quota provider mapping for model overrides`);
-  binding = { ...binding, provider: requested.provider, model: requested.model, quotaProvider };
-}
-if (effortOverride !== undefined) binding = { ...binding, effort: effortOverride };
 
 console.error("STAGE=quota");
 let rawQuota;
@@ -255,7 +283,6 @@ try {
   rawQuota = typeof error.stdout === "string" && error.stdout.trim() !== "" ? error.stdout : undefined;
   quotaError = `quota snapshot unavailable: ${error.message}`;
 }
-
 let snapshot;
 if (rawQuota !== undefined) {
   try {
@@ -276,44 +303,52 @@ try {
       .flatMap(([provider, entry]) => (Array.isArray(entry?.models) ? entry.models : []).map((model) => `${provider} ${model.id}`))
       .join("\n");
 } catch (error) {
-  console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=Pi model catalog unavailable: ${error.message}`);
-  process.exit(3);
+  block(role, `Pi model catalog unavailable: ${error.message}`);
 }
 const availableModels = new Set(rawCatalog.split(/\r?\n/).map((line) => {
   const [provider, model] = line.trim().split(/\s+/);
   return provider && model ? `${provider}/${model}` : "";
 }).filter(Boolean));
 
-if ((modelOverride !== undefined || effortOverride !== undefined || rolePolicy.independentBindings !== undefined) && availableModels.has(modelKey(binding))) {
-  validateModelEffort(role, binding, modelMetadataInput);
-}
-
 const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
-const provider = providers.find((candidate) => candidate.provider === binding.quotaProvider);
-const windows = Array.isArray(provider?.windows) ? provider.windows : [];
-const relevantWindows = windows.filter((window) => window.kind !== "model" || binding.model.includes(window.id.replace(/^model:/, "")));
-const telemetryStatus = provider === undefined
-  ? "unavailable"
-  : provider.state?.status === "fresh" && provider.state?.stale !== true
-    ? "fresh"
-    : provider.state?.status === "stale" || provider.state?.stale === true
-      ? "stale"
-      : "unavailable";
-const telemetryError = telemetryStatus === "fresh"
-  ? null
-  : provider?.state?.error
-    ?? quotaError
-    ?? (provider === undefined
-      ? `quota provider '${binding.quotaProvider}' is absent`
-      : `quota provider '${binding.quotaProvider}' is ${telemetryStatus}`);
-let reason;
-if (!availableModels.has(`${binding.provider}/${binding.model}`)) reason = `Pi model '${binding.provider}/${binding.model}' is unavailable`;
-else if (telemetryStatus === "fresh" && relevantWindows.some((window) => Number(window.percentRemaining) <= 0)) reason = `quota exhausted for '${binding.quotaProvider}'`;
-
-if (reason) {
-  console.error(`ROUTING=BLOCKED\nROLE=${role}\nREASON=${reason}`);
-  process.exit(3);
+function admit(binding) {
+  const provider = providers.find((candidate) => candidate.provider === binding.quotaProvider);
+  const windows = Array.isArray(provider?.windows) ? provider.windows : [];
+  const relevantWindows = windows.filter((window) => window.kind !== "model" || binding.model.includes(window.id.replace(/^model:/, "")));
+  const telemetryStatus = provider === undefined
+    ? "unavailable"
+    : provider.state?.status === "fresh" && provider.state?.stale !== true
+      ? "fresh"
+      : provider.state?.status === "stale" || provider.state?.stale === true
+        ? "stale"
+        : "unavailable";
+  const telemetryError = telemetryStatus === "fresh"
+    ? null
+    : provider?.state?.error
+      ?? quotaError
+      ?? (provider === undefined ? `quota provider '${binding.quotaProvider}' is absent` : `quota provider '${binding.quotaProvider}' is ${telemetryStatus}`);
+  let reason;
+  if (!availableModels.has(modelKey(binding))) reason = `Pi model '${modelKey(binding)}' is unavailable`;
+  else reason = effortProblem(binding, modelMetadataInput, modelOverride !== undefined || effortOverride !== undefined);
+  if (reason === undefined && telemetryStatus === "fresh" && relevantWindows.some((window) => Number(window.percentRemaining) <= 0)) {
+    reason = `quota exhausted for '${binding.quotaProvider}'`;
+  }
+  return { binding, reason, provider, relevantWindows, telemetryStatus, telemetryError };
 }
+
+const attempts = [];
+let chosen;
+for (const candidate of candidates) {
+  const attempt = admit(candidate);
+  attempts.push(attempt);
+  if (attempt.reason === undefined) { chosen = attempt; break; }
+}
+if (chosen === undefined) block(role, attempts.map((a) => `${modelKey(a.binding)}: ${a.reason}`).join("; "));
+const binding = chosen.binding;
+const fallback = attempts.length > 1
+  ? { from: modelKey(attempts[0].binding), reason: attempts[0].reason, skipped: attempts.slice(0, -1).map((a) => ({ model: modelKey(a.binding), reason: a.reason })) }
+  : undefined;
+if (independence !== undefined && independence.kind === undefined) independence.selectedFamily = familyOf(binding);
 
 const result = {
   status: "pass",
@@ -322,24 +357,26 @@ const result = {
     provider: binding.provider,
     model: binding.model,
     effort: binding.effort,
+    ...(modelOverride === undefined && overlay === undefined ? { tier: rolePolicy.tier } : {}),
+    ...(fallback === undefined ? {} : { fallback }),
     ...(independence === undefined ? {} : { independence }),
     ...(modelOverride === undefined ? {} : { modelOverride }),
     ...(effortOverride === undefined ? {} : { effortOverride }),
     ...(overlay === undefined ? {} : { routingOverlay: { path: overlay.path, sha256: overlay.sha256 } }),
-    admission: telemetryStatus === "fresh" ? "fresh-quota" : "degraded-quota-telemetry",
+    admission: chosen.telemetryStatus === "fresh" ? "fresh-quota" : "degraded-quota-telemetry",
     quotaSnapshot: {
       generatedAt: snapshot?.generatedAt ?? null,
-      telemetryStatus,
-      relevantWindows: relevantWindows.map((window) => ({
+      telemetryStatus: chosen.telemetryStatus,
+      relevantWindows: chosen.relevantWindows.map((window) => ({
         id: window.id,
         kind: window.kind,
         windowSeconds: window.windowSeconds ?? null,
         resetsAt: window.resetsAt ?? null,
         percentRemaining: window.percentRemaining,
       })),
-      stale: telemetryStatus === "stale",
-      refreshedAt: provider?.state?.refreshedAt ?? null,
-      error: telemetryError,
+      stale: chosen.telemetryStatus === "stale",
+      refreshedAt: chosen.provider?.state?.refreshedAt ?? null,
+      error: chosen.telemetryError,
     },
   },
 };
@@ -350,12 +387,13 @@ if (format === "env") {
   console.log(`PI_PROVIDER=${binding.provider}`);
   console.log(`PI_MODEL=${binding.model}`);
   console.log(`PI_THINKING=${binding.effort}`);
+  if (fallback !== undefined) console.log(`ROUTING_FALLBACK_FROM=${fallback.from}`);
   if (independence?.independentOfProvider !== undefined) console.log(`INDEPENDENT_OF_PROVIDER=${independence.independentOfProvider}`);
   if (independence?.independentOfModel !== undefined) console.log(`INDEPENDENT_OF_MODEL=${independence.independentOfModel}`);
   else if (independence?.authorModel !== undefined) console.log(`INDEPENDENT_OF_MODEL=${independence.authorProvider}/${independence.authorModel}`);
   if (overlay !== undefined) console.log(`ROUTING_OVERLAY_SHA256=${overlay.sha256}`);
   console.log(`QUOTA_ADMISSION=${result.modelBinding.admission}`);
-  console.log(`QUOTA_TELEMETRY_STATUS=${telemetryStatus}`);
+  console.log(`QUOTA_TELEMETRY_STATUS=${chosen.telemetryStatus}`);
   console.log(`QUOTA_GENERATED_AT=${snapshot?.generatedAt ?? ""}`);
 } else {
   console.log(JSON.stringify(result, null, 2));

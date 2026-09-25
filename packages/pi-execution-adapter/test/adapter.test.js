@@ -75,9 +75,9 @@ test("summarizes a child's own report_status call verbatim, bounded", () => {
 const now = new Date("2026-03-20T12:00:00.000Z");
 function spec(overrides = {}) {
   return {
-    task: "Inspect src and report.", profile: "scout", cognitiveRole: "investigation", cwd: "/tmp", tools: ["read", "bash"],
+    task: "Inspect src and report.", profile: "scout", cognitiveRole: "routine", cwd: "/tmp", tools: ["read", "bash"],
     binding: {
-      cognitiveRole: "investigation",
+      cognitiveRole: "routine",
       provider: "anthropic",
       model: "claude-test",
       effort: "high",
@@ -289,32 +289,32 @@ test("enforces cross-family bindings for independent roles", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
   const reviewBinding = {
     ...spec().binding,
-    cognitiveRole: "independent-review",
+    cognitiveRole: "review",
     independence: { independentOfProvider: "openai-codex", independentOfFamily: "openai", selectedFamily: "anthropic" },
   };
-  const receipt = await adapter.dispatch(spec({ cognitiveRole: "independent-review", binding: reviewBinding }));
+  const receipt = await adapter.dispatch(spec({ cognitiveRole: "review", binding: reviewBinding }));
   assert.equal((await adapter.result(receipt.executionId)).outcome, "success");
 
   await assert.rejects(
-    adapter.dispatch(spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: undefined } })),
+    adapter.dispatch(spec({ cognitiveRole: "review", binding: { ...reviewBinding, independence: undefined } })),
     (error) => error.code === "INVALID_BINDING",
   );
   await assert.rejects(
-    adapter.dispatch(spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: { ...reviewBinding.independence, independentOfFamily: "anthropic" } } })),
+    adapter.dispatch(spec({ cognitiveRole: "review", binding: { ...reviewBinding, independence: { ...reviewBinding.independence, independentOfFamily: "anthropic" } } })),
     (error) => error.code === "INVALID_BINDING",
   );
 });
 
 test("verifies gateway model families and records the excluded panel family", async () => {
   const binding = {
-    ...spec().binding, cognitiveRole: "challenge", provider: "github-copilot", model: "grok-4.6",
+    ...spec().binding, cognitiveRole: "review", provider: "github-copilot", model: "grok-4.6",
     independence: {
       independentOfProvider: "github-copilot", independentOfModel: "github-copilot/gpt-5.6-sol",
       independentOfFamily: "openai", selectedFamily: "xai", excludedFamilies: ["anthropic"],
     },
   };
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ provider: binding.provider, model: binding.model }) });
-  const receipt = await adapter.dispatch(spec({ cognitiveRole: "challenge", binding }));
+  const receipt = await adapter.dispatch(spec({ cognitiveRole: "review", binding }));
   const result = await adapter.result(receipt.executionId);
   assert.equal(result.outcome, "success");
   assert.deepEqual(result.independence, binding.independence);
@@ -325,7 +325,7 @@ test("rejects forged gateway families, excluded judges, and ambiguous authors be
   let spawned = 0;
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => { spawned++; return fakeRpc(); } });
   const binding = {
-    ...spec().binding, cognitiveRole: "challenge",
+    ...spec().binding, cognitiveRole: "review",
     independence: {
       independentOfProvider: "openai-codex", independentOfModel: "openai-codex/gpt-5.6-sol",
       independentOfFamily: "openai", selectedFamily: "anthropic", excludedFamilies: ["xai"],
@@ -343,7 +343,7 @@ test("rejects forged gateway families, excluded judges, and ambiguous authors be
     { ...binding, provider: "github-copilot", model: "gpt-5.6-sol" },
   ];
   for (const candidate of invalid) {
-    await assert.rejects(adapter.dispatch(spec({ cognitiveRole: "challenge", binding: candidate })), (error) => error.code === "INVALID_BINDING");
+    await assert.rejects(adapter.dispatch(spec({ cognitiveRole: "review", binding: candidate })), (error) => error.code === "INVALID_BINDING");
   }
   assert.equal(spawned, 0);
 });
@@ -351,9 +351,9 @@ test("rejects forged gateway families, excluded judges, and ambiguous authors be
 test("all independent bindings require fresh subagent context", async () => {
   let spawned = 0;
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => { spawned++; return fakeRpc(); } });
-  const binding = { ...spec().binding, cognitiveRole: "challenge", independence: { independentOfProvider: "openai-codex", independentOfFamily: "openai", selectedFamily: "anthropic" } };
+  const binding = { ...spec().binding, cognitiveRole: "review", independence: { independentOfProvider: "openai-codex", independentOfFamily: "openai", selectedFamily: "anthropic" } };
   for (const extra of [{ continuation: { sessionId: "prior-review" } }, { kind: "worker" }]) {
-    await assert.rejects(adapter.dispatch(spec({ ...extra, cognitiveRole: "challenge", binding })), (error) => error.code === "INVALID_BINDING");
+    await assert.rejects(adapter.dispatch(spec({ ...extra, cognitiveRole: "review", binding })), (error) => error.code === "INVALID_BINDING");
   }
   assert.equal(spawned, 0);
 });
@@ -569,21 +569,21 @@ test("fails closed when a binding does not match the active routing overlay", as
 test("accepts distinct-model independence only under an active overlay with fresh context", async () => {
   const adapter = stubOverlayRead(overlayAdapter());
   const independence = { kind: "fresh-context-distinct-model", authorProvider: "anthropic", authorModel: "claude-other", selectedProvider: "anthropic", selectedModel: "claude-test" };
-  const reviewBinding = { ...spec().binding, cognitiveRole: "independent-review", routingOverlay: overlayReceipt, independence };
-  const receipt = await adapter.dispatch(spec({ cognitiveRole: "independent-review", binding: reviewBinding }));
+  const reviewBinding = { ...spec().binding, cognitiveRole: "review", routingOverlay: overlayReceipt, independence };
+  const receipt = await adapter.dispatch(spec({ cognitiveRole: "review", binding: reviewBinding }));
   assert.equal((await adapter.result(receipt.executionId)).outcome, "success");
 
   const rejected = [
-    spec({ cognitiveRole: "independent-review", binding: reviewBinding, continuation: { sessionId: "resumed" } }),
-    spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: { ...independence, authorModel: "claude-test" } } }),
-    spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: { ...independence, authorModel: "claude-elsewhere" } } }),
-    spec({ cognitiveRole: "independent-review", binding: { ...reviewBinding, independence: { ...independence, selectedModel: "claude-other" } } }),
+    spec({ cognitiveRole: "review", binding: reviewBinding, continuation: { sessionId: "resumed" } }),
+    spec({ cognitiveRole: "review", binding: { ...reviewBinding, independence: { ...independence, authorModel: "claude-test" } } }),
+    spec({ cognitiveRole: "review", binding: { ...reviewBinding, independence: { ...independence, authorModel: "claude-elsewhere" } } }),
+    spec({ cognitiveRole: "review", binding: { ...reviewBinding, independence: { ...independence, selectedModel: "claude-other" } } }),
   ];
   for (const candidate of rejected) await assert.rejects(adapter.dispatch(candidate), (error) => error.code === "INVALID_BINDING");
 
   const withoutOverlay = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
   await assert.rejects(
-    withoutOverlay.dispatch(spec({ cognitiveRole: "independent-review", binding: { ...spec().binding, cognitiveRole: "independent-review", independence } })),
+    withoutOverlay.dispatch(spec({ cognitiveRole: "review", binding: { ...spec().binding, cognitiveRole: "review", independence } })),
     (error) => error.code === "INVALID_BINDING",
   );
 });

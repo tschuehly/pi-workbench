@@ -77,14 +77,14 @@ test("worker tools isolate mutations and default status by persisted lead sessio
 
     const foreignStatus = await execute("worker_status", { workerId: foreign.details.workerId }, ctx("lead-a"));
     assert.match(foreignStatus.content[0].text, /belongs to another lead session/);
-    const foreignDispatch = await execute("worker_dispatch", { workerId: foreign.details.workerId, task: "Inspect only", cognitiveRole: "investigation" }, ctx("lead-a"));
+    const foreignDispatch = await execute("worker_dispatch", { workerId: foreign.details.workerId, task: "Inspect only", cognitiveRole: "routine" }, ctx("lead-a"));
     assert.match(foreignDispatch.content[0].text, /WORKER_SESSION_MISMATCH/);
     const foreignRetire = await execute("worker_retire", { workerId: foreign.details.workerId, reason: "wrong owner" }, ctx("lead-a"));
     assert.match(foreignRetire.content[0].text, /WORKER_SESSION_MISMATCH/);
 
     const ephemeralCreate = await execute("worker_create", { name: "ephemeral", scope: "none", profile: "scout" }, ctx("temporary", false));
     assert.match(ephemeralCreate.content[0].text, /persisted lead Pi session/);
-    const ephemeralDispatch = await execute("worker_dispatch", { workerId: owned.details.workerId, task: "none", cognitiveRole: "investigation" }, ctx("temporary", false));
+    const ephemeralDispatch = await execute("worker_dispatch", { workerId: owned.details.workerId, task: "none", cognitiveRole: "routine" }, ctx("temporary", false));
     assert.match(ephemeralDispatch.content[0].text, /persisted lead Pi session/);
     const ephemeralRetire = await execute("worker_retire", { workerId: owned.details.workerId, reason: "none" }, ctx("temporary", false));
     assert.match(ephemeralRetire.content[0].text, /persisted lead Pi session/);
@@ -200,7 +200,7 @@ test("collecting a running child by identifier returns a snapshot without waitin
   const running = {
     executionId: "child-running",
     profile: "scout",
-    cognitiveRole: "investigation",
+    cognitiveRole: "routine",
     kind: "subagent",
     provider: "anthropic",
     model: "claude-test",
@@ -362,9 +362,9 @@ test("a terminal result cites the author model so independentOfModel can quote a
 
 test("a terminal review receipt exposes verified panel family evidence", async () => {
   const independence = { independentOfProvider: "openai-codex", independentOfFamily: "openai", selectedFamily: "xai", excludedFamilies: ["anthropic"] };
-  const final = { outcome: "success", text: "Reviewed.", kind: "subagent", profile: "reviewer", cognitiveRole: "challenge", provider: "github-copilot", model: "grok-4.6", effort: "high", independence };
+  const final = { outcome: "success", text: "Reviewed.", kind: "subagent", profile: "reviewer", cognitiveRole: "review", provider: "github-copilot", model: "grok-4.6", effort: "high", independence };
   const adapter = { result: () => Promise.resolve(final), cancel: () => {}, async *observe() {} };
-  const result = await streamToResult(adapter, "judge-2", "reviewer", "challenge", new Date().toISOString(), undefined, undefined, { cancelOnAbort: true });
+  const result = await streamToResult(adapter, "judge-2", "reviewer", "review", new Date().toISOString(), undefined, undefined, { cancelOnAbort: true });
   assert.match(result.content[0].text, /family xai/);
   assert.match(result.content[0].text, /excluded anthropic/);
   assert.deepEqual(result.details.independence, independence);
@@ -459,7 +459,7 @@ test("rejects family exclusions on non-independent roles before routing", async 
   const result = await tools.get("subagent").execute("call", {
     task: "Inspect routing",
     profile: "reviewer",
-    cognitiveRole: "investigation",
+    cognitiveRole: "routine",
     excludeFamilies: ["anthropic"],
   }, undefined, undefined, { model: { provider: "openai-codex", id: "gpt-6-astra" } });
 
@@ -513,7 +513,7 @@ test("defaults independence to the exact parent model and preserves repeated fam
     const result = await tools.get("subagent").execute("call", {
       task: "Review the author output",
       profile: "reviewer",
-      cognitiveRole: "independent-review",
+      cognitiveRole: "review",
       excludeFamilies: ["anthropic", "openai"],
       background: true,
     }, undefined, undefined, {
@@ -524,7 +524,7 @@ test("defaults independence to the exact parent model and preserves repeated fam
 
     assert.equal(result.details.outcome, "launched");
     assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), [
-      "independent-review",
+      "review",
       "--independent-of-model", "github-copilot/claude-sonnet-5",
       "--exclude-family", "anthropic",
       "--exclude-family", "openai",
@@ -557,7 +557,7 @@ test("provider-only authors never borrow a parent model and are used only when a
   try {
     subagentExtension({ events: { emit: () => {} }, on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} }, { adapter, resolverPath });
     await tools.get("subagent").execute("call", {
-      task: "Review the author output", profile: "reviewer", cognitiveRole: "independent-review",
+      task: "Review the author output", profile: "reviewer", cognitiveRole: "review",
       independentOfProvider: "anthropic", background: true,
     }, undefined, undefined, {
       cwd: "/repo",
@@ -565,16 +565,16 @@ test("provider-only authors never borrow a parent model and are used only when a
       sessionManager: { getSessionId: () => "lead" },
     });
 
-    assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), ["independent-review", "--independent-of", "anthropic"]);
+    assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), ["review", "--independent-of", "anthropic"]);
 
     await tools.get("subagent").execute("call", {
-      task: "Review the parent output", profile: "reviewer", cognitiveRole: "independent-review", background: true,
+      task: "Review the parent output", profile: "reviewer", cognitiveRole: "review", background: true,
     }, undefined, undefined, {
       cwd: "/repo",
       model: { provider: "github-copilot", id: "" },
       sessionManager: { getSessionId: () => "lead" },
     });
-    assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), ["independent-review", "--independent-of", "github-copilot"]);
+    assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), ["review", "--independent-of", "github-copilot"]);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
@@ -611,7 +611,7 @@ async function dispatchSubagentWithName(params) {
     subagentExtension(pi, { adapter, resolverPath });
     await tools.get("subagent").execute("call", {
       profile: "reviewer",
-      cognitiveRole: "investigation",
+      cognitiveRole: "routine",
       background: true,
       ...params,
     }, undefined, undefined, { cwd: "/repo", model: { provider: "anthropic", id: "claude" }, sessionManager: { getSessionId: () => "lead" } });
@@ -641,7 +641,7 @@ test("an explicit subagent name wins over the task-derived label and slug", asyn
   });
   assert.equal(dispatched.name, "Fix roster label");
   assert.equal(activityName, "Fix roster label");
-  assert.deepEqual(resolverArgs, ["investigation", "--model", "openai-codex/gpt-6-astra", "--effort", "xhigh"]);
+  assert.deepEqual(resolverArgs, ["routine", "--model", "openai-codex/gpt-6-astra", "--effort", "xhigh"]);
 });
 
 test("an omitted subagent name falls back to the task-derived label, unchanged", async () => {
@@ -672,7 +672,7 @@ test("preflight failures retain resolver stage and process diagnostics", async (
   try {
     subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} }, { resolverPath });
     const result = await tools.get("subagent").execute("call", {
-      task: "Inspect routing", profile: "scout", cognitiveRole: "investigation",
+      task: "Inspect routing", profile: "scout", cognitiveRole: "routine",
     }, undefined, undefined, { model: { provider: "anthropic", id: "claude-test" } });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /elapsedMs=\d+ killed=false signal=none exitCode=3 lastStage=catalog/);
@@ -710,7 +710,7 @@ test("fails closed on worker lifecycle and background delegation from inside a w
       assert.equal(result.isError, true, name);
       assert.match(result.content[0].text, /Workers cannot create or dispatch Workers/, name);
     }
-    const nestedBackground = await run("subagent", { task: "t", profile: "scout", cognitiveRole: "investigation", background: true });
+    const nestedBackground = await run("subagent", { task: "t", profile: "scout", cognitiveRole: "routine", background: true });
     assert.equal(nestedBackground.isError, true);
     assert.match(nestedBackground.content[0].text, /must run in the foreground/);
     console.log("NESTED_GUARDS_OK");

@@ -1,125 +1,30 @@
 {
-  "version": 4,
-  "source": "skill-incubator/skills/model-orchestration/references/routing-policy.json",
+  "version": 5,
   "quotaProviders": {
     "openai-codex": "codex",
     "github-copilot": "copilot",
     "anthropic": "claude"
   },
-  "bindings": {
-    "implementation": {
-      "provider": "openai-codex",
-      "quotaProvider": "codex",
-      "model": "gpt-6-sol",
-      "effort": "medium"
-    },
-    "problem-solving": {
-      "provider": "openai-codex",
-      "quotaProvider": "codex",
-      "model": "gpt-6-sol",
-      "effort": "high"
-    },
-    "design": {
-      "provider": "openai-codex",
-      "quotaProvider": "codex",
-      "model": "gpt-6-luna",
-      "effort": "xhigh"
-    },
-    "escalation": {
-      "provider": "openai-codex",
-      "quotaProvider": "codex",
-      "model": "gpt-6-luna",
-      "effort": "max"
-    },
-    "coordination": {
-      "provider": "openai-codex",
-      "quotaProvider": "codex",
-      "model": "gpt-6-sol",
-      "effort": "high"
-    },
-    "investigation": {
-      "provider": "openai-codex",
-      "quotaProvider": "codex",
-      "model": "gpt-6-luna",
-      "effort": "medium"
-    },
-    "independent-judgment": {
-      "independentBindings": [
-        {
-          "provider": "anthropic",
-          "quotaProvider": "claude",
-          "model": "claude-fable-5-1",
-          "effort": "low"
-        },
-        {
-          "provider": "openai-codex",
-          "quotaProvider": "codex",
-          "model": "gpt-6-luna",
-          "effort": "medium"
-        },
-        {
-          "provider": "github-copilot",
-          "quotaProvider": "copilot",
-          "model": "grok-4.6",
-          "effort": "high"
-        }
-      ]
-    },
-    "challenge": {
-      "independentBindings": [
-        {
-          "provider": "anthropic",
-          "quotaProvider": "claude",
-          "model": "claude-fable-5-1",
-          "effort": "high"
-        },
-        {
-          "provider": "openai-codex",
-          "quotaProvider": "codex",
-          "model": "gpt-6-luna",
-          "effort": "xhigh"
-        },
-        {
-          "provider": "github-copilot",
-          "quotaProvider": "copilot",
-          "model": "grok-4.6",
-          "effort": "high"
-        }
-      ]
-    },
-    "synthesis": {
-      "provider": "anthropic",
-      "quotaProvider": "claude",
-      "model": "claude-opus-5-5",
-      "effort": "high"
-    },
-    "independent-review": {
-      "independentBindings": [
-        {
-          "provider": "anthropic",
-          "quotaProvider": "claude",
-          "model": "claude-opus-5-5",
-          "effort": "high"
-        },
-        {
-          "provider": "openai-codex",
-          "quotaProvider": "codex",
-          "model": "gpt-6-sol",
-          "effort": "high"
-        },
-        {
-          "provider": "github-copilot",
-          "quotaProvider": "copilot",
-          "model": "grok-4.6",
-          "effort": "high"
-        }
-      ]
-    },
-    "mechanics": {
-      "provider": "openai-codex",
-      "quotaProvider": "codex",
-      "model": "gpt-6-luna",
-      "effort": "low"
-    }
+  "models": {
+    "fable": { "provider": "anthropic", "quotaProvider": "claude", "model": "claude-fable-5-1" },
+    "opus": { "provider": "anthropic", "quotaProvider": "claude", "model": "claude-opus-5-5" },
+    "sonnet": { "provider": "anthropic", "quotaProvider": "claude", "model": "claude-sonnet-5" },
+    "astra": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-astra" },
+    "sol": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-sol" },
+    "luna": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-luna" },
+    "grok": { "provider": "github-copilot", "quotaProvider": "copilot", "model": "grok-4.7" }
+  },
+  "tiers": {
+    "strong": ["astra", "opus"],
+    "standard": ["opus", "sol"],
+    "light": ["luna", "sonnet"]
+  },
+  "reserve": ["fable"],
+  "roles": {
+    "routine": { "tier": "light", "effort": "xhigh" },
+    "implementation": { "tier": "standard", "effort": "high" },
+    "frontier": { "tier": "strong", "effort": "xhigh", "minEffort": "xhigh" },
+    "coordination": { "tier": "standard", "effort": "high" },
+    "review": { "tier": "standard", "effort": "xhigh", "minEffort": "xhigh", "independent": true, "thirdFamily": "grok" }
   }
 }

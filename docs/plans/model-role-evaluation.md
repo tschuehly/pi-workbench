@@ -1,6 +1,8 @@
 # Model–role and profile-instruction evaluation plan
 
 **Status:** proposed; non-authoritative. No binding, profile, or policy changes because of this plan.
+Its role names predate the five roles of [`model-orchestration-redesign.md`](model-orchestration-redesign.md),
+which extends it with a runner and current cases.
 **Home:** separate file rather than a section in
 [`subagent-worker-iterative-improvement.md`](subagent-worker-iterative-improvement.md), because that
 roadmap evaluates delegation *lifecycle* behavior (wakeup, cache posture, status, messaging) with

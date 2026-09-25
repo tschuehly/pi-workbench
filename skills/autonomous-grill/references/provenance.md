@@ -18,7 +18,7 @@
 ## Adapted for Pi Workbench
 
 - Provider-specific Claude/GPT language became provider-neutral cross-family Independence.
-- A durable attended Worker with Cognitive Role `design` retains recurring advisor context across bounded dispatches; a fresh `challenge` Subagent performs the closing audit.
+- A durable attended Worker with Cognitive Role `frontier` retains recurring advisor context across bounded dispatches; a fresh `challenge` Subagent performs the closing audit.
 - Worker continuity replaces the former per-round advisor ledger. Only a compact dissent summary crosses into the fresh closing audit.
 - The worker advisor trades fresh-context Independence for continuity, so its output is never presented as independent judgment.
 - Primary Evidence, Cognitive Role, Worker, Subagent, and Independence use canonical Workbench language.

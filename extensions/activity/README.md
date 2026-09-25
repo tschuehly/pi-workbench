@@ -6,7 +6,7 @@ Other extensions publish session-local presentation state through Pi's existing 
 
 ```ts
 pi.events.emit("pi-workbench:activity", { type: "upsert", item: {
-  id: "stable-owner-id", kind: "subagent", role: "independent-review",
+  id: "stable-owner-id", kind: "subagent", role: "review",
   model: "anthropic/claude-opus-5", objective: "Review activity design", activity: "reading runtime.ts",
 } });
 pi.events.emit("pi-workbench:activity", { type: "remove", id: "stable-owner-id" });

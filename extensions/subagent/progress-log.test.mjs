@@ -11,8 +11,8 @@ test("renders a bounded rolling subagent activity log with elapsed and idle time
   recordProgress(entries, { type: "tool_start", at: "2026-08-07T20:00:04.000Z", detail: { toolCallId: "call-1", toolName: "bash" } }, 3);
   recordProgress(entries, { type: "tool_end", at: "2026-08-07T20:00:06.000Z", detail: { toolCallId: "call-1", toolName: "bash" } }, 3);
 
-  assert.equal(renderProgressLog({ entries, startedAt, now: startedAt + 21_000, profile: "reviewer", cognitiveRole: "independent-review" }), [
-    "Subagent reviewer · independent-review · running 21s",
+  assert.equal(renderProgressLog({ entries, startedAt, now: startedAt + 21_000, profile: "reviewer", cognitiveRole: "review" }), [
+    "Subagent reviewer · review · running 21s",
     "    1s  Binding verified: openai-codex/gpt-test:medium",
     "    4s  tool start: bash",
     "    6s  tool end: bash",

@@ -99,9 +99,8 @@ this so leads do not accumulate workers by habit.
 
 ## Cognitive Roles and routing
 
-The three Independence roles — `independent-judgment`, `challenge`, and `independent-review` —
-fail worker preflight. Independence requires fresh context; those roles remain subagent-only.
-Every other known Cognitive Role may be dispatched to a worker.
+The `review` role fails worker preflight: independence requires fresh context, so it stays
+subagent-only. Every other Cognitive Role may be dispatched to a worker.
 
 Every worker dispatch resolves a fresh binding through the same
 `skills/model-orchestration/scripts/resolve-runtime-binding.mjs` path used by subagents, with

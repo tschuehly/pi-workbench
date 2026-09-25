@@ -16,7 +16,7 @@ const TOOLS = "read,bash,edit,write,grep,find,ls";
 // Eval arms still pass the routing gate (catalog, effort, quota). Arms set an explicit model, which the
 // resolver refuses for independence roles; independence is not in play because humans authored the
 // reviewed bytes, so review cases resolve admission under a non-independent role.
-const ADMISSION_ROLE = { routine: "investigation", implementation: "implementation", frontier: "escalation", "independent-review": "problem-solving", judge: "problem-solving" };
+const ADMISSION_ROLE = { routine: "routine", implementation: "implementation", frontier: "frontier", review: "implementation", "independent-review": "implementation", judge: "implementation" };
 
 const sh = (cmd, opts = {}) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", maxBuffer: 1 << 28, ...opts });
 // Gradle reuses daemons across invocations. A daemon started inside one trial's sandbox can read only that
