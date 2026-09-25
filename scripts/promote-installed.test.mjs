@@ -35,6 +35,15 @@ test("check-idle sees a retitled `pi` child of the session daemon", () => {
   assert.match(result.stderr, /3087 50696 pi/);
 });
 
+test("check-idle lists a session's background job but not the phone helper", () => {
+  const job = "5100 50696 /bin/bash -c ./scripts/ci/gate.sh";
+  const result = run([...quiet, "5200 50696 npm exec ping-a-human", "5300 50696 <defunct>", job], "check-idle");
+  assert.equal(result.status, 3);
+  assert.match(result.stderr, /5100 50696 .*gate\.sh/);
+  assert.doesNotMatch(result.stderr, /ping-a-human|defunct/);
+  assert.equal(run([...quiet, "5200 50696 npm exec ping-a-human"], "check-idle").status, 0);
+});
+
 test("switch refuses before preparing or scheduling anything", () => {
   const result = run([...quiet, child], "switch", "HEAD", "HEAD", "5");
   assert.equal(result.status, 3);
