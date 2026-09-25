@@ -22,7 +22,8 @@ prepare_one() { # <repo-name> <rev> -> prints the prepared directory
   if [[ ! -e $dir.prepared ]]; then
     [[ -d $dir ]] || git -C "$PROJECTS/$name" worktree add --detach "$dir" "$sha" >&2 || return 1
     # Pi supplies pi-workbench's peer packages at load time; only PI WEB needs installing and building.
-    if [[ $name == pi-web ]]; then (cd "$dir" && npm ci --no-audit --no-fund && npm run build) >&2 || return 1; fi
+    # npm 11 skips node-pty's unapproved install script, which makes spawn-helper executable (Terminal).
+    if [[ $name == pi-web ]]; then (cd "$dir" && npm ci --no-audit --no-fund && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && npm run build) >&2 || return 1; fi
     touch "$dir.prepared" || return 1
   fi
   echo "$dir"
