@@ -81,27 +81,35 @@ The versioned quality, authority, safety, evidence, and retention envelope gover
 _Avoid_: Prompt, workflow script, execution plan
 
 **Alignment:**
-The owner-selected axis controlling how much Shared Understanding Pi establishes before
-committing semantic work: `Vibe` aligns normally in chat, `Align` asks about one coherent
-unconfirmed product, architecture, scope, or quality choice, `Plan` requires accepted whole-task
-direction, and `Spec` requires accepted behavior, constraints, and evidence. Alignment is
-prompt-guided and controls commitment, not mutation permission, Human Attention, or verification.
+The owner-selected axis controlling how Shared Understanding is established before semantic work:
+`Default` adds nothing, `Align` runs a lightweight grill, and `Plan` and `Spec` require a persisted
+plan or specification accepted before implementation. Alignment is prompt-guided and controls
+commitment, not mutation permission or verification.
 _Avoid_: Approval flow, planning depth, autonomy level
 
+**Attention:**
+The owner-selected axis stating how Pia uses Thomas's attention and which channel it uses:
+`Default`, `Focused`, `Switching`, `Phone`, or `AFK`. Only Phone uses the phone tools; AFK never
+contacts Thomas.
+_Avoid_: Presence detection, notification setting
+
 **Checking:**
-The owner-selected axis stating the minimum completion evidence: `light` directly inspects or
-exercises the result without required test-writing or review, `tests` runs relevant automated tests,
-and `adversarial` adds a fresh independent challenge. The terminal starts unset, leaving owner
-direction, repository policy, and task consequences in effect without a selected floor. The values
-are ordered by cost and delay, not quality.
+The owner-selected axis stating the minimum completion evidence: `Default` adds no floor,
+`Exercise` directly inspects or exercises the result, `Test` adds automated proof, and `Challenge`
+adds fresh independent scrutiny. Owner direction, repository policy, and task consequences may
+require more.
 _Avoid_: Quality level, rigor tier, autonomy level
 
+**Orchestration:**
+The owner-selected axis preferring a primary execution structure: `Main`, `Subagents`, or
+`Workers`. It is guidance, not mandatory delegation, and selects no model bindings.
+_Avoid_: Team size, autonomy level
+
 **Working Mode:**
-The configuration of independent behavioral axes. Its current axes are Alignment
-(`Vibe | Align | Plan | Spec`) and Checking (`light | tests | adversarial`). A new context starts in
-Vibe; prior-choice restoration is outside the current design. Working Mode configures behavior and
-never grants permission. The terminal provides in-memory `/mode` selection and a footer indicator;
-graphical controls and saved selections remain deferred.
+The configuration of independent behavioral axes: Alignment, Attention, Checking, and
+Orchestration. A new context starts at the neutral values with Orchestration at Main. `/mode`
+changes reach the model as a tagged conversation message that the session records and resume
+restores. Working Mode configures behavior and never grants permission.
 _Avoid_: Operating Level, workflow profile, authority grant, agent tier
 
 **Session Summary:**

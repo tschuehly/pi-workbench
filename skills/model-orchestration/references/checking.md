@@ -13,7 +13,7 @@ consequence by the impact of a wrong conclusion, not by implementation difficult
 
 | Consequence | Minimum independent checking |
 |---|---|
-| `low` | The selected Checking floor only; at `adversarial`, one cross-family `challenge` |
+| `low` | The selected Checking floor only; at `Challenge`, one cross-family `challenge` |
 | `medium` | One `independent-judgment` or `challenge` |
 | `high` | Two parallel `challenge` assignments from distinct non-author model families; when only one non-author family has quota (see below), one `challenge` from that family, disclosed as single-family |
 | `critical` | The `high` panel, then one `independent-review` at the evidence-bearing boundary and a separate `synthesis` |

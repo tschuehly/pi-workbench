@@ -1,121 +1,122 @@
-import { realpathSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
-import { formatSkillsForPrompt, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const checkoutRoot = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
-const manualOnly = new Set([
-  "grilling", "domain-modeling", "to-spec", "autonomous-grill", "grill-with-docs", "handoff",
-  "improve-codebase-architecture", "process-scan-inbox", "setup-matt-pocock-skills", "teach",
-  "to-tickets", "triage", "wayfinder", "workbench-compound", "analyze-source-for-workbench",
-  "marketing-studio", "ponytail-audit", "ponytail-debt", "ponytail-gain", "ponytail-help",
-  "customize-pi-web-presentation",
-]);
-const adversarialOnly = new Set(["code-review", "ponytail-review"]);
+export const axes = {
+  alignment: {
+    label: "Alignment",
+    values: {
+      Default: "",
+      Align: "For nontrivial work, check shared understanding: surface consequential assumptions, resolve important ambiguities, and agree the outcome, scope, and success criteria. Reuse what Thomas has already confirmed; record lasting decisions in existing documentation.",
+      Plan: "Before implementation, persist a plan with the outcome, approach, boundaries, and evidence, then obtain Thomas's acceptance. Reuse the accepted plan and adapt ordinary tactics within it.",
+      Spec: "Before implementation, persist a specification with user stories, required behavior, constraints, and acceptance criteria, then obtain Thomas's acceptance. Reuse the accepted specification; adapt implementation within its criteria.",
+    },
+  },
+  attention: {
+    label: "Attention",
+    values: {
+      Default: "",
+      Focused: "Thomas is following the session conversation; ask there promptly when a quick answer improves direction.",
+      Switching: "Thomas moves among sessions but remains available; batch questions in the session conversation and make each self-contained so he can answer without rereading the session.",
+      Phone: "Thomas is away from the session conversation but reachable by phone. This setting, not a guess about his presence, selects the phone channel. Ask only real blockers through `ask_human`; make each question concise and self-contained. Use `notify_human` only for an update that needs no answer. Start the first line with `❓` for a question or `ℹ️` for an update. Batch open decisions into one `ask_human` call with a numbered list and a safe default per item. Give every `ask_human` call a finite `timeoutMs` matched to the response window; state the fallback when timeout matters.",
+      AFK: "Before treating a choice as blocked, recheck the agreed goal and success criteria. For a material doubt, ask an advisor to challenge the assumption or find an in-scope route; an advisor cannot approve a different goal. Continue with a changed approach only if it preserves the agreed outcome, behavior, scope, and success criteria; record the reason in an accepted plan or specification when one exists. If advice is unavailable or unclear, use only a low-cost, reversible local step within those bounds; record uncertainty and how to undo it. With advisor backing, decide product, architecture, scope, or quality questions the agreement leaves open; record the decision, the advice, and how to undo it. Do not contact Thomas. If no advisor is available and no reversible in-scope step remains, list the question for Thomas's return, pause affected work, and continue independent work.",
+    },
+  },
+  checking: {
+    label: "Checking",
+    values: {
+      Default: "",
+      Exercise: "Inspect or exercise the changed result directly and report the evidence. Apply stronger checks required by Thomas, the repository, or the task; report any evidence gap.",
+      Test: "Produce automated proof of the changed behavior, adding a relevant test when needed, and report the exact result. Apply stronger required checks; report any evidence gap.",
+      Challenge: "Prove the changed behavior with an automated check, adding a test when needed, and report its exact result. Then obtain fresh independent scrutiny and report unresolved findings and evidence gaps. Apply stronger required checks.",
+    },
+  },
+  orchestration: {
+    label: "Orchestration",
+    values: {
+      Main: "Perform the primary work in the main session. Required advisors and independent checks remain available.",
+      Subagents: "Delegate a bounded task when isolation, volume, or an independent check helps; reconcile the result. Keep trivial work in the main session.",
+      Workers: "Use a scope-owning worker when repeated bounded tasks benefit from retained context. A worker may delegate only to a leaf subagent; continuity is not independent review. Keep trivial work in the main session.",
+    },
+  },
+} as const;
 
-function isInsideCheckout(cwd: string) {
-  try {
-    const current = realpathSync(cwd);
-    return current === checkoutRoot || current.startsWith(`${checkoutRoot}${sep}`);
-  } catch {
-    return false;
-  }
-}
-
-export function visibleSkillsForMode(skills: Skill[], checking: keyof typeof checkingGuidance) {
-  return skills.filter(({ name, disableModelInvocation }) =>
-    disableModelInvocation !== true &&
-    !manualOnly.has(name) &&
-    (!adversarialOnly.has(name) || checking === "adversarial") &&
-    (name !== "tdd" || checking === "tests" || checking === "adversarial")
-  );
-}
-
-function filterSkillCatalog(systemPrompt: string, skills: Skill[], checking: keyof typeof checkingGuidance) {
-  const catalog = formatSkillsForPrompt(skills);
-  if (!catalog) return systemPrompt;
-  const at = systemPrompt.indexOf(catalog);
-  if (at < 0 || systemPrompt.indexOf(catalog, at + catalog.length) >= 0) return systemPrompt;
-  return systemPrompt.slice(0, at) + formatSkillsForPrompt(visibleSkillsForMode(skills, checking)) + systemPrompt.slice(at + catalog.length);
-}
-
-export const alignmentGuidance = {
-  Vibe: "Work normally in chat, aligning continuously without a separate artifact, extra pause boundary, or automatic mode switch.",
-  Align: "Before one unconfirmed product, architecture, scope, or quality choice becomes durable implementation or parallel work, present the coherent change and ask the owner whether its direction is right. Proceed within accepted direction; ask again if evidence invalidates it or materially changes its consequences.",
-  Plan: "Before implementing the task, obtain owner acceptance of its outcome, approach, boundaries, and evidence. Reuse accepted direction in this conversation; keep implementation details adaptive.",
-  Spec: "Before implementing the task, obtain owner acceptance of required behavior, constraints, and acceptance evidence. Reuse accepted requirements in this conversation; implementation strategy may adapt.",
-};
-export const checkingGuidance = {
-  unset: "No Checking floor is selected by this control. Follow explicit owner direction, repository policy, and the task's consequences; unset does not mean no checks.",
-  light: "Before claiming completion, inspect or exercise the changed result directly. This selection alone requires neither test-writing nor a separate review pass.",
-  tests: "Before claiming completion, run relevant automated tests that prove the changed behavior and report the exact result.",
-  adversarial: "Before claiming completion, produce relevant deterministic evidence, then obtain a fresh independent challenge against the result. Use model-orchestration for independent routing. If required evidence or independent challenge is unavailable, report the gap rather than claiming completion.",
-};
-
-export type WorkingModeState = { alignment: keyof typeof alignmentGuidance; checking: keyof typeof checkingGuidance };
+type Axes = typeof axes;
+export type Axis = keyof Axes;
+export type WorkingModeState = { [A in Axis]: keyof Axes[A]["values"] };
 export type WorkingModeSnapshot = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   phase: "selected" | "applied";
   selected: WorkingModeState;
   applied: WorkingModeState | null;
 };
+export type WorkingModeDetails = { schemaVersion: 2; seq: number; selection: WorkingModeState };
 
-function workingModeSuffix(state: WorkingModeState) {
-  return `\n\n# Working Mode (prompt guidance)\nAlignment: ${state.alignment}. ${alignmentGuidance[state.alignment]}\nChecking: ${state.checking}. ${checkingGuidance[state.checking]}\nAlignment and Checking are independent. Preserve explicit owner direction and repository constraints; a selected Checking floor cannot silently remove required checks. These choices change behavior, not permissions, tool availability, authority, Human Attention, delegation, durability, or workspace protection. Keep accepted direction in the conversation rather than a separate mutable plan file.`;
+export const CUSTOM_TYPE = "working-mode";
+export const defaults: WorkingModeState = { alignment: "Default", attention: "Default", checking: "Default", orchestration: "Main" };
+const axisNames = Object.keys(axes) as Axis[];
+const usage = `/mode <axis> <value>: ${axisNames.map((axis) => `${axis} <${Object.keys(axes[axis].values).join("|").toLowerCase()}>`).join(" · ")}`;
+
+export function isSelection(value: any): value is WorkingModeState {
+  return !!value && axisNames.every((axis) => typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis]));
 }
 
-export function renderWorkingModePrompt(systemPrompt: string, options: { cwd: string; skills?: Skill[] }, state: WorkingModeState, filterSkills = true) {
-  const prompt = filterSkills && isInsideCheckout(options.cwd)
-    ? filterSkillCatalog(systemPrompt, options.skills ?? [], state.checking)
-    : systemPrompt;
-  return `${prompt}${workingModeSuffix(state)}`;
+const same = (a: WorkingModeState, b: WorkingModeState) => axisNames.every((axis) => a[axis] === b[axis]);
+
+/** Latest Working Mode block among the given entries, or null. */
+function latestBlock(entries: readonly any[]): WorkingModeDetails | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry?.type === "custom_message" && entry.customType === CUSTOM_TYPE && isSelection(entry.details?.selection)) return entry.details;
+  }
+  return null;
+}
+
+export function renderBlock(selection: WorkingModeState, seq: number) {
+  const summary = axisNames.map((axis) => `${axes[axis].label}: ${selection[axis]}`).join(" · ");
+  const guidance = axisNames
+    .filter((axis) => selection[axis] !== defaults[axis])
+    .map((axis) => `${axes[axis].label} — ${selection[axis]}: ${(axes[axis].values as Record<string, string>)[selection[axis]]}`);
+  return [
+    `<working-mode seq="${seq}">`,
+    `Thomas selected Working Mode ${summary}.`,
+    guidance.length
+      ? "This is behavior guidance, not permission; explicit owner direction and repository instructions still apply.\n\n" + guidance.join("\n\n")
+      : "Every value is at its starting setting; no Working Mode guidance applies.",
+    "",
+    "This block replaces every earlier <working-mode> block.",
+    "</working-mode>",
+  ].join("\n");
 }
 
 export default function workingModeExtension(pi: ExtensionAPI) {
-  let alignment: keyof typeof alignmentGuidance = "Vibe";
-  let checking: keyof typeof checkingGuidance = "unset";
+  let selected: WorkingModeState = { ...defaults };
   let applied: WorkingModeState | null = null;
 
-  const selected = (): WorkingModeState => ({ alignment, checking });
-  const snapshot = (phase: WorkingModeSnapshot["phase"]): WorkingModeSnapshot => ({
-    schemaVersion: 1,
-    phase,
-    selected: selected(),
-    applied,
-  });
   const publish = (ctx: ExtensionContext, phase: WorkingModeSnapshot["phase"]) => {
-    const value = snapshot(phase);
+    const value: WorkingModeSnapshot = { schemaVersion: 2, phase, selected: { ...selected }, applied };
     pi.events?.emit("pi-workbench:working-mode", value);
     ctx.ui.setStatus("working-mode", ctx.mode === "tui"
-      ? `Alignment: ${alignment} · Checking: ${checking} (guidance)`
+      ? axisNames.map((axis) => `${axes[axis].label}: ${selected[axis]}`).join(" · ")
       : JSON.stringify(value));
   };
-  const usage = "/mode alignment <vibe|align|plan|spec> | /mode checking <unset|light|tests|adversarial>";
 
   function applyArgs(args: string) {
-    const [axis, value, ...extra] = args.trim().split(/\s+/);
-    if (extra.length || !axis || !value) return false;
-    if (axis === "alignment") {
-      const match = Object.keys(alignmentGuidance).find((candidate) => candidate.toLowerCase() === value);
-      if (!match) return false;
-      alignment = match as keyof typeof alignmentGuidance;
-    } else if (axis === "checking" && Object.hasOwn(checkingGuidance, value)) {
-      checking = value as keyof typeof checkingGuidance;
-    } else {
-      return false;
-    }
+    const [name, value, ...extra] = args.trim().toLowerCase().split(/\s+/);
+    const axis = name as Axis;
+    if (extra.length || !axisNames.includes(axis)) return false;
+    const match = Object.keys(axes[axis].values).find((candidate) => candidate.toLowerCase() === value);
+    if (!match) return false;
+    selected = { ...selected, [axis]: match };
     return true;
   }
 
   pi.on("session_start", (_event, ctx) => {
-    alignment = "Vibe";
-    checking = "unset";
+    selected = { ...(latestBlock(ctx.sessionManager.getBranch())?.selection ?? defaults) };
     applied = null;
-    if (ctx.mode === "tui" || ctx.mode === "rpc") publish(ctx, "selected");
+    publish(ctx, "selected");
   });
 
   pi.registerCommand("mode", {
-    description: "Choose Alignment and Checking guidance for the next prompt (not saved)",
+    description: "Choose Working Mode guidance for the next prompt",
     handler: async (args, ctx) => {
       if (args.trim()) {
         if (!applyArgs(args)) {
@@ -126,31 +127,26 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.notify(usage, "info");
         return;
       } else {
-        const axis = await ctx.ui.select("Working Mode — prompt guidance, not permissions", [
-          `Alignment: ${alignment}`,
-          `Checking: ${checking}`,
-        ]);
-        if (axis === `Alignment: ${alignment}`) {
-          const value = await ctx.ui.select("Alignment — shared understanding", Object.keys(alignmentGuidance));
-          if (!value || !Object.hasOwn(alignmentGuidance, value)) return;
-          alignment = value as keyof typeof alignmentGuidance;
-        } else if (axis === `Checking: ${checking}`) {
-          const value = await ctx.ui.select("Checking — minimum completion evidence", Object.keys(checkingGuidance));
-          if (!value || !Object.hasOwn(checkingGuidance, value)) return;
-          checking = value as keyof typeof checkingGuidance;
-        } else {
-          return;
-        }
+        const choice = await ctx.ui.select("Working Mode — guidance, not permissions", axisNames.map((axis) => `${axes[axis].label}: ${selected[axis]}`));
+        const axis = axisNames.find((name) => choice === `${axes[name].label}: ${selected[name]}`);
+        if (!axis) return;
+        const value = await ctx.ui.select(axes[axis].label, Object.keys(axes[axis].values));
+        if (!value || !Object.hasOwn(axes[axis].values, value)) return;
+        selected = { ...selected, [axis]: value };
       }
       publish(ctx, "selected");
-      if (ctx.mode === "tui") ctx.ui.notify(`Alignment: ${alignment} · Checking: ${checking}. Applies to the next prompt; not saved.`, "info");
+      if (ctx.mode === "tui") ctx.ui.notify("Working Mode applies with the next prompt.", "info");
     },
   });
 
-  pi.on("before_agent_start", (event, ctx) => {
-    if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
-    applied = selected();
+  pi.on("before_agent_start", (_event, ctx) => {
+    applied = { ...selected };
     publish(ctx, "applied");
-    return { systemPrompt: renderWorkingModePrompt(event.systemPrompt, event.systemPromptOptions, applied, ctx.mode === "tui") };
+    // Compare with the block the model can still see; compaction may have summarized it away.
+    const seen = latestBlock(ctx.sessionManager.buildContextEntries())?.selection ?? defaults;
+    if (same(seen, selected)) return;
+    const seq = (latestBlock(ctx.sessionManager.getBranch())?.seq ?? 0) + 1;
+    const details: WorkingModeDetails = { schemaVersion: 2, seq, selection: { ...selected } };
+    return { message: { customType: CUSTOM_TYPE, content: renderBlock(selected, seq), display: true, details } };
   });
 }

@@ -13,7 +13,7 @@ Current V1 sessions use the attended human–Pi posture:
 - optional bounded child Pi work reconciled by the lead; and
 - no unattended execution beyond the lead session, managed authority, or recovery claim.
 
-V1 provides terminal pickers and direct terminal/RPC Working Mode commands; graphical controls remain deferred. A PI WEB session identifier is never inferred to be a Run identifier.
+V1 provides terminal pickers and direct terminal/RPC Working Mode commands; the PI WEB buttons still expose only the retired two-axis values. A PI WEB session identifier is never inferred to be a Run identifier.
 
 Managed supervision, future managed Run controls, and broker-driven prioritization remain outside V1.
 
@@ -187,9 +187,9 @@ Project surfaces cannot alter shell-owned permission, identity, or recovery cont
 
 ## Working Mode Boundary
 
-The [Working Mode specification](../foundation/working-mode.md) defines intended prompt-guided behavior. A new context starts in Vibe; the owner may state Align, Plan, Spec, or a Checking value when useful. Align returns for owner judgment at a semantic commitment boundary rather than mechanically blocking project mutation.
+The [Working Mode specification](../foundation/working-mode.md) defines prompt-guided behavior across Alignment, Attention, Checking, and Orchestration. A new context starts at the neutral values with Orchestration at Main. Attention selects the contact channel; Align returns for owner judgment rather than mechanically blocking project mutation.
 
-The Pi extension provides `/mode` with independent terminal pickers and direct terminal/RPC commands. It starts at Vibe / unset, applies choices to the next prompt, emits disposable state snapshots, and resets on reload or session replacement without saving selections. No graphical selector, prior-choice restoration, or mutation gate is implemented. Mode selection can never grant permissions or guarantees.
+The Pi extension provides `/mode` with terminal pickers and direct terminal/RPC commands. A change reaches the model as one tagged conversation message with the next prompt; the session records it, resume restores it, and state snapshots report it. No mutation gate is implemented. Mode selection can never grant permissions or guarantees.
 
 ## External Adapters
 

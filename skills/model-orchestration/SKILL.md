@@ -10,7 +10,7 @@ Use one router under every Alignment value. Load only the guidance needed for th
 - **[Binding](references/binding.md):** for every delegated Subagent or Worker invocation, lead-model
   selection, or capacity check. Classify the role, resolve the live binding, and submit it unchanged.
 - **[Checking](references/checking.md):** before resolving independent assignments when Checking is
-  `adversarial`, owner direction or repository policy requires independent review, or the impact of
+  `Challenge`, owner direction or repository policy requires independent review, or the impact of
   a wrong conclusion warrants it; also load it when sizing a checking plan. Consequence may add
   evidence requirements, never remove the selected floor.
 - **[Routing rationale](references/routing-rationale.md):** only when evaluating the routing policy.
