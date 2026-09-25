@@ -70,9 +70,10 @@ export function createBackgroundBashJobs(pi, operations, { intervalMs = 5_000, n
         onChange();
         if (!closed) {
           try {
+            const tail = job.exitCode === 0 ? job.tail.split("\n").slice(-20).join("\n") : job.tail;
             pi.sendMessage({
               customType: "background-bash", display: true,
-              content: `Background bash ${id} ${job.state}${job.exitCode === undefined ? "" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output (available until session shutdown): ${logPath}\n${job.bytes > Buffer.byteLength(job.tail) ? "[showing recent output only]\n" : ""}${cleanOutput(job.tail.replace(/^[\uDC00-\uDFFF]/u, ""))}`,
+              content: `Background bash ${id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output (available until session shutdown): ${logPath}\n${job.bytes > Buffer.byteLength(job.tail) ? "[showing recent output only]\n" : ""}${cleanOutput(tail.replace(/^[\uDC00-\uDFFF]/u, ""))}`,
               details: describe(job),
             }, { triggerTurn: job.state !== "cancelled", deliverAs: "followUp" });
           } catch (error) { console.error(`Background bash ${id} could not deliver completion:`, error); }

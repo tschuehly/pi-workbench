@@ -36,12 +36,33 @@ test("background bash returns before completion, reports progress, and delivers 
   assert.equal(existsSync(job.logPath), false);
 });
 
+test("successful completions send only the last 20 lines while failures retain the larger tail", async () => {
+  const { pi, messages } = fixture();
+  const output = Array.from({ length: 35 }, (_, index) => `line ${index}`).join("\n");
+  const jobs = createBackgroundBashJobs(pi, { exec: async (_command, _cwd, { onData }) => { onData(Buffer.from(output)); return { exitCode: 0 }; } });
+  jobs.start("long success", "/repo", undefined, {});
+  await tick();
+  assert.match(messages[0].message.content, /line 34/);
+  assert.doesNotMatch(messages[0].message.content, /line 14(?:\n|$)/);
+  assert.match(messages[0].message.content, /line 15/);
+  assert.match(messages[0].message.content, /Background bash .* complete \(exit 0\)/);
+  assert.match(messages[0].message.content, /Full output .*\.log/);
+  await jobs.shutdown();
+
+  const failed = fixture();
+  const failedJobs = createBackgroundBashJobs(failed.pi, { exec: async (_command, _cwd, { onData }) => { onData(Buffer.from(output)); return { exitCode: 2 }; } });
+  failedJobs.start("long failure", "/repo", undefined, {});
+  await tick();
+  assert.match(failed.messages[0].message.content, /line 0/);
+  await failedJobs.shutdown();
+});
+
 test("a shell with no exit code reports unknown status rather than fabricating exit 1", async () => {
   const { pi, messages } = fixture();
   const jobs = createBackgroundBashJobs(pi, { exec: async () => ({ exitCode: null }) });
   jobs.start("terminated", "/repo", undefined, {});
   await tick();
-  assert.match(messages[0].message.content, /failed\. Shell exited without an exit code/);
+  assert.match(messages[0].message.content, /failed \(exit unknown\)\. Shell exited without an exit code/);
   assert.doesNotMatch(messages[0].message.content, /exit 1/);
   await jobs.shutdown();
 });
