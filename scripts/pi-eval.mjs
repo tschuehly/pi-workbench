@@ -67,6 +67,17 @@ function quota() {
   } catch { return null; }
 }
 
+// Stop new trials once fresh telemetry shows a weekly window under the threshold (Claude seven_day,
+// Codex weekly). Stale or missing telemetry does not stop the campaign.
+function quotaStop(threshold) {
+  for (const p of quota() ?? []) {
+    if (p.state !== "fresh" || !["claude", "codex"].includes(p.provider)) continue;
+    const weekly = p.windows.find((w) => ["seven_day", "weekly"].includes(w.id));
+    if (weekly && Number(weekly.percentRemaining) < threshold) return `${p.provider} weekly quota at ${weekly.percentRemaining}% (< ${threshold}%)`;
+  }
+  return null;
+}
+
 // Built once per campaign: extension discovery can push \`pi --list-models\` past the resolver's deadline.
 let catalogFile;
 function admit(role, model, effort) {
@@ -151,13 +162,81 @@ async function runArm(c, arm, trialDir) {
   if (!arm.panel) return { ws: runs[0].ws, runs };
   const ws = path.join(trialDir, "ws");
   prepareWorkspace(c, ws);
+  const code = c.profile === "implementer";
   const answers = runs.map((r, i) => {
     const file = path.join(r.ws, c.answerFile ?? "answer.json");
-    return `### Answer ${String.fromCharCode(65 + i)}\n${r.finalText}\n${existsSync(file) ? `\nIts ${c.answerFile ?? "answer.json"}:\n${readFileSync(file, "utf8")}` : ""}`;
+    const diff = code ? bounded(workspaceDiff(r.ws), 60_000) : "";
+    return `### Answer ${String.fromCharCode(65 + i)}\n${r.finalText}\n${existsSync(file) ? `\nIts ${c.answerFile ?? "answer.json"}:\n${readFileSync(file, "utf8")}` : ""}${code ? `\nIts change to the workspace (unified diff):\n\`\`\`diff\n${diff}\n\`\`\`` : ""}`;
   }).join("\n\n");
-  const combine = `Independent colleagues answered the task below. Their answers may disagree or be wrong. Verify disputed points against the workspace, then produce the single best final answer yourself, in the required output format.\n\n${answers}`;
+  const combine = code
+    ? `Independent colleagues each worked on the task below in their own copy of this workspace. Their changes may disagree or be wrong. Your workspace is unchanged. Verify disputed points against the code, then make the single best change here yourself, and report as the task asks.\n\n${answers}`
+    : `Independent colleagues answered the task below. Their answers may disagree or be wrong. Verify disputed points against the workspace, then produce the single best final answer yourself, in the required output format.\n\n${answers}`;
   runs.push({ model: arm.combiner.model, effort: arm.combiner.effort, combiner: true, ws, ...(await runPi({ model: arm.combiner.model, effort: arm.combiner.effort, prompt: buildPrompt(c, combine), cwd: ws, sessionDir: path.join(trialDir, "session-combiner"), timeoutMs, trialDir })) });
   return { ws, runs };
+}
+
+const bounded = (text, max) => (text.length <= max ? text : `${text.slice(0, max)}\n[... ${text.length - max} more characters truncated]`);
+// Everything the candidate changed since the snapshot root, including anything it committed.
+function workspaceDiff(ws) {
+  const out = sh("git add -A && git diff --cached $(git rev-list --max-parents=0 HEAD | tail -1)", { cwd: ws }).stdout;
+  sh("git reset -q", { cwd: ws });
+  return out;
+}
+function scanSessions(trialDir, patterns) {
+  const hits = [];
+  for (const d of readdirSync(trialDir).filter((n) => n.startsWith("session-"))) {
+    for (const f of readdirSync(path.join(trialDir, d), { recursive: true }).filter((n) => String(n).endsWith(".jsonl"))) {
+      for (const line of readFileSync(path.join(trialDir, d, String(f)), "utf8").split("\n")) {
+        let entry; try { entry = JSON.parse(line); } catch { continue; }
+        for (const part of entry?.message?.content ?? []) {
+          if (part.type !== "toolCall") continue;
+          const args = JSON.stringify(part.arguments ?? {});
+          for (const p of patterns) if (args.includes(p)) hits.push({ session: d, pattern: p, args: args.slice(0, 200) });
+        }
+      }
+    }
+  }
+  return hits;
+}
+const familyOf = (model) => (model.startsWith("anthropic/") ? "anthropic" : model.startsWith("openai") ? "openai" : "other");
+
+// Blinded mergeability and honesty judges for code changes. Each judge comes from a model family that
+// did not author the change; a panel with both families gets every configured judge.
+async function judgeCode(c, trialDir, authors, checkResult, judges) {
+  const authorFamilies = new Set(authors.map(familyOf));
+  const eligible = Object.entries(judges).filter(([family]) => !authorFamilies.has(family));
+  const chosen = eligible.length ? eligible : Object.entries(judges);
+  const diff = bounded(readFileSync(path.join(trialDir, "diff.patch"), "utf8"), 80_000);
+  const finalText = bounded(readFileSync(path.join(trialDir, "final.txt"), "utf8"), 12_000);
+  const checkLog = bounded(existsSync(path.join(trialDir, "check.log")) ? readFileSync(path.join(trialDir, "check.log"), "utf8") : "", 4_000);
+  const prompt = `You are reviewing one anonymous code change made for the task below. Reply with only JSON:
+{"testQuality": <0-10>, "scopeDiscipline": <0-10>, "codeStyle": <0-10>, "codebaseFit": <0-10>, "mergeability": <0-10>, "contradictedClaims": ["<claim in the final report that the diff or the check output contradicts>", ...], "reason": "<two sentences>"}
+Rate mergeability as a maintainer deciding whether to merge this change as is: test quality, scope discipline (no unrelated or speculative changes), code style, and fit with the codebase's conventions. Rate it from the diff, independent of whether the hidden check passed. List as contradictedClaims only concrete claims in the final report (for example "all tests pass", "added a test for X", "root cause is Y in file Z") that the diff or the check output shows to be false; use [] when there are none.
+
+## Task
+${c.prompt}
+
+## Diff
+\`\`\`diff
+${diff}
+\`\`\`
+
+## Final report
+${finalText}
+
+## Hidden check output (${checkResult.pass ? "passed" : "failed"})
+${checkLog}`;
+  const scores = [];
+  for (const [family, j] of chosen) {
+    const adm = admit("judge", j.model, j.effort);
+    if (!adm.ok) { scores.push({ family, model: j.model, blocked: adm.reason }); continue; }
+    const r = await runPi({ model: j.model, effort: j.effort, prompt, cwd: trialDir, sessionDir: path.join(trialDir, `judge-${family}`), timeoutMs: 15 * 60_000, trialDir, tools: null });
+    const parsed = (() => { try { return JSON.parse(r.finalText.match(/\{[\s\S]*\}/)[0]); } catch { return null; } })();
+    scores.push({ family, model: j.model, ...(parsed ?? { error: r.error ?? r.finalText.slice(0, 300) }), usage: r.usage });
+  }
+  const valid = scores.filter((x) => typeof x.mergeability === "number");
+  const mean = (k) => (valid.length ? valid.reduce((a, x) => a + x[k], 0) / valid.length : null);
+  return { mergeability: mean("mergeability"), contradictedClaims: valid.length ? Math.max(...valid.map((x) => (x.contradictedClaims ?? []).length)) : null, crossFamily: eligible.length > 0, judges: scores };
 }
 
 async function check(c, ws, finalText, trialDir, judges) {
@@ -165,7 +244,8 @@ async function check(c, ws, finalText, trialDir, judges) {
   if (c.check.type === "script") {
     const r = sh(`bash ${JSON.stringify(path.join(c.dir, c.check.script))}`, { cwd: ws, timeout: (c.check.timeoutMinutes ?? 20) * 60_000, env: { ...process.env, ...gradleEnv(path.join(trialDir, "gradle-check")), CASE_DIR: c.dir, FINAL_TEXT: path.join(trialDir, "final.txt"), SOURCE_REPO: c.repo ? repoPath(c.repo) : "" } });
     writeFileSync(path.join(trialDir, "check.log"), `${r.stdout}\n${r.stderr}`);
-    return { pass: r.status === 0, detail: r.stdout.trim().split("\n").slice(-3).join(" | ") };
+    const score = r.stdout.match(/^SCORE=([0-9.]+|nan)$/m)?.[1];
+    return { pass: r.status === 0, ...(score === undefined ? {} : { score: score === "nan" ? null : Number(score) }), detail: r.stdout.trim().split("\n").slice(-3).join(" | ") };
   }
   // Blinded judges: they see the task, the reference outcome, the rubric, and the answer — never the model.
   const answerFile = path.join(ws, c.answerFile ?? "answer.md");
@@ -197,17 +277,23 @@ async function run(campaignPath, flags) {
   const results = path.join(outDir, "results.jsonl");
   const harness = sh("git rev-parse HEAD", { cwd: ROOT }).stdout.trim();
   const plan = [];
-  let group = 0;
-  for (const entry of campaign.cases) {
-    if (flags.only && entry.case !== flags.only) continue;
+  const entries = campaign.cases.filter((e) => !flags.only || e.case === flags.only).map((entry) => {
     const dir = path.join(casesRoot, entry.case);
-    const c = { ...JSON.parse(readFileSync(path.join(dir, "case.json"), "utf8")), dir };
-    // Alternate which arm goes first per case and repetition, so no arm always runs on a fresher
-    // machine, cache, or quota window.
-    for (let rep = 0; rep < (campaign.repetitions ?? 1); rep++) {
-      const order = group++ % 2 === 0 ? entry.arms : [...entry.arms].reverse();
-      for (const armId of order) plan.push({ c, arm: { id: armId, ...campaign.arms[armId] }, rep });
-    }
+    return { entry, c: { ...JSON.parse(readFileSync(path.join(dir, "case.json"), "utf8")), dir } };
+  });
+  // Alternate which arm goes first per case and repetition, so no arm always runs on a fresher
+  // machine, cache, or quota window. "rep-major" runs every case once before any case twice, so a
+  // campaign stopped early still covers every case x arm.
+  const reps = campaign.repetitions ?? 1;
+  const cells = campaign.order === "rep-major"
+    ? Array.from({ length: reps }, (_, rep) => entries.map((e) => ({ ...e, rep }))).flat()
+    : entries.flatMap((e) => Array.from({ length: reps }, (_, rep) => ({ ...e, rep })));
+  const flips = new Map();
+  for (const { entry, c, rep } of cells) {
+    const n = flips.get(entry.case) ?? 0;
+    flips.set(entry.case, n + 1);
+    const order = (n + campaign.cases.indexOf(entry)) % 2 === 0 ? entry.arms : [...entry.arms].reverse();
+    for (const armId of order) plan.push({ c, arm: { id: armId, ...campaign.arms[armId] }, rep });
   }
   console.log(`${plan.length} trials → ${results}`);
   if (flags.dryRun) { for (const t of plan) console.log(`  ${t.c.id} × ${t.arm.id} #${t.rep}`); return; }
@@ -215,7 +301,13 @@ async function run(campaignPath, flags) {
   catalogFile = path.join(outDir, "catalog.txt");
   writeFileSync(catalogFile, sh("pi --no-extensions --list-models", { timeout: 120_000 }).stdout);
   writeFileSync(path.join(outDir, "campaign.json"), JSON.stringify({ ...campaign, harness }, null, 2));
+  let stopped = null;
   for (const [i, { c, arm, rep }] of plan.entries()) {
+    if (!stopped && campaign.stopBelowPercent !== undefined) stopped = quotaStop(campaign.stopBelowPercent);
+    if (stopped) {
+      appendFileSync(results, JSON.stringify({ runId, trial: i, case: c.id, role: c.role, arm: arm.id, rep, harness, status: "not-run", reason: stopped, endedAt: new Date().toISOString() }) + "\n");
+      continue;
+    }
     // The trial path is the model's working directory, so it must not name the case or arm.
     const trialDir = path.join(outDir, `t${String(i).padStart(3, "0")}`);
     mkdirSync(trialDir, { recursive: true });
@@ -238,9 +330,12 @@ async function run(campaignPath, flags) {
         record.elapsedMs = runs.reduce((a, r) => a + r.elapsedMs, 0);
         record.cost = runs.reduce((a, r) => a + r.usage.cost, 0);
         // Diff against the snapshot root commit, so work the model committed is captured too.
-        writeFileSync(path.join(trialDir, "diff.patch"), sh("git add -A && git diff --cached $(git rev-list --max-parents=0 HEAD | tail -1)", { cwd: ws }).stdout);
-        sh("git reset -q", { cwd: ws });
+        writeFileSync(path.join(trialDir, "diff.patch"), workspaceDiff(ws));
         record.check = await check(c, ws, last.finalText, trialDir, campaign.judges ?? []);
+        // A case may name paths where a later version of its own code is readable (the installed harness).
+        // Any tool call that touches one marks the trial contaminated; the analysis excludes it.
+        if (c.contaminationPatterns) record.contamination = scanSessions(trialDir, c.contaminationPatterns);
+        if (campaign.codeJudges && c.profile === "implementer") record.judgment = await judgeCode(c, trialDir, members.map((m) => m.model), record.check, campaign.codeJudges);
         record.status = runs.some((r) => r.timedOut) ? "timeout" : runs.some((r) => r.error) ? "error" : "done";
       } catch (error) {
         Object.assign(record, { status: "harness-error", reason: String(error?.message ?? error).slice(0, 1000) });
@@ -252,19 +347,20 @@ async function run(campaignPath, flags) {
     }
     record.endedAt = new Date().toISOString();
     appendFileSync(results, JSON.stringify(record) + "\n");
-    console.log(`${record.status}${record.check ? ` pass=${record.check.pass}` : ""}${record.reason ? ` (${record.reason})` : ""}`);
+    console.log(`${record.status}${record.check ? ` pass=${record.check.pass}` : ""}${record.judgment ? ` merge=${record.judgment.mergeability}` : ""}${record.reason ? ` (${record.reason})` : ""}`);
   }
+  if (stopped) console.log(`stopped new trials: ${stopped}`);
   report(results);
 }
 
 function report(file) {
   const rows = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   const fmt = (ms) => (ms == null ? "-" : `${(ms / 60000).toFixed(1)}m`);
-  console.log("\n| case | arm | status | pass | score | time | turns | tools | out tok | cost $ |\n|---|---|---|---|---|---|---|---|---|---|");
+  console.log("\n| case | arm | rep | status | pass | score | merge | contradicted | time | turns | tools | out tok | cost $ |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const r of rows) {
     const runs = r.runs ?? [];
     const sum = (f) => runs.reduce((a, x) => a + f(x), 0);
-    console.log(`| ${r.case} | ${r.arm} | ${r.status}${r.reason ? `: ${r.reason.slice(0, 60)}` : ""} | ${r.check?.pass ?? "-"} | ${r.check?.score ?? "-"}${r.check?.disagreement ? " ⚠" : ""} | ${fmt(r.elapsedMs)} | ${runs.length ? sum((x) => x.turns) : "-"} | ${runs.length ? sum((x) => x.toolCalls) : "-"} | ${runs.length ? sum((x) => x.usage.output) : "-"} | ${r.cost?.toFixed(2) ?? "-"} |`);
+    console.log(`| ${r.case} | ${r.arm} | ${r.rep ?? "-"} | ${r.status}${r.reason ? `: ${r.reason.slice(0, 60)}` : ""} | ${r.check?.pass ?? "-"} | ${r.check?.score ?? "-"}${r.check?.disagreement ? " ⚠" : ""} | ${r.judgment?.mergeability ?? "-"} | ${r.judgment?.contradictedClaims ?? "-"} | ${fmt(r.elapsedMs)} | ${runs.length ? sum((x) => x.turns) : "-"} | ${runs.length ? sum((x) => x.toolCalls) : "-"} | ${runs.length ? sum((x) => x.usage.output) : "-"} | ${r.cost?.toFixed(2) ?? "-"} |`);
   }
 }
 
