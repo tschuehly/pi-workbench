@@ -292,7 +292,9 @@ async function run(campaignPath, flags) {
   for (const { entry, c, rep } of cells) {
     const n = flips.get(entry.case) ?? 0;
     flips.set(entry.case, n + 1);
-    const order = (n + campaign.cases.indexOf(entry)) % 2 === 0 ? entry.arms : [...entry.arms].reverse();
+    // Rotate the arm order: with two arms this alternates; with three each arm takes every position.
+    const k = (n + campaign.cases.indexOf(entry)) % entry.arms.length;
+    const order = [...entry.arms.slice(k), ...entry.arms.slice(0, k)];
     for (const armId of order) plan.push({ c, arm: { id: armId, ...campaign.arms[armId] }, rep });
   }
   console.log(`${plan.length} trials → ${results}`);
