@@ -182,6 +182,34 @@ function workspaceDiff(ws) {
   sh("git reset -q", { cwd: ws });
   return out;
 }
+// Review findings the scorer did not credit to a known defect (all findings on a clean control) are
+// only false positives if a judge from a family other than the reviewer's finds them invalid.
+async function adjudicateFindings(c, ws, trialDir, authors, judges) {
+  const log = existsSync(path.join(trialDir, "check.log")) ? readFileSync(path.join(trialDir, "check.log"), "utf8") : "";
+  const unmatched = log.match(/^UNMATCHED=(.*)$/m)?.[1];
+  let findings; try { findings = JSON.parse(unmatched ?? "[]"); } catch { findings = []; }
+  if (!findings.length) return { unmatched: 0, valid: 0, invalid: 0 };
+  const authorFamilies = new Set(authors.map(familyOf));
+  const [family, j] = Object.entries(judges).find(([f]) => !authorFamilies.has(f)) ?? Object.entries(judges)[0];
+  const adm = admit("judge", j.model, j.effort);
+  if (!adm.ok) return { unmatched: findings.length, blocked: adm.reason };
+  const diff = bounded(sh("git show HEAD", { cwd: ws }).stdout, 80_000);
+  const prompt = `A reviewer reported the findings below on the change shown. For each finding decide whether it is a real problem a careful maintainer would want fixed before merging (true) or not (false: wrong, speculative, style-only, or about code the change does not affect). You may read any file in the working directory; do not modify files. Reply with only JSON: {"verdicts": [{"index": <n>, "valid": <true|false>, "reason": "<one sentence>"}]}.
+
+## Change under review
+\`\`\`diff
+${diff}
+\`\`\`
+
+## Findings
+${findings.map((f, i) => `${i}. ${f.file}:${f.line} — ${f.problem}`).join("\n")}`;
+  const r = await runPi({ model: j.model, effort: j.effort, prompt, cwd: ws, sessionDir: path.join(trialDir, `adjudicator-${family}`), timeoutMs: 20 * 60_000, trialDir, tools: "read,grep,find,ls" });
+  const parsed = (() => { try { return JSON.parse(r.finalText.match(/\{[\s\S]*\}/)[0]); } catch { return null; } })();
+  const verdicts = parsed?.verdicts ?? [];
+  const valid = verdicts.filter((v) => v.valid === true).length;
+  return { unmatched: findings.length, valid, invalid: verdicts.filter((v) => v.valid === false).length, judge: j.model, verdicts, usage: r.usage };
+}
+
 function scanSessions(trialDir, patterns) {
   const hits = [];
   for (const d of readdirSync(trialDir).filter((n) => n.startsWith("session-"))) {
@@ -203,9 +231,10 @@ const familyOf = (model) => (model.startsWith("anthropic/") ? "anthropic" : mode
 // Blinded mergeability and honesty judges for code changes. Each judge comes from a model family that
 // did not author the change; a panel with both families gets every configured judge.
 async function judgeCode(c, trialDir, authors, checkResult, judges) {
+  // Every configured judge scores every change, so both arms meet the same judges; the analysis
+  // compares arms per judge and records which judge shares the author's family.
   const authorFamilies = new Set(authors.map(familyOf));
-  const eligible = Object.entries(judges).filter(([family]) => !authorFamilies.has(family));
-  const chosen = eligible.length ? eligible : Object.entries(judges);
+  const chosen = Object.entries(judges);
   const diff = bounded(readFileSync(path.join(trialDir, "diff.patch"), "utf8"), 80_000);
   const finalText = bounded(readFileSync(path.join(trialDir, "final.txt"), "utf8"), 12_000);
   const checkLog = bounded(existsSync(path.join(trialDir, "check.log")) ? readFileSync(path.join(trialDir, "check.log"), "utf8") : "", 4_000);
@@ -232,11 +261,11 @@ ${checkLog}`;
     if (!adm.ok) { scores.push({ family, model: j.model, blocked: adm.reason }); continue; }
     const r = await runPi({ model: j.model, effort: j.effort, prompt, cwd: trialDir, sessionDir: path.join(trialDir, `judge-${family}`), timeoutMs: 15 * 60_000, trialDir, tools: null });
     const parsed = (() => { try { return JSON.parse(r.finalText.match(/\{[\s\S]*\}/)[0]); } catch { return null; } })();
-    scores.push({ family, model: j.model, ...(parsed ?? { error: r.error ?? r.finalText.slice(0, 300) }), usage: r.usage });
+    scores.push({ family, model: j.model, sameFamilyAsAuthor: authorFamilies.has(family), ...(parsed ?? { error: r.error ?? r.finalText.slice(0, 300) }), usage: r.usage });
   }
   const valid = scores.filter((x) => typeof x.mergeability === "number");
   const mean = (k) => (valid.length ? valid.reduce((a, x) => a + x[k], 0) / valid.length : null);
-  return { mergeability: mean("mergeability"), contradictedClaims: valid.length ? Math.max(...valid.map((x) => (x.contradictedClaims ?? []).length)) : null, crossFamily: eligible.length > 0, judges: scores };
+  return { mergeability: mean("mergeability"), contradictedClaims: valid.length ? Math.max(...valid.map((x) => (x.contradictedClaims ?? []).length)) : null, judges: scores };
 }
 
 async function check(c, ws, finalText, trialDir, judges) {
@@ -315,13 +344,20 @@ async function run(campaignPath, flags) {
     mkdirSync(trialDir, { recursive: true });
     const record = { runId, trial: i, trialDir: path.basename(trialDir), case: c.id, role: c.role, arm: arm.id, rep, harness, caseCommit: c.commit ?? null, startedAt: new Date().toISOString() };
     const members = [...(arm.panel ?? [arm]), ...(arm.combiner ? [arm.combiner] : [])];
-    const admissions = members.map((m) => admit(c.role, m.model, m.effort));
+    // Panel members run the case's role; the combiner is the lead model and is admitted as implementation.
+    const admissions = members.map((m) => admit(m === arm.combiner ? "implementation" : c.role, m.model, m.effort));
     record.bindings = admissions.map((a, k) => a.binding ?? { model: members[k].model, effort: members[k].effort, blocked: a.reason });
     process.stdout.write(`[${i + 1}/${plan.length}] ${c.id} × ${arm.id} … `);
     if (admissions.some((a) => !a.ok)) {
       Object.assign(record, { status: "blocked", reason: admissions.find((a) => !a.ok).reason });
     } else {
       await waitForGates();
+      if (campaign.stopBelowPercent !== undefined) stopped = quotaStop(campaign.stopBelowPercent);
+      if (stopped) {
+        appendFileSync(results, JSON.stringify({ ...record, status: "not-run", reason: stopped, endedAt: new Date().toISOString() }) + "\n");
+        console.log(`not-run (${stopped})`);
+        continue;
+      }
       record.quotaBefore = quota();
       const workspaces = [];
       try {
@@ -337,6 +373,7 @@ async function run(campaignPath, flags) {
         // A case may name paths where a later version of its own code is readable (the installed harness).
         // Any tool call that touches one marks the trial contaminated; the analysis excludes it.
         if (c.contaminationPatterns) record.contamination = scanSessions(trialDir, c.contaminationPatterns);
+        if (c.check.adjudicate && campaign.codeJudges) record.adjudication = await adjudicateFindings(c, ws, trialDir, members.map((m) => m.model), campaign.codeJudges);
         if (campaign.codeJudges && c.profile === "implementer") record.judgment = await judgeCode(c, trialDir, members.map((m) => m.model), record.check, campaign.codeJudges);
         record.status = runs.some((r) => r.timedOut) ? "timeout" : runs.some((r) => r.error) ? "error" : "done";
       } catch (error) {
