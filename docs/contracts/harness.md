@@ -14,14 +14,14 @@ A Workstream preserves cross-session attention but grants no workspace lease, en
 
 Model selection may resolve concrete providers, models, and Model Effort for the interactive lead and child processes. Those bindings do not change the attended posture.
 
-The terminal [Working Mode](../foundation/working-mode.md) control provides `/mode` and a footer indicator with in-memory Vibe / unset defaults. Selections guide the next prompt; reload and session replacement reset them. It writes no settings or session entries and leaves non-terminal sessions unchanged. The control must:
+The [Working Mode](../foundation/working-mode.md) control provides `/mode` in the terminal and RPC, a terminal footer indicator, and four axes that start at their neutral values (Orchestration at Main). A change reaches the model as one tagged conversation message with the next prompt; the system prompt is unchanged. The session records each change and resume restores it. The control must:
 
-- start a new context in Vibe without a setup gate;
-- keep Alignment and Checking independent;
+- start a new context at the starting values without a setup gate;
+- keep the four axes independent;
 - present an active owner choice truthfully without implying mechanical enforcement; and
-- leave Human Attention, delegation, authority, durability, and workspace protection outside Working Mode.
+- leave authority, durability, and workspace protection outside Working Mode.
 
-Restoring a prior choice, forcing an initial read-only phase, filtering tools, and applying a blanket mutation gate are outside the current design. Further state or enforcement requires observed need and explicit owner approval.
+Forcing an initial read-only phase, filtering tools or skills, and applying a blanket mutation gate are outside the current design. Further enforcement requires observed need and explicit owner approval.
 
 The packaged agent-input audit is an explicitly enabled, current-terminal diagnostic. It observes supported provider sends without changing them, stores sensitive evidence only under ignored local review storage, and stops on reload, session replacement, or shutdown. Its saved request evidence and unsent Working Mode previews are inspectable as versioned JSON or through a local Atelier Surface. Native session JSONL remains the output authority; the audit stores entry references and export-time evidence snapshots rather than a second transcript. Supported transports and evidence limits are documented with the extension and must not be generalized to provider receipt, raw response bytes, hidden server instructions, or unsupported providers.
 
@@ -59,12 +59,7 @@ Each resulting Episode records the exact versions of the skills and adaptations 
 
 In V1, the one interactive Pi loads only the resources selected for the attended task. Tool output and model claims remain ordinary session material; they do not become authoritative Workstream state.
 
-The bounded terminal [skill-discovery trial](../foundation/working-mode.md#skill-discovery-trial)
-filters the next prompt's automatic catalog in the extension's own checkout using the accepted
-Working Mode mapping. It preserves explicit `/skill:name` invocation, repository instructions,
-tools, and existing installation-level manual-only flags. Discovery neither mandates use nor grants
-permission. Previously loaded skill instructions remain in context. Other repositories and
-non-terminal sessions retain existing discovery; there is no repository configuration loader.
+Working Mode does not filter skill discovery; every value advertises the same catalog.
 
 Every supported V1 skill remains executable by Pi. Human interactions become available through delivered Workbench client slices. The terminal remains the fallback for capabilities that are not yet graphical.
 

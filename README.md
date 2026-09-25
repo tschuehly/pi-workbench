@@ -54,24 +54,21 @@ composition described above has not shipped.
 
 ### Working Mode
 
-The Pi terminal's `/mode` control separates two choices:
+`/mode` sets four independent choices:
 
 ```text
-Alignment:  Vibe  |  Align  |  Plan   |  Spec
-Checking:   light |  tests  |  adversarial
+Alignment:      Default | Align | Plan | Spec
+Attention:      Default | Focused | Switching | Phone | AFK
+Checking:       Default | Exercise | Test | Challenge
+Orchestration:  Main | Subagents | Workers
 ```
 
-Alignment controls how much shared understanding the owner judges at once. Vibe is normal work in
-chat; Align asks about one coherent unconfirmed direction; Plan covers the task direction; Spec
-covers required behavior and evidence. Checking states the minimum completion evidence and starts
-**unset**, leaving owner direction and repository policy in effect without a selected floor.
-
-Run `/mode` to choose an axis and value; the footer shows both as guidance for the next prompt.
-Selections are not saved: reload or session replacement resets them to **Vibe / unset**. Graphical
-controls remain deferred. Working Mode changes behavior, never permissions or guarantees; there
-is no mutation gate. In this extension's checkout, a bounded trial also filters automatic skill
-discovery by the accepted mapping without disabling `/skill:name` or removing previously loaded instructions.
-See [Working Mode and the accepted mapping](docs/foundation/working-mode.md#skill-discovery-trial).
+Alignment sets how shared understanding is established, Attention how and whether Pia contacts
+the owner, Checking the minimum completion evidence, and Orchestration the structure of primary
+execution. A change reaches the model as one tagged message with the next prompt, leaving the
+system prompt and its cache unchanged; the session records it and resume restores it. Working Mode
+changes behavior, never permissions, tools, or the skill catalog. See
+[Working Mode](docs/foundation/working-mode.md).
 
 ### Managed execution
 

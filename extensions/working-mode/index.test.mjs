@@ -1,324 +1,147 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { AgentSession, formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
-import workingModeExtension from "./index.ts";
+import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxProvider, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import workingMode, { axes, defaults, renderBlock } from "./index.ts";
 
-const checkoutRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const manualOnly = [
-  "grilling", "domain-modeling", "to-spec", "autonomous-grill", "grill-with-docs", "handoff",
-  "improve-codebase-architecture", "process-scan-inbox", "setup-matt-pocock-skills", "teach",
-  "to-tickets", "triage", "wayfinder", "workbench-compound", "analyze-source-for-workbench",
-  "marketing-studio", "ponytail-audit", "ponytail-debt", "ponytail-gain", "ponytail-help",
-  "customize-pi-web-presentation",
-];
-const allModes = [
-  "define-goal", "write-for-humans", "codebase-design", "prototype", "atelier", "btw",
-  "focus-handoff", "workstreams", "writing-for-agents", "mcp-scripting", "monitor", "ponytail",
-  "agent-browser", "diagnosing-bugs", "research", "wizard", "model-orchestration",
-];
-const mappedNames = [...manualOnly, "code-review", "ponytail-review", "tdd", ...allModes, "unknown-skill"];
-const skills = mappedNames.map((name) => ({
-  name,
-  description: `${name} description`,
-  filePath: `/skills/${name}/SKILL.md`,
-  baseDir: `/skills/${name}`,
-  sourceInfo: { path: `/skills/${name}/SKILL.md`, source: "test", scope: "temporary", origin: "top-level" },
-  disableModelInvocation: false,
-}));
+const cwd = "/tmp/working-mode-test";
+const agentDir = `${cwd}/agent`;
 
-function harness(mode = "tui", { cwd = checkoutRoot, loadedSkills = skills } = {}) {
-  const events = new Map();
-  const commands = new Map();
-  const statuses = new Map();
-  const notifications = [];
-  const choices = [];
-  const pickers = [];
-  const busEvents = [];
-  const ctx = {
-    mode,
-    hasUI: mode === "tui" || mode === "rpc",
-    ui: {
-      setStatus: (key, value) => statuses.set(key, value),
-      notify: (message, level) => notifications.push({ message, level }),
-      select: async (title, values) => {
-        pickers.push({ title, values });
-        return choices.shift();
-      },
-    },
-  };
-  workingModeExtension({
-    on: (name, handler) => events.set(name, handler),
-    registerCommand: (name, command) => commands.set(name, command),
-    events: { emit: (name, value) => busEvents.push({ name, value }) },
-    setActiveTools: () => assert.fail("working-mode must not change tools"),
+// A real Pi session with a scripted model: records every request the model receives.
+async function session(entries) {
+  const faux = fauxProvider();
+  const requests = [];
+  const reply = (context) => { requests.push(context); return fauxAssistantMessage("ok"); };
+  faux.setResponses(Array.from({ length: 20 }, () => reply));
+  const snapshots = [];
+  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens: 1 } });
+  const resourceLoader = new DefaultResourceLoader({
+    cwd, agentDir, settingsManager, systemPrompt: "BASE",
+    noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true,
+    extensionFactories: [(pi) => {
+      pi.registerProvider(faux.provider);
+      pi.events.on("pi-workbench:working-mode", (value) => snapshots.push(value));
+    }, workingMode],
   });
-  const start = (reason = "startup") => events.get("session_start")({ reason }, ctx);
-  const basePrompt = (catalogSkills = loadedSkills) => `PREFIX${formatSkillsForPrompt(catalogSkills)}\nSUFFIX`;
-  const prompt = ({ systemPrompt = basePrompt(), prompt: userPrompt = "task" } = {}) => events.get("before_agent_start")({
-    prompt: userPrompt,
-    systemPrompt,
-    systemPromptOptions: { cwd, skills: loadedSkills, selectedTools: ["read", "bash"] },
-  }, ctx);
-  const command = (args = "") => commands.get("mode").handler(args, ctx);
-  const choose = async (...values) => {
-    choices.push(...values);
-    await command();
+  await resourceLoader.reload();
+  const modelRuntime = await ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: null, refreshOnCreate: false });
+  const sessionManager = entries ? SessionManager.inMemory(cwd, undefined, entries) : SessionManager.inMemory(cwd);
+  const { session } = await createAgentSession({
+    cwd, agentDir, modelRuntime, resourceLoader, settingsManager, sessionManager, model: faux.getModel(), noTools: "all",
+    sessionStartEvent: { type: "session_start", reason: entries ? "resume" : "startup" },
+  });
+  await session.bindExtensions({});
+  const blocks = (request) => request.messages
+    .map((message) => typeof message.content === "string" ? message.content : message.content?.map?.((part) => part.text ?? "").join("") ?? "")
+    .filter((text) => text.startsWith("<working-mode"));
+  const last = () => requests.at(-1);
+  return { session, sessionManager, requests, snapshots, blocks, last, entries: () => [sessionManager.getHeader(), ...sessionManager.getEntries()] };
+}
+
+test("a mode change reaches the model as one tagged message; the system prompt never changes", async () => {
+  const s = await session();
+  await s.session.prompt("first");
+  await s.session.prompt("/mode alignment align");
+  await s.session.prompt("/mode Attention PHONE");
+  await s.session.prompt("second");
+  await s.session.prompt("third");
+
+  const prompts = s.requests.map((request) => getCurrentSystemPrompt(request.messages));
+  assert.equal(new Set(prompts).size, 1, "system prompt must stay byte-identical");
+  assert.equal(s.blocks(s.requests[0]).length, 0, "starting values post nothing");
+  const [block] = s.blocks(s.last());
+  assert.equal(s.blocks(s.last()).length, 1, "posted once, not repeated");
+  assert.match(block, /^<working-mode seq="1">/);
+  assert.match(block, /Alignment: Align · Attention: Phone · Checking: Default · Orchestration: Main/);
+  assert.match(block, /Alignment — Align: For nontrivial work/);
+  assert.match(block, /Attention — Phone: .*ask_human/);
+  assert.doesNotMatch(block, /Checking —|Orchestration —/);
+  assert.match(block, /This block replaces every earlier <working-mode> block\.\n<\/working-mode>$/);
+  assert.doesNotMatch(block, /ignore previous/i);
+  assert.deepEqual(s.snapshots.at(-1), {
+    schemaVersion: 2, phase: "applied",
+    selected: { alignment: "Align", attention: "Phone", checking: "Default", orchestration: "Main" },
+    applied: { alignment: "Align", attention: "Phone", checking: "Default", orchestration: "Main" },
+  });
+  s.session.dispose();
+});
+
+test("each change posts a numbered replacement; returning to starting values says so", async () => {
+  const s = await session();
+  await s.session.prompt("/mode checking test");
+  await s.session.prompt("one");
+  await s.session.prompt("/mode checking default");
+  await s.session.prompt("two");
+  const blocks = s.blocks(s.last());
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0], /seq="1"[\s\S]*Checking — Test/);
+  assert.match(blocks[1], /seq="2"[\s\S]*no Working Mode guidance applies/);
+  s.session.dispose();
+});
+
+test("resume restores the selection from the session without posting again", async () => {
+  const first = await session();
+  await first.session.prompt("/mode orchestration workers");
+  await first.session.prompt("one");
+  const saved = first.entries();
+  first.session.dispose();
+
+  const resumed = await session(saved);
+  assert.deepEqual(resumed.snapshots.at(-1).selected, { ...defaults, orchestration: "Workers" });
+  await resumed.session.prompt("two");
+  assert.equal(resumed.blocks(resumed.last()).length, 1, "the saved block is reused, not re-posted");
+  resumed.session.dispose();
+});
+
+test("after compaction summarizes the block away, the next prompt attaches it again", async () => {
+  const s = await session();
+  await s.session.prompt("/mode attention afk");
+  await s.session.prompt("one");
+  await s.session.prompt("two");
+  await s.session.compact();
+  await s.session.prompt("three");
+  const blocks = s.blocks(s.last());
+  assert.equal(blocks.length, 1);
+  assert.match(blocks[0], /seq="2"[\s\S]*Attention — AFK/);
+  s.session.dispose();
+});
+
+test("invalid commands change nothing", async () => {
+  const s = await session();
+  for (const args of ["alignment vibe", "checking", "speed fast", "alignment align extra"]) await s.session.prompt(`/mode ${args}`);
+  await s.session.prompt("task");
+  assert.equal(s.blocks(s.last()).length, 0);
+  s.session.dispose();
+});
+
+test("every non-starting value has guidance; starting values render none", () => {
+  for (const [axis, { values }] of Object.entries(axes)) {
+    for (const [value, text] of Object.entries(values)) {
+      const block = renderBlock({ ...defaults, [axis]: value }, 1);
+      if (value === defaults[axis]) assert.match(block, /no Working Mode guidance applies/);
+      else assert.ok(text && block.includes(text), `${axis}=${value}`);
+    }
+  }
+});
+
+test("the terminal picker changes one axis; cancel changes nothing", async () => {
+  const handlers = new Map();
+  let command;
+  const statuses = [];
+  const choices = [];
+  workingMode({ on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, events: { emit() {} } });
+  const ctx = {
+    mode: "tui", hasUI: true,
+    sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
+    ui: { setStatus: (_key, value) => statuses.push(value), notify() {}, select: async () => choices.shift() },
   };
-  start();
-  return { events, commands, statuses, notifications, choices, pickers, busEvents, ctx, start, prompt, command, choose, basePrompt };
-}
-
-function catalogNames(prompt) {
-  const catalog = prompt.match(/<available_skills>[\s\S]*?<\/available_skills>/)?.[0] ?? "";
-  return [...catalog.matchAll(/<name>([^<]+)<\/name>/g)].map((match) => match[1]);
-}
-
-test("starts without a setup dialog; changes each axis independently for subsequent prompts", async () => {
-  const h = harness();
-  assert.equal(h.pickers.length, 0);
-  assert.equal(h.statuses.get("working-mode"), "Alignment: Vibe · Checking: unset (guidance)");
-  const first = h.prompt().systemPrompt;
-  assert.match(first, /^PREFIX/);
-  assert.match(first, /unset does not mean no checks/);
-
-  await h.choose("Alignment: Vibe", "Plan");
-  assert.match(h.prompt().systemPrompt, /Alignment: Plan\./);
-  assert.match(h.prompt().systemPrompt, /Checking: unset\./);
-  await h.choose("Checking: unset", "adversarial");
-  assert.match(h.prompt().systemPrompt, /fresh independent challenge/);
-  assert.match(h.prompt().systemPrompt, /Alignment: Plan\./);
-  assert.equal(h.statuses.get("working-mode"), "Alignment: Plan · Checking: adversarial (guidance)");
-  assert.match(h.notifications.at(-1).message, /Applies to the next prompt; not saved/);
-  assert.match(first, /Alignment: Vibe\./, "the already-built prompt stays unchanged");
-  assert.equal(h.prompt().systemPrompt.match(/# Working Mode/g).length, 1);
-});
-
-test("reports selected-next-turn separately from the mode applied by the prompt handler", async () => {
-  const h = harness();
-  assert.deepEqual(h.busEvents.at(-1).value, { schemaVersion: 1, phase: "selected", selected: { alignment: "Vibe", checking: "unset" }, applied: null });
-  await h.choose("Alignment: Vibe", "Plan");
-  await h.choose("Checking: unset", "tests");
-  assert.deepEqual(h.busEvents.at(-1).value, { schemaVersion: 1, phase: "selected", selected: { alignment: "Plan", checking: "tests" }, applied: null });
-  h.prompt();
-  assert.deepEqual(h.busEvents.at(-1).value, { schemaVersion: 1, phase: "applied", selected: { alignment: "Plan", checking: "tests" }, applied: { alignment: "Plan", checking: "tests" } });
-  await h.choose("Alignment: Plan", "Spec");
-  assert.deepEqual(h.busEvents.at(-1).value, { schemaVersion: 1, phase: "selected", selected: { alignment: "Spec", checking: "tests" }, applied: { alignment: "Plan", checking: "tests" } });
-});
-
-test("all 4x4 dial states apply the reviewed skill mapping with independent axes", async () => {
-  for (const alignment of ["Vibe", "Align", "Plan", "Spec"]) {
-    for (const checking of ["unset", "light", "tests", "adversarial"]) {
-      const h = harness();
-      if (alignment !== "Vibe") await h.choose("Alignment: Vibe", alignment);
-      if (checking !== "unset") await h.choose("Checking: unset", checking);
-      const names = catalogNames(h.prompt().systemPrompt);
-
-      assert.equal(manualOnly.length, 21);
-      for (const name of manualOnly) assert.ok(!names.includes(name), `${name} hidden for ${alignment}/${checking}`);
-      assert.equal(names.includes("code-review"), checking === "adversarial");
-      assert.equal(names.includes("ponytail-review"), checking === "adversarial");
-      assert.equal(names.includes("tdd"), checking === "tests" || checking === "adversarial");
-      assert.equal(mappedNames.length - 1, 41);
-      for (const name of [...allModes, "unknown-skill"]) assert.ok(names.includes(name), `${name} visible`);
-      assert.match(h.prompt().systemPrompt, new RegExp(`Alignment: ${alignment}\\.`));
-      assert.match(h.prompt().systemPrompt, new RegExp(`Checking: ${checking}\\.`));
-    }
-  }
-});
-
-test("fresh prompts restore filtered entries when Checking changes", async () => {
-  const h = harness();
-  assert.deepEqual(catalogNames(h.prompt().systemPrompt).filter((name) => ["code-review", "tdd"].includes(name)), []);
-  await h.choose("Checking: unset", "tests");
-  assert.deepEqual(catalogNames(h.prompt().systemPrompt).filter((name) => ["code-review", "tdd"].includes(name)), ["tdd"]);
-  await h.choose("Checking: tests", "adversarial");
-  assert.deepEqual(catalogNames(h.prompt().systemPrompt).filter((name) => ["code-review", "tdd"].includes(name)), ["code-review", "tdd"]);
-  await h.choose("Checking: adversarial", "light");
-  assert.deepEqual(catalogNames(h.prompt().systemPrompt).filter((name) => ["code-review", "tdd"].includes(name)), []);
-});
-
-test("filters only the exact generated catalog and preserves all other prompt bytes", () => {
-  const h = harness();
-  const result = h.prompt().systemPrompt;
-  assert.ok(result.startsWith("PREFIX"));
-  assert.ok(result.includes("\nSUFFIX\n\n# Working Mode"));
-
-  for (const prose of [
-    "prefix <available_skills><skill><name>grilling</name></skill> malformed prose suffix",
-    "A repository note says grilling and <name>code-review</name>; leave it alone.",
-  ]) {
-    assert.ok(h.prompt({ systemPrompt: prose }).systemPrompt.startsWith(`${prose}\n\n# Working Mode`));
-  }
-
-  const duplicate = `${h.basePrompt()}${formatSkillsForPrompt(skills)}`;
-  assert.ok(h.prompt({ systemPrompt: duplicate }).systemPrompt.startsWith(`${duplicate}\n\n# Working Mode`));
-});
-
-test("installation-level manual-only flags and absent catalogs stay unchanged", async () => {
-  const installed = skills.map((skill) => Object.freeze({ ...skill, disableModelInvocation: skill.name === "model-orchestration" }));
-  Object.freeze(installed);
-  const h = harness("tui", { loadedSkills: installed });
-  await h.choose("Checking: unset", "adversarial");
-  assert.ok(!catalogNames(h.prompt().systemPrompt).includes("model-orchestration"));
-  assert.ok(catalogNames(h.prompt().systemPrompt).includes("unknown-skill"));
-  for (const loadedSkills of [[], installed.map((skill) => ({ ...skill, disableModelInvocation: true }))]) {
-    const empty = harness("tui", { loadedSkills });
-    assert.ok(empty.prompt().systemPrompt.startsWith(`${empty.basePrompt()}\n\n# Working Mode`));
-  }
-});
-
-test("actual Pi skill expansion remains intact while its automatic catalog entry is hidden", () => {
-  const dir = mkdtempSync(join(tmpdir(), "working-mode-skill-"));
-  const filePath = join(dir, "SKILL.md");
-  writeFileSync(filePath, "---\nname: grilling\ndescription: Explicit test\n---\n\n# Explicit body\nDo the explicit workflow.\n");
-  const explicitSkill = { ...skills[0], filePath, baseDir: dir };
-  const errors = [];
-  try {
-    assert.equal(typeof AgentSession.prototype._expandSkillCommand, "function", "Pi private skill-expansion API changed");
-    const expanded = AgentSession.prototype._expandSkillCommand.call({
-      resourceLoader: { getSkills: () => ({ skills: [explicitSkill] }) },
-      _extensionRunner: { emitError: (error) => errors.push(error) },
-    }, "/skill:grilling focus here");
-    assert.match(expanded, /^<skill name="grilling"/);
-    assert.match(expanded, /# Explicit body/);
-    assert.match(expanded, /focus here$/);
-
-    const h = harness("tui", { loadedSkills: [explicitSkill] });
-    const result = h.prompt({ prompt: expanded });
-    assert.deepEqual(catalogNames(result.systemPrompt), []);
-    assert.match(expanded, /Do the explicit workflow/);
-    assert.deepEqual(errors, []);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("scope follows real paths: checkout descendants and aliases work; sibling and escaping paths do not", () => {
-  const external = mkdtempSync(join(tmpdir(), "working-mode-external-"));
-  const aliases = mkdtempSync(join(tmpdir(), "working-mode-aliases-"));
-  const checkoutAlias = join(aliases, "checkout");
-  const escapeDir = join(checkoutRoot, "extensions/working-mode", `.scope-escape-${process.pid}`);
-  const escapeLink = join(escapeDir, "outside");
-  symlinkSync(checkoutRoot, checkoutAlias, "dir");
-  mkdirSync(escapeDir);
-  symlinkSync(external, escapeLink, "dir");
-  try {
-    for (const cwd of [checkoutRoot, join(checkoutRoot, "packages"), checkoutAlias]) {
-      assert.ok(!catalogNames(harness("tui", { cwd }).prompt().systemPrompt).includes("grilling"), `filtered: ${cwd}`);
-    }
-    for (const cwd of [`${checkoutRoot}.credential-broker`, external, escapeLink]) {
-      const result = harness("tui", { cwd }).prompt().systemPrompt;
-      assert.ok(catalogNames(result).includes("grilling"), `isolated: ${cwd}`);
-      assert.match(result, /# Working Mode/, "existing /mode guidance remains outside the trial scope");
-    }
-  } finally {
-    rmSync(escapeDir, { recursive: true, force: true });
-    rmSync(aliases, { recursive: true, force: true });
-    rmSync(external, { recursive: true, force: true });
-  }
-});
-
-test("every choice has guidance, and unset clears the selected Checking floor", async () => {
-  const h = harness();
-  let previous = "Vibe";
-  for (const [value, expected] of [
-    ["Align", /ask the owner whether its direction is right/],
-    ["Plan", /outcome, approach, boundaries, and evidence/],
-    ["Spec", /required behavior, constraints, and acceptance evidence/],
-    ["Vibe", /Work normally in chat/],
-  ]) {
-    await h.choose(`Alignment: ${previous}`, value);
-    assert.match(h.prompt().systemPrompt, expected);
-    assert.match(h.prompt().systemPrompt, /Checking: unset\./);
-    previous = value;
-  }
-  previous = "unset";
-  for (const [value, expected] of [
-    ["light", /inspect or exercise the changed result directly/],
-    ["tests", /run relevant automated tests/],
-    ["adversarial", /fresh independent challenge/],
-    ["unset", /No Checking floor is selected/],
-  ]) {
-    await h.choose(`Checking: ${previous}`, value);
-    assert.match(h.prompt().systemPrompt, expected);
-    assert.match(h.prompt().systemPrompt, /Alignment: Vibe\./);
-    previous = value;
-  }
-  assert.doesNotMatch(h.prompt().systemPrompt, /obtain a fresh independent challenge/);
-});
-
-test("direct commands apply every value in TUI and RPC without opening a picker", async () => {
-  for (const mode of ["tui", "rpc"]) {
-    const h = harness(mode);
-    if (mode === "rpc") assert.deepEqual(JSON.parse(h.statuses.get("working-mode")), h.busEvents.at(-1).value);
-    for (const value of ["vibe", "align", "plan", "spec"]) {
-      await h.command(`alignment ${value}`);
-      assert.deepEqual(h.busEvents.at(-1).value.selected.alignment, `${value[0].toUpperCase()}${value.slice(1)}`);
-      assert.match(h.prompt().systemPrompt, new RegExp(`Alignment: ${value[0].toUpperCase()}${value.slice(1)}\\.`));
-    }
-    for (const value of ["unset", "light", "tests", "adversarial"]) {
-      await h.command(`checking ${value}`);
-      assert.equal(h.busEvents.at(-1).value.selected.checking, value);
-      assert.match(h.prompt().systemPrompt, new RegExp(`Checking: ${value}\\.`));
-    }
-    assert.equal(h.pickers.length, 0);
-    if (mode === "rpc") {
-      assert.equal(h.notifications.length, 0, "valid RPC selections do not create notification output");
-      assert.deepEqual(JSON.parse(h.statuses.get("working-mode")), h.busEvents.at(-1).value);
-    }
-    h.start("reload");
-    assert.deepEqual(h.busEvents.at(-1).value.selected, { alignment: "Vibe", checking: "unset" });
-  }
-});
-
-test("cancel, invalid selections, and unsupported arguments leave both choices unchanged", async () => {
-  const h = harness();
-  const original = h.prompt();
-  for (const choices of [[undefined], ["Alignment: Vibe", undefined], ["Checking: unset", undefined],
-    ["Alignment: Vibe", "toString"], ["Checking: unset", "bogus"]]) {
-    await h.choose(...choices);
-    assert.deepEqual(h.prompt(), original);
-  }
-  await h.command("tests");
-  assert.match(h.notifications.at(-1).message, /^\/mode alignment/);
-  assert.deepEqual(h.prompt(), original);
-});
-
-test("resets on session replacement and reload without owning tools or persistence", async () => {
-  const h = harness();
-  assert.deepEqual([...h.events.keys()].sort(), ["before_agent_start", "session_start"]);
-  for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
-    await h.choose("Alignment: Vibe", "Spec");
-    await h.choose("Checking: unset", "tests");
-    h.start(reason);
-    assert.equal(h.statuses.get("working-mode"), "Alignment: Vibe · Checking: unset (guidance)");
-    assert.match(h.prompt().systemPrompt, /Alignment: Vibe\./);
-    assert.match(h.prompt().systemPrompt, /Checking: unset\./);
-  }
-});
-
-test("RPC no-argument use returns usage without a picker or state change", async () => {
-  const h = harness("rpc");
-  const initialEvent = h.busEvents.at(-1);
-  await h.command();
-  assert.equal(h.pickers.length, 0);
-  assert.match(h.notifications.at(-1).message, /^\/mode alignment/);
-  assert.equal(h.busEvents.at(-1), initialEvent);
-  assert.match(h.prompt().systemPrompt, /Alignment: Vibe\./);
-  assert.ok(catalogNames(h.prompt().systemPrompt).includes("grilling"), "RPC retains the full skill catalog");
-});
-
-test("print and JSON sessions receive neither pickers nor mode prompt guidance", async () => {
-  for (const mode of ["print", "json"]) {
-    const h = harness(mode);
-    await h.command();
-    assert.equal(h.statuses.size, 0);
-    assert.equal(h.pickers.length, 0);
-    assert.equal(h.prompt(), undefined);
-    assert.equal(h.notifications.length, 0);
-  }
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  choices.push("Checking: Default", "Challenge");
+  await command.handler("", ctx);
+  choices.push(undefined);
+  await command.handler("", ctx);
+  assert.equal(statuses.at(-1), "Alignment: Default · Attention: Default · Checking: Challenge · Orchestration: Main");
+  const result = handlers.get("before_agent_start")({}, ctx);
+  assert.equal(result.message.customType, "working-mode");
+  assert.deepEqual(result.message.details, { schemaVersion: 2, seq: 1, selection: { ...defaults, checking: "Challenge" } });
 });

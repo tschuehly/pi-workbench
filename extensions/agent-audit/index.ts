@@ -7,9 +7,8 @@ import {
   AUDIT_FORMAT, AUDIT_SCHEMA_VERSION, createAuditStore, createTransportObserver, findExactSkillEvidence,
   formatError, isInside, jsonValue, providerCoverage, snapshotFileVersion, snapshotSources,
 } from "./audit.mjs";
-import {
-  alignmentGuidance, checkingGuidance, renderWorkingModePrompt, visibleSkillsForMode, type WorkingModeState,
-} from "../working-mode/index.ts";
+import { alignmentGuidance, checkingGuidance, renderWorkingModePrompt, visibleSkillsForMode } from "./legacy-working-mode.ts";
+import { isSelection, type WorkingModeState } from "../working-mode/index.ts";
 
 const indexPath = fileURLToPath(import.meta.url);
 const checkoutRoot = realpathSync(resolve(dirname(indexPath), "../.."));
@@ -18,7 +17,7 @@ const extensionVersion = 1;
 const producerSources = [
   snapshotFileVersion(indexPath, "capture adapter"),
   snapshotFileVersion(join(dirname(indexPath), "audit.mjs"), "transport/storage implementation"),
-  snapshotFileVersion(join(dirname(indexPath), "../working-mode/index.ts"), "Working Mode renderer"),
+  snapshotFileVersion(join(dirname(indexPath), "legacy-working-mode.ts"), "legacy Working Mode preview renderer"),
 ];
 
 export default function agentAuditExtension(pi: ExtensionAPI) { registerAgentAudit(pi); }
@@ -56,7 +55,7 @@ export function registerAgentAudit(pi: ExtensionAPI, runtime: { auditRoot?: stri
       const skillEvidence = findExactSkillEvidence(
         actualPayload,
         observation.logical.run.options.skills ?? [],
-        observation.logical.appliedMode ? visibleSkillsForMode(observation.logical.run.options.skills ?? [], observation.logical.appliedMode.checking) : observation.logical.run.options.skills ?? [],
+        observation.logical.run.options.skills ?? [],
         formatSkillsForPrompt,
         { api: observation.logical.provider.api, contextMessages: observation.logical.context, cwd: observation.logical.run.options.cwd },
       );
@@ -123,8 +122,8 @@ export function registerAgentAudit(pi: ExtensionAPI, runtime: { auditRoot?: stri
   });
 
   pi.events.on("pi-workbench:working-mode", (value: any) => {
-    if (validMode(value?.selected)) selectedMode = { ...value.selected };
-    if (value?.phase === "applied" && validMode(value?.applied)) appliedMode = { ...value.applied };
+    if (isSelection(value?.selected)) selectedMode = { ...value.selected };
+    if (value?.phase === "applied" && isSelection(value?.applied)) appliedMode = { ...value.applied };
   });
 
   pi.registerCommand("agent-audit", {
@@ -324,9 +323,6 @@ function instructionFields(payload: any, api: string | null) {
   return fields;
 }
 
-function validMode(value: any): value is WorkingModeState {
-  return Object.hasOwn(alignmentGuidance, value?.alignment) && Object.hasOwn(checkingGuidance, value?.checking);
-}
 
 export async function loadPiBasePrompt(options: any, argv1 = process.argv[1]) {
   const packages = runtimePackages(argv1), running = packages.piCodingAgent.runningProcess, extension = packages.piCodingAgent.extensionResolved;

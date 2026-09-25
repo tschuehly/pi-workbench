@@ -1,161 +1,176 @@
 # Pi Workbench Working Mode
 
-Status: the owner-approved Pi extension provides `/mode` in the terminal and RPC, plus a terminal
-footer indicator. Both axes remain prompt-guided behavior, not mechanically enforced gates.
+Status: Thomas confirmed the behavioral model on 2026-09-21, chose starting values on
+2026-09-24, and settled the channel, AFK, question, delivery, and skill-discovery points on
+2026-09-25. `extensions/working-mode/` implements it. [Decision 69](decisions.md) records the
+accepted direction.
 
-Working Mode lets the owner choose how Pi establishes shared understanding and what evidence Pi must
-produce before claiming completion. It has two independent behavioral axes:
-
-```text
-Alignment:  Vibe  |  Align  |  Plan   |  Spec
-Checking:   light |  tests  |  adversarial
-```
-
-Working Mode configures behavior, never permission. Human Attention, model, Model Effort, authority,
-delegation, durability, and workspace protection remain separate capabilities. There are no bundled
-Operating Levels.
+Working Mode configures how Pia establishes Shared Understanding, uses Thomas's attention,
+checks a result, and distributes primary execution. It provides guidance, not permission or a
+mechanical mutation gate.
 
 ## Alignment
 
-Alignment values are ordered by how much shared understanding the owner must judge at once.
+The confirmed values are `Default | Align | Plan | Spec`.
 
 | Value | Shared-understanding behavior |
 | --- | --- |
-| `Vibe` | Work normally in chat. Pi and the owner align continuously without a separate artifact or extra guard. |
-| `Align` | Before one unconfirmed product, architecture, scope, or quality choice becomes durable implementation or parallel work, Pi presents the coherent change and asks whether its direction is right. |
-| `Plan` | The owner accepts a concise statement of outcome, approach, boundaries, and evidence for the whole task. |
-| `Spec` | The owner accepts required behavior, constraints, and acceptance evidence; implementation strategy may adapt. |
+| `Default` | Add no Alignment-specific behavior. Ordinary Pi interpretation and the existing session instructions remain. |
+| `Align` | Establish shared understanding through a lightweight grill: expose consequential assumptions, resolve important ambiguities, and confirm the intended outcome, scope, and success criteria. |
+| `Plan` | Persist a plan covering the outcome, approach, boundaries, and evidence; obtain Thomas's acceptance before implementation. |
+| `Spec` | Persist a specification with user stories, required behavior, constraints, and acceptance criteria; obtain Thomas's acceptance before implementation. |
 
-`Vibe` is the normal interactive experience. It adds no one-slice limit, attention detector, pause
-boundary, or automatic mode switch.
+Align is active clarification, not merely permission to proceed. For nontrivial work, Pia should
+check that Thomas and Pia mean the same thing rather than silently interpreting the request.
+Reuse understanding already established. Record lasting decisions in existing docs without
+requiring a full plan or specification for every Align task.
 
-`Align` is a prompt-guided trial, not a mechanically enforced gate. Pi asks before turning an
-uncertain semantic choice into committed work, not before every file edit. It may proceed without a
-new question when implementation stays inside an already understood direction. It asks again when
-evidence invalidates that direction or materially changes the consequence.
+Plan and Spec are persisted agreements, not only conversational context or Pia's private working
+notes. Reuse an existing accepted document rather than recreating it. Pia may maintain progress
+and implementation details without repeated approval. Attention determines how new questions are
+handled; it does not turn advisor judgment into Thomas's acceptance of a different outcome.
 
-Examples:
+Default adds no new draft-first or ask-first rule. It does not remove existing global, repository,
+or conversational instructions. A clean Pi profile is not part of this design.
 
-- **Ask before:** remove an existing capability, introduce a new state owner, choose a product
-  trade-off, broaden scope, or turn a prototype into the delivery architecture.
-- **Proceed without asking:** rename a local symbol, repair a defect inside accepted behavior, or
-  perform an implementation detail that does not alter the owner's understood outcome.
-- **Ask again:** contrary evidence appears, a reversible experiment becomes a lasting dependency,
-  or the proposed change gains material scope, risk, or quality consequences.
+## Attention
 
-Evaluate the Align trial from observed use: missed consequential choices, unnecessary
-interruptions, and summaries that are difficult for the owner to judge. Do not add a mutation lock
-or richer state model without that evidence.
+Attention controls consultation and how Pia reaches Thomas. The confirmed presets are
+`Focused | Switching | Phone | AFK`, plus a neutral `Default` that adds no Attention guidance.
+They are explicit selections, not device or presence detection: Pia cannot tell whether Thomas is
+in the conversation, so the selected value alone chooses the channel.
 
-A `Plan` confirms task direction rather than predicting every implementation step. A `Spec` adds
-behavioral precision only when the outcome needs it. Grilling may produce either artifact when
-material ambiguity remains. It asks the current frontier of decisions, finds facts rather than
-asking the owner for them, and ends with owner confirmation of the shared understanding.
+| Value | Interaction behavior |
+| --- | --- |
+| `Default` | Add no Attention-specific behavior; existing instructions apply. |
+| `Focused` | Ask Thomas readily when a quick clarification improves direction; Thomas is following the session. |
+| `Switching` | Batch questions and provide enough context to answer without rereading the transcript; Thomas moves among sessions but remains available for consultation. |
+| `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools, even if Thomas also replies in the conversation. |
+| `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
-Working Mode creates no durable plan file. Accepted direction stays in the Pi session; Workstream
-checkpoints provide fresh-session and next-day continuity.
+Only Phone uses `ask_human` and `notify_human`. Focused and Switching ask in the session
+conversation. Thomas switches to Focused when he returns to the conversation.
+
+### AFK adaptation and fallback
+
+Pia may consult an advisor, change an accepted plan's implementation approach, record the reason
+in the persisted plan, and continue while preserving the agreed outcome, behavior, scope, and
+acceptance criteria. Advice is useful where judgment matters, not a requirement for every tactical
+choice.
+
+With advisor backing, Pia may decide product, architecture, scope, or quality questions that the
+accepted outcome leaves open, recording the decision, the advice, and how to undo it. In AFK this
+replaces the global rule to seek Thomas's direction at such a commitment boundary. It never
+changes an outcome Thomas already accepted.
+
+If consultation is unavailable or inconclusive, Pia may choose a low-cost, reversible local path
+within the accepted outcome. Record the choice, uncertainty, and how to undo it. If no such path
+exists, pause the affected work and list the question for Thomas's return. Independent work
+continues.
+
+These rules describe behavior within the existing session and task. They introduce neither a
+separate Autonomy dial nor managed execution or recovery. Existing authority requirements remain
+separate from the mode guidance.
+
+### Questions follow the Attention channel
+
+Open questions for Thomas go through the channel the Attention value selects: the conversation
+for Default, Focused, and Switching, the phone tools for Phone. AFK lists them for Thomas's return
+in the final message or Workstream checkpoint. Working Mode does not persist questions as Workstream
+Human Tasks. Include the question, recommendation, affected work, and any provisional action
+needed to understand the choice.
+
+A delegated tactical decision is recorded as a decision. A provisional action or advisor verdict
+must not silently close a question that still requires Thomas's answer.
 
 ## Checking
 
-Checking states the minimum evidence Pi must produce before reporting completion.
+The confirmed values are `Exercise | Test | Challenge`.
 
-| Value | Minimum evidence |
+| Value | Minimum completion evidence |
 | --- | --- |
-| `light` | Inspect or exercise the changed result directly. No test-writing or separate review pass is required. |
-| `tests` | Run the relevant automated tests that prove the changed behavior and report the exact result. |
-| `adversarial` | Produce the relevant deterministic evidence, then obtain a fresh independent challenge against the result. |
+| `Default` | Add no Checking-specific requirement; existing required checks still apply. |
+| `Exercise` | Inspect or exercise the changed result directly and report the evidence. This selection alone does not require automated tests. |
+| `Test` | Produce automated proof of the changed behavior, adding a relevant test when needed, and report the exact result. |
+| `Challenge` | Meet Test, then obtain fresh independent scrutiny of the result. Report unresolved findings and evidence gaps. |
 
-The values are ordered by cost and delay, not quality. Alignment never silently selects Checking.
-Explicit owner direction, repository policy, or the consequence of a wrong conclusion may require a
-stronger floor, but cannot silently remove selected checks.
+Checking specifies the evidence needed before claiming completion. Attention or Alignment must
+not silently lower it. Owner direction, repository policy, or task consequences may require
+stronger evidence. If the selected evidence cannot be produced, report the gap rather than claim
+it was satisfied. Independent scrutiny does not replace automated proof.
 
-The terminal control starts Checking at `unset`: it adds no selected evidence floor and leaves
-explicit owner direction, repository policy, and task consequences in effect. `unset` is absence
-of a selection, not a fourth Checking level or an instruction to skip checks. No repository default
-configuration schema or format is adopted yet. Whether the owner inspects evidence live or Pi
-produces it for later review may change the evidence route without changing the Checking value.
+Use [model-orchestration](../../skills/model-orchestration/SKILL.md) for independent routing.
+Existing consequence-based checking requirements remain in effect; this redesign does not replace
+them with a universal one-review limit.
 
-## Delegation and model orchestration
+## Orchestration
 
-Delegation remains task-local under every Alignment value; it is not another Working Mode axis. The
-[`model-orchestration`](../../skills/model-orchestration/SKILL.md) skill is one router with separate
-Binding and Checking references. Binding applies to every delegated Subagent or Worker invocation;
-Checking applies when independent challenge is required by the selected floor, owner direction,
-repository policy, or material risk. Routing rationale and provenance remain conditional references
-for policy evaluation and port audits. Managed Dispatch remains a future controller boundary.
+Orchestration selects the preferred structure for primary execution. Thomas confirmed the fourth
+axis after the grill: `Main | Subagents | Workers`.
 
-## Start and presentation
-
-In the Pi terminal, `/mode` opens a built-in picker: choose an axis, then its value. Direct commands
-work in both the terminal and RPC: `/mode alignment <vibe|align|plan|spec>` and
-`/mode checking <unset|light|tests|adversarial>`. An argument-free RPC call returns usage instead of
-opening a picker. The terminal footer shows both selections as guidance. Choices apply to the next
-prompt, not an already-running agent loop. Changing either axis leaves the other unchanged;
-cancelling leaves both unchanged.
-
-Selections exist only in extension memory. Startup, `/reload`, `/new`, `/resume`, and `/fork` or
-`/clone` reset them to `Vibe` and `unset`. Compaction and `/tree` navigation retain the current
-in-memory choices rather than restoring historical ones. Conversation remains ordinary session
-context; the control neither parses chat for selections nor removes earlier owner instructions.
-Use `/mode` to change the displayed selection.
-
-RPC receives direct commands and injected Working Mode guidance without interactive selectors.
-Print and JSON sessions receive no selector or injected guidance. The extension emits a versioned,
-disposable state snapshot after selection, reset, and application; no settings or session entries are
-written. Working Mode does not block project mutation mechanically or grant workspace leases,
-filesystem isolation, publication authority, durable execution, or recovery. Those claims require
-deterministic services that enforce them. See the
-[extension](../../extensions/working-mode/README.md) for use and checks.
-
-## Skill discovery trial
-
-The owner-approved trial filters the automatic skill catalog on the next terminal prompt in the
-checkout hosting this extension. It does not change installation, skill files, command completion,
-`/skill:name` expansion, tools, permissions, or repository instructions. Outside that checkout and
-in non-terminal sessions, discovery stays unchanged. Unknown skills retain Pi's existing behavior.
-This is a fixed Workbench trial, not a repository configuration loader.
-
-The reviewed mapping is identical under Vibe, Align, Plan, and Spec:
-
-| Automatic discovery | Skills |
+| Value | Execution behavior |
 | --- | --- |
-| All modes, task-triggered | `define-goal`, `write-for-humans`, `codebase-design`, `prototype`, `atelier`, `btw`, `focus-handoff`, `workstreams`, `writing-for-agents`, `mcp-scripting`, `monitor`, `ponytail`, `agent-browser`, `diagnosing-bugs`, `research`, `wizard`, `model-orchestration` |
-| Checking `tests` or `adversarial` | `tdd` |
-| Checking `adversarial` only | `code-review`, `ponytail-review` |
-| Manual-only in every mode | `grilling`, `domain-modeling`, `to-spec`, `autonomous-grill`, `grill-with-docs`, `handoff`, `improve-codebase-architecture`, `process-scan-inbox`, `setup-matt-pocock-skills`, `teach`, `to-tickets`, `triage`, `wayfinder`, `workbench-compound`, `analyze-source-for-workbench`, `marketing-studio`, `ponytail-audit`, `ponytail-debt`, `ponytail-gain`, `ponytail-help`, `customize-pi-web-presentation` |
+| `Main` | Pia performs the primary work in the main session. |
+| `Subagents` | Pia delegates bounded tasks to fresh subagents and reconciles their results. |
+| `Workers` | Pia coordinates scope-owning workers that retain context and delegate execution to subagents. |
 
-This records the 41 reviewed skills, not a complete installation audit. Discovery permits
-consideration when the task matches; it does not make a skill mandatory. In particular, discovering
-`tdd` does not require test-first development, and discovering `model-orchestration` does not require
-delegation. `customize-pi-web-presentation` remains explicit legacy PI WEB tooling, not a retired skill.
+This is guidance, not mandatory team creation for trivial work. Workers are useful when repeated
+bounded actions in one scope benefit from retained context. The existing supported hierarchy is
+main session → worker → leaf subagent; this selection does not add another nesting level or change
+child lifetimes.
 
-Filtering only removes entries Pi already included. It does not install missing skills or override
-an existing manual-only flag. Hidden skills remain explicitly callable when installed; repository
-requirements can still direct their use. Already loaded instructions remain in conversation context
-and cannot be erased by changing a dial. Tests can prove prompt delivery and command preservation,
-not model obedience. See the [extension checks](../../extensions/working-mode/README.md).
+Main does not prohibit advisors required by Attention or independent checks required by Checking.
+Worker continuity is not independent review: independent scrutiny still uses a fresh subagent.
+The Orchestration dial selects execution structure; existing model routing selects the bindings.
+It starts at `Main`.
 
-## Human Attention and continuity
+## Defaults and delivery boundary
 
-Human Attention remains distinct from Working Mode. The managed-Run Human-Attention Contract stays
-intact, but interactive work gains no Attention axis, agreement, presence detector, or inferred
-cadence now. Reopen that question only after repeated evidence that Pi interrupts too often, fails
-to ask, or mishandles an explicit statement that the owner is away.
+Alignment, Attention, and Checking start at their neutral `Default`; Orchestration starts at
+`Main`. Neutral values add no dial-specific guidance and do not cancel existing global or
+repository checks or required advisors.
 
-A Workstream checkpoint is the canonical fresh-session or next-day re-entry source. The approved
-`Reconcile and End` trial is separate: it would write a session-local owner-facing Session Summary
-for someone returning to the same Pi session. That summary is not read automatically for next-day
-re-entry and does not replace a Workstream checkpoint. Compaction remains lossy model context;
-`compound` evaluates completed sessions for harness improvement rather than continuity.
+Persisted Plan/Spec documents do not imply persisted dial selections. The first delivery uses
+existing question tools rather than a new inbox or store. Repository configuration, a
+clean-profile feature, and managed execution are not included.
 
-## Deferred repository adaptation
+## Delivery in the session
 
-If repository-level Working Mode configuration is later adopted, its committed path is
-`.pi-workbench/config.json`. Its schema, format, prompt composition, and adoption remain deferred.
-Repository Adaptation—stable mode meanings with project-specific prompts, skills, commands, and
-evidence—remains a hypothesis. The PhotoQuest and Embabel trials are deferred and neither target
-repository is changed by this design.
+The redesigned runtime delivers Working Mode as conversation messages, not as a system-prompt
+suffix, so a change never invalidates the provider's prompt cache:
 
-Axes and configuration are added one at a time from observed need. The withdrawn
-[multidimensional proposal](../research/reports/multidimensional-working-mode-proposal.md) remains
-research, not a backlog or specification.
+- When the selection changed since the last prompt, attach one tagged block to the next prompt.
+  It states the complete current selection and the guidance for each non-neutral value, not a diff.
+  Returning everything to neutral posts a block that says so.
+- Number each block and end it with "This block replaces every earlier `<working-mode>` block."
+  Do not use "ignore previous instructions" wording, and never rewrite or remove earlier blocks:
+  either would break the cache.
+- The blocks are saved in the session, so the transcript records every change. On resume, restore
+  the selection from the latest block. After compaction, attach the current block again.
+- Message guidance carries less weight than the system prompt; global and repository instructions
+  win a conflict. Automated tests prove delivery; whether the model follows the latest block in a
+  long session still needs observed use.
+
+## Using `/mode`
+
+`/mode <axis> <value>` sets one axis in the terminal, RPC, or PI WEB; values are case-insensitive.
+Argument-free `/mode` opens axis and value pickers in the terminal. The terminal footer shows all
+four values. A change applies with the next prompt, not to a running agent loop. Every value is
+guidance; no tool, permission, or skill catalog changes. See the
+[extension README](../../extensions/working-mode/README.md).
+
+## Skill discovery
+
+Mode-based skill filtering is deferred. Every value advertises the same catalog. The earlier
+two-axis trial's checkout-scoped filter was retired with that trial.
+
+## Continuity and evaluation
+
+A Workstream checkpoint remains the fresh-session or next-day re-entry source; persisted task
+agreements complement it rather than replace it. The separate `Reconcile and End` trial would
+provide a session-local summary and remains unimplemented.
+
+Evaluate the revised guidance through observed use: shared understanding before wrong-direction
+work, interruptions appropriate to the Attention selection, discoverable owner questions,
+traceable AFK decisions, and evidence that satisfies the selected Checking requirement. See the
+[implementation plan](../plans/working-mode.md) for the remaining delivery gate and verification.

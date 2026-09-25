@@ -16,7 +16,7 @@ import {
   isInside, listCaptures, listPreviewSets, providerCoverage, readCaptureSet, readPreviewSet, removeCapture, removePreviewSet, snapshotSources,
 } from "./audit.mjs";
 import agentAuditExtension, { loadPiBasePrompt, registerAgentAudit, runtimePackages } from "./index.ts";
-import { alignmentGuidance, checkingGuidance, renderWorkingModePrompt } from "../working-mode/index.ts";
+import { alignmentGuidance, checkingGuidance, renderWorkingModePrompt } from "./legacy-working-mode.ts";
 
 const repo = resolve(dirname(new URL(import.meta.url).pathname), "../..");
 const temp = (prefix) => realpathSync(mkdtempSync(join(realpathSync(tmpdir()), prefix)));
@@ -448,7 +448,7 @@ test("extension snapshots applied mode and native outputs through real lifecycle
   const modeEvent=(phase,selected,applied)=>busListeners.get("pi-workbench:working-mode")?.({phase,selected,applied});
   try {
     await handlers.get("session_start")({reason:"startup"},ctx);
-    modeEvent("selected",{alignment:"Plan",checking:"tests"},null);
+    modeEvent("selected",{alignment:"Plan",attention:"Default",checking:"Test",orchestration:"Main"},null);
     await commands.get("agent-audit").handler("start",ctx);
     const preview=readPreviewSet(join(dir,"audit"),readdirSync(join(dir,"audit","previews"))[0].replace(/\.json$/, ""));
     assert.equal(preview.basePrompt,"STRUCTURED BASE"); assert.equal(preview.basePromptEvidence.source,"injected-test-harness"); assert.doesNotMatch(preview.basePrompt,/STALE|Alignment: Vibe/);
@@ -456,10 +456,10 @@ test("extension snapshots applied mode and native outputs through real lifecycle
     for(const item of preview.previews) { assert.equal((item.systemPrompt.match(/# Working Mode/g)||[]).length,1); assert.deepEqual(item.dials,{alignment:item.alignment,checking:item.checking}); }
 
     await handlers.get("before_agent_start")({prompt:"task",systemPrompt:"base at audit hook",systemPromptOptions:options},ctx);
-    modeEvent("applied",{alignment:"Plan",checking:"tests"},{alignment:"Plan",checking:"tests"});
+    modeEvent("applied",{alignment:"Plan",attention:"Default",checking:"Test",orchestration:"Main"},{alignment:"Plan",attention:"Default",checking:"Test",orchestration:"Main"});
     handlers.get("turn_start")({turnIndex:0,timestamp:Date.now()},ctx);
     await handlers.get("context")({messages:[{role:"user",content:"task"}]},ctx);
-    modeEvent("selected",{alignment:"Spec",checking:"adversarial"},{alignment:"Plan",checking:"tests"});
+    modeEvent("selected",{alignment:"Spec",attention:"Phone",checking:"Challenge",orchestration:"Workers"},{alignment:"Plan",attention:"Default",checking:"Test",orchestration:"Main"});
     await handlers.get("before_provider_request")({payload:{system:"logical"}},ctx);
     await fetch(`${url}/v1/messages`,{method:"POST",body:JSON.stringify({system:"actual"}),headers:{"content-type":"application/json"}});
     entries.push({type:"message",id:"assistant-life",parentId:null,timestamp:new Date().toISOString(),message:{role:"assistant",content:[{type:"text",text:"native"}],stopReason:"stop"}});
@@ -467,8 +467,8 @@ test("extension snapshots applied mode and native outputs through real lifecycle
     await handlers.get("turn_end")({turnIndex:0,message:entries[0].message,toolResults:[]},ctx);
     await commands.get("agent-audit").handler("stop",ctx);
     const [summary]=listCaptures(join(dir,"audit")); const exported=readCaptureSet(join(dir,"audit"),summary.id,{materializeOutputs:true});
-    assert.deepEqual(exported.capture.workingMode.appliedToPrompt,{alignment:"Plan",checking:"tests"});
-    assert.deepEqual(exported.capture.workingMode.selectedNextTurnAtTransport,{alignment:"Spec",checking:"adversarial"});
+    assert.deepEqual(exported.capture.workingMode.appliedToPrompt,{alignment:"Plan",attention:"Default",checking:"Test",orchestration:"Main"});
+    assert.deepEqual(exported.capture.workingMode.selectedNextTurnAtTransport,{alignment:"Spec",attention:"Phone",checking:"Challenge",orchestration:"Workers"});
     assert.equal(exported.capture.producerSources.length,3); assert.ok(exported.capture.producerSources.every(source=>source.status==="observed"&&source.sha256));
     assert.equal(exported.capture.runtime.piCodingAgent.version,JSON.parse(readFileSync(join(repo,"node_modules/@earendil-works/pi-coding-agent/package.json"))).version); assert.equal(exported.capture.runtime.piCodingAgent.extensionResolved.resolution,"extension module resolver");
     assert.equal(exported.nativeOutputs.status,"observed"); assert.equal(exported.nativeOutputs.entries[0].id,"assistant-life");

@@ -19,7 +19,7 @@ system-wide design rules, [requirements](requirements.md) for V1 outcomes and va
 | --- | --- |
 | **Current** | The terminal is the working surface. V1 supports standalone and Workstream-associated Pi sessions, typed Workstream operations, attended bounded child execution, and automatically persisted correctable checkpoints. |
 | **Intended V1 client** | One complete Pi Chat per macOS window, first with a graphical composer and then a toggleable workspace file viewer/editor. The client remains non-authoritative. |
-| **Intended Working Mode** | Prompt-guided `Alignment: Vibe / Align / Plan / Spec` and independent Checking. No selector, persistence, visible display, or mechanical mutation gate is implemented; prior-choice restoration is outside the current design. |
+| **Working Mode** | Prompt-guided Alignment, Attention, Checking, and Orchestration, selected with `/mode` and delivered as recorded conversation messages. No mechanical mutation gate is implemented. |
 | **Unbuilt managed system** | Run Controller, managed execution, enforced workspace isolation, durable Run state, unattended execution, and controller-mediated recovery. |
 
 Working Mode configures behavior, never permission. The managed architecture remains documented so
