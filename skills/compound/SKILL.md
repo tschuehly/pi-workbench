@@ -39,7 +39,7 @@ Inspect child or Worker session files only when an active question requires them
 Derive the target lead's author provider and model from its session-file model metadata and assistant entries. If they are missing or contradictory, stop rather than guessing. Launch one fresh `subagent` in the background with:
 
 - `profile: "reviewer"`;
-- `cognitiveRole: "independent-review"`;
+- `cognitiveRole: "review"` with a judgment lens;
 - `independentOfProvider` explicitly set to the derived target lead provider—never omitted or defaulted; and
 - a self-contained assignment naming the evidence manifest, selected question IDs, prior relevant reports, target-repository evidence, and the exact Workbench documents below.
 
