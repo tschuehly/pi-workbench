@@ -14,7 +14,7 @@
 #   promote-installed check-idle
 #       Exit 3 and list running child Pi processes, or exit 0 when none run.
 set -Eeuo pipefail
-export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export PATH=${PI_PROMOTE_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
 STORE=$HOME/.pi-workbench/installed
 PORT=8505 # the Pi Workbench app's default ServerURL
@@ -98,18 +98,27 @@ healthy() {
 rollback() {
   echo "FAILED; restoring previous services"
   stop_all
-  rm -f \$la/com.pi-web.*.plist
-  cp -p "$job"/backup/com.pi-web.*.plist \$la/
-  cp -p "$job/backup/settings.json" \$HOME/.pi/agent/settings.json
-  cp -p "$job/backup/config.json" \$HOME/.config/pi-web/config.json
-  ln -sfn "\$(cat "$job/backup/plugin-link")" \$HOME/.pi-web/plugins/pi-workbench
+  {
+    rm -f \$la/com.pi-web.*.plist &&
+    cp -p "$job"/backup/com.pi-web.*.plist \$la/ &&
+    cp -p "$job/backup/settings.json" \$HOME/.pi/agent/settings.json &&
+    cp -p "$job/backup/config.json" \$HOME/.config/pi-web/config.json &&
+    ln -sfn "\$(cat "$job/backup/plugin-link")" \$HOME/.pi-web/plugins/pi-workbench
+  } || { echo "ROLLBACK FAILED: restoring saved files"; exit 4; }
   i=0; for l in pi-workbench.installed pi-web.installed; do
     i=\$((i+1)); t=\$(sed -n "\${i}p" "$job/backup/links")
-    if [[ -n \$t ]]; then ln -sfn "\$t" "$PROJECTS/\$l"; else rm -f "$PROJECTS/\$l"; fi
+    if [[ -n \$t ]]; then ln -sfn "\$t" "$PROJECTS/\$l" || { echo "ROLLBACK FAILED: restoring \$l"; exit 4; }
+    else rm -f "$PROJECTS/\$l" || { echo "ROLLBACK FAILED: removing \$l"; exit 4; }; fi
   done
-  for f in \$la/com.pi-web.*.plist; do launchctl bootstrap gui/$uid "\$f" || true; done
-  echo "rollback done \$(date -u +%FT%TZ)"
-  exit 1
+  boot_failed=0
+  for f in \$la/com.pi-web.*.plist; do launchctl bootstrap gui/$uid "\$f" || boot_failed=1; done
+  if [[ \$boot_failed == 1 ]]; then echo "ROLLBACK FAILED: old service bootstrap"; exit 4; fi
+  for i in \$(seq 90); do
+    if healthy; then echo "rollback done \$(date -u +%FT%TZ)"; exit 1; fi
+    sleep 1
+  done
+  echo "ROLLBACK FAILED: old service health check"
+  exit 4
 }
 
 ln -sfn "$wb" "$PROJECTS/pi-workbench.installed"
@@ -126,7 +135,7 @@ node -e '
   const fs=require("fs"),f=process.argv[1],c=JSON.parse(fs.readFileSync(f,"utf8"));
   c.port=$PORT; fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' \$HOME/.config/pi-web/config.json
 stop_all
-(cd "$pw" && /bin/zsh -lc 'node dist/cli.js install') || rollback
+(cd "$pw" && "${PI_PROMOTE_ZSH:-/bin/zsh}" -lc 'node dist/cli.js install') || rollback
 for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; exit 0; }; sleep 1; done
 rollback
 EOF
