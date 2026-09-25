@@ -22,9 +22,27 @@ const sh = (cmd, opts = {}) => spawnSync("bash", ["-c", cmd], { encoding: "utf8"
 // Gradle reuses daemons across invocations. A daemon started inside one trial's sandbox can read only that
 // trial, so reuse by a later trial or by the unsandboxed check breaks builds and could leak state. Give the
 // candidate and the check separate per-trial registries with a short idle timeout.
-const gradleEnv = (dir) => ({ GRADLE_OPTS: `${process.env.GRADLE_OPTS ?? ""} -Dorg.gradle.daemon.registry.base=${dir} -Dorg.gradle.daemon.idletimeout=120000`.trim() });
-function stopGradle(ws, dir) {
-  if (existsSync(dir) && existsSync(path.join(ws, "gradlew"))) sh("./gradlew --stop -q", { cwd: ws, env: { ...process.env, ...gradleEnv(dir) }, timeout: 120_000 });
+// PI_EVAL_MAX_FORKS is read by ~/.gradle/init.d/pi-eval-max-forks.gradle, which caps Test.maxParallelForks so
+// a trial does not start four test JVMs plus Chrome next to other sessions' builds.
+const MAX_FORKS = process.env.PI_EVAL_MAX_FORKS ?? "2";
+const gradleEnv = (dir) => ({ PI_EVAL_MAX_FORKS: MAX_FORKS, GRADLE_OPTS: `${process.env.GRADLE_OPTS ?? ""} -Dorg.gradle.daemon.registry.base=${dir} -Dorg.gradle.daemon.idletimeout=120000`.trim() });
+// Stop every daemon a trial registered, with or without its workspace: `gradlew --stop` first, then SIGTERM
+// any daemon that is still alive, identified by the daemon-<pid>.out.log files in the trial's own registry.
+function stopGradle(trialDir, workspaces) {
+  for (const d of ["gradle-agent", "gradle-check"].map((n) => path.join(trialDir, n)).filter(existsSync)) {
+    const ws = workspaces.find((w) => existsSync(path.join(w, "gradlew")));
+    if (ws) sh("./gradlew --stop -q", { cwd: ws, env: { ...process.env, ...gradleEnv(d) }, timeout: 120_000 });
+    const pids = sh(`find ${JSON.stringify(d)} -name 'daemon-*.out.log'`).stdout.split("\n").map((f) => f.match(/daemon-(\d+)\.out\.log$/)?.[1]).filter(Boolean);
+    for (const pid of pids) if (/GradleDaemon/.test(sh(`ps -o command= -p ${pid}`).stdout)) try { process.kill(Number(pid), "SIGTERM"); } catch {}
+  }
+}
+// Long campaigns yield to CI gates run by other sessions.
+async function waitForGates() {
+  let announced = false;
+  while (sh("pgrep -f 'gate\\.sh'").stdout.trim()) {
+    if (!announced) { process.stdout.write("(waiting for gate.sh to finish) "); announced = true; }
+    await new Promise((r) => setTimeout(r, 60_000));
+  }
 }
 const stamp = () => new Date().toISOString().replace(/[:.]/g, "-");
 
@@ -202,9 +220,12 @@ async function run(campaignPath, flags) {
     if (admissions.some((a) => !a.ok)) {
       Object.assign(record, { status: "blocked", reason: admissions.find((a) => !a.ok).reason });
     } else {
+      await waitForGates();
       record.quotaBefore = quota();
+      const workspaces = [];
       try {
         const { ws, runs } = await runArm(c, arm, trialDir);
+        workspaces.push(ws, ...runs.map((x) => x.ws));
         const last = runs.at(-1);
         record.runs = runs.map(({ ws: _w, finalText: _f, ...r }) => r);
         record.elapsedMs = runs.reduce((a, r) => a + r.elapsedMs, 0);
@@ -213,10 +234,11 @@ async function run(campaignPath, flags) {
         sh("git reset -q", { cwd: ws });
         record.check = await check(c, ws, last.finalText, trialDir, campaign.judges ?? []);
         record.status = runs.some((r) => r.timedOut) ? "timeout" : runs.some((r) => r.error) ? "error" : "done";
-        for (const w of new Set([ws, ...runs.map((x) => x.ws)])) for (const d of ["gradle-agent", "gradle-check"]) stopGradle(w, path.join(trialDir, d));
-        if (!flags.keep) for (const r of new Set([ws, ...runs.map((x) => x.ws)])) rmSync(r, { recursive: true, force: true });
       } catch (error) {
         Object.assign(record, { status: "harness-error", reason: String(error?.message ?? error).slice(0, 1000) });
+      } finally {
+        stopGradle(trialDir, workspaces);
+        if (!flags.keep) for (const r of new Set(workspaces)) rmSync(r, { recursive: true, force: true });
       }
       record.quotaAfter = quota();
     }

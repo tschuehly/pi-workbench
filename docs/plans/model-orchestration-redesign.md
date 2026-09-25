@@ -161,6 +161,14 @@ one trial, sequentially. `report <results.jsonl>` prints the comparison table.
 
 Results stay under `~/.pi-workbench/evals/results/` and never change routing policy.
 
+Trials share the machine with other sessions' builds. Before each trial the runner waits while any
+`gate.sh` is running. Each trial gets its own Gradle daemon registries (one for the model, one for
+the check), and the daemons idle out after two minutes. When the trial ends, the runner stops them
+with `--stop` and then kills any still alive. `PI_EVAL_MAX_FORKS` (default 2) caps
+`Test.maxParallelForks` through the machine-local init script
+`~/.gradle/init.d/pi-eval-max-forks.gradle`, which does nothing when the variable is unset. Manual
+probes set the same variable and a private daemon registry.
+
 PhotoQuest is private and this repository is public, so PhotoQuest cases and campaigns live outside
 the repository under `~/.pi-workbench/evals/{cases,campaigns}/`. A case is `case.json` (role,
 profile, repository, commit, brief, check) plus its setup and check scripts; judge references are
