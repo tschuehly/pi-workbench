@@ -15,8 +15,9 @@ const run = (psLines, ...args) => {
     env: { ...process.env, HOME: dir, PI_WORKBENCH_PROJECTS: dir, PI_PROMOTE_PS: `cat ${ps}` },
   });
 };
-const child = "4242 node /opt/pi/dist/cli.js --mode rpc --provider openai-codex --model gpt-6-luna --tools read";
-const quiet = ["1 /sbin/launchd", "50696 node /x/dist/server/sessiond.js", "39353 pi", "7 awk / --mode[ ]rpc( |$)/"];
+const child = "4242 50696 node /opt/pi/dist/cli.js --mode rpc --provider openai-codex --model gpt-6-luna --tools read";
+// A terminal `pi` (parent: a shell) survives the restart; only the daemon's children die.
+const quiet = ["1 0 /sbin/launchd", "50696 1 node /x/dist/server/sessiond.js", "900 1 -zsh", "39353 900 pi", "7 900 awk / --mode[ ]rpc( |$)/"];
 
 test("check-idle passes when no child Pi process runs", () => {
   assert.equal(run(quiet, "check-idle").status, 0);
@@ -26,6 +27,12 @@ test("check-idle lists a running subagent and exits 3", () => {
   const result = run([...quiet, child], "check-idle");
   assert.equal(result.status, 3);
   assert.match(result.stderr, /4242 .*--mode rpc/);
+});
+
+test("check-idle sees a retitled `pi` child of the session daemon", () => {
+  const result = run([...quiet, "3087 50696 pi             "], "check-idle");
+  assert.equal(result.status, 3);
+  assert.match(result.stderr, /3087 50696 pi/);
 });
 
 test("switch refuses before preparing or scheduling anything", () => {

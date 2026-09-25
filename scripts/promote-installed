@@ -33,9 +33,13 @@ prepare_one() { # <repo-name> <rev> -> prints the prepared directory
   echo "$dir"
 }
 
-check_idle() { # Child Pi processes (subagents, workers) run as `pi --mode rpc` under the session daemon.
+check_idle() { # Child Pi processes (subagents, workers) run under the session daemon. Pi retitles
+  # itself to plain `pi`, hiding `--mode rpc`, so a `pi` whose parent is sessiond.js counts too.
   local busy
-  busy=$(${PI_PROMOTE_PS:-ps -axo pid=,command=} | awk '/ --mode[ ]rpc( |$)/')
+  busy=$(${PI_PROMOTE_PS:-ps -axo pid=,ppid=,command=} | awk '
+    { line[NR] = $0; parent[NR] = $2; cmd = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", cmd); command[NR] = cmd
+      if (cmd ~ /sessiond[.]js/) daemon[$1] = 1 }
+    END { for (i = 1; i <= NR; i++) if (command[i] ~ / --mode[ ]rpc( |$)/ || (daemon[parent[i]] && command[i] ~ /^pi *$/)) print line[i] }')
   [[ -z $busy ]] && return 0
   echo "refusing: a restart would kill these running subagents/workers:" >&2
   echo "$busy" | cut -c1-160 >&2
