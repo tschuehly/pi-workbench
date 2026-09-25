@@ -18,7 +18,7 @@ test("packs action-first activity pills into responsive rows", () => {
   const wide = renderActivityLines(items, 120);
   assert.equal(wide.length, 3, "two pills fit on each wide row");
   assert.match(wide[1], /🤖 reading monitor\/runtime\.ts\s+⟨review · Opus 5 · high⟩/);
-  assert.match(wide[1], /🧰 running npm test\s+⟨Catalog · build · Terra 5\.6 · medium⟩/);
+  assert.match(wide[1], /🧰 running npm.*⟨Catalog · standard · Terra 5\.6 · medium⟩/);
   assert.equal(wide.join("\n").includes("embabel/me#993"), false);
   assert.equal(wide.every((line) => visibleWidth(line) <= 120), true);
 
@@ -27,7 +27,7 @@ test("packs action-first activity pills into responsive rows", () => {
   assert.equal(narrow.every((line) => visibleWidth(line) <= 70), true);
   const halfPane = renderActivityLines(items.slice(0, 2), 86);
   assert.equal(halfPane.length, 3, "packing does not squeeze metadata into undersized columns");
-  assert.match(halfPane[2], /⟨Catalog · build · Terra 5\.6 · medium⟩$/);
+  assert.match(halfPane[2], /⟨Catalog · standard · Terra 5\.6 · medium⟩$/);
 });
 
 test("keeps metadata visible by truncating a long action first", () => {

@@ -71,7 +71,7 @@ const COGNITIVE_ROLES = ["routine", "implementation", "frontier", "coordination"
 // Latitude is how much the child must decide for itself: how unclear the problem is and how little
 // the brief specifies. It selects the model tier; skills/model-orchestration/references/routing-policy.json
 // names the models.
-const ROLE_GUIDE = "Pick by latitude, how much the child must decide itself. routine: narrow latitude (detailed brief, accepted plan, mechanical edits, evidence collection); light tier. implementation: normal latitude (clear goal, ordinary brief); standard tier. frontier: wide latitude (unclear or novel problem, symptom-only bug, thin brief); strong tier. coordination: a Worker owning one scope. review: independent judgment, challenge, or diff review from the other model family; state the lens in the brief";
+const ROLE_GUIDE = "The profile says what kind of work the child does; the role says how much it must decide, which picks the model tier. Test your own brief. routine (light tier): you can list what to check or change, e.g. collect what named guides say about a topic. implementation (standard tier): you can write the finish line but not the approach, e.g. weigh sources and recommend one of several options, or build a specified change. frontier (strong tier): you have only a symptom or an open question. A brief that is a checklist plus a final judgment is two assignments: a routine child collects, then you decide or launch an implementation child. coordination: a Worker owning one scope. review: independent judgment, challenge, or diff review from the other model family; state the lens in the brief";
 const MODEL_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const INDEPENDENT_ROLES = new Set<string>(["review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
@@ -184,7 +184,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "Never sleep, poll, or call subagent_collect to wait for a background child.",
       "For independent roles, quote the exact author provider/model from its completion receipt when available. Use excludeFamilies only for additional cross-family exclusions; distinct-model overlays reject it, and non-independent roles reject both options.",
-      "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Roles describe the work; effort is a ceiling the role sets, and frontier and review never go below xhigh.",
+      "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review never go below xhigh.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
     ],
@@ -498,7 +498,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
       "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
-      "Use worker_dispatch modelOverride only when the owner or run contract requests an exact model; Cognitive Role routing remains the default. Roles describe the work; effort is its own knob—do not pick a role for its effort.",
+      "Use worker_dispatch modelOverride only when the owner or run contract requests an exact model; Cognitive Role routing remains the default. Choose the role by how much the Worker must decide, never for its effort.",
     ],
     parameters: WorkerDispatchParams,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {

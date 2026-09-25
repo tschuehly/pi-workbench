@@ -172,7 +172,8 @@ function requiredText(value, max) {
 }
 
 function shortRole(value) {
-  const roles = { routine: "routine", implementation: "build", frontier: "frontier", coordination: "coordinate", review: "review" };
+  // Show the model tier the role selected, not a kind of work: the profile names the work.
+  const roles = { routine: "light", implementation: "standard", frontier: "strong", coordination: "coordinate", review: "review" };
   return typeof value === "string" && Object.hasOwn(roles, value) ? roles[value] : value?.replaceAll("-", " ");
 }
 

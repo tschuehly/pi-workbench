@@ -5,21 +5,23 @@ description: Route delegated Pi work to models by latitude. Use when a routing r
 
 # Model orchestration
 
-**Latitude** is how much a child must decide for itself: how unclear the problem is and how little
-the brief specifies. Latitude picks the Cognitive Role, the role picks a model tier, and
-[`references/routing-policy.json`](references/routing-policy.json) names the models. The resolver's
-`--help` (`scripts/resolve-runtime-binding.mjs --help`) lists the current roles, tiers, flags, and
-fallback rules.
+A launch names a **profile**, what kind of work the child does (scout, planner, reviewer,
+implementer), and a **Cognitive Role**, how much it must decide. The role picks the model tier;
+[`references/routing-policy.json`](references/routing-policy.json) names the models, and the
+resolver's `--help` (`scripts/resolve-runtime-binding.mjs --help`) lists tiers, flags, and fallback.
 
-| Role | Latitude | Tier |
-| --- | --- | --- |
-| `routine` | Narrow: detailed brief, accepted plan, mechanical edits, evidence collection | light |
-| `implementation` | Normal: clear goal, ordinary brief | standard |
-| `frontier` | Wide: unclear or novel problem, symptom-only bug, thin brief | strong |
-| `coordination` | A Worker that owns one scope and dispatches leaves | standard |
-| `review` | Independent judgment, challenge, or diff review; the lens goes in the brief | standard, other family |
+Test your own brief to choose the role:
 
-A sharper brief or an accepted plan narrows latitude and moves the same work to a lighter tier.
+| If you can write | Role | Tier | Example |
+| --- | --- | --- | --- |
+| A list of what to check or change | `routine` | light | Collect what named guides and tools say about a topic |
+| The finish line, but not the approach | `implementation` | standard | Weigh sources and recommend one option; build a specified change |
+| Neither: only a symptom or an open question | `frontier` | strong | "Reports keep opening with meta-commentary; find out why and fix it" |
+
+A brief that is a checklist plus a final judgment is two assignments: a `routine` child collects,
+then you decide or launch an `implementation` child. A topic that feels important does not widen
+the brief; a sharper brief or an accepted plan moves the same work to a lighter tier.
+`coordination` is a Worker that owns one scope; `review` is covered in step 3.
 
 ## 1. Launch and read the receipt
 
