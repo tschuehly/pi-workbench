@@ -197,11 +197,17 @@ async function run(campaignPath, flags) {
   const results = path.join(outDir, "results.jsonl");
   const harness = sh("git rev-parse HEAD", { cwd: ROOT }).stdout.trim();
   const plan = [];
+  let group = 0;
   for (const entry of campaign.cases) {
     if (flags.only && entry.case !== flags.only) continue;
     const dir = path.join(casesRoot, entry.case);
     const c = { ...JSON.parse(readFileSync(path.join(dir, "case.json"), "utf8")), dir };
-    for (const armId of entry.arms) for (let rep = 0; rep < (campaign.repetitions ?? 1); rep++) plan.push({ c, arm: { id: armId, ...campaign.arms[armId] }, rep });
+    // Alternate which arm goes first per case and repetition, so no arm always runs on a fresher
+    // machine, cache, or quota window.
+    for (let rep = 0; rep < (campaign.repetitions ?? 1); rep++) {
+      const order = group++ % 2 === 0 ? entry.arms : [...entry.arms].reverse();
+      for (const armId of order) plan.push({ c, arm: { id: armId, ...campaign.arms[armId] }, rep });
+    }
   }
   console.log(`${plan.length} trials → ${results}`);
   if (flags.dryRun) { for (const t of plan) console.log(`  ${t.c.id} × ${t.arm.id} #${t.rep}`); return; }
@@ -210,9 +216,10 @@ async function run(campaignPath, flags) {
   writeFileSync(catalogFile, sh("pi --no-extensions --list-models", { timeout: 120_000 }).stdout);
   writeFileSync(path.join(outDir, "campaign.json"), JSON.stringify({ ...campaign, harness }, null, 2));
   for (const [i, { c, arm, rep }] of plan.entries()) {
-    const trialDir = path.join(outDir, `${String(i).padStart(3, "0")}-${c.id}-${arm.id}-${rep}`);
+    // The trial path is the model's working directory, so it must not name the case or arm.
+    const trialDir = path.join(outDir, `t${String(i).padStart(3, "0")}`);
     mkdirSync(trialDir, { recursive: true });
-    const record = { runId, trial: i, case: c.id, role: c.role, arm: arm.id, rep, harness, caseCommit: c.commit ?? null, startedAt: new Date().toISOString() };
+    const record = { runId, trial: i, trialDir: path.basename(trialDir), case: c.id, role: c.role, arm: arm.id, rep, harness, caseCommit: c.commit ?? null, startedAt: new Date().toISOString() };
     const members = [...(arm.panel ?? [arm]), ...(arm.combiner ? [arm.combiner] : [])];
     const admissions = members.map((m) => admit(c.role, m.model, m.effort));
     record.bindings = admissions.map((a, k) => a.binding ?? { model: members[k].model, effort: members[k].effort, blocked: a.reason });
@@ -230,7 +237,8 @@ async function run(campaignPath, flags) {
         record.runs = runs.map(({ ws: _w, finalText: _f, ...r }) => r);
         record.elapsedMs = runs.reduce((a, r) => a + r.elapsedMs, 0);
         record.cost = runs.reduce((a, r) => a + r.usage.cost, 0);
-        writeFileSync(path.join(trialDir, "diff.patch"), sh("git add -A && git diff --cached", { cwd: ws }).stdout);
+        // Diff against the snapshot root commit, so work the model committed is captured too.
+        writeFileSync(path.join(trialDir, "diff.patch"), sh("git add -A && git diff --cached $(git rev-list --max-parents=0 HEAD | tail -1)", { cwd: ws }).stdout);
         sh("git reset -q", { cwd: ws });
         record.check = await check(c, ws, last.finalText, trialDir, campaign.judges ?? []);
         record.status = runs.some((r) => r.timedOut) ? "timeout" : runs.some((r) => r.error) ? "error" : "done";
