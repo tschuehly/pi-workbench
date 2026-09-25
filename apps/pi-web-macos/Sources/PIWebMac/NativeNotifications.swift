@@ -19,7 +19,7 @@ Object.defineProperty(window, "piWebNative", {
   value: Object.freeze({
     pickDirectory: () => window.webkit.messageHandlers.piWebDirectoryPicker.postMessage({}),
     requestNotificationPermission: () => window.webkit.messageHandlers.piWebRequestNotificationPermission.postMessage({}),
-    notify: (title, body) => window.webkit.messageHandlers.piWebNotification.postMessage({ title, body }),
+    notify: (title, body, target) => window.webkit.messageHandlers.piWebNotification.postMessage({ title, body, ...target }),
     getSleepDisabled: () => window.webkit.messageHandlers.piWebGetSleepDisabled.postMessage({}),
     setSleepDisabled: disabled => window.webkit.messageHandlers.piWebSetSleepDisabled.postMessage(disabled)
   })
@@ -62,7 +62,9 @@ final class NativeNotificationBridge {
             let values = value as? [String: Any],
             let title = values["title"] as? String,
             let body = values["body"] as? String,
-            !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            (values["sessionId"] == nil && values["machineId"] == nil) ||
+                ((values["sessionId"] as? String)?.isEmpty == false && (values["machineId"] as? String)?.isEmpty == false)
         else {
             reply(nil, "Notification requires a non-empty string title and a string body")
             return
@@ -86,6 +88,9 @@ final class NativeNotificationBridge {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
+            if let sessionId = values["sessionId"] as? String, let machineId = values["machineId"] as? String {
+                content.userInfo = ["sessionId": sessionId, "machineId": machineId]
+            }
             content.sound = .default
             center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) { error in
                 if let error { reply(nil, "Notification delivery failed: \(error.localizedDescription)") }
@@ -112,12 +117,20 @@ func handleNativeNotificationMessage(
     }
 }
 
+func notificationChatURL(serverURL: URL, machineId: String, sessionId: String) -> URL? {
+    guard !machineId.isEmpty, !sessionId.isEmpty, var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false) else { return nil }
+    components.queryItems = [URLQueryItem(name: "machine", value: machineId), URLQueryItem(name: "session", value: sessionId)]
+    return components.url
+}
+
 func activateFromNotificationClick(
     activateApplication: () -> Void,
     bringWindowForward: () -> Void,
+    routeChat: () -> Void,
     complete: () -> Void
 ) {
     activateApplication()
     bringWindowForward()
+    routeChat()
     complete()
 }

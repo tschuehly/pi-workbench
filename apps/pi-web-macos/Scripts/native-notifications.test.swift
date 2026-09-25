@@ -106,6 +106,17 @@ struct NativeNotificationTests {
         precondition(success.authorizationRequests == 0 && success.statusRequests == 1)
         precondition(success.request?.content.title == "Title")
         precondition(success.request?.content.body == "Body")
+        precondition(success.request?.content.userInfo["sessionId"] as? String == nil)
+        let routed = FakeCenter()
+        NativeNotificationBridge(center: routed).notify(["title": "Chat", "body": "Question", "machineId": "remote", "sessionId": "session-1"]) { result, error in
+            precondition(result as? Bool == true && error == nil)
+        }
+        precondition(routed.request?.content.userInfo["sessionId"] as? String == "session-1")
+        precondition(routed.request?.content.userInfo["machineId"] as? String == "remote")
+        NativeNotificationBridge(center: routed).notify(["title": "Chat", "body": "Question", "sessionId": "session-1"]) { result, error in
+            precondition(result == nil && error != nil)
+        }
+        precondition(notificationChatURL(serverURL: URL(string: "https://localhost/app/")!, machineId: "remote", sessionId: "one & two")?.absoluteString == "https://localhost/app/?machine=remote&session=one%20%26%20two")
         precondition(success.request?.content.sound == .default)
         precondition(success.request?.trigger == nil)
 
@@ -119,9 +130,10 @@ struct NativeNotificationTests {
         activateFromNotificationClick(
             activateApplication: { clickEvents.append("activate") },
             bringWindowForward: { clickEvents.append("window") },
+            routeChat: { clickEvents.append("route") },
             complete: { clickEvents.append("complete") }
         )
-        precondition(clickEvents == ["activate", "window", "complete"])
+        precondition(clickEvents == ["activate", "window", "route", "complete"])
 
         guard let context = JSContext() else { preconditionFailure("JavaScriptCore unavailable") }
         context.evaluateScript("""
@@ -138,7 +150,8 @@ struct NativeNotificationTests {
         context.evaluateScript(piWebNativeScript)
         precondition(context.evaluateScript("window.piWebNative.requestNotificationPermission() instanceof Promise")?.toBool() == true)
         precondition(context.evaluateScript("Object.keys(permissionPayload).length")?.toInt32() == 0)
-        precondition(context.evaluateScript("window.piWebNative.notify('Title', 'Body') instanceof Promise")?.toBool() == true)
+        precondition(context.evaluateScript("window.piWebNative.notify('Title', 'Body', {machineId: 'local', sessionId: 'session-1'}) instanceof Promise")?.toBool() == true)
+        precondition(context.evaluateScript("notificationPayload.sessionId === 'session-1' && notificationPayload.machineId === 'local'")?.toBool() == true)
         precondition(context.evaluateScript("notificationPayload.title === 'Title' && notificationPayload.body === 'Body'")?.toBool() == true)
         precondition(context.evaluateScript("window.piWebNative.getSleepDisabled() instanceof Promise")?.toBool() == true)
         precondition(context.evaluateScript("window.piWebNative.setSleepDisabled(true) instanceof Promise")?.toBool() == true)

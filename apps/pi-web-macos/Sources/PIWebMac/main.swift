@@ -74,6 +74,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
             activateFromNotificationClick(
                 activateApplication: { NSApp.activate(ignoringOtherApps: true) },
                 bringWindowForward: { self?.browser.bringExistingWindowForward() },
+                routeChat: {
+                    guard let machineId = response.notification.request.content.userInfo["machineId"] as? String,
+                          let sessionId = response.notification.request.content.userInfo["sessionId"] as? String else { return }
+                    self?.browser.openNotificationChat(machineId: machineId, sessionId: sessionId)
+                },
                 complete: completionHandler
             )
         }
@@ -394,6 +399,16 @@ private final class BrowserCoordinator {
         guard let window = (keyController ?? controllers.values.first)?.window else { return }
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func openNotificationChat(machineId: String, sessionId: String) {
+        guard let serverURL, let url = notificationChatURL(serverURL: serverURL, machineId: machineId, sessionId: sessionId) else { return }
+        if let controller = controllers.values.first(where: { $0.applicationURL == url }) ?? keyController ?? controllers.values.first {
+            if controller.applicationURL != url { controller.load(url) }
+            controller.window?.makeKeyAndOrderFront(nil)
+        } else {
+            openWindow(url: url)
+        }
     }
 
     func showReport(title: String, text: String) {
