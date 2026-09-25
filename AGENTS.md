@@ -21,6 +21,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 
 | Task | Read or change |
 | --- | --- |
+| Installed vs development checkouts, promotion | `docs/contracts/harness.md` ("Installed and Development Checkouts") |
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
 | Pi CLI activity presentation | `extensions/activity/` |
 | Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
@@ -56,6 +57,9 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - Keep Workstream continuation paths outside OS temporary folders; anchor lasting evidence to a repository revision or retained artifact rather than a disposable worktree. Follow `docs/contracts/workstreams.md` before retiring a linked worktree.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
 - Commit each coherent unit after it is complete and needs no further human input.
+- Change Pi Workbench and PI WEB code only in a development worktree you own, on its own branch.
+  The `*.installed` checkouts and the integration checkouts are what the owner runs; changes reach
+  them only by merge and owner-approved promotion.
 - Before changing sibling PI WEB, fetch `upstream` and the `origin` fork. Work on a fork branch and
   never push to upstream directly.
 - Keep sibling PI WEB `main` as a clean fast-forward mirror of `upstream/main`. Use `pi-workbench`
