@@ -358,9 +358,11 @@ test("all independent bindings require fresh subagent context", async () => {
   assert.equal(spawned, 0);
 });
 
-test("default child capability ceiling includes self-reporting but not arbitrary tools", () => {
+test("default child capability ceiling includes reporting and web activation targets but not arbitrary tools", () => {
   const adapter = new PiRpcExecutionAdapter();
-  assert.equal(adapter.hostTools.has("report_status"), true);
+  for (const tool of ["report_status", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content"]) {
+    assert.equal(adapter.hostTools.has(tool), true, `${tool} reaches the child ceiling`);
+  }
   assert.equal(adapter.hostTools.has("goal_complete"), false);
 });
 

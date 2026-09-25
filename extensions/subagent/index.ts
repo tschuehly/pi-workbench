@@ -17,7 +17,7 @@ import { activityText, progressText, recordProgress, renderProgressLog, reported
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
 const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"] as const;
-const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status"] as const;
+const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content"] as const;
 const STATUS_INSTRUCTION = "Call report_status when you begin real work, and again when your phase changes materially. Describe what you are doing in plain language, not a path or a generic tool action.";
 export const PROFILES = {
   scout: {

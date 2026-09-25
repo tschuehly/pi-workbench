@@ -413,8 +413,12 @@ test("bounds the hierarchy to lead → worker → leaf with a delegating coordin
   assert.match(PROFILES.implementer.instruction, /Do not commit unless the assignment explicitly authorizes a scope-only commit/);
 
   const delegation = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
-  assert.deepEqual(PROFILES.coordinator.tools, ["read", "bash", "grep", "find", "ls", "report_status", ...delegation]);
-  for (const profile of Object.values(PROFILES)) assert.ok(profile.tools.includes("report_status"), "every child profile can report its own status");
+  const web = ["web_enable", "web_search", "source_check", "fetch_content", "get_search_content"];
+  assert.deepEqual(PROFILES.coordinator.tools, ["read", "bash", "grep", "find", "ls", "report_status", ...web, ...delegation]);
+  for (const profile of Object.values(PROFILES)) {
+    assert.ok(profile.tools.includes("report_status"), "every child profile can report its own status");
+    assert.deepEqual(profile.tools.filter((tool) => web.includes(tool)), web, "every child can activate and use web tools");
+  }
   for (const worker of ["worker_create", "worker_dispatch", "worker_retire"]) {
     assert.equal(PROFILES.coordinator.tools.includes(worker), false, `a coordinator must not receive ${worker}`);
   }
