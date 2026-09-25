@@ -9,6 +9,10 @@
 #       the Pi package entry and the PI WEB plugin link, and reinstalls PI WEB's production
 #       services. INTERRUPTS EVERY OPEN SESSION. Run only with the owner's go-ahead.
 #       Roll back by switching to the previous revisions (the job also restores on failure).
+#       Refuses while subagents or workers run, at scheduling and again when the job starts,
+#       because the restart kills them. --force (first argument) skips that check.
+#   promote-installed check-idle
+#       Exit 3 and list running child Pi processes, or exit 0 when none run.
 set -Eeuo pipefail
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
@@ -29,7 +33,19 @@ prepare_one() { # <repo-name> <rev> -> prints the prepared directory
   echo "$dir"
 }
 
-[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,12p' "$0"; exit 2; }
+check_idle() { # Child Pi processes (subagents, workers) run as `pi --mode rpc` under the session daemon.
+  local busy
+  busy=$(${PI_PROMOTE_PS:-ps -axo pid=,command=} | awk '/ --mode[ ]rpc( |$)/')
+  [[ -z $busy ]] && return 0
+  echo "refusing: a restart would kill these running subagents/workers:" >&2
+  echo "$busy" | cut -c1-160 >&2
+  return 3
+}
+
+force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
+[[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
+[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,16p' "$0"; exit 2; }
+if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
 wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
 pw=$(prepare_one pi-web "$3") || { echo "prepare pi-web failed" >&2; exit 1; }
@@ -38,6 +54,7 @@ echo "prepared: $pw"
 [[ $1 == switch ]] || exit 0
 
 uid=$(id -u)
+self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
 job=$STORE/jobs/$(date -u +%Y%m%dT%H%M%SZ)
 label=com.pi-workbench.promote-installed.$(basename "$job")
 mkdir -p "$job/backup"
@@ -48,6 +65,7 @@ export PATH=$PATH
 exec >>"$job/job.log" 2>&1
 trap 'launchctl bootout gui/$uid/$label' EXIT
 sleep ${4:-60}
+if [[ $force == 0 ]] && ! "$self" check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
 echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"
 la=\$HOME/Library/LaunchAgents
 cp -p \$la/com.pi-web.*.plist \$HOME/.pi/agent/settings.json \$HOME/.config/pi-web/config.json "$job/backup/" || { echo "backup failed"; exit 1; }
