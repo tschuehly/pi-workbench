@@ -18,23 +18,23 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
 const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"] as const;
 const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content"] as const;
-const STATUS_INSTRUCTION = "Call report_status when you begin real work, and again when your phase changes materially. Describe what you are doing in plain language, not a path or a generic tool action.";
+const STATUS_INSTRUCTION = "Call report_status when you begin real work, and again when your phase changes materially. Describe what you are doing in plain language, not a path or a generic tool action. Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found.";
 export const PROFILES = {
   scout: {
     tools: [...CHILD_TOOLS],
-    instruction: "Investigate only. Do not mutate files unless the assignment says otherwise. Return compact evidence and conclusions to the attending lead.",
+    instruction: "Investigate only. Do not mutate files unless the assignment says otherwise. Return compact evidence and conclusions to the attending lead. Mark anything you could not confirm and say where you looked.",
   },
   planner: {
     tools: [...CHILD_TOOLS],
-    instruction: "Produce a bounded plan or design judgment. Do not mutate files unless the assignment says otherwise. Name assumptions, risks, and verification.",
+    instruction: "Produce a bounded plan or design judgment. Do not mutate files unless the assignment says otherwise. State assumptions, options, risks, verification, and one recommendation.",
   },
   reviewer: {
     tools: [...CHILD_TOOLS],
-    instruction: "Review independently. Do not mutate files unless the assignment says otherwise. Lead with actionable findings and cite repository paths.",
+    instruction: "Review independently. Do not mutate files unless the assignment says otherwise. List only problems you would block on. For each, give the file and line, why it is wrong, and how to show it fails. Say what you did not check.",
   },
   implementer: {
     tools: [...CHILD_TOOLS, "edit", "write"],
-    instruction: "Implement only the bounded assignment. Verify your changes and report files changed, checks, and remaining risks. Never push or publish. Do not commit unless the assignment explicitly authorizes a scope-only commit; then commit exactly what it names.",
+    instruction: "Implement only the bounded assignment and continue until its done condition holds. Verify your changes and report files changed, checks, and remaining risks. Never push or publish. Do not commit unless the assignment explicitly authorizes a scope-only commit; then commit exactly what it names.",
   },
   plain: {
     tools: [...CHILD_TOOLS, "edit", "write"],
@@ -45,7 +45,7 @@ export const PROFILES = {
   // hierarchy stays exactly lead → Worker → leaf.
   coordinator: {
     tools: [...CHILD_TOOLS, ...DELEGATION_TOOLS],
-    instruction: "Coordinate this scope (cognitive role: coordination). You do not edit files yourself: launch one fresh bounded leaf Subagent per phase, collect it exactly once, and keep only intent, decisions, and compact child evidence in your own context. Run at most one writing leaf at a time. Leaves never commit or publish; after their evidence passes you may make one mechanical scope-only checkpoint commit with bash. You cannot create workers.",
+    instruction: "Coordinate this scope (cognitive role: coordination). You do not edit files yourself: launch one fresh bounded leaf Subagent per phase, collect it exactly once, and keep only intent, decisions, and compact child evidence in your own context. Check each leaf's evidence before you accept its result. Run at most one writing leaf at a time. Leaves never commit or publish; after their evidence passes you may make one mechanical scope-only checkpoint commit with bash. You cannot create workers.",
   },
 } as const;
 
@@ -77,7 +77,7 @@ const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(rol
 const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
 
 const Params = Type.Object({
-  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output" }),
+  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …' (a checkable finish line), 'Stop and ask only if …', and the expected output" }),
   name: Type.Optional(Type.String({ minLength: 1, description: "Short human-readable label for this child, a few words not a sentence (e.g. 'Fix login redirect'). Names the delegate roster row and the child session; falls back to a label derived from task when omitted." })),
   profile: StringEnum(LEAF_PROFILES, { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: "Required kind of thinking; never a model name" }),
@@ -107,7 +107,7 @@ const WorkerCreateParams = Type.Object({
 });
 const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
-  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment naming relevant paths, constraints, and expected output. Continuity supplements explicit tasking; it never replaces it." }),
+  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …', 'Stop and ask only if …', and the expected output. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: "Required kind of thinking; Independence roles are subagent-only because independence requires fresh context" }),
   modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'" })),
   effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
@@ -178,6 +178,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Delegate execution only after the assignment's direction and verification are established. Use a subagent when context isolation, mechanical volume, parallelism, or genuinely independent judgment materially improves the result; work inline while the task needs continuous owner steering or is smaller than a handoff brief.",
       "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
+      "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output. Do not add 'think carefully' lines; Model Effort controls thinking.",
       "Prefer background:true. Finish genuinely independent work, then end the turn; the coalesced completion signal starts the next turn. Answer it with subagent_collect without an executionId. Never collect to wait. Omit background only when the result is the immediate next input and nothing useful can happen first.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
       "Never sleep, poll, or call subagent_collect to wait for a background child.",
@@ -491,7 +492,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     promptSnippet: "Dispatch one bounded assignment to a durable attended worker",
     promptGuidelines: [
       "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
-      "Keep every worker task self-contained with paths, constraints, and expected output; continuity supplements explicit tasking.",
+      "Keep every worker task self-contained with paths, constraints, 'Done means …', 'Stop and ask only if …', and expected output; continuity supplements explicit tasking.",
       "Prefer background:true. Finish genuinely independent work, then end the turn; the coalesced completion signal starts the next turn. Answer it with subagent_collect without an executionId. Never collect to wait. Omit background only when the result is the immediate next input and nothing useful can happen first.",
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",

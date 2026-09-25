@@ -105,6 +105,27 @@ the lead combines their answers. Panels suit advice, investigation, debate, and 
 data; they do not suit code changes, which cannot be merged meaningfully. Children do not see each
 other's answers before the lead collects all of them. A panel is a lead pattern, not a role.
 
+### Prompts
+
+The brief and profile templates follow Anthropic's
+[Opus 5.5 guidance](https://claude.dev/blog/getting-the-most-out-of-opus-5-5/) and are in effect now,
+independent of the model evaluation. They live in `extensions/subagent/index.ts`.
+
+- Every brief states the task, relevant paths and constraints, "Done means …" as a checkable
+  finish line, "Stop and ask only if …", and the expected output.
+- No brief or instruction asks a model to think carefully or to show its reasoning; Model Effort
+  controls thinking.
+- Every child keeps going while a step needs no input, and starts its final report with what it
+  needs from the lead, then what it changed and found.
+- Profile sentences add the role's output shape: investigation marks what it could not confirm and
+  where it looked; planning names options and one recommendation; review lists only blocking
+  problems with file, line, why, and how to show the failure; implementation continues until the
+  done condition holds; coordination checks each leaf's evidence before accepting it.
+
+The guidance targets Opus 5.5. The evaluation compares each new profile sentence against the
+profile-free `plain` arm on every model, so its effect on Sol, Astra, and Luna is measured rather
+than assumed.
+
 ### Checking panels and GitHub Copilot
 
 For `high` and `critical` consequence, a checking panel needs two reviewers from distinct
@@ -154,6 +175,8 @@ Results stay under `~/.pi-workbench/evals/results/` and never change routing pol
 | `frontier` | Astra `xhigh` · Fable 5.1 `xhigh` |
 | `independent-review` | Sol `xhigh` · Opus 5.5 `xhigh` |
 | Panel | Sol + Opus combined by Opus · each alone |
+| Prompt | Each role's profile sentence · `plain` without it, on the same model |
+| Review effort | Opus 5.5 `low` · Opus 5.5 `xhigh` |
 
 ### Sequence
 

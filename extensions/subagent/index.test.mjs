@@ -411,6 +411,9 @@ test("bounds the hierarchy to lead → worker → leaf with a delegating coordin
   assert.match(PROFILES.planner.instruction, /unless the assignment says otherwise/);
   assert.match(PROFILES.reviewer.instruction, /unless the assignment says otherwise/);
   assert.match(PROFILES.implementer.instruction, /Do not commit unless the assignment explicitly authorizes a scope-only commit/);
+  assert.match(PROFILES.scout.instruction, /could not confirm and say where you looked/);
+  assert.match(PROFILES.reviewer.instruction, /file and line, why it is wrong, and how to show it fails/);
+  assert.match(tools.get("subagent").parameters.properties.task.description, /Done means .*Stop and ask only if/);
 
   const delegation = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
   const web = ["web_enable", "web_search", "source_check", "fetch_content", "get_search_content"];
@@ -652,6 +655,7 @@ test("an omitted subagent name falls back to the task-derived label, unchanged",
 test("plain adds the shared status instruction without an empty profile preamble", async () => {
   const { dispatched } = await dispatchSubagentWithName({ task: "Use only this contract.", profile: "plain" });
   assert.match(dispatched.task, /^Call report_status when you begin real work/);
+  assert.match(dispatched.task, /Start your final report with anything you need from the lead/);
   assert.match(dispatched.task, /Assignment:\nUse only this contract\.$/);
 });
 
