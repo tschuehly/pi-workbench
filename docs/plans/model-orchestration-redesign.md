@@ -28,30 +28,32 @@ alternative on real work.
 
 ## Design
 
-### Certainty selects the tier
+### Open decisions select the tier
 
-How well the problem is understood chooses the model tier. Each tier pairs one Anthropic and one
-OpenAI model, so a cross-family partner always exists at the same capability level.
+Tiers are named by model strength. The tier follows how much the model must decide for itself:
+how unclear the problem is and how little the brief specifies. Each tier pairs one Anthropic and
+one OpenAI model, so a cross-family partner always exists at the same strength.
 
-| Certainty | Typical work | Anthropic | OpenAI |
+| Tier | Anthropic | OpenAI | Use when the model must decide |
 | --- | --- | --- | --- |
-| Low | Unclear, hard, novel, or stuck work; design without an accepted plan | Claude Fable 5.1 | GPT-6 Astra |
-| Normal | Engineering against a clear objective; coordination; independent checks | Claude Opus 5.5 | GPT-6 Sol |
-| High | Well-defined work: mechanical edits, broad evidence collection, executing an accepted plan | Claude Sonnet 5 | GPT-6 Luna |
+| Strong | Claude Fable 5.1 | GPT-6 Astra | The problem, approach, and finish line: unclear, novel, or stuck work; a symptom-only bug; a thin brief |
+| Standard | Claude Opus 5.5 | GPT-6 Sol | The approach, against a clear objective and an ordinary brief; coordination; independent checks |
+| Light | Claude Sonnet 5 | GPT-6 Luna | Little or nothing: a detailed brief, an accepted plan, mechanical edits, broad evidence collection |
 
-An accepted Plan or Spec raises certainty and can move execution to a cheaper tier.
+A detailed brief or an accepted Plan or Spec moves the same work to a lighter tier; a vague brief
+moves it to a stronger one.
 
 ### Roles
 
 | Role | Replaces | Tier | Default binding | Evaluated against |
 | --- | --- | --- | --- | --- |
-| `routine` | `mechanics`, `investigation` | High | GPT-6 Luna `xhigh` | Luna `max`; Sonnet 5 `high` |
-| `implementation` | `implementation`, `problem-solving` | Normal | Set by evaluation: GPT-6 Sol `high` or Opus 5.5 `high` | Sol vs Opus; Luna `max` for AFK work with an accepted plan |
-| `frontier` | `design`, `escalation` | Low | GPT-6 Astra `xhigh` | Fable 5.1 `xhigh` |
-| `coordination` | `coordination` | Normal | Claude Opus 5.5 `high` | — |
-| `independent-review` | `independent-review`, `challenge`, `independent-judgment` | Normal | Opus 5.5 or Sol `xhigh`, whichever family differs from the author | Sol vs Opus on the same review |
+| `routine` | `mechanics`, `investigation` | Light | GPT-6 Luna `xhigh` | Luna `max`; Sonnet 5 `high` |
+| `implementation` | `implementation`, `problem-solving` | Standard | Claude Opus 5.5 `high` | Sol `high`, to test whether Opus is worth its Claude quota; Luna `max` for AFK work with an accepted plan |
+| `frontier` | `design`, `escalation` | Strong | GPT-6 Astra `xhigh` | Fable 5.1 `xhigh` |
+| `coordination` | `coordination` | Standard | Claude Opus 5.5 `high` | — |
+| `independent-review` | `independent-review`, `challenge`, `independent-judgment` | Standard | Opus 5.5 or Sol `xhigh`, whichever family differs from the author | Sol vs Opus on the same review |
 
-Until the evaluation reports, `implementation` keeps its current GPT-6 Sol binding at `high`.
+Thomas set `implementation` to Opus 5.5 `high` on 2026-09-25; the evaluation checks it against Sol.
 
 The lead session is Claude Opus 5.5 `high`; it is configured in Pi settings, not routed. The lead
 also combines panel answers, replacing the `synthesis` role.
