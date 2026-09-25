@@ -45,11 +45,11 @@ Runtime routing and the interactive startup check share a machine-local quota sn
 
 The owner uses Pi Workbench and PI WEB for daily work while they are developed. Running code and edited code therefore live in separate checkouts:
 
-- **Installed checkouts** — `pi-workbench.installed` and `pi-web.installed`, sibling worktrees pinned to a committed, verified revision. Pi package settings, the PI WEB plugin link, and the launchd services load only these, and PI WEB runs a production build rather than autoreloading dev servers. No session edits them.
+- **Installed checkouts** — `~/IdeaProjects/pi-workbench.installed` and `pi-web.installed` link to immutable detached worktrees under `~/.pi-workbench/installed/`, one per promoted revision. Pi package settings, the PI WEB plugin link, and the launchd services load only these, and PI WEB runs its production services (`pi-web install`) on port 8505 rather than autoreloading dev servers. No session edits them.
 - **Integration branches** — pi-workbench `main` and PI WEB `pi-workbench` receive work only as merged commits. Keep their checkouts clean; no session edits them in place.
 - **Development worktrees** — each editing session owns one linked worktree on its own branch. One session per worktree.
 
-A change goes live by promotion: merge into the integration branch, trial it in a second PI WEB instance with its own `PI_WEB_DATA_DIR`, socket, and port (or `pi -e <worktree>` for terminal checks), then run `scripts/promote-installed <workbench-rev> <pi-web-rev>`. Promotion moves both installed checkouts together, builds, and schedules a detached restart of the Web/API service and then the session daemon, because the daemon keeps the code it loaded at start. Restarting interrupts every open session, so promotion requires the owner's explicit go-ahead and time. Roll back by promoting the previous revisions.
+A change goes live by promotion: merge into the integration branch, trial it in a second PI WEB instance with its own `PI_WEB_DATA_DIR`, socket, and port (or `pi -e <worktree>` for terminal checks), then run `scripts/promote-installed switch <workbench-rev> <pi-web-rev>`. Promotion builds both revisions in new worktrees (`prepare` does only this, safely at any time), then a detached launchd job repoints both links together and reinstalls both PI WEB services, because the session daemon keeps the code it loaded at start. The job restores the previous services if PI WEB does not become healthy; its log is under `~/.pi-workbench/installed/jobs/`. Restarting interrupts every open session, so promotion requires the owner's explicit go-ahead and time. Roll back by promoting the previous revisions.
 
 ## Skill Capability and Interface Layer
 

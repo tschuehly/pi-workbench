@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Run Pi Workbench and PI WEB from pinned, immutable builds (docs/contracts/harness.md,
+# "Installed and Development Checkouts").
+#
+#   promote-installed prepare <workbench-rev> <pi-web-rev>
+#       Build immutable copies under ~/.pi-workbench/installed. Touches nothing running.
+#   promote-installed switch <workbench-rev> <pi-web-rev> [delay-seconds, default 60]
+#       Prepare, then schedule a detached launchd job that repoints ~/IdeaProjects/*.installed,
+#       the Pi package entry and the PI WEB plugin link, and reinstalls PI WEB's production
+#       services. INTERRUPTS EVERY OPEN SESSION. Run only with the owner's go-ahead.
+#       Roll back by switching to the previous revisions (the job also restores on failure).
+set -Eeuo pipefail
+export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
+STORE=$HOME/.pi-workbench/installed
+PORT=8505 # the Pi Workbench app's default ServerURL
+
+prepare_one() { # <repo-name> <rev> -> prints the prepared directory
+  local name=$1 sha dir
+  sha=$(git -C "$PROJECTS/$name" rev-parse --verify "$2^{commit}") || return 1
+  dir=$STORE/$name-${sha:0:12}
+  if [[ ! -e $dir.prepared ]]; then
+    [[ -d $dir ]] || git -C "$PROJECTS/$name" worktree add --detach "$dir" "$sha" >&2 || return 1
+    # Pi supplies pi-workbench's peer packages at load time; only PI WEB needs installing and building.
+    if [[ $name == pi-web ]]; then (cd "$dir" && npm ci --no-audit --no-fund && npm run build) >&2 || return 1; fi
+    touch "$dir.prepared" || return 1
+  fi
+  echo "$dir"
+}
+
+[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,12p' "$0"; exit 2; }
+mkdir -p "$STORE"
+wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
+pw=$(prepare_one pi-web "$3") || { echo "prepare pi-web failed" >&2; exit 1; }
+echo "prepared: $wb"
+echo "prepared: $pw"
+[[ $1 == switch ]] || exit 0
+
+uid=$(id -u)
+job=$STORE/jobs/$(date -u +%Y%m%dT%H%M%SZ)
+label=com.pi-workbench.promote-installed.$(basename "$job")
+mkdir -p "$job/backup"
+cat >"$job/job.sh" <<EOF
+#!/bin/bash
+set -Euo pipefail
+export PATH=$PATH
+exec >>"$job/job.log" 2>&1
+trap 'launchctl bootout gui/$uid/$label' EXIT
+sleep ${4:-60}
+echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"
+la=\$HOME/Library/LaunchAgents
+cp -p \$la/com.pi-web.*.plist \$HOME/.pi/agent/settings.json \$HOME/.config/pi-web/config.json "$job/backup/" || { echo "backup failed"; exit 1; }
+for l in pi-workbench.installed pi-web.installed; do readlink "$PROJECTS/\$l" >>"$job/backup/links" || echo >>"$job/backup/links"; done
+readlink \$HOME/.pi-web/plugins/pi-workbench >"$job/backup/plugin-link"
+
+stop_all() {
+  for s in ui-dev web sessiond; do launchctl bootout gui/$uid/com.pi-web.\$s 2>/dev/null || true; done
+  sleep 3
+  # Dev launchers can orphan children (ISSUE-032): stop leftovers that still hold PI WEB's ports or socket.
+  for p in \$(lsof -ti tcp:8504 -sTCP:LISTEN; lsof -ti tcp:8505 -sTCP:LISTEN; lsof -t \$HOME/.pi-web/sessiond.sock); do
+    kill -TERM "\$p" 2>/dev/null || true
+  done 2>/dev/null
+  sleep 3
+}
+healthy() {
+  curl -fsS --max-time 3 http://127.0.0.1:$PORT/api/plugins | node -e '
+    let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const p=JSON.parse(d).plugins.find(x=>x.id==="pi-workbench");
+    process.exit(p&&p.server&&p.server.state==="active"&&!p.server.restartRequired?0:1)})'
+}
+rollback() {
+  echo "FAILED; restoring previous services"
+  stop_all
+  rm -f \$la/com.pi-web.*.plist
+  cp -p "$job"/backup/com.pi-web.*.plist \$la/
+  cp -p "$job/backup/settings.json" \$HOME/.pi/agent/settings.json
+  cp -p "$job/backup/config.json" \$HOME/.config/pi-web/config.json
+  ln -sfn "\$(cat "$job/backup/plugin-link")" \$HOME/.pi-web/plugins/pi-workbench
+  i=0; for l in pi-workbench.installed pi-web.installed; do
+    i=\$((i+1)); t=\$(sed -n "\${i}p" "$job/backup/links")
+    if [[ -n \$t ]]; then ln -sfn "\$t" "$PROJECTS/\$l"; else rm -f "$PROJECTS/\$l"; fi
+  done
+  for f in \$la/com.pi-web.*.plist; do launchctl bootstrap gui/$uid "\$f" || true; done
+  echo "rollback done \$(date -u +%FT%TZ)"
+  exit 1
+}
+
+ln -sfn "$wb" "$PROJECTS/pi-workbench.installed"
+ln -sfn "$pw" "$PROJECTS/pi-web.installed"
+ln -sfn "$PROJECTS/pi-workbench.installed/packages" \$HOME/.pi-web/plugins/pi-workbench
+node -e '
+  const fs=require("fs"),[f,from,to]=process.argv.slice(1),s=JSON.parse(fs.readFileSync(f,"utf8"));
+  const [wbFrom,wbTo,pw]=[from,to,process.argv[4]];
+  s.packages=s.packages.map(p=>typeof p!=="string"?p:p===wbFrom?wbTo
+    :p.replace(/^.*\/pi-web[^/]*\/dist\/pi-packages\//,pw+"/dist/pi-packages/"));
+  fs.writeFileSync(f,JSON.stringify(s,null,2)+"\n")' \
+  \$HOME/.pi/agent/settings.json "$PROJECTS/pi-workbench" "$PROJECTS/pi-workbench.installed" "$PROJECTS/pi-web.installed"
+node -e '
+  const fs=require("fs"),f=process.argv[1],c=JSON.parse(fs.readFileSync(f,"utf8"));
+  c.port=$PORT; fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' \$HOME/.config/pi-web/config.json
+stop_all
+(cd "$pw" && /bin/zsh -lc 'node dist/cli.js install') || rollback
+for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; exit 0; }; sleep 1; done
+rollback
+EOF
+chmod +x "$job/job.sh"
+plutil -create xml1 "$job/job.plist"
+plutil -insert Label -string "$label" "$job/job.plist"
+plutil -insert ProgramArguments -array "$job/job.plist"
+plutil -insert ProgramArguments.0 -string "$job/job.sh" "$job/job.plist"
+plutil -insert RunAtLoad -bool true "$job/job.plist"
+launchctl bootstrap "gui/$uid" "$job/job.plist"
+echo "scheduled $label in ${4:-60}s; log: $job/job.log"
