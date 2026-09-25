@@ -45,7 +45,7 @@ in the conversation, so the selected value alone chooses the channel.
 | `Default` | Add no Attention-specific behavior; existing instructions apply. |
 | `Focused` | Ask Thomas readily when a quick clarification improves direction; Thomas is following the session. |
 | `Switching` | Batch questions and provide enough context to answer without rereading the transcript; Thomas moves among sessions but remains available for consultation. |
-| `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools, even if Thomas also replies in the conversation. |
+| `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools and never in the conversation, even if Thomas also replies there. Send one update when a milestone finishes or work stops to wait. |
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
 Only Phone uses `ask_human` and `notify_human`. Focused and Switching ask in the session
