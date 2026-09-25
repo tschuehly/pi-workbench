@@ -49,6 +49,7 @@ test("collapses noisy repeated assistant and tool progress updates", () => {
 
 test("extracts a child's own report_status call, distinct from ordinary tool activity", () => {
   assert.equal(reportedStatusText({ type: "tool_start", detail: { toolName: "report_status", action: "Investigating the roster bug" } }), "Investigating the roster bug");
+  assert.equal(activityText({ type: "tool_start", detail: { toolName: "report_status", action: "Finished" } }), undefined, "a self-report must not mark a running child terminal");
   assert.equal(reportedStatusText({ type: "tool_progress", detail: { toolName: "bash", action: "running npm test" } }), undefined);
   assert.equal(reportedStatusText({ type: "tool_start", detail: { toolName: "report_status", action: "" } }), undefined);
   assert.equal(reportedStatusText({ type: "thinking_progress" }), undefined);

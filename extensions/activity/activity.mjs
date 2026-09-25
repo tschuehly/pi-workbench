@@ -110,7 +110,7 @@ function renderActivityPill(item, width) {
 
 function activityAction(item) {
   const current = clean(item.activity);
-  if (item.kind === "shell") return clean(item.objective) || "running shell";
+  if (item.kind === "shell") return item.id.startsWith("background-bash:") ? current || "running shell" : clean(item.objective) || "running shell";
   if (item.kind === "monitor" && (current === "" || current === "watching" || current === "starting")) return clean(item.objective) || "watching";
   return current === "" || current === "running" ? "starting" : current;
 }

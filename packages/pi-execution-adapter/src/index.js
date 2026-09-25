@@ -17,7 +17,7 @@ export class PiRpcExecutionAdapter {
     this.command = options.command ?? "pi";
     this.defaultStartupTimeoutMs = options.startupTimeoutMs ?? 15_000;
     this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 10 * 60_000;
-    this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write", ...DELEGATION_TOOLS]);
+    this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write", "report_status", ...DELEGATION_TOOLS]);
     this.clock = options.clock ?? (() => new Date());
     this.spawn = options.spawn ?? nodeSpawn;
     this.killGraceMs = options.killGraceMs ?? 2_000;
@@ -455,7 +455,7 @@ const REPORT_STATUS_MAX = 120;
 export function summarizeToolAction(toolName, args) {
   if (toolName === "report_status") {
     const status = cleanText(args?.status);
-    return status === "" ? "reporting status" : bounded(status, REPORT_STATUS_MAX);
+    return status === "" ? "" : bounded(status, REPORT_STATUS_MAX);
   }
   const path = concisePath(args?.path);
   if (toolName === "read") return bounded(`reading ${path ?? "file"}`, 56);

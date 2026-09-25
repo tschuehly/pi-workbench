@@ -53,6 +53,7 @@ export function reportedStatusText(observation) {
 }
 
 export function activityText(observation) {
+  if (observation.type.startsWith("tool_") && observation.detail?.toolName === "report_status") return undefined;
   if (observation.type.startsWith("tool_")) return String(observation.detail?.action ?? observation.detail?.toolName ?? "tool");
   if (observation.type === "thinking_progress") return "thinking";
   if (observation.type === "assistant_progress") return "responding";

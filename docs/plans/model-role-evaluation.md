@@ -28,7 +28,7 @@ profile, and policy change. Pia never edits `routing-policy.json` or `PROFILES` 
 - **Q-M1:** For each Cognitive Role, which model + Model Effort is the cheapest binding (in the
   relevant provider's quota, not API dollars) that reliably meets the role's quality threshold?
 - **Q-M2:** Do the profile instruction sentences in `extensions/subagent/index.ts` PROFILES
-  (`scout`, `reviewer`, `implementer`) change outcomes at all, against a sentence-free `plain`
+  (`scout`, `reviewer`, `implementer`) change outcomes at all, against a profile-sentence-free `plain`
   profile with the same tool set? The audit shows 107 scouts writing report files under "Do not
   mutate files" and 8 sessions with commit-authority conflicts, so the sentences are at least partly
   ignored and sometimes wrong.
@@ -36,7 +36,7 @@ profile, and policy change. Pia never edits `routing-policy.json` or `PROFILES` 
   (`problem-solving` chosen for "high")? If effort guidance is what leads actually need, that is a
   guidance change, not a binding change.
 
-`plain` does not exist yet. Q-M2 requires Thomas to approve adding it to PROFILES as an evaluation
+`plain` now exists. It receives the shared assignment wrapper and `report_status` instruction, but no profile-specific sentence. Q-M2 originally required Thomas to approve adding it to PROFILES as an evaluation
 arm; until then Q-M2 runs only as sentence-present vs sentence-removed-in-brief, which is weaker.
 
 ## (b) Unit of comparison
@@ -74,9 +74,9 @@ a grep the child claimed, a file that must exist), run it outside both arms and 
    to Luna; paired evidence must show whether Luna's role specialization beats the Sol execution
    baseline without increasing corrections or truncation. Also carries H2 (truncation is
    brief-driven, not model-driven) at no extra cost.
-2. **P2 — profile sentence: `scout` vs sentence-free `plain`, both on the P1 winner** (H7/Q-M2).
+2. **P2 — profile sentence: `scout` vs profile-sentence-free `plain`, both on the P1 winner** (H7/Q-M2).
    Same role, same brief; tests whether the sentence adds compliance, subtracts capability, or does
-   nothing. Needs Thomas to approve the `plain` arm first.
+   no profile-specific sentence; both arms receive shared status instructions. `plain` is available.
 3. **P3 — independent-review of OpenAI-authored diffs: Opus 5.5 high vs Fable 5.1 high** (H4).
    Opus 5.5 is the current review binding; the pair tests whether Fable matches its correction rate
    with lower latency while preserving the cross-family rule.
@@ -106,7 +106,7 @@ reproducible high-impact failure.
   `references/routing-rationale.md`. Never Pia, never automatically.
 - **Cheaper arm loses materially:** record the binding as confirmed and stop re-testing it until a
   model, effort, or harness revision changes.
-- **Sentence-free `plain` matches the sentence arm:** propose dropping or shortening that sentence in
+- **Profile-sentence-free `plain` matches the sentence arm:** propose dropping or shortening that sentence in
   PROFILES, keeping only tool-set enforcement, which is mechanical.
 - **Sentence arm wins:** keep the sentence and fix its known conflicts (a scout asked to write a
   report; an implementer explicitly authorized to commit) rather than deleting it.

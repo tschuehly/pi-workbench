@@ -13,8 +13,8 @@ prototype-fidelity plans.
 One native macOS window represents one Pi Chat.
 
 A new window first asks for a workspace and an existing or new session. After selection, the window
-shows the Chat. A toggle opens that workspace's files on the right while Chat stays visible on the
-left.
+shows the Chat. A workspace-scoped file search opens a selected file on the right while Chat stays
+visible on the left.
 
 ```text
 Pi Workbench.app window
@@ -44,15 +44,15 @@ Use this checkpoint for real work before starting the file pane.
 
 ### Checkpoint 2: add files beside Chat
 
-Add a toggleable right-hand file pane. Adapt the useful file behavior from PI WEB's
-`WorkspaceFilesPanel`, but give it a narrow file-only context. Do not import the old plugin panel,
-upload controls, Git, or Terminal.
+Add a toggleable right-hand file pane. Adapt useful viewing and safe editing behavior from PI WEB,
+but replace the persistent tree with workspace-scoped file search (Cmd+P or a button). Do not import
+the old plugin panel, upload controls, Git, or Terminal.
 
 This checkpoint is done when an attended Chat-and-file session proves:
 
 - opening and closing Files does not disturb Chat;
-- the tree shows only the selected workspace;
-- text and supported images render correctly;
+- search finds files only within the selected workspace, including untracked files, with honest pagination;
+- text and supported images render correctly and unsupported files have a clear fallback;
 - text files can be edited, saved, and reloaded;
 - save failures remain visible;
 - switching files or closing the pane never silently discards unsaved edits; and
@@ -78,7 +78,7 @@ content. The owner can then reload or explicitly choose to overwrite.
 
 - Workstreams or cross-Chat attention
 - File upload, Git, or Terminal
-- Message trees, child-execution inspectors, project-wide search, or editor tabs
+- Message trees, child-execution inspectors, or editor tabs
 - Permanent project or session navigation panes
 - Shell profiles, plugin-composed layout, dashboards, or portfolio views
 - A native Swift Chat implementation
@@ -158,11 +158,13 @@ second entry for the same want.
 | 20 Return to an earlier message | shipped in the PI WEB fork: entry ids reach the client (`4aaf0d7a`) and each message carries Revert to here, with Edit and resend on the owner's own messages, alongside the session-tree navigator the Workbench shell never rendered (`63ebdfc8`) |
 | 21 Truthful queue and steering | shipped and verified end to end after the daemon restart on 2026-09-21 (`32ed0ad4`, `208de9f4`): queue order preserved, Send now and Send all now return 200, Stop returns queued text to the composer, Enter steers while the secondary action queues |
 | 22 Human sessions first | shipped in the PI WEB fork (`d09da87f`) |
-| 23 Legible delegated work | roster rows show name, goal, and current state, preferring the child's own reported line (`6fa403c8`); children report it through a `report_status` tool carried as `reportedStatus` (`d9827e1`); names come from the task (`f6bc36a`) or an explicit `name` argument the lead passes (`e9d37cf`), which applies to newly dispatched children only; Thomas rejected the row's use of space on 2026-09-21 and chose option 2: the widest column held one word ("thinking"), "Subagent" and "Running" repeated on every row, and the goal column showed the first 240 characters of the raw prompt, the bound `extensions/activity/activity.mjs` applies. The published objective is now the task's first clause instead of a prompt prefix (`e828b851`), which only reads as a goal when the lead writes the goal first, and duplicates the name when the lead passes no explicit `name`. The row was rebuilt in the PI WEB fork (`957ff868`): kind and state are small labelled dots, role, model and effort returned beside the name, and the freed width went to the name and the child's current line, measured at 1400px as 53/436/260/545 px before and 7/508/200/610 px after; the client had been discarding `model` and `effort` while parsing the snapshot |
+| 23 Legible delegated work | Thomas rejected raw task previews and inferred "thinking" in installed use. The source now shows name, role/model, and the child's own `report_status` line (or an explicit missing-report state); every new child profile can call that tool and is instructed to report at work start and material phase changes. Installed acceptance pending |
 | 24 Fast, durable session entry | **closed** on 2026-09-21. Routed reload recovery shipped (`76d859d3`). Session-open latency was measured and not reproduced: click-to-first-message was 113–155 ms for 37-, 249-, and 509-message sessions, a deep-link reload rendered the full transcript in ~240 ms, and the API answered `messages` in 8–20 ms, so no optimisation was made and Thomas closed the story. Reopen only with a concrete slow case |
 | 25 Readable on every surface | the Workbench shell now applies the theme and follows `prefers-color-scheme` live (`ece7c4d1`); border-to-surface contrast raised from 1.4–1.8:1 to at least 3:1 in every theme, guarded by a WCAG test (`09a79b07`); `--pi-border-muted` now means hairline separators only, with 21 interactive boundaries moved to `--pi-border` (`828e182c`); the `index.html` inline fallback matches the default `github-dark` theme value for value, guarded by a test that parses the `:root` block (`04694c84`); the phone layout is verified and fixed (`83f249f3`): the workspace select no longer stretches the chooser card past the viewport and hides Settings, Working Mode's Checking options stay reachable, the shell honours safe-area insets, and nothing overflows at 320, 360, 390 or landscape |
 | 26 Live work visible from the overview | shipped in the PI WEB fork (`947ab6bf`): the Workbench shell now passes the per-session status and activity it already receives into the Workstream chooser and All sessions, showing a live dot and what each session is doing; a collapsed row now carries the same indicator (`cfdd5b53`), which needed no Workstream-store or protocol change: the client inverts the lookup and resolves each live session's Workstream through the existing `listWorkstreams({ sessionId })` query, once per session rather than per render, forgetting an unmatched or failed lookup so a session that joins a Workstream later still lights up |
-| 27 Workstream colour identity | shipped in the PI WEB fork (`68ea8512`): a hue derived from the Workstream id, rendered as a left rail on chooser rows, the expanded card, and the Chat drawer, with CSS `light-dark()` choosing the legible variant; no Workstream-store change |
+| 27 Workstream colour identity | source treatment under revision: the chooser/card still use an id-derived hue (`68ea8512`), while Chat replaces the unexplained initials and literal label with the title and stronger color border; installed visual acceptance pending |
+| 28 Automatic Workstream re-entry | source wiring under review: only a newly confirmed linked Chat after a three-hour `user`-role interval invokes full orientation; existing Chats and saved continuation drafts remain untouched; installed acceptance pending |
+| 29 Transcript role filter | owner revised the filter: Everything by default, filter-icon choices Human only, Assistant only, and Human + Assistant; the latter two exclude assistant thinking, tool calls and results. Source revision and installed acceptance pending |
 
 Decisions already taken: Resume opens the existing session; modes stay guidance only; the
 Workstream-level overview replaces the earlier `goal.set` idea; the ten-variant launcher prototype
@@ -170,8 +172,8 @@ and the context-view prototypes are superseded by the shipped card and the `agen
 
 ## Later, only if use demands it
 
-Files beside Chat (Checkpoint 2 above), Terminal, Git, project-wide search, editor tabs, and history
-remain uncommitted until real use asks for them.
+Files beside Chat (Checkpoint 2 above) now includes the owner-requested workspace file search.
+Terminal, Git, editor tabs, and history remain uncommitted until real use asks for them.
 
 Keep one window per Chat unless real use proves that model wrong.
 

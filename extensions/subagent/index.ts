@@ -17,32 +17,34 @@ import { activityText, progressText, recordProgress, renderProgressLog, reported
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
 const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"] as const;
+const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status"] as const;
+const STATUS_INSTRUCTION = "Call report_status when you begin real work, and again when your phase changes materially. Describe what you are doing in plain language, not a path or a generic tool action.";
 export const PROFILES = {
   scout: {
-    tools: ["read", "bash", "grep", "find", "ls"],
+    tools: [...CHILD_TOOLS],
     instruction: "Investigate only. Do not mutate files unless the assignment says otherwise. Return compact evidence and conclusions to the attending lead.",
   },
   planner: {
-    tools: ["read", "bash", "grep", "find", "ls"],
+    tools: [...CHILD_TOOLS],
     instruction: "Produce a bounded plan or design judgment. Do not mutate files unless the assignment says otherwise. Name assumptions, risks, and verification.",
   },
   reviewer: {
-    tools: ["read", "bash", "grep", "find", "ls"],
+    tools: [...CHILD_TOOLS],
     instruction: "Review independently. Do not mutate files unless the assignment says otherwise. Lead with actionable findings and cite repository paths.",
   },
   implementer: {
-    tools: ["read", "bash", "grep", "find", "ls", "edit", "write"],
+    tools: [...CHILD_TOOLS, "edit", "write"],
     instruction: "Implement only the bounded assignment. Verify your changes and report files changed, checks, and remaining risks. Never push or publish. Do not commit unless the assignment explicitly authorizes a scope-only commit; then commit exactly what it names.",
   },
   plain: {
-    tools: ["read", "bash", "grep", "find", "ls", "edit", "write"],
+    tools: [...CHILD_TOOLS, "edit", "write"],
     instruction: "",
   },
   // Worker-only. A coordinator holds one scope's durable context and delegates the work itself to
   // fresh leaf Subagents; it has no edit or write tool, and no Worker lifecycle tool, so the
   // hierarchy stays exactly lead → Worker → leaf.
   coordinator: {
-    tools: ["read", "bash", "grep", "find", "ls", ...DELEGATION_TOOLS],
+    tools: [...CHILD_TOOLS, ...DELEGATION_TOOLS],
     instruction: "Coordinate this scope (cognitive role: coordination). You do not edit files yourself: launch one fresh bounded leaf Subagent per phase, collect it exactly once, and keep only intent, decisions, and compact child evidence in your own context. Run at most one writing leaf at a time. Leaves never commit or publish; after their evidence passes you may make one mechanical scope-only checkpoint commit with bash. You cannot create workers.",
   },
 } as const;
@@ -222,7 +224,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
 
       const parentSessionId = ctx.sessionManager.getSessionId();
-      const childTask = profile.instruction === "" ? params.task : `${profile.instruction}\n\nAssignment:\n${params.task}`;
+      const childTask = [profile.instruction, STATUS_INSTRUCTION, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
       const telemetryConcept = params.telemetryConcept ?? inheritedConcept();
       let receipt;
       try {
@@ -534,7 +536,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       const continuing = begin.continuationSessionId !== null;
       const preamble = `You are the durable attended worker \"${begin.name}\" with the semantic scope \"${begin.scope}\".${continuing ? " This dispatch resumes your persisted session; the earlier conversation above is your own prior work in this scope." : " This is your first dispatch in this scope."}`;
-      const childTask = [profile.instruction, preamble, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
+      const childTask = [profile.instruction, STATUS_INSTRUCTION, preamble, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
       let receipt;
       try {
         receipt = await adapter.dispatch({
@@ -752,15 +754,17 @@ export async function watchActivity(
   // A self-report is sticky across unrelated tool calls: once the child reports, its status
   // survives until the next report, while the inferred `activity` keeps changing per tool call.
   let reportedStatus: string | undefined;
+  let currentActivity = activity.activity;
   try {
     for await (const observation of adapter.observe(executionId)) {
       const text = activityText(observation);
       const reported = reportedStatusText(observation);
       if (reported !== undefined) reportedStatus = reported;
       if (text === undefined && reported === undefined) continue;
+      if (text !== undefined) currentActivity = text;
       upsertActivity(pi, {
         ...activity,
-        ...(text === undefined ? {} : { activity: text }),
+        activity: currentActivity,
         ...(reportedStatus === undefined ? {} : { reportedStatus }),
       });
     }

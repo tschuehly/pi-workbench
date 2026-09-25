@@ -39,7 +39,7 @@ Each parent tool invocation launches one child with these semantic inputs:
 - `task` is a self-contained assignment that names relevant repository paths, constraints, and expected output.
 
 Approved candidate amendment, not yet implemented: cap `task` at 20,000 characters and reject larger input before routing or child launch. The subagent-details implementation must land the schema/preflight check, tests, this plan's current-behavior wording, and extension README together.
-- `profile` selects Workbench-owned child behavior and requested Pi tools. These lowercase Level 1 child profiles are neither managed Execution Profiles nor authority shapes; in particular, `scout` does not grant managed Scout authority. `implementer` avoids overloading the canonical Worker term. `plain` adds no profile instruction, so its task text is the whole assignment contract.
+- `profile` selects Workbench-owned child behavior and requested Pi tools. These lowercase Level 1 child profiles are neither managed Execution Profiles nor authority shapes; in particular, `scout` does not grant managed Scout authority. `implementer` avoids overloading the canonical Worker term. `plain` adds no profile-specific instruction; like every child, it receives the shared assignment wrapper and a request to use `report_status` at work start and material phase changes.
 - `cognitiveRole` selects the required kind of thinking. It never names a provider or model.
 - `modelOverride` is an owner-requested exception selecting an exact `<provider>/<model>` for a non-independent dispatch.
 - `effort` optionally selects explicit Model Effort while the Cognitive Role still selects the model.
@@ -73,7 +73,7 @@ Persisting a child session is evidence and the continuity primitive reused by th
 
 Level 1 children share the attended parent's local machine trust boundary. The adapter applies explicit Pi tool allowlists, but V1 has no filesystem, process, or network sandbox and makes no confinement claim.
 
-Analysis-oriented profiles request analysis tools and are instructed not to mutate unless the assignment says otherwise. Because unrestricted shell access can write, that non-mutation behavior is not presented as a security guarantee. The `implementer` and `plain` profiles additionally request Pi editing and writing tools; `plain` adds no profile instruction. The effective tool set is the intersection of profile requests and the host ceiling; it can narrow but never expand at runtime.
+Analysis-oriented profiles request analysis tools and are instructed not to mutate unless the assignment says otherwise. Because unrestricted shell access can write, that non-mutation behavior is not presented as a security guarantee. The `implementer` and `plain` profiles additionally request Pi editing and writing tools; `plain` adds no profile-specific instruction. Every profile can call `report_status` for self-reported progress; the effective tool set is the intersection of profile requests and the host ceiling; it can narrow but never expand at runtime.
 
 A later sandbox adapter must fail preflight whenever a requested filesystem, process, or network restriction cannot be enforced. V1 does not add that policy prematurely or represent prompt instructions as authority enforcement.
 

@@ -24,9 +24,10 @@ This document defines product outcomes and system-level validation. The
    display, transcript paging, live questions, and extension dialogs available in Chat.
 5. **Client replacement without session loss.** As an interruptible developer, I want closing,
    reloading, or replacing a client window to leave Pi sessions and the session daemon running.
-6. **Safe, bounded file editing.** As a developer, I want a toggleable file pane beside Chat for
-   viewing and safely editing the selected workspace without silently overwriting newer agent or
-   external changes. Upload, Terminal, Workstreams, Git, and other surfaces wait for observed need.
+6. **Safe, bounded file editing.** As a developer, I want to search files in the selected workspace
+   by name or path, open them beside Chat without a persistent tree, and safely edit readable text
+   without silently overwriting newer agent or external changes. Unsupported files need a clear
+   fallback; upload, Terminal, Git, and other surfaces wait for observed need.
 
 ### Workstreams
 
@@ -81,12 +82,10 @@ recorded in the [Workbench UI plan](../plans/workbench-ui.md).
     way to send one or all of them now.
 22. **Human sessions first.** As a developer opening All sessions, I want delegated child sessions
     hidden by default and revealable by one toggle.
-23. **Legible delegated work.** As a developer watching delegated work, I want each child row to spend
-    its width on what varies — the child's name, the goal it was given, and what it is doing now,
-    reported by the child in one line rather than inferred from its opening prompt — while its role and
-    model stay visible and constant labels such as "Subagent" and "Running" shrink to a compact
-    indicator instead of a column of repeated words. The goal must read as a goal, not as the opening
-    characters of the prompt.
+23. **Legible delegated work.** As a developer watching delegated work, I want each child row to
+    identify its purpose by name and show the child's own one-line status, while role and model remain
+    visible and repeated labels stay compact. Do not show raw assignment snippets or guessed "thinking"
+    as progress. If the child has not reported, say so instead of inventing a status.
 24. **Fast, durable session entry.** As a developer, I want opening a session to feel immediate, and
     a client reload or development-server restart to leave me in the same session.
 25. **Readable on every surface.** As a developer, I want Chat to stay usable at narrow widths and on
@@ -96,8 +95,23 @@ recorded in the [Workbench UI plan](../plans/workbench-ui.md).
     and Workstream overview to show which sessions are active right now and what they are working
     on, so I can re-enter the work that is moving.
 27. **Workstream colour identity.** As a developer with several Workstreams open, I want each
-    Workstream to carry its own colour through the overview and Chat, so I can tell at a glance
-    which one I am looking at.
+    Workstream to carry a strong, recognizable colour and title through the overview and Chat,
+    without a redundant label or unexplained initials, so I can tell which one I am looking at.
+28. **Automatic Workstream re-entry.** As a developer starting a new Chat in an existing Workstream
+    after roughly three hours away, I want one full goal-first orientation after association, while
+    the saved continuation prompt stays in my draft. Reopening a Chat or starting one sooner must
+    not trigger it. For the first trial, use the latest persisted `user`-role message across linked
+    active Chats as the clock; automated user-role messages may delay the orientation.
+29. **Transcript role filter.** As a developer reading a long Chat, I want a filter icon with
+    Human-only, Assistant-only, and Human + Assistant choices. Everything is visible by default.
+    Assistant views show assistant messages without thinking, tool calls, or tool results; Human
+    uses the persisted `user` role. Filtering must not alter stored history, live updates, paging,
+    or message actions.
+30. **Responsive shell work.** As a developer running a long shell command, I want Pi's model-callable
+    bash tool to start it in the background by default, show elapsed time and status, and let me
+    continue directing the agent. I can explicitly request foreground execution when an immediate
+    result is necessary. Completion reports the actual exit status and output; session shutdown
+    cancels owned jobs rather than silently leaving work behind.
 
 ## Validation conditions
 
@@ -112,9 +126,10 @@ recorded in the [Workbench UI plan](../plans/workbench-ui.md).
 - Exercise multiline input, selection, clipboard, undo/redo, macOS navigation shortcuts, draft
   restoration, send, steer, stop, attachments, inline answers, model/status display, reconnect,
   and error recovery. Accept this checkpoint in attended use before adding Files.
-- Toggle the right-hand file pane. The tree must be scoped to the selected workspace; text and
-  supported images must render; text edits must survive save and reload; failures must remain
-  visible; and unsaved work must not be silently discarded.
+- Search for a file in the selected workspace and open it in the right-hand pane. Text and
+  supported images must render; unsupported files and incomplete results must be explicit;
+  edits must survive save and reload; failures must remain visible; and unsaved work must not be
+  silently discarded.
 - Change an open file outside the editor before save. The stale save must be rejected, and the
   newer content must survive until the owner explicitly chooses reload or overwrite.
 - Operate two windows on different sessions. No selection, draft, scroll, status, transcript,

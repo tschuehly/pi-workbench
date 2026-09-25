@@ -161,7 +161,7 @@ test("watchActivity keeps the last self-reported status while inferred activity 
 
   await watchActivity(pi, adapter, "child-2", activity, () => true);
   const items = events.filter(([channel]) => channel === "pi-workbench:activity").map(([, event]) => event.item);
-  assert.deepEqual(items.map((item) => item.activity), ["reading roster.ts", "Investigating the roster bug", "editing roster.ts", "Fixing the roster bug", "running focused tests"]);
+  assert.deepEqual(items.map((item) => item.activity), ["reading roster.ts", "reading roster.ts", "editing roster.ts", "editing roster.ts", "running focused tests"]);
   assert.deepEqual(items.map((item) => item.reportedStatus), [undefined, "Investigating the roster bug", "Investigating the roster bug", "Fixing the roster bug", "Fixing the roster bug"]);
 });
 
@@ -413,7 +413,8 @@ test("bounds the hierarchy to lead → worker → leaf with a delegating coordin
   assert.match(PROFILES.implementer.instruction, /Do not commit unless the assignment explicitly authorizes a scope-only commit/);
 
   const delegation = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
-  assert.deepEqual(PROFILES.coordinator.tools, ["read", "bash", "grep", "find", "ls", ...delegation]);
+  assert.deepEqual(PROFILES.coordinator.tools, ["read", "bash", "grep", "find", "ls", "report_status", ...delegation]);
+  for (const profile of Object.values(PROFILES)) assert.ok(profile.tools.includes("report_status"), "every child profile can report its own status");
   for (const worker of ["worker_create", "worker_dispatch", "worker_retire"]) {
     assert.equal(PROFILES.coordinator.tools.includes(worker), false, `a coordinator must not receive ${worker}`);
   }
@@ -612,6 +613,8 @@ async function dispatchSubagentWithName(params) {
     await rm(temporary, { recursive: true, force: true });
   }
   const activityItem = events.find(([channel, event]) => channel === "pi-workbench:activity" && event.type === "upsert")[1].item;
+  assert.ok(dispatched.tools.includes("report_status"));
+  assert.match(dispatched.task, /Call report_status when you begin real work/);
   return { dispatched, activityName: activityItem.name, resolverArgs };
 }
 
@@ -642,9 +645,10 @@ test("an omitted subagent name falls back to the task-derived label, unchanged",
   assert.equal(activityName, "Fix the roster label");
 });
 
-test("plain passes only the assignment contract without an empty profile preamble", async () => {
+test("plain adds the shared status instruction without an empty profile preamble", async () => {
   const { dispatched } = await dispatchSubagentWithName({ task: "Use only this contract.", profile: "plain" });
-  assert.equal(dispatched.task, "Use only this contract.");
+  assert.match(dispatched.task, /^Call report_status when you begin real work/);
+  assert.match(dispatched.task, /Assignment:\nUse only this contract\.$/);
 });
 
 test("preflight failures retain resolver stage and process diagnostics", async () => {

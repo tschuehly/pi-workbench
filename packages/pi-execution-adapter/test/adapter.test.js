@@ -66,8 +66,8 @@ test("summarizes child tool activity without exposing shell arguments", () => {
 
 test("summarizes a child's own report_status call verbatim, bounded", () => {
   assert.equal(summarizeToolAction("report_status", { status: "Wiring the schema field" }), "Wiring the schema field");
-  assert.equal(summarizeToolAction("report_status", { status: "" }), "reporting status");
-  assert.equal(summarizeToolAction("report_status", {}), "reporting status");
+  assert.equal(summarizeToolAction("report_status", { status: "" }), "");
+  assert.equal(summarizeToolAction("report_status", {}), "");
   assert.equal(summarizeToolAction("report_status", { status: "x".repeat(200) }), `${"x".repeat(120)}\u2026`);
   assert.equal(summarizeToolAction("report_status", { status: 42 }), "42");
 });
@@ -356,6 +356,12 @@ test("all independent bindings require fresh subagent context", async () => {
     await assert.rejects(adapter.dispatch(spec({ ...extra, cognitiveRole: "challenge", binding })), (error) => error.code === "INVALID_BINDING");
   }
   assert.equal(spawned, 0);
+});
+
+test("default child capability ceiling includes self-reporting but not arbitrary tools", () => {
+  const adapter = new PiRpcExecutionAdapter();
+  assert.equal(adapter.hostTools.has("report_status"), true);
+  assert.equal(adapter.hostTools.has("goal_complete"), false);
 });
 
 test("fails closed on inconsistent admission, capability expansion, fresh exhaustion, and runtime binding mismatch", async () => {
