@@ -37,8 +37,6 @@ function observerHarness(logical) {
 }
 
 test("all 16 previews use the same exported Working Mode renderer as actual prompts", () => {
-  assert.equal(JSON.parse(readFileSync(join(repo,"node_modules/@earendil-works/pi-coding-agent/package.json"))).version,"0.84.3");
-  assert.equal(JSON.parse(readFileSync(join(repo,"node_modules/@earendil-works/pi-ai/package.json"))).version,"0.84.3");
   const skill={name:"unknown-skill",description:"unknown",filePath:"/skills/unknown/SKILL.md",baseDir:"/skills/unknown",sourceInfo:{path:"/skills/unknown/SKILL.md",source:"test",scope:"temporary",origin:"top-level"},disableModelInvocation:false};
   const options={ cwd:repo, skills:[skill], selectedTools:["read"] };
   const base=`base prompt${formatSkillsForPrompt([skill])}`;
@@ -73,10 +71,10 @@ test("HTTP observer preserves exact large and zstd request bytes received by a l
   } finally { h.observer.restore(); await close(server); }
 });
 
-test("installed Anthropic 0.84.3 HTTP/SSE path sends the exact captured body to a local fake provider", async () => {
-  let received;
+test("installed Anthropic HTTP/SSE path sends the exact captured body to a local fake provider", async () => {
+  let received, requestPath;
   const {server,url}=await listen((req,res)=>{ const chunks=[]; req.on("data",c=>chunks.push(c)); req.on("end",()=>{
-    received=Buffer.concat(chunks);
+    received=Buffer.concat(chunks); requestPath=req.url;
     res.writeHead(200,{"content-type":"text/event-stream"});
     const events=[
       ["message_start",{type:"message_start",message:{id:"msg-1",type:"message",role:"assistant",model:"claude-test",content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:2,output_tokens:0}}}],
@@ -88,11 +86,13 @@ test("installed Anthropic 0.84.3 HTTP/SSE path sends the exact captured body to 
     ];
     res.end(events.map(([name,data])=>`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(""));
   }); });
-  const endpoint=`${url}/v1/messages`; const logical={value:pending(endpoint)}; const h=observerHarness(logical); h.observer.install();
   const model={id:"claude-test",name:"fake anthropic",api:"anthropic-messages",provider:"anthropic",baseUrl:url,reasoning:false,input:["text"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:200000,maxTokens:1000};
+  const logical={value:{coverage:providerCoverage(model),transportIds:[]}}; const h=observerHarness(logical); h.observer.install();
   try {
-    const eventsSeen=[]; let answer; for await (const event of streamAnthropic(model,{systemPrompt:"system exact",messages:[{role:"user",content:[{type:"text",text:"request exact"}],timestamp:Date.now()}],tools:[]},{apiKey:"test-key"})) { eventsSeen.push(event.type); if (event.type === "done") answer = event.message; }
-    await waitFor(()=>received && h.captures.length===1);
+    const eventsSeen=[]; let answer; for await (const event of streamAnthropic(model,{messages:[{role:"system",content:[{type:"text",text:"system exact"}],timestamp:Date.now()},{role:"user",content:[{type:"text",text:"request exact"}],timestamp:Date.now()}]},{apiKey:"test-key"})) { eventsSeen.push(event.type); if (event.type === "done") answer = event.message; }
+    assert.ok(received, `fake provider not reached; events: ${eventsSeen.join(",")}`);
+    assert.equal(requestPath,"/v1/messages?beta=true");
+    await waitFor(()=>h.captures.length===1);
     assert.equal(Buffer.from(h.captures[0].body.base64,"base64").compare(received),0);
     assert.equal(JSON.parse(received).system[0].text,"system exact");
     assert.equal(eventsSeen.at(-1),"done");
@@ -101,7 +101,7 @@ test("installed Anthropic 0.84.3 HTTP/SSE path sends the exact captured body to 
   } finally { h.observer.restore(); await close(server); }
 });
 
-test("installed Codex 0.84.3 HTTP/SSE retry path preserves each compressed send", async () => {
+test("installed Codex HTTP/SSE retry path preserves each compressed send", async () => {
   const received=[]; let attempts=0;
   const {server,url}=await listen((req,res)=>{ const chunks=[]; req.on("data",chunk=>chunks.push(chunk)); req.on("end",()=>{
     const bytes=Buffer.concat(chunks); received.push(bytes); attempts++;
@@ -114,7 +114,7 @@ test("installed Codex 0.84.3 HTTP/SSE retry path preserves each compressed send"
   const model={id:"gpt-5.3-codex",name:"fake codex",api:"openai-codex-responses",provider:"openai-codex",baseUrl:url,reasoning:true,input:["text"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:200000,maxTokens:1000};
   const token=`x.${Buffer.from(JSON.stringify({"https://api.openai.com/auth":{chatgpt_account_id:"account"}})).toString("base64url")}.x`;
   try {
-    let answer; for await(const event of streamCodex(model,{systemPrompt:"sse-system",messages:[{role:"user",content:[{type:"text",text:"sse-request"}],timestamp:Date.now()}],tools:[]},{apiKey:token,transport:"sse",maxRetries:1,maxRetryDelayMs:10})) if(event.type==="done")answer=event.message;
+    let answer; for await(const event of streamCodex(model,{messages:[{role:"system",content:[{type:"text",text:"sse-system"}],timestamp:Date.now()},{role:"user",content:[{type:"text",text:"sse-request"}],timestamp:Date.now()}]},{apiKey:token,transport:"sse",maxRetries:1,maxRetryDelayMs:10})) if(event.type==="done")answer=event.message;
     await h.observer.drain();
     assert.equal(received.length,2); assert.equal(h.captures.length,2);
     for(let i=0;i<2;i++) assert.equal(Buffer.from(h.captures[i].body.base64,"base64").compare(received[i]),0);
@@ -470,7 +470,7 @@ test("extension snapshots applied mode and native outputs through real lifecycle
     assert.deepEqual(exported.capture.workingMode.appliedToPrompt,{alignment:"Plan",checking:"tests"});
     assert.deepEqual(exported.capture.workingMode.selectedNextTurnAtTransport,{alignment:"Spec",checking:"adversarial"});
     assert.equal(exported.capture.producerSources.length,3); assert.ok(exported.capture.producerSources.every(source=>source.status==="observed"&&source.sha256));
-    assert.equal(exported.capture.runtime.piCodingAgent.version,"0.84.3"); assert.equal(exported.capture.runtime.piCodingAgent.extensionResolved.resolution,"extension module resolver");
+    assert.equal(exported.capture.runtime.piCodingAgent.version,JSON.parse(readFileSync(join(repo,"node_modules/@earendil-works/pi-coding-agent/package.json"))).version); assert.equal(exported.capture.runtime.piCodingAgent.extensionResolved.resolution,"extension module resolver");
     assert.equal(exported.nativeOutputs.status,"observed"); assert.equal(exported.nativeOutputs.entries[0].id,"assistant-life");
   } finally { globalThis.fetch=originalFetch; await close(server); rmSync(dir,{recursive:true,force:true}); }
 });

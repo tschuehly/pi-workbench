@@ -263,7 +263,8 @@ function matches(coverage, transport, rawUrl) {
   if (coverage?.status !== "supported") return false;
   try {
     const actual = new URL(rawUrl).toString();
-    return transport === "http-fetch" ? actual === coverage.httpUrl : actual === coverage.webSocketUrl;
+    if (transport === "http-fetch") return actual === coverage.httpUrl || (coverage.api === "anthropic-messages" && actual === `${coverage.httpUrl}?beta=true`);
+    return actual === coverage.webSocketUrl;
   } catch { return false; }
 }
 
