@@ -63,7 +63,20 @@ function quota() {
   try {
     return JSON.parse(r.stdout).providers
       .filter((p) => ["claude", "codex", "copilot"].includes(p.provider))
-      .map((p) => ({ provider: p.provider, state: p.state?.status, windows: (p.windows ?? []).map((w) => ({ id: w.id, percentRemaining: w.percentRemaining, resetsAt: w.resetsAt })) }));
+      .map((p) => ({ provider: p.provider, state: p.state?.status, windows: (p.windows ?? []).map((w) => ({ id: w.id, percentRemaining: w.percentRemaining, resetsAt: w.resetsAt })) }))
+      .map((p) => (p.provider === "claude" && p.state !== "fresh" ? claudeUsageFromPi() ?? p : p));
+  } catch { return null; }
+}
+
+// Fallback when quota-axi has no Claude session: read the usage endpoint with Pi's own Anthropic token.
+function claudeUsageFromPi() {
+  try {
+    const token = JSON.parse(readFileSync(path.join(homedir(), ".pi/agent/auth.json"), "utf8")).anthropic?.access;
+    if (!token) return null;
+    const r = spawnSync("curl", ["-sf", "--max-time", "20", "-H", `Authorization: Bearer ${token}`, "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"], { encoding: "utf8" });
+    const d = JSON.parse(r.stdout);
+    const w = (id) => d[id] && { id, percentRemaining: Math.round(100 - d[id].utilization), resetsAt: d[id].resets_at };
+    return { provider: "claude", state: "fresh", source: "pi-oauth-usage", windows: [w("five_hour"), w("seven_day")].filter(Boolean) };
   } catch { return null; }
 }
 
