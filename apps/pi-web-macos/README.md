@@ -25,7 +25,8 @@ replaces services, including the session daemon. For an existing installation, p
 The installer:
 
 1. builds the release `PIWebMac` executable;
-2. records the resolved PI WEB checkout and CLI in the app bundle;
+2. records the PI WEB checkout and CLI in the app bundle, keeping symlinks such as
+   `pi-web.installed` so the app follows promotions;
 3. installs the split development services through `pi-web install --dev`; and
 4. atomically replaces the previous app.
 

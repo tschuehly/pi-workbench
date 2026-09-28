@@ -109,6 +109,12 @@ check_equal "app-only refresh preserves recorded CLI" "${fake_bin}/pi-web" "$(/u
 check_equal "app-only install invokes no lifecycle commands" "" "$(cat "${fake_cli_log}")"
 check_true "app-only install replaces the existing bundle" test ! -e "${app_path}/atomic-marker"
 
+ln -s "${fake_checkout}" "${test_root}/pi-web.installed"
+ln -s "${fake_bin}" "${test_root}/bin.installed"
+PI_WEB_TEST_DIR="${test_root}/pi-web.installed" PI_WEB_TEST_CLI="${test_root}/bin.installed/pi-web" run_installer --app-only
+check_equal "linked checkout is recorded unresolved so promotions carry over" "${test_root}/pi-web.installed" "$(/usr/libexec/PlistBuddy -c 'Print :CheckoutPath' "${bundle_config}")"
+check_equal "linked CLI is recorded unresolved" "${test_root}/bin.installed/pi-web" "$(/usr/libexec/PlistBuddy -c 'Print :CLIPath' "${bundle_config}")"
+
 printf 'preserve-existing-app\n' >"${app_path}/atomic-marker"
 if PI_WEB_FAKE_FAIL_INSTALL=1 run_installer 2>/dev/null; then
   printf 'not ok - installer should fail when lifecycle install preflight fails\n' >&2

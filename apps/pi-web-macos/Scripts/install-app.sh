@@ -51,7 +51,8 @@ fi
 absolute_executable() {
   local value="$1"
   local directory
-  directory="$(cd "$(dirname "${value}")" 2>/dev/null && pwd -P)" || return 1
+  # Keep symlinks (e.g. pi-web.installed) so the app follows promotions instead of pinning a revision.
+  directory="$(cd "$(dirname "${value}")" 2>/dev/null && pwd)" || return 1
   printf '%s/%s\n' "${directory}" "$(basename "${value}")"
 }
 
@@ -94,7 +95,7 @@ trap cleanup EXIT
 
 [[ "${destination}" == *.app ]] || fail "Destination must be a .app bundle: ${destination}"
 [[ -d "${pi_web_dir}" ]] || fail "PI WEB checkout not found at ${pi_web_dir}. Set PI_WEB_DIR to its location."
-pi_web_dir="$(cd "${pi_web_dir}" && pwd -P)"
+pi_web_dir="$(cd "${pi_web_dir}" && pwd)"
 [[ -f "${pi_web_dir}/package.json" ]] || fail "${pi_web_dir} does not contain a package.json."
 pi_web_cli="$(resolve_cli)" || fail "PI WEB CLI not found. Set PI_WEB_CLI to a pi-web command or built dist/cli.js."
 [[ -f "${app_icon}" ]] || fail "App icon not found at ${app_icon}."
