@@ -26,6 +26,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Pi CLI activity presentation | `extensions/activity/` |
 | Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
 | Session-log inventory and conversation extraction | `tools/session-logs/README.md` |
+| Owner re-entry orientation for Chats and Workstreams | `skills/orient/` |
 | Lead-session provider-input and skill-access audit | `extensions/agent-audit/`, `tools/agent-audit/` |
 | Pi and PI WEB configuration templates | `config/` |
 | Attended human–Pi work | `docs/contracts/execution.md`, `docs/contracts/workstreams.md` |
