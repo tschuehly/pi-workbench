@@ -9,3 +9,4 @@
   - goal tools appear during `/goal`;
   - prompt-cache reads stay high after a mid-session enable;
   - startup tokens match `node scripts/context-usage.mjs` (2026-09-29: lead 16,899, child 13,487).
+- [ ] Add a ponytail A/B arm to the model evaluation (Workstream ws-model-routing-eval-20260925): Opus 5.5 with and without the ponytail text in `~/.pi/agent/APPEND_SYSTEM.md`, on Workbench-typical tasks, measuring cost, output tokens, LOC, and correctness. No Opus 5.5 evidence exists yet (checked 2026-09-29; nearest is Opus 5 in ponytail PR #844, n≤3, conflicting). Thomas decides whether ponytail stays always on.
