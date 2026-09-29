@@ -57,6 +57,7 @@ test("rebuilds an identical deterministic projection from semantic ledger record
   assert.equal(snapshot.sessions[0].status, "active");
   assert.equal(snapshot.sessions[0].latestCheckpoint.id, "cp-1");
   assert.equal(snapshot.sessions[0].latestCheckpoint.waitingOn, "agent");
+  assert.equal(snapshot.sessions[0].latestCheckpoint.sessionTitle, null);
   assert.equal(snapshot.sessions[0].latestCheckpoint.nextSessionPrompt, null);
   assert.equal(snapshot.humanTasks[0].id, "task-1");
   assert.equal(snapshot.links[0].id, "link-1");
@@ -93,6 +94,7 @@ test("accepts checkpoints without a prompt, validates waitingOn, and bounds a le
 
   const checkpoint = { id: "cp-prompt", whatChanged: "Implemented", remains: "Review", next: "Run tests" };
   const replace = (idempotencyKey, value, expectedRevision = 2) => store.append({ workstreamId: "ws-1", expectedRevision, idempotencyKey, records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: value } }] });
+  await assert.rejects(replace("checkpoint-long-title", { ...checkpoint, sessionTitle: "x".repeat(81) }), (error) => error.code === "INVALID_REQUEST" && error.message.includes("sessionTitle"));
   await assert.rejects(replace("checkpoint-bad-waiting", { ...checkpoint, waitingOn: "nobody" }), (error) => error.code === "INVALID_REQUEST" && error.message.includes("waitingOn"));
   await assert.rejects(replace("checkpoint-empty-prompt", { ...checkpoint, nextSessionPrompt: " " }), (error) => error.code === "INVALID_REQUEST" && error.message.includes("nextSessionPrompt"));
   await assert.rejects(replace("checkpoint-long-prompt", { ...checkpoint, nextSessionPrompt: "x".repeat(2_001) }), (error) => error.code === "INVALID_REQUEST" && error.message.includes("at most 2000 characters"));
@@ -102,11 +104,15 @@ test("accepts checkpoints without a prompt, validates waitingOn, and bounds a le
   let latest = (await store.inspect("ws-1")).sessions[0].latestCheckpoint;
   assert.equal(latest.waitingOn, "owner");
   assert.equal(latest.nextSessionPrompt, null);
+  assert.equal(latest.sessionTitle, null);
 
   await replace("checkpoint-max-prompt", { ...checkpoint, id: "cp-legacy-prompt", nextSessionPrompt: "x".repeat(2_000) }, 3);
   latest = (await store.inspect("ws-1")).sessions[0].latestCheckpoint;
   assert.equal(latest.nextSessionPrompt.length, 2_000);
   assert.equal(latest.waitingOn, null);
+
+  await replace("checkpoint-title", { ...checkpoint, id: "cp-title", sessionTitle: "Merge OpenAPI PR stack" }, 4);
+  assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint.sessionTitle, "Merge OpenAPI PR stack");
 });
 
 test("projects omitted legacy confirmation fields as incomplete without inventing a checkpoint prompt", () => {

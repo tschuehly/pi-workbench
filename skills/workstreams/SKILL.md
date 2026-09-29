@@ -142,12 +142,13 @@ Write it for an owner returning after a weekend: concrete nouns, the actor on ev
 ## 4. Checkpoint automatically
 
 Write a checkpoint when meaningful attention changes, without waiting for the user to confirm each
-field. Persist five values:
+field. Persist six values:
 
 - `whatChanged`: what now exists or works, naming concrete artifacts — two to four short sentences, one fact each, anchors (commit, PR, path, count) inside the sentence they belong to;
 - `remains`: what is blocked or still owed — one short sentence per item, the owner's decisions first;
 - `next`: the suggested next action in one plain sentence, starting with the actor;
 - `waitingOn` (required): `owner` when Thomas must act or decide, `agent` when an agent can continue, or `external` when a third party, CI, or reviewer must act;
+- `sessionTitle`: this session's goal as a 2–6 word Chat title (for example "Merge OpenAPI PR stack"); keep it unless the session's goal changed, and never put status or progress in it;
 - `references`: the current absolute working directory first while it is a live continuation target, then only the concrete paths or identifiers needed to resume; use repository identity plus full commit ID for lasting Git evidence.
 
 Lead with the point and make the checkpoint sufficient to resume without rereading chat. Do not write `nextSessionPrompt`; a fresh Chat resumes with the `orient` skill.

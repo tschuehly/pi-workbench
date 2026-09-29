@@ -142,6 +142,8 @@ The active session writes for the owner who will read the checkpoint later and f
 - `agent`: an agent can continue without the owner; or
 - `external`: a third party, CI, or reviewer must act.
 
+Optional `sessionTitle` names the session's goal in a few words (at most 80 characters). PI WEB renames the checkpointed Chat to it unless the owner named that Chat by hand; it changes only when the session's goal changes, never for status.
+
 The Workstream's current `waitingOn` is the one on its newest checkpoint. Checkpoints written before the field existed project `waitingOn: null`.
 
 A new Chat resumes a Workstream by starting with the `orient` skill, not from a stored prompt. Durable checkpoint and link references must not point into operating-system temporary directories such as `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders; the Store rejects those references instead of creating future stale launch targets.

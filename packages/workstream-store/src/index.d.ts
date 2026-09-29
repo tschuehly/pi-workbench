@@ -66,6 +66,8 @@ export interface Checkpoint {
   /** Legacy paste-ready continuation prompt; no longer written. */
   nextSessionPrompt?: string;
   waitingOn?: WaitingOn;
+  /** The session's goal as a 2-6 word Chat title; PI WEB renames the Chat unless the owner named it. At most 80 characters. */
+  sessionTitle?: string;
   references?: string[];
 }
 
@@ -91,6 +93,7 @@ export interface ProjectedCheckpoint {
   next: string;
   nextSessionPrompt: string | null;
   waitingOn: WaitingOn | null;
+  sessionTitle: string | null;
   references?: string[];
   recordedAt: string;
 }
