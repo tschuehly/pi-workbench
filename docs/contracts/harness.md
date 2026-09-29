@@ -45,7 +45,7 @@ Runtime routing and the interactive startup check share a machine-local quota sn
 
 The owner uses Pi Workbench and PI WEB for daily work while they are developed. Running code and edited code therefore live in separate checkouts:
 
-- **Installed checkouts** — `~/IdeaProjects/pi-workbench.installed` and `pi-web.installed` link to immutable detached worktrees under `~/.pi-workbench/installed/`, one per promoted revision. Pi package settings, the PI WEB plugin link, and the launchd services load only these, and PI WEB runs its production services (`pi-web install`) on port 8505 rather than autoreloading dev servers. No session edits them.
+- **Installed checkouts** — `~/IdeaProjects/pi-workbench.installed` and `pi-web.installed` link to immutable detached worktrees under `~/.pi-workbench/installed/`, one per promoted revision. Pi package settings, the PI WEB plugin link, and the launchd services load only these, and PI WEB runs its production services (`pi-web install`) on port 8505 rather than autoreloading dev servers. No session edits them. `scripts/promote-installed check-settings` fails when any Pi Workbench or PI WEB package path in `~/.pi/agent/settings.json`, or the plugin link, resolves outside `~/.pi-workbench/installed/`; `switch` rolls back and `switch-workbench` refuses on that failure.
 - **Integration branches** — pi-workbench `main` and PI WEB `pi-workbench` receive work only as merged commits. Keep their checkouts clean; no session edits them in place.
 - **Development worktrees** — each editing session owns one linked worktree on its own branch. One session per worktree.
 

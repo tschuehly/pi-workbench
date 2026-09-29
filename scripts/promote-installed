@@ -27,6 +27,9 @@
 #       that differ.
 #   promote-installed check-idle
 #       Exit 3 and list running child Pi processes, or exit 0 when none run.
+#   promote-installed check-settings [settings.json]
+#       Exit 6 unless every Pi Workbench or PI WEB package path in Pi's settings, and the PI WEB
+#       pi-workbench plugin link, resolves into ~/.pi-workbench/installed (never a development checkout).
 set -Eeuo pipefail
 export PATH=${PI_PROMOTE_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
@@ -65,6 +68,19 @@ check_idle() { # Everything a session starts (subagents, workers, foreground com
   return 3
 }
 
+check_settings() { # [settings.json]
+  node -e '
+    const fs=require("fs"),path=require("path"),[file,store,plugin]=process.argv.slice(1);
+    const real=p=>{try{return fs.realpathSync(p)}catch{return null}},root=(real(store)??store)+"/";
+    const paths=(JSON.parse(fs.readFileSync(file,"utf8")).packages??[]).map(p=>typeof p==="string"?p:p.source)
+      .filter(p=>/^[~/.]/.test(p)&&/pi-web|pi-workbench/.test(p))
+      .map(p=>path.resolve(path.dirname(file),p.replace(/^~(?=\/)/,process.env.HOME)));
+    try{fs.lstatSync(plugin);paths.push(plugin)}catch{}
+    const bad=paths.filter(p=>!real(p)?.startsWith(root));
+    for(const p of bad)console.error(`not an installed checkout: ${p} -> ${real(p)??"missing"}`);
+    process.exit(bad.length?6:0)' "${1:-$HOME/.pi/agent/settings.json}" "$STORE" "$HOME/.pi-web/plugins/pi-workbench"
+}
+
 healthy() {
   curl -fsS --max-time 3 http://127.0.0.1:$PORT/api/plugins 2>/dev/null | node -e '
     let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const p=JSON.parse(d).plugins.find(x=>x.id==="pi-workbench");
@@ -97,6 +113,7 @@ JS
 
 force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
+[[ ${1:-} == check-settings && $# -le 2 ]] && { check_settings "${2:-}"; exit $?; }
 [[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
 if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   la=$HOME/Library/LaunchAgents; web=$HOME/Library/LaunchAgents/com.pi-web.web.plist
@@ -124,6 +141,7 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   echo "ROLLBACK FAILED: web service unhealthy on $old" >&2; exit 4
 fi
 if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
+  check_settings || { echo "refusing: Pi would not load the promoted Pi Workbench; fix the paths above" >&2; exit 6; }
   mkdir -p "$STORE"
   wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
   link=$PROJECTS/pi-workbench.installed
@@ -133,7 +151,7 @@ if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   echo "roll back: $0 switch-workbench ${previous##*-}"
   exit 0
 fi
-[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,29p' "$0"; exit 2; }
+[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,32p' "$0"; exit 2; }
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
 wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
@@ -208,6 +226,7 @@ node -e '
     :p.replace(/^.*\/pi-web[^/]*\/dist\/pi-packages\//,pw+"/dist/pi-packages/"));
   fs.writeFileSync(f,JSON.stringify(s,null,2)+"\n")' \
   \$HOME/.pi/agent/settings.json "$PROJECTS/pi-workbench" "$PROJECTS/pi-workbench.installed" "$PROJECTS/pi-web.installed"
+"$self" check-settings || rollback
 node -e '
   const fs=require("fs"),f=process.argv[1],c=JSON.parse(fs.readFileSync(f,"utf8"));
   c.port=$PORT; fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' \$HOME/.config/pi-web/config.json

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -78,4 +78,16 @@ test("sessiond-unchanged follows the daemon's imports and the lock, ignoring web
   assert.equal(shared.status, 1);
   assert.match(shared.stderr, /dist\/shared\/b\.js/);
   assert.equal(run(quiet, "sessiond-unchanged", base, build("b", "web", "lock changed")).status, 1);
+});
+
+test("check-settings refuses Pi Workbench or PI WEB packages outside the installed store", () => {
+  const store = join(dir, ".pi-workbench/installed/pi-workbench-0123456789ab");
+  mkdirSync(store, { recursive: true });
+  mkdirSync(join(dir, "pi-workbench"), { recursive: true });
+  symlinkSync(store, join(dir, "pi-workbench.installed"));
+  const settings = (...packages) => { const f = join(dir, "settings.json"); writeFileSync(f, JSON.stringify({ packages })); return f; };
+  assert.equal(run(quiet, "check-settings", settings("npm:pi-web-access", join(dir, "pi-workbench.installed"))).status, 0);
+  const dev = run(quiet, "check-settings", settings(join(dir, "pi-workbench.installed"), { source: join(dir, "pi-workbench") }));
+  assert.equal(dev.status, 6);
+  assert.match(dev.stderr, /not an installed checkout: .*\/pi-workbench ->/);
 });

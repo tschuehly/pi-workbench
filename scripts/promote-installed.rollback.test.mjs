@@ -26,7 +26,7 @@ function scenario(mode, bootstrapFails = false) {
   const saved = files.map(file => readFileSync(file));
   for (const name of ["pi-workbench", "pi-web"]) {
     mkdirSync(join(projects, name), { recursive: true });
-    mkdirSync(join(store, `${name}-${sha.slice(0, 12)}`), { recursive: true });
+    mkdirSync(join(store, `${name}-${sha.slice(0, 12)}`, name === "pi-web" ? "dist/pi-packages/a" : "packages"), { recursive: true });
     put(join(store, `${name}-${sha.slice(0, 12)}.prepared`), "");
     symlinkSync(`/previous/${name}`, join(projects, `${name}.installed`));
   }
