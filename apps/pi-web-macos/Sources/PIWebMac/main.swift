@@ -494,7 +494,7 @@ private final class SleepControlMessageHandler: NSObject, WKScriptMessageHandler
     }
 }
 
-/// Opens a local HTML page in the default browser, where its scripts and neighbouring assets work.
+/// Opens a local HTML page in the default browser, where its scripts and neighbouring assets work, or a local folder in Finder.
 private final class OpenLocalFileMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
     private let serverURL: URL?
     init(serverURL: URL?) { self.serverURL = serverURL }
@@ -503,8 +503,10 @@ private final class OpenLocalFileMessageHandler: NSObject, WKScriptMessageHandle
         guard message.frameInfo.isMainFrame, let expected = serverURL, let actual = message.frameInfo.request.url,
               actual.scheme?.lowercased() == expected.scheme?.lowercased(), actual.host?.lowercased() == expected.host?.lowercased(),
               actual.port == expected.port else { replyHandler(nil, "Only the PI WEB page can open local files"); return }
-        guard let file = localHTMLFileURL(message.body) else { replyHandler(nil, "Only existing local HTML files can be opened"); return }
-        if let browser = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!) {
+        guard let file = localOpenTarget(message.body) else { replyHandler(nil, "Only existing local HTML files and folders can be opened"); return }
+        if file.hasDirectoryPath {
+            NSWorkspace.shared.open(file)
+        } else if let browser = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!) {
             NSWorkspace.shared.open([file], withApplicationAt: browser, configuration: NSWorkspace.OpenConfiguration())
         } else {
             NSWorkspace.shared.open(file)
