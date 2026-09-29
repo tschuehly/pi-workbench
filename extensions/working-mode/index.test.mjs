@@ -8,10 +8,15 @@ const cwd = "/tmp/working-mode-test";
 const agentDir = `${cwd}/agent`;
 
 // A real Pi session with a scripted model: records every request the model receives.
-async function session(entries) {
+// `gate`, when given, holds the first reply open until it resolves so a test can act mid-run.
+async function session(entries, gate) {
   const faux = fauxProvider();
   const requests = [];
-  const reply = (context) => { requests.push(context); return fauxAssistantMessage("ok"); };
+  const reply = async (context) => {
+    requests.push(context);
+    if (gate && requests.length === 1) await gate;
+    return fauxAssistantMessage("ok");
+  };
   faux.setResponses(Array.from({ length: 20 }, () => reply));
   const snapshots = [];
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens: 1 } });
@@ -105,6 +110,93 @@ test("after compaction summarizes the block away, the next prompt attaches it ag
   assert.equal(blocks.length, 1);
   assert.match(blocks[0], /seq="2"[\s\S]*Attention — AFK/);
   s.session.dispose();
+});
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+test("/mode send while idle starts a turn that carries the block once", async () => {
+  const s = await session();
+  await s.session.prompt("first");
+  await s.session.prompt("/mode checking test");
+  await s.session.prompt("/mode send");
+  await s.session.waitForIdle();
+  await tick();
+  await s.session.waitForIdle();
+  assert.equal(s.requests.length, 2, "send starts a turn");
+  const [block] = s.blocks(s.last());
+  assert.match(block, /^<working-mode seq="1">[\s\S]*Checking — Test/);
+  assert.match(block, /Acknowledge this change in one sentence and continue under it\.\n<\/working-mode>$/);
+  assert.equal(s.snapshots.at(-1).phase, "applied");
+  assert.deepEqual(s.snapshots.at(-1).applied, { ...defaults, checking: "Test" });
+  await s.session.prompt("next");
+  assert.equal(s.blocks(s.last()).length, 1, "the next prompt does not repeat the sent block");
+  s.session.dispose();
+});
+
+test("/mode send while streaming steers the running turn", async () => {
+  let release;
+  const s = await session(undefined, new Promise((resolve) => { release = resolve; }));
+  const running = s.session.prompt("work");
+  while (s.requests.length === 0) await tick();
+  await s.session.prompt("/mode attention focused");
+  await s.session.prompt("/mode send");
+  release();
+  await running;
+  await s.session.waitForIdle();
+  assert.equal(s.requests.length, 2, "the steer continues the same run");
+  assert.equal(s.blocks(s.requests[0]).length, 0);
+  const [block] = s.blocks(s.last());
+  assert.match(block, /Attention — Focused[\s\S]*Acknowledge this change/);
+  await s.session.prompt("next");
+  assert.equal(s.blocks(s.last()).length, 1, "no duplicate after the steer lands");
+  s.session.dispose();
+});
+
+test("/mode send with nothing pending sends nothing", async () => {
+  const s = await session();
+  await s.session.prompt("/mode send");
+  await tick();
+  await s.session.prompt("/mode checking test");
+  await s.session.prompt("one");
+  await s.session.prompt("/mode send");
+  await tick();
+  assert.equal(s.requests.length, 1);
+  s.session.dispose();
+});
+
+test("a queued steer counts as visible; a dropped one is attached again", async () => {
+  const handlers = new Map();
+  let command;
+  const sent = [];
+  const notes = [];
+  workingMode({
+    on: (name, handler) => handlers.set(name, handler),
+    registerCommand: (_name, value) => { command = value; },
+    sendMessage: (message, options) => sent.push({ message, options }),
+    events: { emit() {} },
+  });
+  const ctx = {
+    mode: "rpc", hasUI: true,
+    sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
+    ui: { setStatus() {}, notify: (text) => notes.push(text) },
+  };
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  await command.handler("send", ctx);
+  assert.equal(sent.length, 0);
+  assert.equal(notes.at(-1), "Working Mode unchanged");
+  await command.handler("checking challenge", ctx);
+  await command.handler("send", ctx);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].options, { triggerTurn: true, deliverAs: "steer" });
+  assert.deepEqual(sent[0].message.details, { schemaVersion: 2, seq: 1, selection: { ...defaults, checking: "Challenge" } });
+  assert.equal(sent[0].message.display, true);
+  await command.handler("send", ctx);
+  assert.equal(sent.length, 1, "a queued block is not sent twice");
+  assert.equal(handlers.get("before_agent_start")({}, ctx), undefined, "queued block is not injected again");
+  handlers.get("agent_end")({}, ctx);
+  const result = handlers.get("before_agent_start")({}, ctx);
+  assert.equal(result.message.details.seq, 1, "dropped steer: the next prompt attaches the block");
+  assert.doesNotMatch(result.message.content, /Acknowledge/);
 });
 
 test("invalid commands change nothing", async () => {

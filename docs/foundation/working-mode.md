@@ -156,7 +156,8 @@ suffix, so a change never invalidates the provider's prompt cache:
 
 `/mode <axis> <value>` sets one axis in the terminal, RPC, or PI WEB; values are case-insensitive.
 Argument-free `/mode` opens axis and value pickers in the terminal. The terminal footer shows all
-four values. A change applies with the next prompt, not to a running agent loop. Every value is
+four values. A change applies with the next prompt; `/mode send` delivers it now, starting a turn
+when idle or steering a running agent loop, and asks the agent to acknowledge it. Every value is
 guidance; no tool, permission, or skill catalog changes. See the
 [extension README](../../extensions/working-mode/README.md).
 
