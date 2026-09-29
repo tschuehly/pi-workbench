@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, providerOf, reservePending, streamToResult, taskGoal, watchActivity } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, providerOf, reservePending, streamToResult, taskGoal, watchActivity } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -897,4 +897,38 @@ test("bulk collection reports an empty roster and never hides a child failure", 
 
 test("the subagent extension uses the process-shared barrier", () => {
   assert.equal(checkpointBarrier(), checkpointBarrier());
+});
+
+test("child web tools stay behind web_enable even when a later tool registration re-activates the allowlist", () => {
+  const web = ["web_enable", "web_search", "source_check", "fetch_content", "get_search_content"];
+  const child = (messages = [], initial = ["read", ...web]) => {
+    const handlers = new Map();
+    let active = [...initial];
+    keepChildWebToolsLazy({ on: (event, handler) => handlers.set(event, handler), getActiveTools: () => [...active], setActiveTools: (names) => { active = [...names]; } });
+    handlers.get("session_start")({}, { sessionManager: { buildSessionProjection: () => ({ messages }) } });
+    return { handlers, active: () => active, refresh: () => { active = [...initial]; } };
+  };
+
+  const fresh = child();
+  fresh.handlers.get("before_agent_start")();
+  assert.deepEqual(fresh.active(), ["read", "web_enable"]);
+  fresh.refresh();
+  fresh.handlers.get("turn_end")();
+  assert.deepEqual(fresh.active(), ["read", "web_enable"], "a mid-run registration refresh is undone before the next request");
+  fresh.handlers.get("tool_execution_end")({ toolName: "web_enable", isError: true });
+  fresh.refresh();
+  fresh.handlers.get("turn_end")();
+  assert.deepEqual(fresh.active(), ["read", "web_enable"], "a failed web_enable enables nothing");
+  fresh.handlers.get("tool_execution_end")({ toolName: "web_enable", isError: false });
+  fresh.refresh();
+  fresh.handlers.get("turn_end")();
+  assert.deepEqual(fresh.active(), ["read", ...web], "after web_enable the web tools stay active");
+
+  const resumed = child([{ role: "system", toolsAdded: [{ name: "read" }, { name: "web_search" }] }]);
+  resumed.handlers.get("before_agent_start")();
+  assert.deepEqual(resumed.active(), ["read", ...web], "a resumed transcript that declared web tools keeps them");
+
+  const eager = child([], ["read", "web_search"]);
+  eager.handlers.get("before_agent_start")();
+  assert.deepEqual(eager.active(), ["read", "web_search"], "eager pi-web-access (no web_enable) is left alone");
 });

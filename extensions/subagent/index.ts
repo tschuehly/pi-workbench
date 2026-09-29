@@ -17,6 +17,9 @@ import { activityText, progressText, recordProgress, renderProgressLog, reported
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
 const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"] as const;
+// The web tools are the ceiling web_enable activates within: Pi drops tools missing from --tools, so a
+// web_enable-only list would leave it nothing to enable. keepChildWebToolsLazy keeps them inactive until then.
+const WEB_TOOLS = ["web_search", "source_check", "fetch_content", "get_search_content"];
 const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content"] as const;
 const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found.";
 export const PROFILES = {
@@ -145,6 +148,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   const pendingWorkerCompletions = new Set<Promise<unknown>>();
   const pendingSubagentCompletions = new Set<Promise<unknown>>();
   const completionWakeup = createCheckpointAwareWakeup(pi);
+  if (process.env.PI_WORKBENCH_EXECUTION_KIND !== undefined) keepChildWebToolsLazy(pi);
 
   const backgroundShortcut = {
     description: "Background the newest foreground Subagent or Worker",
@@ -734,6 +738,34 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
     },
   });
+}
+
+/**
+ * pi-web-access narrows a fresh session to web_enable at session_start, but under a --tools allowlist
+ * Pi re-activates every allowed tool whenever any extension registers a tool later (pi-claude-code-use
+ * and pi-mcp-adapter do). Re-narrow before each request until web_enable succeeds or the resumed
+ * transcript already declared web tools. Without web_enable (eager pi-web-access) nothing changes.
+ */
+export function keepChildWebToolsLazy(pi: Pick<ExtensionAPI, "on" | "getActiveTools" | "setActiveTools">) {
+  let enabled = false;
+  const narrow = () => {
+    const active = pi.getActiveTools();
+    if (enabled || !active.includes("web_enable")) return;
+    const next = active.filter((name) => !WEB_TOOLS.includes(name));
+    if (next.length !== active.length) pi.setActiveTools(next);
+  };
+  pi.on("session_start", (_event, ctx) => {
+    const declared = new Set<string>();
+    for (const message of ctx.sessionManager.buildSessionProjection().messages as any[]) {
+      if (message.role !== "system") continue;
+      for (const tool of message.toolsRemoved ?? []) declared.delete(tool.name);
+      for (const tool of message.toolsAdded ?? []) declared.add(tool.name);
+    }
+    enabled = WEB_TOOLS.some((name) => declared.has(name));
+  });
+  pi.on("tool_execution_end", (event) => { if (event.toolName === "web_enable" && event.isError !== true) enabled = true; });
+  pi.on("before_agent_start", narrow);
+  pi.on("turn_end", narrow);
 }
 
 export async function watchActivity(
