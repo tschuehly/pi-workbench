@@ -15,7 +15,8 @@ const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "su
 export class PiRpcExecutionAdapter {
   constructor(options = {}) {
     this.command = options.command ?? "pi";
-    this.defaultStartupTimeoutMs = options.startupTimeoutMs ?? 15_000;
+    // A loaded machine (parallel Maven builds, renders) can take well over 15 s to start a child Pi.
+    this.defaultStartupTimeoutMs = options.startupTimeoutMs ?? ((value) => Number.isSafeInteger(value) && value > 0 ? value : 60_000)(Number(process.env.PI_WORKBENCH_STARTUP_TIMEOUT_MS));
     this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 10 * 60_000;
     this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write", "report_status", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content", ...DELEGATION_TOOLS]);
     this.clock = options.clock ?? (() => new Date());

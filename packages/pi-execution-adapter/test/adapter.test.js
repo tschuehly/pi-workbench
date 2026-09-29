@@ -109,6 +109,21 @@ function spec(overrides = {}) {
   };
 }
 
+test("defaults the startup timeout from a positive integer environment value", () => {
+  const previous = process.env.PI_WORKBENCH_STARTUP_TIMEOUT_MS;
+  try {
+    process.env.PI_WORKBENCH_STARTUP_TIMEOUT_MS = "90000";
+    assert.equal(new PiRpcExecutionAdapter().defaultStartupTimeoutMs, 90_000);
+    for (const invalid of ["0", "-1", "2.5", "not-a-number"]) {
+      process.env.PI_WORKBENCH_STARTUP_TIMEOUT_MS = invalid;
+      assert.equal(new PiRpcExecutionAdapter().defaultStartupTimeoutMs, 60_000);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.PI_WORKBENCH_STARTUP_TIMEOUT_MS;
+    else process.env.PI_WORKBENCH_STARTUP_TIMEOUT_MS = previous;
+  }
+});
+
 test("defaults the result budget from a positive integer environment value", () => {
   const previous = process.env.PI_WORKBENCH_RESULT_MAX_CHARS;
   try {

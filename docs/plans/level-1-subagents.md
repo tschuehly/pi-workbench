@@ -103,7 +103,7 @@ The module keeps only bounded live process state: execution identifier, process 
 
 Level 1 imposes no local child concurrency cap and provides no scheduler. Each invocation still represents one bounded child execution; future managed admission and scheduling remain controller-owned.
 
-Each execution has a startup timeout. Pi RPC must answer the initial state handshake within 15 seconds; a stall terminates before prompting as `launch_failed` with explicit startup evidence. After launch, a task runs until the child finishes, the lead cancels it, or the attended session shuts down.
+Each execution has a startup timeout. Pi RPC must answer the initial state handshake within 60 seconds (`PI_WORKBENCH_STARTUP_TIMEOUT_MS`); a stall terminates before prompting as `launch_failed` with explicit startup evidence. After launch, a task runs until the child finishes, the lead cancels it, or the attended session shuts down.
 
 ## Observations, results, and cancellation
 
