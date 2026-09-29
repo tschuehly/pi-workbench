@@ -290,12 +290,13 @@ function renderCheckpoint(item) {
       <div class="cp-section"><h4>What changed</h4><p>${escapeHtml(cp.whatChanged || "No change summary recorded.")}</p></div>
       <div class="cp-section"><h4>What remained</h4><p>${escapeHtml(cp.remains || "Nothing recorded.")}</p></div>
       <div class="cp-section"><h4>Next move</h4><p>${escapeHtml(cp.next || "No next move recorded.")}</p></div>
+      ${cp.waitingOn ? `<div class="cp-section"><h4>Waiting on</h4><p>${escapeHtml(cp.waitingOn)}</p></div>` : ""}
       ${cp.stale ? `<div class="stale-note"><strong>Marked stale.</strong> ${escapeHtml(cp.stale.reason)}</div>` : ""}
     </div>
     <div>
       <dl class="meta-list"><div><dt>ID</dt><dd>${escapeHtml(cp.id)}</dd></div><div><dt>Session</dt><dd>${escapeHtml(cp.sessionId || "—")}</dd></div><div><dt>Producer</dt><dd>${escapeHtml(cp.producer || "—")}</dd></div><div><dt>Revision</dt><dd>${cp.revision}</dd></div></dl>
       <div class="cp-section"><h4>References</h4>${refs}</div>
-      ${cp.nextSessionPrompt ? `<div class="cp-section"><h4>Continuation prompt</h4><p>${escapeHtml(cp.nextSessionPrompt)}</p></div>` : ""}
+      ${cp.nextSessionPrompt ? `<div class="cp-section"><h4>Legacy continuation prompt</h4><p>${escapeHtml(cp.nextSessionPrompt)}</p></div>` : ""}
     </div>
   </article>`;
 }

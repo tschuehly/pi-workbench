@@ -118,6 +118,7 @@ const items = Object.entries(store.workstreams).map(([id, raw]) => {
       whatChanged: checkpoint.whatChanged || "",
       remains: checkpoint.remains || "",
       next: checkpoint.next || "",
+      waitingOn: checkpoint.waitingOn || "",
       nextSessionPrompt: checkpoint.nextSessionPrompt || "",
       references: checkpoint.references || [],
       stale: stale ? { reason: stale.payload.reason, recordedAt: stale.recordedAt } : null,
