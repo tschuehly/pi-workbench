@@ -181,8 +181,6 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     return job === undefined ? undefined : describe(job);
   }
 
-  function cancelAll() { for (const job of jobs.values()) if (job.state === "running") cancel(job.id); }
-
   /** Stop watching; jobs keep running and are reattached by the next session start. */
   function shutdown() {
     closed = true;
@@ -191,5 +189,5 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     jobs.clear();
   }
 
-  return { start, attach, cancel, cancelAll, shutdown, list: () => [...jobs.values()].map(describe) };
+  return { start, attach, cancel, shutdown, list: () => [...jobs.values()].map(describe) };
 }

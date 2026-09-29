@@ -33,7 +33,7 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "bash", label: "bash",
-    description: "Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait. One-shot print/JSON modes run foreground; child Pi uses the native bash tool. Background jobs survive reload and PI WEB restarts but are cancelled by /new, /resume or fork; they stop at their timeout or a 12-hour maximum lifetime.",
+    description: "Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait. One-shot print/JSON modes run foreground; child Pi uses the native bash tool. Background jobs survive session shutdown, reload and PI WEB restarts; they stop at their timeout or a 12-hour maximum lifetime.",
     promptSnippet: "Run bash commands in the background by default; use foreground for dependent steps",
     promptGuidelines: [
       "Run long checks and builds in the background. Continue independent work, then wait for their completion message before dependent actions; never infer success from a job ID.",
@@ -88,7 +88,6 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
     },
   });
 
-  // Quit and reload (including PI WEB restarts) keep jobs running for the next session_start to reattach.
-  // Leaving the session for another (/new, /resume, fork) cancels them, as nothing would watch them.
-  pi.on("session_shutdown", (event) => { const reason = event?.reason; if (reason === "new" || reason === "resume" || reason === "fork") jobs.cancelAll(); jobs.shutdown(); clearStatus(); publishStatus = () => {}; clearStatus = () => {}; });
+  // Jobs keep running; the next session_start of this session reattaches them.
+  pi.on("session_shutdown", () => { jobs.shutdown(); clearStatus(); publishStatus = () => {}; clearStatus = () => {}; });
 }

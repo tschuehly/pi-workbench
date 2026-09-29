@@ -4,7 +4,7 @@ In an attended lead Pi session, this package overrides the model-callable `bash`
 
 Set `foreground: true` when a following action needs the command's exit status or output before proceeding. Use `bash_status` to inspect jobs and `bash_cancel` to stop one. At most eight jobs per session run concurrently. Background jobs are attended session work, not durable Run jobs.
 
-Jobs survive quitting the session, `/reload`, and PI WEB session-daemon restarts, including promotion. Leaving the session for another one (`/new`, `/resume`, fork) cancels its running jobs, since nothing would watch them. Each job runs under a small detached runner (`runner.mjs`) that leads its own process group, so it no longer belongs to the Pi process or daemon that started it. The runner writes the output log and a one-shot exit record, and kills the job's process group at its `timeout` or, without one, after a 12-hour maximum lifetime. Processes the command deliberately moves into a new session (`setsid`) are outside that group, as with native bash.
+Jobs survive session shutdown, `/reload`, and PI WEB session-daemon restarts, including promotion. Each job runs under a small detached runner (`runner.mjs`) that leads its own process group, so it no longer belongs to the Pi process or daemon that started it. The runner writes the output log and a one-shot exit record, and kills the job's process group at its `timeout` or, without one, after a 12-hour maximum lifetime. Processes the command deliberately moves into a new session (`setsid`) are outside that group, as with native bash.
 
 The job registry lives at `~/.pi-workbench/background-bash/jobs/<id>/` (directories `0700`, files `0600`):
 
