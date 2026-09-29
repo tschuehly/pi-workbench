@@ -8,7 +8,8 @@ import { join } from "node:path";
 const script = new URL("./promote-installed", import.meta.url).pathname;
 const sha = "abcdef1234567890";
 const put = (path, data) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, data); };
-const plist = (entry) => `<string>exec node '${entry}'</string>\n`;
+// launchd plists written by pi-web escape the quotes as &apos;.
+const plist = (entry) => `<string>exec node &apos;${entry}&apos;</string>\n`;
 
 function scenario({ healthy, daemonChanged = false }) {
   const root = mkdtempSync(join(tmpdir(), "promote-switch-web-"));

@@ -117,7 +117,7 @@ force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
 if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   la=$HOME/Library/LaunchAgents; web=$HOME/Library/LaunchAgents/com.pi-web.web.plist
-  entry() { sed -n "s|.*exec node '\(.*\)/dist/server/$2'.*|\1|p" "$1"; }
+  entry() { sed -e "s/&apos;/'/g" "$1" | sed -n "s|.*exec node '\(.*\)/dist/server/$2'.*|\1|p"; }
   running=$(entry "$la/com.pi-web.sessiond.plist" sessiond.js); old=$(entry "$web" index.js)
   [[ -n $running && -n $old ]] || { echo "cannot read the running PI WEB builds from $la" >&2; exit 1; }
   mkdir -p "$STORE"
@@ -126,7 +126,7 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
     echo "refusing: the files above differ from the running session daemon ($running); use switch" >&2; exit 5
   fi
   swap() { # <from-dir> <to-dir>
-    sed -i '' "s|exec node '$1/dist/server/index.js'|exec node '$2/dist/server/index.js'|" "$web"
+    sed -i '' "s|$1/dist/server/index.js|$2/dist/server/index.js|" "$web"
     ln -sfn "$2" "$PROJECTS/pi-web.installed"
     launchctl bootout "gui/$(id -u)/com.pi-web.web" 2>/dev/null || true
     sleep 1
