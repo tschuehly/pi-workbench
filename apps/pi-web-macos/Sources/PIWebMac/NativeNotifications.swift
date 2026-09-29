@@ -27,14 +27,15 @@ Object.defineProperty(window, "piWebNative", {
 });
 """
 
-/// Only an existing local HTML file, judged after resolving symlinks: opening arbitrary paths could launch apps or scripts.
-func localHTMLFileURL(_ value: Any) -> URL? {
+/// An existing local HTML file (opens in the browser) or plain folder (opens in Finder), judged after resolving
+/// symlinks. Other files and packages such as `.app` bundles are refused: opening them could launch apps or scripts.
+func localOpenTarget(_ value: Any) -> URL? {
     guard let path = value as? String, path.hasPrefix("/") else { return nil }
     let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
     var isDirectory: ObjCBool = false
-    guard ["html", "htm"].contains(url.pathExtension.lowercased()),
-          FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return nil }
-    return url
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return nil }
+    if isDirectory.boolValue { return (try? url.resourceValues(forKeys: [.isPackageKey]).isPackage) == false ? URL(fileURLWithPath: url.path, isDirectory: true) : nil }
+    return ["html", "htm"].contains(url.pathExtension.lowercased()) ? url : nil
 }
 
 enum NativeNotificationCommand {
