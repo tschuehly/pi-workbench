@@ -97,3 +97,17 @@ test("a reloaded extension reattaches the session's running job and cancels it",
   assert.match(after.messages[0].content, /cancelled/);
   await after.handlers.get("session_shutdown")();
 });
+
+test("leaving a session via /new keeps its job, and resuming that session reattaches it", async () => {
+  const before = harness();
+  await before.handlers.get("session_start")({}, before.ctx);
+  const started = await before.tools.get("bash").execute("call", { command: "sleep 30" }, undefined, undefined, before.ctx);
+  await before.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "new" });
+  const resumed = harness();
+  await resumed.handlers.get("session_start")({ reason: "resume" }, resumed.ctx);
+  const status = await resumed.tools.get("bash_status").execute("call", { id: started.details.id });
+  assert.equal(status.details.jobs[0].state, "running");
+  await resumed.tools.get("bash_cancel").execute("call", { id: started.details.id });
+  await resumed.completion;
+  await resumed.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" });
+});
