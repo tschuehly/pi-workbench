@@ -259,8 +259,9 @@ function applyFakeRecord(snapshot, record, metadata) {
       break;
     }
     case "checkpoint.replaced": {
-      if (!isReplacementCheckpoint(record.payload.checkpoint)) throw new Error("Replacement checkpoint requires a next-session prompt of at most 2,000 characters.");
-      Object.assign(session(snapshot, record.payload.sessionId), { latestCheckpoint: structuredClone(record.payload.checkpoint), checkpointFailure: null, checkpointStaleness: null });
+      const checkpoint = { ...structuredClone(record.payload.checkpoint), nextSessionPrompt: record.payload.checkpoint?.nextSessionPrompt ?? null, waitingOn: record.payload.checkpoint?.waitingOn ?? null };
+      if (!isCheckpoint(checkpoint)) throw new Error("Replacement checkpoint is invalid.");
+      Object.assign(session(snapshot, record.payload.sessionId), { latestCheckpoint: checkpoint, checkpointFailure: null, checkpointStaleness: null });
       break;
     }
     case "checkpoint.failed": session(snapshot, record.payload.sessionId).checkpointFailure = record.payload.reason; break;
@@ -351,11 +352,8 @@ function isCheckpoint(value) {
     && isString(value.remains)
     && isString(value.next)
     && (value.nextSessionPrompt === null || isString(value.nextSessionPrompt) && value.nextSessionPrompt.length <= 2_000)
+    && (value.waitingOn === undefined || value.waitingOn === null || ["owner", "agent", "external"].includes(value.waitingOn))
     && (value.references === undefined || (Array.isArray(value.references) && value.references.every(isString)));
-}
-
-function isReplacementCheckpoint(value) {
-  return isCheckpoint(value) && typeof value.nextSessionPrompt === "string";
 }
 
 function isCheckpointStaleness(value) {

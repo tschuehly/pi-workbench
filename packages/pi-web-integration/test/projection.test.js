@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicFakeWorkstreamClient, parseRecordedWorkstreams } from "../fake-workstream-client.js";
-import { checkpointProposalPrompt, copyNextSessionPrompt, currentSessionLocationResult, dedicatedMobileControlState, dedicatedWorkstreamLayout, hostedChatViewRequiresRemount, hostedSurfaceMountOptions, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, startLocationFailureMessage, startLocationRecoveryVisible, transitionDedicatedWorkstreamUi, typedHostError } from "../pi-web-plugin.js";
+import { checkpointProposalPrompt, currentSessionLocationResult, dedicatedMobileControlState, dedicatedWorkstreamLayout, hostedChatViewRequiresRemount, hostedSurfaceMountOptions, normalizeDedicatedMobilePane, parseWorkbenchProjection, recordedWorkstreamSelection, sessionAnchor, startLocationFailureMessage, startLocationRecoveryVisible, transitionDedicatedWorkstreamUi, typedHostError } from "../pi-web-plugin.js";
 import { createWorkbenchWorkstreamClient, reconcileWorkstreams, WorkstreamClientError } from "../workstream-client.js";
 import { WorkstreamSessionCoordinator } from "../workstream-session-coordinator.js";
 
@@ -215,26 +215,9 @@ test("fake and typed clients project pending derivation and remove cancelled ass
 test("checkpoint proposal guidance carries the complete attended contract", () => {
   const proposal = checkpointProposalPrompt();
   assert.match(proposal, /exactly five labeled parts/);
-  assert.match(proposal, /Next-session prompt/);
+  assert.match(proposal, /Waiting on \(owner, agent, or external\)/);
+  assert.doesNotMatch(proposal, /Next-session prompt/);
   assert.match(proposal, /References/);
-});
-
-test("copies the exact next-session prompt and falls back when clipboard access fails", async () => {
-  let copied;
-  const clipboardResult = await copyNextSessionPrompt("Continue exactly here.", {
-    clipboard: { writeText: async (value) => { copied = value; } },
-    fallback: () => assert.fail("fallback should not be used"),
-  });
-  assert.equal(clipboardResult, "clipboard");
-  assert.equal(copied, "Continue exactly here.");
-
-  let fallback;
-  const fallbackResult = await copyNextSessionPrompt("Resume safely.", {
-    clipboard: { writeText: async () => { throw new Error("denied"); } },
-    fallback: (value) => { fallback = value; },
-  });
-  assert.equal(fallbackResult, "fallback");
-  assert.equal(fallback, "Resume safely.");
 });
 
 test("server Workstream responses remain strict JSON when a session has no anchor", async () => {
@@ -346,7 +329,7 @@ test("session launch records pending before start and confirms exactly one runti
       assert.equal(calls[0], "session.pending");
       assert.match(initialPrompt, /Workstream “Pair”/);
       assert.match(initialPrompt, /Level 1 Pair posture/);
-      assert.match(initialPrompt, /exact paste-ready prompt/);
+      assert.match(initialPrompt, /who the Workstream waits on/);
       assert.match(initialPrompt, /review and confirm every field before persistence/);
       return { id: "session-runtime", location: { machineId: "local", projectId: "project-1", workspaceId: "workspace-1" } };
     },
@@ -510,15 +493,20 @@ test("typed Workstream client rejects malformed canonical success values", async
   assert.equal((await legacyPromptClient.inspect("ws-workstream-store")).sessions[0].latestCheckpoint.nextSessionPrompt, null);
 });
 
-test("fake Workstream client rejects replacement checkpoints without the required prompt", async () => {
+test("fake Workstream client accepts replacement checkpoints without a prompt and validates waitingOn", async () => {
   const fixture = parseRecordedWorkstreams(JSON.parse(await readFile(new URL("../fixtures/recorded-workstreams.json", import.meta.url), "utf8")));
   const client = new DeterministicFakeWorkstreamClient(fixture);
-  await assert.rejects(client.append({
+  const replace = (idempotencyKey, checkpoint) => client.append({
     workstreamId: "ws-workstream-store",
     expectedRevision: 8,
-    idempotencyKey: "missing-next-session-prompt",
-    records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-store-contract", checkpoint: { id: "cp-invalid", whatChanged: "Changed", remains: "Remains", next: "Next" } } }],
-  }), /requires a next-session prompt/);
+    idempotencyKey,
+    records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-store-contract", checkpoint } }],
+  });
+  await assert.rejects(replace("invalid-waiting-on", { id: "cp-invalid", whatChanged: "Changed", remains: "Remains", next: "Next", waitingOn: "nobody" }), /invalid/);
+  await replace("no-prompt", { id: "cp-no-prompt", whatChanged: "Changed", remains: "Remains", next: "Next", waitingOn: "owner" });
+  const latest = (await client.inspect("ws-workstream-store")).sessions.find((session) => session.id === "session-store-contract").latestCheckpoint;
+  assert.equal(latest.waitingOn, "owner");
+  assert.equal(latest.nextSessionPrompt, null);
 });
 
 test("typed Workstream client structurally validates optional projected session anchors", async () => {

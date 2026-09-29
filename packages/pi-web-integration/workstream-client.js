@@ -137,6 +137,7 @@ function isCheckpoint(value) {
     && isString(value.remains)
     && isString(value.next)
     && (value.nextSessionPrompt === null || isString(value.nextSessionPrompt) && value.nextSessionPrompt.length <= 2_000)
+    && (value.waitingOn === undefined || value.waitingOn === null || ["owner", "agent", "external"].includes(value.waitingOn))
     && (value.references === undefined || Array.isArray(value.references) && value.references.every(isString));
 }
 

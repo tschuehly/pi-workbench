@@ -251,6 +251,8 @@ test("brief projection preserves sourced per-session fields and checkpoint truth
   assert.deepEqual(remembered.unresolvedHumanTasks.map((task) => task.status), ["pending", "answered"]);
   assert.equal(remembered.unresolvedHumanTasks.some((task) => task.id === "task-resolved"), false);
   assert.equal(remembered.sessions.find((session) => session.id === "session-a").whatChanged, "The destination model is fixed.");
+  assert.equal(remembered.sessions.find((session) => session.id === "session-a").waitingOn, "agent");
+  assert.equal(remembered.sessions.find((session) => session.id === "session-b").waitingOn, null);
   assert.equal(remembered.sessions.find((session) => session.id === "session-c").checkpointStatus, "failed");
   assert.equal(remembered.sessions.find((session) => session.id === "session-c").confirmedCheckpointAvailable, true);
   assert.equal(remembered.sessions.find((session) => session.id === "session-c").priorCheckpointAvailable, true);

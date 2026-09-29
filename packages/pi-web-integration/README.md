@@ -23,7 +23,7 @@ The view preserves current and closed Workstreams, revision, loading, empty, fai
 - launch, reconcile, and resume attended sessions;
 - repair session anchors;
 - request and confirm checkpoints;
-- show and copy each checkpoint's distinct next-session prompt;
+- show who each checkpoint is waiting on;
 - answer and separately resolve typed Human Tasks;
 - append reference links;
 - render accepted receipts; and
@@ -139,7 +139,7 @@ The shared module follows this sequence:
 
 A checked pre-creation rejection records failure. Transport loss or another unproven outcome remains pending.
 
-The initial prompt carries the Workstream identity, Level 1 boundary, and complete five-field attended-checkpoint guidance into a fresh session. New checkpoints require a separate, non-empty `nextSessionPrompt` no longer than 2,000 characters. Checkpoints created before that field existed show it as unavailable instead of reconstructing it from `next`.
+The initial prompt carries the Workstream identity, Level 1 boundary, and complete five-field attended-checkpoint guidance into a fresh session. New checkpoints record `waitingOn` (`owner`, `agent`, or `external`) and no longer write `nextSessionPrompt`; a legacy prompt is shown read-only when present. A checkpoint continuation starts the fresh session with the `orient` skill and the confirmed checkpoint fields.
 
 The coordinator exposes guarded checkpoint inspection and launch methods for a future host contribution. This package does not claim a server journal, explicit target-location start, or **Continue in new session** UI.
 

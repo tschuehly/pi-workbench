@@ -25,7 +25,7 @@ export function dedicatedWorkstreamLayout({ tool, sessionsPaneOpen }) {
 }
 
 export function checkpointProposalPrompt() {
-  return "Propose a concise attended Workstream checkpoint with exactly five labeled parts: What changed, What remains, Next useful action, Next-session prompt, and References. Make the next-session prompt exact and paste-ready for a fresh attended Pi session; list only concrete paths or identifiers under References. Do not persist it; I will review and confirm it in the Workstreams view.";
+  return "Propose a concise attended Workstream checkpoint with exactly five labeled parts: What changed, What remains, Next useful action, Waiting on (owner, agent, or external), and References. List only concrete paths or identifiers under References. Do not persist it; I will review and confirm it in the Workstreams view.";
 }
 
 export function normalizeDedicatedMobilePane(value) {
@@ -851,25 +851,25 @@ function installWorkstreamsElement() {
       if (remains === null || remains.trim() === "") return;
       const next = window.prompt("Next useful action?", prior?.next ?? "");
       if (next === null || next.trim() === "") return;
-      const nextSessionPromptInput = window.prompt("Exact prompt to paste into the next attended session (maximum 2,000 characters)", prior?.nextSessionPrompt ?? "");
-      if (nextSessionPromptInput === null) return;
-      const nextSessionPrompt = nextSessionPromptInput.trim();
-      if (nextSessionPrompt === "" || nextSessionPrompt.length > 2_000) {
-        recordedWorkstreamState.error = "The next-session prompt must contain 1 to 2,000 characters.";
+      const waitingOnInput = window.prompt("Waiting on: owner, agent, or external?", prior?.waitingOn ?? "");
+      if (waitingOnInput === null) return;
+      const waitingOn = waitingOnInput.trim().toLowerCase();
+      if (!["owner", "agent", "external"].includes(waitingOn)) {
+        recordedWorkstreamState.error = "Waiting on must be owner, agent, or external.";
         this.#render();
         return;
       }
       const referencesInput = window.prompt("References (optional; one path or identifier per line)", prior?.references?.join("\n") ?? "");
       if (referencesInput === null) return;
       const references = referencesInput.split("\n").map((value) => value.trim()).filter(Boolean);
-      if (!window.confirm(`Save this checkpoint?\n\nChanged: ${whatChanged}\n\nRemains: ${remains}\n\nNext: ${next}\n\nNext-session prompt: ${nextSessionPrompt}\n\nReferences: ${references.join(", ") || "None"}`)) return;
+      if (!window.confirm(`Save this checkpoint?\n\nChanged: ${whatChanged}\n\nRemains: ${remains}\n\nNext: ${next}\n\nWaiting on: ${waitingOn}\n\nReferences: ${references.join(", ") || "None"}`)) return;
       void this.#mutate(async (client) => {
         try {
           return await client.append({
             workstreamId: snapshot.id,
             expectedRevision: snapshot.revision,
             idempotencyKey: newId("checkpoint"),
-            records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: session.id, payload: { sessionId: session.id, checkpoint: { id: newId("cp"), whatChanged: whatChanged.trim(), remains: remains.trim(), next: next.trim(), nextSessionPrompt, ...(references.length === 0 ? {} : { references }) } } }],
+            records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: session.id, payload: { sessionId: session.id, checkpoint: { id: newId("cp"), whatChanged: whatChanged.trim(), remains: remains.trim(), next: next.trim(), waitingOn, ...(references.length === 0 ? {} : { references }) } } }],
           });
         } catch (error) {
           const current = await client.inspect(snapshot.id);
@@ -2127,9 +2127,8 @@ function renderConfirmedUpdate(session) {
     return item;
   }
   item.append(field("What changed", session.whatChanged), field("What remains", session.remains), field("Next useful action", session.next));
-  const prompt = field("Next-session prompt", session.nextSessionPrompt ?? "Unavailable for this confirmed checkpoint");
-  if (typeof session.nextSessionPrompt === "string") prompt.append(keyedButton("Copy exact prompt", `checkpoint:${session.id}:copy-prompt`, () => { void copyNextSessionPrompt(session.nextSessionPrompt); }));
-  item.append(prompt);
+  item.append(field("Waiting on", session.waitingOn ?? "Not recorded"));
+  if (typeof session.nextSessionPrompt === "string") item.append(field("Legacy next-session prompt", session.nextSessionPrompt));
   const references = field("References", session.references.length === 0 ? "None recorded" : session.references.join("\n"));
   references.classList.add("checkpoint-references");
   item.append(references);
@@ -2910,22 +2909,6 @@ function isMissingFileError(error) {
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
-}
-
-export async function copyNextSessionPrompt(value, {
-  clipboard = globalThis.navigator?.clipboard,
-  fallback = (prompt) => { window.prompt("Copy next-session prompt", prompt); },
-} = {}) {
-  if (clipboard?.writeText !== undefined) {
-    try {
-      await clipboard.writeText(value);
-      return "clipboard";
-    } catch {
-      // Fall through to a selectable prompt when clipboard access is unavailable.
-    }
-  }
-  fallback(value);
-  return "fallback";
 }
 
 function newId(prefix) {

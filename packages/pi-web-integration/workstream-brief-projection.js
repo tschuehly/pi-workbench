@@ -111,6 +111,7 @@ function projectSession(session) {
     remains: session.latestCheckpoint?.remains,
     next: session.latestCheckpoint?.next,
     nextSessionPrompt: session.latestCheckpoint?.nextSessionPrompt,
+    waitingOn: session.latestCheckpoint?.waitingOn ?? null,
     references: [...(session.latestCheckpoint?.references ?? [])],
     checkpointFailure: session.checkpointFailure,
     checkpointStaleness: session.checkpointStaleness,

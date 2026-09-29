@@ -93,6 +93,7 @@
               "remains": "Build the responsive shell.",
               "next": "Implement the root navigator.",
               "nextSessionPrompt": "Continue the unified navigator implementation.",
+              "waitingOn": "agent",
               "references": [
                 "docs/plans/pi-web-unified-ui-production.md"
               ]
@@ -398,6 +399,7 @@
                 "remains": "Build the responsive shell.",
                 "next": "Implement the root navigator.",
                 "nextSessionPrompt": "Continue the unified navigator implementation.",
+                "waitingOn": "agent",
                 "references": [
                   "docs/plans/pi-web-unified-ui-production.md"
                 ]
