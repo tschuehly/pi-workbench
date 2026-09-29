@@ -31,9 +31,10 @@ When the model already sees the selection, it only notifies "Working Mode unchan
   the agent to prepare instead: stay in the conversation, present the agreement (Align bullets or
   a persisted plan or specification) with its checklist and every foreseeable question, and wait.
   After Thomas confirms, the agent calls `alignment_reached`; its result carries the AFK rules and
-  the next block says alignment is reached. Changing the Alignment value clears it. With Alignment
+  the next block says alignment is reached. Changing the Alignment value clears it, and the agent
+  calls `alignment_reset` when the work turns to a new task that needs a new agreement. With Alignment
   Default, AFK starts at once. The snapshot's `aligned` field reports the state.
-- Guidance only: the `alignment_reached` tool records state; no permissions or skill catalog change.
+- Guidance only: the `alignment_reached` and `alignment_reset` tools record state; no permissions or skill catalog change.
 
 The behavioral contract is [Working Mode](../../docs/foundation/working-mode.md).
 

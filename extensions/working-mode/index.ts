@@ -53,6 +53,7 @@ export type WorkingModeSnapshot = {
 export type WorkingModeDetails = { schemaVersion: 2; seq: number; selection: WorkingModeState; aligned?: boolean };
 
 export const ALIGNMENT_TOOL = "alignment_reached";
+export const ALIGNMENT_RESET_TOOL = "alignment_reset";
 
 /** How each Alignment value reaches alignment before AFK starts; Default needs none. */
 const afkPreparation: Record<string, string> = {
@@ -78,13 +79,16 @@ export function isSelection(value: any): value is WorkingModeState {
   return !!value && axisNames.every((axis) => typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis]));
 }
 
-/** Alignment state from whichever came last on the branch: a Working Mode block or an alignment_reached result. */
+/** Alignment state from whichever came last on the branch: a Working Mode block or an alignment tool result. */
 function latestAligned(entries: readonly any[]): boolean {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (entry?.type === "custom_message" && entry.customType === CUSTOM_TYPE && isSelection(entry.details?.selection)) return !!entry.details.aligned;
     const message = entry?.type === "message" ? entry.message : undefined;
-    if (message?.role === "toolResult" && message.toolName === ALIGNMENT_TOOL && !message.isError) return true;
+    if (message?.role === "toolResult" && !message.isError) {
+      if (message.toolName === ALIGNMENT_TOOL) return true;
+      if (message.toolName === ALIGNMENT_RESET_TOOL) return false;
+    }
   }
   return false;
 }
@@ -232,6 +236,19 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         ? `Alignment recorded. AFK starts now: ${axes.attention.values.AFK}`
         : "Alignment recorded.";
       return { content: [{ type: "text", text }], details: { alignment: selected.alignment, agreement: params.agreement } };
+    },
+  });
+
+  pi.registerTool({
+    name: ALIGNMENT_RESET_TOOL,
+    label: "Alignment reset",
+    description: "Clear the confirmed alignment when the work turns to a new task that needs a new agreement with Thomas.",
+    parameters: Type.Object({ reason: Type.String({ minLength: 1, description: "The new task, briefly" }) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      aligned = false;
+      publish(ctx, "applied");
+      const text = afkPending(selected, aligned) ? `Alignment cleared. ${afkPreparationText(selected)}` : "Alignment cleared.";
+      return { content: [{ type: "text", text }], details: { alignment: selected.alignment, reason: params.reason } };
     },
   });
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
-import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL } from "./index.ts";
+import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL } from "./index.ts";
 
 const cwd = "/tmp/working-mode-test";
 const agentDir = `${cwd}/agent`;
@@ -244,12 +244,13 @@ test("the terminal picker changes one axis; cancel changes nothing", async () =>
 // Drives the extension through fake Pi hooks so the alignment tool can be called directly.
 function fakePi(branch = []) {
   const handlers = new Map();
-  let command, tool;
+  let command;
+  const tools = {};
   const snapshots = [];
   workingMode({
     on: (name, handler) => handlers.set(name, handler),
     registerCommand: (_name, value) => { command = value; },
-    registerTool: (value) => { tool = value; },
+    registerTool: (value) => { tools[value.name] = value; },
     events: { emit: (_name, value) => snapshots.push(value) },
   });
   const context = [];
@@ -264,12 +265,14 @@ function fakePi(branch = []) {
     if (result) context.push({ type: "custom_message", customType: result.message.customType, details: result.message.details });
     return result?.message;
   };
-  const confirm = async () => {
-    const result = await tool.execute("t1", { agreement: "ship X; check Y" }, undefined, undefined, ctx);
-    context.push({ type: "message", message: { role: "toolResult", toolName: ALIGNMENT_TOOL, isError: false, details: result.details } });
+  const call = async (name, params) => {
+    const result = await tools[name].execute("t1", params, undefined, undefined, ctx);
+    context.push({ type: "message", message: { role: "toolResult", toolName: name, isError: false, details: result.details } });
     return result.content[0].text;
   };
-  return { mode: (args) => command.handler(args, ctx), prompt, confirm, snapshots, tool };
+  const confirm = () => call(ALIGNMENT_TOOL, { agreement: "ship X; check Y" });
+  const reset = () => call(ALIGNMENT_RESET_TOOL, { reason: "new task Z" });
+  return { mode: (args) => command.handler(args, ctx), prompt, confirm, reset, snapshots };
 }
 
 test("AFK with an Alignment value stays interactive until alignment is reached", async () => {
@@ -309,4 +312,26 @@ test("resume restores alignment from the latest alignment_reached result", () =>
   const s = fakePi(branch);
   assert.equal(s.snapshots.at(-1).aligned, true);
   assert.equal(fakePi(branch.slice(0, 1)).snapshots.at(-1).aligned, false);
+});
+
+test("the agent can reset alignment for a new task", async () => {
+  const s = fakePi();
+  await s.mode("alignment align");
+  await s.mode("attention afk");
+  s.prompt();
+  await s.confirm();
+  s.prompt();
+  assert.match(await s.reset(), /^Alignment cleared\. AFK has not started[\s\S]*five bullets/);
+  assert.equal(s.snapshots.at(-1).aligned, false);
+  assert.match(s.prompt().content, /AFK \(preparing\)/);
+});
+
+test("resume after a reset restores unaligned state", () => {
+  const selection = { ...defaults, alignment: "Align", attention: "AFK" };
+  const branch = [
+    { type: "custom_message", customType: "working-mode", details: { schemaVersion: 2, seq: 1, selection, aligned: false } },
+    { type: "message", message: { role: "toolResult", toolName: ALIGNMENT_TOOL, isError: false } },
+    { type: "message", message: { role: "toolResult", toolName: ALIGNMENT_RESET_TOOL, isError: false } },
+  ];
+  assert.equal(fakePi(branch).snapshots.at(-1).aligned, false);
 });

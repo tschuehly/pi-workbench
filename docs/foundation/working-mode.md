@@ -80,7 +80,7 @@ Pia stays interactive in the conversation and prepares: she presents the agreeme
 value asks for (five Align bullets, or a persisted plan or specification) with the checklist she
 will follow and a numbered list of every question she can foresee, then waits. After Thomas
 confirms, Pia calls `alignment_reached` and the AFK rules apply. Changing the Alignment value asks
-for a new agreement. With Alignment Default, AFK starts immediately.
+for a new agreement, and so does a new task: Pia calls `alignment_reset` and prepares again. With Alignment Default, AFK starts immediately.
 
 ### Questions follow the Attention channel
 
