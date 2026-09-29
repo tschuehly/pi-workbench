@@ -53,7 +53,7 @@ export type WorkingModeDetails = { schemaVersion: 2; seq: number; selection: Wor
 export const CUSTOM_TYPE = "working-mode";
 export const defaults: WorkingModeState = { alignment: "Default", attention: "Default", checking: "Default", orchestration: "Main" };
 const axisNames = Object.keys(axes) as Axis[];
-const usage = `/mode <axis> <value>: ${axisNames.map((axis) => `${axis} <${Object.keys(axes[axis].values).join("|").toLowerCase()}>`).join(" · ")}`;
+const usage = `/mode send delivers the pending change now · /mode <axis> <value>: ${axisNames.map((axis) => `${axis} <${Object.keys(axes[axis].values).join("|").toLowerCase()}>`).join(" · ")}`;
 
 export function isSelection(value: any): value is WorkingModeState {
   return !!value && axisNames.every((axis) => typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis]));
@@ -70,7 +70,7 @@ function latestBlock(entries: readonly any[]): WorkingModeDetails | null {
   return null;
 }
 
-export function renderBlock(selection: WorkingModeState, seq: number) {
+export function renderBlock(selection: WorkingModeState, seq: number, sent = false) {
   const summary = axisNames.map((axis) => `${axes[axis].label}: ${selection[axis]}`).join(" · ");
   const guidance = axisNames
     .filter((axis) => selection[axis] !== defaults[axis])
@@ -83,6 +83,7 @@ export function renderBlock(selection: WorkingModeState, seq: number) {
       : "Every value is at its starting setting; no Working Mode guidance applies.",
     "",
     "This block replaces every earlier <working-mode> block.",
+    ...(sent ? ["Acknowledge this change in one sentence and continue under it."] : []),
     "</working-mode>",
   ].join("\n");
 }
@@ -90,6 +91,18 @@ export function renderBlock(selection: WorkingModeState, seq: number) {
 export default function workingModeExtension(pi: ExtensionAPI) {
   let selected: WorkingModeState = { ...defaults };
   let applied: WorkingModeState | null = null;
+  // Block sent by `/mode send` that may still wait in the steer queue, outside the session branch.
+  let queued: WorkingModeDetails | null = null;
+
+  /** Next block to deliver, or null when the model already sees (or will see) the selection. */
+  function pendingBlock(ctx: ExtensionContext, sent: boolean) {
+    // Compare with the block the model can still see; compaction may have summarized it away.
+    const seen = queued?.selection ?? latestBlock(ctx.sessionManager.buildContextEntries())?.selection ?? defaults;
+    if (same(seen, selected)) return null;
+    const seq = Math.max(queued?.seq ?? 0, latestBlock(ctx.sessionManager.getBranch())?.seq ?? 0) + 1;
+    const details: WorkingModeDetails = { schemaVersion: 2, seq, selection: { ...selected } };
+    return { customType: CUSTOM_TYPE, content: renderBlock(selected, seq, sent), display: true, details };
+  }
 
   const publish = (ctx: ExtensionContext, phase: WorkingModeSnapshot["phase"]) => {
     const value: WorkingModeSnapshot = { schemaVersion: 2, phase, selected: { ...selected }, applied };
@@ -112,12 +125,31 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     selected = { ...(latestBlock(ctx.sessionManager.getBranch())?.selection ?? defaults) };
     applied = null;
+    queued = null;
     publish(ctx, "selected");
   });
 
+  // A run's end means a queued steer either landed in the branch or was dropped (abort, clearQueue).
+  // ponytail: a steer queued after the loop's last queue check can survive into the next run and
+  // duplicate the block there; track message_end of the queued block if that shows up in practice.
+  pi.on("agent_end", () => { queued = null; });
+
   pi.registerCommand("mode", {
-    description: "Choose Working Mode guidance for the next prompt",
+    description: "Choose Working Mode guidance for the next prompt; /mode send delivers it now",
     handler: async (args, ctx) => {
+      if (args.trim().toLowerCase() === "send") {
+        const message = pendingBlock(ctx, true);
+        if (!message) {
+          if (ctx.hasUI) ctx.ui.notify("Working Mode unchanged", "info");
+          return;
+        }
+        queued = message.details;
+        applied = { ...selected };
+        publish(ctx, "applied");
+        // Idle: starts a turn. Streaming: steers the running turn after its current tool calls.
+        pi.sendMessage(message, { triggerTurn: true, deliverAs: "steer" });
+        return;
+      }
       if (args.trim()) {
         if (!applyArgs(args)) {
           if (ctx.hasUI) ctx.ui.notify(usage, "warning");
@@ -142,11 +174,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", (_event, ctx) => {
     applied = { ...selected };
     publish(ctx, "applied");
-    // Compare with the block the model can still see; compaction may have summarized it away.
-    const seen = latestBlock(ctx.sessionManager.buildContextEntries())?.selection ?? defaults;
-    if (same(seen, selected)) return;
-    const seq = (latestBlock(ctx.sessionManager.getBranch())?.seq ?? 0) + 1;
-    const details: WorkingModeDetails = { schemaVersion: 2, seq, selection: { ...selected } };
-    return { message: { customType: CUSTOM_TYPE, content: renderBlock(selected, seq), display: true, details } };
+    const message = pendingBlock(ctx, false);
+    return message ? { message } : undefined;
   });
 }
