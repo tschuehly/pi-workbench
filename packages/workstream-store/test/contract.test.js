@@ -136,6 +136,9 @@ test("keeps the previous confirmed checkpoint when a later checkpoint fails", as
   const snapshot = await store.inspect("ws-1");
   assert.equal(snapshot.sessions[0].latestCheckpoint.id, "cp-good");
   assert.equal(snapshot.sessions[0].checkpointFailure, "Persistence interrupted");
+  const summary = (await store.list()).find((item) => item.id === "ws-1");
+  assert.equal(summary.next, "Run tests");
+  assert.equal(summary.waitingOn, "agent");
 });
 
 test("projects the latest overview and rejects oversized or empty ones", async () => {
@@ -154,6 +157,8 @@ test("projects the latest overview and rejects oversized or empty ones", async (
   assert.equal(summary.group, "Embabel");
   assert.equal(summary.createdAt, snapshot.createdAt);
   assert.equal(summary.lastCheckpointAt, null);
+  assert.equal(summary.next, null);
+  assert.equal(summary.waitingOn, null);
   assert.equal((await store.create({ ...createRequest, workstreamId: "ws-2", idempotencyKey: "create-2" })) && (await store.inspect("ws-2")).overview, null);
   for (const bad of [
     { ...overview("x").payload.overview, goal: "g".repeat(281) },

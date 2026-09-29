@@ -185,6 +185,9 @@ export interface WorkstreamSummary {
   updatedAt: string;
   /** Time of the newest session checkpoint, or null before the first checkpoint. */
   lastCheckpointAt: string | null;
+  /** Next move and waiting actor from the newest session checkpoint, or null before the first checkpoint. */
+  next: string | null;
+  waitingOn: WaitingOn | null;
   activeSessionCount: number;
   pendingSessionCount: number;
   failedSessionCount: number;

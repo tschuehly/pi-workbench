@@ -342,6 +342,7 @@ function timestamp(clock) {
 }
 
 function toSummary(snapshot) {
+  const newest = snapshot.sessions.reduce((latest, session) => session.latestCheckpoint !== null && (latest === null || session.latestCheckpoint.recordedAt > latest.recordedAt) ? session.latestCheckpoint : latest, null);
   return {
     id: snapshot.id,
     title: snapshot.title,
@@ -349,7 +350,9 @@ function toSummary(snapshot) {
     revision: snapshot.revision,
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
-    lastCheckpointAt: snapshot.sessions.reduce((latest, session) => session.latestCheckpoint !== null && (latest === null || session.latestCheckpoint.recordedAt > latest) ? session.latestCheckpoint.recordedAt : latest, null),
+    lastCheckpointAt: newest?.recordedAt ?? null,
+    next: newest?.next ?? null,
+    waitingOn: newest?.waitingOn ?? null,
     activeSessionCount: snapshot.sessions.filter((session) => session.status === "active").length,
     pendingSessionCount: snapshot.sessions.filter((session) => session.status === "pending").length,
     failedSessionCount: snapshot.sessions.filter((session) => session.status === "failed").length,
