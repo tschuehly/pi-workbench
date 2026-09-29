@@ -123,7 +123,7 @@ The active Pi session writes a concise checkpoint automatically at a meaningful 
 - what changed;
 - what remains;
 - the next useful continuation; and
-- an exact prompt for starting the next session.
+- who the Workstream now waits on.
 
 A checkpoint is a correctable projection of where the work stands, not an authority transition. The owner may correct or replace it at any time. A later checkpoint supersedes an earlier one. Closing the Workstream remains explicit and human-instructed.
 
@@ -134,13 +134,21 @@ The active session writes for the owner who will read the checkpoint later and f
 - name the concrete artifacts it references; and
 - let the owner resume without rereading the session.
 
-`whatChanged` states what now exists or works. `remains` separates what is blocked or still owed. `next` gives one obvious owner-facing action.
+`whatChanged` states what now exists or works. `remains` separates what is blocked or still owed. `next` is the plain-language suggested next action.
 
-The required `nextSessionPrompt` is a separate, paste-ready prompt for a fresh attended Pi session. It carries only the context, constraints, starting action, and references needed to continue safely. It does not restate the conversation or expand into an execution plan. The prompt is persisted with the rest of the checkpoint, remains owner-correctable, and is limited to 2,000 characters. Durable checkpoint and link references must not point into operating-system temporary directories such as `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders; the Store rejects those references instead of creating future stale launch targets.
+`waitingOn` names who the Workstream currently waits on:
+
+- `owner`: Thomas must act or decide;
+- `agent`: an agent can continue without the owner; or
+- `external`: a third party, CI, or reviewer must act.
+
+The Workstream's current `waitingOn` is the one on its newest checkpoint. Checkpoints written before the field existed project `waitingOn: null`.
+
+A new Chat resumes a Workstream by starting with the `orient` skill, not from a stored prompt. Durable checkpoint and link references must not point into operating-system temporary directories such as `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders; the Store rejects those references instead of creating future stale launch targets.
 
 For lasting Git evidence, record repository identity and a full commit ID (or a retained artifact), not only a worktree directory: a persistent-path worktree can still be removed. A worktree path in a checkpoint is a live continuation location, not a promise that the directory will outlive the work. Before removing it, check for Pi sessions stored under that working directory and replace current continuation targets in open Workstreams. Closed Workstreams remain immutable; their old directory links are historical locations and may no longer exist. Preserve the referenced commit or artifact before cleanup.
 
-Checkpoints accepted before `nextSessionPrompt` existed project `nextSessionPrompt: null` rather than inventing a prompt. Every new replacement requires the field.
+`nextSessionPrompt` is legacy. New checkpoints do not write it; the Store still accepts it as an optional string of at most 2,000 characters and projects `nextSessionPrompt: null` when absent. Clients never invent one from `next`.
 
 A failed, rejected, or abandoned proposal remains visible as a checkpoint failure when applicable. It does not invent continuation state or replace the latest confirmed checkpoint.
 

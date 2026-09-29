@@ -49,11 +49,11 @@ Several Workstreams and human-initiated sessions may remain active. The canonica
 
 ### Checkpoints
 
-Pi writes checkpoints automatically at meaningful attention changes. Each checkpoint states what changed, what remains, the next useful continuation, and a concise paste-ready prompt for a fresh session. The owner can later correct or replace any field; a later checkpoint supersedes an earlier one.
+Pi writes checkpoints automatically at meaningful attention changes. Each checkpoint states what changed, what remains, the next useful continuation, and who the Workstream waits on (`owner`, `agent`, or `external`). The owner can later correct or replace any field; a later checkpoint supersedes an earlier one.
 
-The interface presents the next-session prompt separately from the owner-facing next action. The owner can copy the prompt without reconstructing context from Chat.
+The interface shows who the Workstream waits on next to the owner-facing next action. A fresh Chat resumes with the `orient` skill rather than a copied prompt; a legacy next-session prompt may be shown read-only.
 
-A failed write preserves the previous checkpoint and makes the missing, failed, or stale state visible. If a checkpoint was accepted before next-session prompts existed, the interface identifies the prompt as unavailable instead of constructing one from `next`.
+A failed write preserves the previous checkpoint and makes the missing, failed, or stale state visible. The interface never constructs a prompt from `next`.
 
 ### Re-entry and place preservation
 
@@ -65,7 +65,7 @@ The view derives changes from Workstream revisions and records. It does not summ
 
 The shared recorded Workstream fixture must prove:
 
-1. The owner can identify where to resume and copy the confirmed next-session prompt without reading raw logs or Chat history.
+1. The owner can identify where to resume and who the Workstream waits on without reading raw logs or Chat history.
 2. Current, closed, empty, loading, failure, reconnect, and checkpoint-failure states are distinct.
 3. Re-entry restores the Workstreams destination and reconciles from canonical revisions.
 4. A failed or abandoned checkpoint cannot appear current or replace confirmed continuation state.

@@ -146,15 +146,20 @@ field. Persist five values:
 
 - `whatChanged`: what now exists or works, naming concrete artifacts — two to four short sentences, one fact each, anchors (commit, PR, path, count) inside the sentence they belong to;
 - `remains`: what is blocked or still owed — one short sentence per item, the owner's decisions first;
-- `next`: one obvious owner-facing action in one sentence, starting with the actor;
-- `nextSessionPrompt`: the exact prompt to paste into a fresh attended Pi session;
+- `next`: the suggested next action in one plain sentence, starting with the actor;
+- `waitingOn` (required): `owner` when Thomas must act or decide, `agent` when an agent can continue, or `external` when a third party, CI, or reviewer must act;
 - `references`: the current absolute working directory first while it is a live continuation target, then only the concrete paths or identifiers needed to resume; use repository identity plus full commit ID for lasting Git evidence.
 
-Lead with the point and make the checkpoint sufficient to resume without rereading chat. Keep `nextSessionPrompt` under 2,000 characters and include only the context, constraints, starting action, and references needed to continue safely; do not turn it into a transcript or execution plan.
+Lead with the point and make the checkpoint sufficient to resume without rereading chat. Do not write `nextSessionPrompt`; a fresh Chat resumes with the `orient` skill.
+
+In the same `append` as `checkpoint.replaced`, also:
+
+- write `overview.replaced` if the overview's description, history, or state no longer matches (for example, it still says something awaits promotion after it was promoted);
+- append `human-task.resolved` for every Human Task the owner answered or explicitly deferred.
 
 Append `checkpoint.replaced` for the current active session with a unique checkpoint id, then tell the user what you wrote so they can correct it. A checkpoint is a correctable projection, not an authority transition: a later checkpoint supersedes an earlier one, and a failed write leaves the previous checkpoint unchanged. Closing the Workstream still requires the user's explicit instruction.
 
-**Complete when:** the new checkpoint is the session's latest and the user has been told what it says.
+**Complete when:** the new checkpoint is the session's latest, carries `waitingOn`, the overview and open Human Tasks match it, and the user has been told what it says.
 
 ## 5. Close deliberately
 

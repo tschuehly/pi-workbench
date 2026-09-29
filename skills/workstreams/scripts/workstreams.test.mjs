@@ -88,7 +88,7 @@ test("associates and checkpoints an agent-only session without host location ide
             whatChanged: "Associated from an attended agent session",
             remains: "PI WEB may repair the missing catalog anchor later",
             next: "Continue the Workstream",
-            nextSessionPrompt: "Continue ws-agent-only from its latest checkpoint.",
+            waitingOn: "agent",
           },
         },
       }],
@@ -99,6 +99,8 @@ test("associates and checkpoints an agent-only session without host location ide
     assert.equal(inspected.stdoutValue.sessions[0].status, "active");
     assert.equal(inspected.stdoutValue.sessions[0].machineId, undefined);
     assert.equal(inspected.stdoutValue.sessions[0].latestCheckpoint.id, "cp-agent-only");
+    assert.equal(inspected.stdoutValue.sessions[0].latestCheckpoint.waitingOn, "agent");
+    assert.equal(inspected.stdoutValue.sessions[0].latestCheckpoint.nextSessionPrompt, null);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
