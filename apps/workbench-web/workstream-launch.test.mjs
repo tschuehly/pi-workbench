@@ -105,17 +105,17 @@ test('rejects changed complete-scan evidence without appending an anchor', async
   assert.equal((await f.store.inspect('ws-1')).revision, saved.revision);
 });
 
-test('checkpoint prompt is persisted verbatim and never sent; saved request survives reload', async () => {
+test('checkpoint launch prompt starts from orient and the checkpoint, is never sent, and saved request survives reload', async () => {
   const f = await fixture();
   await f.store.append({ workstreamId: 'ws-1', expectedRevision: 1, idempotencyKey: 'source', records: [
     { type: 'session.pending', producer: 'owner', payload: { associationKey: 'source', sessionId: 'old', ...location } },
     { type: 'session.confirmed', producer: 'owner', sourceSessionId: 'old', payload: { associationKey: 'source', sessionId: 'old', ...location } },
   ] });
-  await f.store.append({ workstreamId: 'ws-1', expectedRevision: 2, idempotencyKey: 'checkpoint', records: [{ type: 'checkpoint.replaced', producer: 'owner', payload: { sessionId: 'old', checkpoint: { id: 'cp', whatChanged: 'done', remains: 'more', next: 'go', nextSessionPrompt: '  exact\nnext  ' } } }] });
+  await f.store.append({ workstreamId: 'ws-1', expectedRevision: 2, idempotencyKey: 'checkpoint', records: [{ type: 'checkpoint.replaced', producer: 'owner', payload: { sessionId: 'old', checkpoint: { id: 'cp', whatChanged: 'done', remains: 'more', next: 'go', waitingOn: 'agent' } } }] });
   const selection = (await f.make().inspectContinuation('ws-1')).candidates[0].selection;
   const request = { kind: 'checkpoint', workstreamId: 'ws-1', operationId: 'next', selection };
   assert.equal((await f.make().launch(request)).type, 'confirmed');
-  assert.match(f.make().savedPrompt('next').prompt, /--- BEGIN OWNER-CONFIRMED NEXT-SESSION PROMPT ---\n\n  exact\nnext  \n\n--- END/);
+  assert.match(f.make().savedPrompt('next').prompt, /`orient` skill[\s\S]*--- BEGIN OWNER-CONFIRMED CHECKPOINT ---\n\nWhat changed: done\nWhat remains: more\nNext: go\nWaiting on: agent\n\n--- END/);
   assert.deepEqual(f.make().saved('next'), request);
   assert.equal(f.calls.filter(c => c.options?.method === 'POST').length, 1);
   assert.equal((await f.make().resume('next')).type, 'confirmed');

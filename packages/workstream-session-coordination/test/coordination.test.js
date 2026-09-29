@@ -13,7 +13,7 @@ function clock() {
   return () => new Date(Date.UTC(2026, 0, 1, 0, 0, tick++));
 }
 
-async function workstreamWithCheckpoint({ prompt = "Continue from the confirmed checkpoint.", stale = false } = {}) {
+async function workstreamWithCheckpoint({ next = "Continue in a fresh session.", stale = false } = {}) {
   const adapter = new InMemoryWorkstreamAdapter();
   const store = new WorkstreamStore({ adapter, clock: clock() });
   await store.create({ workstreamId: "ws-1", idempotencyKey: "create", title: "Coordinate continuation", producer: "owner" });
@@ -40,8 +40,8 @@ async function workstreamWithCheckpoint({ prompt = "Continue from the confirmed 
           id: "checkpoint-1",
           whatChanged: "Coordination was designed.",
           remains: "Launch it.",
-          next: "Continue in a fresh session.",
-          nextSessionPrompt: prompt,
+          next,
+          waitingOn: "agent",
           references: ["packages/workstream-session-coordination"],
         },
       },
@@ -93,8 +93,8 @@ test("classifies continuation candidates per source session without inventing a 
     humanTasks: [],
     links: [],
     sessions: [
-      { id: "active-ready", status: "active", machineId: "local", projectId: "p", workspaceId: "w", latestCheckpoint: { id: "cp", whatChanged: "Changed", remains: "Remain", next: "Next", nextSessionPrompt: "Continue." }, checkpointFailure: null, checkpointStaleness: null, launchFailure: null },
-      { id: "active-legacy", status: "active", machineId: "local", projectId: "p", workspaceId: "w", latestCheckpoint: { id: "legacy", whatChanged: "Changed", remains: "Remain", next: "Next", nextSessionPrompt: null }, checkpointFailure: null, checkpointStaleness: null, launchFailure: null },
+      { id: "active-ready", status: "active", machineId: "local", projectId: "p", workspaceId: "w", latestCheckpoint: { id: "cp", whatChanged: "Changed", remains: "Remain", next: "Next", waitingOn: "agent" }, checkpointFailure: null, checkpointStaleness: null, launchFailure: null },
+      { id: "active-legacy", status: "active", machineId: "local", projectId: "p", workspaceId: "w", latestCheckpoint: { id: "legacy", whatChanged: "Changed", remains: "Remain", next: "Next", nextSessionPrompt: null, waitingOn: null }, checkpointFailure: null, checkpointStaleness: null, launchFailure: null },
       { id: "active-incomplete", status: "active", latestCheckpoint: null, checkpointFailure: null, checkpointStaleness: null, launchFailure: null },
       { id: "pending-1", status: "pending", associationKey: "pi-web:pending", latestCheckpoint: null, checkpointFailure: null, checkpointStaleness: null, launchFailure: null },
     ],
@@ -105,7 +105,7 @@ test("classifies continuation candidates per source session without inventing a 
   const statuses = Object.fromEntries(view.candidates.map((candidate) => [candidate.sourceSessionId, candidate.status === "ready" ? "ready" : candidate.cause]));
   assert.deepEqual(statuses, {
     "active-incomplete": "SOURCE_LOCATION_INCOMPLETE",
-    "active-legacy": "NEXT_SESSION_PROMPT_MISSING",
+    "active-legacy": "ready",
     "active-ready": "ready",
     "pending-1": "SOURCE_SESSION_NOT_ACTIVE",
   });
@@ -113,7 +113,7 @@ test("classifies continuation candidates per source session without inventing a 
 });
 
 test("checkpoint selections encode and decode without Node globals", async () => {
-  const state = await workstreamWithCheckpoint({ prompt: "Continue with ünicode 🚀." });
+  const state = await workstreamWithCheckpoint({ next: "Continue with ünicode 🚀." });
   let snapshot = await state.store.inspect("ws-1");
   const client = {
     inspect: async () => structuredClone(snapshot),
@@ -140,9 +140,9 @@ test("checkpoint selections encode and decode without Node globals", async () =>
   }
 });
 
-test("records pending before launch, preserves the exact prompt once, and confirms the created session", async () => {
-  const exactPrompt = "x".repeat(2_000);
-  const { store } = await workstreamWithCheckpoint({ prompt: exactPrompt });
+test("records pending before launch, starts from orient and the checkpoint once, and confirms the created session", async () => {
+  const exactNext = "x".repeat(4_000);
+  const { store } = await workstreamWithCheckpoint({ next: exactNext });
   let launchRequest;
   const host = readyHost({
     launch: async (request, hooks) => {
@@ -161,7 +161,9 @@ test("records pending before launch, preserves the exact prompt once, and confir
   assert.equal(outcome.type, "confirmed");
   assert.equal(outcome.operationToken, "pi-web:continue-1");
   assert.equal(launchRequest.operationMarker, "pi-web:continue-1");
-  assert.equal(launchRequest.initialPrompt.split(exactPrompt).length - 1, 1);
+  assert.equal(launchRequest.initialPrompt.split(exactNext).length - 1, 1);
+  assert.match(launchRequest.initialPrompt, /`orient` skill/);
+  assert.match(launchRequest.initialPrompt, /Waiting on: agent/);
   const snapshot = await store.inspect("ws-1");
   assert.equal(snapshot.sessions.find((session) => session.id === "created-1").status, "active");
   assert.equal(snapshot.sessions.find((session) => session.id === "created-1").derivationKind, undefined);
@@ -208,7 +210,7 @@ test("blocks a selection when its checkpoint or source location changes after in
     workstreamId: "ws-1",
     expectedRevision: 3,
     idempotencyKey: "replace-after-inspection",
-    records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "source-1", checkpoint: { id: "checkpoint-2", whatChanged: "Changed again", remains: "Review", next: "Continue", nextSessionPrompt: "Use the newer prompt." } } }],
+    records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "source-1", checkpoint: { id: "checkpoint-2", whatChanged: "Changed again", remains: "Review", next: "Continue", waitingOn: "owner" } } }],
   });
   const outcome = await value.launch({ kind: "checkpoint", workstreamId: "ws-1", operationId: "changed", selection });
   assert.equal(outcome.type, "blocked");
@@ -409,7 +411,7 @@ test("blank launch prompts preserve Level 1 posture and checkpoint instructions"
   const outcome = await value.launch({ kind: "blank", workstreamId: "ws-1", operationId: "blank", location: { machineId: "local", projectId: "workbench", workspaceId: "main" } });
   assert.equal(outcome.type, "confirmed");
   assert.match(initialPrompt, /Level 1 Pair posture/);
-  assert.match(initialPrompt, /what changed, what remains, the next useful action, an exact paste-ready prompt/i);
+  assert.match(initialPrompt, /what changed, what remains, the next useful action, who the Workstream waits on/i);
   assert.match(initialPrompt, /review and confirm every field before persistence/i);
 });
 

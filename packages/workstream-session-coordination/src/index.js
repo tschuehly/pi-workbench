@@ -411,9 +411,6 @@ function classifyCandidate(snapshot, session) {
   if (session.status !== "active") return { ...base, status: "blocked", cause: "SOURCE_SESSION_NOT_ACTIVE", reason: `Session ${session.id} is not active.` };
   if (!completeLocation(session)) return { ...base, status: "blocked", cause: "SOURCE_LOCATION_INCOMPLETE", reason: `Session ${session.id} does not have a complete location.` };
   if (session.latestCheckpoint === null || session.latestCheckpoint === undefined) return { ...base, status: "blocked", cause: "CHECKPOINT_MISSING", reason: `Session ${session.id} has no confirmed checkpoint.` };
-  if (typeof session.latestCheckpoint.nextSessionPrompt !== "string" || session.latestCheckpoint.nextSessionPrompt.length === 0) {
-    return { ...base, status: "blocked", cause: "NEXT_SESSION_PROMPT_MISSING", reason: `Checkpoint ${session.latestCheckpoint.id} has no next-session prompt.` };
-  }
 
   const location = pickLocation(session);
   const checkpoint = structuredClone(session.latestCheckpoint);
@@ -510,7 +507,7 @@ function blankSessionPrompt(snapshot, associationKey) {
     `You are pairing in Pi Workbench Workstream “${snapshot.title}” (${snapshot.id}).`,
     `The attended session association key is ${associationKey}.`,
     "Remain in Level 1 Pair posture: work with the attending user, reconcile any bounded child work yourself, and do not claim background execution or managed Run authority.",
-    "When asked for a checkpoint, propose concise values for: what changed, what remains, the next useful action, an exact paste-ready prompt for a fresh attended session, and only the concrete references needed to resume. The user must review and confirm every field before persistence.",
+    "When asked for a checkpoint, propose concise values for: what changed, what remains, the next useful action, who the Workstream waits on (owner, agent, or external), and only the concrete references needed to resume. The user must review and confirm every field before persistence.",
   ].join("\n\n");
 }
 
@@ -519,10 +516,16 @@ function checkpointSessionPrompt(snapshot, candidate, associationKey) {
     `You are continuing Pi Workbench Workstream “${snapshot.title}” (${snapshot.id}) in a fresh attended session.`,
     `The source is session ${candidate.sourceSessionId}, checkpoint ${candidate.checkpoint.id}.`,
     `The attended session association key is ${associationKey}.`,
-    "Remain in Level 1 Pair posture. The owner-confirmed next-session prompt follows verbatim; follow it without reconstructing continuation state from another conversation.",
-    "--- BEGIN OWNER-CONFIRMED NEXT-SESSION PROMPT ---",
-    candidate.checkpoint.nextSessionPrompt,
-    "--- END OWNER-CONFIRMED NEXT-SESSION PROMPT ---",
+    "Remain in Level 1 Pair posture. Start with the `orient` skill for this Workstream, then continue from its owner-confirmed checkpoint below without reconstructing continuation state from another conversation.",
+    "--- BEGIN OWNER-CONFIRMED CHECKPOINT ---",
+    [
+      `What changed: ${candidate.checkpoint.whatChanged}`,
+      `What remains: ${candidate.checkpoint.remains}`,
+      `Next: ${candidate.checkpoint.next}`,
+      ...(candidate.checkpoint.waitingOn ? [`Waiting on: ${candidate.checkpoint.waitingOn}`] : []),
+      ...(candidate.checkpoint.references?.length ? [`References: ${candidate.checkpoint.references.join(", ")}`] : []),
+    ].join("\n"),
+    "--- END OWNER-CONFIRMED CHECKPOINT ---",
   ].join("\n\n");
 }
 

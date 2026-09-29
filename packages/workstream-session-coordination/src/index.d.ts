@@ -21,7 +21,9 @@ export interface ContinuationCheckpoint {
   whatChanged: string;
   remains: string;
   next: string;
-  nextSessionPrompt: string;
+  /** Legacy; no longer written or used for launch. */
+  nextSessionPrompt?: string | null;
+  waitingOn?: "owner" | "agent" | "external" | null;
   references?: string[];
 }
 
@@ -36,7 +38,6 @@ export type ContinuationBlockedCause =
   | "SOURCE_LOCATION_INCOMPLETE"
   | "CHECKPOINT_MISSING"
   | "CHECKPOINT_STALE"
-  | "NEXT_SESSION_PROMPT_MISSING"
   | "SELECTION_INVALID"
   | "SELECTION_CHANGED"
   | "HOST_LOCATION_UNAVAILABLE"

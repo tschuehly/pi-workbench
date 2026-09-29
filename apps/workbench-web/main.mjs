@@ -283,8 +283,8 @@ function renderWorkstreams(view) {
     const item = document.createElement('article');
     const title = document.createElement('strong'); title.textContent = `Session ${session.id} · ${session.status}`; item.append(title);
     if (session.latestCheckpoint) {
-      const note = document.createElement('p'); note.textContent = `Checkpoint: ${session.latestCheckpoint.whatChanged}\nRemaining: ${session.latestCheckpoint.remains}\nNext: ${session.latestCheckpoint.next}`; item.append(note);
-      if (session.latestCheckpoint.nextSessionPrompt) { const prompt = document.createElement('details'); const label = document.createElement('summary'); label.textContent = 'Continuation prompt'; const text = document.createElement('pre'); text.textContent = session.latestCheckpoint.nextSessionPrompt; prompt.append(label, text); item.append(prompt); }
+      const note = document.createElement('p'); note.textContent = `Checkpoint: ${session.latestCheckpoint.whatChanged}\nRemaining: ${session.latestCheckpoint.remains}\nNext: ${session.latestCheckpoint.next}${session.latestCheckpoint.waitingOn ? `\nWaiting on: ${session.latestCheckpoint.waitingOn}` : ''}`; item.append(note);
+      if (session.latestCheckpoint.nextSessionPrompt) { const prompt = document.createElement('details'); const label = document.createElement('summary'); label.textContent = 'Legacy continuation prompt'; const text = document.createElement('pre'); text.textContent = session.latestCheckpoint.nextSessionPrompt; prompt.append(label, text); item.append(prompt); }
       if (session.checkpointStaleness) { const stale = document.createElement('p'); stale.textContent = `Stale: ${session.checkpointStaleness.reason}`; item.append(stale); }
     }
     if (session.status === 'active') {
