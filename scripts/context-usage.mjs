@@ -5,7 +5,7 @@
 // The child run sets PI_WORKBENCH_EXECUTION_KIND like the adapter, so child-only extension behavior applies.
 // ponytail: child = lead minus tools not on the scout allowlist; the per-task profile text (~100 tokens) is not included.
 //
-// Usage: node scripts/context-usage.mjs [--cwd DIR] [--model provider/id] [--json]
+// Usage: node scripts/context-usage.mjs [--cwd DIR] [--model provider/id] [--json] [-- extra pi args, e.g. -e ext.ts]
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +14,7 @@ import path from "node:path";
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : fallback; };
 const cwd = path.resolve(arg("--cwd", process.cwd()));
 const model = arg("--model", "anthropic/claude-opus-5-5");
+const extra = process.argv.includes("--") ? process.argv.slice(process.argv.indexOf("--") + 1) : [];
 // Mirrors CHILD_TOOLS for the scout profile in extensions/subagent/index.ts.
 const src = readFileSync(new URL("../extensions/subagent/index.ts", import.meta.url), "utf8");
 const childTools = JSON.parse(src.match(/const CHILD_TOOLS = (\[[^\]]*\])/)[1]);
@@ -21,7 +22,7 @@ const childTools = JSON.parse(src.match(/const CHILD_TOOLS = (\[[^\]]*\])/)[1]);
 function measure(extraArgs, env = process.env) {
   const dir = mkdtempSync(path.join(tmpdir(), "ctx-usage-"));
   try {
-    const r = spawnSync("pi", ["-p", "--session-dir", dir, "--model", model, "--thinking", "low", ...extraArgs, "Reply with the single word ok."], { cwd, env, encoding: "utf8", timeout: 180_000 });
+    const r = spawnSync("pi", ["-p", "--session-dir", dir, "--model", model, "--thinking", "low", ...extra, ...extraArgs, "Reply with the single word ok."], { cwd, env, encoding: "utf8", timeout: 180_000 });
     const file = readdirSync(dir).find((f) => f.endsWith(".jsonl"));
     if (!file) throw new Error(`pi wrote no session (exit ${r.status}): ${(r.stderr || r.stdout).slice(0, 300)}`);
     for (const line of readFileSync(path.join(dir, file), "utf8").split("\n")) {
