@@ -11,7 +11,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,20 @@ function findPi() {
 	const result = run("which", ["pi"]);
 	requireSuccess(result, "Locating pi");
 	return result.stdout.trim();
+}
+
+// Optional: regenerates the static ponytail block in APPEND_SYSTEM.md. Never aborts the update.
+function syncPonytail() {
+	const onPath = run("which", ["ponytail-sync"]);
+	const fallback = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "bin", "ponytail-sync");
+	const command = onPath.status === 0 ? onPath.stdout.trim() : existsSync(fallback) ? fallback : null;
+	if (!command) return console.log("ponytail-sync not installed; skipping.");
+	try {
+		const result = run(command, [], { stdio: "inherit" });
+		if (result.status !== 0) console.error(`WARNING: ponytail-sync failed with exit code ${result.status}; APPEND_SYSTEM.md may be stale.`);
+	} catch (error) {
+		console.error(`WARNING: ponytail-sync failed: ${error.message}; APPEND_SYSTEM.md may be stale.`);
+	}
 }
 
 function findInstallation(piExecutable) {
@@ -224,6 +238,7 @@ function writeChecked(path, content) {
 
 const piExecutable = findPi();
 requireSuccess(run(piExecutable, ["update", "--all"], { stdio: "inherit" }), "Updating Pi and packages");
+syncPonytail();
 const installation = findInstallation(piExecutable);
 const temporaryDir = mkdtempSync(join(tmpdir(), "pi-8773-probe-"));
 const probeExtension = join(temporaryDir, "probe.mjs");
