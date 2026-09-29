@@ -1,10 +1,12 @@
 export const FALLBACK = { provider: "openai-codex", id: "gpt-6.1-sol", thinking: "high" };
 
-const LIMIT_ERROR = /rate.?limit|usage.?limit|quota|429/i;
+const RECOVERABLE_ERROR = /rate.?limit|usage.?limit|quota|\b429\b|\b5\d{2}\b|overload|currently experiencing high demand|service.?unavailable|server.?error|internal.?error|timed? out|timeout|ETIMEDOUT/i;
+const EXCLUDED_ERROR = /\b(?:abort(?:ed)?|cancel(?:l?ed)?)\b|refusal|refused|content.?filter|content.?policy|safety|policy.?violation/i;
 
-// True when a lead's final (post-retry) Claude turn failed on an account limit.
+// Called only at final settlement, after Pi's configured native retry policy.
 export function shouldFallBack({ env, model, message }) {
-  if (env.PI_TELEMETRY_PARENT_SESSION_ID) return false; // child Pi: routing owns its fallback
+  if (env.PI_TELEMETRY_PARENT_SESSION_ID || env.PI_TELEMETRY_EXECUTION_ID || env.PI_WORKBENCH_EXECUTION_KIND) return false; // child Pi: routing owns its fallback
   if (model?.provider !== "anthropic") return false;
-  return message?.role === "assistant" && message.stopReason === "error" && LIMIT_ERROR.test(message.errorMessage ?? "");
+  const error = message?.errorMessage ?? "";
+  return message?.role === "assistant" && message.stopReason === "error" && !EXCLUDED_ERROR.test(error) && RECOVERABLE_ERROR.test(error);
 }

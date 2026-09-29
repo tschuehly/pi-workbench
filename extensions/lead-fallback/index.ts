@@ -1,8 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FALLBACK, shouldFallBack } from "./fallback.mjs";
 
-// When the lead's Claude account hits its limit (after Pi's own retries), switch the lead to
-// GPT-6 Sol high and continue the same run.
+// Pi owns bounded retries; this final boundary handles lead-only recovery after them.
 export default function leadFallbackExtension(pi: ExtensionAPI) {
   let lastAssistant: any;
   pi.on("message_end", (event) => {
@@ -12,20 +11,26 @@ export default function leadFallbackExtension(pi: ExtensionAPI) {
   pi.on("agent_before_settle", async (event, ctx) => {
     const message = lastAssistant;
     lastAssistant = undefined;
-    if (event.outcome !== "error" || !shouldFallBack({ env: process.env, model: ctx.model, message })) return;
+    if (ctx.signal?.aborted || event.outcome !== "error" || !shouldFallBack({ env: process.env, model: ctx.model, message })) return;
     const target = ctx.modelRegistry.find(FALLBACK.provider, FALLBACK.id);
-    if (!target || !(await pi.setModel(target))) {
-      ctx.ui.notify(`Claude limit reached; fallback ${FALLBACK.provider}/${FALLBACK.id} is unavailable.`, "error");
-      return;
+    let switched = false;
+    try {
+      switched = !!target && await pi.setModel(target);
+    } catch {
+      // Auth resolution can throw as well as return false; leave the failed run stopped.
     }
-    pi.setThinkingLevel(FALLBACK.thinking as any);
+    if (ctx.signal?.aborted) return;
+    if (switched) pi.setThinkingLevel(FALLBACK.thinking as any);
+    const recovery = switched
+      ? "Continuing the interrupted work in this session. Before repeating any side-effecting action, check its recorded results and actual outcome; do not repeat completed actions or blindly retry actions with unknown outcomes."
+      : "Fallback unavailable; stopped without automatic continuation. Restore fallback access or choose a model before resuming.";
     return {
-      continue: true,
+      continue: switched,
       entries: [{
         type: "custom_message",
         customType: "lead-fallback",
         display: true,
-        content: `Claude usage limit reached (${message.errorMessage}). Switched the lead to ${FALLBACK.id} (${FALLBACK.thinking}); continue the interrupted work.`,
+        content: `Claude request failed (${message.errorMessage}). ${switched ? "Switched the lead to" : "Could not switch the lead to"} ${FALLBACK.provider}/${FALLBACK.id} (${FALLBACK.thinking}). ${recovery}`,
       }],
     };
   });
