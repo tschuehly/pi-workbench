@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import backgroundBashExtension from "./index.ts";
+
+process.env.PI_BACKGROUND_BASH_ROOT = mkdtempSync(join(tmpdir(), "pi-background-bash-index-"));
 
 function harness(mode = "rpc", child = false) {
   const tools = new Map();
@@ -62,9 +67,6 @@ test("a child keeps the native bash tool and one-shot Pi runs foreground", async
 });
 
 test("foreground and background commands receive the session's PI_TMP folder", async () => {
-  const { mkdtempSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
   process.env.PI_TMP_ROOT = mkdtempSync(join(tmpdir(), "pi-tmp-bash-"));
   try {
     const expected = join(process.env.PI_TMP_ROOT, "pi-workbench", "test-session");
@@ -77,4 +79,21 @@ test("foreground and background commands receive the session's PI_TMP folder", a
     assert.match(attended.messages[0].content, new RegExp(expected));
     await attended.handlers.get("session_shutdown")();
   } finally { delete process.env.PI_TMP_ROOT; }
+});
+
+test("a reloaded extension reattaches the session's running job and cancels it", async () => {
+  const before = harness();
+  await before.handlers.get("session_start")({}, before.ctx);
+  const started = await before.tools.get("bash").execute("call", { command: "sleep 30" }, undefined, undefined, before.ctx);
+  await before.handlers.get("session_shutdown")();
+  const after = harness();
+  await after.handlers.get("session_start")({ reason: "reload" }, after.ctx);
+  const status = await after.tools.get("bash_status").execute("call", { id: started.details.id });
+  assert.equal(status.details.jobs[0].state, "running");
+  assert.equal(JSON.parse(after.statuses.at(-1)[1]).jobs.length, 1);
+  const cancelled = await after.tools.get("bash_cancel").execute("call", { id: started.details.id });
+  assert.match(cancelled.content[0].text, /state=cancelled/);
+  await after.completion;
+  assert.match(after.messages[0].content, /cancelled/);
+  await after.handlers.get("session_shutdown")();
 });

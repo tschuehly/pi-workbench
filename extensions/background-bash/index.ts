@@ -1,4 +1,4 @@
-import { createBashToolDefinition, createLocalBashOperations, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, getAgentDir, getShellConfig, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { delimiter, join } from "node:path";
 import { Type } from "typebox";
 import { createBackgroundBashJobs } from "./jobs.mjs";
@@ -7,29 +7,33 @@ import { piTmpDir } from "../pi-tmp/pitmp.mjs";
 export default function backgroundBashExtension(pi: ExtensionAPI) {
   // Short-lived Subagents and Workers must receive the native blocking tool: their Pi process exits at agent_settled.
   if (process.env.PI_WORKBENCH_EXECUTION_KIND !== undefined) return;
-  // ponytail: Pi does not expose the configured base bash tool; this override uses stock shellPath/prefix defaults. Forward configured shell settings when the extension API exposes them.
+  // ponytail: Pi does not expose the configured base bash tool; foreground and background both use stock shellPath/prefix defaults (getShellConfig()). Forward configured shell settings when the extension API exposes them.
   const foreground = createBashToolDefinition(process.cwd(), {
     spawnHook: (spawn) => spawn.env.PI_SESSION_ID === undefined ? spawn : { ...spawn, env: { ...spawn.env, PI_TMP: piTmpDir(spawn.cwd, spawn.env.PI_SESSION_ID) } },
   });
   let publishStatus: () => void = () => {};
   let clearStatus: () => void = () => {};
-  const jobs = createBackgroundBashJobs(pi, createLocalBashOperations(), { onChange: () => { publishStatus(); } });
+  const jobs = createBackgroundBashJobs(pi, { onChange: () => { publishStatus(); } });
   pi.on("session_start", (_event, ctx) => {
-    if (ctx.mode !== "rpc") return;
-    publishStatus = () => {
-      const active = jobs.list().filter((job: { state: string }) => job.state === "running")
-        .map((job: { id: string; elapsedSeconds: number; bytes: number }) => ({
-          id: job.id, elapsedSeconds: job.elapsedSeconds, bytes: job.bytes,
-        }));
-      ctx.ui.setStatus("pi-workbench:background-bash", JSON.stringify({ schemaVersion: 1, jobs: active }));
-    };
-    clearStatus = () => { ctx.ui.setStatus("pi-workbench:background-bash", undefined); };
+    // One-shot modes run bash in the foreground; leave completions for the next attended open.
+    if (ctx.mode === "print" || ctx.mode === "json") return;
+    if (ctx.mode === "rpc") {
+      publishStatus = () => {
+        const active = jobs.list().filter((job: { state: string }) => job.state === "running")
+          .map((job: { id: string; elapsedSeconds: number; bytes: number }) => ({
+            id: job.id, elapsedSeconds: job.elapsedSeconds, bytes: job.bytes,
+          }));
+        ctx.ui.setStatus("pi-workbench:background-bash", JSON.stringify({ schemaVersion: 1, jobs: active }));
+      };
+      clearStatus = () => { ctx.ui.setStatus("pi-workbench:background-bash", undefined); };
+    }
+    jobs.attach(ctx.sessionManager.getSessionId());
     publishStatus();
   });
 
   pi.registerTool({
     name: "bash", label: "bash",
-    description: "Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait. One-shot print/JSON modes run foreground; child Pi uses the native bash tool. Background jobs stop on session shutdown or reload.",
+    description: "Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait. One-shot print/JSON modes run foreground; child Pi uses the native bash tool. Background jobs survive session shutdown, reload and PI WEB restarts; they stop at their timeout or a 12-hour maximum lifetime.",
     promptSnippet: "Run bash commands in the background by default; use foreground for dependent steps",
     promptGuidelines: [
       "Run long checks and builds in the background. Continue independent work, then wait for their completion message before dependent actions; never infer success from a job ID.",
@@ -39,7 +43,7 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       command: Type.String({ description: "Shell command to execute" }),
-      timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+      timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional; background jobs otherwise stop after 12 hours)" })),
       foreground: Type.Optional(Type.Boolean({ description: "Wait for output and exit status; default false" })),
     }),
     async execute(id, params, signal, onUpdate, ctx) {
@@ -60,7 +64,8 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
       else { delete env.PI_PROVIDER; delete env.PI_MODEL; }
       if (ctx.thinkingLevel) env.PI_REASONING_LEVEL = ctx.thinkingLevel;
       else delete env.PI_REASONING_LEVEL;
-      const job = jobs.start(params.command, ctx.cwd, params.timeout, env);
+      const { shell, args } = getShellConfig();
+      const job = jobs.start(params.command, ctx.cwd, params.timeout, env, { sessionId: ctx.sessionManager.getSessionId(), sessionFile, shell, args });
       return { content: [{ type: "text", text: `Background bash ${job.id} started. Check bash_status or continue independent work; completion will arrive automatically. Output log: ${job.logPath}` }], details: job };
     },
   });
@@ -83,5 +88,6 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.on("session_shutdown", async () => { await jobs.shutdown(); clearStatus(); publishStatus = () => {}; clearStatus = () => {}; });
+  // Jobs keep running; the next session_start of this session reattaches them.
+  pi.on("session_shutdown", () => { jobs.shutdown(); clearStatus(); publishStatus = () => {}; clearStatus = () => {}; });
 }
