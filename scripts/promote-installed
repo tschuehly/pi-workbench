@@ -47,10 +47,10 @@ prepare_one() { # <repo-name> <rev> -> prints the prepared directory
   echo "$dir"
 }
 
-check_idle() { # Everything a session starts (subagents, workers, background jobs, servers) is a child
-  # of the session daemon and dies with it. Pi children retitle themselves to plain `pi`, hiding
-  # `--mode rpc`. The phone tool's `ping-a-human` helpers restart cleanly; this script's own
-  # ancestors (the shell that runs it) are skipped.
+check_idle() { # Everything a session starts (subagents, workers, foreground commands, servers) is a
+  # child of the session daemon and dies with it. Pi children retitle themselves to plain `pi`, hiding
+  # `--mode rpc`. The phone tool's `ping-a-human` helpers restart cleanly, and background bash runners
+  # lead their own process group and survive; this script's own ancestors are skipped.
   local busy self=" $$ " p=$$
   while p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ') && [[ -n $p && $p -gt 1 ]]; do self+="$p "; done
   busy=$(${PI_PROMOTE_PS:-ps -axo pid=,ppid=,command=} | awk -v self="$self" '
@@ -58,9 +58,9 @@ check_idle() { # Everything a session starts (subagents, workers, background job
       if (cmd ~ /sessiond[.]js/) daemon[$1] = 1 }
     END { for (i = 1; i <= NR; i++) {
       if (index(self, " " pid[i] " ")) continue
-      if (command[i] ~ / --mode[ ]rpc( |$)/ || (daemon[parent[i]] && command[i] !~ /ping-a-human|<defunct>/)) print line[i] } }')
+      if (command[i] ~ / --mode[ ]rpc( |$)/ || (daemon[parent[i]] && command[i] !~ /ping-a-human|<defunct>|background-bash\/runner[.]mjs/)) print line[i] } }')
   [[ -z $busy ]] && return 0
-  echo "refusing: a restart would kill these subagents, workers, and background jobs:" >&2
+  echo "refusing: a restart would kill these subagents, workers, and commands:" >&2
   echo "$busy" | cut -c1-160 >&2
   return 3
 }
