@@ -58,6 +58,10 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - Treat every file under `docs/archive/` as outdated historical evidence, never current behavior or intended state.
 - Keep Workstream continuation paths outside OS temporary folders; anchor lasting evidence to a repository revision or retained artifact rather than a disposable worktree. Follow `docs/contracts/workstreams.md` before retiring a linked worktree.
 - Never commit credentials, authentication state, sessions, machine-local paths, or generated Run data.
+- When a change can alter what Pi loads before the first user message (extensions, tool definitions,
+  child profiles, skills, AGENTS.md, prompts, Pi packages or their config), run
+  `node scripts/context-usage.mjs` before and after, and report the lead and child token change to
+  Thomas. Explain any increase.
 - Commit each coherent unit after it is complete and needs no further human input.
 - Change Pi Workbench and PI WEB code only in a development worktree you own, on its own branch.
   The `*.installed` checkouts and the integration checkouts are what the owner runs; changes reach
