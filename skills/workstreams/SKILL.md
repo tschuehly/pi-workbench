@@ -66,7 +66,7 @@ Report each Workstream in this shape:
 **Last recorded state:** <what is complete, usable, active, blocked, superseded, or only proposed, with evidence>
 **Waiting on:** <named actor and exact gate, or none>
 **Next:** <one concrete continuation>
-**Open decisions:** <pending Human Tasks or none>
+**Open decisions:** <open owner decisions from the newest checkpoint and any pending Human Tasks, or none>
 ```
 
 End a multi-Workstream review with a compact disposition table when it helps the owner allocate attention. Keep facts traceable to the inspected snapshot, distinguish recommendation from stored state, and omit empty narrative detail.
@@ -113,8 +113,7 @@ Supported records and payloads are defined in `packages/workstream-store/src/ind
 - `title.set` when the owner renames the Workstream or its current title no longer describes it; use `producer: "owner"` for an owner-supplied or approved title and `producer: "session"` for an agent-proposed title;
 - `overview.replaced` for the Workstream-level re-entry summary (see below);
 - `link.upsert` / `link.removed` for relevant file, repository, plan, Run, or artifact references; for lasting Git evidence, link the repository identity and full commit ID, not just a worktree path;
-- `human-task.upsert` for a durable question that needs an answer;
-- `human-task.answered` and then, separately, `human-task.resolved`;
+- `human-task.resolved` to close an existing Human Task; do not create new ones (`human-task.upsert`) for questions—ask the owner through the current Attention channel and record the decision or the open decision in the checkpoint (`next` plus `waitingOn: owner`). Real-world obligations with a deadline outside Pi (a tax filing, a form to send) may still be a Human Task.
 - `checkpoint.replaced` for a checkpoint, written automatically at a meaningful attention change;
 - `checkpoint.failed` or `checkpoint.stale` only when that explicit state occurred.
 
