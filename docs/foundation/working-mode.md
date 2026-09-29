@@ -2,7 +2,9 @@
 
 Status: Thomas confirmed the behavioral model on 2026-09-21, chose starting values on
 2026-09-24, and settled the channel, AFK, question, delivery, and skill-discovery points on
-2026-09-25. `extensions/working-mode/` implements it. [Decision 69](decisions.md) records the
+2026-09-25. On 2026-09-29 Thomas accepted the runtime, including the AFK alignment gate, kept
+the starting values, and kept periodic block re-sending deferred until drift shows in real use.
+`extensions/working-mode/` implements it. [Decision 69](decisions.md) records the
 accepted direction.
 
 Working Mode configures how Pia establishes Shared Understanding, uses Thomas's attention,
