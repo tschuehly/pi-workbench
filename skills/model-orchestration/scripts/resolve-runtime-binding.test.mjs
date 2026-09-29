@@ -98,8 +98,8 @@ try {
   assert.equal(pass.modelBinding.quotaSnapshot.relevantWindows.length, 1);
 
   for (const [role, model, effort, tier] of [
-    ["routine", "gpt-6-luna", "xhigh", "light"], ["implementation", "claude-opus-5-5", "high", "standard"],
-    ["frontier", "gpt-6-astra", "xhigh", "strong"], ["coordination", "claude-opus-5-5", "high", "standard"],
+    ["routine", "gpt-6-luna", "medium", "light"], ["implementation", "claude-opus-5-5", "medium", "standard"],
+    ["frontier", "gpt-6-astra", "xhigh", "strong"], ["coordination", "claude-opus-5-5", "medium", "standard"],
   ]) {
     const resolved = JSON.parse(execFileSync(process.execPath, [resolver, role, "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
     assert.equal(resolved.modelBinding.model, model, role);
@@ -137,20 +137,20 @@ try {
   const astraWorker = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--model", "openai-codex/gpt-6-astra", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(astraWorker.modelBinding.provider, "openai-codex");
   assert.equal(astraWorker.modelBinding.model, "gpt-6-astra");
-  assert.equal(astraWorker.modelBinding.effort, "high", "the Cognitive Role still selects effort");
+  assert.equal(astraWorker.modelBinding.effort, "medium", "the Cognitive Role still selects effort");
   assert.equal(astraWorker.modelBinding.modelOverride, "openai-codex/gpt-6-astra");
   assert.equal(astraWorker.modelBinding.quotaSnapshot.telemetryStatus, "fresh");
 
   const crossProviderWorker = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--model", "anthropic/claude-sonnet-5", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(crossProviderWorker.modelBinding.provider, "anthropic");
   assert.equal(crossProviderWorker.modelBinding.model, "claude-sonnet-5");
-  assert.equal(crossProviderWorker.modelBinding.effort, "high");
+  assert.equal(crossProviderWorker.modelBinding.effort, "medium");
   assert.equal(crossProviderWorker.modelBinding.quotaSnapshot.relevantWindows[0].id, "five_hour", "quota follows the overridden provider");
 
-  const explicitEffort = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--effort", "medium", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const explicitEffort = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--effort", "high", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(explicitEffort.modelBinding.model, "claude-opus-5-5", "the Cognitive Role still selects the model");
-  assert.equal(explicitEffort.modelBinding.effort, "medium");
-  assert.equal(explicitEffort.modelBinding.effortOverride, "medium");
+  assert.equal(explicitEffort.modelBinding.effort, "high");
+  assert.equal(explicitEffort.modelBinding.effortOverride, "high");
 
   const reasoningOff = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--model", "github-copilot/plain-chat", "--effort", "off", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(reasoningOff.modelBinding.model, "plain-chat");
@@ -360,7 +360,7 @@ try {
   // Exhausted Claude quota moves coordination to its tier partner, never to another tier.
   const partner = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(partner.modelBinding.model, "gpt-6-sol");
-  assert.equal(partner.modelBinding.effort, "high");
+  assert.equal(partner.modelBinding.effort, "medium");
   assert.equal(partner.modelBinding.fallback.from, "anthropic/claude-opus-5-5");
   assert.match(partner.modelBinding.fallback.reason, /quota exhausted for 'claude'/);
   const pinned = spawnSync(process.execPath, [resolver, "coordination", "--model", "anthropic/claude-opus-5-5", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });

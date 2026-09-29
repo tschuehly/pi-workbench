@@ -21,10 +21,10 @@
   },
   "reserve": ["fable"],
   "roles": {
-    "routine": { "tier": "light", "effort": "xhigh" },
-    "implementation": { "tier": "standard", "effort": "high" },
+    "routine": { "tier": "light", "effort": "medium" },
+    "implementation": { "tier": "standard", "effort": "medium" },
     "frontier": { "tier": "strong", "effort": "xhigh", "minEffort": "xhigh" },
-    "coordination": { "tier": "standard", "effort": "high" },
+    "coordination": { "tier": "standard", "effort": "medium" },
     "review": { "tier": "standard", "effort": "xhigh", "minEffort": "xhigh", "independent": true, "thirdFamily": "grok" }
   }
 }
