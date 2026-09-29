@@ -26,6 +26,11 @@ test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
   assert.deepEqual(tools.get("worker_dispatch").parameters.properties.effort.enum, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
   assert.ok(tools.get("subagent").parameters.properties.name, "subagent accepts an explicit dispatcher-supplied name");
   assert.ok(tools.get("worker_status").parameters.properties.all);
+  // Each delegation rule lives once where it acts: background in the subagent description, collect in the wake notice.
+  const text = JSON.stringify([...tools.values()].map(({ description, promptGuidelines, parameters }) => ({ description, promptGuidelines, parameters })));
+  assert.equal(text.split("Prefer background:true").length - 1, 1);
+  assert.equal(text.split("without an executionId").length - 1, 0);
+  assert.equal(text.split("to wait").length - 1, 1);
   let notice;
   shortcuts.get("super+b").handler({ ui: { notify: (...args) => { notice = args; } } });
   assert.deepEqual(notice, ["No Subagent or Worker can be backgrounded.", "info"]);
@@ -624,7 +629,7 @@ async function dispatchSubagentWithName(params) {
   }
   const activityItem = events.find(([channel, event]) => channel === "pi-workbench:activity" && event.type === "upsert")[1].item;
   assert.ok(dispatched.tools.includes("report_status"));
-  assert.match(dispatched.task, /Call report_status when you begin real work/);
+  assert.match(dispatched.task, /Keep going while a step needs no input from the lead/);
   return { dispatched, activityName: activityItem.name, resolverArgs };
 }
 
@@ -657,7 +662,7 @@ test("an omitted subagent name falls back to the task-derived label, unchanged",
 
 test("plain adds the shared status instruction without an empty profile preamble", async () => {
   const { dispatched } = await dispatchSubagentWithName({ task: "Use only this contract.", profile: "plain" });
-  assert.match(dispatched.task, /^Call report_status when you begin real work/);
+  assert.match(dispatched.task, /^Keep going while a step needs no input from the lead/);
   assert.match(dispatched.task, /Start your final report with anything you need from the lead/);
   assert.match(dispatched.task, /Assignment:\nUse only this contract\.$/);
 });

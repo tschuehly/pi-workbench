@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
 const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"] as const;
 const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content"] as const;
-const STATUS_INSTRUCTION = "Call report_status when you begin real work, and again when your phase changes materially. Describe what you are doing in plain language, not a path or a generic tool action. Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found.";
+const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found.";
 export const PROFILES = {
   scout: {
     tools: [...CHILD_TOOLS],
@@ -71,7 +71,7 @@ const COGNITIVE_ROLES = ["routine", "implementation", "frontier", "coordination"
 // Latitude is how much the child must decide for itself: how unclear the problem is and how little
 // the brief specifies. It selects the model tier; skills/model-orchestration/references/routing-policy.json
 // names the models.
-const ROLE_GUIDE = "The profile says what kind of work the child does; the role says how much it must decide, which picks the model tier. Test your own brief. routine (light tier): you can list what to check or change, e.g. collect what named guides say about a topic. implementation (standard tier): you can write the finish line but not the approach, e.g. weigh sources and recommend one of several options, or build a specified change. frontier (strong tier): you have only a symptom or an open question. A brief that is a checklist plus a final judgment is two assignments: a routine child collects, then you decide or launch an implementation child. coordination: a Worker owning one scope. review: independent judgment, challenge, or diff review from the other model family; state the lens in the brief";
+const ROLE_GUIDE = "How much the child must decide; picks the model tier (see the model-orchestration skill).\nroutine: you can list what to check or change\nimplementation: you can state the finish line, not the approach\nfrontier: you have only a symptom or an open question\ncoordination: a Worker owning one scope\nreview: independent other-family judgment; state the lens";
 const MODEL_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const INDEPENDENT_ROLES = new Set<string>(["review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
@@ -88,7 +88,7 @@ const Params = Type.Object({
   independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Independent roles default to the active parent provider/model; distinct-model overlays require this exact value." })),
   excludeFamilies: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Additional model families to reject during cross-family independent routing; propagated unchanged as repeatable exclusions and unavailable under distinct-model overlays" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
-  background: Type.Optional(Type.Boolean({ description: "Prefer true. Finish genuinely independent work, then end the turn; the completion signal starts the next turn. Never collect to wait. Omit only when the result is the immediate next input and nothing useful can happen first; always omit inside a Worker." })),
+  background: Type.Optional(Type.Boolean({ description: "Return immediately; a completion signal arrives later." })),
 });
 
 const CollectParams = Type.Object({ executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect or collect; omit to reconcile every terminal child that is not yet collected" })) });
@@ -109,11 +109,11 @@ const WorkerCreateParams = Type.Object({
 const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …', 'Stop and ask only if …', and the expected output. Continuity supplements explicit tasking; it never replaces it." }),
-  cognitiveRole: StringEnum(WORKER_ROLES, { description: `${ROLE_GUIDE}. review is subagent-only because independence requires fresh context` }),
+  cognitiveRole: StringEnum(WORKER_ROLES, { description: `${ROLE_GUIDE}\nreview is subagent-only here: independence requires fresh context` }),
   modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'" })),
   effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
-  background: Type.Optional(Type.Boolean({ description: "Prefer true. Finish genuinely independent work, then end the turn; the completion signal starts the next turn. Never collect to wait. Omit only for a result that is the immediate next input when nothing useful can happen first." })),
+  background: Type.Optional(Type.Boolean({ description: "Return immediately; a completion signal arrives later." })),
   acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
 });
 const WorkerStatusParams = Type.Object({
@@ -173,17 +173,14 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Launch one fresh attended child Pi for one bounded assignment. Prefer background:true; omit only for a result that is the immediate next input when nothing useful can happen first.",
+    description: "Launch one fresh attended child Pi for one bounded assignment. Prefer background:true, finish genuinely independent work, then end the turn; the completion signal starts the next turn. Never sleep, poll, or collect to wait. Omit background only when the result is the immediate next input and nothing useful can happen first.",
     promptSnippet: "Delegate one bounded attended assignment to a fresh child Pi",
     promptGuidelines: [
       "Delegate execution only after the assignment's direction and verification are established. Use a subagent when context isolation, mechanical volume, parallelism, or genuinely independent judgment materially improves the result; work inline while the task needs continuous owner steering or is smaller than a handoff brief.",
       "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
       "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output. Do not add 'think carefully' lines; Model Effort controls thinking.",
-      "Prefer background:true. Finish genuinely independent work, then end the turn; the coalesced completion signal starts the next turn. Answer it with subagent_collect without an executionId. Never collect to wait. Omit background only when the result is the immediate next input and nothing useful can happen first.",
       "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
-      "Never sleep, poll, or call subagent_collect to wait for a background child.",
-      "For independent roles, quote the exact author provider/model from its completion receipt when available. Use excludeFamilies only for additional cross-family exclusions; distinct-model overlays reject it, and non-independent roles reject both options.",
       "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review never go below xhigh.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
@@ -303,7 +300,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       pendingSubagentCompletions.add(tracked);
       void tracked.then(() => pendingSubagentCompletions.delete(tracked));
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background on ${binding.provider}/${binding.model}:${binding.effort}${binding.fallback ? ` (fallback from ${binding.fallback.from}: ${binding.fallback.reason})` : ""} (${params.profile} · ${params.cognitiveRole}). Finish genuinely independent work, then end the turn. The completion signal starts the next turn; answer it with subagent_collect without an executionId. Inspect with subagent_status; stop with subagent_cancel.` }],
+        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background on ${binding.provider}/${binding.model}:${binding.effort}${binding.fallback ? ` (fallback from ${binding.fallback.from}: ${binding.fallback.reason})` : ""} (${params.profile} · ${params.cognitiveRole}).` }],
         details: { outcome: "launched", executionId: receipt.executionId, profile: params.profile, cognitiveRole: params.cognitiveRole, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Launched");
@@ -322,12 +319,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "subagent_collect",
     label: "Subagent collect",
-    description: "Reconcile background children. On a completion signal, call without executionId first to collect all ready terminal children; repeat only for a reported budget-limited remainder. With one, return an immediate bounded snapshot if running or if a finished Worker receipt is still settling, otherwise the compact terminal result. Receipt failures collect as outcome_unknown.",
+    description: "Reconcile background children. Without executionId, collect all ready terminal children; repeat only for a reported budget-limited remainder. With one, return an immediate bounded snapshot if running or if a finished Worker receipt is still settling, otherwise the compact terminal result. Receipt failures collect as outcome_unknown.",
     promptSnippet: "Reconcile backgrounded child Pi results",
-    promptGuidelines: [
-      "Answer a completion signal with subagent_collect without an executionId first; the extension owns the terminal-uncollected set. Repeat only for a reported budget-limited remainder. Use subagent_status only if collect reports children still running and you must decide something about them.",
-      "Never sleep, poll, or collect to wait. After a background launch, finish genuinely independent work and end the turn; the completion signal starts the next turn.",
-    ],
     parameters: CollectParams,
     async execute(_toolCallId, params, signal, onUpdate) {
       // Callers pass only terminal children; reconciliation suppresses their completion-wakeup race.
@@ -385,11 +378,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "subagent_status",
     label: "Subagent status",
-    description: "Non-blocking snapshot of one child, or the running and terminal-but-uncollected direct children. Pass all:true for the full session roster.",
+    description: "Diagnostic, non-blocking snapshot of one child, or the running and terminal-but-uncollected direct children. Pass all:true for the full session roster.",
     promptSnippet: "Inspect backgrounded child Pi progress",
-    promptGuidelines: [
-      "subagent_status is diagnostic, not a required first step. Answer a completion signal with subagent_collect without an executionId first; use status only if collect reports children still running and you must decide something about them. Use all:true only for bounded diagnostics.",
-    ],
     parameters: StatusParams,
     async execute(_toolCallId, params) {
       if (params.executionId !== undefined) {
@@ -490,12 +480,11 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "worker_dispatch",
     label: "Worker dispatch",
-    description: "Dispatch one bounded assignment to a durable worker with scoped session continuity. Prefer background:true; omit only for a result that is the immediate next input when nothing useful can happen first. Owner-requested modelOverride changes the model; effort may be set independently. One dispatch at a time; none survives the attended session.",
+    description: "Dispatch one bounded assignment to a durable worker with scoped session continuity. background works as in subagent. Owner-requested modelOverride changes the model; effort may be set independently. One dispatch at a time; none survives the attended session.",
     promptSnippet: "Dispatch one bounded assignment to a durable attended worker",
     promptGuidelines: [
       "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
       "Keep every worker task self-contained with paths, constraints, 'Done means …', 'Stop and ask only if …', and expected output; continuity supplements explicit tasking.",
-      "Prefer background:true. Finish genuinely independent work, then end the turn; the coalesced completion signal starts the next turn. Answer it with subagent_collect without an executionId. Never collect to wait. Omit background only when the result is the immediate next input and nothing useful can happen first.",
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
       "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
@@ -657,7 +646,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       void tracked.then(() => pendingWorkerCompletions.delete(tracked));
 
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background using ${binding.provider}/${binding.model}:${binding.effort}: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). Finish genuinely independent work, then end the turn. After the receipt settles, the completion signal starts the next turn; answer it with subagent_collect without an executionId. Receipt failures send separate outcome_unknown attention. Stop with subagent_cancel.` }],
+        content: [{ type: "text" as const, text: `${verb} worker \"${begin.name}\" in the background using ${binding.provider}/${binding.model}:${binding.effort}: ${receipt.executionId} (${begin.profile} · ${params.cognitiveRole}${continuing ? ", resuming its session" : ", first dispatch"}). The completion signal arrives after its receipt settles; a receipt failure sends separate outcome_unknown attention.` }],
         details: { outcome: "launched", executionId: receipt.executionId, workerId: params.workerId, workerName: begin.name, profile: begin.profile, cognitiveRole: params.cognitiveRole, provider: binding.provider, model: binding.model, effort: binding.effort, modelOverride: params.modelOverride ?? null, continuing, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Dispatched");
@@ -842,7 +831,7 @@ export async function streamToResult(
 
   if (settled === "detached") {
     return {
-      content: [{ type: "text", text: `Stopped watching ${executionId}; the child is still running. Use subagent_status, then end the turn; the completion signal wakes the lead.` }],
+      content: [{ type: "text", text: `Stopped watching ${executionId}; the child keeps running and its completion signal arrives later.` }],
       details: { outcome: "detached", executionId, observations },
     };
   }
