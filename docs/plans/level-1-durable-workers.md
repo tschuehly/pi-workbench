@@ -18,7 +18,9 @@ continuity within the worker's scope.
 After a lead crash, the Worker's durable identity, scope, and child session lineage survive, so its
 memory resumes on the next dispatch; the running execution and the lead's in-memory roster do not
 survive. No child process outlives its attended parent, and no unattended activity occurs between
-dispatches. An interrupted dispatch is recorded with an unknown outcome and requires inspection before
+dispatches. The one bounded exception is a lead's background `bash` job (`extensions/background-bash/`):
+it is owned by one Pi session, stops at its timeout or a 12-hour maximum lifetime, stays cancellable
+after reattachment, and is swept from its registry a week after finishing. An interrupted dispatch is recorded with an unknown outcome and requires inspection before
 reuse. An idle worker is a record plus a persisted child Pi session file, never a waiting subprocess.
 
 This realizes the canonical Worker meaning — "a Pi actor that retains useful continuity across
