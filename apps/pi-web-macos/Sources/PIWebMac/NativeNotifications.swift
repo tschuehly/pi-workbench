@@ -21,10 +21,21 @@ Object.defineProperty(window, "piWebNative", {
     requestNotificationPermission: () => window.webkit.messageHandlers.piWebRequestNotificationPermission.postMessage({}),
     notify: (title, body, target) => window.webkit.messageHandlers.piWebNotification.postMessage({ title, body, ...target }),
     getSleepDisabled: () => window.webkit.messageHandlers.piWebGetSleepDisabled.postMessage({}),
-    setSleepDisabled: disabled => window.webkit.messageHandlers.piWebSetSleepDisabled.postMessage(disabled)
+    setSleepDisabled: disabled => window.webkit.messageHandlers.piWebSetSleepDisabled.postMessage(disabled),
+    openLocalFile: path => window.webkit.messageHandlers.piWebOpenLocalFile.postMessage(path)
   })
 });
 """
+
+/// Only an existing local HTML file, judged after resolving symlinks: opening arbitrary paths could launch apps or scripts.
+func localHTMLFileURL(_ value: Any) -> URL? {
+    guard let path = value as? String, path.hasPrefix("/") else { return nil }
+    let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+    var isDirectory: ObjCBool = false
+    guard ["html", "htm"].contains(url.pathExtension.lowercased()),
+          FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return nil }
+    return url
+}
 
 enum NativeNotificationCommand {
     case requestPermission

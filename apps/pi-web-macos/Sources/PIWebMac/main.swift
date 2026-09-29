@@ -494,6 +494,25 @@ private final class SleepControlMessageHandler: NSObject, WKScriptMessageHandler
     }
 }
 
+/// Opens a local HTML page in the default browser, where its scripts and neighbouring assets work.
+private final class OpenLocalFileMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
+    private let serverURL: URL?
+    init(serverURL: URL?) { self.serverURL = serverURL }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
+        guard message.frameInfo.isMainFrame, let expected = serverURL, let actual = message.frameInfo.request.url,
+              actual.scheme?.lowercased() == expected.scheme?.lowercased(), actual.host?.lowercased() == expected.host?.lowercased(),
+              actual.port == expected.port else { replyHandler(nil, "Only the PI WEB page can open local files"); return }
+        guard let file = localHTMLFileURL(message.body) else { replyHandler(nil, "Only existing local HTML files can be opened"); return }
+        if let browser = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!) {
+            NSWorkspace.shared.open([file], withApplicationAt: browser, configuration: NSWorkspace.OpenConfiguration())
+        } else {
+            NSWorkspace.shared.open(file)
+        }
+        replyHandler(true, nil)
+    }
+}
+
 private final class RouteMessageHandler: NSObject, WKScriptMessageHandler {
     private let report: (URL) -> Void
     init(_ report: @escaping (URL) -> Void) { self.report = report }
@@ -555,6 +574,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         userContentController.addScriptMessageHandler(NotificationMessageHandler(.notify), contentWorld: .page, name: "piWebNotification")
         userContentController.addScriptMessageHandler(SleepControlMessageHandler(.get, control: sleepControl, serverURL: serverURL), contentWorld: .page, name: "piWebGetSleepDisabled")
         userContentController.addScriptMessageHandler(SleepControlMessageHandler(.set, control: sleepControl, serverURL: serverURL), contentWorld: .page, name: "piWebSetSleepDisabled")
+        userContentController.addScriptMessageHandler(OpenLocalFileMessageHandler(serverURL: serverURL), contentWorld: .page, name: "piWebOpenLocalFile")
         userContentController.addUserScript(WKUserScript(source: """
             (() => {
               const report = () => window.webkit.messageHandlers.piWebRoute.postMessage(location.href);

@@ -134,6 +134,17 @@ struct NativeNotificationTests {
         )
         precondition(clickEvents == ["route", "activate", "complete"], "the chosen window is key before the app activates")
 
+        let htmlDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: htmlDir, withIntermediateDirectories: true)
+        let page = htmlDir.appendingPathComponent("Page.HTML"), script = htmlDir.appendingPathComponent("run.command"), alias = htmlDir.appendingPathComponent("alias.html")
+        try! "<p>x</p>".write(to: page, atomically: true, encoding: .utf8)
+        try! "echo x".write(to: script, atomically: true, encoding: .utf8)
+        try! FileManager.default.createSymbolicLink(at: alias, withDestinationURL: script)
+        precondition(localHTMLFileURL(page.path)?.lastPathComponent == "Page.HTML", "an existing HTML file opens")
+        precondition(localHTMLFileURL(script.path) == nil && localHTMLFileURL(alias.path) == nil, "non-HTML targets, also behind an .html symlink, are refused")
+        precondition(localHTMLFileURL(htmlDir.appendingPathComponent("missing.html").path) == nil && localHTMLFileURL("rel.html") == nil && localHTMLFileURL(42) == nil)
+        try? FileManager.default.removeItem(at: htmlDir)
+
         let desktop = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&workspace=w"), isOnActiveSpace: true)
         let other = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&session=a&view=chat"), isOnActiveSpace: false)
         let target = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&session=b&view=chat&workspace=w"), isOnActiveSpace: false)
