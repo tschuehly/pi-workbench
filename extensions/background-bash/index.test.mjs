@@ -60,3 +60,21 @@ test("a child keeps the native bash tool and one-shot Pi runs foreground", async
   assert.match(result.content[0].text, /printed/);
   await oneShot.handlers.get("session_shutdown")();
 });
+
+test("foreground and background commands receive the session's PI_TMP folder", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  process.env.PI_TMP_ROOT = mkdtempSync(join(tmpdir(), "pi-tmp-bash-"));
+  try {
+    const expected = join(process.env.PI_TMP_ROOT, "pi-workbench", "test-session");
+    const oneShot = harness("print");
+    const printed = await oneShot.tools.get("bash").execute("call", { command: "printf %s \"$PI_TMP\"" }, undefined, undefined, oneShot.ctx);
+    assert.match(printed.content[0].text, new RegExp(expected));
+    const attended = harness();
+    await attended.tools.get("bash").execute("call", { command: "printf %s \"$PI_TMP\"" }, undefined, undefined, attended.ctx);
+    await attended.completion;
+    assert.match(attended.messages[0].content, new RegExp(expected));
+    await attended.handlers.get("session_shutdown")();
+  } finally { delete process.env.PI_TMP_ROOT; }
+});

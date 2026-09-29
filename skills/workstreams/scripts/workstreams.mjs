@@ -16,7 +16,7 @@ Examples:
   workstreams.mjs list '{}'
   workstreams.mjs inspect '{"workstreamId":"ws-example"}'
   workstreams.mjs associate '{"workstreamId":"ws-example","expectedRevision":1,"idempotencyKey":"associate-session"}'
-  workstreams.mjs create @/tmp/create-workstream.json
+  workstreams.mjs create @"$PI_TMP/create-workstream.json"
 
 associate reads the current session id from PI_SESSION_ID. The tool uses
 PI_WORKBENCH_WORKSTREAM_DIR when set and otherwise the user-local Workstream

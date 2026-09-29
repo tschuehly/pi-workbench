@@ -24,6 +24,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Installed vs development checkouts, promotion | `docs/contracts/harness.md` ("Installed and Development Checkouts") |
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
 | Pi CLI activity presentation | `extensions/activity/` |
+| Per-session scratch folder (`PI_TMP`) and its cleanup | `extensions/pi-tmp/` |
 | Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
 | Session-log inventory and conversation extraction | `tools/session-logs/README.md` |
 | Owner re-entry orientation for Chats and Workstreams | `skills/orient/` |

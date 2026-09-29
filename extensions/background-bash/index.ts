@@ -2,12 +2,15 @@ import { createBashToolDefinition, createLocalBashOperations, getAgentDir, type 
 import { delimiter, join } from "node:path";
 import { Type } from "typebox";
 import { createBackgroundBashJobs } from "./jobs.mjs";
+import { piTmpDir } from "../pi-tmp/pitmp.mjs";
 
 export default function backgroundBashExtension(pi: ExtensionAPI) {
   // Short-lived Subagents and Workers must receive the native blocking tool: their Pi process exits at agent_settled.
   if (process.env.PI_WORKBENCH_EXECUTION_KIND !== undefined) return;
   // ponytail: Pi does not expose the configured base bash tool; this override uses stock shellPath/prefix defaults. Forward configured shell settings when the extension API exposes them.
-  const foreground = createBashToolDefinition(process.cwd());
+  const foreground = createBashToolDefinition(process.cwd(), {
+    spawnHook: (spawn) => spawn.env.PI_SESSION_ID === undefined ? spawn : { ...spawn, env: { ...spawn.env, PI_TMP: piTmpDir(spawn.cwd, spawn.env.PI_SESSION_ID) } },
+  });
   let publishStatus: () => void = () => {};
   let clearStatus: () => void = () => {};
   const jobs = createBackgroundBashJobs(pi, createLocalBashOperations(), { onChange: () => { publishStatus(); } });
@@ -45,7 +48,7 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
         return foreground.execute(id, { command: params.command, ...(params.timeout === undefined ? {} : { timeout: params.timeout }) }, signal, onUpdate, ctx);
       }
       if (signal?.aborted) throw new Error("Bash launch cancelled");
-      const env: NodeJS.ProcessEnv = { ...process.env, PI_SESSION_ID: ctx.sessionManager.getSessionId() };
+      const env: NodeJS.ProcessEnv = { ...process.env, PI_SESSION_ID: ctx.sessionManager.getSessionId(), PI_TMP: piTmpDir(ctx.cwd, ctx.sessionManager.getSessionId()) };
       const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
       const bin = join(getAgentDir(), "bin");
       const entries = (env[pathKey] ?? "").split(delimiter).filter(Boolean);
