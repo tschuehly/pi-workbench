@@ -147,8 +147,13 @@ export class PiRpcExecutionAdapter {
   #launch(state) {
     const { spec } = state;
     const args = ["--mode", "rpc", "--provider", spec.binding.provider, "--model", spec.binding.model, "--thinking", spec.binding.effort, "--tools", spec.tools.join(",")];
-    if (spec.continuation === undefined) args.push("--name", `workbench-${spec.profile}-${taskSlug(spec.name ?? spec.task)}`);
-    else args.push("--session", spec.continuation.sessionId);
+    const sessionName = `workbench-${spec.profile}-${taskSlug(spec.name ?? spec.task)}`;
+    // Pi has no CLI flag for a session header's parentSession; its RPC new_session is the supported
+    // way. A fresh child therefore replaces its unwritten startup session before anything else and
+    // names the replacement, which --name could not reach.
+    const linkParent = spec.continuation === undefined && spec.parentSessionFile !== undefined;
+    if (spec.continuation !== undefined) args.push("--session", spec.continuation.sessionId);
+    else if (!linkParent) args.push("--name", sessionName);
     const env = { ...process.env, PI_TELEMETRY_EXECUTION_ID: state.executionId, PI_WORKBENCH_EXECUTION_KIND: state.kind };
     if (spec.parentSessionId === undefined) delete env.PI_TELEMETRY_PARENT_SESSION_ID;
     else env.PI_TELEMETRY_PARENT_SESSION_ID = spec.parentSessionId;
@@ -191,7 +196,10 @@ export class PiRpcExecutionAdapter {
         this.#finish(state, resultFor(state, outcome, state.finalText, diagnostic));
       }
     });
-    void this.#command(state, "get_state").catch((error) => {
+    const linked = linkParent
+      ? this.#command(state, "new_session", { parentSession: spec.parentSessionFile }).then(() => this.#command(state, "set_session_name", { name: sessionName }))
+      : Promise.resolve();
+    void linked.then(() => this.#command(state, "get_state")).catch((error) => {
       if (!state.done) this.#finish(state, resultFor(state, state.prompted ? "execution_failed" : "launch_failed", "", errorMessage(error)));
     });
   }
@@ -323,7 +331,7 @@ export class PiRpcExecutionAdapter {
     clearTimeout(timer);
   }
 
-  #command(state, type) {
+  #command(state, type, fields = {}) {
     if (state.done || state.child?.stdin?.destroyed) return Promise.reject(new Error("Pi RPC is unavailable."));
     const id = `${state.executionId}:${String(++state.commandSequence)}`;
     return new Promise((resolve, reject) => {
@@ -353,7 +361,7 @@ export class PiRpcExecutionAdapter {
         resolve(data);
       };
       state.commands.set(id, { command: type, resolve: type === "get_state" && !state.prompted ? verifyInitialState : resolve, reject });
-      state.child.stdin.write(`${JSON.stringify({ id, type })}\n`, (error) => {
+      state.child.stdin.write(`${JSON.stringify({ ...fields, id, type })}\n`, (error) => {
         if (error !== null && error !== undefined) { state.commands.delete(id); reject(error); }
       });
     });
@@ -494,8 +502,8 @@ function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   if (spec.continuation !== undefined && (typeof spec.continuation !== "object" || spec.continuation === null || typeof spec.continuation.sessionId !== "string" || spec.continuation.sessionId.trim() === "")) {
     throw typedError("INVALID_SPEC", "continuation.sessionId must be a non-empty string when continuation is present.");
   }
-  if (spec.parentSessionId !== undefined && (typeof spec.parentSessionId !== "string" || spec.parentSessionId.trim() === "")) {
-    throw typedError("INVALID_SPEC", "parentSessionId must be a non-empty string when present.");
+  for (const field of ["parentSessionId", "parentSessionFile"]) {
+    if (spec[field] !== undefined && (typeof spec[field] !== "string" || spec[field].trim() === "")) throw typedError("INVALID_SPEC", `${field} must be a non-empty string when present.`);
   }
   if (spec.telemetryConcept !== undefined && (typeof spec.telemetryConcept !== "string" || spec.telemetryConcept.trim() === "")) {
     throw typedError("INVALID_SPEC", "telemetryConcept must be a non-empty string when present.");

@@ -8,6 +8,8 @@ Independent bindings are revalidated against the author and selected model's und
 
 When `parentSessionId` is present, the adapter passes it and the generated execution ID to the child as `PI_TELEMETRY_PARENT_SESSION_ID` and `PI_TELEMETRY_EXECUTION_ID`. The child telemetry extension records that launch-time lineage even when a background result is never collected.
 
+When `parentSessionFile` is present on a fresh launch, the adapter sends Pi RPC `new_session` with that path before the first prompt, so the child's session header records `parentSession`, then names the new session with `set_session_name`. Pi has no CLI flag for the header field. The discarded startup session is never written to disk, but its extensions see one extra `session_start`/`session_shutdown` pair. A continuation keeps the header from its first dispatch.
+
 This package keeps live process state only. It is not a Run Controller, scheduler, sandbox, workspace owner, durable actor store, or acceptance authority.
 
 ```sh

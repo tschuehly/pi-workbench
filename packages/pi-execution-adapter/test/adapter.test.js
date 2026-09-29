@@ -50,6 +50,27 @@ test("names the launched child session from an explicit name when the caller sup
   assert.equal(args[args.indexOf("--name") + 1], "workbench-scout-fix-login-redirect");
 });
 
+test("records the launching lead as parentSession through RPC new_session before the first prompt", async () => {
+  const children = [];
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, args) => { const child = fakeRpc(); children.push({ child, args }); return child; } });
+  const receipt = await adapter.dispatch(spec({ task: "Align drawer labels", parentSessionFile: "/sessions/lead.jsonl" }));
+  assert.equal((await adapter.result(receipt.executionId)).outcome, "success");
+  const { child, args } = children[0];
+  assert.equal(args.includes("--name"), false, "--name would name the replaced startup session");
+  assert.deepEqual(child.commands.slice(0, 4).map(({ id, ...command }) => command), [
+    { type: "new_session", parentSession: "/sessions/lead.jsonl" },
+    { type: "set_session_name", name: "workbench-scout-align-drawer-labels" },
+    { type: "get_state" },
+    { type: "prompt", message: child.commands[3].message },
+  ]);
+
+  const resumed = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => { const next = fakeRpc({ sessionId: "worker-session-1" }); children.push({ child: next }); return next; } });
+  const again = await resumed.dispatch(spec({ parentSessionFile: "/sessions/lead.jsonl", continuation: { sessionId: "worker-session-1" } }));
+  await resumed.result(again.executionId);
+  assert.equal(children[1].child.commands.some((command) => command.type === "new_session"), false, "a continuation keeps its original header");
+  await assert.rejects(adapter.dispatch(spec({ parentSessionFile: " " })), (error) => error.code === "INVALID_SPEC");
+});
+
 test("rejects a blank explicit name instead of silently falling back", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
   await assert.rejects(adapter.dispatch(spec({ name: "   " })), (error) => error.code === "INVALID_SPEC");
@@ -131,6 +152,7 @@ function fakeRpc(options = {}) {
         else if (options.stateDelayMs !== undefined) setTimeout(() => send(stateResponse(command)), options.stateDelayMs);
         else send(stateResponse(command));
       }
+      if (command.type === "new_session" || command.type === "set_session_name") send({ id: command.id, type: "response", command: command.type, success: true, data: command.type === "new_session" ? { cancelled: false } : undefined });
       if (command.type === "abort" && options.respondStateOnAbort && pendingGetState !== undefined) send(stateResponse(pendingGetState));
       if (command.type === "abort" && options.settleOnAbort) queueMicrotask(() => send({ type: "agent_settled" }));
       if (command.type === "prompt") {

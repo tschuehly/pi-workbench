@@ -238,6 +238,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           tools: [...profile.tools],
           binding,
           parentSessionId,
+          ...parentSessionFile(ctx),
           kind: "subagent",
           ...(params.name === undefined ? {} : { name: params.name }),
           ...(telemetryConcept === undefined ? {} : { telemetryConcept }),
@@ -549,6 +550,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           tools: [...profile.tools],
           binding,
           parentSessionId,
+          ...parentSessionFile(ctx),
           kind: "worker",
           ...(params.telemetryConcept === undefined ? {} : { telemetryConcept: params.telemetryConcept }),
           ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
@@ -997,6 +999,12 @@ function registryFailure(error: unknown) {
   const diagnostic = errorMessage(error);
   const coded = typeof code === "string" ? `[${code}] ${diagnostic}` : diagnostic;
   return { content: [{ type: "text" as const, text: `preflight_failed: ${coded}` }], details: { outcome: "preflight_failed", ...(typeof code === "string" ? { code } : {}), diagnostic }, isError: true };
+}
+
+// Recorded as parentSession in the child's session header so session tools can tell children from leads.
+function parentSessionFile(ctx: ExtensionContext): { parentSessionFile?: string } {
+  const file = ctx.sessionManager.getSessionFile?.();
+  return file === undefined ? {} : { parentSessionFile: file };
 }
 
 export function taskGoal(task: string): string {

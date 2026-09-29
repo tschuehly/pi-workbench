@@ -252,6 +252,7 @@ async function settlingWorkerHarness() {
   let releaseReceipt;
   const receiptGate = new Promise((resolve) => { releaseReceipt = resolve; });
   let resultCalls = 0;
+  const dispatchedSpecs = [];
   const execution = {
     executionId: "worker-execution", running: false, outcome: "success", kind: "worker",
     profile: "implementer", cognitiveRole: "implementation", provider: "anthropic", model: "claude-test", effort: "low",
@@ -259,7 +260,7 @@ async function settlingWorkerHarness() {
   };
   const final = { ...execution, text: "Worker done.", sessionId: "worker-session", truncated: false };
   const adapter = {
-    dispatch: async () => ({ executionId: execution.executionId, acceptedAt: execution.acceptedAt }),
+    dispatch: async (spec) => { dispatchedSpecs.push(spec); return { executionId: execution.executionId, acceptedAt: execution.acceptedAt }; },
     result: () => { resultCalls += 1; return Promise.resolve(final); },
     status: () => execution,
     list: () => [execution],
@@ -285,7 +286,7 @@ async function settlingWorkerHarness() {
   }, undefined, undefined, ctx);
 
   return {
-    tools, sent, wakeup, releaseReceipt,
+    tools, sent, wakeup, releaseReceipt, dispatchedSpecs,
     resultCalls: () => resultCalls,
     cleanup: async () => {
       await handlers.get("session_shutdown")();
@@ -309,6 +310,7 @@ test("per-id collect returns a settling Worker snapshot without consuming its la
   try {
     const snapshot = await mustResolveImmediately(harness.tools.get("subagent_collect").execute("collect", { executionId: "worker-execution" }, undefined, undefined));
     assert.equal(harness.resultCalls(), 1, "collect does not read the finished child while its Worker receipt is unsettled");
+    assert.equal(harness.dispatchedSpecs[0].parentSessionFile, "/sessions/lead.jsonl", "a Worker session header names the dispatching lead");
     assert.equal(snapshot.details.receiptStatus, "settling");
     assert.match(snapshot.content[0].text, /worker-execution \[settling\] child finished; Worker receipt not yet settled/);
 
@@ -519,10 +521,11 @@ test("defaults independence to the exact parent model and preserves repeated fam
     }, undefined, undefined, {
       cwd: "/repo",
       model: { provider: "github-copilot", id: "claude-sonnet-5" },
-      sessionManager: { getSessionId: () => "lead" },
+      sessionManager: { getSessionId: () => "lead", getSessionFile: () => "/sessions/lead.jsonl" },
     });
 
     assert.equal(result.details.outcome, "launched");
+    assert.equal(dispatched.parentSessionFile, "/sessions/lead.jsonl", "the child session header names the launching lead");
     assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), [
       "review",
       "--independent-of-model", "github-copilot/claude-sonnet-5",
