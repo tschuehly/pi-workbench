@@ -129,11 +129,18 @@ struct NativeNotificationTests {
         var clickEvents: [String] = []
         activateFromNotificationClick(
             activateApplication: { clickEvents.append("activate") },
-            bringWindowForward: { clickEvents.append("window") },
             routeChat: { clickEvents.append("route") },
             complete: { clickEvents.append("complete") }
         )
-        precondition(clickEvents == ["activate", "window", "route", "complete"])
+        precondition(clickEvents == ["route", "activate", "complete"], "the chosen window is key before the app activates")
+
+        let desktop = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&workspace=w"), isOnActiveSpace: true)
+        let other = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&session=a&view=chat"), isOnActiveSpace: false)
+        let target = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&session=b&view=chat&workspace=w"), isOnActiveSpace: false)
+        precondition(notificationWindowIndex([desktop, other, target], sessionId: "b") == 2, "the window showing the Chat wins over the active Space")
+        precondition(notificationWindowIndex([other, desktop], sessionId: "z") == 1, "an unopened Chat uses the window on the active Space")
+        precondition(notificationWindowIndex([other, target], sessionId: nil) == 0, "otherwise the frontmost window")
+        precondition(notificationWindowIndex([], sessionId: "b") == nil, "no window means open one")
 
         guard let context = JSContext() else { preconditionFailure("JavaScriptCore unavailable") }
         context.evaluateScript("""

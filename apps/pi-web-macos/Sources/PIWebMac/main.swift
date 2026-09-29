@@ -73,11 +73,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         DispatchQueue.main.async { [weak self] in
             activateFromNotificationClick(
                 activateApplication: { NSApp.activate(ignoringOtherApps: true) },
-                bringWindowForward: { self?.browser.bringExistingWindowForward() },
                 routeChat: {
-                    guard let machineId = response.notification.request.content.userInfo["machineId"] as? String,
-                          let sessionId = response.notification.request.content.userInfo["sessionId"] as? String else { return }
-                    self?.browser.openNotificationChat(machineId: machineId, sessionId: sessionId)
+                    let userInfo = response.notification.request.content.userInfo
+                    self?.browser.openNotificationChat(machineId: userInfo["machineId"] as? String, sessionId: userInfo["sessionId"] as? String)
                 },
                 complete: completionHandler
             )
@@ -395,20 +393,20 @@ private final class BrowserCoordinator {
     func goBackInKeyWindow() { keyController?.goBack() }
     func goForwardInKeyWindow() { keyController?.goForward() }
 
-    func bringExistingWindowForward() {
-        guard let window = (keyController ?? controllers.values.first)?.window else { return }
-        if window.isMiniaturized { window.deminiaturize(nil) }
-        window.makeKeyAndOrderFront(nil)
-    }
-
-    func openNotificationChat(machineId: String, sessionId: String) {
-        guard let serverURL, let url = notificationChatURL(serverURL: serverURL, machineId: machineId, sessionId: sessionId) else { return }
-        if let controller = controllers.values.first(where: { $0.applicationURL == url }) ?? keyController ?? controllers.values.first {
-            if controller.applicationURL != url { controller.load(url) }
-            controller.window?.makeKeyAndOrderFront(nil)
-        } else {
+    /// Bring forward the window already showing the Chat, so macOS switches to its Space instead of loading it elsewhere.
+    func openNotificationChat(machineId: String?, sessionId: String?) {
+        let url = serverURL.flatMap { server in machineId.flatMap { machine in sessionId.flatMap { notificationChatURL(serverURL: server, machineId: machine, sessionId: $0) } } }
+        let ordered = NSApp.orderedWindows.compactMap { window in controllers.values.first { $0.window === window } }
+            + controllers.values.filter { controller in !NSApp.orderedWindows.contains { $0 === controller.window } }
+        let candidates = ordered.map { NotificationWindowCandidate(url: $0.applicationURL, isOnActiveSpace: $0.window?.isVisible == true && $0.window?.isOnActiveSpace == true) }
+        guard let index = notificationWindowIndex(candidates, sessionId: url == nil ? nil : sessionId) else {
             openWindow(url: url)
+            return
         }
+        let controller = ordered[index]
+        if let url, chatSessionId(of: controller.applicationURL) != sessionId { controller.load(url) }
+        if controller.window?.isMiniaturized == true { controller.window?.deminiaturize(nil) }
+        controller.window?.makeKeyAndOrderFront(nil)
     }
 
     func showReport(title: String, text: String) {

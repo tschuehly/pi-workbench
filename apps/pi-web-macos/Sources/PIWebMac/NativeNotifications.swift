@@ -123,14 +123,33 @@ func notificationChatURL(serverURL: URL, machineId: String, sessionId: String) -
     return components.url
 }
 
+/// The session a Pi Workbench window shows, from its `session` query item.
+func chatSessionId(of url: URL?) -> String? {
+    url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "session" }?.value }
+}
+
+struct NotificationWindowCandidate {
+    let url: URL?
+    let isOnActiveSpace: Bool
+}
+
+/// Pick the window for a notification's Chat from windows ordered front to back: the one already
+/// showing that session (so its Space comes forward), else the one on the Space the owner is looking at,
+/// else the frontmost. Nil means there is no window, so open one.
+func notificationWindowIndex(_ windows: [NotificationWindowCandidate], sessionId: String?) -> Int? {
+    // ponytail: matches by session ID alone; window URLs omit the local machine. Compare machine too once remote Chats get their own windows.
+    if let sessionId, let showing = windows.firstIndex(where: { chatSessionId(of: $0.url) == sessionId }) { return showing }
+    return windows.firstIndex { $0.isOnActiveSpace } ?? (windows.isEmpty ? nil : 0)
+}
+
+/// Route first so the chosen window is key before activation; activating first would bring forward
+/// whichever window was key, possibly on another Space.
 func activateFromNotificationClick(
     activateApplication: () -> Void,
-    bringWindowForward: () -> Void,
     routeChat: () -> Void,
     complete: () -> Void
 ) {
-    activateApplication()
-    bringWindowForward()
     routeChat()
+    activateApplication()
     complete()
 }
