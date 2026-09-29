@@ -73,6 +73,15 @@ These rules describe behavior within the existing session and task. They introdu
 separate Autonomy dial nor managed execution or recovery. Existing authority requirements remain
 separate from the mode guidance.
 
+### AFK starts after alignment
+
+When Alignment is Align, Plan, or Spec, AFK does not start until alignment is reached. Until then
+Pia stays interactive in the conversation and prepares: she presents the agreement the Alignment
+value asks for (five Align bullets, or a persisted plan or specification) with the checklist she
+will follow and a numbered list of every question she can foresee, then waits. After Thomas
+confirms, Pia calls `alignment_reached` and the AFK rules apply. Changing the Alignment value asks
+for a new agreement. With Alignment Default, AFK starts immediately.
+
 ### Questions follow the Attention channel
 
 Open questions for Thomas go through the channel the Attention value selects: the conversation

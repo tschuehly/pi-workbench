@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 export const axes = {
   alignment: {
@@ -47,8 +48,26 @@ export type WorkingModeSnapshot = {
   phase: "selected" | "applied";
   selected: WorkingModeState;
   applied: WorkingModeState | null;
+  aligned: boolean;
 };
-export type WorkingModeDetails = { schemaVersion: 2; seq: number; selection: WorkingModeState };
+export type WorkingModeDetails = { schemaVersion: 2; seq: number; selection: WorkingModeState; aligned?: boolean };
+
+export const ALIGNMENT_TOOL = "alignment_reached";
+
+/** How each Alignment value reaches alignment before AFK starts; Default needs none. */
+const afkPreparation: Record<string, string> = {
+  Align: "state the outcome, scope, consequential assumptions, and success check in at most five bullets, followed by the checklist you will work through while he is away",
+  Plan: "persist the plan, including the checklist you will work through while he is away, and ask him to accept it",
+  Spec: "persist the specification, including the checklist you will work through while he is away, and ask him to accept it",
+};
+
+/** AFK waits for alignment when an Alignment value asks for it and Thomas has not yet confirmed. */
+export const afkPending = (selection: WorkingModeState, aligned: boolean) =>
+  selection.attention === "AFK" && selection.alignment !== "Default" && !aligned;
+
+function afkPreparationText(selection: WorkingModeState) {
+  return `AFK has not started: alignment is not reached yet. Prepare to go AFK while Thomas is still here: stay interactive in this conversation and do not use phone tools. In one message, ${afkPreparation[selection.alignment]}. In the same message, add a numbered list of every question you can foresee while he is away, each with a recommended default. Wait for his answer. Once he confirms, call \`${ALIGNMENT_TOOL}\` with the agreed outcome and checklist; from then on the AFK rules apply.`;
+}
 
 export const CUSTOM_TYPE = "working-mode";
 export const defaults: WorkingModeState = { alignment: "Default", attention: "Default", checking: "Default", orchestration: "Main" };
@@ -57,6 +76,17 @@ const usage = `/mode send delivers the pending change now · /mode <axis> <value
 
 export function isSelection(value: any): value is WorkingModeState {
   return !!value && axisNames.every((axis) => typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis]));
+}
+
+/** Alignment state from whichever came last on the branch: a Working Mode block or an alignment_reached result. */
+function latestAligned(entries: readonly any[]): boolean {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry?.type === "custom_message" && entry.customType === CUSTOM_TYPE && isSelection(entry.details?.selection)) return !!entry.details.aligned;
+    const message = entry?.type === "message" ? entry.message : undefined;
+    if (message?.role === "toolResult" && message.toolName === ALIGNMENT_TOOL && !message.isError) return true;
+  }
+  return false;
 }
 
 const same = (a: WorkingModeState, b: WorkingModeState) => axisNames.every((axis) => a[axis] === b[axis]);
@@ -70,14 +100,16 @@ function latestBlock(entries: readonly any[]): WorkingModeDetails | null {
   return null;
 }
 
-export function renderBlock(selection: WorkingModeState, seq: number, sent = false) {
+export function renderBlock(selection: WorkingModeState, seq: number, aligned = false, sent = false) {
   const summary = axisNames.map((axis) => `${axes[axis].label}: ${selection[axis]}`).join(" · ");
   const guidance = axisNames
     .filter((axis) => selection[axis] !== defaults[axis])
-    .map((axis) => `${axes[axis].label} — ${selection[axis]}: ${(axes[axis].values as Record<string, string>)[selection[axis]]}`);
+    .map((axis) => axis === "attention" && afkPending(selection, aligned)
+      ? `Attention — AFK (preparing): ${afkPreparationText(selection)}`
+      : `${axes[axis].label} — ${selection[axis]}: ${(axes[axis].values as Record<string, string>)[selection[axis]]}`);
   return [
     `<working-mode seq="${seq}">`,
-    `Thomas selected Working Mode ${summary}.`,
+    `Thomas selected Working Mode ${summary}.${aligned ? " Alignment is reached." : ""}`,
     guidance.length
       ? "Follow this guidance until a newer block replaces it. It grants no extra permissions, and Thomas's explicit instructions in the conversation override it.\n\n" + guidance.join("\n\n")
       : "Every value is at its starting setting; no Working Mode guidance applies.",
@@ -91,21 +123,22 @@ export function renderBlock(selection: WorkingModeState, seq: number, sent = fal
 export default function workingModeExtension(pi: ExtensionAPI) {
   let selected: WorkingModeState = { ...defaults };
   let applied: WorkingModeState | null = null;
+  let aligned = false;
   // Block sent by `/mode send` that may still wait in the steer queue, outside the session branch.
   let queued: WorkingModeDetails | null = null;
 
   /** Next block to deliver, or null when the model already sees (or will see) the selection. */
   function pendingBlock(ctx: ExtensionContext, sent: boolean) {
     // Compare with the block the model can still see; compaction may have summarized it away.
-    const seen = queued?.selection ?? latestBlock(ctx.sessionManager.buildContextEntries())?.selection ?? defaults;
-    if (same(seen, selected)) return null;
+    const seen = queued ?? latestBlock(ctx.sessionManager.buildContextEntries());
+    if (same(seen?.selection ?? defaults, selected) && !!seen?.aligned === aligned) return null;
     const seq = Math.max(queued?.seq ?? 0, latestBlock(ctx.sessionManager.getBranch())?.seq ?? 0) + 1;
-    const details: WorkingModeDetails = { schemaVersion: 2, seq, selection: { ...selected } };
-    return { customType: CUSTOM_TYPE, content: renderBlock(selected, seq, sent), display: true, details };
+    const details: WorkingModeDetails = { schemaVersion: 2, seq, selection: { ...selected }, aligned };
+    return { customType: CUSTOM_TYPE, content: renderBlock(selected, seq, aligned, sent), display: true, details };
   }
 
   const publish = (ctx: ExtensionContext, phase: WorkingModeSnapshot["phase"]) => {
-    const value: WorkingModeSnapshot = { schemaVersion: 2, phase, selected: { ...selected }, applied };
+    const value: WorkingModeSnapshot = { schemaVersion: 2, phase, selected: { ...selected }, applied, aligned };
     pi.events?.emit("pi-workbench:working-mode", value);
     ctx.ui.setStatus("working-mode", ctx.mode === "tui"
       ? axisNames.map((axis) => `${axes[axis].label}: ${selected[axis]}`).join(" · ")
@@ -118,12 +151,20 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     if (extra.length || !axisNames.includes(axis)) return false;
     const match = Object.keys(axes[axis].values).find((candidate) => candidate.toLowerCase() === value);
     if (!match) return false;
-    selected = { ...selected, [axis]: match };
+    select(axis, match);
     return true;
   }
 
+  // Changing the Alignment value asks for a new agreement.
+  function select(axis: Axis, value: string) {
+    if (axis === "alignment" && value !== selected.alignment) aligned = false;
+    selected = { ...selected, [axis]: value };
+  }
+
   pi.on("session_start", (_event, ctx) => {
-    selected = { ...(latestBlock(ctx.sessionManager.getBranch())?.selection ?? defaults) };
+    const branch = ctx.sessionManager.getBranch();
+    selected = { ...(latestBlock(branch)?.selection ?? defaults) };
+    aligned = latestAligned(branch);
     applied = null;
     queued = null;
     publish(ctx, "selected");
@@ -164,7 +205,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         if (!axis) return;
         const value = await ctx.ui.select(axes[axis].label, Object.keys(axes[axis].values));
         if (!value || !Object.hasOwn(axes[axis].values, value)) return;
-        selected = { ...selected, [axis]: value };
+        select(axis, value);
       }
       publish(ctx, "selected");
       if (ctx.mode === "tui") ctx.ui.notify("Working Mode applies with the next prompt.", "info");
@@ -176,5 +217,21 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     publish(ctx, "applied");
     const message = pendingBlock(ctx, false);
     return message ? { message } : undefined;
+  });
+
+  pi.registerTool({
+    name: ALIGNMENT_TOOL,
+    label: "Alignment reached",
+    description: "Record that Thomas confirmed the outcome, scope, and success check (or accepted the plan or specification). Call only after his explicit confirmation.",
+    parameters: Type.Object({ agreement: Type.String({ minLength: 1, description: "The agreed outcome and checklist, briefly" }) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const wasPending = afkPending(selected, aligned);
+      aligned = true;
+      publish(ctx, "applied");
+      const text = wasPending
+        ? `Alignment recorded. AFK starts now: ${axes.attention.values.AFK}`
+        : "Alignment recorded.";
+      return { content: [{ type: "text", text }], details: { alignment: selected.alignment, agreement: params.agreement } };
+    },
   });
 }

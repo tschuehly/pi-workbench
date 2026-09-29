@@ -25,9 +25,15 @@ When the model already sees the selection, it only notifies "Working Mode unchan
 - **Persistence:** blocks are saved in the session. Resume, reload, and fork restore the selection
   from the latest block on the branch. After compaction summarizes a block away, the next prompt
   attaches the current one again. A new session starts at the starting values.
-- **Status:** each start, selection, and prompt publishes a snapshot (schema version 2, `selected` and
-  `applied`) through status key `working-mode` and the `pi-workbench:working-mode` event.
-- Guidance only: no tools, permissions, or skill catalog change.
+- **Status:** each start, selection, and prompt publishes a snapshot (schema version 2, `selected`,
+  `applied`, and `aligned`) through status key `working-mode` and the `pi-workbench:working-mode` event.
+- **Alignment gate for AFK:** with Attention AFK and Alignment Align, Plan, or Spec, the block tells
+  the agent to prepare instead: stay in the conversation, present the agreement (Align bullets or
+  a persisted plan or specification) with its checklist and every foreseeable question, and wait.
+  After Thomas confirms, the agent calls `alignment_reached`; its result carries the AFK rules and
+  the next block says alignment is reached. Changing the Alignment value clears it. With Alignment
+  Default, AFK starts at once. The snapshot's `aligned` field reports the state.
+- Guidance only: the `alignment_reached` tool records state; no permissions or skill catalog change.
 
 The behavioral contract is [Working Mode](../../docs/foundation/working-mode.md).
 
