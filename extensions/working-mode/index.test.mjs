@@ -53,7 +53,7 @@ test("a mode change reaches the model as one tagged message; the system prompt n
   assert.equal(s.blocks(s.last()).length, 1, "posted once, not repeated");
   assert.match(block, /^<working-mode seq="1">/);
   assert.match(block, /Alignment: Align · Attention: Phone · Checking: Default · Orchestration: Main/);
-  assert.match(block, /Alignment — Align: For nontrivial work/);
+  assert.match(block, /Alignment — Align: Investigate freely, but before the first edit/);
   assert.match(block, /Attention — Phone: .*ask_human`, never in the session conversation/);
   assert.match(block, /When a milestone finishes or you stop to wait, send one `notify_human` update/);
   assert.doesNotMatch(block, /Checking —|Orchestration —/);

@@ -5,17 +5,17 @@ export const axes = {
     label: "Alignment",
     values: {
       Default: "",
-      Align: "For nontrivial work, check shared understanding: surface consequential assumptions, resolve important ambiguities, and agree the outcome, scope, and success criteria. Reuse what Thomas has already confirmed; record lasting decisions in existing documentation.",
-      Plan: "Before implementation, persist a plan with the outcome, approach, boundaries, and evidence, then obtain Thomas's acceptance. Reuse the accepted plan and adapt ordinary tactics within it.",
-      Spec: "Before implementation, persist a specification with user stories, required behavior, constraints, and acceptance criteria, then obtain Thomas's acceptance. Reuse the accepted specification; adapt implementation within its criteria.",
+      Align: "Investigate freely, but before the first edit, delegation, or long-running job on nontrivial work, stop and confirm shared understanding: state the outcome, scope, consequential assumptions, and how success will be checked in at most five bullets, ask Thomas to confirm or correct them, and wait for his answer. Do not ask again about what he already confirmed. After confirmation, implement one bounded slice and return with evidence before starting the next. Record lasting decisions in existing documentation.",
+      Plan: "Before implementation, persist a plan with the outcome, approach, boundaries, and evidence, then obtain Thomas's acceptance and wait for it before editing code. Reuse the accepted plan and adapt ordinary tactics within it.",
+      Spec: "Before implementation, persist a specification with user stories, required behavior, constraints, and acceptance criteria, then obtain Thomas's acceptance and wait for it before editing code. Reuse the accepted specification; adapt implementation within its criteria.",
     },
   },
   attention: {
     label: "Attention",
     values: {
       Default: "",
-      Focused: "Thomas is following the session conversation; ask there promptly when a quick answer improves direction.",
-      Switching: "Thomas moves among sessions but remains available; batch questions in the session conversation and make each self-contained so he can answer without rereading the session.",
+      Focused: "Thomas is watching this conversation now. Work in short steps and report each meaningful finding or step in a few lines. Ask in the conversation as soon as a question arises, one question at a time, instead of guessing or batching; keep working on anything the question does not affect. Do not use phone tools.",
+      Switching: "Thomas works in other sessions and reads this one only occasionally. Do not interrupt for single questions: keep working on everything an open decision does not block, and write only when blocked or finished. Then send one conversation message: a one-line status, then a numbered list of open decisions, each with the context needed and a recommended default, so he can answer like \"1 yes, 2 b\" without rereading the session. Do not use phone tools.",
       Phone: "Thomas is away from the session conversation but reachable by phone. This setting, not a guess about his presence, selects the phone channel. Ask every question through `ask_human`, never in the session conversation; ask only real blockers and make each question concise and self-contained. When a milestone finishes or you stop to wait, send one `notify_human` update; use it only for updates that need no answer. Start the first line with `❓` for a question or `ℹ️` for an update. Batch open decisions into one `ask_human` call with a numbered list and a safe default per item. Give every `ask_human` call a finite `timeoutMs` matched to the response window; state the fallback when timeout matters.",
       AFK: "Before treating a choice as blocked, recheck the agreed goal and success criteria. For a material doubt, ask an advisor to challenge the assumption or find an in-scope route; an advisor cannot approve a different goal. Continue with a changed approach only if it preserves the agreed outcome, behavior, scope, and success criteria; record the reason in an accepted plan or specification when one exists. If advice is unavailable or unclear, use only a low-cost, reversible local step within those bounds; record uncertainty and how to undo it. With advisor backing, decide product, architecture, scope, or quality questions the agreement leaves open; record the decision, the advice, and how to undo it. Do not contact Thomas. If no advisor is available and no reversible in-scope step remains, list the question for Thomas's return, pause affected work, and continue independent work.",
     },
@@ -33,8 +33,8 @@ export const axes = {
     label: "Orchestration",
     values: {
       Main: "Perform the primary work in the main session. Required advisors and independent checks remain available.",
-      Subagents: "Delegate a bounded task when isolation, volume, or an independent check helps; reconcile the result. Keep trivial work in the main session.",
-      Workers: "Use a scope-owning worker when repeated bounded tasks benefit from retained context. A worker may delegate only to a leaf subagent; continuity is not independent review. Keep trivial work in the main session.",
+      Subagents: "Parallelize by default; this overrides any general preference to work inline. Before each task, split it into independent parts such as research questions, files, modules, or checks. When two or more exist, launch them as parallel background subagents in the same turn. Also delegate mechanical volume such as bulk reading, scans, and broad edits. Keep the main session for steering, integration, and talking with Thomas; do inline only what is smaller than writing its brief.",
+      Workers: "Organize multi-step work around durable workers; this overrides any general preference for fresh subagents. At the start, name the scopes that will receive repeated tasks, such as a module, repository area, or review lane, create one worker per scope, and route every task in that scope to its worker. Run workers for independent scopes in parallel. A worker may delegate only to a leaf subagent; continuity is not independent review. Keep the main session for steering, integration, and talking with Thomas.",
     },
   },
 } as const;
@@ -79,7 +79,7 @@ export function renderBlock(selection: WorkingModeState, seq: number) {
     `<working-mode seq="${seq}">`,
     `Thomas selected Working Mode ${summary}.`,
     guidance.length
-      ? "This is behavior guidance, not permission; explicit owner direction and repository instructions still apply.\n\n" + guidance.join("\n\n")
+      ? "Follow this guidance until a newer block replaces it. It grants no extra permissions, and Thomas's explicit instructions in the conversation override it.\n\n" + guidance.join("\n\n")
       : "Every value is at its starting setting; no Working Mode guidance applies.",
     "",
     "This block replaces every earlier <working-mode> block.",

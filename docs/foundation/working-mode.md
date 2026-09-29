@@ -16,7 +16,7 @@ The confirmed values are `Default | Align | Plan | Spec`.
 | Value | Shared-understanding behavior |
 | --- | --- |
 | `Default` | Add no Alignment-specific behavior. Ordinary Pi interpretation and the existing session instructions remain. |
-| `Align` | Establish shared understanding through a lightweight grill: expose consequential assumptions, resolve important ambiguities, and confirm the intended outcome, scope, and success criteria. |
+| `Align` | Before the first edit, delegation, or long-running job on nontrivial work, state outcome, scope, assumptions, and success check in at most five bullets and wait for Thomas's confirmation; then deliver one bounded slice with evidence at a time. |
 | `Plan` | Persist a plan covering the outcome, approach, boundaries, and evidence; obtain Thomas's acceptance before implementation. |
 | `Spec` | Persist a specification with user stories, required behavior, constraints, and acceptance criteria; obtain Thomas's acceptance before implementation. |
 
@@ -30,8 +30,9 @@ notes. Reuse an existing accepted document rather than recreating it. Pia may ma
 and implementation details without repeated approval. Attention determines how new questions are
 handled; it does not turn advisor judgment into Thomas's acceptance of a different outcome.
 
-Default adds no new draft-first or ask-first rule. It does not remove existing global, repository,
-or conversational instructions. A clean Pi profile is not part of this design.
+Default adds no new draft-first or ask-first rule. The commitment-boundary and bounded-slice rules
+live in Align, not in global instructions, so Default no longer stops to confirm. It does not
+remove repository or conversational instructions. A clean Pi profile is not part of this design.
 
 ## Attention
 
@@ -43,8 +44,8 @@ in the conversation, so the selected value alone chooses the channel.
 | Value | Interaction behavior |
 | --- | --- |
 | `Default` | Add no Attention-specific behavior; existing instructions apply. |
-| `Focused` | Ask Thomas readily when a quick clarification improves direction; Thomas is following the session. |
-| `Switching` | Batch questions and provide enough context to answer without rereading the transcript; Thomas moves among sessions but remains available for consultation. |
+| `Focused` | Thomas is watching: work in short, reported steps and ask one question at a time as soon as it arises. |
+| `Switching` | Thomas reads occasionally: keep working on unblocked parts, write only when blocked or finished, then send one status line and a numbered list of decisions with recommended defaults. |
 | `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools and never in the conversation, even if Thomas also replies there. Send one update when a milestone finishes or work stops to wait. |
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
@@ -111,8 +112,8 @@ axis after the grill: `Main | Subagents | Workers`.
 | Value | Execution behavior |
 | --- | --- |
 | `Main` | Pia performs the primary work in the main session. |
-| `Subagents` | Pia delegates bounded tasks to fresh subagents and reconciles their results. |
-| `Workers` | Pia coordinates scope-owning workers that retain context and delegate execution to subagents. |
+| `Subagents` | Pia parallelizes by default: splits each task into independent parts, launches them as parallel background subagents, delegates mechanical volume, and keeps the main session for steering and integration. |
+| `Workers` | Pia names the scopes that receive repeated tasks, creates one worker per scope, routes every task in that scope to it, and runs independent workers in parallel. |
 
 This is guidance, not mandatory team creation for trivial work. Workers are useful when repeated
 bounded actions in one scope benefit from retained context. The existing supported hierarchy is
