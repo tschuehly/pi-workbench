@@ -4,7 +4,7 @@
 #
 #   promote-installed prepare <workbench-rev> <pi-web-rev>
 #       Build immutable copies under ~/.pi-workbench/installed. Touches nothing running.
-#   promote-installed switch <workbench-rev> <pi-web-rev> [delay-seconds, default 60]
+#   promote-installed switch <workbench-rev> <pi-web-rev> [delay-seconds, default 10]
 #       Prepare, then schedule a detached launchd job that repoints ~/IdeaProjects/*.installed,
 #       the Pi package entry and the PI WEB plugin link, and reinstalls PI WEB's production
 #       services. INTERRUPTS EVERY OPEN SESSION. Run only with the owner's go-ahead.
@@ -16,6 +16,15 @@
 #       running; open sessions keep the code they loaded, and new sessions or /reload load the new
 #       revision. Use only when the PI WEB plugin code (packages/ used by the server plugin) is
 #       unchanged. Roll back by switching to the previous revision, which it prints.
+#   promote-installed switch-web <pi-web-rev>
+#       Prepare, then restart only PI WEB's web service on the new build and repoint
+#       ~/IdeaProjects/pi-web.installed. The session daemon, open sessions and their children keep
+#       running; browsers reconnect. Refuses (exit 5) when the code the session daemon loads or the
+#       dependency lock differs from its running build; use switch then. Restores the previous web
+#       service if it does not become healthy. Prints the command that switches back.
+#   promote-installed sessiond-unchanged <pi-web-dir> <pi-web-dir>
+#       Exit 0 when both builds give the session daemon the same code, or exit 1 listing the files
+#       that differ.
 #   promote-installed check-idle
 #       Exit 3 and list running child Pi processes, or exit 0 when none run.
 set -Eeuo pipefail
@@ -56,8 +65,64 @@ check_idle() { # Everything a session starts (subagents, workers, background job
   return 3
 }
 
+healthy() {
+  curl -fsS --max-time 3 http://127.0.0.1:$PORT/api/plugins 2>/dev/null | node -e '
+    let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const p=JSON.parse(d).plugins.find(x=>x.id==="pi-workbench");
+    process.exit(p&&p.server&&p.server.state==="active"&&!p.server.restartRequired?0:1)})' 2>/dev/null
+}
+
+sessiond_unchanged() { # <pi-web-dir> <pi-web-dir>: same relative-import closure of the daemon entry and same lock
+  # ponytail: static import scan only; a computed import("./" + x) would slip past, add a bundler metafile then.
+  node - "$1" "$2" <<'JS'
+const fs = require("fs"), path = require("path"), { createHash } = require("crypto");
+const hash = (root, file) => { try { return createHash("sha256").update(fs.readFileSync(path.join(root, file))).digest("hex"); } catch { return "missing"; } };
+const closure = (root) => {
+  const seen = new Map([["package-lock.json", hash(root, "package-lock.json")]]), todo = ["dist/server/sessiond.js"];
+  while (todo.length) {
+    const file = todo.pop();
+    if (seen.has(file)) continue;
+    seen.set(file, hash(root, file));
+    if (seen.get(file) === "missing") continue;
+    for (const [, spec] of fs.readFileSync(path.join(root, file), "utf8").matchAll(/\b(?:from|import)\s*\(?\s*["'](\.\.?\/[^"']+)["']/g))
+      todo.push(path.join(path.dirname(file), spec));
+  }
+  return seen;
+};
+const [a, b] = process.argv.slice(-2).map(closure);
+const changed = [...new Set([...a.keys(), ...b.keys()])].filter((file) => a.get(file) !== b.get(file));
+for (const file of changed) console.error(`  ${file}`);
+process.exit(changed.length ? 1 : 0);
+JS
+}
+
 force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
+[[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
+if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
+  la=$HOME/Library/LaunchAgents; web=$HOME/Library/LaunchAgents/com.pi-web.web.plist
+  entry() { sed -n "s|.*exec node '\(.*\)/dist/server/$2'.*|\1|p" "$1"; }
+  running=$(entry "$la/com.pi-web.sessiond.plist" sessiond.js); old=$(entry "$web" index.js)
+  [[ -n $running && -n $old ]] || { echo "cannot read the running PI WEB builds from $la" >&2; exit 1; }
+  mkdir -p "$STORE"
+  pw=$(prepare_one pi-web "$2") || { echo "prepare pi-web failed" >&2; exit 1; }
+  if ! sessiond_unchanged "$running" "$pw"; then
+    echo "refusing: the files above differ from the running session daemon ($running); use switch" >&2; exit 5
+  fi
+  swap() { # <from-dir> <to-dir>
+    sed -i '' "s|exec node '$1/dist/server/index.js'|exec node '$2/dist/server/index.js'|" "$web"
+    ln -sfn "$2" "$PROJECTS/pi-web.installed"
+    launchctl bootout "gui/$(id -u)/com.pi-web.web" 2>/dev/null || true
+    sleep 1
+    launchctl bootstrap "gui/$(id -u)" "$web"
+  }
+  up() { for _ in $(seq 60); do healthy && return 0; sleep 1; done; return 1; }
+  swap "$old" "$pw"
+  if up; then echo "web: $old -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $0 switch-web ${old##*-}"; exit 0; fi
+  echo "FAILED; restoring $old" >&2
+  swap "$pw" "$old"
+  up && exit 1
+  echo "ROLLBACK FAILED: web service unhealthy on $old" >&2; exit 4
+fi
 if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   mkdir -p "$STORE"
   wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
@@ -68,7 +133,7 @@ if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   echo "roll back: $0 switch-workbench ${previous##*-}"
   exit 0
 fi
-[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,21p' "$0"; exit 2; }
+[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,29p' "$0"; exit 2; }
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
 wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
@@ -88,7 +153,7 @@ set -Euo pipefail
 export PATH=$PATH
 exec >>"$job/job.log" 2>&1
 trap 'launchctl bootout gui/$uid/$label' EXIT
-sleep ${4:-60}
+sleep ${4:-10}
 if [[ $force == 0 ]] && ! "$self" check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
 echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"
 la=\$HOME/Library/LaunchAgents
@@ -105,11 +170,8 @@ stop_all() {
   done 2>/dev/null
   sleep 3
 }
-healthy() {
-  curl -fsS --max-time 3 http://127.0.0.1:$PORT/api/plugins | node -e '
-    let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const p=JSON.parse(d).plugins.find(x=>x.id==="pi-workbench");
-    process.exit(p&&p.server&&p.server.state==="active"&&!p.server.restartRequired?0:1)})'
-}
+PORT=$PORT
+$(declare -f healthy)
 rollback() {
   echo "FAILED; restoring previous services"
   stop_all
@@ -161,4 +223,4 @@ plutil -insert ProgramArguments -array "$job/job.plist"
 plutil -insert ProgramArguments.0 -string "$job/job.sh" "$job/job.plist"
 plutil -insert RunAtLoad -bool true "$job/job.plist"
 launchctl bootstrap "gui/$uid" "$job/job.plist"
-echo "scheduled $label in ${4:-60}s; log: $job/job.log"
+echo "scheduled $label in ${4:-10}s; log: $job/job.log"

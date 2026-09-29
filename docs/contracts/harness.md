@@ -57,6 +57,15 @@ atomically repoints only `pi-workbench.installed`. Open sessions keep the code t
 sessions and `/reload` load the new revision, so reload a session before relying on changed tools
 or roles in it. It prints the command that switches back.
 
+A PI WEB change that leaves the session daemon's code and dependencies untouched (browser client or
+web/API server only) goes live with `scripts/promote-installed switch-web <pi-web-rev>`. It restarts
+only the web service, so sessions and everything they started keep running while browsers
+reconnect. It refuses when any file the session daemon imports, or `package-lock.json`, differs
+from the daemon's running build (`sessiond-unchanged` runs that check alone); use `switch` then. It
+restores the previous web service if the new one does not become healthy and prints the command
+that switches back. `switch` waits 10 seconds by default before restarting, enough for the calling
+session to finish its reply.
+
 ## Skill Capability and Interface Layer
 
 Skills are self-contained agent capabilities with concise instructions and bundled scripts, references, and assets. The harness gives skills common ways to expose progress, decisions, artifacts, inputs, outputs, and relevant actions; each skill does not need a separate application.

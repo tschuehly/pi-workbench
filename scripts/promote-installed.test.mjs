@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -56,4 +56,25 @@ test("--force skips the idle check", () => {
   const result = run([...quiet, child], "--force", "switch", "HEAD", "HEAD", "5");
   assert.doesNotMatch(result.stderr, /refusing/);
   assert.match(result.stderr, /prepare pi-workbench failed/);
+});
+
+test("sessiond-unchanged follows the daemon's imports and the lock, ignoring web-only files", () => {
+  const build = (shared, web, lock) => {
+    const root = mkdtempSync(join(tmpdir(), "promote-build-"));
+    mkdirSync(join(root, "dist/server"), { recursive: true });
+    mkdirSync(join(root, "dist/shared"), { recursive: true });
+    writeFileSync(join(root, "dist/server/sessiond.js"), 'import { a } from "./a.js";\nawait import("../shared/b.js");\n');
+    writeFileSync(join(root, "dist/server/a.js"), 'export * from "../shared/c.js";\n');
+    writeFileSync(join(root, "dist/shared/b.js"), shared);
+    writeFileSync(join(root, "dist/shared/c.js"), "export const a = 1;\n");
+    writeFileSync(join(root, "dist/server/index.js"), web);
+    writeFileSync(join(root, "package-lock.json"), lock);
+    return root;
+  };
+  const base = build("b", "web", "lock");
+  assert.equal(run(quiet, "sessiond-unchanged", base, build("b", "web changed", "lock")).status, 0);
+  const shared = run(quiet, "sessiond-unchanged", base, build("b changed", "web", "lock"));
+  assert.equal(shared.status, 1);
+  assert.match(shared.stderr, /dist\/shared\/b\.js/);
+  assert.equal(run(quiet, "sessiond-unchanged", base, build("b", "web", "lock changed")).status, 1);
 });
