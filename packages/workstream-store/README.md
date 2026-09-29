@@ -43,10 +43,10 @@ Failed launches remain as `failed` sessions with their association anchor and a 
 provenance-bearing `checkpointStaleness` value that only a later `checkpoint.replaced` clears.
 Neither state is inferred from Chat or tool activity.
 
-Every accepted replacement checkpoint carries `nextSessionPrompt` separately from its owner-facing
-`next` action. The prompt is required, non-empty, and limited to 2,000 characters so clients can
-present a paste-ready continuation without parsing prose. Projection rebuilds expose `null` for
-checkpoints accepted before the field existed; they never derive a prompt from `next`.
+A replacement checkpoint may carry `waitingOn` (`owner`, `agent`, or `external`); projection
+exposes `null` when it is absent. `nextSessionPrompt` is legacy and optional: when present it must
+be non-empty and at most 2,000 characters, and projection exposes `null` when it is absent. Clients
+never derive a prompt from `next`.
 
 A typed Human Task declares `answerKind` (`yes-no`, `choice`, or `free-text`), explicit `options`,
 and `materiality` (`material` or `non-material`). The projection preserves the task's

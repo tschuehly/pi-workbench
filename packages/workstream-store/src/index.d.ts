@@ -63,9 +63,14 @@ export interface Checkpoint {
   whatChanged: string;
   remains: string;
   next: string;
-  nextSessionPrompt: string;
+  /** Legacy paste-ready continuation prompt; no longer written. */
+  nextSessionPrompt?: string;
+  waitingOn?: WaitingOn;
   references?: string[];
 }
+
+/** Who the Workstream waits on after this checkpoint. */
+export type WaitingOn = "owner" | "agent" | "external";
 
 /** Workstream-level re-entry summary: what it is for and how it got here. Latest wins. */
 export interface WorkstreamOverview {
@@ -85,6 +90,7 @@ export interface ProjectedCheckpoint {
   remains: string;
   next: string;
   nextSessionPrompt: string | null;
+  waitingOn: WaitingOn | null;
   references?: string[];
   recordedAt: string;
 }

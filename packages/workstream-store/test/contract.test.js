@@ -46,7 +46,7 @@ test("rebuilds an identical deterministic projection from semantic ledger record
       type: "checkpoint.replaced",
       producer: "checkpoint-worker",
       sourceSessionId: "session-1",
-      payload: { sessionId: "session-1", checkpoint: { id: "cp-1", whatChanged: "Store implemented", remains: "Connect UI", next: "Run contract tests", nextSessionPrompt: "Continue the Workstream store integration. Start by running the contract tests in packages/workstream-store.", references: ["packages/workstream-store"] } },
+      payload: { sessionId: "session-1", checkpoint: { id: "cp-1", whatChanged: "Store implemented", remains: "Connect UI", next: "Run contract tests", waitingOn: "agent", references: ["packages/workstream-store"] } },
     }],
   });
 
@@ -56,7 +56,8 @@ test("rebuilds an identical deterministic projection from semantic ledger record
   assert.equal(snapshot.revision, 3);
   assert.equal(snapshot.sessions[0].status, "active");
   assert.equal(snapshot.sessions[0].latestCheckpoint.id, "cp-1");
-  assert.equal(snapshot.sessions[0].latestCheckpoint.nextSessionPrompt, "Continue the Workstream store integration. Start by running the contract tests in packages/workstream-store.");
+  assert.equal(snapshot.sessions[0].latestCheckpoint.waitingOn, "agent");
+  assert.equal(snapshot.sessions[0].latestCheckpoint.nextSessionPrompt, null);
   assert.equal(snapshot.humanTasks[0].id, "task-1");
   assert.equal(snapshot.links[0].id, "link-1");
 });
@@ -66,7 +67,7 @@ test("rejects temporary paths from durable checkpoint and link records", async (
   await store.create(createRequest);
   await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate-for-path-policy", records: associationRecords.slice(0, 2) });
 
-  const checkpoint = { id: "cp-temp", whatChanged: "Implemented", remains: "Review", next: "Continue", nextSessionPrompt: "Continue from the durable workspace." };
+  const checkpoint = { id: "cp-temp", whatChanged: "Implemented", remains: "Review", next: "Continue", waitingOn: "owner" };
   for (const [idempotencyKey, record] of [
     ["checkpoint-temp-path", { type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { ...checkpoint, references: ["/private/tmp/deleted-worktree"] } } }],
     ["link-temp-path", { type: "link.upsert", producer: "owner", payload: { link: { id: "link-temp", kind: "file", reference: "/tmp/deleted-file" } } }],
@@ -85,24 +86,27 @@ test("rejects temporary paths from durable checkpoint and link records", async (
   assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint.references[0], "/Users/thomas/workbench");
 });
 
-test("requires a concise explicit next-session prompt for every confirmed checkpoint", async () => {
+test("accepts checkpoints without a prompt, validates waitingOn, and bounds a legacy prompt", async () => {
   const { store } = memoryStore();
   await store.create(createRequest);
   await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate-for-prompt", records: associationRecords.slice(0, 2) });
 
   const checkpoint = { id: "cp-prompt", whatChanged: "Implemented", remains: "Review", next: "Run tests" };
-  await assert.rejects(
-    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-without-prompt", records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint } }] }),
-    (error) => error.code === "INVALID_REQUEST" && error.message.includes("nextSessionPrompt"),
-  );
-  await assert.rejects(
-    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-long-prompt", records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { ...checkpoint, nextSessionPrompt: "x".repeat(2_001) } } }] }),
-    (error) => error.code === "INVALID_REQUEST" && error.message.includes("at most 2000 characters"),
-  );
+  const replace = (idempotencyKey, value, expectedRevision = 2) => store.append({ workstreamId: "ws-1", expectedRevision, idempotencyKey, records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: value } }] });
+  await assert.rejects(replace("checkpoint-bad-waiting", { ...checkpoint, waitingOn: "nobody" }), (error) => error.code === "INVALID_REQUEST" && error.message.includes("waitingOn"));
+  await assert.rejects(replace("checkpoint-empty-prompt", { ...checkpoint, nextSessionPrompt: " " }), (error) => error.code === "INVALID_REQUEST" && error.message.includes("nextSessionPrompt"));
+  await assert.rejects(replace("checkpoint-long-prompt", { ...checkpoint, nextSessionPrompt: "x".repeat(2_001) }), (error) => error.code === "INVALID_REQUEST" && error.message.includes("at most 2000 characters"));
   assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint, null);
 
-  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-max-prompt", records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { ...checkpoint, nextSessionPrompt: "x".repeat(2_000) } } }] });
-  assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint.nextSessionPrompt.length, 2_000);
+  await replace("checkpoint-waiting-owner", { ...checkpoint, waitingOn: "owner" });
+  let latest = (await store.inspect("ws-1")).sessions[0].latestCheckpoint;
+  assert.equal(latest.waitingOn, "owner");
+  assert.equal(latest.nextSessionPrompt, null);
+
+  await replace("checkpoint-max-prompt", { ...checkpoint, id: "cp-legacy-prompt", nextSessionPrompt: "x".repeat(2_000) }, 3);
+  latest = (await store.inspect("ws-1")).sessions[0].latestCheckpoint;
+  assert.equal(latest.nextSessionPrompt.length, 2_000);
+  assert.equal(latest.waitingOn, null);
 });
 
 test("projects omitted legacy confirmation fields as incomplete without inventing a checkpoint prompt", () => {
@@ -114,13 +118,14 @@ test("projects omitted legacy confirmation fields as incomplete without inventin
   ]);
   assert.equal(legacy.sessions[0].machineId, undefined);
   assert.equal(legacy.sessions[0].latestCheckpoint.nextSessionPrompt, null);
+  assert.equal(legacy.sessions[0].latestCheckpoint.waitingOn, null);
 });
 
 test("keeps the previous confirmed checkpoint when a later checkpoint fails", async () => {
   const { store } = memoryStore();
   await store.create(createRequest);
   await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate", records: associationRecords.slice(0, 2) });
-  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-good", records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: "session-1", payload: { sessionId: "session-1", checkpoint: { id: "cp-good", whatChanged: "Implemented", remains: "Review", next: "Run tests", nextSessionPrompt: "Review the implementation, then run the focused tests." } } }] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-good", records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: "session-1", payload: { sessionId: "session-1", checkpoint: { id: "cp-good", whatChanged: "Implemented", remains: "Review", next: "Run tests", waitingOn: "agent" } } }] });
   await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "checkpoint-failed", records: [{ type: "checkpoint.failed", producer: "pi-web", sourceSessionId: "session-1", payload: { sessionId: "session-1", reason: "Persistence interrupted" } }] });
   const snapshot = await store.inspect("ws-1");
   assert.equal(snapshot.sessions[0].latestCheckpoint.id, "cp-good");
@@ -490,7 +495,7 @@ test("changes checkpoint staleness only through an explicit matching record and 
   const { store } = memoryStore();
   await store.create(createRequest);
   await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate-stale", records: associationRecords.slice(0, 2) });
-  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-before-stale", records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: "session-1", payload: { sessionId: "session-1", checkpoint: { id: "cp-before", whatChanged: "Implemented", remains: "Review", next: "Verify", nextSessionPrompt: "Verify the accepted protocol change, then replace this checkpoint." } } }] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "checkpoint-before-stale", records: [{ type: "checkpoint.replaced", producer: "owner", sourceSessionId: "session-1", payload: { sessionId: "session-1", checkpoint: { id: "cp-before", whatChanged: "Implemented", remains: "Review", next: "Verify", waitingOn: "agent" } } }] });
   await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "checkpoint-failure-not-stale", records: [{ type: "checkpoint.failed", producer: "pi-web", payload: { sessionId: "session-1", reason: "Proposal interrupted" } }] });
   assert.equal((await store.inspect("ws-1")).sessions[0].checkpointStaleness, null);
 
@@ -504,7 +509,7 @@ test("changes checkpoint staleness only through an explicit matching record and 
   assert.equal(stale.checkpointStaleness.reason, "The accepted protocol changed");
   assert.equal(stale.checkpointStaleness.revision, 5);
 
-  await store.append({ workstreamId: "ws-1", expectedRevision: 5, idempotencyKey: "checkpoint-after-stale", records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { id: "cp-after", whatChanged: "Reconciled", remains: "None", next: "Continue", nextSessionPrompt: "Continue from the reconciled protocol state." } } }] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 5, idempotencyKey: "checkpoint-after-stale", records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { id: "cp-after", whatChanged: "Reconciled", remains: "None", next: "Continue", waitingOn: "external" } } }] });
   assert.equal((await store.inspect("ws-1")).sessions[0].checkpointStaleness, null);
 });
 
