@@ -354,13 +354,13 @@ test("a terminal result cites the author model so independentOfModel can quote a
   const final = {
     outcome: "success", text: "Applied the caption fix.", truncated: false, kind: "subagent",
     profile: "implementer", cognitiveRole: "implementation",
-    provider: "anthropic", model: "claude-sonnet-5", effort: "medium", sessionId: "leaf",
+    provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", sessionId: "leaf",
   };
   const adapter = { result: () => Promise.resolve(final), cancel: () => {}, async *observe() {} };
 
   const result = await streamToResult(adapter, "child-1", "implementer", "implementation", new Date().toISOString(), undefined, undefined, { cancelOnAbort: true });
-  assert.match(result.content[0].text, /Completion receipt: anthropic\/claude-sonnet-5:medium/);
-  assert.equal(result.details.model, "claude-sonnet-5");
+  assert.match(result.content[0].text, /Completion receipt: anthropic\/claude-sonnet-5-5:medium/);
+  assert.equal(result.details.model, "claude-sonnet-5-5");
 
   const truncated = { ...final, truncated: true };
   const oversized = await streamToResult({ ...adapter, result: () => Promise.resolve(truncated) }, "child-2", "implementer", "implementation", new Date().toISOString(), undefined, undefined, { cancelOnAbort: true });
@@ -487,7 +487,7 @@ test("defaults independence to the exact parent model and preserves repeated fam
       provider: "github-copilot", model: "gemini-2.5-pro", effort: "high",
       independence: {
         independentOfProvider: "github-copilot",
-        independentOfModel: "github-copilot/claude-sonnet-5",
+        independentOfModel: "github-copilot/claude-sonnet-5-5",
         independentOfFamily: "anthropic",
         selectedFamily: "google",
         excludedFamilies: ["anthropic", "openai"],
@@ -525,7 +525,7 @@ test("defaults independence to the exact parent model and preserves repeated fam
       background: true,
     }, undefined, undefined, {
       cwd: "/repo",
-      model: { provider: "github-copilot", id: "claude-sonnet-5" },
+      model: { provider: "github-copilot", id: "claude-sonnet-5-5" },
       sessionManager: { getSessionId: () => "lead", getSessionFile: () => "/sessions/lead.jsonl" },
     });
 
@@ -533,7 +533,7 @@ test("defaults independence to the exact parent model and preserves repeated fam
     assert.equal(dispatched.parentSessionFile, "/sessions/lead.jsonl", "the child session header names the launching lead");
     assert.deepEqual(JSON.parse(await readFile(argsPath, "utf8")), [
       "review",
-      "--independent-of-model", "github-copilot/claude-sonnet-5",
+      "--independent-of-model", "github-copilot/claude-sonnet-5-5",
       "--exclude-family", "anthropic",
       "--exclude-family", "openai",
     ]);

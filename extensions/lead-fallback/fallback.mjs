@@ -1,4 +1,4 @@
-export const FALLBACK = { provider: "openai-codex", id: "gpt-6-sol", thinking: "high" };
+export const FALLBACK = { provider: "openai-codex", id: "gpt-6.1-sol", thinking: "high" };
 
 const LIMIT_ERROR = /rate.?limit|usage.?limit|quota|429/i;
 

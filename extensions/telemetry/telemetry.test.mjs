@@ -78,7 +78,7 @@ test("reports descendant usage once and unions parallel active intervals", () =>
 });
 
 test("executions expose the lead → worker → leaf parent chain and the independence basis", () => {
-  const independence = { kind: "fresh-context-distinct-model", authorProvider: "anthropic", authorModel: "claude-sonnet-5", selectedProvider: "anthropic", selectedModel: "claude-opus-5" };
+  const independence = { kind: "fresh-context-distinct-model", authorProvider: "anthropic", authorModel: "claude-sonnet-5-5", selectedProvider: "anthropic", selectedModel: "claude-opus-5" };
   const events = [
     event("session.start", "12:00:00", { sessionId: "lead" }),
     event("session.start", "12:00:02", { sessionId: "worker", parentSessionId: "lead", executionId: "exec-worker" }),

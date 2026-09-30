@@ -8,9 +8,9 @@
   "models": {
     "fable": { "provider": "anthropic", "quotaProvider": "claude", "model": "claude-fable-5-1" },
     "opus": { "provider": "anthropic", "quotaProvider": "claude", "model": "claude-opus-5-5" },
-    "sonnet": { "provider": "anthropic", "quotaProvider": "claude", "model": "claude-sonnet-5" },
+    "sonnet": { "provider": "anthropic", "quotaProvider": "claude", "model": "claude-sonnet-5-5" },
     "astra": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-astra" },
-    "sol": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-sol" },
+    "sol": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6.1-sol" },
     "luna": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-luna" },
     "grok": { "provider": "github-copilot", "quotaProvider": "copilot", "model": "grok-4.7" }
   },
