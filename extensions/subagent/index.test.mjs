@@ -673,7 +673,7 @@ test("preflight failures retain resolver stage and process diagnostics", async (
   await writeFile(resolverPath, `
     console.error("STAGE=quota");
     console.error("STAGE=catalog");
-    console.error("ROUTING=BLOCKED\\nROLE=investigation\\nREASON=catalog fixture failed");
+    console.error("ROUTING=BLOCKED\\nROLE=routine\\nREASON=catalog fixture failed");
     process.exit(3);
   `);
   const tools = new Map();

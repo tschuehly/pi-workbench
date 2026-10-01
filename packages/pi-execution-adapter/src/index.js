@@ -497,7 +497,9 @@ function safeCommandName(value) {
 function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   if (!spec || typeof spec !== "object") throw typedError("INVALID_SPEC", "ResolvedExecutionSpec is required.");
   for (const field of ["task", "profile", "cognitiveRole", "cwd"]) if (typeof spec[field] !== "string" || spec[field].trim() === "") throw typedError("INVALID_SPEC", `${field} is required.`);
-  if (!Array.isArray(spec.tools) || spec.tools.some((tool) => !hostTools.has(tool))) throw typedError("CAPABILITY_EXCEEDED", "Requested tools exceed the host capability ceiling.");
+  if (!Array.isArray(spec.tools)) throw typedError("CAPABILITY_EXCEEDED", "Requested tools not available on this host: invalid tools list");
+  const unavailableTools = spec.tools.filter((tool) => !hostTools.has(tool));
+  if (unavailableTools.length) throw typedError("CAPABILITY_EXCEEDED", `Requested tools not available on this host: ${unavailableTools.join(", ")}`);
   const kind = spec.kind ?? "subagent";
   if (!EXECUTION_KINDS.has(kind)) throw typedError("INVALID_SPEC", `kind must be one of ${[...EXECUTION_KINDS].join(", ")}.`);
   if (spec.continuation !== undefined && (typeof spec.continuation !== "object" || spec.continuation === null || typeof spec.continuation.sessionId !== "string" || spec.continuation.sessionId.trim() === "")) {

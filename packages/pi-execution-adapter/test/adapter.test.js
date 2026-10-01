@@ -405,7 +405,8 @@ test("default child capability ceiling includes reporting and web activation tar
 
 test("fails closed on inconsistent admission, capability expansion, fresh exhaustion, and runtime binding mismatch", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, hostTools: ["read", "bash"], spawn: () => fakeRpc({ model: "wrong" }) });
-  await assert.rejects(adapter.dispatch(spec({ tools: ["write"] })), (error) => error.code === "CAPABILITY_EXCEEDED");
+  await assert.rejects(adapter.dispatch(spec({ tools: ["write"] })), (error) => error.code === "CAPABILITY_EXCEEDED" && error.message === "Requested tools not available on this host: write");
+  await assert.rejects(adapter.dispatch(spec({ tools: ["edit", "write"] })), (error) => error.code === "CAPABILITY_EXCEEDED" && error.message === "Requested tools not available on this host: edit, write");
   await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, admission: "degraded-quota-telemetry" } })), (error) => error.code === "INVALID_BINDING");
   await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, quotaSnapshot: { ...spec().binding.quotaSnapshot, telemetryStatus: "stale", stale: true, error: "stale" } } })), (error) => error.code === "INVALID_BINDING");
   await assert.rejects(adapter.dispatch(spec({ binding: { ...spec().binding, quotaSnapshot: undefined } })), (error) => error.code === "INVALID_BINDING");

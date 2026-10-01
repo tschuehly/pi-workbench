@@ -13,7 +13,7 @@ The active Pi model remains the lead. Recurring advice and the closing audit use
 | Work | Child form | Cognitive Role | Current binding | Independence |
 | --- | --- | --- | --- | --- |
 | Frontier-round advisor batches (the whole settled frontier per dispatch) | One durable attended `planner` worker, resumed across bounded dispatches | `design` | `openai-codex/gpt-5.6-sol` at `xhigh` | Anchored by its prior rounds; not independent and not guaranteed cross-family |
-| Closing completeness audit | One fresh `reviewer` Subagent per audit | `challenge` | OpenAI lead → `anthropic/claude-fable-5` at `high`; Anthropic lead → `openai-codex/gpt-5.6-sol` at `xhigh` | Fresh-context and cross-family independent from the lead provider; with an Anthropic lead it uses the same model and effort as the worker |
+| Closing completeness audit | One fresh `reviewer` Subagent per audit | `review` | OpenAI lead → `anthropic/claude-fable-5` at `high`; Anthropic lead → `openai-codex/gpt-5.6-sol` at `xhigh` | Fresh-context and cross-family independent from the lead provider; with an Anthropic lead it uses the same model and effort as the worker |
 
 The lead resumes an active advisor worker already scoped to this grill or creates one, dispatches it one frontier-round assignment at a time, and retires every advisor worker after the final audit, replacement, or terminal stop. After the audit, the lead walks the human through the design tree in frontier rounds for verdicts. Worker continuity replaces the old per-round advisor ledger. A compact dissent summary remains only as the bounded handoff to each fresh closing-audit Subagent.
 
