@@ -146,7 +146,7 @@ Optional `sessionTitle` names the session's goal in a few words (at most 80 char
 
 The Workstream's current `waitingOn` is the one on its newest checkpoint. Checkpoints written before the field existed project `waitingOn: null`.
 
-A new Chat resumes a Workstream by starting with the `orient` skill, not from a stored prompt. Durable checkpoint and link references must not point into operating-system temporary directories such as `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders; the Store rejects those references instead of creating future stale launch targets.
+A new Chat resumes a Workstream by starting with the `orient` skill, not from a stored prompt. Durable checkpoint and link references must not point into operating-system temporary directories such as `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders; the Store rejects those references instead of creating future stale launch targets. It also rejects references under the swept `PI_TMP` root (`~/.pi-workbench/tmp/`); use a repository path and commit or a retained artifact such as `~/.pi-workbench/reports/`.
 
 For lasting Git evidence, record repository identity and a full commit ID (or a retained artifact), not only a worktree directory: a persistent-path worktree can still be removed. A worktree path in a checkpoint is a live continuation location, not a promise that the directory will outlive the work. Before removing it, check for Pi sessions stored under that working directory and replace current continuation targets in open Workstreams. Closed Workstreams remain immutable; their old directory links are historical locations and may no longer exist. Preserve the referenced commit or artifact before cleanup.
 

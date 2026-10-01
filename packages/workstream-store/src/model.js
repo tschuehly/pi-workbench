@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fail } from "./errors.js";
 
 export const DEFAULT_LIMITS = Object.freeze({
@@ -70,9 +72,16 @@ function isTemporaryPath(value) {
     || /^(?:[A-Za-z]:[\\/])(?:Users[\\/][^\\/]+[\\/]AppData[\\/]Local[\\/]Temp|Temp)(?:[\\/]|$)/i.test(value);
 }
 
+// PI_TMP folders are swept after 7 active project days (extensions/pi-tmp); ~/.pi-workbench/reports stays allowed.
+function isPiTmpPath(value) {
+  const roots = [join(homedir(), ".pi-workbench", "tmp"), "~/.pi-workbench/tmp", process.env.PI_TMP_ROOT, process.env.PI_TMP];
+  return roots.some((root) => root && (value === root || value.startsWith(`${root.replace(/\/+$/, "")}/`)));
+}
+
 function durableReference(value, field, limits) {
   string(value, field, limits.maxTextLength);
   if (isTemporaryPath(value)) fail("INVALID_RECORD", `${field} must not point into a temporary directory`);
+  if (isPiTmpPath(value)) fail("INVALID_RECORD", `${field} must not point into PI_TMP, which is swept; reference a repository path and commit or a retained artifact`);
 }
 
 function id(value, field, limits) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -85,6 +85,27 @@ test("rejects temporary paths from durable checkpoint and link records", async (
     records: [{ type: "checkpoint.replaced", producer: "owner", payload: { sessionId: "session-1", checkpoint: { ...checkpoint, references: ["/Users/thomas/workbench"] } } }],
   });
   assert.equal((await store.inspect("ws-1")).sessions[0].latestCheckpoint.references[0], "/Users/thomas/workbench");
+});
+
+test("rejects swept PI_TMP paths but keeps retained reports", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "associate-for-pi-tmp", records: associationRecords.slice(0, 2) });
+  const previous = process.env.PI_TMP;
+  process.env.PI_TMP = "/Volumes/scratch/session-1";
+  try {
+    for (const [index, reference] of [join(homedir(), ".pi-workbench", "tmp", "pi-workbench", "s1", "notes.md"), "~/.pi-workbench/tmp/pi-workbench/s1", "/Volumes/scratch/session-1/plan.md"].entries()) {
+      await assert.rejects(
+        store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: `pi-tmp-${index}`, records: [{ type: "link.upsert", producer: "owner", payload: { link: { id: "link-pi-tmp", kind: "file", reference } } }] }),
+        (error) => error.code === "INVALID_RECORD" && error.message.includes("PI_TMP") && error.message.includes("retained artifact"),
+      );
+    }
+    const report = join(homedir(), ".pi-workbench", "reports", "audit.md");
+    await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "report-link", records: [{ type: "link.upsert", producer: "owner", payload: { link: { id: "link-report", kind: "file", reference: report } } }] });
+    assert.equal((await store.inspect("ws-1")).links.at(-1).reference, report);
+  } finally {
+    if (previous === undefined) delete process.env.PI_TMP; else process.env.PI_TMP = previous;
+  }
 });
 
 test("accepts checkpoints without a prompt, validates waitingOn, and bounds a legacy prompt", async () => {
