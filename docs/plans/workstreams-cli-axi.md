@@ -1,6 +1,6 @@
 # Workstreams CLI: AXI redesign (proposal)
 
-Status: proposed 2026-10-01, not accepted. Evidence comes from the 2026-10-01 session audit (`docs/research/reports/session-audit-2026-10-01.md`). It is also in the private `workstreams-failures.md`, which lists 12 failures verified in the raw logs. Design reference: [AXI, ten principles for agent-facing CLIs](https://axi.md/).
+Status: accepted 2026-10-01 (owner defaults: text output with `--json`; automatic `expectedRevision` for checkpoints, explicit `--expect` for overview and close). Evidence comes from the 2026-10-01 session audit (`docs/research/reports/session-audit-2026-10-01.md`). It is also in the private `workstreams-failures.md`, which lists 12 failures verified in the raw logs. Design reference: [AXI, ten principles for agent-facing CLIs](https://axi.md/).
 
 ## Problem
 
