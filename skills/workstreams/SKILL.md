@@ -5,174 +5,75 @@ description: Interact directly with Pi Workbench Workstreams while their PI WEB 
 
 # Workstreams
 
-Use the bundled CLI as the temporary interface to the authoritative user-local Workstream Store. Set `SKILL_DIR` to this skill's directory. The CLI reads `PI_WORKBENCH_WORKSTREAM_DIR` when set; otherwise it uses `~/.pi-workbench/workstreams`, matching the Workbench service default.
+Use the `workstreams` command on PATH. It reads and writes the authoritative user-local Workstream Store (`PI_WORKBENCH_WORKSTREAM_DIR`, default `~/.pi-workbench/workstreams`). Run `workstreams` alone for this session's Workstream and the most recent open ones, and `workstreams <command> --help` for flags, limits, and examples. The CLI fills in the session, revision, and idempotency key; it prints `help:` lines on errors, and repeating a write is a no-op. Never edit the store file.
 
-```bash
-node "$SKILL_DIR/scripts/workstreams.mjs" --help
-```
+A Workstream is a sparse attention ledger, not a transcript, plan, workspace, or managed Run. Record only meaningful attention changes.
 
-Treat a Workstream as a sparse attention ledger, not a transcript, plan, workspace, or managed Run. Record only meaningful attention changes.
+## 1. Find, create, associate
 
-## 1. Find or create the Workstream
+- `workstreams list` (add `--all`, `--closed`, `--fields`) and `workstreams show <id>` (add `--full` for complete text). Use `--closed` only when the user asks about history.
+- If none fits, `workstreams create <id> --title "…" --group "…"`; groups are `Embabel`, `PhotoQuest`, `Pi Workbench`, `Personal`, or one the user names. Then write its overview.
+- `workstreams associate <id>` makes this session active there. A session has exactly one home Workstream; if the CLI names another one, stop and report the conflict.
 
-List active Workstreams first:
+## 2. Report status (read-only)
 
-```bash
-node "$SKILL_DIR/scripts/workstreams.mjs" list '{}'
-```
+When the user asks what exists, where work stands, or what happened, read and do not write:
 
-This returns every open Workstream as a summary. When the user asks to check all current Workstreams in full, inspect every returned id:
-
-```bash
-node "$SKILL_DIR/scripts/workstreams.mjs" inspect '{"workstreamId":"ws-example"}'
-```
-
-Use `{"includeClosed":true}` only when the user asks about history. Before changing one Workstream, inspect its full snapshot. If none fits, ask for or derive a short stable id and title, then create it with a unique idempotency key:
-
-```json
-{"workstreamId":"ws-example","idempotencyKey":"create-ws-example","title":"Example","producer":"owner"}
-```
-
-Pass JSON inline, as `@file`, or as stdin. Keep temporary request files outside the repository.
-
-**Complete when:** every Workstream the user asked to check has been inspected, or one open Workstream is selected and its current snapshot and revision are known.
-
-### Report Workstream status
-
-When the user asks what Workstreams exist, where work stands, or what happened, make the review read-only:
-
-1. List open Workstreams, select the requested topic or project, and state the inclusion rule when the match is not obvious. Inspect every selected id in full.
-2. Reconstruct the original goal from the title and earliest durable evidence available in the snapshot. If the title is insufficient, label the reconstructed goal as an inference.
-3. Explain why the Workstream exists, what it covers, and its important boundaries in a short description. Write for an owner who no longer remembers the work.
-4. Synthesize three to six consequential events from the projected session checkpoints, Human Tasks, and links: shipped results, decisions, pivots, failed approaches, and preserved evidence. Keep them in logical order and omit routine session activity. A session checkpoint is that session's projection, not a global latest checkpoint; expose unresolved conflicts instead of silently choosing one.
-5. State what is now complete, usable, active, blocked, superseded, or merely proposed, and name the evidence supporting that state. Name the actor and exact gate under `Waiting on`.
-6. Derive directories only from concrete checkpoint or link references. For local absolute paths, verify whether each directory currently exists and label its role or absence. Never infer a path from a title or repository name.
-7. Separate current evidence from recorded history. Report `updatedAt`; when current state has not been live-verified, call it the last recorded state rather than presenting it as current fact.
-
-Report each Workstream in this shape:
+1. List, select the requested topic, and state the inclusion rule when the match is not obvious. `show --full` every selected id.
+2. Take the goal from the overview; if it is missing, reconstruct it from the earliest evidence and label it an inference.
+3. Pick three to six consequential events (shipped results, decisions, pivots, failed approaches, preserved evidence) from checkpoints, Human Tasks, and links. Each session checkpoint is that session's view; expose disagreements instead of choosing one.
+4. Derive directories only from concrete checkpoint or link references, check each one exists, and label its role or absence.
+5. Call it the last recorded state, with its date, unless you verified it live.
 
 ```markdown
 ### <title>
 **ID:** `<id>`
 **Original goal:** <plain-language outcome>
 **Created:** <date> · **Last recorded update:** <date>
-**Directories:** <primary path and any evidence/worktree paths, each with role and existence>
+**Directories:** <path, role, exists or missing>
 
-**Description:** <why this exists, its scope, and its important boundaries>
+**Description:** <why this exists, its scope and boundaries>
 
 **What happened**
 - <consequential event and why it mattered>
 
-**Last recorded state:** <what is complete, usable, active, blocked, superseded, or only proposed, with evidence>
+**Last recorded state:** <complete, usable, active, blocked, superseded, or proposed, with evidence>
 **Waiting on:** <named actor and exact gate, or none>
 **Next:** <one concrete continuation>
-**Open decisions:** <open owner decisions from the newest checkpoint and any pending Human Tasks, or none>
+**Open decisions:** <from the newest checkpoint and pending Human Tasks, or none>
 ```
 
-End a multi-Workstream review with a compact disposition table when it helps the owner allocate attention. Keep facts traceable to the inspected snapshot, distinguish recommendation from stored state, and omit empty narrative detail.
+End a multi-Workstream review with a compact disposition table when it helps Thomas allocate attention. If an overview is missing or stale, say so and offer to write it.
 
-**Complete when:** every selected Workstream has an explained goal, description, consequential history, evidenced state, directories, next action, and freshness boundary.
+## 3. Checkpoint automatically
 
-## 2. Associate this session when needed
+Write `workstreams checkpoint <id>` when meaningful attention changes, without asking Thomas to confirm each field:
 
-Check `PI_SESSION_ID`, then inspect the selected Workstream. If this session is already active there, preserve that association. If it appears in another Workstream, stop and report the conflict. A session has exactly one home Workstream.
+- `--what`: what now exists or works, two to four short sentences, one fact each, with anchors (commit, PR, path, count) in the sentence they belong to.
+- `--remains`: what is blocked or still owed, one sentence per item, Thomas's decisions first.
+- `--next`: one plain sentence starting with the actor.
+- `--waiting`: `owner` when Thomas must act, `agent` when an agent can continue, `external` for a third party, CI, or reviewer.
+- `--title`: this session's goal as a 2–6 word Chat title; never status or progress.
+- `--ref`: the current working directory first while it is a live continuation target, then only what is needed to resume. Use repository plus full commit ID for lasting Git evidence.
 
-When trusted host context exposes complete `machineId`, `projectId`, and `workspaceId` values, append `session.pending` and `session.confirmed` together using one association key and the actual identifiers:
+In the same step, rewrite the overview if it no longer matches (`workstreams overview <id> --expect <rev> …`), and `workstreams resolve-task <id> <taskId>` for every Human Task Thomas answered or deferred. Do not create Human Tasks for questions: ask through the current Attention channel and record the open decision as `--next` with `--waiting owner`. Real-world obligations with a deadline outside Pi may still be Human Tasks (`workstreams append --help`).
 
-```json
-{
-  "workstreamId":"ws-example",
-  "expectedRevision":1,
-  "idempotencyKey":"associate-SESSION_ID",
-  "records":[
-    {"type":"session.pending","producer":"session","sourceSessionId":"SESSION_ID","payload":{"sessionId":"SESSION_ID","associationKey":"manual-SESSION_ID","machineId":"MACHINE_ID","projectId":"PROJECT_ID","workspaceId":"WORKSPACE_ID"}},
-    {"type":"session.confirmed","producer":"session","sourceSessionId":"SESSION_ID","payload":{"sessionId":"SESSION_ID","associationKey":"manual-SESSION_ID","machineId":"MACHINE_ID","projectId":"PROJECT_ID","workspaceId":"WORKSPACE_ID"}}
-  ]
-}
-```
+Then tell Thomas what the checkpoint says so he can correct it. A later checkpoint supersedes it.
 
-Replace every uppercase placeholder with the exact trusted value. Use the actual session id throughout.
+**Complete when:** the session's latest checkpoint carries `waitingOn`, and the overview and open Human Tasks match it.
 
-When complete host context is unavailable, use the supported agent-only association instead:
+## 4. Write for Thomas
 
-```bash
-node "$SKILL_DIR/scripts/workstreams.mjs" associate '{"workstreamId":"ws-example","expectedRevision":1,"idempotencyKey":"associate-SESSION_ID"}'
-```
+The overview answers *what is this for and how did it get here*; checkpoints answer *what changed last*. Write the overview at creation, and rewrite it whole on a pivot, a shipped result, or a new blocker, not for routine checkpoints. Write for an owner returning after a weekend: concrete nouns, the actor on every open item (Thomas decides or checks, Pia implements, a named reviewer reviews), what a pull request does and not only its number, and plain words for jargon. Keep numbers, dates, conditions, and uncertainty.
 
-`associate` reads `PI_SESSION_ID` and records an active session with all three location fields absent. This permits checkpointing immediately; PI WEB can later resolve the exact catalog location and append `session.anchor.repaired`, which is required before PI WEB can continue that checkpoint in a new session. Never infer or copy identifiers from `cwd`, repository names, branch names, or other Workstreams. If `PI_SESSION_ID` is unavailable, stop without appending.
-
-**Complete when:** the inspected projection shows this session as active in exactly one Workstream. A missing anchor does not block completion or checkpointing.
-
-## 3. Append one meaningful change
-
-Inspect immediately before every mutation and use its `revision` as `expectedRevision`. Invoke `append` with one or more related semantic records. Give every request a unique idempotency key; repeat the exact request and key only when retrying an uncertain result.
-
-Supported records and payloads are defined in `packages/workstream-store/src/index.d.ts`. Common records are:
-
-- `group.set` for the owner's grouping label (`Embabel`, `PhotoQuest`, `Pi Workbench`, `Personal`, or a new one the user names); set it at creation;
-- `title.set` when the owner renames the Workstream or its current title no longer describes it; use `producer: "owner"` for an owner-supplied or approved title and `producer: "session"` for an agent-proposed title;
-- `overview.replaced` for the Workstream-level re-entry summary (see below);
-- `link.upsert` / `link.removed` for relevant file, repository, plan, Run, or artifact references; for lasting Git evidence, link the repository identity and full commit ID, not just a worktree path;
-- `human-task.resolved` to close an existing Human Task; do not create new ones (`human-task.upsert`) for questions—ask the owner through the current Attention channel and record the decision or the open decision in the checkpoint (`next` plus `waitingOn: owner`). Real-world obligations with a deadline outside Pi (a tax filing, a form to send) may still be a Human Task.
-- `checkpoint.replaced` for a checkpoint, written automatically at a meaningful attention change;
-- `checkpoint.failed` or `checkpoint.stale` only when that explicit state occurred.
-
-Set `producer` to `session` for agent-proposed records and `owner` for a mutation the user explicitly chose. Include `sourceSessionId` for records originating here. Keep raw conversation, routine tool activity, repeated summaries, and large artifact contents out of the ledger.
-
-On `STALE_REVISION`, inspect again, reconcile the intervening change, and submit a new request with a new idempotency key. On any other error, report the stable error code instead of editing the store file.
-
-**Complete when:** the new snapshot contains the intended semantic change and unrelated state is unchanged.
-
-### Keep the overview current
-
-The overview answers *what is this for and how did it get here*; checkpoints answer *what changed last*. Write `overview.replaced` when the Workstream is created, and rewrite the whole record when the story changes: a pivot, a shipped result, or a new blocker. Do not rewrite it for routine checkpoints or a title-only rename. When the user asks for the original goal, a summary, or what happened, read the projected `overview` first; if it is missing or stale, write it rather than answering only in chat.
-
-```json
-{"type":"overview.replaced","producer":"session","sourceSessionId":"SESSION_ID","payload":{"overview":{
-  "goal":"What this is for, in the owner's words (<=280).",
-  "doneWhen":"One observable that ends the Workstream (<=200).",
-  "description":"Why it exists; what is in and out of scope (<=600).",
-  "history":["2026-09-08: one consequential event with a date and a checkable anchor such as a PR, SHA, path, or count (<=200 each, 1-6 items)."]
-}}}
-```
-
-Write it for an owner returning after a weekend: concrete nouns, the actor on every open item (Thomas decides or checks, Pia implements, a named reviewer reviews), what a pull request does and not only its number, and plain words for jargon. Keep numbers, dates, conditions, and uncertainty; when two sessions disagree, say so instead of choosing.
-
-## 4. Checkpoint automatically
-
-Write a checkpoint when meaningful attention changes, without waiting for the user to confirm each
-field. Persist six values:
-
-- `whatChanged`: what now exists or works, naming concrete artifacts — two to four short sentences, one fact each, anchors (commit, PR, path, count) inside the sentence they belong to;
-- `remains`: what is blocked or still owed — one short sentence per item, the owner's decisions first;
-- `next`: the suggested next action in one plain sentence, starting with the actor;
-- `waitingOn` (required): `owner` when Thomas must act or decide, `agent` when an agent can continue, or `external` when a third party, CI, or reviewer must act;
-- `sessionTitle`: this session's goal as a 2–6 word Chat title (for example "Merge OpenAPI PR stack"); keep it unless the session's goal changed, and never put status or progress in it;
-- `references`: the current absolute working directory first while it is a live continuation target, then only the concrete paths or identifiers needed to resume; use repository identity plus full commit ID for lasting Git evidence.
-
-Lead with the point and make the checkpoint sufficient to resume without rereading chat. Do not write `nextSessionPrompt`; a fresh Chat resumes with the `orient` skill.
-
-In the same `append` as `checkpoint.replaced`, also:
-
-- write `overview.replaced` if the overview's description, history, or state no longer matches (for example, it still says something awaits promotion after it was promoted);
-- append `human-task.resolved` for every Human Task the owner answered or explicitly deferred.
-
-Append `checkpoint.replaced` for the current active session with a unique checkpoint id, then tell the user what you wrote so they can correct it. A checkpoint is a correctable projection, not an authority transition: a later checkpoint supersedes an earlier one, and a failed write leaves the previous checkpoint unchanged. Closing the Workstream still requires the user's explicit instruction.
-
-**Complete when:** the new checkpoint is the session's latest, carries `waitingOn`, the overview and open Human Tasks match it, and the user has been told what it says.
+Use `--owner` only for a change Thomas explicitly chose, such as an owner-supplied title. Link files, repositories, plans, Runs, and artifacts with `workstreams link`. Keep raw conversation, routine tool activity, and artifact contents out of the ledger.
 
 ## 5. Close deliberately
 
-Before closing, inspect and report unresolved Human Tasks and scratch-file links. Close only on the user's explicit instruction, using the latest revision and a unique idempotency key. Closure preserves unresolved items and deletes no files.
-
-```json
-{"workstreamId":"ws-example","expectedRevision":4,"idempotencyKey":"close-ws-example","producer":"owner","sourceSessionId":"SESSION_ID"}
-```
-
-**Complete when:** the inspected Workstream is closed and any proposed cleanup remains subject to separate human confirmation.
+Close only on Thomas's explicit instruction. Before closing, `show` and report unresolved Human Tasks and scratch-file links, then `workstreams close <id> --expect <rev>`. Closure preserves unresolved items and deletes no files. `overview` and `close` require the revision you reviewed; if it moved, the CLI shows what changed, so reconcile before retrying.
 
 ### Retire a linked worktree
 
-Before owner-approved removal, check the worktree is clean, its unique changes are landed or deliberately retained, and Pi has no stored sessions under its exact working directory. Check open Workstreams for current checkpoint or link references to that directory and move live continuation to a valid workspace before removal. Preserve repository identity and a reachable full commit ID (or retained artifact) for evidence. A closed Workstream is immutable: its old directory link records a historical location, not a promise the checkout still exists. Report the missing historical path as such rather than rewriting the ledger or keeping an otherwise unused worktree forever. `git worktree remove` never migrates a Pi session.
+Before owner-approved removal, check the worktree is clean, its unique changes are landed or deliberately retained, and Pi has no stored sessions under its exact directory. Move any open Workstream's live continuation reference to a valid workspace first, and keep repository identity plus a reachable full commit ID (or retained artifact) as evidence. A closed Workstream is immutable; report its missing old path as historical rather than rewriting the ledger. `git worktree remove` never migrates a Pi session.
 
-**Complete when:** no Pi session or open Workstream needs the worktree as a live target, and the retained evidence remains resolvable after removal.
+**Complete when:** no Pi session or open Workstream needs the worktree as a live target, and the retained evidence still resolves.

@@ -4,7 +4,7 @@ import path from "node:path";
 
 const dir = path.dirname(new URL(import.meta.url).pathname);
 const data = JSON.parse(fs.readFileSync(path.join(dir, "dashboard-data.json"), "utf8"));
-const store = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".pi-workbench/workstreams/workstreams.json"), "utf8"));
+const store = JSON.parse(fs.readFileSync(path.join(process.env.PI_WORKBENCH_WORKSTREAM_DIR ?? path.join(os.homedir(), ".pi-workbench/workstreams"), "workstreams.json"), "utf8"));
 const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
 const rawCheckpoints = Object.values(store.workstreams).flatMap(({ ledger }) => ledger.filter(({ type }) => type === "checkpoint.replaced"));
 
