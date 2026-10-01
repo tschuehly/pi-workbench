@@ -99,7 +99,7 @@ interface PiExecutionAdapter {
 
 The first runner is a Pi RPC subprocess. Do not introduce a generic runner framework or Pi SDK implementation until measured startup latency or another real requirement justifies a second runner.
 
-The module keeps only bounded live process state: execution identifier, process identifier, RPC connection, Pi session identifier, latest usage, cancellation state, and latest observation. The parent Pi session retains the compact tool result and visible progress. The module owns no durable authoritative state.
+The module keeps only bounded live process state: execution identifier, process identifier, RPC connection, Pi session identifier, latest usage, cancellation state, and latest observation. The parent Pi session retains the compact tool result and visible progress. The module owns no durable authoritative state. The `subagent` extension also appends one minimal custom entry per child launch, terminal outcome, and collection to the parent session, so a reloaded runtime reports a terminal child's retained compact result and a child that was live at reload as `interrupted`; it never resumes or relaunches either.
 
 Level 1 imposes no local child concurrency cap and provides no scheduler. Each invocation still represents one bounded child execution; future managed admission and scheduling remain controller-owned.
 

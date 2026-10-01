@@ -932,3 +932,85 @@ test("child web tools stay behind web_enable even when a later tool registration
   eager.handlers.get("before_agent_start")();
   assert.deepEqual(eager.active(), ["read", "web_search"], "eager pi-web-access (no web_enable) is left alone");
 });
+
+test("a reloaded runtime reports retained outcomes and interrupted children for the same IDs", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-reload-"));
+  const resolverPath = join(temporary, "resolver.mjs");
+  await writeFile(resolverPath, `
+    console.log(JSON.stringify({ status: "pass", modelBinding: {
+      cognitiveRole: process.argv[2], provider: "anthropic", model: "claude-test", effort: "low",
+      admission: "degraded-quota-telemetry",
+      quotaSnapshot: { generatedAt: null, telemetryStatus: "unavailable", relevantWindows: [], stale: false, refreshedAt: null, error: "test" },
+    }}));
+  `);
+  // One persisted session file shared by both runtimes.
+  const entries = [];
+  const runtime = (adapter) => {
+    const tools = new Map();
+    const handlers = new Map();
+    subagentExtension({
+      events: { emit: () => {} },
+      on: (event, handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
+      registerTool: (tool) => tools.set(tool.name, tool),
+      registerShortcut: () => {},
+      sendMessage: () => {},
+      appendEntry: (customType, data) => entries.push({ type: "custom", customType, data: structuredClone(data) }),
+    }, { adapter, resolverPath });
+    const ctx = { cwd: "/repo", model: { provider: "anthropic", id: "claude" }, sessionManager: { getSessionId: () => "lead", getSessionFile: () => "/sessions/lead.jsonl", getBranch: () => entries, buildSessionProjection: () => ({ messages: [] }) } };
+    const fire = async (event, payload) => { for (const handler of handlers.get(event) ?? []) await handler(payload, ctx); };
+    const run = (name, params) => tools.get(name).execute("call", params, undefined, undefined, ctx);
+    return { fire, run };
+  };
+
+  const children = new Map();
+  let next = 0;
+  const first = runtime({
+    dispatch: async () => {
+      const executionId = `child-${++next}`;
+      let settle;
+      children.set(executionId, { result: new Promise((resolve) => { settle = resolve; }), settle });
+      return { executionId, acceptedAt: "2026-10-01T00:00:00Z" };
+    },
+    result: (executionId) => children.get(executionId).result,
+    async *observe() {},
+    list: () => [],
+    cancelAll: async () => {
+      // Shutdown cancels the live child; its late settlement must not overwrite the interrupted record.
+      children.get("child-2").settle({ outcome: "cancelled", diagnostic: "Attended parent session ended." });
+      return [];
+    },
+  });
+  try {
+    await first.fire("session_start", { reason: "startup" });
+    await first.run("subagent", { task: "Finish quickly", name: "Quick", profile: "scout", cognitiveRole: "routine", background: true });
+    await first.run("subagent", { task: "Still running at reload", profile: "scout", cognitiveRole: "routine", background: true });
+    children.get("child-1").settle({ outcome: "success", text: "Found the bug in a.ts.", sessionId: "child-session-1", provider: "anthropic", model: "claude-test", effort: "low" });
+    await children.get("child-1").result;
+    await new Promise((resolve) => setImmediate(resolve));
+    await first.fire("session_shutdown", { reason: "reload" });
+
+    const unknown = () => { throw new Error("Unknown execution"); };
+    const second = runtime({ dispatch: unknown, result: unknown, status: unknown, async *observe() {}, list: () => [], cancelAll: async () => [] });
+    await second.fire("session_start", { reason: "reload" });
+
+    const roster = await second.run("subagent_status", {});
+    assert.match(roster.content[0].text, /0 running, 2 terminal and uncollected, 2 launched this session/);
+    assert.match((await second.run("subagent_status", { executionId: "child-2" })).content[0].text, /child-2 \[interrupted, uncollected\]/);
+
+    const done = await second.run("subagent_collect", { executionId: "child-1" });
+    assert.equal(done.details.outcome, "success");
+    assert.match(done.content[0].text, /Found the bug in a\.ts\.[\s\S]*anthropic\/claude-test:low · subagent · scout · routine · outcome success · child session child-session-1/);
+
+    const rest = await second.run("subagent_collect", {});
+    assert.deepEqual(rest.details.collected, [{ executionId: "child-2", outcome: "interrupted" }]);
+    assert.match(rest.content[0].text, /not resumed or relaunched/);
+    assert.equal(next, 2, "reload never relaunches a child");
+
+    // Collection itself is retained across a further reload.
+    const third = runtime({ list: () => [], cancelAll: async () => [] });
+    await third.fire("session_start", { reason: "reload" });
+    assert.match((await third.run("subagent_status", {})).content[0].text, /0 running, 0 terminal and uncollected, 2 launched this session\. Nothing needs reconciliation/);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});

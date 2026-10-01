@@ -79,6 +79,9 @@ const MODEL_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"
 const INDEPENDENT_ROLES = new Set<string>(["review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
 const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
+// Session custom entries that let a reloaded runtime answer for children an earlier runtime launched.
+export const CHILD_RECORD = "pi-workbench.subagent-child";
+const RETAINED_TEXT_MAX = 8_000;
 
 const Params = Type.Object({
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …' (a checkable finish line), 'Stop and ask only if …', and the expected output" }),
@@ -134,6 +137,11 @@ type LaunchMeta = { profile: string; cognitiveRole: string; taskPreview: string;
 type ForegroundDispatch = { label: string; detach: () => void };
 /** A background Worker's registry receipt settles after its child result. */
 type WorkerReceipt = { workerId: string; settled: Promise<{ error: unknown } | undefined>; isSettled: boolean };
+type ChildRecord = {
+  executionId: string; kind?: string; name?: string; profile?: string; cognitiveRole?: string; model?: string;
+  taskPreview?: string; launchedAt?: string; workerId?: string; workerName?: string; status?: string; text?: string; truncated?: boolean;
+  diagnostic?: string; childSessionId?: string; collected?: boolean;
+};
 
 export default function subagentExtension(pi: ExtensionAPI, options: { adapter?: PiRpcExecutionAdapter; resolverPath?: string } = {}) {
   const adapter = options.adapter ?? new PiRpcExecutionAdapter();
@@ -149,6 +157,26 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   const pendingSubagentCompletions = new Set<Promise<unknown>>();
   const completionWakeup = createCheckpointAwareWakeup(pi);
   if (process.env.PI_WORKBENCH_EXECUTION_KIND !== undefined) keepChildWebToolsLazy(pi);
+  // Children an earlier runtime of this session launched; the live adapter no longer knows them.
+  let retained = new Map<string, ChildRecord>();
+  let shuttingDown = false;
+  const record = (data: ChildRecord) => { try { pi.appendEntry?.(CHILD_RECORD, data); } catch {} };
+  // A child cancelled by session shutdown stays `running` in the record, so the next runtime reports it interrupted.
+  const recordSettled = (executionId: string, final: { outcome: string; text?: string; truncated?: boolean; diagnostic?: string; sessionId?: string }) => {
+    if (shuttingDown) return;
+    const text = final.text ?? "";
+    record({ executionId, status: final.outcome, text: bounded(text, RETAINED_TEXT_MAX), truncated: final.truncated === true || text.length > RETAINED_TEXT_MAX, diagnostic: final.diagnostic, childSessionId: final.sessionId });
+  };
+  const markCollected = (executionId: string) => {
+    collected.add(executionId);
+    record({ executionId, collected: true });
+  };
+  const retainedOnly = (executionId: string) => launched.has(executionId) ? undefined : retained.get(executionId);
+  pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
+    shuttingDown = false;
+    retained = restoreChildRecords(ctx.sessionManager.getBranch?.() ?? []);
+    for (const child of retained.values()) if (child.collected === true) collected.add(child.executionId);
+  });
 
   const backgroundShortcut = {
     description: "Background the newest foreground Subagent or Worker",
@@ -168,6 +196,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.on("agent_settled", () => completionWakeup.rearm());
 
   pi.on("session_shutdown", async () => {
+    shuttingDown = true;
     foreground.clear();
     completionWakeup.shutdown();
     await adapter.cancelAll("Attended parent session ended.");
@@ -262,6 +291,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         launchedAt: receipt.acceptedAt,
       };
       launched.set(receipt.executionId, meta);
+      record({ executionId: receipt.executionId, kind: "subagent", name: taskLabel(params.name ?? params.task), ...meta, model: `${binding.provider}/${binding.model}:${binding.effort}`, status: "running" });
       const activity = {
         id: `delegate:${receipt.executionId}`,
         kind: "subagent",
@@ -291,6 +321,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           executionId: receipt.executionId, kind: "subagent", childSessionId: final.sessionId ?? null,
           outcome: final.outcome,
         });
+        recordSettled(receipt.executionId, final);
         if (backgrounded) {
           completionWakeup.notify({
             executionId: receipt.executionId,
@@ -312,7 +343,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       try {
         const result = await streamToResult(adapter, receipt.executionId, params.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
         if ((result as { details?: { outcome?: unknown } }).details?.outcome === "detached") return backgroundResult("Moved");
-        collected.add(receipt.executionId);
+        markCollected(receipt.executionId);
         return result;
       } finally {
         foreground.delete(receipt.executionId);
@@ -329,13 +360,19 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     async execute(_toolCallId, params, signal, onUpdate) {
       // Callers pass only terminal children; reconciliation suppresses their completion-wakeup race.
       const collectOne = async (executionId: string) => {
+        const kept = retainedOnly(executionId);
+        if (kept !== undefined) {
+          markCollected(executionId);
+          kept.collected = true;
+          return retainedResult(kept);
+        }
         reconciling.add(executionId);
         completionWakeup.beginReconciliation(executionId);
         const meta = launched.get(executionId);
         const result = await streamToResult(adapter, executionId, meta?.profile ?? "unknown", meta?.cognitiveRole ?? "unknown", meta?.launchedAt ?? new Date().toISOString(), signal, onUpdate, { cancelOnAbort: false });
         const outcome = (result as { details?: { outcome?: unknown } }).details?.outcome;
         const terminal = typeof outcome === "string" && TERMINAL_OUTCOMES.has(outcome);
-        if (terminal) collected.add(executionId);
+        if (terminal) markCollected(executionId);
         completionWakeup.finishReconciliation(executionId, terminal);
         reconciling.delete(executionId);
         const reconciled = await receiptSafeResult({ result, executionId, terminal, receipt: workerReceipts.get(executionId) });
@@ -346,6 +383,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         return reconciled;
       };
       if (params.executionId !== undefined) {
+        if (retainedOnly(params.executionId) !== undefined) return collectOne(params.executionId);
         let status;
         try { status = adapter.status(params.executionId); } catch (error) { return failure("outcome_unknown", errorMessage(error)); }
         if (status.running) {
@@ -370,7 +408,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       const settling = roster
         .filter((child) => !child.running && !collected.has(child.executionId) && !reconciling.has(child.executionId) && workerReceipts.get(child.executionId)?.isSettled === false)
         .map((child) => child.executionId);
-      const pending = reservePending(roster, collected, reconciling, new Set(settling));
+      const kept = [...retained.values()].filter((child) => !launched.has(child.executionId)).map((child) => ({ executionId: child.executionId, running: false }));
+      const pending = reservePending([...roster, ...kept], collected, reconciling, new Set(settling));
       try {
         return await collectAll({ pending, running: roster.filter((child) => child.running).length, settling, collectOne });
       } finally {
@@ -387,6 +426,13 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     parameters: StatusParams,
     async execute(_toolCallId, params) {
       if (params.executionId !== undefined) {
+        const kept = retainedOnly(params.executionId);
+        if (kept !== undefined) {
+          return {
+            content: [{ type: "text", text: `${retainedLine(kept, collected.has(kept.executionId))}${kept.taskPreview ? `\nTask: ${kept.taskPreview}` : ""}` }],
+            details: { ...kept, outcome: kept.status, retained: true },
+          };
+        }
         let status;
         try { status = adapter.status(params.executionId); } catch (error) { return failure("outcome_unknown", errorMessage(error)); }
         const meta = launched.get(params.executionId);
@@ -400,20 +446,24 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       const roster = adapter.list();
       const all = params.all === true;
       const summaries = all ? roster : roster.filter((s) => s.running || !collected.has(s.executionId));
+      const kept = [...retained.values()].filter((child) => !launched.has(child.executionId));
+      const keptShown = all ? kept : kept.filter((child) => !collected.has(child.executionId));
       const running = roster.filter((s) => s.running).length;
-      const uncollected = roster.filter((s) => !s.running && !collected.has(s.executionId)).length;
+      const uncollected = roster.filter((s) => !s.running && !collected.has(s.executionId)).length + kept.filter((child) => !collected.has(child.executionId)).length;
+      const total = roster.length + kept.length;
       const current = harnessRevision();
       const stale = current === LOADED_HARNESS_REVISION ? "" : `\nHarness drift: this lead loaded delegation revision ${LOADED_HARNESS_REVISION}, but ${current} is on disk. Restart the lead before relying on the changed hierarchy rules.`;
-      const counts = `${running} running, ${uncollected} terminal and uncollected, ${roster.length} launched this session.${stale}`;
-      if (summaries.length === 0) {
-        return { content: [{ type: "text", text: `${counts}${all ? "" : " Nothing needs reconciliation; use all:true for the full roster."}` }], details: { children: [], running, uncollected, total: roster.length } };
+      const counts = `${running} running, ${uncollected} terminal and uncollected, ${total} launched this session.${stale}`;
+      if (summaries.length === 0 && keptShown.length === 0) {
+        return { content: [{ type: "text", text: `${counts}${all ? "" : " Nothing needs reconciliation; use all:true for the full roster."}` }], details: { children: [], running, uncollected, total } };
       }
       const lines = summaries.map((s) => {
         const meta = launched.get(s.executionId);
         const state = s.running ? "running" : `${s.outcome ?? "finished"}${collected.has(s.executionId) ? ", collected" : ", uncollected"}`;
         return `- ${s.executionId} [${state}] ${s.kind} · ${s.profile} · ${s.cognitiveRole}${meta?.workerName !== undefined ? ` · worker \"${meta.workerName}\"` : ""}${meta ? ` — ${meta.taskPreview}` : ""}`;
       });
-      return { content: [{ type: "text", text: `${counts}\n${lines.join("\n")}` }], details: { children: summaries, running, uncollected, total: roster.length } };
+      for (const child of keptShown) lines.push(`- ${retainedLine(child, collected.has(child.executionId))}${child.taskPreview ? ` — ${child.taskPreview}` : ""}`);
+      return { content: [{ type: "text", text: `${counts}\n${lines.join("\n")}` }], details: { children: [...summaries, ...keptShown.map((child) => ({ ...child, outcome: child.status, retained: true }))], running, uncollected, total } };
     },
   });
 
@@ -436,7 +486,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     parameters: CancelParams,
     async execute(_toolCallId, params) {
       completionWakeup.markHandled(params.executionId);
-      collected.add(params.executionId);
+      markCollected(params.executionId);
       dismissedActivity.add(params.executionId);
       try {
         const receipt = await adapter.cancel(params.executionId, params.reason ?? "Cancelled by the attended lead.");
@@ -569,6 +619,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         workerName: begin.name,
       };
       launched.set(receipt.executionId, meta);
+      record({ executionId: receipt.executionId, kind: "worker", name: begin.name, ...meta, model: `${binding.provider}/${binding.model}:${binding.effort}`, status: "running" });
       const activity = {
         id: `delegate:${receipt.executionId}`,
         kind: "worker",
@@ -603,6 +654,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           executionId: receipt.executionId, kind: "worker", workerId: params.workerId,
           childSessionId: final.sessionId ?? null, outcome: final.outcome,
         });
+        recordSettled(receipt.executionId, final);
         await usageWatch;
         clearInterval(heartbeat);
         await settleWorkerReceipt({
@@ -658,7 +710,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       try {
         const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
         if ((result as { details?: { outcome?: unknown } }).details?.outcome === "detached") return backgroundResult("Moved");
-        collected.add(receipt.executionId);
+        markCollected(receipt.executionId);
         return receiptSafeResult({ result, executionId: receipt.executionId, terminal: true, receipt: workerReceipts.get(receipt.executionId) });
       } finally {
         foreground.delete(receipt.executionId);
@@ -884,6 +936,46 @@ export async function streamToResult(
     content: [{ type: "text", text: `${summary}${receiptLine}` }],
     details: { executionId, ...final, observations },
     ...(final.outcome === "success" ? {} : { isError: true }),
+  };
+}
+
+/**
+ * Folds this extension's custom entries on the active branch into one record per child. A child
+ * with no terminal record was live when its runtime ended (reload, session switch, quit, or crash):
+ * that runtime cancelled it, so it is reported as interrupted and never resumed or relaunched.
+ */
+export function restoreChildRecords(entries: any[]): Map<string, ChildRecord> {
+  const records = new Map<string, ChildRecord>();
+  for (const entry of entries) {
+    if (entry?.type !== "custom" || entry.customType !== CHILD_RECORD || typeof entry.data?.executionId !== "string") continue;
+    records.set(entry.data.executionId, { ...records.get(entry.data.executionId), ...entry.data });
+  }
+  for (const [executionId, child] of records) {
+    // A cancel or collect of an ID this session never launched leaves no launch record to restore.
+    if (child.launchedAt === undefined) records.delete(executionId);
+    else if (child.status === undefined || child.status === "running") child.status = "interrupted";
+  }
+  return records;
+}
+
+function retainedLine(child: ChildRecord, isCollected: boolean): string {
+  return `${child.executionId} [${child.status}${isCollected ? ", collected" : ", uncollected"}] ${child.kind ?? "subagent"} \u00b7 ${child.profile ?? "?"} \u00b7 ${child.cognitiveRole ?? "?"} \u00b7 ${child.model ?? "?"}${child.workerName !== undefined ? ` \u00b7 worker "${child.workerName}"` : ""} \u2014 retained from an earlier runtime of this session`;
+}
+
+/** The compact terminal result for a child an earlier runtime launched, from its retained record. */
+export function retainedResult(child: ChildRecord) {
+  const outcome = child.status ?? "interrupted";
+  const locator = child.childSessionId ? ` \u00b7 child session ${child.childSessionId}` : "";
+  const summary = outcome === "interrupted"
+    ? `interrupted: ${child.executionId} was still running when an earlier runtime of this session ended (extension reload or session shutdown). That runtime cancelled it; it is not resumed or relaunched. Launch a new child if the work is still needed.`
+    : outcome === "success"
+      ? child.text || "Child completed without a text result."
+      : `${outcome}: ${child.diagnostic ?? child.text ?? "No diagnostic was reported."}`;
+  const receiptLine = `\n\nRetained receipt: ${child.model ?? "?"} \u00b7 ${child.kind ?? "subagent"} \u00b7 ${child.profile ?? "?"} \u00b7 ${child.cognitiveRole ?? "?"} \u00b7 outcome ${outcome}${locator}${child.truncated ? " \u00b7 TRUNCATED, cannot satisfy verification" : ""}`;
+  return {
+    content: [{ type: "text" as const, text: `${summary}${receiptLine}` }],
+    details: { ...child, outcome, retained: true },
+    ...(outcome === "success" ? {} : { isError: true }),
   };
 }
 
