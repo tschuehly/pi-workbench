@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 export const KEEP_ACTIVE_DAYS = 7;
 export const defaultRoot = () => process.env.PI_TMP_ROOT ?? join(homedir(), ".pi-workbench", "tmp");
@@ -54,4 +54,22 @@ export function sweep(root = defaultRoot(), keep = KEEP_ACTIVE_DAYS) {
 
 function list(dir) {
   try { return readdirSync(dir); } catch { return []; }
+}
+
+const OS_TMP = /^(?:\/private)?(?:\/var)?\/tmp(?:\/|$)/;
+const TMP_ARG = String.raw`["']?(?:\/private)?(?:\/var)?\/tmp(?![\w.-])`;
+// ponytail: regex heuristic over the raw command; misses writes via variables or scripts, parse the shell if that matters.
+const BASH_TMP = new RegExp(String.raw`(?:>>?|&>)\s*${TMP_ARG}|\b(?:cd|pushd|tee|mkdir|touch|cp|mv|ln|rsync|install|mktemp)\b[^;&|\n]*\s${TMP_ARG}|\bgit\b[^;&|\n]*\bworktree\s+add\b[^;&|\n]*\s${TMP_ARG}`);
+const useInstead = () => `Use $PI_TMP${process.env.PI_TMP ? ` (${process.env.PI_TMP})` : ""} for scratch or the repository for lasting files; the OS empties /tmp on reboot.`;
+
+/** Reason to block a write/edit whose target resolves into an OS temp folder, else undefined. */
+export function blockTmpWrite(path, cwd) {
+  if (typeof path !== "string") return;
+  const target = resolve(cwd, path.replace(/^@/, ""));
+  if (OS_TMP.test(target)) return `Blocked: ${target} is under an OS temp folder. ${useInstead()}`;
+}
+
+/** One-line warning when a bash command writes, cds, or adds a Git worktree under an OS temp folder, else undefined. */
+export function warnTmpBash(command) {
+  if (typeof command === "string" && BASH_TMP.test(command)) return `Warning: this command uses /tmp. ${useInstead()}`;
 }
