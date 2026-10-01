@@ -25,6 +25,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
 | Pi CLI activity presentation | `extensions/activity/` |
 | Per-session scratch folder (`PI_TMP`) and its cleanup | `extensions/pi-tmp/` |
+| Secret redaction of tool output, assistant text, and context | `extensions/secret-redaction/` |
 | Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
 | Session-log inventory and conversation extraction | `tools/session-logs/README.md` |
 | Owner re-entry orientation for Chats and Workstreams | `skills/orient/` |
