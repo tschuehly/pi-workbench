@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname));
-const storePath = path.join(os.homedir(), ".pi-workbench/workstreams/workstreams.json");
+const storePath = path.join(process.env.PI_WORKBENCH_WORKSTREAM_DIR ?? path.join(os.homedir(), ".pi-workbench/workstreams"), "workstreams.json");
 const cli = path.resolve("skills/workstreams/scripts/workstreams.mjs");
 const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
 
@@ -124,7 +124,7 @@ const items = Object.entries(store.workstreams).map(([id, raw]) => {
       stale: stale ? { reason: stale.payload.reason, recordedAt: stale.recordedAt } : null,
     };
   });
-  const snapshot = JSON.parse(execFileSync("node", [cli, "inspect", JSON.stringify({ workstreamId: id, includeClosed: true })], { encoding: "utf8" }));
+  const snapshot = JSON.parse(execFileSync("node", [cli, "show", id, "--json"], { encoding: "utf8" }));
   const fallbackCheckpoint = checkpoints.at(-1);
   const latestBySession = [...new Map(checkpoints.map((cp) => [cp.sessionId, cp])).values()]
     .sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt));
