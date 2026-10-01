@@ -53,8 +53,8 @@ def in_window(entry, since, until):
     return (since is None or date >= since) and (until is None or date < until)
 
 
-def inventory(path, since=None, until=None):
-    header, name, opening = {}, "", None
+def inventory(path, since=None, until=None, match=None):
+    header, name, opening, first_match = {}, "", None, None
     counts, window_counts = Counter(), Counter()
     first, last, matched = None, None, 0
     for line, entry in entries(path):
@@ -75,18 +75,23 @@ def inventory(path, since=None, until=None):
             counts[role] += 1
             if inside:
                 window_counts[role] += 1
-        if role == "user" and opening is None:
-            opening = {"line": line, "id": entry.get("id"),
-                       "text": text_content(message.get("content"))}
+        if role == "user":
+            user_text = text_content(message.get("content"))
+            if opening is None:
+                opening = {"line": line, "id": entry.get("id"), "text": user_text}
+            if match is not None and first_match is None and match.casefold() in user_text.casefold():
+                first_match = user_text[:160]
     if not matched:
         return None
     opening_text = (opening or {}).get("text", "")
-    child = opening_text.startswith(CHILD_OPENINGS) or name.startswith("workbench-")
+    parent_session = header.get("parentSession") is not None
+    child = parent_session or opening_text.startswith(CHILD_OPENINGS) or name.startswith("workbench-")
     return {
         "path": str(path.resolve()), "id": header.get("id"), "cwd": header.get("cwd"),
         "parentSession": header.get("parentSession"), "name": name,
-        "kind": "child_candidate" if child else "conversation_candidate" if opening else "empty",
-        "classificationBasis": "name/dispatch-opening heuristic; not proven human authorship",
+        "kind": "child" if parent_session else "child_candidate" if child else "conversation_candidate" if opening else "empty",
+        "classificationBasis": "parentSession header" if parent_session else "name/dispatch-opening heuristic; not proven human authorship",
+        "match": first_match,
         "first": first.isoformat() if first else None,
         "last": last.isoformat() if last else None,
         "bytes": path.stat().st_size, "messages": dict(counts),
@@ -147,7 +152,8 @@ def main():
     for command in (listing, reading):
         command.add_argument("--since", type=timestamp, help="Inclusive ISO date/time; UTC if no offset")
         command.add_argument("--until", type=timestamp, help="Exclusive ISO date/time; UTC if no offset")
-    listing.add_argument("--kind", choices=("child_candidate", "conversation_candidate", "empty"))
+    listing.add_argument("--kind", choices=("child", "child_candidate", "conversation_candidate", "empty"))
+    listing.add_argument("--match", help="Keep sessions with a user message containing this case-insensitive substring")
     reading.add_argument("session", help="File path or unique filename/ID substring")
     reading.add_argument("--roles", default="user,assistant,custom,summary")
     reading.add_argument("--tools", action="store_true", help="Include tool arguments/results; may contain secrets")
@@ -166,8 +172,8 @@ def main():
         failed = False
         for path in sorted(root.rglob("*.jsonl")):
             try:
-                item = inventory(path, args.since, args.until)
-                if item and (args.kind is None or item["kind"] == args.kind):
+                item = inventory(path, args.since, args.until, args.match)
+                if item and (args.kind is None or item["kind"] == args.kind) and (args.match is None or item["match"] is not None):
                     print(json.dumps(item, ensure_ascii=False))
             except (OSError, ValueError) as error:
                 print(error, file=sys.stderr)

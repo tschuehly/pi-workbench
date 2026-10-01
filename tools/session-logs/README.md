@@ -5,6 +5,7 @@ Run from the repository root:
 
 ```sh
 python3 tools/session-logs/cli.py list --since 2026-09-13 --until 2026-09-20
+python3 tools/session-logs/cli.py list --match workstream
 python3 tools/session-logs/cli.py read <session-id-or-file>
 python3 tools/session-logs/cli.py read <session-id> --roles user --match status
 python3 tools/session-logs/cli.py read <session-id> --tools --match workstream --format jsonl
@@ -17,8 +18,11 @@ is exclusive. Inventory scans entry timestamps across every file, including olde
 resumed during the window; file modification times do not establish conversation activity.
 
 `list` emits one JSON object per session, including the opening, message-role counts within
-and outside the requested window, paths, and session IDs. `child_candidate` is a heuristic
-based on a Workbench session name or standard dispatch opening. Other conversations are
+and outside the requested window, paths, and session IDs. `--match <text>` keeps only sessions
+with a user-role message containing the case-insensitive substring and reports the first
+matching message snippet (up to 160 characters) as `match`. A non-null `parentSession` header
+classifies a session as `child` with basis `parentSession header`; otherwise, `child_candidate`
+is a heuristic based on a Workbench session name or standard dispatch opening. Other conversations are
 candidates, not proof of human authorship: goal continuations and injected notifications can
 also use the user role. Sessions with only metadata activity can appear in the inventory.
 
