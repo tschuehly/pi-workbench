@@ -56,7 +56,7 @@ test("reports descendant usage once and unions parallel active intervals", () =>
     event("usage", "12:00:07", { sessionId: "root", usageKey: "root:u1", provider: "openai", model: "lead", usage: usage(10, 2) }),
     event("usage", "12:00:08", { sessionId: "child", usageKey: "child:u1", provider: "anthropic", model: "claude", usage: usage(5, null) }),
     event("agent.settled", "12:00:10", { sessionId: "root" }),
-    event("execution.launched", "12:00:01", { sessionId: "root", executionId: "exec-1", kind: "subagent", task: "Review it", cognitiveRole: "independent-review", concept: "alpha", provider: "anthropic", model: "claude", effort: "high" }),
+    event("execution.launched", "12:00:01", { sessionId: "root", executionId: "exec-1", kind: "subagent", task: "Review it", cognitiveRole: "review", concept: "alpha", provider: "anthropic", model: "claude", effort: "high" }),
     event("execution.settled", "12:00:15", { sessionId: "root", executionId: "exec-1", childSessionId: null, outcome: "cancelled" }),
   ];
 
@@ -67,10 +67,10 @@ test("reports descendant usage once and unions parallel active intervals", () =>
     incompleteActiveIntervals: 0,
     usage: { eventCount: 2, inputTokens: 15, outputTokens: 4, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 19, knownCost: 2, totalCost: null, unknownCostEvents: 1 },
     usageByAttribution: [
-      { role: "independent-review", concept: "alpha", provider: "anthropic", model: "claude", eventCount: 1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 7, knownCost: null, totalCost: null, unknownCostEvents: 1 },
+      { role: "review", concept: "alpha", provider: "anthropic", model: "claude", eventCount: 1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 7, knownCost: null, totalCost: null, unknownCostEvents: 1 },
       { role: "shared_lead", concept: null, provider: "openai", model: "lead", eventCount: 1, inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12, knownCost: 2, totalCost: 2, unknownCostEvents: 0 },
     ],
-    executions: [{ executionId: "exec-1", kind: "subagent", workerId: null, task: "Review it", parentSessionId: "root", cognitiveRole: "independent-review", concept: "alpha", independence: null, provider: "anthropic", model: "claude", effort: "high", acceptedAt: "2026-08-28T12:00:01.000Z", endedAt: "2026-08-28T12:00:15.000Z", childSessionId: "child", outcome: "cancelled" }],
+    executions: [{ executionId: "exec-1", kind: "subagent", workerId: null, task: "Review it", parentSessionId: "root", cognitiveRole: "review", concept: "alpha", independence: null, provider: "anthropic", model: "claude", effort: "high", acceptedAt: "2026-08-28T12:00:01.000Z", endedAt: "2026-08-28T12:00:15.000Z", childSessionId: "child", outcome: "cancelled" }],
     failures: 1,
     retrySignals: 0,
     studio: { concept: null, builds: [], correctionCycles: [], completedCorrectionRounds: 0 },
@@ -83,8 +83,8 @@ test("executions expose the lead → worker → leaf parent chain and the indepe
     event("session.start", "12:00:00", { sessionId: "lead" }),
     event("session.start", "12:00:02", { sessionId: "worker", parentSessionId: "lead", executionId: "exec-worker" }),
     event("session.start", "12:00:04", { sessionId: "leaf", parentSessionId: "worker", executionId: "exec-leaf" }),
-    event("execution.launched", "12:00:01", { sessionId: "lead", executionId: "exec-worker", kind: "worker", workerId: "w1", task: "Coordinate 29", cognitiveRole: "synthesis", concept: "29-printed-cards-giftable", provider: "anthropic", model: "claude-opus-5", effort: "high", independence: null }),
-    event("execution.launched", "12:00:03", { sessionId: "worker", executionId: "exec-leaf", kind: "subagent", task: "Review the draft", cognitiveRole: "independent-review", concept: "29-printed-cards-giftable", provider: "anthropic", model: "claude-opus-5", effort: "high", independence }),
+    event("execution.launched", "12:00:01", { sessionId: "lead", executionId: "exec-worker", kind: "worker", workerId: "w1", task: "Coordinate 29", cognitiveRole: "coordination", concept: "29-printed-cards-giftable", provider: "anthropic", model: "claude-opus-5", effort: "high", independence: null }),
+    event("execution.launched", "12:00:03", { sessionId: "worker", executionId: "exec-leaf", kind: "subagent", task: "Review the draft", cognitiveRole: "review", concept: "29-printed-cards-giftable", provider: "anthropic", model: "claude-opus-5", effort: "high", independence }),
   ];
 
   const byId = new Map(buildReport(events, { rootSessionId: "lead" }).executions.map((execution) => [execution.executionId, execution]));
