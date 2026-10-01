@@ -2,7 +2,7 @@
 
 In an attended lead Pi session, this package overrides the model-callable `bash` tool. Commands run in the background by default, return a job ID immediately, show elapsed time and output bytes in Activity, and send the exit status plus recent output to the Chat when they finish.
 
-Set `foreground: true` when a following action needs the command's exit status or output before proceeding. Use `bash_status` to inspect jobs and `bash_cancel` to stop one. At most eight jobs per session run concurrently. Background jobs are attended session work, not durable Run jobs.
+Set `foreground: true` when a following action needs the command's exit status or output before proceeding. After a background launch, continue independent work or end the turn; completion arrives automatically. `bash_status` is a diagnostic snapshot, not a way to poll for completion; use `bash_cancel` to stop a job. At most eight jobs per session run concurrently. Background jobs are attended session work, not durable Run jobs.
 
 Jobs survive session shutdown, `/reload`, and PI WEB session-daemon restarts, including promotion. Each job runs under a small detached runner (`runner.mjs`) that leads its own process group, so it no longer belongs to the Pi process or daemon that started it. The runner writes the output log and a one-shot exit record, and kills the job's process group at its `timeout` or, without one, after a 12-hour maximum lifetime. Processes the command deliberately moves into a new session (`setsid`) are outside that group, as with native bash.
 

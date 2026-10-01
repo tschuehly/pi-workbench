@@ -36,7 +36,9 @@ test("an attended RPC bash call starts immediately, publishes status, and clears
   const fixture = harness();
   await fixture.handlers.get("session_start")({}, fixture.ctx);
   const result = await fixture.tools.get("bash").execute("call", { command: "printf attended" }, undefined, undefined, fixture.ctx);
-  assert.match(result.content[0].text, /Background bash .* started/);
+  assert.match(result.content[0].text, /Continue independent work or end the turn; completion arrives automatically/);
+  assert.doesNotMatch(result.content[0].text, /Check bash_status/);
+  assert.match(fixture.tools.get("bash_status").description, /Diagnostic snapshot.*Do not use to poll for completion/);
   const active = JSON.parse(fixture.statuses.at(-1)[1]).jobs;
   assert.equal(active.length, 1);
   assert.equal(active[0].command, undefined, "status snapshots must not disclose shell commands");

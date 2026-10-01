@@ -66,12 +66,12 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
       else delete env.PI_REASONING_LEVEL;
       const { shell, args } = getShellConfig();
       const job = jobs.start(params.command, ctx.cwd, params.timeout, env, { sessionId: ctx.sessionManager.getSessionId(), sessionFile, shell, args });
-      return { content: [{ type: "text", text: `Background bash ${job.id} started. Check bash_status or continue independent work; completion will arrive automatically. Output log: ${job.logPath}` }], details: job };
+      return { content: [{ type: "text", text: `Background bash ${job.id} started. Continue independent work or end the turn; completion arrives automatically. Output log: ${job.logPath}` }], details: job };
     },
   });
 
   pi.registerTool({
-    name: "bash_status", label: "Bash status", description: "Show background bash job state, elapsed time, output byte count, and log path. Omit id to list all jobs in this session.",
+    name: "bash_status", label: "Bash status", description: "Diagnostic snapshot of background bash job state, elapsed time, output byte count, and log path. Do not use to poll for completion; it arrives automatically. Omit id to list all jobs in this session.",
     parameters: Type.Object({ id: Type.Optional(Type.String()) }),
     async execute(_id, params) {
       const list = jobs.list().filter((job: { id: string }) => params.id === undefined || job.id === params.id);
