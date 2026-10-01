@@ -58,10 +58,10 @@ test("a new session hides worker and goal tools; tools_enable adds workers as a 
   await s.session.prompt("go");
 
   const [first, second] = s.requests;
-  assert.deepEqual(s.tools(first), ["report_status", "tools_enable"]);
-  assert.deepEqual(s.tools(second), ["report_status", "tools_enable", "worker_create", "worker_status"]);
+  assert.deepEqual(s.tools(first), ["alignment_reached", "alignment_reset", "report_status", "tools_enable"]);
+  assert.deepEqual(s.tools(second), ["alignment_reached", "alignment_reset", "report_status", "tools_enable", "worker_create", "worker_status"]);
   const [initial, ...later] = s.systemMessages(second);
-  assert.deepEqual(initial.toolsAdded.map((tool) => tool.name).sort(), ["report_status", "tools_enable"], "initial loadout unchanged");
+  assert.deepEqual(initial.toolsAdded.map((tool) => tool.name).sort(), ["alignment_reached", "alignment_reset", "report_status", "tools_enable"], "initial loadout unchanged");
   assert.deepEqual(later.flatMap((message) => message.toolsAdded ?? []).map((tool) => tool.name).sort(), ["worker_create", "worker_status"], "enabled tools arrive as a later addition");
   assert.ok(s.session.getActiveToolNames().includes("goal_complete"), "goal tools return once the session settles");
 
