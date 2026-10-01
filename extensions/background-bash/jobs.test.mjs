@@ -6,6 +6,8 @@ import { test } from "node:test";
 import { createBackgroundBashJobs } from "./jobs.mjs";
 
 const cwd = process.cwd();
+// Completions are redacted; keep the real ~/.pi/agent/auth.json out of tests.
+process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "pi-background-bash-agent-"));
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 async function until(condition, ms = 10_000) {
   for (const deadline = Date.now() + ms; !condition();) {
@@ -43,6 +45,22 @@ test("background bash returns before completion, reports progress, and delivers 
   assert.ok(events.some((event) => event.type === "remove" && event.id === `background-bash:${job.id}`));
   jobs.shutdown();
   assert.equal(existsSync(job.logPath), true, "logs outlive the session");
+});
+
+test("completion output and command are redacted before delivery", async () => {
+  const { messages, make } = fixture();
+  const jobs = make();
+  const secret = "ghp_" + "S".repeat(36);
+  process.env.SYNTHETIC_BG_TOKEN = "bgSecretValue1234567890";
+  try {
+    jobs.start(`echo ${secret} $SYNTHETIC_BG_TOKEN`, cwd, 30, undefined, { sessionId: "s1" });
+    await until(() => messages.length === 1);
+  } finally { delete process.env.SYNTHETIC_BG_TOKEN; }
+  const { content, details } = messages[0].message;
+  assert.match(content, /\[REDACTED:github-token\] \[REDACTED:env:SYNTHETIC_BG_TOKEN\]/);
+  assert.doesNotMatch(content, /S{36}|bgSecretValue/);
+  assert.equal(details.command, "echo [REDACTED:github-token] $SYNTHETIC_BG_TOKEN");
+  jobs.shutdown();
 });
 
 test("successful completions send only the last 20 lines while failures retain the larger tail", async () => {

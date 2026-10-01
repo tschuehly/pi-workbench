@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
+import { redact, redactDeep } from "../secret-redaction/redact.mjs";
 import { writeOnce } from "./runner.mjs";
 
 const MAX_TAIL = 12_000;
@@ -92,8 +93,9 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
       const shown = job.exitCode === 0 ? tail.replace(/\n$/, "").split("\n").slice(-20).join("\n") : tail;
       pi.sendMessage({
         customType: "background-bash", display: true,
-        content: `Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${cleanOutput(shown)}`,
-        details: describe(job),
+        // Idle, non-triggering completions persist before any extension hook runs, so redact here.
+        content: redact(`Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${cleanOutput(shown)}`),
+        details: redactDeep(describe(job)),
       }, { triggerTurn: job.state !== "cancelled", deliverAs: "followUp" });
     } catch (error) {
       rmSync(marker, { force: true }); // let a later attach retry
