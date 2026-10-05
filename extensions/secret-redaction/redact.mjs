@@ -42,11 +42,16 @@ let auth = { key: "", values: [] };
 function readAuth() {
   const path = authPath();
   let key;
-  try { const stat = statSync(path); key = `${path}:${stat.mtimeMs}:${stat.size}`; } catch { return []; }
+  // Strong generation: an atomic rename changes ino, and any write or utimes changes ctime, so a
+  // same-size rotation with a restored mtime is still seen. mtime and size alone are not enough.
+  try { const s = statSync(path, { bigint: true }); key = `${path}:${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`; }
+  catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") { auth = { key: "", values: [] }; return []; } // removed
+    return auth.values; // other stat failure: keep redacting the last known values
+  }
   if (key !== auth.key) { // OAuth access tokens rotate: re-read on change
-    let values = [];
-    try { values = authValues(JSON.parse(readFileSync(path, "utf8"))); } catch { /* unreadable or mid-write: retry next call */ key = ""; }
-    auth = { key, values };
+    try { auth = { key, values: authValues(JSON.parse(readFileSync(path, "utf8"))) }; }
+    catch { auth = { key: "", values: auth.values }; } // unreadable or mid-write: keep last known values, retry next call
   }
   return auth.values;
 }
@@ -67,27 +72,37 @@ function knownRegex() {
   return known;
 }
 
-/** Replace known credential values and well-known secret shapes with `[REDACTED:<source>]`. */
-export function redact(text) {
-  if (typeof text !== "string" || text === "") return text;
-  const { regex, sources } = knownRegex();
+function redactWith({ regex, sources }, text) {
   let out = regex ? text.replace(regex, (match) => `[REDACTED:${sources.get(match)}]`) : text;
   for (const [name, pattern] of PATTERNS) out = out.replace(pattern, `[REDACTED:${name}]`);
   return out;
 }
 
+/** Replace known credential values and well-known secret shapes with `[REDACTED:<source>]`. */
+export function redact(text) {
+  if (typeof text !== "string" || text === "") return text;
+  return redactWith(knownRegex(), text);
+}
+
 const SKIP_BLOCKS = new Set(["image", "thinking", "redacted_thinking"]); // binary data and provider-signed reasoning
 
-/** Redact every string in a JSON-like value. Returns the same reference when nothing changed. */
+/**
+ * Redact every string in a JSON-like value. Returns the same reference when nothing changed.
+ * Takes one auth.json/env snapshot per call, at the first non-empty string; batch several values in one array to share it.
+ */
 export function redactDeep(value) {
-  if (typeof value === "string") return redact(value);
-  if (!value || typeof value !== "object" || SKIP_BLOCKS.has(value.type)) return value;
-  let changed = false;
-  const copy = Array.isArray(value) ? [] : {};
-  for (const [key, item] of Object.entries(value)) {
-    const next = redactDeep(item);
-    if (next !== item) changed = true;
-    copy[key] = next;
-  }
-  return changed ? copy : value;
+  let snapshot;
+  const walk = (value) => {
+    if (typeof value === "string") return value === "" ? value : redactWith(snapshot ??= knownRegex(), value);
+    if (!value || typeof value !== "object" || SKIP_BLOCKS.has(value.type)) return value;
+    let changed = false;
+    const copy = Array.isArray(value) ? [] : {};
+    for (const [key, item] of Object.entries(value)) {
+      const next = walk(item);
+      if (next !== item) changed = true;
+      copy[key] = next;
+    }
+    return changed ? copy : value;
+  };
+  return walk(value);
 }

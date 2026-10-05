@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import fs, { mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 // Synthetic secrets only: never point tests at the real ~/.pi/agent/auth.json.
 const agentDir = mkdtempSync(join(process.env.PI_TMP ?? tmpdir(), "pi-secret-redaction-"));
@@ -89,4 +90,113 @@ test("extension hooks redact tool results, assistant text (not tool calls), and 
 
   const context = await handlers.context({ messages: [{ role: "bashExecution", command: "env", output: OPAQUE }] });
   assert.equal(context.messages[0].output, "[REDACTED:auth.json]");
+});
+
+// Counts auth.json stats, i.e. auth/env snapshots, taken while fn runs. `fail` makes every stat throw that error code.
+function authStats(fn, fail) {
+  const real = fs.statSync;
+  const spy = mock.method(fs, "statSync", (path, options) => {
+    if (fail) throw Object.assign(new Error(fail), { code: fail });
+    return real(path, options);
+  });
+  syncBuiltinESMExports();
+  try { fn(); return spy.mock.calls.filter((call) => String(call.arguments[0]).endsWith("auth.json")).length; }
+  finally { spy.mock.restore(); syncBuiltinESMExports(); }
+}
+
+const A = "Ah3kLm9QwZx7Pv2RtYb5NcJ8dFgE6uSo";
+const B = "Bq8sWe4RtYu1IoPa6SdFgH3jKlZx9CvN"; // same length as A, so the file size does not change
+const C = "Cz5XcVb2NmQw8ErTy4UiOp7AsDf1GhJk";
+const authFile = join(agentDir, "auth.json");
+const authBody = (secret) => JSON.stringify({ anthropic: { type: "oauth", access: secret } });
+
+test("one auth/env snapshot per public operation, batched hooks included, none without strings", () => {
+  writeAuth({ anthropic: { access: A } }, 3000);
+  const handlers = {};
+  extension({ on: (name, handler) => { handlers[name] = handler; } });
+  assert.equal(authStats(() => assert.equal(redact(A), "[REDACTED:auth.json]")), 1);
+  assert.equal(authStats(() => redact("")), 0);
+  assert.equal(authStats(() => redactDeep({ a: [A, "x", { b: `y ${A}` }], n: 1 })), 1);
+  const plain = [1, true, false, null, undefined, "", { type: "image", data: A }];
+  assert.equal(authStats(() => assert.equal(redactDeep(plain), plain)), 0);
+  assert.equal(redactDeep(true), true);
+
+  let result;
+  const event = { content: [{ type: "text", text: A }, { type: "text", text: "ok" }], details: { stdout: A, stderr: "" }, structuredContent: { value: `v=${A}` } };
+  const before = structuredClone(event);
+  assert.equal(authStats(() => { result = handlers.tool_result(event); }), 1);
+  assert.deepEqual(event, before, "the original event is not mutated");
+  assert.deepEqual(result, {
+    content: [{ type: "text", text: "[REDACTED:auth.json]" }, { type: "text", text: "ok" }],
+    details: { stdout: "[REDACTED:auth.json]", stderr: "" },
+    structuredContent: { value: "v=[REDACTED:auth.json]" },
+  });
+  assert.equal(result.content[1], event.content[1], "unchanged leaves keep their reference");
+
+  const thinking = { type: "thinking", thinking: A, thinkingSignature: "sig" };
+  const call = { type: "toolCall", id: "1", name: "bash", arguments: { command: A } };
+  const message = { role: "assistant", content: [{ type: "text", text: `a ${A}` }, thinking, call, { type: "text", text: "line1\r\nline2\n" }, { type: "text", text: A }] };
+  let ended;
+  assert.equal(authStats(() => { ended = handlers.message_end({ message }); }), 1);
+  assert.deepEqual(ended.message.content.map((block) => block.text), ["a [REDACTED:auth.json]", undefined, undefined, "line1\r\nline2\n", "[REDACTED:auth.json]"]);
+  for (const i of [1, 2, 3]) assert.equal(ended.message.content[i], message.content[i]);
+  assert.equal(message.content[0].text, `a ${A}`);
+
+  const messages = Array.from({ length: 50 }, (_, i) => ({ role: "toolResult", content: [{ type: "text", text: i % 10 ? "clean" : A }] }));
+  let context;
+  assert.equal(authStats(() => { context = handlers.context({ messages }); }), 1);
+  assert.equal(context.messages[0].content[0].text, "[REDACTED:auth.json]");
+  assert.equal(context.messages[1], messages[1]);
+  assert.equal(authStats(() => assert.equal(handlers.context({ messages: [] }), undefined)), 0);
+});
+
+test("same-size auth.json rotation with a restored mtime is seen by the next operation", () => {
+  const handlers = {};
+  extension({ on: (name, handler) => { handlers[name] = handler; } });
+  writeFileSync(authFile, authBody(A));
+  utimesSync(authFile, 4000, 4000);
+  assert.equal(handlers.tool_result({ content: [{ type: "text", text: A }] }).content[0].text, "[REDACTED:auth.json]");
+
+  writeFileSync(authFile, authBody(B)); // in place: same size, mtime restored below; ctime still moves
+  utimesSync(authFile, 4000, 4000);
+  assert.equal(handlers.tool_result({ content: [{ type: "text", text: B }] }).content[0].text, "[REDACTED:auth.json]");
+  assert.equal(redact(A), A, "the rotated-out value is no longer a known value");
+
+  const next = join(agentDir, "auth.json.next");
+  writeFileSync(next, authBody(C)); // atomic rename: same size and mtime, new inode
+  utimesSync(next, 4000, 4000);
+  renameSync(next, authFile);
+  assert.equal(redactDeep({ out: C }).out, "[REDACTED:auth.json]");
+  assert.equal(redact(B), B);
+});
+
+test("failed stat or parse keeps the last known auth values; removal drops them on the next operation", () => {
+  writeAuth({ anthropic: { access: A } }, 5000);
+  assert.equal(redact(A), "[REDACTED:auth.json]");
+  writeFileSync(authFile, authBody(B).slice(0, 20)); // mid-write
+  assert.equal(redact(A), "[REDACTED:auth.json]");
+  authStats(() => assert.equal(redactDeep([A])[0], "[REDACTED:auth.json]"), "EACCES");
+  writeAuth({ anthropic: { access: B } }, 5000);
+  assert.equal(redact(B), "[REDACTED:auth.json]");
+  assert.equal(redact(A), A);
+  rmSync(authFile);
+  assert.equal(redact(B), B);
+  writeAuth({ "github-copilot": { access: COPILOT, refresh: OPAQUE } }, 6000);
+});
+
+test("env rotation and removal are seen by the next operation", () => {
+  process.env.SYNTHETIC_API_KEY = A;
+  try {
+    assert.equal(redactDeep({ v: A }).v, "[REDACTED:env:SYNTHETIC_API_KEY]");
+    process.env.SYNTHETIC_API_KEY = B;
+    assert.deepEqual(redactDeep([A, B]), [A, "[REDACTED:env:SYNTHETIC_API_KEY]"]);
+    delete process.env.SYNTHETIC_API_KEY;
+    assert.equal(redact(B), B);
+  } finally { delete process.env.SYNTHETIC_API_KEY; }
+});
+
+test("redactDeep still overflows on cycles rather than silently skipping them", () => {
+  const cycle = { text: "x" };
+  cycle.self = cycle;
+  assert.throws(() => redactDeep(cycle), RangeError);
 });

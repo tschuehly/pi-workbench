@@ -6,9 +6,13 @@ This is defense in depth, not a guarantee. It cannot catch encoded, split, or tr
 
 ## What it redacts
 
-1. **Known values** (`auth.json`): every string leaf of at least 12 characters in the credential entries of `auth.json` in the Pi agent directory (`PI_CODING_AGENT_DIR` or `~/.pi/agent`). Arrays such as `availableModelIds` are skipped. The file is re-read when its mtime or size changes, because OAuth access tokens rotate.
+1. **Known values** (`auth.json`): every string leaf of at least 12 characters in the credential entries of `auth.json` in the Pi agent directory (`PI_CODING_AGENT_DIR` or `~/.pi/agent`). Arrays such as `availableModelIds` are skipped. OAuth access tokens rotate, so the file is re-read when its inode, size, mtime, or ctime changes; a same-size rotation with a restored mtime is still seen. If the file is unreadable or mid-write, the last known values stay redacted. If it is removed, its values are dropped.
 2. **Known values** (`env:<NAME>`): the value of every environment variable whose name contains `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD`, `AUTH` (not `AUTHOR`), `CREDENTIAL`, or `COOKIE`. The value must be at least 12 characters and not obviously non-secret: no whitespace, paths, booleans, numbers, URLs without credentials, or e-mail addresses.
 3. **Prefixes** for secrets Pi never held: `gh[opsur]_…`, `github_pat_…`, `sk-ant-…`, `sk-…`, JWTs, PEM private-key blocks, and Copilot `tid=…;exp=…` tokens. There is no generic length or entropy rule, so git SHAs and blob hashes survive.
+
+## When
+
+Each `redact()` or `redactDeep()` call takes one fresh snapshot of `auth.json` and the environment, so a rotation or removal applies from the next call. `redactDeep()` takes it at the first non-empty string and reuses it for the whole value. Each hook below makes one `redactDeep()` call.
 
 ## Where
 
