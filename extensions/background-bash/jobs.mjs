@@ -219,5 +219,14 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     jobs.clear();
   }
 
-  return { start, wait, attach, cancel, shutdown, list: () => [...jobs.values()].map(describe) };
+  /** Redacted, control-free command and recent output for the Activity drawer. */
+  function preview(id, chars) {
+    const job = jobs.get(id);
+    if (job === undefined) return undefined;
+    // Redact before cutting so a secret split at the edge is still recognized.
+    const output = redact(cleanOutput(readTail(job.logPath, job.bytes))).slice(-chars);
+    return { command: redact(cleanOutput(job.command)).slice(0, 240), output, logPath: job.logPath };
+  }
+
+  return { start, wait, preview, attach, cancel, shutdown, list: () => [...jobs.values()].map(describe) };
 }

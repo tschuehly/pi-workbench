@@ -25,6 +25,8 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
         const active = jobs.list().filter((job: { state: string }) => job.state === "running")
           .map((job: { id: string; elapsedSeconds: number; bytes: number }) => ({
             id: job.id, elapsedSeconds: job.elapsedSeconds, bytes: job.bytes,
+            // ponytail: recent output only; 8 jobs × 1200 chars stays under PI WEB's 32 KB snapshot cap. Serve the full log if the tail proves too short.
+            ...jobs.preview(job.id, 1200),
           }));
         ctx.ui.setStatus("pi-workbench:background-bash", JSON.stringify({ schemaVersion: 1, jobs: active }));
       };

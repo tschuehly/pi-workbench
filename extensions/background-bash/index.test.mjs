@@ -35,14 +35,17 @@ function harness(mode = "rpc", child = false) {
 test("an attended RPC bash call starts immediately, publishes status, and clears it on shutdown", async () => {
   const fixture = harness();
   await fixture.handlers.get("session_start")({}, fixture.ctx);
-  const result = await fixture.tools.get("bash").execute("call", { command: "printf attended" }, undefined, undefined, fixture.ctx);
+  const secret = "sk-ant-" + "a".repeat(24);
+  const result = await fixture.tools.get("bash").execute("call", { command: `printf 'attended ${secret}\\n'; sleep 0.2` }, undefined, undefined, fixture.ctx);
   assert.match(result.content[0].text, /Continue independent work or end the turn; completion arrives automatically/);
   assert.doesNotMatch(result.content[0].text, /Check bash_status/);
   assert.match(fixture.tools.get("bash_status").description, /Diagnostic snapshot.*Do not use to poll for completion/);
   const active = JSON.parse(fixture.statuses.at(-1)[1]).jobs;
   assert.equal(active.length, 1);
-  assert.equal(active[0].command, undefined, "status snapshots must not disclose shell commands");
   assert.equal(active[0].elapsedSeconds, 0);
+  assert.match(active[0].command, /^printf 'attended /);
+  assert.match(active[0].logPath, /output\.log$/);
+  assert.doesNotMatch(fixture.statuses.map(([, value]) => value ?? "").join(""), /sk-ant-a{24}/, "Activity status must be redacted");
   await fixture.completion;
   assert.match(fixture.messages[0].content, /complete \(exit 0\)/);
   assert.match(fixture.messages[0].content, /attended/);

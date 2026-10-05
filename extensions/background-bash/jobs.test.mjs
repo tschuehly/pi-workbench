@@ -217,3 +217,18 @@ test("wait claims a fast completion and leaves a slow one to normal delivery", a
   assert.equal((await waiting).state, "cancelled");
   jobs.shutdown();
 });
+
+test("preview shows the redacted command and the redacted end of the output", async () => {
+  const { make } = fixture();
+  const jobs = make();
+  const secret = "sk-ant-" + "b".repeat(24);
+  const job = jobs.start(`printf 'early\\nkey ${secret}\\nlast line'; sleep 30`, cwd, 60, undefined, { sessionId: "s1" });
+  await until(() => jobs.list()[0].bytes > 0);
+  const shown = jobs.preview(job.id, 20);
+  assert.doesNotMatch(JSON.stringify(shown), /b{24}/);
+  assert.match(shown.output, /last line$/);
+  assert.ok(shown.output.length <= 20);
+  assert.equal(shown.logPath, job.logPath);
+  jobs.cancel(job.id);
+  jobs.shutdown();
+});
