@@ -148,6 +148,13 @@ struct NativeNotificationTests {
         try! FileManager.default.createSymbolicLink(at: folderAlias, withDestinationURL: htmlDir)
         precondition(localOpenTarget(htmlDir.path)?.hasDirectoryPath == true && localOpenTarget(folderAlias.path)?.hasDirectoryPath == true, "an existing folder opens in Finder")
         precondition(localOpenTarget(bundle.path) == nil, "an app bundle is refused, it would launch")
+        let docx = htmlDir.appendingPathComponent("Plan.docx"), docxAlias = htmlDir.appendingPathComponent("alias.docx")
+        try! "x".write(to: docx, atomically: true, encoding: .utf8)
+        try! FileManager.default.createSymbolicLink(at: docxAlias, withDestinationURL: docx)
+        precondition(localOpenTarget(docx.path) == nil && localOpenTarget(docxAlias.path) == nil, "a document never opens in its default app")
+        precondition(localRevealTarget(docx.path)?.lastPathComponent == "Plan.docx" && localRevealTarget(script.path) != nil && localRevealTarget(bundle.path) != nil, "any existing file or package can be revealed in Finder")
+        precondition(localRevealTarget(docxAlias.path)?.lastPathComponent == "alias.docx" && localRevealTarget(alias.path) != nil, "a symlink is revealed itself")
+        precondition(localRevealTarget(htmlDir.appendingPathComponent("missing.docx").path) == nil && localRevealTarget("rel.docx") == nil && localRevealTarget(42) == nil)
         try? FileManager.default.removeItem(at: htmlDir)
 
         let desktop = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&workspace=w"), isOnActiveSpace: true)
