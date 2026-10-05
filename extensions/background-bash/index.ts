@@ -4,6 +4,9 @@ import { Type } from "typebox";
 import { createBackgroundBashJobs } from "./jobs.mjs";
 import { piTmpDir } from "../pi-tmp/pitmp.mjs";
 
+// A foreground call waits this long, then continues as a background job so the agent is never stuck.
+const FOREGROUND_WAIT_MS = 30_000;
+
 export default function backgroundBashExtension(pi: ExtensionAPI) {
   // Short-lived Subagents and Workers must receive the native blocking tool: their Pi process exits at agent_settled.
   if (process.env.PI_WORKBENCH_EXECUTION_KIND !== undefined) return;
@@ -33,22 +36,22 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "bash", label: "bash",
-    description: "Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait. One-shot print/JSON modes run foreground; child Pi uses the native bash tool. Background jobs survive session shutdown, reload and PI WEB restarts; they stop at their timeout or a 12-hour maximum lifetime.",
+    description: "Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait up to 30 seconds for the output; a command still running then continues in the background and delivers its completion like any job. One-shot print/JSON modes run foreground; child Pi uses the native bash tool. Background jobs survive session shutdown, reload and PI WEB restarts; they stop at their timeout or a 12-hour maximum lifetime.",
     promptSnippet: "Run bash commands in the background by default; use foreground for dependent steps",
     promptGuidelines: [
       "Run long checks and builds in the background. Continue independent work, then wait for their completion message before dependent actions; never infer success from a job ID.",
-      "Use foreground=true only for short commands whose output is needed now and when there is no independent work. Do not launch conflicting writes while a background command is running.",
+      "Use foreground=true for short commands whose output is needed now. If it returns a job ID instead, the command is still running: continue independent work or end the turn. Do not launch conflicting writes while a background command is running.",
       "Use bash_status for elapsed time and output bytes; use bash_cancel to stop a job. If the command redirects its own output to a log, inspect that log separately for progress.",
       "A completed job reports its exit status and bounded output in a new message; do not claim success from its initial job ID.",
     ],
     parameters: Type.Object({
       command: Type.String({ description: "Shell command to execute" }),
       timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional; background jobs otherwise stop after 12 hours)" })),
-      foreground: Type.Optional(Type.Boolean({ description: "Wait for output and exit status; default false" })),
+      foreground: Type.Optional(Type.Boolean({ description: "Wait up to 30 seconds for output and exit status, then continue in the background; default false" })),
     }),
     async execute(id, params, signal, onUpdate, ctx) {
       // One-shot modes settle as soon as the tool returns; never detach their result.
-      if (params.foreground === true || ctx.mode === "print" || ctx.mode === "json") {
+      if (ctx.mode === "print" || ctx.mode === "json") {
         return foreground.execute(id, { command: params.command, ...(params.timeout === undefined ? {} : { timeout: params.timeout }) }, signal, onUpdate, ctx);
       }
       if (signal?.aborted) throw new Error("Bash launch cancelled");
@@ -66,6 +69,16 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
       else delete env.PI_REASONING_LEVEL;
       const { shell, args } = getShellConfig();
       const job = jobs.start(params.command, ctx.cwd, params.timeout, env, { sessionId: ctx.sessionManager.getSessionId(), sessionFile, shell, args });
+      if (params.foreground === true) {
+        const done = await jobs.wait(job.id, FOREGROUND_WAIT_MS, signal);
+        if (done !== undefined) {
+          const text = `${done.truncated ? `[showing recent output only; full output: ${done.logPath}]\n` : ""}${done.output || "(no output)"}`;
+          if (done.state === "cancelled") throw new Error(`${text}\n\nCommand aborted`);
+          if (done.state !== "complete") throw new Error(`${text}\n\nCommand ${done.exitCode === undefined ? "failed" : `exited with code ${done.exitCode}`}`);
+          return { content: [{ type: "text", text }], details: done };
+        }
+        return { content: [{ type: "text", text: `Still running after 30s; continued as background bash ${job.id}. Continue independent work or end the turn; completion arrives automatically. Output log: ${job.logPath}` }], details: job };
+      }
       return { content: [{ type: "text", text: `Background bash ${job.id} started. Continue independent work or end the turn; completion arrives automatically. Output log: ${job.logPath}` }], details: job };
     },
   });

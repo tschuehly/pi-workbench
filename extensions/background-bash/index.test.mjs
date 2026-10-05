@@ -51,6 +51,18 @@ test("an attended RPC bash call starts immediately, publishes status, and clears
   assert.equal(fixture.statuses.at(-1)[1], undefined);
 });
 
+test("a foreground call returns output inline and failures as errors, with no follow-up", async () => {
+  const fixture = harness();
+  await fixture.handlers.get("session_start")({}, fixture.ctx);
+  const bash = fixture.tools.get("bash");
+  const ok = await bash.execute("call", { command: "printf inline", foreground: true }, undefined, undefined, fixture.ctx);
+  assert.equal(ok.content[0].text, "inline");
+  await assert.rejects(bash.execute("call", { command: "printf boom; exit 4", foreground: true }, undefined, undefined, fixture.ctx), /boom[\s\S]*exited with code 4/);
+  await new Promise((resolve) => { setTimeout(resolve, 200); });
+  assert.equal(fixture.messages.length, 0);
+  await fixture.handlers.get("session_shutdown")();
+});
+
 test("a child keeps the native bash tool and one-shot Pi runs foreground", async () => {
   const prior = process.env.PI_WORKBENCH_EXECUTION_KIND;
   process.env.PI_WORKBENCH_EXECUTION_KIND = "subagent";

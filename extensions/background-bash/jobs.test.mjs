@@ -145,12 +145,12 @@ test("a job finishing while detached delivers its completion exactly once on rea
 
 test("the maximum lifetime kills the whole process group", async () => {
   const fx = fixture();
-  const jobs = fx.make({ lifetimeSeconds: 0.5 });
+  const jobs = fx.make({ lifetimeSeconds: 2 }); // room for the shell to record the grandchild PID under load
   const pidFile = join(fx.root, "grandchild.pid");
   const job = jobs.start(`sleep 30 & echo $! > ${pidFile}; sleep 30`, cwd, undefined, undefined, { sessionId: "s1" });
   const { pgid } = record(fx.root, job.id);
   await until(() => fx.messages.length === 1);
-  assert.match(fx.messages[0].message.content, /failed \(exit unknown\)\. Stopped at the 1-second maximum lifetime/);
+  assert.match(fx.messages[0].message.content, /failed \(exit unknown\)\. Stopped at the 2-second maximum lifetime/);
   const grandchild = Number(readFileSync(pidFile, "utf8"));
   await until(() => !alive(grandchild) && !groupAlive(pgid));
   jobs.shutdown();
@@ -194,5 +194,26 @@ test("background timeout validation and concurrency are bounded", async () => {
   for (let i = 0; i < 8; i++) started.push(jobs.start("sleep 30", cwd, undefined, undefined, { sessionId: "s1" }));
   assert.throws(() => jobs.start("ninth", cwd, undefined, undefined, {}), /Too many/);
   for (const job of started) jobs.cancel(job.id);
+  jobs.shutdown();
+});
+
+test("wait claims a fast completion and leaves a slow one to normal delivery", async () => {
+  const { messages, make } = fixture();
+  const jobs = make();
+  const fast = jobs.start("printf done", cwd, 30, undefined, { sessionId: "s1" });
+  const claimed = await jobs.wait(fast.id, 5_000);
+  assert.equal(claimed.state, "complete");
+  assert.equal(claimed.output, "done");
+  await sleep(200);
+  assert.equal(messages.length, 0, "a claimed completion sends no follow-up");
+  const slow = jobs.start("sleep 0.5; printf late", cwd, 30, undefined, { sessionId: "s1" });
+  assert.equal(await jobs.wait(slow.id, 50), undefined);
+  await until(() => messages.length === 1);
+  assert.match(messages[0].message.content, /late/);
+  const controller = new AbortController();
+  const aborted = jobs.start("sleep 30", cwd, 60, undefined, { sessionId: "s1" });
+  const waiting = jobs.wait(aborted.id, 5_000, controller.signal);
+  controller.abort();
+  assert.equal((await waiting).state, "cancelled");
   jobs.shutdown();
 });

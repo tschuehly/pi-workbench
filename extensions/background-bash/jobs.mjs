@@ -118,6 +118,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     settle(job, result);
     removeActivity(pi, `background-bash:${job.id}`);
     onChange();
+    job.waiter?.();
     deliver(job);
   }
 
@@ -173,6 +174,33 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     setImmediate(() => { for (const job of jobs.values()) if (job.state === "running") check(job); else if (!closed) deliver(job); });
   }
 
+  /**
+   * Wait up to `ms` for a job to finish. If it does, claim its completion (no follow-up message)
+   * and resolve with its description and output tail; otherwise resolve undefined and let the
+   * completion arrive as usual. Aborting `signal` cancels the job.
+   */
+  function wait(id, ms, signal) {
+    const job = jobs.get(id);
+    if (job === undefined) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      const finish = (claimed) => {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", abort);
+        job.waiter = undefined;
+        resolve(claimed ? { ...describe(job), output: cleanOutput(readTail(job.logPath, job.bytes)), truncated: job.bytes > MAX_TAIL } : undefined);
+      };
+      job.waiter = () => {
+        try { writeFileSync(join(job.dir, "delivered"), "", { flag: "wx", mode: 0o600 }); } catch { return finish(false); }
+        finish(true);
+      };
+      const abort = () => { cancel(id); };
+      const timeout = setTimeout(() => finish(false), ms);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      else if (job.state !== "running") job.waiter();
+    });
+  }
+
   function cancel(id) {
     const job = jobs.get(id);
     if (job?.state === "running") {
@@ -191,5 +219,5 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     jobs.clear();
   }
 
-  return { start, attach, cancel, shutdown, list: () => [...jobs.values()].map(describe) };
+  return { start, wait, attach, cancel, shutdown, list: () => [...jobs.values()].map(describe) };
 }
