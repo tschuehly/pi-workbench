@@ -226,8 +226,7 @@ test("preview shows the redacted command and the redacted end of the output", as
   await until(() => jobs.list()[0].bytes > 0);
   const shown = jobs.preview(job.id, 20);
   assert.doesNotMatch(JSON.stringify(shown), /b{24}/);
-  assert.match(shown.output, /last line$/);
-  assert.ok(shown.output.length <= 20);
+  assert.equal(shown.output, "last line", "a cut tail starts at a line boundary");
   assert.equal(shown.logPath, job.logPath);
   jobs.cancel(job.id);
   jobs.shutdown();

@@ -224,7 +224,10 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     const job = jobs.get(id);
     if (job === undefined) return undefined;
     // Redact before cutting so a secret split at the edge is still recognized.
-    const output = redact(cleanOutput(readTail(job.logPath, job.bytes))).slice(-chars);
+    const full = redact(cleanOutput(readTail(job.logPath, job.bytes)));
+    let output = full.slice(-chars);
+    // Start at a line boundary when the cut fell mid-line.
+    if (output.length < full.length && full[full.length - output.length - 1] !== "\n" && output.includes("\n")) output = output.slice(output.indexOf("\n") + 1);
     return { command: redact(cleanOutput(job.command)).slice(0, 240), output, logPath: job.logPath };
   }
 
