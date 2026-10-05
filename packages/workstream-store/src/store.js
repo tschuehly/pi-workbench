@@ -1,6 +1,7 @@
 import { WorkstreamStoreError, fail } from "./errors.js";
 import {
   DEFAULT_LIMITS,
+  TRUSTED_READ,
   canonical,
   clone,
   rebuildSnapshot,
@@ -70,7 +71,7 @@ export class WorkstreamStore {
 
   async inspect(workstreamId) {
     validateWorkstreamId(workstreamId, this.limits);
-    return this.adapter.transaction((database) => clone(rebuildSnapshot(getEntry(database, workstreamId).ledger)), { readOnly: true });
+    return this.adapter.transaction((database) => clone(rebuildSnapshot(getEntry(database, workstreamId).ledger)), { readOnly: true, [TRUSTED_READ]: true });
   }
 
   async list(query = {}) {
@@ -84,7 +85,7 @@ export class WorkstreamStore {
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
         .map(toSummary);
       return clone(summaries);
-    }, { readOnly: true });
+    }, { readOnly: true, [TRUSTED_READ]: true });
   }
 
   async watch(watch = {}) {
@@ -114,7 +115,7 @@ export class WorkstreamStore {
         events,
         nextSequence: events.length ? events.at(-1).sequence : database.nextSequence - 1,
       });
-    }, { readOnly: true });
+    }, { readOnly: true, [TRUSTED_READ]: true });
   }
 
   async close(request) {

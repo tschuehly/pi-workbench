@@ -28,6 +28,15 @@ Use `InMemoryWorkstreamAdapter` for contract tests. `FileWorkstreamAdapter` atom
 ledger database in a caller-selected user-local directory. `createUserLocalWorkstreamStore()` uses
 `~/.pi-workbench/workstreams` by default. Do not point it into the repository or commit its data.
 
+`FileWorkstreamAdapter` writes compact `formatVersion: 1` JSON; it reads compact and older
+pretty-printed files alike. Every transaction, including reads, holds the cross-process lock. Under
+that lock the Store's own `inspect`, `list`, and `watch` reuse the last validated parsed file while
+the open file keeps the same device, inode, size, and nanosecond mtime and ctime; any change,
+deletion, read error, or write attempt drops the cached copy. Public `transaction(callback, {
+readOnly: true })` callbacks always receive a fresh, mutable copy whose changes are discarded, and
+custom adapters receive no new contract. Detection relies on nanosecond file timestamps (APFS, ext4);
+on coarse-timestamp filesystems a same-size in-place rewrite that bypasses the lock could be missed.
+
 ## Records
 
 The accepted semantic records cover pending/confirmed/failed session associations, checkpoint

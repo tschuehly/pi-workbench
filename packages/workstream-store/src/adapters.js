@@ -1,7 +1,7 @@
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { clone } from "./model.js";
+import { TRUSTED_READ, clone } from "./model.js";
 import { fail } from "./errors.js";
 
 const FORMAT_VERSION = 1;
@@ -59,14 +59,19 @@ export class FileWorkstreamAdapter {
     this.eventRetention = eventRetention;
     this.lockTimeoutMs = lockTimeoutMs;
     this.queue = Promise.resolve();
+    // Last validated file generation, lent only to TRUSTED_READ callbacks and revalidated under the lock.
+    this.generation = null;
   }
 
-  transaction(callback, { readOnly = false } = {}) {
+  transaction(callback, options = {}) {
+    const { readOnly = false } = options;
+    const trusted = readOnly && options[TRUSTED_READ] === true;
     const operation = this.queue.then(async () => {
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
       await this.acquireLock();
       try {
-        const database = await this.readDatabase();
+        if (!readOnly) this.generation = null;
+        const database = trusted ? await this.readTrustedDatabase() : await this.readDatabase();
         const result = await callback(database);
         if (!readOnly) await this.writeDatabase(database);
         return clone(result);
@@ -78,9 +83,31 @@ export class FileWorkstreamAdapter {
     return operation;
   }
 
-  async readDatabase() {
+  // Caller must hold the lock. Reuses the cached generation only while the open file keeps the same
+  // identity, size, mtime, and ctime; any change, deletion, or read error drops it.
+  async readTrustedDatabase() {
+    let handle;
     try {
-      const database = JSON.parse(await readFile(this.file, "utf8"));
+      handle = await open(this.file, "r");
+      const before = await handle.stat({ bigint: true });
+      if (this.generation && sameGeneration(this.generation.stat, before)) return this.generation.database;
+      this.generation = null;
+      const database = await this.readDatabase(handle);
+      if (sameGeneration(before, await handle.stat({ bigint: true }))) this.generation = { stat: before, database };
+      return database;
+    } catch (error) {
+      this.generation = null;
+      if (error?.code === "ENOENT") return emptyDatabase(this.eventRetention);
+      if (error?.code === "CORRUPT_STORE") throw error;
+      fail("CORRUPT_STORE", `cannot read workstream store: ${error.message}`);
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  async readDatabase(source = this.file) {
+    try {
+      const database = JSON.parse(await readFile(source, "utf8"));
       validateDatabase(database);
       return database;
     } catch (error) {
@@ -95,7 +122,7 @@ export class FileWorkstreamAdapter {
     const temporary = join(this.directory, `.workstreams-${process.pid}-${randomUUID()}.tmp`);
     const handle = await open(temporary, "wx", 0o600);
     try {
-      await handle.writeFile(`${JSON.stringify(database, null, 2)}\n`, "utf8");
+      await handle.writeFile(`${JSON.stringify(database)}\n`, "utf8");
       await handle.sync();
     } finally {
       await handle.close();
@@ -116,6 +143,10 @@ export class FileWorkstreamAdapter {
       }
     }
   }
+}
+
+function sameGeneration(a, b) {
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 }
 
 function validateRetention(value) {
