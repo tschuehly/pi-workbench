@@ -70,6 +70,12 @@ Parity holds in every round:
 - post-append state and exact-retry receipt digests are identical;
 - each version reads the other's written file with the same digests and retry receipt.
 
+## Review correction (not included in the timings above)
+
+Independent review found that valid top-level JSON with a corrupt ledger stayed cached after projection failed. A new regression failed on that behavior; transactions now evict the generation on callback failure. Trusted Store readers also avoid a second output clone: their callbacks already clone the result, while public/write transactions retain their clone.
+
+The parent reran Store, coordination and launch checks: **64 passed**, no failures or skips. The original timings above predate these corrections; final controlled comparisons remain pending.
+
 ## Limits
 
 - Warm reads drop from a whole-file parse to an open plus `fstat`. Launch improves only about 6–17%,
@@ -77,8 +83,8 @@ Parity holds in every round:
   Warm reads alone do not make the whole launch 2× faster.
 - In the full run (load average about 87), `single` append p50 went 680 → 1002 and cold list 482 → 1053,
   with p95 at 2115 → 1688 and 863 → 1335. The isolated 12-round writes A/B did not reproduce this
-  (append is neutral to faster; cold list differs by 11 ms at n=12). Treat it as host-load noise, not as
-  proven absent.
+  (append is neutral to faster; cold list differs by 11 ms at n=12). Host load is a possible explanation,
+  not proof that regressions are absent; final controlled cold/write comparisons must resolve this.
 - Contention p95 still sits near the 5 s lock timeout in both variants, and `STORE_BUSY` still occurs.
   The candidate has fewer busy failures because readers hold the lock briefly. Lock recovery and
   lock-free reads are out of scope.

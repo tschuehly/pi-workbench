@@ -124,6 +124,20 @@ test("public readOnly transactions stay fresh and isolated while the trusted cac
   assert.equal((await store.watch({ afterSequence: 0 })).events[0].records[0].title, "Alpha");
 });
 
+test("semantic ledger corruption evicts the generation after every failed projection", async (t) => {
+  const { file, adapter, store } = await fixture(t);
+  await store.list();
+  const database = JSON.parse(await readFile(file, "utf8"));
+  database.workstreams["ws-1"].ledger = [];
+  await writeFile(file, JSON.stringify(database));
+  const reads = countReads(adapter);
+  for (const read of [() => store.list(), () => store.inspect("ws-1")]) {
+    await assert.rejects(read(), (error) => error.code === "CORRUPT_STORE");
+    assert.equal(adapter.generation, null);
+  }
+  assert.equal(reads.count, 2, "failed semantic validation must not reuse the parsed generation");
+});
+
 test("a failed write transaction invalidates without serving its discarded graph", async (t) => {
   const { adapter, store } = await fixture(t);
   await store.list();

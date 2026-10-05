@@ -74,7 +74,11 @@ export class FileWorkstreamAdapter {
         const database = trusted ? await this.readTrustedDatabase() : await this.readDatabase();
         const result = await callback(database);
         if (!readOnly) await this.writeDatabase(database);
-        return clone(result);
+        // Trusted Store callbacks already detach their results from the generation.
+        return trusted ? result : clone(result);
+      } catch (error) {
+        this.generation = null;
+        throw error;
       } finally {
         await rm(this.lockDirectory, { recursive: true, force: true });
       }
