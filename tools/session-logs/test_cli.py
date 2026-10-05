@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -46,6 +47,12 @@ class SessionLogsTest(unittest.TestCase):
             result = subprocess.run([sys.executable, cli.__file__, "--root", directory, "list", "--since", "2026-09-14", "--until", "2026-09-15"], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["id"], "abc123")
+            stale = Path(directory) / "stale.jsonl"
+            stale.write_text('{"incomplete":')  # would fail if parsed
+            os.utime(stale, (0, 0))
+            result = subprocess.run([sys.executable, cli.__file__, "--root", directory, "list", "--since", "2026-09-14"], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stale.unlink()
             result = subprocess.run([sys.executable, cli.__file__, "--root", directory, "list", "--match", "workstream"], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             listing = json.loads(result.stdout)

@@ -172,6 +172,9 @@ def main():
         failed = False
         for path in sorted(root.rglob("*.jsonl")):
             try:
+                # Append-only logs: a file last written before --since holds no entry inside the window.
+                if args.since and path.stat().st_mtime < args.since.timestamp():
+                    continue
                 item = inventory(path, args.since, args.until, args.match)
                 if item and (args.kind is None or item["kind"] == args.kind) and (args.match is None or item["match"] is not None):
                     print(json.dumps(item, ensure_ascii=False))
