@@ -1,6 +1,6 @@
 # Storage-aware agents on worktrunk (plan)
 
-Status: draft 2026-10-06, revised after two Sol adversarial reviews (both REWORK; findings folded in, owner decisions marked **Decision**), Workstream `ws-treehouse-storage-awareness-20261005`. Owner decisions so far: use [worktrunk](https://worktrunk.dev) (`wt`, v0.74 installed) instead of Treehouse, with our own management in Workbench; scratch lives per Workstream outside the worktree (S2); routine cleanup touches only regenerable data (no Docker volumes or unmerged work without the owner).
+Status: draft 2026-10-06, revised after two Sol adversarial reviews (both REWORK; findings folded in, owner decisions listed under Decided), Workstream `ws-treehouse-storage-awareness-20261005`. Owner decisions so far: use [worktrunk](https://worktrunk.dev) (`wt`, v0.74 installed) instead of Treehouse, with our own management in Workbench; scratch lives per Workstream outside the worktree (S2); routine cleanup touches only regenerable data (no Docker volumes or unmerged work without the owner).
 
 ## Problem
 
