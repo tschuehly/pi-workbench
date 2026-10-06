@@ -193,3 +193,7 @@ fi
 printf 'Installed %s\n' "${destination}"
 printf 'Installed %s\n' "${command_dir}/pi-web-mac"
 printf 'Open the app from Finder, Spotlight, the Dock, or pi-web-mac.\n'
+# A running copy keeps the old code, and macOS refuses its folder panels once the signature on disk changed.
+if /usr/bin/pgrep -f "${destination}/Contents/MacOS/" >/dev/null 2>&1; then
+  printf 'Pi Workbench is still running the previous build: quit and reopen it (folder panels fail until then).\n' >&2
+fi

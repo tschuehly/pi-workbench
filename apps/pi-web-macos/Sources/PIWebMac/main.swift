@@ -463,6 +463,7 @@ private final class DirectoryPickerMessageHandler: NSObject, WKScriptMessageHand
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
         panel.resolvesAliases = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("IdeaProjects", isDirectory: true)
         let complete: (NSApplication.ModalResponse) -> Void = { response in
             replyHandler(response == .OK ? panel.url?.path : NSNull(), nil)
         }
