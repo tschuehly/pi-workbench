@@ -77,10 +77,10 @@ No thresholds that block commands or stop jobs. Instead agents are told what the
 1. **Report** (§1, in mac-storage-maintenance). Check: `--workstream` finishes < 10 s; categories match `du`/`docker system df` within 10%; worktree classification fixture tests (merged/unmerged/dirty/ignored/stored-session).
 2. **Worktrunk adoption + scratch rescue** (§2, §4 rescue). Check: create/remove in pi-workbench and `me` with `wt`; `.worktreeinclude` limits copying; a non-empty `.scratch/` survives removal; a failed move aborts removal; containers gone, volume listed.
 3. **Workstream scratch** (§4). Check: `PI_SCRATCH` present in attended bash, a Subagent and a Worker; traversal/symlink fixtures refused.
-4. **Self-cleanup** (§5). Check: `storage report --workstream` lists exactly a fixture Workstream's items; a checkpoint in a real session shows the list and the agent removes its merged worktree; nudge appears with a fake `statfs`; log cap holds.
+4. **Self-cleanup** (§5). Check: `storage-report --workstream` lists exactly a fixture Workstream's items; a checkpoint in a real session shows the list and the agent removes its merged worktree; nudge appears with a fake `statfs`; log cap holds.
 5. **Scheduled job** (§3, in mac-storage-maintenance). Check: one supervised run; notification lists only unowned items; `storage remove` refuses a changed item. Then one week of daily free-space readings.
 
-Phases 1 and 5 are commits to mac-storage-maintenance (also closes its open \"Docker volumes of removed worktrees not flagged\" gap). Phases 2–4 are PRs to pi-workbench `main`, promoted with `switch-workbench` (no PI WEB restart expected). The two Workstreams stay separate: that one owns the audit tool, this one the agent behaviour.
+Phases 1 and 5 are commits to mac-storage-maintenance (also closes its open gap: Docker volumes of removed worktrees are not flagged). Phases 2–4 are PRs to pi-workbench `main`, promoted with `switch-workbench` (no PI WEB restart expected). The two Workstreams stay separate: that one owns the audit tool, this one the agent behaviour.
 
 ## Open questions
 
