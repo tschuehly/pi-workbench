@@ -19,15 +19,15 @@ Agents also do not know the disk state: nothing tells them free space before a D
 
 ## Goal and done-when
 
-Agents create and remove worktrees through worktrunk, every artifact an agent creates has an owner, and agents are told what they own and clean it up themselves, with no hard limits. **Done when** a week of normal use leaves free space flat or rising with no cleanup by the owner beyond approving the short list of unowned items, and `storage-report` explains every category above 1 GB.
+Agents create and remove worktrees through worktrunk, every artifact an agent creates has an owner, and agents are told what they own and clean it up themselves, with no hard limits. **Done when** a week of normal use leaves free space flat or rising with no cleanup by the owner, and `storage-report` explains every category above 1 GB.
 
 Out of scope: CPU/heavy-job limits (resource-guard branch), firstmate, worktree reuse/pools, PI WEB grouping by lease.
 
 ## Safety rule
 
 - **Unattended (scheduled job):** only dangling Docker images (`docker image prune`, never `-a`) and build cache, npm/Homebrew via the job's existing guarded paths, stale `git worktree` metadata, and the existing PI_TMP sweep.
-- **Owning agent (attended, at checkpoint):** only its own merged worktree (§2 retire) and its own branch containers. Ownership = the Workstream that created the item (recorded at creation, §2). Any other Workstream's reference is a **retention pin**, not permission; a pinned, shared or unknown item is kept. An unreadable Workstream Store or session inventory means keep everything (fail closed).
-- **Owner only, per item:** Workstream scratch, Docker volumes, unmerged or dirty worktrees, installed snapshots, `reports/`, `evals/`, tagged Docker images.
+- **Owning agent (attended, at checkpoint, orient or a storage hook):** decides by its own judgment on everything its Workstream created — worktrees (merged or not), `.scratch` contents, Workstream scratch, Docker volumes and containers, unmerged work. Ownership = the Workstream that created the item (recorded at creation, §2). A reference from another Workstream is a **retention pin**: the item stays. An unreadable Workstream Store or session inventory means keep everything (fail closed). Items no Workstream owns may be cleaned by any agent working in that repo (§5).
+- **Owner only:** installed snapshots, `reports/`, `evals/`, tagged Docker images.
 
 ## Design
 
@@ -52,28 +52,28 @@ Free space always comes from a fresh `statfs`.
 - Rules: harness.md "Development worktrees", global `AGENTS.md`, the workstreams skill's retire section and PhotoQuest `CLAUDE.md`: create with `wt switch --create <branch>` and link the path to the Workstream; after the PR merges, the owning agent retires it with `storage-retire <path>`, which takes a lock file, re-checks ownership, pins, cleanliness, landed commit and that no process has its cwd inside, then runs `wt remove`. Residual race (a session opening in that second) is accepted by the owner; `ponytail:` add a session-start check of the lock if it ever bites.
 - **Decided (2026-10-06): old chats do not block retirement.** A merged worktree may be retired once the Workstream checkpoint records branch and full commit. Transcripts stay readable; to continue a chat, `wt switch --create <branch> --base <commit>` recreates the worktree at the same path (deterministic path template), so the session's cwd exists again. The workstreams skill's retire rule changes accordingly.
 
-### 3. Scheduled report: owned items go to their agents, unowned to the owner
+### 3. Scheduled job (script, no agent)
 
 The existing 6-hourly `mac-storage-candidates.sh` launchd job:
 1. Adds the rest of the unattended set (`docker image prune`, `docker builder prune`, `git worktree prune`); npm/Homebrew stay on its existing paths.
 2. Runs the report and attributes items to their creating Workstream.
-3. Sends `notify_human` when there are **unowned** items (owner approves by id with `storage-remove <id>…`, which re-checks and refuses changed items or ignored content not shown).
-4. **Wakes the owning Chat when free space < 50 GB (decided 2026-10-06).** For each Workstream whose owned items grew since the last run, it posts one message into that Workstream's most recent session through PI WEB (the same follow-up mechanism that delivers subagent completions, `sendCustomMessage` with `triggerTurn`): "Disk low: N GB free. This Workstream owns M GB (+K since last check) — run `storage-report --workstream` and clean up what you no longer need." Deduplicated: at most one wake per Workstream per day unless growth continues. A Workstream with no reachable session falls back to `notify_human`. This covers idle chats whose job keeps writing.
+3. No Telegram or other owner messages. Unowned items surface in checkpoint/orient (§5).
+4. **Wakes the owning Chat when free space < 50 GB (decided 2026-10-06).** For each Workstream whose owned items grew since the last run, it posts one message into that Workstream's most recent session through PI WEB (the same follow-up mechanism that delivers subagent completions, `sendCustomMessage` with `triggerTurn`): "Disk low: N GB free. This Workstream owns M GB (+K since last check) — run `storage-report --workstream` and clean up what you no longer need." Deduplicated: at most one wake per Workstream per day unless growth continues. A Workstream with no reachable session is picked up at its next checkpoint or orient. This covers idle chats whose job keeps writing.
 
 ### 4. Workstream scratch (S2)
 
 - `~/.pi-workbench/scratch/<encoded-workstream-id>/`: the id is encoded as one path component; deletion verifies the resolved path stays inside the scratch root and follows no symlinks. (Finding 4.)
 - Exported as `PI_SCRATCH` on **every launch path where PI_TMP is set today** — attended `bash` via background-bash, Subagents/Workers via the pi-tmp extension — resolved per command from the session's (or parent's) Workstream; unassociated sessions get none. (Finding 10.)
-- **Never deleted by the scheduled job or by agents,** open or closed (owner requirement: no needed scratch lost). Closure is not consent. `storage-report` lists size per Workstream; the owner deletes after seeing contents. The Store already accepts these paths.
-- **Rescue on worktree removal:** the user-level `pre-remove` hook moves a non-empty `.scratch/` to the owning Workstream's scratch (or `scratch/unowned/<worktree>/`); if the move fails, removal aborts.
-- PI_TMP stays throwaway (existing sweep). Agents put anything worth keeping in `PI_SCRATCH`. Migration: move worktrees out of `PhotoQuest/.scratch` with `wt`, then move the rest to `scratch/unowned/PhotoQuest/` for the owner to sort.
+- **Never deleted by the scheduled job.** The owning agent decides what in it is still needed and deletes the rest; anything another Workstream links to stays. `storage-report` lists size per Workstream. The Store already accepts these paths.
+- **`.scratch` on worktree removal:** before retiring, the agent sorts `.scratch/`: it moves what is needed into the Workstream's scratch and deletes the rest. As a safety net, the user-level `pre-remove` hook moves anything still left to the Workstream's scratch (or `scratch/unowned/<worktree>/`); if the move fails, removal aborts.
+- PI_TMP stays throwaway (existing sweep). Agents put anything worth keeping in `PI_SCRATCH`. Migration: move worktrees out of `PhotoQuest/.scratch` with `wt`, then agents working in PhotoQuest sort the rest like any unowned item.
 
 ### 5. Agents clean up their own stuff (no hard limits)
 
 No thresholds that block commands or stop jobs. Instead agents are told what they own and decide, because they know what is still needed.
 
-- **Cleanup is part of every checkpoint.** The workstreams skill's checkpoint step runs `storage-report --workstream <id>`. The agent retires its own merged worktree and removes its own branch containers (safety rule), and records in the checkpoint what it keeps and why, in one line. Everything else it would like gone (volumes, scratch, unmerged work) goes into `remains` for the owner, never deleted by the agent.
-- **Automatic nudge when space gets low.** The `pi-tmp` extension (already on every command) checks free space; below 50 GB it appends one line to the `bash` result: "Disk low: N GB free. This Workstream owns M GB — run `storage-report --workstream` and clean up what you no longer need." Idle chats are woken by the scheduled job (§3).
+- **Checkpoint and orient both check what can be deleted.** The workstreams skill's checkpoint step and the `orient` skill run `storage-report --workstream <id>`, which also lists unowned items in the same repositories. The agent cleans up what is no longer needed (safety rule) and records in the checkpoint what it kept and why, in one line.
+- **Storage hook (`storage-guard` Pi extension, no limits).** Below 50 GB free (fresh `statfs`): `before_agent_start` adds one line to that run's guidelines — "Disk low: N GB free; this Workstream owns M GB"; `agent_before_settle` appends a cleanup request ("run `storage-report --workstream` and clean up what you no longer need") and continues once, at **every** run end below 50 GB (owner choice). Guard: it never continues twice in a row for the same run, so it cannot loop. The 6-hourly script wakes idle Chats (§3).
 - Background-job logs are not capped (the full log is the job's record); they show up as owned items and in the scheduled growth list.
 - Existing PI_TMP sweep additionally skips folders belonging to a still-running background job. (Finding 6.)
 - Global `AGENTS.md`: "Clean up what you start: containers, your worktree (`wt remove` after merge), files > 1 GB. Keep evidence in `$PI_SCRATCH`, never in the repo checkout."
@@ -83,11 +83,12 @@ No thresholds that block commands or stop jobs. Instead agents are told what the
 1. **Report** (§1, in mac-storage-maintenance). Check: `--workstream` finishes < 10 s; categories match `du`/`docker system df` within 10%; worktree classification fixture tests (merged/unmerged/dirty/ignored/stored-session).
 2. **Worktrunk adoption + scratch rescue** (§2, §4 rescue). Check: create/remove in pi-workbench and `me` with `wt`; `.worktreeinclude` limits copying; a non-empty `.scratch/` survives removal, including on a legacy branch without project config; a failed move aborts removal; containers gone, volume listed.
 3. **Workstream scratch** (§4). Check: `PI_SCRATCH` present in attended bash, a Subagent and a Worker; traversal/symlink fixtures refused.
-4. **Self-cleanup** (§5). Check: `storage-report --workstream` lists exactly a fixture Workstream's items; a checkpoint in a real session shows the list and the agent removes its merged worktree; nudge appears with a fake `statfs`; an agent never deletes scratch or volumes; `storage-retire` refuses pinned, dirty, unlanded or in-use worktrees.
-5. **Scheduled job** (§3, in mac-storage-maintenance). Check: one supervised run; notification lists unowned items, and an idle Chat whose job keeps writing files is woken once below 50 GB; `storage-remove` refuses a changed item. Then one week of daily free-space readings.
+4. **Self-cleanup** (§5). Check: `storage-report --workstream` lists exactly a fixture Workstream's items; a checkpoint in a real session shows the list and the agent removes its merged worktree; the storage hook adds its line and continues exactly once per run end with a fake `statfs`; items pinned by another Workstream survive; `storage-retire` refuses pinned, dirty, unlanded or in-use worktrees.
+5. **Scheduled job** (§3, in mac-storage-maintenance). Check: one supervised run; no owner messages; an idle Chat whose job keeps writing files is woken once below 50 GB. Then one week of daily free-space readings.
 
 Phases 1 and 5 are commits to mac-storage-maintenance (also closes its open gap: Docker volumes of removed worktrees are not flagged). Phases 2–4 are PRs to pi-workbench `main`, promoted with `switch-workbench` (no PI WEB restart expected). The two Workstreams stay separate: that one owns the audit tool, this one the agent behaviour.
 
 ## Decided
 
-- Old chats do not block retiring a merged worktree (§2). Retire race accepted. Nudge and wake below 50 GB. Idle growth wakes the owning Chat (§3). `reports/` and `evals/` stay owner-managed.
+- Old chats do not block retiring a merged worktree (§2). Retire race accepted. Storage hook and Chat wake below 50 GB. Idle growth wakes the owning Chat; no owner messages. `reports/` and `evals/` stay owner-managed.
+- Agents decide on everything their Workstream owns, including scratch, volumes and unmerged work; other Workstreams' links pin items; unowned items may be cleaned by agents in that repo; the `.scratch` hook moves leftovers; the cleanup request fires at every run end below 50 GB.
