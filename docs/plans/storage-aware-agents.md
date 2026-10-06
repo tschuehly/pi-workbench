@@ -43,7 +43,7 @@ Out of scope: CPU/heavy-job limits (resource-guard branch), firstmate, worktree 
 ### 3. Nightly report: owned items go to their agents, unowned to the owner
 
 A nightly launchd job:
-1. Applies the automatic set from the safety rule (`docker image prune -a`, `docker builder prune`, `git worktree prune`).
+1. Applies the automatic set from the safety rule (`docker image prune -a`, `docker builder prune`, `git worktree prune`, `npm cache clean`, `brew cleanup`).
 2. Runs `storage report` and attributes every item to its owning Workstream where it can (worktree link, branch containers/volumes, scratch, its sessions' PI_TMP and job logs). Owned items are left for that Workstream's agents (§5).
 3. Sends `notify_human` only for **unowned** items: worktrees no open Workstream links, Docker volumes with no branch or container, installed snapshots of unknown use, closed Workstreams' scratch. The owner approves by id (`storage remove <id>…`); the command re-checks each item and refuses anything whose state changed or contains ignored content not shown at approval.
 
