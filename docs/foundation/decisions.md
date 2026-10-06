@@ -155,7 +155,7 @@ private evidence `atelier/docs/evidence/design-research-20261006/`. None is impl
 121. **Each Page's Event Log is `<page>.events.jsonl` beside it.** *(Owner-settled on 2026-10-06.)* Append-only JSON lines that travel with the Page. Not implemented.
 122. **The agent acts on a Page through one `atelier` tool with five actions.** *(Owner-settled on 2026-10-06.)* `open` starts the Page and links it in the Chat; `update` shows a changed Page; `ask` posts a Decision; `answer` replies to a Comment in place; `status` moves a Request through its states. Human events need no tool. Not implemented.
 123. **Updates morph the Page with idiomorph.** *(Owner-settled on 2026-10-06.)* idiomorph is copied with a source stamp; full htmx is not used, because the agent writes Page files rather than answering HTML requests. Not implemented.
-124. **Comments keep threads, and every new message catches the human up.** *(Owner-settled on 2026-10-06.)* A new message in a thread states what changed since the human last read it, so the human never has to reread the thread. No side queue, comment tabs or separate chat: a count of open items with a jump to the next replaces the queue, and the Pi session is the chat. Not implemented.
+124. **Comments keep threads, and each thread opens with one catch-up message.** *(Owner-settled on 2026-10-06.)* When the human returns to a thread, especially after switching between items, its first message says where the thread stands now and what changed since the last read; earlier messages are folded behind it, as in Review Studio's threads. No side queue, comment tabs or separate chat: a count of open items with a jump to the next replaces the queue, and the Pi session is the chat. Not implemented.
 
 ## Repository policy examples
 
