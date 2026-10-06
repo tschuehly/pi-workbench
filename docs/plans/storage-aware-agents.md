@@ -1,6 +1,6 @@
 # Storage-aware agents on worktrunk (plan)
 
-Status: accepted 2026-10-06 (simplified after two Sol reviews). Workstream `ws-treehouse-storage-awareness-20261005`.
+Status: accepted 2026-10-06 (simplified after two Sol reviews); steps 1–4 built. Rules live in global `~/.pi/agent/AGENTS.md`, not per-repo CLAUDE.md. Workstream `ws-treehouse-storage-awareness-20261005`.
 
 ## Problem
 
@@ -36,7 +36,7 @@ Out of scope: CPU/heavy-job limits, worktree pools (Treehouse), PI WEB grouping 
 1. **Report.** `mac-storage-workspaces --workstream <id>` in [mac-storage-maintenance](/Users/tschuehly/IdeaProjects/mac-storage-maintenance) lists free space, what the Workstream owns with sizes and pins, and unlinked worktrees in the same repositories. Bounded `du`, fast enough for a checkpoint.
 2. **Checkpoint and orient.** After each checkpoint the agent launches a background Subagent that runs the report and cleans up, told what the lead still needs; its one-sentence result goes into the next checkpoint. Orient runs the report and lists what looks deletable, deleting nothing.
 3. **Storage hook.** A `storage-guard` Pi extension: below 50 GB free, `before_agent_start` adds one line ("Disk low: N GB free; this Workstream owns M GB") and `agent_before_settle` appends a cleanup request and continues once at every run end (never twice in a row).
-4. **Worktrunk.** Rules in harness.md, global `AGENTS.md`, the workstreams skill and PhotoQuest `CLAUDE.md`: create with `wt switch --create`, remove with `wt remove` after merge; `wt merge` is not used. Before removal the agent moves what it needs from `.scratch/` into the Workstream's scratch; a user-level `pre-remove` hook in `~/.config/worktrunk/config.toml` moves any leftover there and aborts removal if the move fails.
+4. **Worktrunk.** Rules in harness.md and global `AGENTS.md` (repo CLAUDE.md files carry no scratch or worktree rules): create with `wt switch --create`, remove with `wt remove` after merge; `wt merge` is not used. Before removal the agent moves what it needs from `.scratch/` into the Workstream's scratch; a user-level `pre-remove` hook in `~/.config/worktrunk/config.toml` (`mac-storage-rescue-scratch`) moves any leftover there and aborts removal if the move fails.
 
 The 6-hourly `mac-storage-candidates.sh` job stays as it is.
 
