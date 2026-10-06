@@ -4,7 +4,7 @@
 
 - **Needs from lead:** none. No live-daemon operation was needed or performed.
 - **Changed:** this report only; no runtime code, tests, installed checkout, configuration, or Git history changed. Isolated scratch fixtures were removed.
-- **Result:** six blocking findings below. All six mechanisms are confirmed by code and isolated checks; their occurrence in the owner's running daemon is **not verified**. Remediation and production verification remain pending.
+- **Result:** six blocking findings below, all fixed on this branch (see ledger); live verification pending. All six mechanisms are confirmed by code and isolated checks; their occurrence in the owner's running daemon is **not verified**. Remediation and production verification remain pending.
 - **Target:** `fix/per-session-checkpoint-barrier`, revision [6b694bc](https://github.com/tschuehly/pi-workbench/commit/6b694bc3dc6f6d7abd8072a0d0dd3259e26e0b50) (the per-session checkpoint barrier fix), in the assigned checkpoint-barrier worktree.
 - **Scope:** runtime in `extensions/*`, `packages/pi-execution-adapter`, `packages/worker-registry`, `packages/workstream-session-coordination`, and `packages/pi-web-integration`. Tests, acceptance fixtures, and historical evidence were not audited as runtime.
 
@@ -12,12 +12,12 @@
 
 | Rank | Priority | Location | Mechanism | Status |
 | --- | --- | --- | --- | --- |
-| 1 | P1 | `extensions/subagent/completion-wakeup.mjs:55` | Terminal attention is marked handled before delivery; a dropped last wake is never replayed. | Confirmed; fix pending |
-| 2 | P1 | `extensions/background-bash/jobs.mjs:90` | Durable `delivered` marker acknowledges queue insertion, not delivery. | Confirmed; fix pending |
-| 3 | P1 | `extensions/background-bash/jobs.mjs:94` | Bash completion bypasses the session checkpoint barrier and starts work during compaction. | Confirmed; fix pending |
-| 4 | P1 | `packages/pi-execution-adapter/src/index.js:298` | A settled child with a final provider error is reported as success, losing the limit/error diagnostic. | Confirmed; fix pending |
-| 5 | P1 | `packages/pi-execution-adapter/src/index.js:280` | Final `get_state` has no deadline; one lost reply strands result settlement and its wake indefinitely. | Confirmed; fix pending |
-| 6 | P1 | `packages/worker-registry/src/adapters.js:98` | A crashed lock owner leaves the shared registry permanently busy for every session. | Confirmed; fix pending |
+| 1 | P1 | `extensions/subagent/completion-wakeup.mjs:55` | Terminal attention is marked handled before delivery; a dropped last wake is never replayed. | Fixed in 98237b6; regression test added; live verification pending |
+| 2 | P1 | `extensions/background-bash/jobs.mjs:90` | Durable `delivered` marker acknowledges queue insertion, not delivery. | Fixed in f16a2ed; regression test added; live verification pending |
+| 3 | P1 | `extensions/background-bash/jobs.mjs:94` | Bash completion bypasses the session checkpoint barrier and starts work during compaction. | Fixed in f16a2ed; regression test added; live verification pending |
+| 4 | P1 | `packages/pi-execution-adapter/src/index.js:298` | A settled child with a final provider error is reported as success, losing the limit/error diagnostic. | Fixed in 4922aad; regression test added; live verification pending |
+| 5 | P1 | `packages/pi-execution-adapter/src/index.js:280` | Final `get_state` has no deadline; one lost reply strands result settlement and its wake indefinitely. | Fixed in 4922aad; regression test added; live verification pending |
+| 6 | P1 | `packages/worker-registry/src/adapters.js:98` | A crashed lock owner leaves the shared registry permanently busy for every session. | Fixed in fb0e210; regression test added; live verification pending |
 
 ### 1. Dropping the last child-completion message loses attention permanently
 
