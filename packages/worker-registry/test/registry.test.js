@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { FileWorkerAdapter, InMemoryWorkerAdapter, WorkerRegistry } from "../src/index.js";
@@ -247,3 +248,38 @@ test("file adapter writes atomically through a temporary file", async () => {
   assert.equal(written.formatVersion, 1);
   assert.equal(Object.keys(written.workers).length, 1);
 });
+
+async function lockedDirectory(owner) {
+  const directory = await mkdtemp(join(tmpdir(), "worker-registry-"));
+  await mkdir(join(directory, ".workers.lock"));
+  if (owner) await writeFile(join(directory, ".workers.lock", "owner.json"), JSON.stringify(owner));
+  return directory;
+}
+
+test("file adapter reclaims a registry lock orphaned by a dead process", async () => {
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+  const directory = await lockedDirectory({ pid: deadPid, host: hostname() });
+  const store = new WorkerRegistry({ adapter: new FileWorkerAdapter({ directory, lockTimeoutMs: 200 }), clock: () => now });
+  await store.create(creation());
+  assert.equal((await store.list({ all: true })).length, 1);
+});
+
+test("file adapter reclaims an old ownerless registry lock", async () => {
+  const directory = await lockedDirectory();
+  const old = new Date(Date.now() - 120_000);
+  await utimes(join(directory, ".workers.lock"), old, old);
+  const store = new WorkerRegistry({ adapter: new FileWorkerAdapter({ directory, lockTimeoutMs: 200 }), clock: () => now });
+  await store.create(creation());
+});
+
+test("file adapter never reclaims a live owner's registry lock", async () => {
+  for (const owner of [{ pid: process.pid, host: hostname() }, { pid: deadPidOnOtherHost(), host: `not-${hostname()}` }, undefined]) {
+    const directory = await lockedDirectory(owner);
+    const store = new WorkerRegistry({ adapter: new FileWorkerAdapter({ directory, lockTimeoutMs: 100 }), clock: () => now });
+    await assert.rejects(store.create(creation()), (error) => error.code === "STORE_BUSY");
+  }
+});
+
+function deadPidOnOtherHost() {
+  return spawnSync(process.execPath, ["-e", ""]).pid;
+}
