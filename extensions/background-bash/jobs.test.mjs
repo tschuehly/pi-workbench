@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { createBackgroundBashJobs } from "./jobs.mjs";
 
 const cwd = process.cwd();
@@ -83,6 +84,7 @@ test("registry files are private", async () => {
   const jobs = make();
   const job = jobs.start("echo private", cwd, undefined, undefined, { sessionId: "s1" });
   await until(() => messages.length === 1);
+  jobs.acknowledge(messages[0].message);
   const mode = (path) => statSync(path).mode & 0o777;
   assert.equal(mode(root), 0o700);
   assert.equal(mode(join(root, job.id)), 0o700);
@@ -128,6 +130,8 @@ test("a job finishing while detached delivers its completion exactly once on rea
   assert.equal(fx.messages.length, 0);
   const second = fx.make();
   second.attach("owner");
+  await until(() => fx.messages.length === 1);
+  second.acknowledge(fx.messages[0].message);
   const third = fx.make();
   third.attach("owner");
   await sleep(50);
@@ -141,6 +145,49 @@ test("a job finishing while detached delivers its completion exactly once on rea
   await sleep(50);
   assert.equal(fx.messages.length, 1);
   fourth.shutdown();
+});
+
+test("a completion stays undelivered until Pi starts its message and is resent after a dropped queue", async () => {
+  const fx = fixture();
+  const first = fx.make();
+  const job = first.start("echo dropped", cwd, undefined, undefined, { sessionId: "owner" });
+  await until(() => fx.messages.length === 1);
+  const marker = join(fx.root, job.id, "delivered");
+  assert.equal(existsSync(marker), false, "sendMessage only queues; it is not delivery");
+  first.redeliver(); // agent_settled after the queued follow-up was cleared
+  assert.equal(fx.messages.length, 2);
+  first.shutdown(); // daemon dies before consuming it
+  const second = fx.make();
+  second.attach("owner");
+  await until(() => fx.messages.length === 3);
+  assert.match(fx.messages[2].message.content, /dropped/);
+  second.acknowledge({ customType: "other", details: { id: job.id } });
+  assert.equal(existsSync(marker), false);
+  second.acknowledge(fx.messages[2].message);
+  assert.equal(existsSync(marker), true);
+  second.redeliver();
+  second.shutdown();
+  const third = fx.make();
+  third.attach("owner");
+  await sleep(50);
+  assert.equal(fx.messages.length, 3, "an acknowledged completion is never resent");
+  third.shutdown();
+});
+
+test("a completion during an open checkpoint barrier waits for its release", async () => {
+  const fx = fixture();
+  const barrier = checkpointBarrier("checkpointing");
+  barrier.open();
+  const jobs = fx.make();
+  const job = jobs.start("echo after-checkpoint", cwd, undefined, undefined, { sessionId: "checkpointing" });
+  await until(() => jobs.list()[0].state === "complete");
+  jobs.redeliver();
+  assert.equal(fx.messages.length, 0);
+  assert.equal(barrier.queuedCount, 1, "one queued send per job");
+  assert.equal(barrier.release(), 1);
+  assert.equal(fx.messages.length, 1);
+  assert.match(fx.messages[0].message.content, new RegExp(`${job.id} complete[\\s\\S]*after-checkpoint`));
+  jobs.shutdown();
 });
 
 test("the maximum lifetime kills the whole process group", async () => {

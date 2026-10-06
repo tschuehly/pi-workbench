@@ -103,6 +103,10 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
     },
   });
 
+  // A completion counts as delivered only once Pi starts its message; a dropped one is resent when the agent settles.
+  pi.on("message_start", (event: { message?: unknown }) => { jobs.acknowledge(event.message); });
+  pi.on("agent_settled", () => { jobs.redeliver(); });
+
   // Jobs keep running; the next session_start of this session reattaches them.
   pi.on("session_shutdown", () => { jobs.shutdown(); clearStatus(); publishStatus = () => {}; clearStatus = () => {}; });
 }

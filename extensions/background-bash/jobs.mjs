@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { redact, redactDeep } from "../secret-redaction/redact.mjs";
+import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { writeOnce } from "./runner.mjs";
 
 const MAX_TAIL = 12_000;
@@ -44,7 +45,9 @@ function readTail(path, size) {
 /**
  * Session-owned background bash jobs. Each job runs under a detached runner (runner.mjs) and is
  * recorded in `<root>/<id>/{job.json,output.log,exit,delivered}`, so it survives shutdown, reload
- * and daemon restarts; `attach(sessionId)` resumes this session's jobs and delivers each completion once.
+ * and daemon restarts; `attach(sessionId)` resumes this session's jobs and delivers each completion.
+ * `delivered` is written only when Pi starts the completion message (`acknowledge`); until then
+ * `attach` and `redeliver` (at agent_settled) resend it, so a dropped queue cannot lose it.
  */
 export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs = 5_000, lifetimeSeconds = MAX_LIFETIME_SECONDS, onChange = () => {} } = {}) {
   const jobs = new Map();
@@ -67,7 +70,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
   }
 
   function track(record, dir) {
-    const job = { id: record.id, dir, command: record.command, startedAt: record.startedAt, pgid: record.pgid, logPath: join(dir, "output.log"), state: "running", bytes: 0, lastActivity: 0 };
+    const job = { id: record.id, sessionId: record.sessionId, dir, command: record.command, startedAt: record.startedAt, pgid: record.pgid, logPath: join(dir, "output.log"), state: "running", bytes: 0, lastActivity: 0 };
     jobs.set(job.id, job);
     timer ??= setInterval(() => { for (const job of jobs.values()) check(job); }, intervalMs);
     timer.unref?.();
@@ -85,22 +88,43 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     }
   }
 
-  function deliver(job) {
-    const marker = join(job.dir, "delivered");
-    try { writeFileSync(marker, "", { flag: "wx", mode: 0o600 }); } catch { return; } // delivered already
-    try {
-      const tail = readTail(job.logPath, job.bytes);
-      const shown = job.exitCode === 0 ? tail.replace(/\n$/, "").split("\n").slice(-20).join("\n") : tail;
-      pi.sendMessage({
-        customType: "background-bash", display: true,
-        // Idle, non-triggering completions persist before any extension hook runs, so redact here.
-        content: redact(`Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${cleanOutput(shown)}`),
-        details: redactDeep(describe(job)),
-      }, { triggerTurn: job.state !== "cancelled", deliverAs: "followUp" });
-    } catch (error) {
-      rmSync(marker, { force: true }); // let a later attach retry
-      console.error(`Background bash ${job.id} could not deliver completion:`, error);
-    }
+  function deliver(job, retry = false) {
+    if (closed || (job.sent && !retry) || existsSync(join(job.dir, "delivered"))) return;
+    job.sent = true;
+    const tail = readTail(job.logPath, job.bytes);
+    const shown = job.exitCode === 0 ? tail.replace(/\n$/, "").split("\n").slice(-20).join("\n") : tail;
+    const triggerTurn = job.state !== "cancelled";
+    const send = () => {
+      if (closed || existsSync(join(job.dir, "delivered"))) return;
+      try {
+        pi.sendMessage({
+          customType: "background-bash", display: true,
+          // Idle, non-triggering completions persist before any extension hook runs, so redact here.
+          content: redact(`Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${cleanOutput(shown)}`),
+          details: redactDeep(describe(job)),
+        }, { triggerTurn, deliverAs: "followUp" });
+      } catch (error) {
+        console.error(`Background bash ${job.id} could not deliver completion:`, error);
+      }
+    };
+    // A turn-triggering completion must not split an accepted checkpoint; one queued send per job.
+    if (!triggerTurn || typeof job.sessionId !== "string" || job.sessionId === "" || !checkpointBarrier(job.sessionId).defer(send, `background-bash:${job.id}`)) send();
+  }
+
+  /** Pi started a completion message: persist `delivered` so no later attach resends it. */
+  function acknowledge(message) {
+    const id = message?.customType === "background-bash" ? message.details?.id : undefined;
+    if (typeof id !== "string" || !/^[\w-]+$/.test(id) || !existsSync(join(root, id))) return;
+    try { writeFileSync(join(root, id, "delivered"), "", { flag: "wx", mode: 0o600 }); } catch { /* already acknowledged */ }
+  }
+
+  /**
+   * Resend finished, unacknowledged completions at an idle boundary (agent_settled): their queued
+   * follow-up was dropped. ponytail: a send made during settlement may be resent once; dedupe by
+   * pending message tracking if duplicates show up.
+   */
+  function redeliver() {
+    for (const job of jobs.values()) if (job.state !== "running") deliver(job, true);
   }
 
   function check(job) {
@@ -231,5 +255,5 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     return { command: redact(cleanOutput(job.command)).slice(0, 240), output, logPath: job.logPath };
   }
 
-  return { start, wait, preview, attach, cancel, shutdown, list: () => [...jobs.values()].map(describe) };
+  return { start, wait, preview, attach, acknowledge, redeliver, cancel, shutdown, list: () => [...jobs.values()].map(describe) };
 }

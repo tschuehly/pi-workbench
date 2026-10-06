@@ -18,7 +18,8 @@ function harness(mode = "rpc", child = false) {
     registerTool: (tool) => tools.set(tool.name, tool),
     on: (name, handler) => handlers.set(name, handler),
     events: { emit() {} },
-    sendMessage: (message) => { messages.push(message); resolveCompletion(); },
+    // Like Pi, a delivered custom message starts and is acknowledged.
+    sendMessage: (message) => { messages.push(message); handlers.get("message_start")?.({ message }); resolveCompletion(); },
   };
   const inheritedKind = process.env.PI_WORKBENCH_EXECUTION_KIND;
   if (!child) delete process.env.PI_WORKBENCH_EXECUTION_KIND;
