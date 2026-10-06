@@ -409,13 +409,13 @@ private final class BrowserCoordinator {
         let url = serverURL.flatMap { server in machineId.flatMap { machine in sessionId.flatMap { notificationChatURL(serverURL: server, machineId: machine, sessionId: $0) } } }
         let ordered = NSApp.orderedWindows.compactMap { window in controllers.values.first { $0.window === window } }
             + controllers.values.filter { controller in !NSApp.orderedWindows.contains { $0 === controller.window } }
-        let candidates = ordered.map { NotificationWindowCandidate(url: $0.applicationURL, isOnActiveSpace: $0.window?.isVisible == true && $0.window?.isOnActiveSpace == true) }
+        let candidates = ordered.map { NotificationWindowCandidate(url: $0.shownURL, isOnActiveSpace: $0.window?.isVisible == true && $0.window?.isOnActiveSpace == true) }
         guard let index = notificationWindowIndex(candidates, sessionId: url == nil ? nil : sessionId) else {
             openWindow(url: url)
             return
         }
         let controller = ordered[index]
-        if let url, chatSessionId(of: controller.applicationURL) != sessionId { controller.load(url) }
+        if let url, chatSessionId(of: controller.shownURL) != sessionId { controller.load(url) }
         if controller.window?.isMiniaturized == true { controller.window?.deminiaturize(nil) }
         controller.window?.makeKeyAndOrderFront(nil)
     }
@@ -552,12 +552,13 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     private let actionHandler: (LifecycleAction) -> Void
     private let webView: WKWebView
     private let onClose: (BrowserWindowController) -> Void
-    private var lastApplicationURL: URL?
+    private var route = WindowRoute()
     var loadTarget: URL? {
-        get { lastApplicationURL }
-        set { lastApplicationURL = newValue }
+        get { route.restorable }
+        set { route.restorable = newValue }
     }
-    var applicationURL: URL? { lastApplicationURL }
+    var applicationURL: URL? { route.restorable }
+    var shownURL: URL? { route.shown }
     private let onChange: () -> Void
     private var nativeProbeAttempts = 0
     private var isOwnedProbePage: Bool {
@@ -632,7 +633,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     }
     func resume(fallback: URL) {
         if let current = webView.url { remember(current) }
-        load(lastApplicationURL ?? fallback)
+        load(route.restorable ?? fallback)
     }
     func reload() { webView.reload() }
     func goBack() { if webView.canGoBack { webView.goBack() } }
@@ -643,8 +644,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     func windowDidResize(_ notification: Notification) { onChange() }
 
     private func remember(_ url: URL) {
-        guard let serverURL, let safe = WindowRestoration.applicationURL(url, server: serverURL), safe != lastApplicationURL else { return }
-        lastApplicationURL = safe
+        guard let serverURL, route.report(url, server: serverURL) else { return }
         onChange()
     }
 

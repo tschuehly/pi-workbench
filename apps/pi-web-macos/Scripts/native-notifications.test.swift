@@ -165,6 +165,18 @@ struct NativeNotificationTests {
         precondition(notificationWindowIndex([other, target], sessionId: nil) == 0, "otherwise the frontmost window")
         precondition(notificationWindowIndex([], sessionId: "b") == nil, "no window means open one")
 
+        // ISSUE-076: PI WEB adds `tool` (open panel) and other views to the route; restoration refuses them, routing must not.
+        let server = URL(string: "http://127.0.0.1:8505")!
+        var route = WindowRoute()
+        precondition(route.report(URL(string: "http://127.0.0.1:8505?session=a&view=chat")!, server: server), "a plain Chat is restorable")
+        precondition(!route.report(URL(string: "http://127.0.0.1:8505?session=b&tool=workspace-files:files&view=chat")!, server: server), "a panel route is not restorable")
+        precondition(chatSessionId(of: route.restorable) == "a" && chatSessionId(of: route.shown) == "b", "restoration keeps the last safe route, routing follows the Chat on screen")
+        let panelWindow = NotificationWindowCandidate(url: route.shown, isOnActiveSpace: false)
+        let staleWindow = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?session=a&view=chat"), isOnActiveSpace: true)
+        precondition(notificationWindowIndex([staleWindow, panelWindow], sessionId: "b") == 1, "the window showing Chat b with a panel open wins")
+        _ = route.report(URL(string: "about:blank")!, server: server)
+        precondition(chatSessionId(of: route.shown) == "b", "the native startup page keeps the shown route")
+
         guard let context = JSContext() else { preconditionFailure("JavaScriptCore unavailable") }
         context.evaluateScript("""
             var window = this;

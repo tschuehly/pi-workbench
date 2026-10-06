@@ -147,6 +147,22 @@ func chatSessionId(of url: URL?) -> String? {
     url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "session" }?.value }
 }
 
+/// What a window shows versus what it may restore. Every reported route counts as shown, so notification routing
+/// follows the Chat on screen even with a panel (`tool`), another `view`, or plugin query keys that restoration refuses.
+struct WindowRoute {
+    private(set) var shown: URL?
+    var restorable: URL?
+
+    /// True when the restorable route changed.
+    mutating func report(_ url: URL, server: URL) -> Bool {
+        // The native startup and failure pages (about:blank) keep the route the window resumes to.
+        if url.host?.lowercased() == server.host?.lowercased() { shown = url }
+        guard let safe = WindowRestoration.applicationURL(url, server: server), safe != restorable else { return false }
+        restorable = safe
+        return true
+    }
+}
+
 struct NotificationWindowCandidate {
     let url: URL?
     let isOnActiveSpace: Bool
