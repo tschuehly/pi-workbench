@@ -113,6 +113,22 @@ export class PiRpcExecutionAdapter {
     return this.#terminate(state);
   }
 
+  /**
+   * Delivers a lead message into a running child as an RPC prompt: `steer` lands after the child's
+   * current tool calls, `followUp` once it would otherwise stop. Returns the observation sequence at
+   * acceptance so a caller can watch only for what the child does afterwards.
+   */
+  async steer(executionId, message, mode = "steer") {
+    const state = this.#state(executionId);
+    if (state.done || state.completing) throw typedError("EXECUTION_TERMINAL", `Execution ${executionId} has already finished.`);
+    if (!state.prompted) throw typedError("EXECUTION_NOT_READY", `Execution ${executionId} has not received its assignment yet.`);
+    if (mode !== "steer" && mode !== "followUp") throw typedError("INVALID_SPEC", "mode must be steer or followUp.");
+    if (typeof message !== "string" || message.trim() === "") throw typedError("INVALID_SPEC", "message is required.");
+    await this.#command(state, "prompt", { message, streamingBehavior: mode }, this.controlTimeoutMs);
+    this.#emit(state, "steered", { mode });
+    return { executionId, mode, sequence: state.observationSequence };
+  }
+
   async cancelAll(reason) {
     return Promise.all([...this.executions.values()].filter((state) => !state.done).map((state) => this.cancel(state.executionId, reason)));
   }

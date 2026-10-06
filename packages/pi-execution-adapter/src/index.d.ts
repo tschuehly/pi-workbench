@@ -25,4 +25,5 @@ export class PiRpcExecutionAdapter {
   list(): ExecutionSummary[];
   cancel(executionId: string, reason: string): Promise<CancellationReceipt>;
   cancelAll(reason: string): Promise<CancellationReceipt[]>;
+  steer(executionId: string, message: string, mode?: "steer" | "followUp"): Promise<{ executionId: string; mode: "steer" | "followUp"; sequence: number }>;
 }

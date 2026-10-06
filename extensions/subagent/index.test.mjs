@@ -1026,3 +1026,35 @@ test("a reloaded runtime reports retained outcomes and interrupted children for 
     await rm(temporary, { recursive: true, force: true });
   }
 });
+
+test("subagent_steer forwards the message and wakes the lead with the child's next self-report", async () => {
+  const tools = new Map();
+  const sent = [];
+  const steered = [];
+  const observations = [{ sequence: 1, type: "tool_start", detail: { toolName: "report_status", action: "old report" } }];
+  let push;
+  const adapter = {
+    steer: async (executionId, message, mode) => { steered.push({ executionId, message, mode }); return { executionId, mode, sequence: 1 }; },
+    async *observe() {
+      yield* observations;
+      yield await new Promise((resolve) => { push = resolve; });
+    },
+  };
+  subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: (message, options) => sent.push({ message, options }) }, { adapter });
+  const result = await tools.get("subagent_steer").execute("call", { executionId: "e1", message: "Focus on auth", requestUpdate: true });
+  assert.equal(result.details.mode, "steer");
+  assert.equal(steered[0].mode, "steer");
+  assert.match(steered[0].message, /^Focus on auth\n\n.*report_status/s);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 0, "a report from before the steer does not wake the lead");
+  push({ sequence: 2, type: "tool_start", detail: { toolName: "report_status", action: "auth tests passing" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].options.deliverAs, "steer");
+  assert.equal(sent[0].options.triggerTurn, true);
+  assert.deepEqual(sent[0].message.details, { executionId: "e1", status: "auth tests passing" });
+
+  adapter.steer = async () => { throw new Error("Execution e1 has already finished."); };
+  const terminal = await tools.get("subagent_steer").execute("call", { executionId: "e1", message: "x" });
+  assert.equal(terminal.isError, true);
+});

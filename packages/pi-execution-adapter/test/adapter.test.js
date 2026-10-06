@@ -644,3 +644,17 @@ test("accepts distinct-model independence only under an active overlay with fres
     (error) => error.code === "INVALID_BINDING",
   );
 });
+
+test("steers a running child through a streaming RPC prompt and refuses a finished one", async () => {
+  const child = fakeRpc({ hang: true });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec());
+  while (!child.commands.some((command) => command.type === "prompt")) await new Promise((resolve) => setImmediate(resolve));
+  const steered = await adapter.steer(receipt.executionId, "Focus on auth", "followUp");
+  assert.equal(steered.mode, "followUp");
+  const { id, ...sent } = child.commands.at(-1);
+  assert.deepEqual(sent, { type: "prompt", message: "Focus on auth", streamingBehavior: "followUp" });
+  await assert.rejects(adapter.steer(receipt.executionId, "x", "sideways"), (error) => error.code === "INVALID_SPEC");
+  await adapter.cancel(receipt.executionId, "test");
+  await assert.rejects(adapter.steer(receipt.executionId, "x"), (error) => error.code === "EXECUTION_TERMINAL");
+});
