@@ -86,7 +86,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
                 activateApplication: { NSApp.activate(ignoringOtherApps: true) },
                 routeChat: {
                     let userInfo = response.notification.request.content.userInfo
-                    self?.browser.openNotificationChat(machineId: userInfo["machineId"] as? String, sessionId: userInfo["sessionId"] as? String)
+                    self?.browser.openNotificationChat(machineId: userInfo["machineId"] as? String, sessionId: userInfo["sessionId"] as? String, message: userInfo["message"] as? String)
                 },
                 complete: completionHandler
             )
@@ -405,8 +405,8 @@ private final class BrowserCoordinator {
     func goForwardInKeyWindow() { keyController?.goForward() }
 
     /// Bring forward the window already showing the Chat, so macOS switches to its Space instead of loading it elsewhere.
-    func openNotificationChat(machineId: String?, sessionId: String?) {
-        let url = serverURL.flatMap { server in machineId.flatMap { machine in sessionId.flatMap { notificationChatURL(serverURL: server, machineId: machine, sessionId: $0) } } }
+    func openNotificationChat(machineId: String?, sessionId: String?, message: String?) {
+        let url = serverURL.flatMap { server in machineId.flatMap { machine in sessionId.flatMap { notificationChatURL(serverURL: server, machineId: machine, sessionId: $0, message: message) } } }
         let ordered = NSApp.orderedWindows.compactMap { window in controllers.values.first { $0.window === window } }
             + controllers.values.filter { controller in !NSApp.orderedWindows.contains { $0 === controller.window } }
         let candidates = ordered.map { NotificationWindowCandidate(url: $0.shownURL, isOnActiveSpace: $0.window?.isVisible == true && $0.window?.isOnActiveSpace == true) }
@@ -415,7 +415,11 @@ private final class BrowserCoordinator {
             return
         }
         let controller = ordered[index]
-        if let url, chatSessionId(of: controller.shownURL) != sessionId { controller.load(url) }
+        switch notificationWindowAction(shown: controller.shownURL, chatURL: url, sessionId: sessionId, message: message) {
+        case .load(let url): controller.load(url)
+        case .reveal: if let machineId, let sessionId, let message { controller.revealNotificationMessage(machineId: machineId, sessionId: sessionId, message: message) }
+        case .none: break
+        }
         if controller.window?.isMiniaturized == true { controller.window?.deminiaturize(nil) }
         controller.window?.makeKeyAndOrderFront(nil)
     }
@@ -567,7 +571,8 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     }
     private var nativeProbeFinished = false
 
-    // Only the isolated, offline smoke may drive the owned main frame. Normal launches never evaluate page JS.
+    // Only the isolated, offline smoke may drive the owned main frame. Normal launches evaluate page JS only to
+    // dispatch a notification's reveal event, with the anchor passed as an argument.
     private var nativeProbeEnabled: Bool {
         let env = ProcessInfo.processInfo.environment
         guard env["PI_WEB_NATIVE_ACCEPTANCE"] == "1", env["PI_WEB_OFFLINE"] == "1", env["PI_OFFLINE"] == "1",
@@ -634,6 +639,9 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     func resume(fallback: URL) {
         if let current = webView.url { remember(current) }
         load(route.restorable ?? fallback)
+    }
+    func revealNotificationMessage(machineId: String, sessionId: String, message: String) {
+        webView.callAsyncJavaScript(notificationRevealScript, arguments: ["machineId": machineId, "sessionId": sessionId, "message": message], in: nil, in: .page, completionHandler: nil)
     }
     func reload() { webView.reload() }
     func goBack() { if webView.canGoBack { webView.goBack() } }

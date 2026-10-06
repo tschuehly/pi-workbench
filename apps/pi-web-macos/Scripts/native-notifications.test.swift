@@ -117,6 +117,36 @@ struct NativeNotificationTests {
             precondition(result == nil && error != nil)
         }
         precondition(notificationChatURL(serverURL: URL(string: "https://localhost/app/")!, machineId: "remote", sessionId: "one & two")?.absoluteString == "https://localhost/app/?machine=remote&session=one%20%26%20two")
+
+        // ISSUE-083: an optional message anchor travels from the bridge to userInfo and the Chat URL.
+        let anchored = FakeCenter()
+        NativeNotificationBridge(center: anchored).notify(["title": "Chat", "body": "Finished", "machineId": "local", "sessionId": "s", "message": "entry:a1b2"]) { result, error in
+            precondition(result as? Bool == true && error == nil)
+        }
+        precondition(anchored.request?.content.userInfo["message"] as? String == "entry:a1b2")
+        for bad: Any in ["entry:", "other:a", "entry:a b", "entry:../x", "entry:" + String(repeating: "a", count: 121), 42] {
+            let refused = FakeCenter()
+            NativeNotificationBridge(center: refused).notify(["title": "Chat", "body": "B", "machineId": "local", "sessionId": "s", "message": bad]) { result, error in
+                precondition(result == nil && error != nil, "unsafe anchor \(bad) is refused")
+            }
+            precondition(refused.request == nil)
+        }
+        NativeNotificationBridge(center: anchored).notify(["title": "Chat", "body": "B", "message": "entry:a"]) { result, error in
+            precondition(result == nil && error != nil, "an anchor needs a Chat target")
+        }
+        let server083 = URL(string: "http://127.0.0.1:8505")!
+        let anchoredURL = notificationChatURL(serverURL: server083, machineId: "local", sessionId: "s", message: "ask:q-1")
+        precondition(anchoredURL?.absoluteString == "http://127.0.0.1:8505?machine=local&session=s&message=ask:q-1")
+        precondition(notificationChatURL(serverURL: server083, machineId: "local", sessionId: "s", message: "x y")?.absoluteString == "http://127.0.0.1:8505?machine=local&session=s", "an unsafe anchor is dropped")
+        precondition(chatSessionId(of: anchoredURL) == "s")
+        precondition(WindowRestoration.applicationURL(anchoredURL!, server: server083)?.absoluteString == "http://127.0.0.1:8505?machine=local&session=s", "restoration strips the one-shot anchor")
+        var anchoredRoute = WindowRoute()
+        precondition(anchoredRoute.report(anchoredURL!, server: server083) && chatSessionId(of: anchoredRoute.restorable) == "s" && anchoredRoute.shown == anchoredURL)
+        let showingS = URL(string: "http://127.0.0.1:8505?session=s&view=chat")
+        precondition(notificationWindowAction(shown: showingS, chatURL: anchoredURL, sessionId: "s", message: "ask:q-1") == .reveal, "the Chat on screen reveals without reloading")
+        precondition(notificationWindowAction(shown: showingS, chatURL: anchoredURL, sessionId: "s", message: nil) == .none, "an anchorless click only focuses, as before")
+        precondition(notificationWindowAction(shown: URL(string: "http://127.0.0.1:8505?session=t"), chatURL: anchoredURL, sessionId: "s", message: "ask:q-1") == .load(anchoredURL!), "another Chat loads the anchored URL")
+        precondition(notificationWindowAction(shown: showingS, chatURL: nil, sessionId: nil, message: nil) == .none)
         precondition(success.request?.content.sound == .default)
         precondition(success.request?.trigger == nil)
 
@@ -199,6 +229,14 @@ struct NativeNotificationTests {
         precondition(context.evaluateScript("window.piWebNative.setSleepDisabled(true) instanceof Promise")?.toBool() == true)
         precondition(context.evaluateScript("sleepSetPayload === true")?.toBool() == true)
         precondition(context.evaluateScript("Object.isFrozen(window.piWebNative)")?.toBool() == true)
+        precondition(context.evaluateScript("window.piWebNative.notify('T', 'B', {machineId: 'local', sessionId: 's', message: 'entry:e1'}); notificationPayload.message === 'entry:e1'")?.toBool() == true)
+        context.evaluateScript("""
+            var revealed;
+            function CustomEvent(type, init) { this.type = type; this.detail = init.detail; }
+            window.dispatchEvent = event => { revealed = event; };
+            (function(machineId, sessionId, message) { \(notificationRevealScript) })('local', 's', 'dialog:d"1');
+            """)
+        precondition(context.evaluateScript("revealed.type === 'pi-web:notification-open' && revealed.detail.sessionId === 's' && revealed.detail.machineId === 'local' && revealed.detail.message === 'dialog:d\"1'")?.toBool() == true)
 
         print("PASS: native notification, sleep-control JS Promise, frame, and click contracts")
     }

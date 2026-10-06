@@ -17,7 +17,8 @@ enum WindowRestoration {
               candidate.path == server.path || (candidate.path == "/" && server.path.isEmpty),
               let parts = URLComponents(url: candidate, resolvingAgainstBaseURL: false),
               let serverParts = URLComponents(url: server, resolvingAgainstBaseURL: false) else { return nil }
-        let items = parts.queryItems ?? []
+        // A notification's one-shot `message` anchor never restores.
+        let items = (parts.queryItems ?? []).filter { $0.name != "message" }
         let values = Dictionary(grouping: items, by: \.name)
         guard values.values.allSatisfy({ $0.count == 1 }),
               values.keys.allSatisfy({ ["machine", "project", "workspace", "session", "view"].contains($0) }),
