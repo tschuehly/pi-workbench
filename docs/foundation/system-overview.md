@@ -49,8 +49,8 @@ non-blocking only within its attended lead session; no child execution survives 
 
 Delegation nests exactly one level: lead → durable Worker → leaf Subagent. A `coordinator` Worker
 holds one scope's context and delegates its work to fresh leaf Subagents, while leaf profiles receive
-no delegation tool, so recursion terminates. A nested leaf must run in the foreground and settle
-before its Worker dispatch returns; cancelling a Worker removes its uncollected leaves, and
+no delegation tool, so recursion terminates. A nested leaf may run in the background, but its Worker holds
+settlement until every leaf has ended and continues once to collect it; cancelling a Worker removes its uncollected leaves, and
 cancelling one leaf leaves its Worker alive. This is workflow containment rather than a sandbox:
 `bash` stays inside the attended local trust boundary, so unsupported deeper nesting is detected
 through telemetry and hierarchy evaluations, not shell interception.

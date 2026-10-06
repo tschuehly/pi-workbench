@@ -549,7 +549,7 @@ function stubOverlayRead(adapter, allowed = ["anthropic/claude-test", "anthropic
 
 test("admits leaf delegation tools for a coordinating worker but nothing beyond the ceiling", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
-  const coordinatorTools = ["read", "bash", "grep", "find", "ls", "subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
+  const coordinatorTools = ["read", "bash", "grep", "find", "ls", "subagent", "subagent_collect", "subagent_status", "subagent_cancel", "subagent_steer"];
   const receipt = await adapter.dispatch(spec({ kind: "worker", tools: coordinatorTools }));
   assert.equal((await adapter.result(receipt.executionId)).kind, "worker");
   await assert.rejects(adapter.dispatch(spec({ tools: [...coordinatorTools, "worker_dispatch"] })), (error) => error.code === "CAPABILITY_EXCEEDED");

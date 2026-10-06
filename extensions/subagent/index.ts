@@ -16,7 +16,7 @@ import { activityText, progressText, recordProgress, renderProgressLog, reported
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
-const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"] as const;
+const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel", "subagent_steer"] as const;
 // The web tools are the ceiling web_enable activates within: Pi drops tools missing from --tools, so a
 // web_enable-only list would leave it nothing to enable. keepChildWebToolsLazy keeps them inactive until then.
 const WEB_TOOLS = ["web_search", "source_check", "fetch_content", "get_search_content"];
@@ -204,6 +204,13 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.on("message_start", (event: { message?: unknown }) => completionWakeup.acknowledge(event.message));
   pi.on("agent_settled", () => completionWakeup.rearm());
 
+  // A Worker's dispatch ends when it settles, so a leaf still writing would outlive the result the
+  // lead reconciles. Hold settlement until background leaves finish, then continue once to collect.
+  const nudged = new Set<string>();
+  if (INSIDE_WORKER) {
+    pi.on("agent_before_settle", () => holdForLeaves({ pending: pendingSubagentCompletions, list: () => adapter.list(), collected, nudged }));
+  }
+
   pi.on("session_shutdown", async () => {
     shuttingDown = true;
     foreground.clear();
@@ -225,7 +232,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Adjust a running child with subagent_steer; when the assignment itself changes, cancel it and launch a new child. Do not imply managed authority, recovery, or durable background work that survives the session.",
       "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review never go below xhigh.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
-      "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
+      "Inside a Worker, a Subagent is the deepest supported level: never launch a Worker from it. The Worker cannot finish until its background Subagents end and are collected.",
     ],
     parameters: Params,
 
@@ -233,11 +240,6 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       const profile = PROFILES[params.profile];
       if (profile === undefined) {
         return failure("preflight_failed", `Unknown child profile: ${params.profile}.`);
-      }
-      // A nested leaf must settle before its Worker's dispatch returns, otherwise the lead would
-      // reconcile a Worker whose own child is still writing.
-      if (INSIDE_WORKER && params.background === true) {
-        return failure("preflight_failed", "A Subagent launched inside a Worker must run in the foreground so it settles and is collected before the Worker dispatch returns.");
       }
 
       const needsIndependence = INDEPENDENT_ROLES.has(params.cognitiveRole);
@@ -890,6 +892,14 @@ export async function watchActivity(
   } finally {
     if (!completed || !retainTerminal()) removeActivity(pi, `delegate:${executionId}`);
   }
+}
+
+/** Waits for running leaves; asks for one continuation per leaf that ended uncollected. */
+export async function holdForLeaves({ pending, list, collected, nudged }: { pending: Set<Promise<unknown>>; list: () => { executionId: string; kind: string }[]; collected: Set<string>; nudged: Set<string> }) {
+  await Promise.allSettled([...pending]);
+  const unread = list().filter((s) => s.kind === "subagent" && !collected.has(s.executionId) && !nudged.has(s.executionId));
+  for (const s of unread) nudged.add(s.executionId);
+  return unread.length > 0 ? { continue: true } : undefined;
 }
 
 /** The child's first self-report after `afterSequence`, or undefined if it ends without one. */

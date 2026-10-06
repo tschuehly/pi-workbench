@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, collectAll, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, providerOf, reservePending, streamToResult, taskGoal, watchActivity } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, providerOf, reservePending, streamToResult, taskGoal, watchActivity } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -422,7 +422,7 @@ test("bounds the hierarchy to lead → worker → leaf with a delegating coordin
   assert.match(PROFILES.reviewer.instruction, /file and line, why it is wrong, and how to show it fails/);
   assert.match(tools.get("subagent").parameters.properties.task.description, /Done means .*Stop and ask only if/);
 
-  const delegation = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
+  const delegation = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel", "subagent_steer"];
   const web = ["web_enable", "web_search", "source_check", "fetch_content", "get_search_content"];
   assert.deepEqual(PROFILES.coordinator.tools, ["read", "bash", "grep", "find", "ls", "report_status", ...web, ...delegation]);
   for (const profile of Object.values(PROFILES)) {
@@ -701,7 +701,7 @@ test("reports counts and hides collected children from the default status roster
   assert.deepEqual(empty.details, { children: [], running: 0, uncollected: 0, total: 0 });
 });
 
-test("fails closed on worker lifecycle and background delegation from inside a worker", async () => {
+test("fails closed on worker lifecycle from inside a worker", async () => {
   const probe = `
     import assert from "node:assert/strict";
     import subagentExtension from ${JSON.stringify(new URL("./index.ts", import.meta.url).href)};
@@ -718,9 +718,6 @@ test("fails closed on worker lifecycle and background delegation from inside a w
       assert.equal(result.isError, true, name);
       assert.match(result.content[0].text, /Workers cannot create or dispatch Workers/, name);
     }
-    const nestedBackground = await run("subagent", { task: "t", profile: "scout", cognitiveRole: "routine", background: true });
-    assert.equal(nestedBackground.isError, true);
-    assert.match(nestedBackground.content[0].text, /must run in the foreground/);
     console.log("NESTED_GUARDS_OK");
   `;
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", probe], {
@@ -1057,4 +1054,19 @@ test("subagent_steer forwards the message and wakes the lead with the child's ne
   adapter.steer = async () => { throw new Error("Execution e1 has already finished."); };
   const terminal = await tools.get("subagent_steer").execute("call", { executionId: "e1", message: "x" });
   assert.equal(terminal.isError, true);
+});
+
+test("a Worker holds settlement for running leaves and continues once per uncollected leaf", async () => {
+  let finish;
+  const pending = new Set([new Promise((resolve) => { finish = resolve; })]);
+  const roster = [{ executionId: "leaf-1", kind: "subagent" }, { executionId: "leaf-2", kind: "subagent" }];
+  const collected = new Set(["leaf-2"]);
+  const nudged = new Set();
+  let settled = false;
+  const held = holdForLeaves({ pending, list: () => roster, collected, nudged }).then((result) => { settled = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "a running leaf holds the Worker open");
+  finish();
+  assert.deepEqual(await held, { continue: true });
+  assert.equal(await holdForLeaves({ pending: new Set(), list: () => roster, collected, nudged }), undefined, "one continuation per leaf, never a loop");
 });
