@@ -37,6 +37,10 @@ const RECORD_TYPES = new Set([
   "title.set",
 ]);
 
+// Package-internal transaction option: the Store's inspect/list/watch callbacks never mutate or retain
+// their input, so FileWorkstreamAdapter may lend them its cached parsed generation. Other adapters ignore it.
+export const TRUSTED_READ = Symbol("workstream-store.trustedRead");
+
 export function clone(value) {
   return structuredClone(value);
 }
