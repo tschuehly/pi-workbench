@@ -12,6 +12,9 @@ export default function leadFallbackExtension(pi: ExtensionAPI) {
     const message = lastAssistant;
     lastAssistant = undefined;
     if (ctx.signal?.aborted || event.outcome !== "error" || !shouldFallBack({ env: process.env, model: ctx.model, message })) return;
+    // Pi omits a failure from context once it schedules a native retry; if it is still omitted at
+    // settlement, the user cancelled that retry (Escape / abort_retry), so stay stopped.
+    if (!event.context?.contextMessages?.some((m: any) => m.role === "assistant" && m.timestamp === message.timestamp)) return;
     const target = ctx.modelRegistry.find(FALLBACK.provider, FALLBACK.id);
     let switched = false;
     try {

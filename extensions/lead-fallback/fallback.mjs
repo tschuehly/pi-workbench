@@ -1,7 +1,8 @@
 export const FALLBACK = { provider: "openai-codex", id: "gpt-6.1-sol", thinking: "high" };
 
-const RECOVERABLE_ERROR = /rate.?limit|usage.?limit|quota|\b429\b|\b5\d{2}\b|overload|currently experiencing high demand|service.?unavailable|server.?error|internal.?error|timed? out|timeout|ETIMEDOUT/i;
-const EXCLUDED_ERROR = /\b(?:abort(?:ed)?|cancel(?:l?ed)?)\b|refusal|refused|content.?filter|content.?policy|safety|policy.?violation/i;
+const RECOVERABLE_ERROR = /rate.?limit|usage.?limit|quota|^(?:HTTP )?(?:429|5\d{2})\b|overload|currently experiencing high demand|service.?unavailable|server.?error|internal.?error|timed? out|timeout|ETIMEDOUT/i;
+// Status numbers count only as the SDK's leading status; other 4xx responses are never transient.
+const EXCLUDED_ERROR = /^(?:HTTP )?4(?!29)\d{2}\b|\b(?:abort(?:ed)?|cancel(?:l?ed)?)\b|refusal|refused|content.?filter|content.?policy|safety|policy.?violation/i;
 
 // Called only at final settlement, after Pi's configured native retry policy.
 export function shouldFallBack({ env, model, message }) {

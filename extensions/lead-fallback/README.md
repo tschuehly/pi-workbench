@@ -2,8 +2,11 @@
 
 At `agent_before_settle`, a failed Anthropic lead request can switch to
 `openai-codex/gpt-6.1-sol` with high thinking and continue the same session.
-Eligible failures: account limits, overloads, HTTP 5xx, and timeouts.
-Cancellations, refusals, ordinary successful replies, and child executions are excluded.
+Eligible failures: account limits, overloads, leading HTTP 429/5xx statuses, and timeouts.
+Other leading 4xx statuses, cancellations, refusals, ordinary successful replies, and child
+executions are excluded. A retry the user cancels during native backoff (Escape / RPC
+`abort_retry`) never falls back: Pi omits a failure from context when it schedules a retry, so a
+final failure still omitted at settlement marks that cancellation.
 
 The extension appends one visible, model-readable notice with the cause, target, and
 continuation instructions. It asks the model to reconcile recorded results and actual
@@ -31,7 +34,8 @@ This extension does not change native classification or settings.
 - Set `PI_CODING_AGENT_MODULE` to the installed runtime's absolute
   `dist/core/agent-session.js` path to also exercise its real agent loop and retry methods.
   This optional check stubs provider calls, persistence, and boundary dispatch; it verifies
-  three retries precede a single fallback and covers retry-disabled behavior.
+  three retries precede a single fallback, covers retry-disabled behavior, and calls the real
+  `abortRetry()` during backoff to confirm no switch.
 - No live provider outage, UI rendering, or promotion is exercised by these tests.
 
 ## Issue ledger / scope limits

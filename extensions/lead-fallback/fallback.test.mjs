@@ -5,7 +5,8 @@ import leadFallback from "./index.ts";
 import { pathToFileURL } from "node:url";
 
 const opus = { provider: "anthropic", id: "claude-opus-5-5" };
-const failure = (errorMessage, stopReason = "error") => ({ role: "assistant", stopReason, errorMessage });
+let clock = 0;
+const failure = (errorMessage, stopReason = "error") => ({ role: "assistant", stopReason, errorMessage, timestamp: ++clock });
 const eligible = (message, env = {}, model = opus) => shouldFallBack({ env, model, message });
 
 test("lead recovery covers limits, overloads, HTTP 5xx and timeouts, not unrelated failures", () => {
@@ -19,7 +20,9 @@ test("lead recovery covers limits, overloads, HTTP 5xx and timeouts, not unrelat
     "401 authentication_error", "403 permission denied", "400 invalid_request_error",
     "prompt is too long", "context window exceeded", "unknown error", "request id 1500",
     "Connection reset", "fetch failed", "Request cancelled after timeout", "Retry canceled: 503",
-    "Request aborted: 500", "refusal: 503", "Request refused: timeout", "safety policy: 500",
+    "Request aborted: 500", "refusal: 503",
+    '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.501.content.0: timeout"}}',
+    'HTTP 400 messages.429.content.0', 'HTTP 404 upstream returned 503', "Request refused: timeout", "safety policy: 500",
     "content_filter: 503", "policy_violation: 500", "refusal_error: 503", "content policy: 500", "",
   ]) assert.equal(eligible(failure(error)), false, error);
   for (const stop of ["stop", "aborted", "refusal", "toolUse"]) assert.equal(eligible(failure("503", stop)), false);
@@ -41,6 +44,7 @@ test("settlement hook switches once, records one notice, and stops when fallback
   function harness(availability = "yes") {
     const handlers = {};
     const calls = [];
+    const projected = [];
     const controller = new AbortController();
     const ctx = {
       model: opus, signal: controller.signal,
@@ -61,9 +65,9 @@ test("settlement hook switches once, records one notice, and stops when fallback
       },
       setThinkingLevel: (level) => calls.push(["thinking", level]),
     });
-    return { handlers, calls, ctx, controller,
-      message: (message) => handlers.message_end({ message }),
-      settle: (outcome = "error") => handlers.agent_before_settle({ outcome }, ctx),
+    return { handlers, calls, ctx, controller, projected,
+      message: (message) => { projected.push(message); handlers.message_end({ message }); },
+      settle: (outcome = "error") => handlers.agent_before_settle({ outcome, context: { contextMessages: [...projected] } }, ctx),
     };
   }
 
@@ -114,6 +118,12 @@ test("settlement hook switches once, records one notice, and stops when fallback
   assert.equal(await cancelled.settle(), undefined);
   assert.deepEqual(cancelled.calls, []);
 
+  const retryCancelled = harness();
+  retryCancelled.message(failure("503"));
+  retryCancelled.projected.pop(); // Pi omitted the attempt for a retry the user then cancelled
+  assert.equal(await retryCancelled.settle(), undefined);
+  assert.deepEqual(retryCancelled.calls, []);
+
   const child = harness();
   process.env.PI_TELEMETRY_EXECUTION_ID = "child";
   child.message(failure("503"));
@@ -127,8 +137,9 @@ test("native Pi retries finish before the extension continues on Sol", { skip: !
   const saved = keys.map((key) => process.env[key]);
   keys.forEach((key) => delete process.env[key]);
   t.after(() => keys.forEach((key, i) => saved[i] === undefined ? delete process.env[key] : process.env[key] = saved[i]));
-  for (const enabled of [true, false]) {
-    const handlers = {}, events = [], notices = [];
+  for (const mode of ["enabled", "disabled", "cancelled"]) {
+    const enabled = mode !== "disabled", cancel = mode === "cancelled";
+    const handlers = {}, events = [], notices = [], projected = [];
     let model = { ...opus, contextWindow: 200000 }, requests = 0;
     // Exercise the installed loop/retry methods without provider calls or session writes.
     const session = Object.create(AgentSession.prototype);
@@ -143,22 +154,35 @@ test("native Pi retries finish before the extension continues on Sol", { skip: !
       const message = { ...failure("503 Service Unavailable", model.provider === "anthropic" ? "error" : "stop"), content: [] };
       session._lastAssistantMessage = message;
       session._lastAssistantToolResults = [];
+      projected.push(message);
       handlers.message_end({ message });
       session._lastActivityOutcome = message.stopReason === "error" ? "error" : "success";
     };
     Object.assign(session, {
       agent: { state: { get model() { return model; } }, prompt: produce, continue: produce, hasQueuedMessages: () => false },
-      settingsManager: { getRetrySettings: () => ({ enabled, maxRetries: 3, baseDelayMs: 0, maxAgentDelayMs: 0 }) },
-      _retryAttempt: 0, _emit: (event) => events.push(event),
-      _recordSelection: () => {}, _omitRecoveryAttempt: () => {}, _checkCompaction: async () => false,
+      settingsManager: { getRetrySettings: () => ({ enabled, maxRetries: 3, baseDelayMs: cancel ? 60000 : 0, maxAgentDelayMs: cancel ? 60000 : 0 }) },
+      _retryAttempt: 0, _emit: (event) => {
+        events.push(event);
+        // The user presses Escape (RPC abort_retry) during native backoff.
+        if (cancel && event.type === "auto_retry_start") setImmediate(() => session.abortRetry());
+      },
+      _recordSelection: () => {}, _omitRecoveryAttempt: (message) => projected.splice(projected.indexOf(message), 1),
+      _checkCompaction: async () => false,
       _runBeforeSettleBoundary: async () => {
-        const result = await handlers.agent_before_settle({ outcome: session._lastActivityOutcome }, ctx);
+        const result = await handlers.agent_before_settle({ outcome: session._lastActivityOutcome, context: { contextMessages: [...projected] } }, ctx);
         if (result) notices.push(...result.entries);
         return result?.continue ?? false;
       },
       _flushPendingBashMessages: () => {}, _flushPendingCustomMessages: () => {}, _emitAgentSettled: async () => {},
     });
     await session._runAgentPrompt([]);
+    if (cancel) {
+      assert.equal(events.at(-1).finalError, "Retry cancelled");
+      assert.equal(requests, 1);
+      assert.equal(notices.length, 0);
+      assert.equal(model.id, opus.id, "user-cancelled retry must not switch models");
+      continue;
+    }
     assert.equal(requests, enabled ? 5 : 2, "initial Claude request, native retries, then one Sol request");
     assert.equal(events.filter((event) => event.type === "auto_retry_start").length, enabled ? 3 : 0);
     assert.equal(notices.length, 1);
