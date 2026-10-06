@@ -19,8 +19,7 @@ Agents also do not know the disk state: nothing tells them free space before a D
 
 ## Goal and done-when
 
-Agents create and remove worktrees through worktrunk, every artifact an agent creates has an owner and an expiry, and agents see free disk space before heavy work. **Done when** a week of normal use leaves free space flat or rising without manual cleanup, and `storage report` explains every category above 1 GB.
-Agents create and remove worktrees through worktrunk, every artifact an agent creates has an owner, and agents see free disk space before and during heavy work. **Done when** a week of normal use leaves free space flat or rising with no cleanup beyond the owner approving the nightly list, and `storage report` explains every category above 1 GB.
+Agents create and remove worktrees through worktrunk, every artifact an agent creates has an owner, and agents are told what they own and clean it up themselves, with no hard limits. **Done when** a week of normal use leaves free space flat or rising with no cleanup by the owner beyond approving the short list of unowned items, and `storage report` explains every category above 1 GB.
 
 Out of scope: CPU/heavy-job limits (resource-guard branch), firstmate, worktree reuse/pools, PI WEB grouping by lease.
 
@@ -41,12 +40,12 @@ Out of scope: CPU/heavy-job limits (resource-guard branch), firstmate, worktree 
 - No PI_TMP deletion in hooks: PI_TMP is keyed per project, not per branch. (Finding 6.)
 - Rules: harness.md "Development worktrees", global `AGENTS.md`, the workstreams skill's retire section and PhotoQuest `CLAUDE.md`: create with `wt switch --create <branch>` and link the path to the Workstream; after the PR merges, the owning agent runs `wt remove` following the skill's existing pre-removal checks (clean, landed, no stored Pi sessions under the path, continuation moved). Integration stays via GitHub PRs; `wt merge` is not used. The `pi-tmp` guard's worktree warning also flags `git worktree add`.
 
-### 3. Nightly report and owner-approved cleanup
+### 3. Nightly report: owned items go to their agents, unowned to the owner
 
 A nightly launchd job:
-1. Applies the automatic set from the safety rule (`docker image prune -a`, `docker builder prune`, `git worktree prune`; package caches only when free < 30 GB).
-2. Runs `storage report` and sends `notify_human` with the **owner-gate list** when it is non-empty or free space < 30 GB: merged worktrees left behind, unowned/unmerged worktrees, Docker volumes without a container, closed Workstreams' scratch, installed snapshots no service or loaded session references (as far as the report can tell; otherwise listed as "unknown use").
-3. The owner approves by id (`storage remove <id>…`); the command re-checks each item and refuses anything whose state changed or contains ignored content not shown at approval.
+1. Applies the automatic set from the safety rule (`docker image prune -a`, `docker builder prune`, `git worktree prune`).
+2. Runs `storage report` and attributes every item to its owning Workstream where it can (worktree link, branch containers/volumes, scratch, its sessions' PI_TMP and job logs). Owned items are left for that Workstream's agents (§5).
+3. Sends `notify_human` only for **unowned** items: worktrees no open Workstream links, Docker volumes with no branch or container, installed snapshots of unknown use, closed Workstreams' scratch. The owner approves by id (`storage remove <id>…`); the command re-checks each item and refuses anything whose state changed or contains ignored content not shown at approval.
 
 ### 4. Workstream scratch (S2)
 
@@ -56,10 +55,13 @@ A nightly launchd job:
 - **Rescue on worktree removal:** `pre-remove` moves a non-empty `.scratch/` to the owning Workstream's scratch (or `scratch/unowned/<worktree>/`); if the move fails, removal aborts.
 - PI_TMP stays throwaway (existing sweep). Agents put anything worth keeping in `PI_SCRATCH`. Migration: move worktrees out of `PhotoQuest/.scratch` with `wt`, then move the rest to `scratch/unowned/PhotoQuest/` for the owner to sort.
 
-### 5. Agent awareness and growth bounds
+### 5. Agents clean up their own stuff (no hard limits)
 
-- `pi-tmp` extension (already on every command) appends a one-line warning to `bash` results when free space < 30 GB and blocks known heavy commands (`docker build`, `wt switch --create`, Gradle/npm installs, video renders) below 15 GB with "run `storage report`".
-- Running jobs: background-bash's runner checks free space while a job writes; below 10 GB it stops the job with a clear message, and it caps each job's log file (keeps the tail). (Finding 8.)
+No thresholds that block commands or stop jobs. Instead agents are told what they own and decide, because they know what is still needed.
+
+- **Cleanup is part of every checkpoint.** The workstreams skill's checkpoint step runs `storage report --workstream <id>`, which lists what this Workstream owns: its worktrees (merged or not), its branches' containers and volumes, scratch size, its sessions' PI_TMP folders and job logs. The agent deletes what is no longer needed (its merged worktree via `wt remove`, its containers, its own regenerable files) and records in the checkpoint what it keeps and why, in one line. Scratch files referenced by a checkpoint or link always stay; volumes and unmerged work are deleted only when the agent created them in this Workstream and knows they hold nothing needed, otherwise they are named in `remains` for the owner.
+- **Automatic nudge when space gets low.** The `pi-tmp` extension (already on every command) checks free space; below 30 GB it appends one line to the `bash` result: "Disk low: N GB free. This Workstream owns M GB — run `storage report --workstream` and clean up what you no longer need." Idle sessions get the same line at their next checkpoint or `orient`.
+- Background-job logs are capped per job (keeps the tail) so one noisy job cannot fill the disk unnoticed. (Finding 8.)
 - Existing PI_TMP sweep additionally skips folders belonging to a still-running background job. (Finding 6.)
 - Global `AGENTS.md`: "Clean up what you start: containers, your worktree (`wt remove` after merge), files > 1 GB. Keep evidence in `$PI_SCRATCH`, never in the repo checkout."
 
@@ -68,12 +70,12 @@ A nightly launchd job:
 1. **Report** (§1). Check: categories match `du`/`docker system df` within 10%; worktree classification fixture tests (merged/unmerged/dirty/ignored/stored-session).
 2. **Worktrunk adoption + scratch rescue** (§2, §4 rescue). Check: create/remove in pi-workbench and `me` with `wt`; `.worktreeinclude` limits copying; a non-empty `.scratch/` survives removal; a failed move aborts removal; containers gone, volume listed.
 3. **Workstream scratch** (§4). Check: `PI_SCRATCH` present in attended bash, a Subagent and a Worker; traversal/symlink fixtures refused.
-4. **Awareness and bounds** (§5). Check: threshold tests with a fake `statfs`; a job writing past the low-water mark is stopped; log cap holds.
-5. **Nightly job** (§3). Check: one supervised run; notification lists only owner-gate items; `storage remove` refuses a changed item. Then one week of daily free-space readings.
+4. **Self-cleanup** (§5). Check: `storage report --workstream` lists exactly a fixture Workstream's items; a checkpoint in a real session shows the list and the agent removes its merged worktree; nudge appears with a fake `statfs`; log cap holds.
+5. **Nightly job** (§3). Check: one supervised run; notification lists only unowned items; `storage remove` refuses a changed item. Then one week of daily free-space readings.
 
 Each phase is one PR to pi-workbench `main`, promoted with `switch-workbench` (no PI WEB restart expected).
 
 ## Open questions
 
-- Thresholds 30 / 15 / 10 GB on a 460 GB disk?
+- Is 30 GB the right point to start nudging agents?
 - Should `reports/` and `evals/` stay owner-managed (current plan) or get an expiry?
