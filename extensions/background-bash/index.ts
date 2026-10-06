@@ -47,6 +47,7 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
       "A completed job reports its exit status and bounded output in a new message; do not claim success from its initial job ID.",
     ],
     parameters: Type.Object({
+      description: Type.String({ description: "Short description of what this command does, 3-10 words, in plain words (e.g. 'Check installed app build date'). Shown to the user instead of the command." }),
       command: Type.String({ description: "Shell command to execute" }),
       timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional; background jobs otherwise stop after 12 hours)" })),
       foreground: Type.Optional(Type.Boolean({ description: "Wait up to 30 seconds for output and exit status, then continue in the background; default false" })),
@@ -70,7 +71,7 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
       if (ctx.thinkingLevel) env.PI_REASONING_LEVEL = ctx.thinkingLevel;
       else delete env.PI_REASONING_LEVEL;
       const { shell, args } = getShellConfig();
-      const job = jobs.start(params.command, ctx.cwd, params.timeout, env, { sessionId: ctx.sessionManager.getSessionId(), sessionFile, shell, args });
+      const job = jobs.start(params.command, ctx.cwd, params.timeout, env, { sessionId: ctx.sessionManager.getSessionId(), sessionFile, shell, args, description: params.description });
       if (params.foreground === true) {
         const done = await jobs.wait(job.id, FOREGROUND_WAIT_MS, signal);
         if (done !== undefined) {

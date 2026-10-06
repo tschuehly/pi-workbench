@@ -66,11 +66,11 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
   }
 
   function describe(job) {
-    return { id: job.id, command: job.command, state: job.state, elapsedSeconds: Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000), bytes: job.bytes, logPath: job.logPath, ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }) };
+    return { id: job.id, command: job.command, ...(job.description === undefined ? {} : { description: job.description }), state: job.state, elapsedSeconds: Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000), bytes: job.bytes, logPath: job.logPath, ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }) };
   }
 
   function track(record, dir) {
-    const job = { id: record.id, sessionId: record.sessionId, dir, command: record.command, startedAt: record.startedAt, pgid: record.pgid, logPath: join(dir, "output.log"), state: "running", bytes: 0, lastActivity: 0 };
+    const job = { id: record.id, sessionId: record.sessionId, dir, command: record.command, description: typeof record.description === "string" && record.description.trim() !== "" ? record.description : undefined, startedAt: record.startedAt, pgid: record.pgid, logPath: join(dir, "output.log"), state: "running", bytes: 0, lastActivity: 0 };
     jobs.set(job.id, job);
     timer ??= setInterval(() => { for (const job of jobs.values()) check(job); }, intervalMs);
     timer.unref?.();
@@ -146,7 +146,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     deliver(job);
   }
 
-  function start(command, cwd, timeout, env, { sessionId, sessionFile, shell = "/bin/bash", args = ["-c"] } = {}) {
+  function start(command, cwd, timeout, env, { sessionId, sessionFile, shell = "/bin/bash", args = ["-c"], description } = {}) {
     if (closed) throw new Error("Background bash session has ended");
     if (typeof command !== "string" || command.trim() === "") throw new Error("A non-empty bash command is required");
     if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0 || timeout * 1000 > 2_147_483_647)) throw new Error("Invalid timeout in seconds");
@@ -158,7 +158,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     mkdirSync(dir, { mode: 0o700 });
     closeSync(openSync(join(dir, "output.log"), "wx", 0o600));
     const startedAt = Date.now();
-    const record = { id, command, cwd, sessionId, sessionFile, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000 };
+    const record = { id, command, description, cwd, sessionId, sessionFile, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000 };
     writeJson(join(dir, "job.json"), record);
     const runner = spawn(process.execPath, [RUNNER, dir], { cwd: dir, detached: true, stdio: "ignore", env });
     runner.unref();
@@ -243,7 +243,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     jobs.clear();
   }
 
-  /** Redacted, control-free command and recent output for the Activity drawer. */
+  /** Redacted, control-free command, description and recent output for the Activity drawer. */
   function preview(id, chars) {
     const job = jobs.get(id);
     if (job === undefined) return undefined;
@@ -252,7 +252,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     let output = full.slice(-chars);
     // Start at a line boundary when the cut fell mid-line.
     if (output.length < full.length && full[full.length - output.length - 1] !== "\n" && output.includes("\n")) output = output.slice(output.indexOf("\n") + 1);
-    return { command: redact(cleanOutput(job.command)).slice(0, 240), output, logPath: job.logPath };
+    return { command: redact(cleanOutput(job.command)).slice(0, 240), ...(job.description === undefined ? {} : { description: redact(cleanOutput(job.description)).slice(0, 120) }), output, logPath: job.logPath };
   }
 
   return { start, wait, preview, attach, acknowledge, redeliver, cancel, shutdown, list: () => [...jobs.values()].map(describe) };

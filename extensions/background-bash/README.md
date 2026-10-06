@@ -1,6 +1,6 @@
 # Background bash
 
-In an attended lead Pi session, this package overrides the model-callable `bash` tool. Commands run in the background by default, return a job ID immediately, show elapsed time and output bytes in Activity, and send the exit status plus recent output to the Chat when they finish.
+In an attended lead Pi session, this package overrides the model-callable `bash` tool. Commands run in the background by default, return a job ID immediately, show elapsed time and output bytes in Activity, and send the exit status plus recent output to the Chat when they finish. Every call carries a required short `description` (3–10 plain words) that Chat and Activity show instead of the raw command.
 
 Set `foreground: true` when a following action needs the command's exit status or output before proceeding. A foreground call still runs as a job: it returns the output inline if the command finishes within 30 seconds, otherwise it returns the job ID and the completion arrives like any background job, so a slow command never holds the agent. Foreground output is not streamed while waiting. After a background launch, continue independent work or end the turn; completion arrives automatically. `bash_status` is a diagnostic snapshot, not a way to poll for completion; use `bash_cancel` to stop a job. At most eight jobs per session run concurrently. Background jobs are attended session work, not durable Run jobs.
 
@@ -8,7 +8,7 @@ Jobs survive session shutdown, `/reload`, and PI WEB session-daemon restarts, in
 
 The job registry lives at `~/.pi-workbench/background-bash/jobs/<id>/` (directories `0700`, files `0600`):
 
-- `job.json`: ID, command, working directory, shell, owner Pi session ID and session file, runner PID and process group, start and expiry times;
+- `job.json`: ID, command, description, working directory, shell, owner Pi session ID and session file, runner PID and process group, start and expiry times;
 - `output.log`: combined stdout and stderr;
 - `exit`: exit code, error (timeout, maximum lifetime, vanished runner), or cancellation, written once;
 - `delivered`: created once when Pi starts the completion message in the Chat. Sending only queues it, so the marker waits for that acknowledgement.

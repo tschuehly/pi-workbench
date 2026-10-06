@@ -95,8 +95,9 @@ test("registry files are private", async () => {
 test("a job keeps running after shutdown; a new instance for the same owner reattaches, reports status, and cancels it", async () => {
   const fx = fixture();
   const first = fx.make();
-  const job = first.start("sleep 30", cwd, undefined, undefined, { sessionId: "owner" });
+  const job = first.start("sleep 30", cwd, undefined, undefined, { sessionId: "owner", description: "Wait half a minute" });
   const { pgid } = record(fx.root, job.id);
+  assert.equal(record(fx.root, job.id).description, "Wait half a minute");
   first.shutdown();
   assert.ok(fx.events.some((event) => event.type === "remove" && event.id === `background-bash:${job.id}`), "shutdown clears Activity");
   await sleep(200);
@@ -113,10 +114,12 @@ test("a job keeps running after shutdown; a new instance for the same owner reat
   assert.equal(second.list().length, 1);
   assert.equal(second.list()[0].state, "running");
   assert.equal(second.list()[0].id, job.id);
+  assert.equal(second.list()[0].description, "Wait half a minute", "the description survives reattach");
   assert.equal(second.cancel(job.id).state, "cancelled");
   await until(() => !groupAlive(pgid));
   assert.equal(fx.messages.length, 1);
   assert.match(fx.messages[0].message.content, /cancelled/);
+  assert.equal(fx.messages[0].message.details.description, "Wait half a minute");
   assert.deepEqual(fx.messages[0].options, { triggerTurn: false, deliverAs: "followUp" });
   second.shutdown();
 });
@@ -228,6 +231,7 @@ test("reattach reports a vanished runner, keeps bounded history, and prunes week
   await until(() => fx.messages.length === 1);
   assert.match(fx.messages[0].message.content, /vanished failed \(exit unknown\)\. The job runner ended without recording an exit status/);
   assert.equal(jobs.list().length, 64);
+  assert.equal("description" in jobs.list()[0], false, "records from before descriptions still load");
   assert.equal(existsSync(join(fx.root, "stale")), false);
   jobs.shutdown();
 });
