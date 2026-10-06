@@ -549,7 +549,7 @@ function stubOverlayRead(adapter, allowed = ["anthropic/claude-test", "anthropic
 
 test("admits leaf delegation tools for a coordinating worker but nothing beyond the ceiling", async () => {
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc() });
-  const coordinatorTools = ["read", "bash", "grep", "find", "ls", "subagent", "subagent_collect", "subagent_status", "subagent_cancel"];
+  const coordinatorTools = ["read", "bash", "grep", "find", "ls", "subagent", "subagent_collect", "subagent_status", "subagent_cancel", "subagent_steer"];
   const receipt = await adapter.dispatch(spec({ kind: "worker", tools: coordinatorTools }));
   assert.equal((await adapter.result(receipt.executionId)).kind, "worker");
   await assert.rejects(adapter.dispatch(spec({ tools: [...coordinatorTools, "worker_dispatch"] })), (error) => error.code === "CAPABILITY_EXCEEDED");
@@ -643,4 +643,18 @@ test("accepts distinct-model independence only under an active overlay with fres
     withoutOverlay.dispatch(spec({ cognitiveRole: "review", binding: { ...spec().binding, cognitiveRole: "review", independence } })),
     (error) => error.code === "INVALID_BINDING",
   );
+});
+
+test("steers a running child through a streaming RPC prompt and refuses a finished one", async () => {
+  const child = fakeRpc({ hang: true });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, killGraceMs: 1 });
+  const receipt = await adapter.dispatch(spec());
+  while (!child.commands.some((command) => command.type === "prompt")) await new Promise((resolve) => setImmediate(resolve));
+  const steered = await adapter.steer(receipt.executionId, "Focus on auth", "followUp");
+  assert.equal(steered.mode, "followUp");
+  const { id, ...sent } = child.commands.at(-1);
+  assert.deepEqual(sent, { type: "prompt", message: "Focus on auth", streamingBehavior: "followUp" });
+  await assert.rejects(adapter.steer(receipt.executionId, "x", "sideways"), (error) => error.code === "INVALID_SPEC");
+  await adapter.cancel(receipt.executionId, "test");
+  await assert.rejects(adapter.steer(receipt.executionId, "x"), (error) => error.code === "EXECUTION_TERMINAL");
 });

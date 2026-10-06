@@ -16,7 +16,7 @@ import { activityText, progressText, recordProgress, renderProgressLog, reported
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const resolver = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
-const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel"] as const;
+const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel", "subagent_steer"] as const;
 // The web tools are the ceiling web_enable activates within: Pi drops tools missing from --tools, so a
 // web_enable-only list would leave it nothing to enable. keepChildWebToolsLazy keeps them inactive until then.
 const WEB_TOOLS = ["web_search", "source_check", "fetch_content", "get_search_content"];
@@ -81,6 +81,7 @@ const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(rol
 const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
 // Session custom entries that let a reloaded runtime answer for children an earlier runtime launched.
 export const CHILD_RECORD = "pi-workbench.subagent-child";
+const CHILD_UPDATE = "pi-workbench:child-update";
 const RETAINED_TEXT_MAX = 8_000;
 
 const Params = Type.Object({
@@ -103,6 +104,13 @@ const StatusParams = Type.Object({
   all: Type.Optional(Type.Boolean({ description: "Include already-collected children for bounded diagnostics" })),
 });
 const CancelParams = Type.Object({ executionId: Type.String({ minLength: 1 }), reason: Type.Optional(Type.String({ description: "Why the child is being cancelled" })) });
+const SteerParams = Type.Object({
+  executionId: Type.String({ minLength: 1 }),
+  message: Type.String({ minLength: 1, description: "Steering instruction for the running child" }),
+  mode: Type.Optional(Type.Union([Type.Literal("steer"), Type.Literal("followUp")], { description: "steer: after its current tool calls (default); followUp: once it would otherwise stop" })),
+  requestUpdate: Type.Optional(Type.Boolean({ description: "Ask the child to report_status; its next report wakes you" })),
+});
+const UPDATE_REQUEST = "The lead asks for a progress update: call report_status now with where you stand, then continue your assignment.";
 const ReportStatusParams = Type.Object({
   status: Type.String({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
 });
@@ -196,6 +204,13 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.on("message_start", (event: { message?: unknown }) => completionWakeup.acknowledge(event.message));
   pi.on("agent_settled", () => completionWakeup.rearm());
 
+  // A Worker's dispatch ends when it settles, so a leaf still writing would outlive the result the
+  // lead reconciles. Hold settlement until background leaves finish, then continue once to collect.
+  const nudged = new Set<string>();
+  if (INSIDE_WORKER) {
+    pi.on("agent_before_settle", () => holdForLeaves({ pending: pendingSubagentCompletions, list: () => adapter.list(), collected, nudged }));
+  }
+
   pi.on("session_shutdown", async () => {
     shuttingDown = true;
     foreground.clear();
@@ -214,10 +229,10 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
       "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output. Do not add 'think carefully' lines; Model Effort controls thinking.",
-      "Correct an assignment by cancelling it and launching a new child; do not imply managed authority, recovery, or durable background work that survives the session.",
+      "Adjust a running child with subagent_steer; when the assignment itself changes, cancel it and launch a new child. Do not imply managed authority, recovery, or durable background work that survives the session.",
       "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review never go below xhigh.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
-      "Inside a Worker, a Subagent is the deepest supported level: keep it in the foreground, collect it once, and never launch a Worker from it.",
+      "Inside a Worker, a Subagent is the deepest supported level: never launch a Worker from it. The Worker cannot finish until its background Subagents end and are collected.",
     ],
     parameters: Params,
 
@@ -225,11 +240,6 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       const profile = PROFILES[params.profile];
       if (profile === undefined) {
         return failure("preflight_failed", `Unknown child profile: ${params.profile}.`);
-      }
-      // A nested leaf must settle before its Worker's dispatch returns, otherwise the lead would
-      // reconcile a Worker whose own child is still writing.
-      if (INSIDE_WORKER && params.background === true) {
-        return failure("preflight_failed", "A Subagent launched inside a Worker must run in the foreground so it settles and is collected before the Worker dispatch returns.");
       }
 
       const needsIndependence = INDEPENDENT_ROLES.has(params.cognitiveRole);
@@ -498,6 +508,34 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       } finally {
         removeActivity(pi, `delegate:${params.executionId}`);
       }
+    },
+  });
+
+  pi.registerTool({
+    name: "subagent_steer",
+    label: "Subagent steer",
+    description: "Send a steering message to a running Subagent or Worker, or ask it for an update. With requestUpdate, its next report_status wakes you; end the turn instead of waiting.",
+    promptSnippet: "Steer a running child Pi or request its status update",
+    parameters: SteerParams,
+    async execute(_toolCallId, params) {
+      const message = params.requestUpdate === true ? `${params.message}\n\n${UPDATE_REQUEST}` : params.message;
+      let receipt;
+      try {
+        receipt = await adapter.steer(params.executionId, message, params.mode ?? "steer");
+      } catch (error) {
+        return failure("preflight_failed", errorMessage(error));
+      }
+      if (params.requestUpdate === true) {
+        void awaitReportedUpdate(adapter, params.executionId, receipt.sequence).then((status) => {
+          if (status === undefined || shuttingDown) return;
+          const send = () => pi.sendMessage(
+            { customType: CHILD_UPDATE, content: `Child ${params.executionId} reported: ${status}\nThis update grants no new authority; continue the run that launched it.`, display: true, details: { executionId: params.executionId, status } },
+            { deliverAs: "steer", triggerTurn: true },
+          );
+          if ((sessionId === undefined ? undefined : checkpointBarrier(sessionId))?.defer(send, `${params.executionId}:update`) !== true) send();
+        });
+      }
+      return { content: [{ type: "text", text: `Sent ${receipt.mode} to ${params.executionId}.${params.requestUpdate === true ? " Its next report_status will wake you." : ""}` }], details: receipt };
     },
   });
 
@@ -854,6 +892,26 @@ export async function watchActivity(
   } finally {
     if (!completed || !retainTerminal()) removeActivity(pi, `delegate:${executionId}`);
   }
+}
+
+/** Waits for running leaves; asks for one continuation per leaf that ended uncollected. */
+export async function holdForLeaves({ pending, list, collected, nudged }: { pending: Set<Promise<unknown>>; list: () => { executionId: string; kind: string }[]; collected: Set<string>; nudged: Set<string> }) {
+  await Promise.allSettled([...pending]);
+  const unread = list().filter((s) => s.kind === "subagent" && !collected.has(s.executionId) && !nudged.has(s.executionId));
+  for (const s of unread) nudged.add(s.executionId);
+  return unread.length > 0 ? { continue: true } : undefined;
+}
+
+/** The child's first self-report after `afterSequence`, or undefined if it ends without one. */
+export async function awaitReportedUpdate(adapter: Pick<PiRpcExecutionAdapter, "observe">, executionId: string, afterSequence: number): Promise<string | undefined> {
+  try {
+    for await (const observation of adapter.observe(executionId)) {
+      if (observation.sequence <= afterSequence || observation.type !== "tool_start") continue;
+      const status = reportedStatusText(observation);
+      if (status !== undefined) return status;
+    }
+  } catch {}
+  return undefined;
 }
 
 export function emitExecutionEvent(pi: Pick<ExtensionAPI, "events">, event: Record<string, unknown>) {
