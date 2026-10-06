@@ -131,7 +131,13 @@ test("a child finishing between checkpoint scheduling and agent_settled wakes on
 
   options.onComplete({ summary: "checkpoint" });
 
-  assert.deepEqual(delivered, ["checkpoint:compacted", "wake:execution-1", "wake:execution-2"]);
+  // The checkpoint result starts a turn; a wake sent before that turn starts would race it
+  // and wedge the session, so wakes wait for the turn boundary.
+  assert.deepEqual(delivered, ["checkpoint:compacted"]);
+  assert.equal(childFinished("execution-2b"), true, "still held until the resumed turn starts");
+  assert.equal(barrier.turnBoundary(), 3);
+  assert.equal(barrier.turnBoundary(), 0, "idempotent");
+  assert.deepEqual(delivered, ["checkpoint:compacted", "wake:execution-1", "wake:execution-2", "wake:execution-2b"]);
   assert.equal(barrier.state, "idle");
   assert.equal(childFinished("execution-3"), false, "later children wake immediately again");
 });
@@ -144,6 +150,7 @@ test("a failed checkpoint still releases the children it queued", () => {
   coordinator.request(request);
   barrier.defer(() => delivered.push("wake:execution-1"), "execution-1");
   coordinator.onAgentSettled(() => { throw new Error("extension context is stale"); });
+  barrier.turnBoundary();
 
   assert.deepEqual(delivered, ["checkpoint:failed", "wake:execution-1"]);
   assert.equal(barrier.state, "idle", "a failed checkpoint must not strand the barrier closed");

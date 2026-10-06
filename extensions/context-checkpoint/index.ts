@@ -115,7 +115,12 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.on("agent_start", (_event, ctx) => {
+    checkpointBarrier(ctx.sessionManager.getSessionId()).turnBoundary();
+  });
+
   pi.on("agent_settled", (_event, ctx) => {
+    checkpointBarrier(ctx.sessionManager.getSessionId()).turnBoundary();
     coordinator.onAgentSettled((options: Parameters<typeof ctx.compact>[0]) => ctx.compact(options));
   });
 

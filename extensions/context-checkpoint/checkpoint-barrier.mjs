@@ -52,7 +52,26 @@ export function createCheckpointBarrier() {
       return true;
     },
 
-    /** Called after the checkpoint result is delivered; flushes every queued wake once. */
+    /**
+     * Called right after the checkpoint result is sent. That send starts a turn, and Pi marks
+     * the session streaming only after its async before_agent_start; a wake sent in that gap
+     * runs a second concurrent prompt that throws and wedges the session (every later prompt
+     * fails instantly). Keep holding wakes until `turnBoundary()`.
+     */
+    handOff() {
+      if (state !== "idle") state = "releasing";
+      return state;
+    },
+
+    /**
+     * agent_start (Pi now queues wakes as steer/followUp) or agent_settled (Pi defers and
+     * serializes triggered sends): queued wakes are safe to send. Idempotent.
+     */
+    turnBoundary() {
+      return state === "releasing" ? this.release() : 0;
+    },
+
+    /** Flushes every queued wake once. */
     release() {
       if (state === "idle") return 0;
       state = "idle";

@@ -35,9 +35,9 @@ export function createCheckpointCoordinator(resume, barrierFor) {
         finished = true;
         compacting = false;
         resume({ request, ...outcome });
-        // Compaction has succeeded or failed and the checkpoint result is delivered;
-        // only now may queued child wakes ask for their own turn.
-        barrier.release();
+        // The checkpoint result is sent; queued child wakes follow at the resumed turn's
+        // first boundary so they cannot race its start.
+        barrier.handOff();
       };
 
       try {
