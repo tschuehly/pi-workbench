@@ -63,6 +63,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// ⌘Q asks first; the Quit menu item, Dock Quit, logout and restarts quit at once.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let event = NSApp.currentEvent, event.type == .keyDown, event.modifierFlags.contains(.command),
+              event.charactersIgnoringModifiers?.lowercased() == "q" else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Quit Pi Workbench?"
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
     func applicationWillTerminate(_ notification: Notification) { browser.isQuitting = true; browser.saveWindows() }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
