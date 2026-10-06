@@ -1,4 +1,4 @@
-# Atelier (working name)
+# Atelier
 
 Pages an agent builds for one task, through which the human comments, decides and asks for work,
 and through which those actions reach the agent's Pi session.

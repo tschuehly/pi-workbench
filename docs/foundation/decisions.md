@@ -144,6 +144,10 @@ private evidence `atelier/docs/evidence/design-research-20261006/`. None is impl
 110. **A Page is identified by its file path.** *(Owner-settled on 2026-10-06.)* A Page belongs to neither a Workstream nor the session that created it, and outlives both. Not implemented.
 111. **Everything a Page uses is copied into the project, and changes flow back.** *(Owner-settled on 2026-10-06.)* The Kernel and Components are copied, not loaded from the harness; a change made in a copy is sent back to the Registry as a Contribution. Not implemented.
 112. **A Page opens in its own browser tab first.** *(Owner-settled on 2026-10-06.)* The agent links it in the Chat; a PI WEB panel ([interfaces](../contracts/interfaces.md), sandboxed application views) comes later. Not implemented.
+113. **A Decision counts as opened only after an explicit action.** *(Owner-settled on 2026-10-06.)* Expanding, clicking or playing its material counts; scrolling past does not, because a visibility timer recorded false agreement in html-plan. Not implemented.
+114. **Contributions travel as pull requests.** *(Owner-settled on 2026-10-06.)* When an agent changes a copied Kernel or Component, it raises a pull request against pi-workbench; a Registry fix reaches a copy only through a diff the owner accepts. Not implemented.
+115. **The first version has no access control.** *(Owner-settled on 2026-10-06.)* Pages serve on the local machine without tokens or origin checks; access control is a later, separate decision. Not implemented.
+116. **The first build target is Review Studio's core loop.** *(Owner-settled on 2026-10-06.)* Queue, item view, Comment, Decision with undo and Update, compared against PhotoQuest Review Studio; the Me eval home follows on top. Not implemented.
 
 ## Repository policy examples
 
