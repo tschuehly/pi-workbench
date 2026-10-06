@@ -22,7 +22,8 @@ Object.defineProperty(window, "piWebNative", {
     notify: (title, body, target) => window.webkit.messageHandlers.piWebNotification.postMessage({ title, body, ...target }),
     getSleepDisabled: () => window.webkit.messageHandlers.piWebGetSleepDisabled.postMessage({}),
     setSleepDisabled: disabled => window.webkit.messageHandlers.piWebSetSleepDisabled.postMessage(disabled),
-    openLocalFile: path => window.webkit.messageHandlers.piWebOpenLocalFile.postMessage(path)
+    openLocalFile: path => window.webkit.messageHandlers.piWebOpenLocalFile.postMessage(path),
+    revealLocalFile: path => window.webkit.messageHandlers.piWebRevealLocalFile.postMessage(path)
   })
 });
 """
@@ -36,6 +37,12 @@ func localOpenTarget(_ value: Any) -> URL? {
     guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return nil }
     if isDirectory.boolValue { return (try? url.resourceValues(forKeys: [.isPackageKey]).isPackage) == false ? URL(fileURLWithPath: url.path, isDirectory: true) : nil }
     return ["html", "htm"].contains(url.pathExtension.lowercased()) ? url : nil
+}
+
+/// Any existing local file or folder: revealing it in Finder only selects it, nothing opens.
+func localRevealTarget(_ value: Any) -> URL? {
+    guard let path = value as? String, path.hasPrefix("/"), FileManager.default.fileExists(atPath: path) else { return nil }
+    return URL(fileURLWithPath: path)
 }
 
 enum NativeNotificationCommand {
