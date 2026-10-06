@@ -56,6 +56,16 @@ Write `workstreams checkpoint <id>` when meaningful attention changes, without a
 - `--title`: this session's goal as a 2–6 word Chat title; never status or progress.
 - `--ref`: the current working directory first while it is a live continuation target, then only what is needed to resume. Use repository plus full commit ID for lasting Git evidence.
 
+After writing it, clean up storage without blocking your work: launch one background Subagent (profile `implementer`, Cognitive Role `routine`) and continue. Its brief: the Workstream id; what you still need (current working directory, worktrees, scratch, containers in use, unmerged work you will continue); and these rules:
+
+- Run `mac-storage-workspaces --workstream <id>`. It lists what the Workstream owns (paths it links to: worktrees, scratch, its sessions' PI_TMP, branch Docker containers and volumes) with sizes, and unlinked worktrees in the same repositories.
+- Delete what is no longer needed, including scratch, Docker volumes and unmerged work. Never touch what the lead still needs. Keep anything `pinned by` another open Workstream. Clean an unlinked worktree only without recent activity or a running process (another session is probably using it).
+- Before removing a worktree, move what is still needed from its `.scratch/` into `~/.pi-workbench/scratch/<id>/`.
+- If the command is missing or fails, delete nothing.
+- Done means: one sentence saying what was freed, what was kept, and why.
+
+Put that sentence in the next checkpoint's `--what`. Skip the launch when the previous cleanup is still running.
+
 In the same step, rewrite the overview if it no longer matches (`workstreams overview <id> --expect <rev> …`), and `workstreams resolve-task <id> <taskId>` for every Human Task Thomas answered or deferred. Do not create Human Tasks for questions: ask through the current Attention channel and record the open decision as `--next` with `--waiting owner`. Real-world obligations with a deadline outside Pi may still be Human Tasks (`workstreams append --help`).
 
 Then tell Thomas what the checkpoint says so he can correct it. A later checkpoint supersedes it.
@@ -74,6 +84,6 @@ Close only on Thomas's explicit instruction. Before closing, `show` and report u
 
 ### Retire a linked worktree
 
-Before owner-approved removal, check the worktree is clean, its unique changes are landed or deliberately retained, and Pi has no stored sessions under its exact directory. Move any open Workstream's live continuation reference to a valid workspace first, and keep repository identity plus a reachable full commit ID (or retained artifact) as evidence. A closed Workstream is immutable; report its missing old path as historical rather than rewriting the ledger. `git worktree remove` never migrates a Pi session.
+The owning agent decides whether its worktree is still needed (see the storage step in section 3); anything another open Workstream links to stays. Stored Pi sessions under the directory do not block removal once the checkpoint records the branch and full commit: the transcripts stay readable, and `wt switch --create <branch> --base <commit>` recreates the worktree at the same path to continue a chat. Move what is needed from `.scratch/` into the Workstream's scratch first, move any open Workstream's live continuation reference to a valid workspace, and keep repository identity plus a reachable full commit ID (or retained artifact) as evidence. A closed Workstream is immutable; report its missing old path as historical rather than rewriting the ledger. `git worktree remove` never migrates a Pi session.
 
 **Complete when:** no Pi session or open Workstream needs the worktree as a live target, and the retained evidence still resolves.
