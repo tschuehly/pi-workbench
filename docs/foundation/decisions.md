@@ -132,6 +132,19 @@ assume.
 106. **Latitude selects the model tier; five Cognitive Roles remain.** *(Owner-approved on 2026-09-25; replaces the eleven-role routing policy.)* Latitude is how much a child must decide for itself: how unclear the problem is and how little the brief specifies. The roles are `routine` (light tier), `implementation` (standard), `frontier` (strong), `coordination`, and `review`; the old role names are removed. Each tier has a default and a partner from the other family: strong Astra/Opus, standard Opus/Sol, light Luna/Sonnet. Routing falls back only to the tier partner and never changes tier. Fable is a reserve model reached only by name, chiefly as the second member of an Astra + Fable frontier panel on the hardest problems. `review` runs on the other family at `xhigh`, and `frontier` and `review` never go below `xhigh`. Detail: [`model-orchestration-redesign.md`](../plans/model-orchestration-redesign.md).
 107. **`light-review` is a sixth Cognitive Role for low-stakes independent checks.** *(Owner-approved on 2026-10-07; amends Decision 106.)* It keeps `review`'s cross-family rule but runs on the light tier at `high`, for PR text, documentation, comment replies, and finding triage only. Every code diff still gets `review` at `xhigh`. Evidence: the 2026-10-07 production-ready-pr run, where code delta reviews caught three failed fixes while text and triage checks found nothing in 3–5 minutes each.
 
+### Atelier: agent-built Pages
+
+These decisions define how agents build task-specific Pages and how human actions on them reach a
+session. Terms: [extensions/atelier/GLOSSARY.md](../../extensions/atelier/GLOSSARY.md). Research:
+private evidence `atelier/docs/evidence/design-research-20261006/`. None is implemented yet.
+
+107. **Atelier is rebuilt natively in Pi Workbench as a Kernel plus a Registry.** *(Owner-settled on 2026-10-06; replaces the skill-incubator Atelier, removed in skill-incubator 21eff3b.)* Like shadcn, but for agents: a small, robust Kernel for agent–human communication, and Components and Patterns that enter the Registry only after real use proves them. Not implemented.
+108. **The Kernel owns four primitives: Comment, Decision, Request and Update.** *(Owner-settled on 2026-10-06.)* A Decision carries options and one recommendation, can be revoked for 10 seconds, and records whether its material was opened. Verdict queues, diffs, timelines and charts are Components. Not implemented.
+109. **Human events reach the agent as Pi session messages.** *(Owner-settled on 2026-10-06; rejects the server-plus-poller path, which was the old Atelier's most fragile part.)* Every event is first appended to the Page's Event Log on disk, then delivered as a session message (follow-up while the agent is busy). Undelivered events go to the next session that opens the Page; without a session the Page offers copy. Not implemented.
+110. **A Page is identified by its file path.** *(Owner-settled on 2026-10-06.)* A Page belongs to neither a Workstream nor the session that created it, and outlives both. Not implemented.
+111. **Everything a Page uses is copied into the project, and changes flow back.** *(Owner-settled on 2026-10-06.)* The Kernel and Components are copied, not loaded from the harness; a change made in a copy is sent back to the Registry as a Contribution. Not implemented.
+112. **A Page opens in its own browser tab first.** *(Owner-settled on 2026-10-06.)* The agent links it in the Chat; a PI WEB panel ([interfaces](../contracts/interfaces.md), sandboxed application views) comes later. Not implemented.
+
 ## Repository policy examples
 
 ### PhotoQuest
