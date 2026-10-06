@@ -5,11 +5,28 @@ protocol UserNotificationCenter {
     func requestAuthorization(options: UNAuthorizationOptions, completionHandler: @escaping @Sendable (Bool, Error?) -> Void)
     func authorizationStatus(completionHandler: @escaping @Sendable (UNAuthorizationStatus) -> Void)
     func add(_ request: UNNotificationRequest, withCompletionHandler completionHandler: (@Sendable (Error?) -> Void)?)
+    /// Delivered and pending requests as identifier → thread identifier.
+    func notificationThreads(completionHandler: @escaping @Sendable ([String: String]) -> Void)
+    func removeNotifications(withIdentifiers identifiers: [String])
 }
 
 extension UNUserNotificationCenter: UserNotificationCenter {
     func authorizationStatus(completionHandler: @escaping @Sendable (UNAuthorizationStatus) -> Void) {
         getNotificationSettings { completionHandler($0.authorizationStatus) }
+    }
+
+    func notificationThreads(completionHandler: @escaping @Sendable ([String: String]) -> Void) {
+        getDeliveredNotifications { delivered in
+            self.getPendingNotificationRequests { pending in
+                let requests = delivered.map(\.request) + pending
+                completionHandler(Dictionary(requests.map { ($0.identifier, $0.content.threadIdentifier) }, uniquingKeysWith: { first, _ in first }))
+            }
+        }
+    }
+
+    func removeNotifications(withIdentifiers identifiers: [String]) {
+        removeDeliveredNotifications(withIdentifiers: identifiers)
+        removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 }
 
@@ -108,17 +125,48 @@ final class NativeNotificationBridge {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
+            var identifier = UUID().uuidString
             if let sessionId = values["sessionId"] as? String, let machineId = values["machineId"] as? String {
                 content.userInfo = ["sessionId": sessionId, "machineId": machineId]
                 if let message = values["message"] as? String { content.userInfo["message"] = message }
+                // Notification Center groups per Chat, and viewing the Chat clears its thread.
+                content.threadIdentifier = notificationThreadIdentifier(machineId: machineId, sessionId: sessionId)
+                identifier = "\(content.threadIdentifier)/\(identifier)"
             }
             content.sound = .default
-            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) { error in
+            center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil)) { error in
                 if let error { reply(nil, "Notification delivery failed: \(error.localizedDescription)") }
                 else { reply(true, nil) }
             }
         }
     }
+}
+
+extension NativeNotificationBridge {
+    /// Removes delivered and pending notifications for the Chat `shown` displays; other Chats keep theirs.
+    func clearChat(shown: URL?) {
+        guard let thread = chatThreadIdentifier(of: shown), let center = center ?? currentUserNotificationCenter() else { return }
+        center.notificationThreads { threads in
+            let identifiers = notificationIdentifiers(threads, thread: thread)
+            if !identifiers.isEmpty { center.removeNotifications(withIdentifiers: identifiers) }
+        }
+    }
+}
+
+func notificationThreadIdentifier(machineId: String, sessionId: String) -> String {
+    let encode = { (value: String) in value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? value }
+    return "pi-chat:\(encode(machineId)):\(encode(sessionId))"
+}
+
+/// The thread of the Chat a window URL shows; PI WEB omits `machine` for the local machine.
+func chatThreadIdentifier(of url: URL?) -> String? {
+    guard let sessionId = chatSessionId(of: url), !sessionId.isEmpty, let url else { return nil }
+    let machineId = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "machine" }?.value
+    return notificationThreadIdentifier(machineId: machineId ?? "local", sessionId: sessionId)
+}
+
+func notificationIdentifiers(_ threads: [String: String], thread: String) -> [String] {
+    threads.filter { $0.value == thread }.map(\.key).sorted()
 }
 
 func handleNativeNotificationMessage(

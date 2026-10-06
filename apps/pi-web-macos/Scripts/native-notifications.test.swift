@@ -27,9 +27,20 @@ private final class FakeCenter: UserNotificationCenter {
         completionHandler(status)
     }
 
+    var shown: [String: String] = [:]
+    var removed: [[String]] = []
+
     func add(_ request: UNNotificationRequest, withCompletionHandler completionHandler: (@Sendable (Error?) -> Void)?) {
         self.request = request
+        shown[request.identifier] = request.content.threadIdentifier
         completionHandler?(deliveryError)
+    }
+
+    func notificationThreads(completionHandler: @escaping @Sendable ([String: String]) -> Void) { completionHandler(shown) }
+
+    func removeNotifications(withIdentifiers identifiers: [String]) {
+        removed.append(identifiers)
+        identifiers.forEach { shown.removeValue(forKey: $0) }
     }
 }
 
@@ -206,6 +217,28 @@ struct NativeNotificationTests {
         precondition(notificationWindowIndex([staleWindow, panelWindow], sessionId: "b") == 1, "the window showing Chat b with a panel open wins")
         _ = route.report(URL(string: "about:blank")!, server: server)
         precondition(chatSessionId(of: route.shown) == "b", "the native startup page keeps the shown route")
+
+        // ISSUE-084: notifications group per Chat, and viewing a Chat clears only its own.
+        let tray = FakeCenter()
+        let trayBridge = NativeNotificationBridge(center: tray)
+        for (machine, session) in [("local", "s"), ("local", "s"), ("local", "t"), ("remote", "s")] {
+            trayBridge.notify(["title": "Chat", "body": "B", "machineId": machine, "sessionId": session]) { result, error in precondition(result as? Bool == true && error == nil) }
+        }
+        trayBridge.notify(["title": "Untargeted", "body": "B"]) { result, _ in precondition(result as? Bool == true) }
+        let threadS = notificationThreadIdentifier(machineId: "local", sessionId: "s")
+        precondition(tray.request?.content.threadIdentifier == "" && tray.shown.values.filter { $0 == threadS }.count == 2)
+        precondition(tray.shown.filter { $0.value == threadS }.allSatisfy { $0.key.hasPrefix(threadS + "/") }, "identifiers carry their Chat")
+        precondition(notificationThreadIdentifier(machineId: "a:b", sessionId: "c") != notificationThreadIdentifier(machineId: "a", sessionId: "b:c"), "Chat keys cannot collide")
+        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8505?session=s&view=chat")) == threadS, "a window URL omits the local machine")
+        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8505?machine=remote&session=s")) == notificationThreadIdentifier(machineId: "remote", sessionId: "s"))
+        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8505?project=p&workspace=w")) == nil && chatThreadIdentifier(of: nil) == nil)
+        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8505?project=p&workspace=w"))
+        precondition(tray.removed.isEmpty, "the chooser clears nothing")
+        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8505?session=s&tool=workspace-files:files&view=chat"))
+        precondition(tray.removed.count == 1 && tray.removed[0].count == 2 && tray.shown.count == 3, "viewing Chat s clears exactly its two notifications")
+        precondition(!tray.shown.values.contains(threadS) && tray.shown.values.contains(notificationThreadIdentifier(machineId: "local", sessionId: "t")) && tray.shown.values.contains(notificationThreadIdentifier(machineId: "remote", sessionId: "s")) && tray.shown.values.contains(""), "other Chats and untargeted notifications stay")
+        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8505?session=s"))
+        precondition(tray.removed.count == 1, "nothing left to remove for Chat s")
 
         guard let context = JSContext() else { preconditionFailure("JavaScriptCore unavailable") }
         context.evaluateScript("""

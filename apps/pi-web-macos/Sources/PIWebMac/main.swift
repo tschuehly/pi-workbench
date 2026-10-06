@@ -647,13 +647,18 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     func goBack() { if webView.canGoBack { webView.goBack() } }
     func goForward() { if webView.canGoForward { webView.goForward() } }
     func windowWillClose(_ notification: Notification) { onClose(self) }
+    // The window turns key again whenever the app reactivates, so this covers app activation too.
+    func windowDidBecomeKey(_ notification: Notification) { NativeNotificationBridge().clearChat(shown: shownURL) }
     func windowDidMove(_ notification: Notification) { onChange() }
     func windowDidEndLiveResize(_ notification: Notification) { onChange() }
     func windowDidResize(_ notification: Notification) { onChange() }
 
     private func remember(_ url: URL) {
-        guard let serverURL, route.report(url, server: serverURL) else { return }
-        onChange()
+        guard let serverURL else { return }
+        let shownChat = chatThreadIdentifier(of: route.shown)
+        let restorableChanged = route.report(url, server: serverURL)
+        if window?.isKeyWindow == true, chatThreadIdentifier(of: route.shown) != shownChat { NativeNotificationBridge().clearChat(shown: shownURL) }
+        if restorableChanged { onChange() }
     }
 
     func showStartup(_ message: String) {
