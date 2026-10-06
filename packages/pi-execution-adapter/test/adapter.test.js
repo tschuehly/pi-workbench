@@ -163,7 +163,7 @@ function fakeRpc(options = {}) {
       const index = input.indexOf("\n"); if (index < 0) return;
       const command = JSON.parse(input.slice(0, index)); input = input.slice(index + 1); child.commands.push(command);
       if (command.type === "get_state") {
-        if (options.hangOnGetState) pendingGetState = command;
+        if (options.hangOnGetState || (options.dropFinalState && child.commands.some((sent) => sent.type === "prompt"))) pendingGetState = command;
         else if (options.stateDelayMs !== undefined) setTimeout(() => send(stateResponse(command)), options.stateDelayMs);
         else send(stateResponse(command));
       }
@@ -175,7 +175,7 @@ function fakeRpc(options = {}) {
         if (!options.hang) queueMicrotask(() => {
           send({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "secret reasoning" } });
           send({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "src" } });
-          send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: options.text ?? "Compact result" }], stopReason: "stop" } });
+          send({ type: "message_end", message: options.finalMessage ?? { role: "assistant", content: [{ type: "text", text: options.text ?? "Compact result" }], stopReason: "stop" } });
           if (!options.omitSettled) send({ type: "agent_settled" });
         });
       }
@@ -281,6 +281,25 @@ test("reconciles terminal output when the settled event is missing but RPC state
   const receipt = await adapter.dispatch(spec());
   const result = await adapter.result(receipt.executionId);
   assert.equal(result.outcome, "success");
+  assert.equal(result.text, "Compact result");
+});
+
+test("reports a final assistant provider error as execution failure with its diagnostic", async () => {
+  const finalMessage = { role: "assistant", content: [], stopReason: "error", errorMessage: "synthetic usage limit 429" };
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ finalMessage }), killGraceMs: 1 });
+  const result = await adapter.result((await adapter.dispatch(spec())).executionId);
+  assert.equal(result.outcome, "execution_failed");
+  assert.equal(result.diagnostic, "synthetic usage limit 429");
+  const aborted = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ finalMessage: { ...finalMessage, stopReason: "aborted" } }), killGraceMs: 1 });
+  assert.equal((await aborted.result((await aborted.dispatch(spec())).executionId)).outcome, "cancelled");
+});
+
+test("settles a finished child whose final state reply never arrives within the control deadline", async () => {
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ dropFinalState: true }), killGraceMs: 1, controlTimeoutMs: 20 });
+  const receipt = await adapter.dispatch(spec());
+  const result = await Promise.race([adapter.result(receipt.executionId), new Promise((resolve) => setTimeout(() => resolve({ outcome: "still running" }), 500))]);
+  assert.equal(result.outcome, "execution_failed");
+  assert.match(result.diagnostic ?? "", /get_state.*20 ms/);
   assert.equal(result.text, "Compact result");
 });
 

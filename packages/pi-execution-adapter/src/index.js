@@ -23,6 +23,8 @@ export class PiRpcExecutionAdapter {
     this.spawn = options.spawn ?? nodeSpawn;
     this.killGraceMs = options.killGraceMs ?? 2_000;
     this.settlementProbeMs = options.settlementProbeMs ?? 5_000;
+    // Deadline for the post-terminal get_state; bounds a lost control reply, not the task.
+    this.controlTimeoutMs = options.controlTimeoutMs ?? 30_000;
     this.resultMaxChars = options.resultMaxChars ?? ((value) => Number.isSafeInteger(value) && value > 0 ? value : 8_000)(Number(process.env.PI_WORKBENCH_RESULT_MAX_CHARS));
     // A child's bounded result is a summary; the full final message is kept as a plain file the lead can read on demand.
     this.resultsDir = options.resultsDir ?? process.env.PI_WORKBENCH_RESULTS_DIR ?? join(homedir(), ".pi-workbench", "results");
@@ -224,6 +226,8 @@ export class PiRpcExecutionAdapter {
     }
     if (event.type === "message_end" && event.message?.role === "assistant") {
       state.finalText = assistantText(event.message);
+      state.finalStopReason = event.message.stopReason;
+      state.finalError = event.message.errorMessage;
       const usage = event.message.usage;
       if (usage !== undefined) this.#emit(state, "usage", usage);
       if (event.message.stopReason !== "toolUse") this.#scheduleSettlementProbe(state);
@@ -256,7 +260,7 @@ export class PiRpcExecutionAdapter {
     if (state.done || state.completing || state.cancelKind !== undefined) return;
     state.completing = true;
     try {
-      const current = await this.#command(state, "get_state");
+      const current = await this.#command(state, "get_state", {}, this.controlTimeoutMs);
       const idle = current?.isStreaming === false && current?.isCompacting === false && current?.pendingMessageCount === 0;
       if (idle) {
         this.#emit(state, "settlement_reconciled", { reason: "terminal output with idle RPC state" });
@@ -264,6 +268,7 @@ export class PiRpcExecutionAdapter {
         return;
       }
     } catch (error) {
+      if (error?.code === "CONTROL_TIMEOUT") return this.#settleFailure(state, "execution_failed", errorMessage(error));
       if (!state.done) this.#emit(state, "diagnostic", { message: `Settlement probe failed: ${errorMessage(error)}` });
     } finally {
       if (!state.done) state.completing = false;
@@ -277,11 +282,19 @@ export class PiRpcExecutionAdapter {
     state.settlementTimer = undefined;
     state.completing = true;
     try {
-      const current = await this.#command(state, "get_state");
+      const current = await this.#command(state, "get_state", {}, this.controlTimeoutMs);
       await this.#finishSuccess(state, current);
     } catch (error) {
-      if (!state.done) this.#finish(state, resultFor(state, "execution_failed", state.finalText, errorMessage(error)));
+      this.#settleFailure(state, "execution_failed", errorMessage(error));
     }
+  }
+
+  // A settled child that did not succeed: report it and retire the process like a success.
+  #settleFailure(state, outcome, diagnostic) {
+    if (state.done) return;
+    this.#finish(state, { ...resultFor(state, outcome, state.finalText, diagnostic), sessionId: state.sessionId });
+    state.child?.stdin?.end();
+    void this.#retireSuccessfulProcess(state);
   }
 
   async #finishSuccess(state, current) {
@@ -294,6 +307,8 @@ export class PiRpcExecutionAdapter {
       return;
     }
     this.#emit(state, "binding_verified", { provider: reportedProvider, model: reportedModel, effort: reportedEffort });
+    if (state.finalStopReason === "error") return this.#settleFailure(state, "execution_failed", bounded(String(state.finalError ?? "Final assistant message ended with an error."), 2_000));
+    if (state.finalStopReason === "aborted") return this.#settleFailure(state, "cancelled", state.finalError === undefined ? "Final assistant message was aborted." : bounded(String(state.finalError), 2_000));
     const fullTextPath = state.finalText.length > (state.resultMaxChars ?? 8_000) ? this.#spillFullText(state, state.finalText) : undefined;
     this.#finish(state, { ...resultFor(state, "success", state.finalText, undefined, fullTextPath), sessionId: current.sessionId });
     state.child?.stdin?.end();
@@ -332,7 +347,7 @@ export class PiRpcExecutionAdapter {
     clearTimeout(timer);
   }
 
-  #command(state, type, fields = {}) {
+  #command(state, type, fields = {}, timeoutMs) {
     if (state.done || state.child?.stdin?.destroyed) return Promise.reject(new Error("Pi RPC is unavailable."));
     const id = `${state.executionId}:${String(++state.commandSequence)}`;
     return new Promise((resolve, reject) => {
@@ -361,7 +376,11 @@ export class PiRpcExecutionAdapter {
         queueMicrotask(() => { if (!state.done) this.#sendPrompt(state); });
         resolve(data);
       };
-      state.commands.set(id, { command: type, resolve: type === "get_state" && !state.prompted ? verifyInitialState : resolve, reject });
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+        if (state.commands.delete(id)) reject(typedError("CONTROL_TIMEOUT", `Pi RPC did not answer ${type} within ${timeoutMs} ms after the child settled.`));
+      }, timeoutMs);
+      const settle = (fn) => (value) => { clearTimeout(timer); fn(value); };
+      state.commands.set(id, { command: type, resolve: settle(type === "get_state" && !state.prompted ? verifyInitialState : resolve), reject: settle(reject) });
       state.child.stdin.write(`${JSON.stringify({ ...fields, id, type })}\n`, (error) => {
         if (error !== null && error !== undefined) { state.commands.delete(id); reject(error); }
       });
