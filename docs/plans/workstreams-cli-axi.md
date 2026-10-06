@@ -23,7 +23,7 @@ The store, its records, revisions and idempotency remain the authority. Only the
 
 1. **An executable on PATH.** Add `~/.pi/agent/bin/workstreams`, symlinked to the installed CLI the same way `pi-telemetry` is. This removes `SKILL_DIR`.
 2. **A home view when run with no arguments.** Print the tool's path, a one-line description, and *this session's* Workstream if `PI_SESSION_ID` is associated (title, waitingOn, next). Then list open Workstreams compactly, followed by 2–3 `help:` next steps.
-3. **Compact text output by default, `--json` for scripts.** `workstream-dashboard` already parses JSON, so it moves to `--json`.
+3. **Compact text output by default, `--json` for scripts.**
    - **`list`:** one row per Workstream, with `id | title | group | waitingOn | updated`, plus `count: 32 open (17 closed)`. Add `--fields` for more columns.
    - **`show <id>`** (replaces `inspect`): overview; links; one line per session (`id | title | state | waitingOn | next`, truncated at about 300 characters); unresolved Human Tasks. `--full` gives the complete text.
 4. **Verb commands for the common writes.** The CLI fills in the envelope: `producer=session` (or `--owner`), `sourceSessionId=$PI_SESSION_ID`, `expectedRevision` read just before the write, and an `idempotencyKey` derived from the content.
@@ -47,4 +47,3 @@ The store, its records, revisions and idempotency remain the authority. Only the
 
 - Every one of the 12 failures in `workstreams-failures.md` becomes either impossible or one self-correcting error. Each has a regression test in `workstreams.test.mjs`.
 - `workstreams` with no arguments, `list`, and `show` together cost under 3 KB for today's store.
-- `tools/workstream-dashboard` still builds using `--json`.
