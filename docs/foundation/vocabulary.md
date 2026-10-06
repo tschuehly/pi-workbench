@@ -65,9 +65,9 @@ Broker operates across projects; a Project Broker operates across concurrent Run
 _Avoid_: Global coordinator, workflow controller, chat router
 
 **FirstMate:**
-The owner-facing Portfolio Broker profile for cross-session interaction that helps the owner
-inspect, resume, prioritize, and close Workstreams from their current projections. It may recommend
-action but does not own Workstream storage or Run state.
+The owner-facing coordinator across all sessions. It shows where each Workstream stands, collects
+decisions for the owner, and starts and steers sessions within code-enforced limits (Decision 127).
+It never edits projects and does not own Workstream storage or Run state.
 _Avoid_: Workstream controller, task database, session watcher
 
 ## Run and authority

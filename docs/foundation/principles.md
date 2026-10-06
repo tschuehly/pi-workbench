@@ -28,8 +28,8 @@ available on demand.
 Bound parallelism by dependencies, isolation, and review capacity. Prefer the shortest path to
 decision-changing evidence over unbounded discovery or review. An attention request pauses only
 the work it affects when dependencies and authority allow other work to continue. Coordination
-scales Human Attention across concurrent work without transferring execution authority to the
-coordinator.
+scales Human Attention across concurrent work. A coordinator may steer work only within limits
+enforced in code, never edits a project itself, and leaves irreversible actions to the owner.
 
 ### 4. Work shape follows context, not rank
 

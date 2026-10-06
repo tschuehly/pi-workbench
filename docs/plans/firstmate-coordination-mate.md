@@ -1,8 +1,7 @@
 # FirstMate coordination mate — capability plan
 
-**Status: rejected for V1 on 2026-09-08.** [Decision 103](../foundation/decisions.md) keeps a
-coordination mate deferred with managed execution. This document is retained as a rejected proposal;
-do not implement its capabilities or phases.
+**Status: superseded on 2026-10-06 by the [FirstMate plan](firstmate.md) (Decision 127).** Rejected for
+V1 on 2026-09-08 by Decision 103. Retained as historical analysis; do not implement its phases.
 
 The durable commitment belongs to [Principle 3](../foundation/principles.md#3-discovery-and-review-are-bounded):
 coordination scales Human Attention across concurrent work without transferring execution authority.
