@@ -191,6 +191,11 @@ export class PiRpcExecutionAdapter {
       this.#finish(state, resultFor(state, "launch_failed", "", errorMessage(error)));
       return;
     }
+    // An unhandled stream 'error' (EPIPE once the child is gone) would throw into the host process and
+    // take every session with it. Writes report failure through their callbacks; close settles the run.
+    for (const name of ["stdin", "stdout", "stderr"]) {
+      child[name]?.on("error", (error) => { if (!state.done) this.#emit(state, "diagnostic", { message: `Pi RPC ${name} error: ${errorMessage(error)}` }); });
+    }
     const startupTimeoutMs = this.defaultStartupTimeoutMs;
     state.startupTimeout = setTimeout(() => {
       if (state.done || state.phase !== "starting") return;
@@ -397,9 +402,7 @@ export class PiRpcExecutionAdapter {
       }, timeoutMs);
       const settle = (fn) => (value) => { clearTimeout(timer); fn(value); };
       state.commands.set(id, { command: type, resolve: settle(type === "get_state" && !state.prompted ? verifyInitialState : resolve), reject: settle(reject) });
-      state.child.stdin.write(`${JSON.stringify({ ...fields, id, type })}\n`, (error) => {
-        if (error !== null && error !== undefined) { state.commands.delete(id); reject(error); }
-      });
+      this.#write(state, { ...fields, id, type });
     });
   }
 
@@ -410,12 +413,26 @@ export class PiRpcExecutionAdapter {
     const id = `${state.executionId}:${String(++state.commandSequence)}`;
     state.commands.set(id, { command: "prompt", resolve: () => {}, reject: (error) => { if (!state.done) this.#finish(state, resultFor(state, "execution_failed", "", errorMessage(error))); } });
     const resultBudget = `Your final message is cut after ${state.resultMaxChars} characters. Lead with findings and cite repository paths; do not paste source or logs.`;
-    state.child.stdin.write(`${JSON.stringify({ id, type: "prompt", message: `${state.spec.task}\n\n${resultBudget}` })}\n`);
+    this.#write(state, { id, type: "prompt", message: `${state.spec.task}\n\n${resultBudget}` });
+  }
+
+  // The single stdin write path: a failed write rejects its pending command instead of throwing.
+  #write(state, command) {
+    const fail = (error) => {
+      const pending = state.commands.get(command.id);
+      state.commands.delete(command.id);
+      pending?.reject(error);
+    };
+    try {
+      state.child.stdin.write(`${JSON.stringify(command)}\n`, (error) => { if (error !== null && error !== undefined) fail(error); });
+    } catch (error) {
+      fail(error);
+    }
   }
 
   async #terminate(state) {
     if (state.done) return { executionId: state.executionId, outcome: state.result.outcome === "outcome_unknown" ? "outcome_unknown" : "cancelled" };
-    try { state.child?.stdin?.write(`${JSON.stringify({ id: `${state.executionId}:abort`, type: "abort" })}\n`); } catch {}
+    if (state.child?.stdin) this.#write(state, { id: `${state.executionId}:abort`, type: "abort" });
     await delay(Math.min(100, this.killGraceMs));
     if (!state.closed) this.#signal(state, "SIGTERM");
     await this.#waitForClose(state, this.killGraceMs);

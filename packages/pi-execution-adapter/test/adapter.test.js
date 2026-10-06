@@ -658,3 +658,22 @@ test("steers a running child through a streaming RPC prompt and refuses a finish
   await adapter.cancel(receipt.executionId, "test");
   await assert.rejects(adapter.steer(receipt.executionId, "x"), (error) => error.code === "EXECUTION_TERMINAL");
 });
+
+test("a command written to a child that already exited rejects instead of crashing the host (ISSUE-081)", async () => {
+  const { spawn: nodeSpawn } = await import("node:child_process");
+  const adapter = new PiRpcExecutionAdapter({
+    clock: () => now,
+    killGraceMs: 1,
+    // A real child that exits at once; block until it is gone so the adapter's first RPC write
+    // hits a closed pipe (EPIPE) before Node has delivered the child's close event.
+    spawn: (_command, _args, options) => {
+      const child = nodeSpawn("/bin/sh", ["-c", "exit 0"], { ...options, cwd: process.cwd(), detached: false });
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+      return child;
+    },
+  });
+  const receipt = await adapter.dispatch(spec());
+  const result = await adapter.result(receipt.executionId);
+  assert.equal(result.outcome, "launch_failed");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+});
