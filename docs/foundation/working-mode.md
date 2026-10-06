@@ -47,7 +47,7 @@ in the conversation, so the selected value alone chooses the channel.
 | --- | --- |
 | `Default` | Add no Attention-specific behavior; existing instructions apply. |
 | `Focused` | Thomas is watching: work in short, reported steps and ask one question at a time as soon as it arises. |
-| `Switching` | Thomas reads occasionally: keep working on unblocked parts, write only when blocked or finished, then send one status line and a numbered list of decisions with recommended defaults. |
+| `Switching` | Thomas reads occasionally: keep working on unblocked parts, write only when blocked or finished, then send one status line and a numbered list of decisions with recommended defaults. Each message is self-contained and supersedes the earlier ones. |
 | `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools and never in the conversation, even if Thomas also replies there. Send one update when a milestone finishes or work stops to wait. |
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
