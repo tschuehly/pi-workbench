@@ -159,6 +159,8 @@ test("a completion stays undelivered until Pi starts its message and is resent a
   assert.equal(existsSync(marker), false, "sendMessage only queues; it is not delivery");
   first.redeliver(); // agent_settled after the queued follow-up was cleared
   assert.equal(fx.messages.length, 2);
+  first.redeliver();
+  assert.equal(fx.messages.length, 2, "resent once: a settle that drops it again does not loop");
   first.shutdown(); // daemon dies before consuming it
   const second = fx.make();
   second.attach("owner");

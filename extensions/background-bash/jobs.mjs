@@ -120,11 +120,16 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
 
   /**
    * Resend finished, unacknowledged completions at an idle boundary (agent_settled): their queued
-   * follow-up was dropped. ponytail: a send made during settlement may be resent once; dedupe by
-   * pending message tracking if duplicates show up.
+   * follow-up was dropped. Once per job per process: a resend triggers a turn, and a turn that
+   * settles without delivering would otherwise resend forever. A later attach resends once more.
    */
+  const redelivered = new Set();
   function redeliver() {
-    for (const job of jobs.values()) if (job.state !== "running") deliver(job, true);
+    for (const job of jobs.values()) {
+      if (job.state === "running" || redelivered.has(job.id)) continue;
+      redelivered.add(job.id);
+      deliver(job, true);
+    }
   }
 
   function check(job) {

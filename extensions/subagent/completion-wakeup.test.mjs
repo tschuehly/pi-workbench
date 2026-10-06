@@ -115,8 +115,11 @@ test("re-sends one coalesced signal at settle when Pi dropped the undelivered on
   assert.equal(sent.length, 1, "pending terminal attention is re-signalled");
   assert.deepEqual(sent[0].message.details, { attention: "terminal-results" });
   wakeup.rearm();
-  assert.equal(sent.length, 2, "still undelivered: the next settle tries again");
+  wakeup.rearm();
+  assert.equal(sent.length, 1, "a resend that settles undelivered is not resent again (no settle loop)");
 
+  wakeup.notify({ ...subagent, executionId: "exec-3" });
+  assert.equal(sent.length, 2, "a new completion signals again");
   wakeup.acknowledge({ role: "custom", ...sent[1].message });
   wakeup.rearm();
   wakeup.rearm();
@@ -138,7 +141,7 @@ test("collection or shutdown clears pending attention that was never delivered",
   assert.equal(muted.sent.length, 1);
 });
 
-test("re-sends a dropped receipt-failure wake until it is delivered", async () => {
+test("re-sends a dropped receipt-failure wake once", async () => {
   const { wakeup, sent } = harness();
   await assert.rejects(settleWorkerReceipt({
     settle: async () => { throw new Error("registry write failed"); },
@@ -150,9 +153,8 @@ test("re-sends a dropped receipt-failure wake until it is delivered", async () =
   wakeup.rearm();
   assert.equal(sent.length, 2);
   assert.equal(sent[1].message.details.receiptStatus, "failed");
-  wakeup.acknowledge({ role: "custom", ...sent[1].message });
   wakeup.rearm();
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, 2, "no settle loop");
 });
 
 test("keeps receipt-failure attention outside normal coalescing", async () => {

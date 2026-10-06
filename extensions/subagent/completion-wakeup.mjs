@@ -22,9 +22,13 @@ export function createCompletionWakeup({ sendMessage }) {
   const receiptFailuresUndelivered = new Map();
   let shuttingDown = false;
   let queued = false;
+  // A resend triggers a turn that settles again; a turn that settles without delivering
+  // (e.g. Pi rejects the prompt) would otherwise resend forever and spin the session daemon.
+  let resent = false;
 
-  const signal = () => {
+  const signal = (resend = false) => {
     queued = true;
+    resent = resend;
     sendMessage(
       { customType: CUSTOM_TYPE, content: NORMAL_CONTENT, display: true, details: { attention: NORMAL_ATTENTION } },
       { deliverAs: "steer", triggerTurn: true },
@@ -47,12 +51,15 @@ export function createCompletionWakeup({ sendMessage }) {
       }
     },
 
-    /** Agent settled: whatever is still pending was dropped, so re-send it once. */
+    /** Agent settled: whatever is still pending was dropped, so re-send it once; subagent_collect still holds the results. */
     rearm() {
       queued = false;
       if (shuttingDown) return;
-      if (undelivered.size > 0) signal();
-      for (const [message, options] of receiptFailuresUndelivered.values()) sendMessage(message, options);
+      if (undelivered.size > 0 && !resent) signal(true);
+      for (const [executionId, [message, options]] of receiptFailuresUndelivered) {
+        receiptFailuresUndelivered.delete(executionId);
+        sendMessage(message, options);
+      }
     },
 
     beginReconciliation(executionId) {
