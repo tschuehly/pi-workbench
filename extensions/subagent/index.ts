@@ -155,7 +155,9 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   const dismissedActivity = new Set<string>();
   const pendingWorkerCompletions = new Set<Promise<unknown>>();
   const pendingSubagentCompletions = new Set<Promise<unknown>>();
-  const completionWakeup = createCheckpointAwareWakeup(pi);
+  // session_start and every launch record the session, so a wake reaches its own session's barrier.
+  let sessionId: string | undefined;
+  const completionWakeup = createCheckpointAwareWakeup(pi, () => sessionId === undefined ? undefined : checkpointBarrier(sessionId));
   if (process.env.PI_WORKBENCH_EXECUTION_KIND !== undefined) keepChildWebToolsLazy(pi);
   // Children an earlier runtime of this session launched; the live adapter no longer knows them.
   let retained = new Map<string, ChildRecord>();
@@ -174,6 +176,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   const retainedOnly = (executionId: string) => launched.has(executionId) ? undefined : retained.get(executionId);
   pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
     shuttingDown = false;
+    sessionId = ctx.sessionManager.getSessionId?.() ?? sessionId;
     retained = restoreChildRecords(ctx.sessionManager.getBranch?.() ?? []);
     for (const child of retained.values()) if (child.collected === true) collected.add(child.executionId);
   });
@@ -256,6 +259,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
 
       const parentSessionId = ctx.sessionManager.getSessionId();
+      sessionId = parentSessionId;
       const childTask = [profile.instruction, STATUS_INSTRUCTION, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
       const telemetryConcept = params.telemetryConcept ?? inheritedConcept();
       let receipt;
@@ -554,6 +558,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         return failure("preflight_failed", "Durable workers require a persisted lead Pi session.");
       }
       const parentSessionId = ctx.sessionManager.getSessionId();
+      sessionId = parentSessionId;
       let begin;
       try {
         begin = await registry.beginDispatch(params.workerId, {
@@ -1040,9 +1045,9 @@ export async function collectAll({ pending, running, settling = [], collectOne, 
 
 /**
  * A completion signal asks for a turn. While a context checkpoint is pending or compacting, the
- * shared barrier queues that signal instead and releases it exactly once after the checkpoint settles.
+ * session's barrier queues that signal instead and releases it exactly once after the checkpoint settles.
  */
-export function createCheckpointAwareWakeup(pi: any, barrier = checkpointBarrier()) {
+export function createCheckpointAwareWakeup(pi: any, barrierFor: () => { defer(send: () => void, key?: string): boolean } | undefined) {
   return createCompletionWakeup({
     sendMessage: (message: any, options: any) => {
       const send = () => pi.sendMessage(message, options);
@@ -1051,7 +1056,7 @@ export function createCheckpointAwareWakeup(pi: any, barrier = checkpointBarrier
       const key = message?.details?.attention !== undefined
         ? `attention:${message.details.attention}`
         : message?.details?.executionId === undefined ? undefined : `${message.details.executionId}:receipt-failure`;
-      if (!barrier.defer(send, key)) send();
+      if (barrierFor()?.defer(send, key) !== true) send();
     },
   });
 }

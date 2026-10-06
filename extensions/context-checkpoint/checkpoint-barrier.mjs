@@ -8,8 +8,11 @@
  * the instant the checkpoint is accepted until the checkpoint result has been
  * delivered, then releases them exactly once.
  *
- * Both extensions load in the same Pi process, so `checkpointBarrier()` returns one
- * shared instance; `createCheckpointBarrier()` exists for isolated tests.
+ * Both extensions load in the same Pi process, so `checkpointBarrier(sessionId)` returns
+ * one instance per session; `createCheckpointBarrier()` exists for isolated tests. The
+ * PI WEB session daemon hosts many sessions in one process, so a process-wide barrier
+ * would let one session's checkpoint hold, and its key collisions drop, every other
+ * session's child wakes.
  */
 export function createCheckpointBarrier() {
   let state = "idle";
@@ -67,8 +70,12 @@ export function createCheckpointBarrier() {
   };
 }
 
-const shared = createCheckpointBarrier();
+// ponytail: entries live for the process; one small idle object per lead session.
+const bySession = new Map();
 
-export function checkpointBarrier() {
-  return shared;
+export function checkpointBarrier(sessionId) {
+  if (typeof sessionId !== "string" || sessionId === "") throw new Error("checkpointBarrier needs a session id");
+  let barrier = bySession.get(sessionId);
+  if (barrier === undefined) bySession.set(sessionId, (barrier = createCheckpointBarrier()));
+  return barrier;
 }

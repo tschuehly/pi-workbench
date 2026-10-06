@@ -56,7 +56,20 @@ test("shutdown suppresses queued wakes instead of delivering them late", () => {
   assert.equal(sent, 0);
 });
 
-test("both extensions share one process-local barrier instance", () => {
-  assert.equal(checkpointBarrier(), checkpointBarrier());
-  assert.notEqual(checkpointBarrier(), createCheckpointBarrier());
+test("both extensions share one barrier per session, never across sessions", () => {
+  assert.equal(checkpointBarrier("session-a"), checkpointBarrier("session-a"));
+  assert.notEqual(checkpointBarrier("session-a"), checkpointBarrier("session-b"));
+  assert.throws(() => checkpointBarrier(undefined), /session id/);
+});
+
+test("one session's pending checkpoint neither holds nor replaces another session's wake", () => {
+  // Regression: the PI WEB daemon hosts many sessions in one process. A process-wide barrier let
+  // one session's checkpoint hold every session's child wakes for hours, and the shared
+  // coalescing key let one session's wake replace another's.
+  const sent = [];
+  checkpointBarrier("busy").open();
+  assert.equal(checkpointBarrier("busy").defer(() => sent.push("busy"), "attention:terminal-results"), true);
+  assert.equal(checkpointBarrier("waiting").defer(() => sent.push("waiting"), "attention:terminal-results"), false);
+  assert.equal(checkpointBarrier("busy").release(), 1);
+  assert.deepEqual(sent, ["busy"]);
 });

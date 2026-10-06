@@ -7,6 +7,7 @@ import {
   MAX_SUMMARY_FOCUS_CHARS,
   validateCheckpointRequest,
 } from "./coordinator.mjs";
+import { checkpointBarrier } from "./checkpoint-barrier.mjs";
 
 type CheckpointRequest = {
   summaryFocus: string;
@@ -21,6 +22,8 @@ type ResumeOutcome = {
 };
 
 export default function contextCheckpointExtension(pi: ExtensionAPI) {
+  // Every coordinator call that reaches the barrier follows a handler that recorded the session.
+  let sessionId: string | undefined;
   const coordinator = createCheckpointCoordinator((outcome: ResumeOutcome) => {
     const failed = outcome.status === "failed";
     const diagnostic = failed ? errorMessage(outcome.error) : undefined;
@@ -49,7 +52,7 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
       },
       { deliverAs: "followUp", triggerTurn: true },
     );
-  });
+  }, () => checkpointBarrier(sessionId));
 
   pi.registerTool({
     name: "compact_and_continue",
@@ -76,6 +79,7 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      sessionId = ctx.sessionManager.getSessionId();
       const request = {
         summaryFocus: params.summaryFocus.trim(),
         nextPhase: params.nextPhase.trim(),
@@ -116,7 +120,7 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", () => {
-    coordinator.dispose();
+    if (sessionId !== undefined) coordinator.dispose();
   });
 }
 

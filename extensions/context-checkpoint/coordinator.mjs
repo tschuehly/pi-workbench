@@ -1,6 +1,5 @@
-import { checkpointBarrier } from "./checkpoint-barrier.mjs";
-
-export function createCheckpointCoordinator(resume, barrier = checkpointBarrier()) {
+/** `barrierFor()` returns the current session's barrier; it is resolved at each use. */
+export function createCheckpointCoordinator(resume, barrierFor) {
   let pending;
   let compacting = false;
   let disposed = false;
@@ -17,7 +16,7 @@ export function createCheckpointCoordinator(resume, barrier = checkpointBarrier(
       pending = { ...request };
       // Block child wakes from acceptance, not from agent_settled: a child that finishes
       // in between would otherwise trigger a turn on the far side of the boundary.
-      barrier.open();
+      barrierFor().open();
       return { accepted: true, state: "pending" };
     },
 
@@ -27,6 +26,7 @@ export function createCheckpointCoordinator(resume, barrier = checkpointBarrier(
       const request = pending;
       pending = undefined;
       compacting = true;
+      const barrier = barrierFor();
       barrier.beginCompaction();
       let finished = false;
 
@@ -57,7 +57,7 @@ export function createCheckpointCoordinator(resume, barrier = checkpointBarrier(
       disposed = true;
       pending = undefined;
       compacting = false;
-      barrier.dispose();
+      barrierFor().dispose();
     },
   };
 }

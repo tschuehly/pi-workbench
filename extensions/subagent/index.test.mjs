@@ -750,7 +750,7 @@ test("makes harness revision drift observable to a long-running lead", () => {
 test("holds one coalesced completion signal while a context checkpoint is pending or compacting", () => {
   const barrier = createCheckpointBarrier();
   const sent = [];
-  const wakeup = createCheckpointAwareWakeup({ sendMessage: (message, options) => sent.push({ attention: message.details?.attention, deliverAs: options?.deliverAs, triggerTurn: options?.triggerTurn }) }, barrier);
+  const wakeup = createCheckpointAwareWakeup({ sendMessage: (message, options) => sent.push({ attention: message.details?.attention, deliverAs: options?.deliverAs, triggerTurn: options?.triggerTurn }) }, () => barrier);
   const finish = (executionId, extra = {}) => wakeup.notify({ executionId, outcome: "succeeded", profile: "implementer", cognitiveRole: "implementation", ...extra });
 
   finish("before-checkpoint");
@@ -789,7 +789,7 @@ test("re-arms coalesced completion attention on marker delivery and on agent_set
 test("keeps a terminal wake and a receipt-failure wake for one execution distinct across a checkpoint", () => {
   const barrier = createCheckpointBarrier();
   const sent = [];
-  const wakeup = createCheckpointAwareWakeup({ sendMessage: (message) => sent.push(message.details?.receiptStatus ?? "terminal") }, barrier);
+  const wakeup = createCheckpointAwareWakeup({ sendMessage: (message) => sent.push(message.details?.receiptStatus ?? "terminal") }, () => barrier);
 
   barrier.open();
   const base = { executionId: "execution-1", outcome: "succeeded", profile: "implementer", cognitiveRole: "implementation" };
@@ -895,8 +895,20 @@ test("bulk collection reports an empty roster and never hides a child failure", 
   assert.deepEqual(failing.details.collected, [{ executionId: "child-a", outcome: "outcome_unknown" }]);
 });
 
-test("the subagent extension uses the process-shared barrier", () => {
-  assert.equal(checkpointBarrier(), checkpointBarrier());
+test("a completion wake waits only for its own session's checkpoint", () => {
+  const sent = [];
+  const wakeupFor = (session) => createCheckpointAwareWakeup({ sendMessage: () => sent.push(session) }, () => checkpointBarrier(session));
+  const finish = (wakeup) => wakeup.notify({ executionId: "execution-1", outcome: "succeeded", profile: "implementer", cognitiveRole: "implementation" });
+
+  checkpointBarrier("checkpointing-lead").open();
+  finish(wakeupFor("checkpointing-lead"));
+  finish(wakeupFor("waiting-lead"));
+  assert.deepEqual(sent, ["waiting-lead"], "another session's checkpoint must not hold this wake");
+
+  checkpointBarrier("checkpointing-lead").release();
+  assert.deepEqual(sent, ["waiting-lead", "checkpointing-lead"]);
+  assert.equal(createCheckpointAwareWakeup({ sendMessage: () => sent.push("no-session") }, () => undefined).notify({ executionId: "execution-2", outcome: "succeeded", profile: "implementer", cognitiveRole: "implementation" }), true);
+  assert.equal(sent.at(-1), "no-session", "without a known session the wake is sent immediately");
 });
 
 test("child web tools stay behind web_enable even when a later tool registration re-activates the allowlist", () => {

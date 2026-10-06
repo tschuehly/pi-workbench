@@ -10,6 +10,8 @@ import {
 } from "./coordinator.mjs";
 import { createCheckpointBarrier } from "./checkpoint-barrier.mjs";
 
+const ownBarrier = () => { const barrier = createCheckpointBarrier(); return () => barrier; };
+
 const request = {
   summaryFocus: "Preserve implementation decisions and verification results.",
   nextPhase: "Review the finished implementation for lifecycle races.",
@@ -54,7 +56,7 @@ test("counts sibling tool calls in the latest assistant message", () => {
 
 test("compacts only after settlement and resumes after completion", () => {
   const outcomes = [];
-  const coordinator = createCheckpointCoordinator((outcome) => outcomes.push(outcome));
+  const coordinator = createCheckpointCoordinator((outcome) => outcomes.push(outcome), ownBarrier());
   const first = coordinator.request(request);
   const duplicate = coordinator.request({ summaryFocus: "other", nextPhase: "other" });
 
@@ -77,7 +79,7 @@ test("compacts only after settlement and resumes after completion", () => {
 
 test("disposal drops pending work and ignores stale callbacks", () => {
   const outcomes = [];
-  const coordinator = createCheckpointCoordinator((outcome) => outcomes.push(outcome));
+  const coordinator = createCheckpointCoordinator((outcome) => outcomes.push(outcome), ownBarrier());
   coordinator.request(request);
   let options;
   coordinator.onAgentSettled((value) => { options = value; });
@@ -92,7 +94,7 @@ test("disposal drops pending work and ignores stale callbacks", () => {
 
 test("reports asynchronous and synchronous compaction failures", () => {
   const outcomes = [];
-  const coordinator = createCheckpointCoordinator((outcome) => outcomes.push(outcome));
+  const coordinator = createCheckpointCoordinator((outcome) => outcomes.push(outcome), ownBarrier());
 
   coordinator.request(request);
   let options;
@@ -113,7 +115,7 @@ test("reports asynchronous and synchronous compaction failures", () => {
 test("a child finishing between checkpoint scheduling and agent_settled wakes only after compaction", () => {
   const delivered = [];
   const barrier = createCheckpointBarrier();
-  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), barrier);
+  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), () => barrier);
   const childFinished = (id) => barrier.defer(() => delivered.push(`wake:${id}`), id);
 
   assert.equal(coordinator.request(request).accepted, true);
@@ -137,7 +139,7 @@ test("a child finishing between checkpoint scheduling and agent_settled wakes on
 test("a failed checkpoint still releases the children it queued", () => {
   const delivered = [];
   const barrier = createCheckpointBarrier();
-  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), barrier);
+  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), () => barrier);
 
   coordinator.request(request);
   barrier.defer(() => delivered.push("wake:execution-1"), "execution-1");
@@ -150,7 +152,7 @@ test("a failed checkpoint still releases the children it queued", () => {
 test("session shutdown during a checkpoint drops queued wakes with the pending checkpoint", () => {
   const delivered = [];
   const barrier = createCheckpointBarrier();
-  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), barrier);
+  const coordinator = createCheckpointCoordinator((outcome) => delivered.push(`checkpoint:${outcome.status}`), () => barrier);
 
   coordinator.request(request);
   let options;
