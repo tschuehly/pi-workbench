@@ -56,7 +56,15 @@ Write `workstreams checkpoint <id>` when meaningful attention changes, without a
 - `--title`: this session's goal as a 2–6 word Chat title; never status or progress.
 - `--ref`: the current working directory first while it is a live continuation target, then only what is needed to resume. Use repository plus full commit ID for lasting Git evidence.
 
-Before writing it, clean up storage: run `mac-storage-workspaces --workstream <id>`. It lists what this Workstream owns (paths it links to: worktrees, scratch, its sessions' PI_TMP, branch Docker containers and volumes) with sizes, and unlinked worktrees in the same repositories. Decide by your judgment what is no longer needed and delete it, including scratch, Docker volumes and unmerged work. Keep anything `pinned by` another open Workstream. An unlinked worktree may be cleaned too, unless it shows recent activity or a running process (another session is probably using it). Before removing a worktree, move what is still needed from its `.scratch/` into `~/.pi-workbench/scratch/<id>/`. Add one sentence to `--what`: what you freed and what you kept and why. If the command is missing or fails, delete nothing and say so.
+After writing it, clean up storage without blocking your work: launch one background Subagent (profile `implementer`, Cognitive Role `routine`) and continue. Its brief: the Workstream id; what you still need (current working directory, worktrees, scratch, containers in use, unmerged work you will continue); and these rules:
+
+- Run `mac-storage-workspaces --workstream <id>`. It lists what the Workstream owns (paths it links to: worktrees, scratch, its sessions' PI_TMP, branch Docker containers and volumes) with sizes, and unlinked worktrees in the same repositories.
+- Delete what is no longer needed, including scratch, Docker volumes and unmerged work. Never touch what the lead still needs. Keep anything `pinned by` another open Workstream. Clean an unlinked worktree only without recent activity or a running process (another session is probably using it).
+- Before removing a worktree, move what is still needed from its `.scratch/` into `~/.pi-workbench/scratch/<id>/`.
+- If the command is missing or fails, delete nothing.
+- Done means: one sentence saying what was freed, what was kept, and why.
+
+Put that sentence in the next checkpoint's `--what`. Skip the launch when the previous cleanup is still running.
 
 In the same step, rewrite the overview if it no longer matches (`workstreams overview <id> --expect <rev> …`), and `workstreams resolve-task <id> <taskId>` for every Human Task Thomas answered or deferred. Do not create Human Tasks for questions: ask through the current Attention channel and record the open decision as `--next` with `--waiting owner`. Real-world obligations with a deadline outside Pi may still be Human Tasks (`workstreams append --help`).
 
