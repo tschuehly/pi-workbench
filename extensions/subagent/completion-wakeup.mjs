@@ -9,20 +9,50 @@ export function isNormalCompletionAttention(message) {
 
 /**
  * Owns session-local completion attention: normal completions coalesce into one steer
- * signal that only delivery re-arms, while a Worker receipt failure keeps its own exact
- * per-execution attention. Terminal result content remains behind subagent_collect.
+ * signal, while a Worker receipt failure keeps its own exact per-execution attention.
+ * Attention stays pending until its marker is delivered (or the result is collected), so a
+ * signal Pi drops from its queue is re-sent once at the next settle. Terminal result content
+ * remains behind subagent_collect.
  */
 export function createCompletionWakeup({ sendMessage }) {
   const handled = new Set();
   const receiptFailuresObserved = new Set();
   const reconciliationInFlight = new Set();
+  const undelivered = new Set();
+  const receiptFailuresUndelivered = new Map();
   let shuttingDown = false;
   let queued = false;
 
+  const signal = () => {
+    queued = true;
+    sendMessage(
+      { customType: CUSTOM_TYPE, content: NORMAL_CONTENT, display: true, details: { attention: NORMAL_ATTENTION } },
+      { deliverAs: "steer", triggerTurn: true },
+    );
+  };
+  const collected = (executionId) => {
+    reconciliationInFlight.delete(executionId);
+    handled.add(executionId);
+    undelivered.delete(executionId);
+  };
+
   return {
-    /** Idempotent: normal attention returns to idle so a later completion can signal again. */
+    /** Marker delivery: the lead is looking at this attention, so it is no longer pending. */
+    acknowledge(message) {
+      if (isNormalCompletionAttention(message)) {
+        queued = false;
+        undelivered.clear();
+      } else if (message?.role === "custom" && message.customType === CUSTOM_TYPE && message.details?.receiptStatus === "failed") {
+        receiptFailuresUndelivered.delete(message.details.executionId);
+      }
+    },
+
+    /** Agent settled: whatever is still pending was dropped, so re-send it once. */
     rearm() {
       queued = false;
+      if (shuttingDown) return;
+      if (undelivered.size > 0) signal();
+      for (const [message, options] of receiptFailuresUndelivered.values()) sendMessage(message, options);
     },
 
     beginReconciliation(executionId) {
@@ -30,13 +60,12 @@ export function createCompletionWakeup({ sendMessage }) {
     },
 
     finishReconciliation(executionId, terminal) {
-      reconciliationInFlight.delete(executionId);
-      if (terminal) handled.add(executionId);
+      if (terminal) collected(executionId);
+      else reconciliationInFlight.delete(executionId);
     },
 
     markHandled(executionId) {
-      reconciliationInFlight.delete(executionId);
-      handled.add(executionId);
+      collected(executionId);
     },
 
     shutdown() {
@@ -53,6 +82,7 @@ export function createCompletionWakeup({ sendMessage }) {
       } else {
         if (reconciliationInFlight.has(executionId) || handled.has(executionId)) return false;
         handled.add(executionId);
+        undelivered.add(executionId);
       }
 
       requiredString(meta.outcome, "outcome");
@@ -63,11 +93,7 @@ export function createCompletionWakeup({ sendMessage }) {
         // One signal per attention cycle: the lead reconciles the whole default status roster,
         // so a second child adds nothing until the first signal has been delivered.
         if (queued) return false;
-        queued = true;
-        sendMessage(
-          { customType: CUSTOM_TYPE, content: NORMAL_CONTENT, display: true, details: { attention: NORMAL_ATTENTION } },
-          { deliverAs: "steer", triggerTurn: true },
-        );
+        signal();
         return true;
       }
 
@@ -89,7 +115,9 @@ export function createCompletionWakeup({ sendMessage }) {
         resultAlreadyReconciled: handled.has(executionId),
       };
 
-      sendMessage({ customType: CUSTOM_TYPE, content, display: true, details }, { deliverAs: "followUp", triggerTurn: true });
+      const failure = [{ customType: CUSTOM_TYPE, content, display: true, details }, { deliverAs: "followUp", triggerTurn: true }];
+      receiptFailuresUndelivered.set(executionId, failure);
+      sendMessage(...failure);
       return true;
     },
   };

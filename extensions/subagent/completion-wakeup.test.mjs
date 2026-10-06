@@ -97,12 +97,62 @@ test("coalesces a fan-out into one signal that only a delivered marker re-arms",
   assert.equal(isNormalCompletionAttention({ ...marker, details: { executionId: "exec-1" } }), false);
   assert.equal(isNormalCompletionAttention(undefined), false);
 
+  wakeup.acknowledge(marker);
   wakeup.rearm();
-  wakeup.rearm();
-  assert.equal(sent.length, 1, "re-arming sends nothing");
+  assert.equal(sent.length, 1, "a delivered marker leaves nothing to re-send");
   assert.equal(finish(23), true);
   assert.equal(sent.length, 2, "a later completion signals again");
   assert.equal(finish(24), false);
+});
+
+test("re-sends one coalesced signal at settle when Pi dropped the undelivered one", () => {
+  const { wakeup, sent } = harness();
+  wakeup.notify(subagent);
+  wakeup.notify({ ...subagent, executionId: "exec-2" });
+  sent.length = 0; // Pi cleared its queue: the marker never reaches message_start.
+
+  wakeup.rearm();
+  assert.equal(sent.length, 1, "pending terminal attention is re-signalled");
+  assert.deepEqual(sent[0].message.details, { attention: "terminal-results" });
+  wakeup.rearm();
+  assert.equal(sent.length, 2, "still undelivered: the next settle tries again");
+
+  wakeup.acknowledge({ role: "custom", ...sent[1].message });
+  wakeup.rearm();
+  wakeup.rearm();
+  assert.equal(sent.length, 2, "a delivered signal does not re-fire on settle");
+});
+
+test("collection or shutdown clears pending attention that was never delivered", () => {
+  const collected = harness();
+  collected.wakeup.notify(subagent);
+  collected.wakeup.beginReconciliation("exec-1");
+  collected.wakeup.finishReconciliation("exec-1", true);
+  collected.wakeup.rearm();
+  assert.equal(collected.sent.length, 1, "collected results need no re-signal");
+
+  const muted = harness();
+  muted.wakeup.notify(subagent);
+  muted.wakeup.shutdown();
+  muted.wakeup.rearm();
+  assert.equal(muted.sent.length, 1);
+});
+
+test("re-sends a dropped receipt-failure wake until it is delivered", async () => {
+  const { wakeup, sent } = harness();
+  await assert.rejects(settleWorkerReceipt({
+    settle: async () => { throw new Error("registry write failed"); },
+    wakeup,
+    background: true,
+    completion: { ...subagent, executionId: "exec-worker", workerId: "worker-1", workerName: "Worker" },
+  }), /registry write failed/);
+  wakeup.markHandled("exec-worker");
+  wakeup.rearm();
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].message.details.receiptStatus, "failed");
+  wakeup.acknowledge({ role: "custom", ...sent[1].message });
+  wakeup.rearm();
+  assert.equal(sent.length, 2);
 });
 
 test("keeps receipt-failure attention outside normal coalescing", async () => {

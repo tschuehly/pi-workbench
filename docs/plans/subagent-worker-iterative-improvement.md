@@ -96,7 +96,7 @@ The completion signal should:
 - use `steer` delivery so a busy lead is reached between turns of one long run;
 - wake an idle lead with `triggerTurn: true`;
 - suppress every later completion until this signal is delivered; and
-- return to idle only on delivery of that exact message or on `agent_settled`, never on status or collection.
+- return to idle only on delivery of that exact message, never on status; while finished children stay undelivered and uncollected, `agent_settled` re-sends one coalesced signal.
 
 For a Worker, the terminal result and registry receipt must settle and the dispatch lock must release before the completion signal is sent. If a background receipt cannot settle, one separately deduplicated bounded `outcome_unknown` attention wakeup reports that failure without claiming lock release; a foreground failure returns `outcome_unknown` directly with the child result marked inspection-only. The terminal result remains available through the existing adapter for collection. Session shutdown still cancels live children. No wakeup may survive that shutdown.
 

@@ -755,7 +755,7 @@ test("holds one coalesced completion signal while a context checkpoint is pendin
 
   finish("before-checkpoint");
   assert.equal(sent.length, 1);
-  wakeup.rearm();
+  wakeup.acknowledge({ role: "custom", customType: "pi-workbench:child-completion", details: { attention: "terminal-results" } });
 
   barrier.open();
   finish("during-pending");

@@ -11,7 +11,7 @@ import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/sr
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
-import { createCompletionWakeup, isNormalCompletionAttention, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
+import { createCompletionWakeup, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -191,11 +191,9 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerShortcut("super+b", backgroundShortcut);
   pi.registerShortcut("ctrl+alt+b", backgroundShortcut);
 
-  // Delivery, not collection, clears coalesced completion attention: the lead is now looking at the
-  // signal. A settled agent re-arms too, so an aborted or swallowed delivery cannot mute later children.
-  pi.on("message_start", (event: { message?: unknown }) => {
-    if (isNormalCompletionAttention(event.message)) completionWakeup.rearm();
-  });
+  // Delivery or collection clears completion attention: the lead is now looking at it. A settled
+  // agent re-sends attention still pending, so a dropped or aborted delivery cannot lose children.
+  pi.on("message_start", (event: { message?: unknown }) => completionWakeup.acknowledge(event.message));
   pi.on("agent_settled", () => completionWakeup.rearm());
 
   pi.on("session_shutdown", async () => {
