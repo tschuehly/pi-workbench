@@ -77,7 +77,7 @@ test("settlement hook switches once, records one notice, and stops when fallback
   assert.equal(result.entries.length, 1);
   assert.equal(result.entries[0].display, true);
   assert.match(result.entries[0].content, /503 Service Unavailable/);
-  assert.match(result.entries[0].content, /openai-codex\/gpt-6-sol \(high\)/);
+  assert.match(result.entries[0].content, /openai-codex\/gpt-6.1-sol \(high\)/);
   assert.match(result.entries[0].content, /Before repeating any side-effecting action, check/);
   assert.deepEqual(h.calls, [["model", FALLBACK], ["thinking", "high"]]);
   assert.equal(await h.settle(), undefined, "consume failure only once");
@@ -150,7 +150,7 @@ test("native Pi retries finish before the extension continues on Sol", { skip: !
       agent: { state: { get model() { return model; } }, prompt: produce, continue: produce, hasQueuedMessages: () => false },
       settingsManager: { getRetrySettings: () => ({ enabled, maxRetries: 3, baseDelayMs: 0, maxAgentDelayMs: 0 }) },
       _retryAttempt: 0, _emit: (event) => events.push(event),
-      _omitRecoveryAttempt: () => {}, _checkCompaction: async () => false,
+      _recordSelection: () => {}, _omitRecoveryAttempt: () => {}, _checkCompaction: async () => false,
       _runBeforeSettleBoundary: async () => {
         const result = await handlers.agent_before_settle({ outcome: session._lastActivityOutcome }, ctx);
         if (result) notices.push(...result.entries);

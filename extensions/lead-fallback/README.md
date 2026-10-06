@@ -1,7 +1,7 @@
 # Lead service-failure recovery
 
 At `agent_before_settle`, a failed Anthropic lead request can switch to
-`openai-codex/gpt-6-sol` with high thinking and continue the same session.
+`openai-codex/gpt-6.1-sol` with high thinking and continue the same session.
 Eligible failures: account limits, overloads, HTTP 5xx, and timeouts.
 Cancellations, refusals, ordinary successful replies, and child executions are excluded.
 
@@ -14,7 +14,7 @@ not trigger another switch.
 
 ## Native retry boundary
 
-Inspected Pi 0.87.1: `AgentSession._runAgentPrompt` runs `_handlePostAgentRun` (including
+Inspected Pi 0.99.0: `AgentSession._runAgentPrompt` runs `_handlePostAgentRun` (including
 `_prepareRetry`) before `_runBeforeSettleBoundary`. The extension adds no retry loop.
 Defaults: three agent retries after the initial request, with 2/4/8-second backoff
 (capped at 60 seconds per delay); provider retries default to zero. Settings can override
@@ -38,6 +38,6 @@ This extension does not change native classification or settings.
 
 | Issue | Finding and status |
 | --- | --- |
-| Lead stops after Claude transient service failure | Implemented here; classifier, hook, and native-loop checks pass against Pi 0.87.1. Live validation pending promotion. |
+| Lead stops after Claude transient service failure | Implemented here; classifier, hook, and native-loop checks pass against installed Pi 0.99.0. Live validation pending promotion. |
 | Child service-failure recovery | Unchanged: `skills/model-orchestration/scripts/resolve-runtime-binding.mjs` selects fallback only at launch (catalog, effort, quota admission). Children retain native same-model retries, not automatic post-failure cross-provider recovery. The adapter verifies the original binding. |
 | Child failure reporting | Code inspection: `packages/pi-execution-adapter/src/index.js` handles `agent_settled` via `#completeSuccess` without checking its outcome. Reproduction/fix pending separate scope; do not interpret this extension as fixing child terminal reporting. |
