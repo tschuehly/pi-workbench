@@ -14,9 +14,8 @@ Reuses existing vocabulary and mechanics; invents no parallel framework:
 - Evaluation Case / Trial / Result and the blinding, freezing, and Pareto rules from
   [`model-evaluation-campaign-proposal.md`](../research/reports/model-evaluation-campaign-proposal.md)
   (unimplemented; this plan runs its cases by hand, without the `evals/` runner).
-- The evaluation loop, evidence bounds, and independent-evaluator rules of
-  [`skills/compound/SKILL.md`](../../skills/compound/SKILL.md), with reports under
-  `~/.pi-workbench/compound/sessions/<session-id>/`.
+- Measured model comparisons now run in Workstream `ws-model-routing-eval-20260925`. The
+  `compound` skill this plan used to name was retired on 2026-10-06.
 - The promotion rule already in the improvement roadmap: three comparable observations agreeing, or
   one reproducible high-impact failure.
 - Leaderboard hypotheses H1–H7 in
