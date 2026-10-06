@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import storageGuard, { freeGb } from "./index.ts";
 
+delete process.env.PI_WORKBENCH_EXECUTION_KIND; // hermetic when run inside a child Pi
+
 function load(gb) {
   process.env.PI_STORAGE_GUARD_FREE_GB = String(gb);
   const handlers = {};
