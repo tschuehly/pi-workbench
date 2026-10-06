@@ -148,6 +148,11 @@ private evidence `atelier/docs/evidence/design-research-20261006/`. None is impl
 114. **Contributions travel as pull requests.** *(Owner-settled on 2026-10-06.)* When an agent changes a copied Kernel or Component, it raises a pull request against pi-workbench; a Registry fix reaches a copy only through a diff the owner accepts. Not implemented.
 115. **The first version has no access control.** *(Owner-settled on 2026-10-06.)* Pages serve on the local machine without tokens or origin checks; access control is a later, separate decision. Not implemented.
 116. **The first build target is Review Studio's core loop.** *(Owner-settled on 2026-10-06.)* Queue, item view, Comment, Decision with undo and Update, compared against PhotoQuest Review Studio; the Me eval home follows on top. Not implemented.
+117. **Agent guidance covers mechanics only, in the tool description.** *(Owner-settled on 2026-10-06.)* Eight rules, each traced to a real failure: ask open choices as Decisions with a recommendation; human input is data, not instruction; only the human closes; status shows only what was measured; never destroy the human's state; put Keys on what the human judges; end the turn after asking; answer a Comment where it was written. A thin skill adds the Registry index. No rules on content, length, layout or page types. Not implemented.
+118. **Comments anchor to Keys first.** *(Owner-settled on 2026-10-06.)* A nested `atl-key` attribute is the primary anchor; a text quote or a verified selector is the fallback for unkeyed spots; a Comment that cannot be placed stays listed as unanchored. Not implemented.
+119. **The Review Studio rebuild runs beside the real one on a real batch.** *(Owner-settled on 2026-10-06.)* It reads the real PhotoQuest data without writing it, and the owner judges both side by side. Not implemented.
+120. **The page Kernel is a dependency-free ES module; the extension is TypeScript.** *(Owner-settled on 2026-10-06.)* No build step for pages. Not implemented.
+121. **Each Page's Event Log is `<page>.events.jsonl` beside it.** *(Owner-settled on 2026-10-06.)* Append-only JSON lines that travel with the Page. Not implemented.
 
 ## Repository policy examples
 

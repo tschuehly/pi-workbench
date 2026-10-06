@@ -10,6 +10,11 @@ An HTML document an agent writes for one task, identified by its file path, that
 session that created it. A Page may serve as a Review Surface.
 _Avoid_: Surface, artifact, dashboard
 
+**Key**:
+A stable attribute (`atl-key`) the agent puts on an element the human judges; nested Keys form its
+address, such as `run-12/turn-3`.
+_Avoid_: Region, id, selector
+
 **Kernel**:
 The small script and Pi extension that carry Comments, Decisions, Requests and Updates between a
 Page and the agent.
@@ -18,6 +23,10 @@ _Avoid_: core, runtime, SDK, kit
 **Comment**:
 A human remark anchored to text, an element or a point on a Page.
 _Avoid_: Thread, annotation, note
+
+**Unanchored Comment**:
+A Comment whose anchor can no longer be found on the Page; it stays listed, never dropped.
+_Avoid_: lost comment, orphan
 
 **Decision**:
 A question the agent asks with options and one recommended option. The human's answer can be
