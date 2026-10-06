@@ -6,4 +6,4 @@ Each command records today as an active day of the project and marks the session
 
 Attended sessions get `PI_TMP` per command from `background-bash`, because one PI WEB daemon hosts several sessions. Subagents and Workers run one session per process, so this extension sets it on the process. Set `PI_TMP_ROOT` to move the root (tests do).
 
-In every session the extension blocks `write` and `edit` into `/tmp`, `/private/tmp`, and `/var/tmp`, and appends a one-line warning to `bash` results that write, `cd`, or add a Git worktree there. It never sets `TMPDIR`: the long `PI_TMP` path would overflow the 104-byte Unix socket path limit.
+In every session the extension blocks `write` and `edit` into `/tmp`, `/private/tmp`, and `/var/tmp`, and appends a one-line warning to `bash` results that write, `cd`, or add a Git worktree there, and a warning to any `git worktree add` pointing to `wt switch --create`. It never sets `TMPDIR`: the long `PI_TMP` path would overflow the 104-byte Unix socket path limit.

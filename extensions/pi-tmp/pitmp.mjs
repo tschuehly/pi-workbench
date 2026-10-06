@@ -69,7 +69,13 @@ export function blockTmpWrite(path, cwd) {
   if (OS_TMP.test(target)) return `Blocked: ${target} is under an OS temp folder. ${useInstead()}`;
 }
 
-/** One-line warning when a bash command writes, cds, or adds a Git worktree under an OS temp folder, else undefined. */
+const GIT_WORKTREE_ADD = /\bgit\b[^;&|\n]*\bworktree\s+add\b/;
+
+/** Warning when a bash command writes, cds, or adds a Git worktree under an OS temp folder, or uses `git worktree add` at all, else undefined. */
 export function warnTmpBash(command) {
-  if (typeof command === "string" && BASH_TMP.test(command)) return `Warning: this command uses /tmp. ${useInstead()}`;
+  if (typeof command !== "string") return;
+  const warnings = [];
+  if (BASH_TMP.test(command)) warnings.push(`Warning: this command uses /tmp. ${useInstead()}`);
+  if (GIT_WORKTREE_ADD.test(command)) warnings.push("Warning: create worktrees with `wt switch --create <branch>` (sibling <repo>.<branch>, runs project hooks), not `git worktree add`.");
+  return warnings.join(" ") || undefined;
 }

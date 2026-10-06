@@ -18,9 +18,17 @@ test("bash that writes, cds, or adds a worktree under /tmp gets a warning; reads
     "git worktree add /private/tmp/wt -b fix main", "git -C ~/repo worktree add -b fix /tmp/wt main", "cp a.txt /tmp/"]) {
     assert.match(warnTmpBash(command), /^Warning: .*\$PI_TMP/, command);
   }
-  for (const command of ["cat /tmp/a", "ls /private/tmp", "echo > $PI_TMP/a", "git worktree add ../repo.fix -b fix", "grep -r tmp/ src"]) {
+  for (const command of ["cat /tmp/a", "ls /private/tmp", "echo > $PI_TMP/a", "wt switch --create fix", "grep -r tmp/ src"]) {
     assert.equal(warnTmpBash(command), undefined, command);
   }
+});
+
+test("any git worktree add points to wt switch --create", () => {
+  for (const command of ["git worktree add ../repo.fix -b fix", "git worktree add -b fix .scratch/fix-worktree main"]) {
+    assert.match(warnTmpBash(command), /^Warning: create worktrees with `wt switch --create/, command);
+  }
+  assert.match(warnTmpBash("git worktree add /tmp/wt -b fix"), /\$PI_TMP.*wt switch --create/);
+  assert.equal(warnTmpBash("git worktree list"), undefined);
 });
 
 test("the extension blocks write/edit tool calls and appends the bash warning without blocking", async () => {
