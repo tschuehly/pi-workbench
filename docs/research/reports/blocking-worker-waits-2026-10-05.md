@@ -32,7 +32,7 @@ ends when its turn ends. So:
 | C | Foreground `bash`: `sleep 1500`, then print the output file of a test run started earlier | Fixed delay, needless late discovery |
 
 The evidence distinguished live tool activity and live underlying work (Maven for C), but did not
-establish continuous output-log growth for each Worker. For chat-b, the gate log was at a compilation
+establish continuous output-log growth for each Worker. For Worker B, the gate log was at a compilation
 marker and its observed modification time was about six minutes stale. A process-liveness check is
 not evidence of log growth; these were point-in-time snapshots, not continuous observations. None of
 the three was a provider outage. A separate reviewer child had one transient provider error and
@@ -77,7 +77,7 @@ tail -n 3 <child session .jsonl>              # last entry a running bash, an as
 
 | Capability | Lead session | Subagent or Worker child |
 | --- | --- | --- |
-| `bash` | Workbench extension backgrounds it by default; each job's timeout is explicit if supplied, otherwise its runner lifetime applies (`extensions/background-bash/README.md`, `jobs.mjs`) | Native Pi `bash`, foreground only. It waits for shell exit, streams output, returns exit status, and accepts an optional timeout. `extensions/background-bash/index.ts` returns early when `PI_WORKBENCH_EXECUTION_KIND` is set |
+| `bash` | Workbench extension backgrounds it by default; a `foreground` call that runs longer than 30 s continues as a background job; each job's timeout is explicit if supplied, otherwise its runner lifetime applies (`extensions/background-bash/README.md`, `jobs.mjs`) | Native Pi `bash`, foreground only. It waits for shell exit, streams output, returns exit status, and accepts an optional timeout. `extensions/background-bash/index.ts` returns early when `PI_WORKBENCH_EXECUTION_KIND` is set |
 | `bash` timeout | Explicit per job; if omitted, the job runner uses its configured 12-hour lifetime. Explicit timeouts can be longer (up to the supported timer limit). | Optional per call, no default; timeout terminates the process tree (Pi 0.99.0 native tool) |
 | pi-process-monitor (`monitor*`) | Through `tools_enable({ group: "monitor" })` | Not available: not in `CHILD_TOOLS` (`extensions/subagent/index.ts`), and tool groups never register in children (`extensions/tool-groups/README.md`) |
 | Background Subagent with completion signal | Yes (Decisions 98–99, `docs/plans/level-1-subagents.md`) | No: inside a Worker, `background: true` fails preflight; leaf profiles have no delegation tools |
