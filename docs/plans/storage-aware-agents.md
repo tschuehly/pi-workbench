@@ -47,7 +47,7 @@ Free space always comes from a fresh `statfs`.
 - No PI_TMP deletion in hooks: PI_TMP is keyed per project, not per branch. (Finding 6.)
 - Rules: harness.md "Development worktrees", global `AGENTS.md`, the workstreams skill's retire section and PhotoQuest `CLAUDE.md`: create with `wt switch --create <branch>` and link the path to the Workstream; after the PR merges, the owning agent runs `wt remove` following the skill's existing pre-removal checks (clean, landed, no stored Pi sessions under the path, continuation moved). Integration stays via GitHub PRs; `wt merge` is not used. The `pi-tmp` guard's worktree warning also flags `git worktree add`.
 
-### 3. Nightly report: owned items go to their agents, unowned to the owner
+### 3. Scheduled report: owned items go to their agents, unowned to the owner
 
 The existing 6-hourly `mac-storage-candidates.sh` launchd job:
 1. Additionally applies the rest of the automatic set from the safety rule (`docker image prune -a`, `docker builder prune`, `git worktree prune`, `npm cache clean`, `brew cleanup`).
