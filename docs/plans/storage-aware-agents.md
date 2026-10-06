@@ -34,7 +34,7 @@ Out of scope: CPU/heavy-job limits, worktree pools (Treehouse), PI WEB grouping 
 ## The four parts
 
 1. **Report.** `mac-storage-workspaces --workstream <id>` in [mac-storage-maintenance](/Users/tschuehly/IdeaProjects/mac-storage-maintenance) lists free space, what the Workstream owns with sizes and pins, and unlinked worktrees in the same repositories. Bounded `du`, fast enough for a checkpoint.
-2. **Checkpoint and orient.** Both skills run the report; the agent cleans up and writes one line in the checkpoint saying what it kept and why.
+2. **Checkpoint and orient.** After each checkpoint the agent launches a background Subagent that runs the report and cleans up, told what the lead still needs; its one-sentence result goes into the next checkpoint. Orient runs the report and lists what looks deletable, deleting nothing.
 3. **Storage hook.** A `storage-guard` Pi extension: below 50 GB free, `before_agent_start` adds one line ("Disk low: N GB free; this Workstream owns M GB") and `agent_before_settle` appends a cleanup request and continues once at every run end (never twice in a row).
 4. **Worktrunk.** Rules in harness.md, global `AGENTS.md`, the workstreams skill and PhotoQuest `CLAUDE.md`: create with `wt switch --create`, remove with `wt remove` after merge; `wt merge` is not used. Before removal the agent moves what it needs from `.scratch/` into the Workstream's scratch; a user-level `pre-remove` hook in `~/.config/worktrunk/config.toml` moves any leftover there and aborts removal if the move fails.
 
