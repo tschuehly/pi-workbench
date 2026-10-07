@@ -4,6 +4,7 @@ export const GROUPS = {
   workers: { names: ["worker_create", "worker_dispatch", "worker_status", "worker_retire"] },
   monitor: { source: /pi-process-monitor/ },
   mcp: { source: /pi-mcp-adapter/ },
+  atelier: { names: ["atelier"] },
 };
 
 // pi-goal refuses to start or continue a goal unless these are active, so they are active while

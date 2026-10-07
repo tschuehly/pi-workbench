@@ -6,7 +6,7 @@ description: "Page contract and Registry index for the atelier tool. Use before 
 # Atelier
 
 A Page is one HTML file, in the project or at any absolute path. Write it, then call `atelier` with `open` and link the
-returned URL in the Chat. Terms: `extensions/atelier/GLOSSARY.md` in pi-workbench.
+returned URL in the Chat; if the tool is missing, call `tools_enable` with group `atelier` first. Terms: `extensions/atelier/GLOSSARY.md` in pi-workbench.
 
 ## Page contract
 
