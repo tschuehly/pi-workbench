@@ -25,6 +25,7 @@
     "implementation": { "tier": "standard", "effort": "medium" },
     "frontier": { "tier": "strong", "effort": "xhigh", "minEffort": "xhigh" },
     "coordination": { "tier": "standard", "effort": "medium" },
-    "review": { "tier": "standard", "effort": "xhigh", "minEffort": "xhigh", "independent": true, "thirdFamily": "grok" }
+    "review": { "tier": "standard", "effort": "xhigh", "minEffort": "xhigh", "independent": true, "thirdFamily": "grok" },
+    "light-review": { "tier": "light", "effort": "high", "independent": true, "thirdFamily": "grok" }
   }
 }

@@ -70,13 +70,13 @@ export function harnessRevision(files: string[] = HARNESS_SOURCES): string {
 }
 const LOADED_HARNESS_REVISION = harnessRevision();
 
-const COGNITIVE_ROLES = ["routine", "implementation", "frontier", "coordination", "review"] as const;
+const COGNITIVE_ROLES = ["routine", "implementation", "frontier", "coordination", "review", "light-review"] as const;
 // Latitude is how much the child must decide for itself: how unclear the problem is and how little
 // the brief specifies. It selects the model tier; skills/model-orchestration/references/routing-policy.json
 // names the models.
-const ROLE_GUIDE = "How much the child must decide; picks the model tier (see the model-orchestration skill).\nroutine: you can list what to check or change\nimplementation: you can state the finish line, not the approach\nfrontier: you have only a symptom or an open question\ncoordination: a Worker owning one scope\nreview: independent other-family judgment; state the lens";
+const ROLE_GUIDE = "How much the child must decide; picks the model tier (see the model-orchestration skill).\nroutine: you can list what to check or change\nimplementation: you can state the finish line, not the approach\nfrontier: you have only a symptom or an open question\ncoordination: a Worker owning one scope\nreview: independent other-family judgment; state the lens\nlight-review: other-family check of PR text, docs, or finding triage; never code";
 const MODEL_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-const INDEPENDENT_ROLES = new Set<string>(["review"]);
+const INDEPENDENT_ROLES = new Set<string>(["review", "light-review"]);
 const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
 const TERMINAL_OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
 // Session custom entries that let a reloaded runtime answer for children an earlier runtime launched.
@@ -123,7 +123,7 @@ const WorkerCreateParams = Type.Object({
 const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
   task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …', 'Stop and ask only if …', and the expected output. Continuity supplements explicit tasking; it never replaces it." }),
-  cognitiveRole: StringEnum(WORKER_ROLES, { description: `${ROLE_GUIDE}\nreview is subagent-only here: independence requires fresh context` }),
+  cognitiveRole: StringEnum(WORKER_ROLES, { description: `${ROLE_GUIDE}\nreview roles are subagent-only here: independence requires fresh context` }),
   modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'" })),
   effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),

@@ -50,6 +50,10 @@ that floor. Pass the author as `independentOfModel` from its completion receipt.
 frontier work, name the other family's strong model as `modelOverride`; the family check still
 applies. Size how many reviewers a conclusion needs with [Checking](references/checking.md).
 
+`light-review` is the same family check on the light tier at `high`. Use it only for PR text,
+documentation, comment replies, and classifying findings; every code diff, including a one-line
+fix, gets `review`.
+
 **Complete when:** every reviewer's receipt shows a family different from the author's, or the
 missing independence is reported.
 

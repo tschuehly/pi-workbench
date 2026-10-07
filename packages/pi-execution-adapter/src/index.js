@@ -8,7 +8,7 @@ import { stripVTControlCharacters } from "node:util";
 import { modelFamily, knownModelFamilies } from "./model-family.js";
 
 const OUTCOMES = new Set(["success", "preflight_failed", "launch_failed", "execution_failed", "cancelled", "outcome_unknown"]);
-const INDEPENDENT_ROLES = new Set(["review"]);
+const INDEPENDENT_ROLES = new Set(["review", "light-review"]);
 const EXECUTION_KINDS = new Set(["subagent", "worker"]);
 const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel", "subagent_steer"];
 

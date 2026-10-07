@@ -279,6 +279,13 @@ try {
 
   assert.equal(reviewOfClaude.modelBinding.effort, "xhigh", "review of Anthropic work never drops to the light tier");
 
+  // light-review keeps the family rule but uses the light tier for text and triage checks.
+  const lightOfClaude = passIndependent(["light-review", "--independent-of", "anthropic"]);
+  assert.equal(lightOfClaude.modelBinding.model, "gpt-6-luna");
+  assert.equal(lightOfClaude.modelBinding.effort, "high");
+  assert.equal(passIndependent(["light-review", "--independent-of", "openai-codex"]).modelBinding.model, "claude-sonnet-5-5");
+  assert.equal(runIndependent(["light-review"]).status, 3, "light-review still needs the author");
+
   const missingIndependence = runIndependent(["review"]);
   assert.equal(missingIndependence.status, 3);
   assert.match(missingIndependence.stderr, /requires --independent-of/);
