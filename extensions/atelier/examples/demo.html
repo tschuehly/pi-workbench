@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Atelier demo: eval run 12</title>
+<style>
+  :root { color-scheme: light dark; } /* the Kernel follows the Page: light, or dark when the OS is dark */
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 24px auto; padding: 0 16px 160px; }
+  [atl-key] { border: 1px solid #8884; border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+  table { border-collapse: collapse; } td, th { border: 1px solid #8886; padding: 2px 8px; }
+</style>
+</head>
+<body>
+<h1>Eval run 12</h1>
+<!-- Every Kernel primitive on one Page: Keys and versions, Comments (Key, text quote, selector),
+     an asked Decision with material, Page-declared Decisions (a 1–5 scale, Confirm/Redo with a required
+     note, one in a table cell via atl-slot), Requests (button and form), grouped Send,
+     and a data file read at load (decision 152). The agent posts the Decision with `atelier ask`. -->
+<p>This run checks whether the assistant answers the onboarding questions correctly. Select any sentence here and press the Comment button beside it to comment on the text itself.</p>
+
+<label>Filter turns <input id="filter" placeholder="type to filter"></label>
+
+<section atl-key="run-12" atl-ver="build-a1" atl-group>
+  <h2>Run 12 <button atl-request="rerun-all">Rerun all turns</button></h2>
+  <div atl-key="turn-1" atl-decide="1|2|3|4|5">
+    <b>Q:</b> How do I reset my password?<br><b>A:</b> Open Settings, then Security, then “Reset password”.
+  </div>
+  <div atl-key="turn-2" atl-decide="1|2|3|4|5">
+    <b>Q:</b> Which plans include SSO?<br><b>A:</b> Only the Enterprise plan includes SSO.
+  </div>
+  <div atl-key="turn-3" atl-decide="Confirm|Redo" atl-rec="Confirm" atl-note="Redo">
+    <b>Q:</b> Can I export my data?<br><b>A:</b> Yes, as CSV from the Reports page.
+  </div>
+</section>
+
+<details atl-key="evidence">
+  <summary>Evidence: judge log for run 12</summary>
+  <p>The judge marked turn 2 as incomplete because the Team plan also includes SSO since 2026-09.</p>
+</details>
+
+<h2>Statistics (read from demo-data.json)</h2>
+<table id="stats"><thead><tr><th>Turn</th><th>Pass rate</th><th>Keep in the suite?</th></tr></thead><tbody></tbody></table>
+
+<form atl-request="rerun-turn">
+  <label>Rerun one turn
+    <select name="turn"><option>turn-1</option><option>turn-2</option><option>turn-3</option></select>
+  </label>
+  <button>Request rerun</button>
+</form>
+
+<script type="module" src="atelier.js"></script>
+<script type="module">
+  // Page data comes from a project file, so filtering needs no agent turn (decision 152).
+  async function stats() {
+    const data = await (await fetch("demo-data.json", { cache: "no-store" })).json().catch(() => ({ turns: [] }));
+    const f = document.getElementById("filter").value.trim();
+    document.querySelector("#stats tbody").innerHTML = data.turns.filter((t) => t.id.includes(f))
+      .map((t) => `<tr atl-key="stat-${t.id}" atl-decide="Keep|Drop"><td>${t.id}</td><td>${Math.round(t.pass * 100)} %</td><td atl-slot></td></tr>`).join("");
+  }
+  document.getElementById("filter").addEventListener("input", stats);
+  document.addEventListener("atelier:update", stats);
+  stats();
+</script>
+</body>
+</html>

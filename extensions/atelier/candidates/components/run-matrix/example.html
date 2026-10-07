@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vergleichbare Ergebnisse nebeneinander</title>
+<style>.run-matrix{font:1rem/1.5 system-ui;padding:1rem}.run-matrix .scroll{overflow:auto}.run-matrix table{border-collapse:collapse}.run-matrix :is(th,td){text-align:left;vertical-align:top;border-bottom:1px solid #888;padding:.6rem}</style>
+<body><main class="run-matrix" id="run-matrix">
+<h1>Eine Antwort ist vollständiger; die zweite ist nicht vergleichbar</h1><p>Synthetischer Befund.</p>
+<div class="scroll"><table><caption>C = Correct, K = Complete · gleiche Eingabe input-1 und Wahrheit truth-1</caption>
+<thead><tr><th scope="col">Fall</th><th scope="col">Run A · build-a · model-x/low</th><th scope="col">Run B · build-b · model-x/low</th></tr></thead>
+<tbody><tr><th scope="row">Frage 1 · criteria-1</th><td atl-key="run-a-turn-1" atl-ver="a:criteria-1">Judge C PASS / K PARTIAL</td><td atl-key="run-b-turn-1" atl-ver="b:criteria-1">Judge C PASS / K PASS</td></tr>
+<tr><th scope="row">Frage 2</th><td atl-key="run-a-turn-2" atl-ver="a:criteria-1">Judge C FAIL / K FAIL</td><td atl-key="run-b-turn-2" atl-ver="b:criteria-2">Nicht vergleichbar: criteria-2 statt criteria-1</td></tr>
+<tr><th scope="row">Frage 3</th><td atl-key="run-a-turn-3" atl-ver="a:criteria-1">UNMEASURED</td><td atl-key="run-b-turn-3" atl-ver="b:criteria-1">UNMEASURED — keine Ergebniszelle als Null/FAIL auffüllen</td></tr></tbody>
+</table></div><p>Keine menschlichen Overrides in diesen Beispieldaten. Vorhandene Overrides separat aus dem Event Log ausweisen.</p>
+</main><script type="module" src="atelier.js"></script></body></html>

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Behauptung wirklich prüfen</title>
+<style>.claim-card{font:1rem/1.5 system-ui;max-width:70ch;padding:1rem}.claim-card article{margin-block:2rem}.claim-card textarea{font:inherit;display:block}</style>
+<body><main class="claim-card" id="claim-card">
+<h1>Entwurf bleibt bei Sendefehler erhalten</h1><p>Synthetisches Beispiel.</p>
+<article atl-key="change-example" atl-ver="build-example-1">
+<p><strong>Vorher:</strong> Der Entwurf verschwand. <strong>Jetzt behauptet:</strong> Er bleibt editierbar.</p>
+<p><strong>Ziel gefunden:</strong> Eingabefeld vorhanden. <strong>Szenario:</strong> Fehlerfall noch nicht erreichbar.</p>
+<section atl-key="verify"><h2>So wäre es prüfbar</h2>
+<ol><li>Den definierten Sendefehler auslösen können.</li><li>Text eingeben und senden.</li><li>Nach dem Fehler denselben Entwurf bearbeiten.</li></ol>
+<p><strong>Erwartet:</strong> Text bleibt stehen; Fehler erscheint neben dem Feld.</p></section>
+<p><strong>Beobachtung:</strong> Noch nicht geprüft. Kein Confirm/Redo, solange der Fehlerfall fehlt.</p>
+<!-- Add atl-decide="Confirm|Redo" only after this scenario is actually available. -->
+</article>
+<article atl-key="local-exercise" atl-ver="exercise-1" atl-decide="Confirm|Redo" atl-note="Redo">
+<h2>Erreichbare Übung: mehrzeiligen Text eingeben</h2>
+<p><strong>Vorher:</strong> Einzeilig. <strong>Jetzt:</strong> Mehrzeiliges Feld.</p>
+<label>Übungsentwurf <textarea id="claim-draft" rows="3"></textarea></label>
+<ol><li>Zwei Zeilen eingeben.</li><li>Die erste Zeile bearbeiten.</li></ol>
+<p><strong>Erwartet:</strong> Beide Zeilen bleiben editierbar. Das ist keine Prüfung des Sendefehlers oben.</p>
+</article></main><script type="module" src="atelier.js"></script></body></html>

@@ -105,9 +105,10 @@ test("groups match by package source and cover claude-code-use aliases", () => {
     { name: "mcp__linear", sourceInfo: { source: "npm:pi-mcp-adapter" } },
     { name: "mcp__mcp_adapter__mcpscript", sourceInfo: { source: "npm:@benvargas/pi-claude-code-use" } },
     { name: "read", sourceInfo: { source: "builtin" } },
+    { name: "atelier", sourceInfo: { source: "/x/pi-workbench" } },
   ];
-  assert.deepEqual([...hiddenNames(tools, (id) => id === "monitor", false)].sort(), ["mcp", "mcpScript", "mcp__linear", "mcp__mcp_adapter__mcpscript"]);
-  assert.deepEqual([...hiddenNames(tools, (id) => id === "mcp", true)].sort(), ["mcp__process_monitor__monitor", "monitor"]);
+  assert.deepEqual([...hiddenNames(tools, (id) => id === "monitor", false)].sort(), ["atelier", "mcp", "mcpScript", "mcp__linear", "mcp__mcp_adapter__mcpscript"]);
+  assert.deepEqual([...hiddenNames(tools, (id) => id !== "monitor", true)].sort(), ["mcp__process_monitor__monitor", "monitor"]);
   assert.deepEqual([...enabledGroups(tools, ["read", "mcp"])], ["mcp"]);
   assert.deepEqual(mcpServers(tools), ["linear"]);
   assert.equal(goalActive([{ type: "custom", customType: "goal-state", data: { goal: { status: "active" } } }, { type: "custom", customType: "goal-state", data: { goal: { status: "paused" } } }]), false);

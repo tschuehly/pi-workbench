@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Synthetische Test-App</title>
+<body><h1>Test-App</h1><button id="target-send">Entwurf senden</button><p>Kein echter Backend-Aufruf.</p>
+<script src="bridge.js"></script><script>
+if (location.protocol === 'http:' && ['127.0.0.1','localhost'].includes(location.hostname))
+  installAtelierReviewBridge({dev:true,parentOrigin:location.origin});
+</script></body></html>

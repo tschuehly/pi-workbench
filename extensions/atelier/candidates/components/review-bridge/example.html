@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>App-Stelle lokalisieren, nicht als geprüft ausgeben</title>
+<style>
+.review-bridge{font:1rem/1.5 system-ui;padding:1rem}.review-bridge :is(button,select,textarea){font:inherit}.review-bridge pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.review-bridge .stage{overflow:hidden}.review-bridge iframe{border:0;transform-origin:top left;height:600px}.review-bridge textarea{display:block;width:100%;box-sizing:border-box}
+</style><body><main class="review-bridge" id="review-bridge">
+<h1>Prüfpunkt in einer App markieren</h1><p>Synthetische Test-App · kein Backend-Aufruf.</p>
+<p id="bridge-state" role="status">Bridge noch nicht verbunden; Ziel nicht geprüft.</p>
+<label>App-Breite <select id="bridge-width"><option>1440</option><option>1024</option><option>390</option></select></label>
+<button data-focus disabled>Ziel zeigen</button> <button data-pick disabled>Stelle markieren</button> <button data-cancel disabled>Markieren beenden</button>
+<section id="bridge-app" atl-key="trial-app" atl-ver="build-example-1">
+<!-- The Key is OUTSIDE the clipped stage: Kernel UI is appended after the stage. -->
+<div class="stage" id="bridge-stage"><iframe id="bridge-frame" src="target.html?review=1" title="Isolierte synthetische Test-App"></iframe></div>
+</section>
+<section atl-key="picked-region" atl-ver="build-example-1"><h2>Markierung als Arbeit anfragen</h2>
+<p>Gefunden ist nicht verifiziert. Die Markierung ist ein Entwurf bis zum Absenden.</p><pre id="bridge-locator">Noch keine Markierung.</pre>
+<form atl-request="create-review-claim"><input type="hidden" name="locator"><input type="hidden" name="build">
+<label>Was soll geprüft werden? <textarea id="bridge-note" name="note" required></textarea></label><button id="bridge-submit" disabled>Prüfpunkt anfragen</button></form>
+</section></main><script type="module" src="atelier.js"></script><script type="module">
+const root=document.getElementById('review-bridge'), q=s=>root.querySelector(s);
+const target=new URL(q('iframe').getAttribute('src'),location.href), send=data=>q('iframe').contentWindow.postMessage(data,target.origin);
+let ready=false, picking=false, selected=false, locator='', build='', note='', status='Bridge noch nicht verbunden; Ziel nicht geprüft.';
+function render() {
+  const widthParam=new URL(location.href).searchParams.get('bridge-width'), width=[390,1024,1440].includes(Number(widthParam))?Number(widthParam):1440;
+  const stage=q('.stage'), frame=q('iframe'), scale=Math.min(1,stage.clientWidth/width);
+  q('#bridge-width').value=String(width);frame.style.width=`${width}px`;frame.style.transform=`scale(${scale})`;stage.style.height=`${600*scale}px`;
+  q('#bridge-state').textContent=status;q('[data-focus]').disabled=!ready;q('[data-pick]').disabled=!ready;q('[data-cancel]').disabled=!picking;
+  q('#bridge-locator').textContent=locator||'Noch keine Markierung.';q('[name=locator]').value=locator;q('[name=build]').value=build;
+  q('#bridge-note').value=note;q('#bridge-submit').disabled=!locator||build!==q('#bridge-app').getAttribute('atl-ver');
+}
+addEventListener('message',e=>{
+  if(e.source!==q('iframe').contentWindow||e.origin!==target.origin||!e.data||typeof e.data!=='object')return;
+  const m=e.data;
+  if(m.type==='review-ready'){ready=true;send({type:'review-items',items:[{id:'send-failure',selector:'#target-send'}]});if(picking)send({type:'review-pick'});}
+  if(m.type==='review-resolved'&&!selected&&!locator&&Array.isArray(m.ids)&&m.ids.every(id=>id==='send-failure'))status=`${m.ids.length} Ziel(e) gefunden; Szenario und Verhalten nicht geprüft.`;
+  if(m.type==='review-select'&&m.id==='send-failure'){selected=true;status='Prüfpunkt gewählt: Sendefehler. Noch keine Decision.';}
+  if(m.type==='review-picked'){
+    const l=m.locator;
+    if(!l||typeof l.cssPath!=='string'||!l.cssPath||l.cssPath.length>2000||typeof l.text!=='string'||l.text.length>160||typeof l.route!=='string'||l.route.length>2000||!l.rect||!l.viewport||!['x','y','w','h'].every(k=>Number.isFinite(l.rect[k]))||l.rect.w<0||l.rect.h<0||!['w','h'].every(k=>Number.isFinite(l.viewport[k])&&l.viewport[k]>0))return;
+    locator=JSON.stringify({cssPath:l.cssPath,text:l.text,route:l.route,rect:{x:l.rect.x,y:l.rect.y,w:l.rect.w,h:l.rect.h},viewport:{w:l.viewport.w,h:l.viewport.h}});
+    build=q('#bridge-app').getAttribute('atl-ver');picking=false;status='Markierung als Entwurf übernommen; Verhalten noch nicht geprüft.';
+  }
+  render();
+});
+root.addEventListener('click',e=>{
+  if(e.target.matches('[data-focus]'))send({type:'review-focus',id:'send-failure'});
+  if(e.target.matches('[data-pick]')){picking=true;send({type:'review-pick'});}
+  if(e.target.matches('[data-cancel]')){picking=false;send({type:'review-pick-off'});}render();
+});
+root.addEventListener('input',e=>{
+  if(e.target.id==='bridge-note')note=e.target.value;
+  if(e.target.id==='bridge-width'){const url=new URL(location.href);url.searchParams.set('bridge-width',e.target.value);history.replaceState(null,'',url);render();}
+});
+root.addEventListener('submit',e=>{if(!locator||build!==q('#bridge-app').getAttribute('atl-ver')){e.preventDefault();e.stopPropagation();}});
+// A listener can miss the iframe's first ready message; hello is an idempotent handshake.
+const hello=()=>{ready=false;send({type:'review-hello'});render();};q('iframe').addEventListener('load',hello);
+addEventListener('resize',render);addEventListener('popstate',render);
+document.addEventListener('atelier:update',()=>{render();hello();});render();hello();
+</script></body></html>

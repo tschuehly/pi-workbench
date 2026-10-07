@@ -8,6 +8,7 @@ Keeps rarely used tool groups out of the lead's startup context. A new session s
 | `workers` | `worker_create`, `worker_dispatch`, `worker_status`, `worker_retire` | Orchestration is Workers |
 | `monitor` | every tool from pi-process-monitor | — |
 | `mcp` | every tool from pi-mcp-adapter (`mcp`, `mcpScript`, `mcp__<server>`) | — |
+| `atelier` | `atelier` (extensions/atelier) | — |
 | goal | `goal_complete`, `goal_blocked`, `goal_wait` | a `/goal` is active (not enableable) |
 
 - **Cache:** tools added mid-session are declared as a transcript delta, which Pi sends to Anthropic

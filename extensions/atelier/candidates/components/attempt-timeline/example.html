@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Versuche mit vollständigen Schritten</title>
+<style>.attempt-timeline{font:1rem/1.5 system-ui;padding:1rem}.attempt-timeline>section>ol{display:flex;gap:2rem;overflow:auto;padding:1rem 1rem 2rem 2rem}.attempt-timeline>section>ol>li{flex:0 0 30rem;max-width:85vw}</style>
+<body><main class="attempt-timeline" id="attempt-timeline">
+<h1>Jeder Versuch bleibt nachvollziehbar</h1><p>Synthetische Daten, keine echten Judge-Zitate.</p>
+<section atl-key="artifact-example"><ol>
+<li atl-key="attempt-1" atl-ver="master-example-1"><h2>Versuch 1 · verworfen</h2><time>08:00–08:04 UTC</time>
+<ol><li atl-key="build">Aufbau: input-a → draft-a, 3 min.</li>
+<li atl-key="render">Render: draft-a → master-a, 40 s, 0,03 USD.</li>
+<li atl-key="check">Prüfung: master-a, FAIL — Ton endet bei 9 s, Bild bei 10 s.</li></ol>
+<blockquote>Judge (synthetisch): „In der letzten Sekunde fehlt der Ton. Die Bildfolge läuft weiter.“</blockquote>
+<p>Frame bei 9,5 s: nicht vorhanden. Ein belegter Frame mit Quellhash und Seek-Link gehört hierher, kein beliebiges Vorschaubild.</p>
+<p>Lead: neu rendern. Menschlicher Comment / Decision erscheint über den Kernel.</p></li>
+<li atl-key="attempt-2" atl-ver="master-example-2"><h2>Versuch 2 · bereit</h2><time>08:06–08:09 UTC</time>
+<p><strong>Änderung:</strong> Tonspur verlängert, input-b statt input-a.</p>
+<ol><li atl-key="build">Aufbau: input-b → draft-b.</li><li atl-key="render">Render: draft-b → master-b.</li>
+<li atl-key="check">Prüfung: master-b, PASS — Ton und Bild enden bei 10 s.</li></ol>
+<p>Kosten noch nicht gemessen. Vollständiger Prüfbeleg fehlt; PASS ist hier nur ein synthetischer Ergebniswert.</p></li>
+</ol></section></main><script type="module" src="atelier.js"></script></body></html>

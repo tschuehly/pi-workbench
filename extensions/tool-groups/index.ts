@@ -42,13 +42,13 @@ export default function toolGroups(pi: ExtensionAPI) {
   };
 
   function register(servers: string[]) {
-    const next = `Call tools_enable first when you need durable workers, the background process monitor, or MCP servers${servers.length ? ` (${servers.join(", ")})` : ""}; the tools appear on the next model request.`;
+    const next = `Call tools_enable first when you need durable workers, the background process monitor, MCP servers${servers.length ? ` (${servers.join(", ")})` : ""}, or Atelier Pages (interactive HTML the human comments on and decides in); the tools appear on the next model request.`;
     if (next === snippet) return;
     snippet = next;
     pi.registerTool({
       name: "tools_enable",
       label: "Enable Tools",
-      description: "Enable a tool group. workers: worker_create/dispatch/status/retire. monitor: monitor* tools for background processes and logs. mcp: MCP gateway (mcp, mcpScript, per-server proxies).",
+      description: "Enable a tool group. workers: worker_create/dispatch/status/retire. monitor: monitor* tools for background processes and logs. mcp: MCP gateway (mcp, mcpScript, per-server proxies). atelier: the atelier tool for Pages.",
       promptSnippet: snippet,
       parameters: Type.Object({ group: StringEnum(GROUP_IDS) }, { additionalProperties: false }),
       async execute(_id, { group }) {

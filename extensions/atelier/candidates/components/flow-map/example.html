@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ablauf und Beweisgrenzen</title>
+<style>.flow-map{font:1rem/1.5 system-ui;padding:1rem}.flow-map .split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:2rem}.flow-map .lane{display:flex;gap:2rem;overflow:auto;white-space:nowrap;padding:1rem 2rem}.flow-map a{color:#1257a0}.flow-map :focus-visible{outline:2px solid #1257a0;outline-offset:3px}</style>
+<body><main class="flow-map" id="flow-map">
+<h1>Vom Ablauf zum einzelnen Check</h1><p>Synthetische Struktur. Reale Reihenfolge aus Ausführungscode übernehmen, nicht aus diesem Beispiel.</p>
+<div class="split"><nav aria-label="Prozessstufen"><ol class="lane"><li><a href="#map-build">Aufbauen</a></li><li><a href="#map-check">Prüfen</a></li><li><a href="#map-output">Ausgeben</a></li></ol>
+<p>Produktion: nacheinander, Stopp bei Fehler. Diagnose: parallel, alle Ergebnisse sammeln.</p>
+<p><a href="#map-audio">Prüfen → Tonabdeckung</a>: echte Hierarchie, keine geometrischen Zoomknöpfe.</p></nav>
+<section atl-key="process" atl-ver="contract-example-1"><h2>Prozess</h2>
+<section id="map-build" atl-key="build"><h3>Aufbauen</h3><p>Eingabe erzeugt einen versionierten Master.</p></section>
+<section id="map-check" atl-key="check"><h3>Prüfen</h3><p>Nach einem Fehler bleiben spätere Produktionschecks UNMEASURED, nicht PASS.</p>
+<section id="map-audio" atl-key="audio"><h4>Tonabdeckung · hartes Gate</h4>
+<dl><dt>Immer / Wirkung / Herkunft</dt><dd>Vergleicht Endzeiten; blockiert bei Lücke. Entstand aus einem abgeschnittenen Tonende.</dd>
+<dt>Beweist nicht</dt><dd>Musikalische Qualität oder Lautheit.</dd>
+<dt>Kaputter Fall</dt><dd>Ton 9 s / Bild 10 s → erwartet FAIL; gemessen FAIL.</dd>
+<dt>Saubere Kontrolle</dt><dd>Ton 10 s / Bild 10 s → erwartet PASS; gemessen PASS.</dd>
+<dt>Quelle / Laufzeit</dt><dd>Beispieldaten; Implementierungsbeleg und Messung fehlen.</dd></dl>
+<p>Die lokale Kernel Decision gehört nach diese Belege, mit diesem Key als Material.</p></section></section>
+<section id="map-output" atl-key="output"><h3>Ausgeben</h3><p>Nur den geprüften Master weitergeben.</p></section>
+</section></div></main><script type="module" src="atelier.js"></script></body></html>
