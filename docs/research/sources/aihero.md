@@ -2,7 +2,7 @@
 
 ## Scope
 
-Primary AIHero material about coding-agent harnesses, repository-specific workflows, local and external state, multi-agent execution, human review, resumability, context management, and artifact retention. Reviewed on 2026-07-15; Skills v1.2 delta reviewed on 2026-08-07.
+Primary AIHero material about coding-agent harnesses, repository-specific workflows, local and external state, multi-agent execution, human review, resumability, context management, and artifact retention. Reviewed on 2026-07-15; Skills v1.2 delta reviewed on 2026-08-07; Skills v1.3 delta reviewed on 2026-10-06.
 
 ## Author Claims
 
@@ -88,3 +88,56 @@ These are architectural inferences from the evidence rather than claims made by 
 - Living dictionary entries: high for current author definitions, but they do not expose publication dates.
 - Universal GUI implications: inferred; AIHero offers no direct validation of that product shape.
 - Spec and ticket retention policy: open design decision due to missing direct guidance.
+
+## Skills v1.3 Delta (reviewed 2026-10-06)
+
+Source state: [`mattpocock/skills`](https://github.com/mattpocock/skills) at [`2b47ffc`](https://github.com/mattpocock/skills/commit/2b47ffcf2385995a536e43ddc9226e32cf9793d9) (2026-10-06), which contains tags `v1.3.0` (2026-09-29) and `v1.3.1` (2026-10-04). Links below are pinned to that commit. `M` abbreviates `https://github.com/mattpocock/skills/blob/2b47ffc`.
+
+Maturity: `implement-spec`, `retro`, and `pr` graduated into the shipped Engineering bucket in v1.3.0. `chief-of-staff` is in `skills/in-progress/`: four commits on 2026-10-05 and 2026-10-06, with no docs page and no published evidence of runs. Neither upstream skill ships tests or run evidence, so every claim below is a prompt-level design claim, not demonstrated behavior.
+
+### Author Claims
+
+1. **`implement-spec`** builds a whole spec in one run. Tickets are a **task graph** whose blocking edges define a ready **frontier**. Background implementer subagents work frontier tickets, each in its own worktree and branch. Each implementer confirms its worktree is based on the integration branch, builds with `tdd`, and merges the integration tip into its own branch before reporting done, "so each merge is a fast-forward". A merger subagent lands the work on one **integration branch**, and new frontier tickets start as soon as earlier ones land. An optional exploration subagent saves notes outside the repo for all later implementers. Communication goes through context pointers (spec, tickets, notes, commits), not copied content. The goal is the integration branch; a draft PR opens only if the tracker closes work through PRs or the user asks. `code-review` runs on the integration branch at the end, and one implementer fixes its findings.
+   - Sources: [`M/skills/engineering/implement-spec/SKILL.md`](https://github.com/mattpocock/skills/blob/2b47ffc/skills/engineering/implement-spec/SKILL.md); [CHANGELOG 1.3.0, #1120](https://github.com/mattpocock/skills/blob/2b47ffc/CHANGELOG.md).
+2. **`chief-of-staff`** is one long session acting as the Directly Responsible Individual for a goal, "accruing tribal knowledge". All work runs in background subagents to protect the coordinator's context and keep it in dialogue with the user. Communication is sparse and uses context pointers. It thinks on two tracks: tactical (finish the immediate task) and strategic (change the environment so the next task goes better). It considers environment improvement "FIRST": constrained APIs, lint rules, `CODING_STANDARDS.md`, access to logs, databases, and the browser, and a "no workarounds" rule. Where the harness allows, it suggests recurring schedules.
+   - Source: [`M/skills/in-progress/chief-of-staff/SKILL.md`](https://github.com/mattpocock/skills/blob/2b47ffc/skills/in-progress/chief-of-staff/SKILL.md).
+3. The `CONTEXT.md`/`CONTEXT-MAP.md` domain-doc convention is renamed to `GLOSSARY.md`/`GLOSSARY-MAP.md` in every skill that reads or writes it. Existing files must be moved with `git mv`, because the skills look only for the new names.
+   - Source: [CHANGELOG 1.3.0, `006a52b`](https://github.com/mattpocock/skills/blob/2b47ffc/CHANGELOG.md).
+4. Cross-skill dependencies are written as `Call the Skill tool with "x"`, one skill per call, because naming a skill in prose (`/x`) "does not reliably cause it to load" (upstream issue #453). The convention applies only to model-invoked skills. For a user-invoked precondition, the skill tells the human to run it.
+   - Sources: [`M/.agents/invocation.md`](https://github.com/mattpocock/skills/blob/2b47ffc/.agents/invocation.md); [CHANGELOG 1.3.0, #878 and #880](https://github.com/mattpocock/skills/blob/2b47ffc/CHANGELOG.md).
+5. The phase-boundary tree (continue, clear, handoff, subagent, compact; first yes wins) is unchanged in substance since v1.2. Its only v1.3 diff is the em-dash sweep. Claim 13 above still describes it.
+   - Source: [`M/skills/engineering/ask-matt/PHASE-BOUNDARIES.md`](https://github.com/mattpocock/skills/blob/2b47ffc/skills/engineering/ask-matt/PHASE-BOUNDARIES.md).
+6. **`retro`** suggests changes to the agent's environment, not the code: navigation pointers, automated checks, coding standards, steering-file size, no-op instructions, tool economy, and information access. A mechanical violation gets a deterministic check, and `CODING_STANDARDS.md` is kept for judgement calls. **`pr`** shapes a PR body as the smallest clarifying visual, before/after evidence, and a "merge danger" call (one-way or two-way door, plus blast radius). `resolving-merge-conflicts` is removed with no replacement.
+   - Sources: [`M/skills/engineering/retro/SKILL.md`](https://github.com/mattpocock/skills/blob/2b47ffc/skills/engineering/retro/SKILL.md); [CHANGELOG 1.3.0](https://github.com/mattpocock/skills/blob/2b47ffc/CHANGELOG.md).
+
+### Comparison and Verdicts
+
+Owner decision (Thomas, 2026-10-06): the two ideas worth borrowing are `implement-spec`'s parallel landing pattern and `chief-of-staff`'s goal-owner pattern. They belong in Pi Workbench as recorded notes, not as a build. Nothing below authorizes implementation.
+
+**1. Parallel frontier implementation onto one integration branch: adapt (note only).**
+- Problem it addresses: on 2026-10-05, in session `01a10ad8`, the owner asked "Can we parallelize?", then "stack them?", then "I want bigger PRs". The lead ran parallel implementer subagents, each preparing a separate local branch "to be combined later" by hand. `implement-spec` gives that sequence one shape: parallel work on the frontier, landed on one integration branch that becomes one larger PR.
+- Mechanisms worth keeping: (a) dispatch from the ready frontier of a dependency graph; (b) one worktree and branch per implementer; (c) **the implementer merges the integration tip before reporting**, so the agent that holds the ticket's context resolves the conflicts and every land is a fast-forward; (d) exploration notes written once, outside the repo, and passed to implementers as pointers.
+- Current Workbench reality: the `subagent` tool gives children no workspace isolation ([`extensions/subagent/README.md`](../../../extensions/subagent/README.md)). Worktrees are created by hand with `wt`. No integration-branch or fast-forward convention exists, and frontier dispatch is the intended Semantic Execution Graph, not implemented behavior. Upstream is ahead on this narrow mechanism. Workbench is ahead on model routing, independent review, and its stated stance on authority.
+- Destination when built: Repository Workspace for the worktree, integration-branch, and fast-forward rule; Semantic Execution Graph for frontier dispatch; Work Packet for pointer-only context. Notes go under `$PI_TMP` or `~/.pi-workbench/scratch/<workstream-id>/`, never `/tmp` or a repo `.scratch/`.
+- Evidence that would prove it: a multi-ticket change lands with no lead-side conflict resolution, every land is a fast-forward, and the owner gets one reviewable PR in less wall-clock time than serial implementation.
+- Must stay unchanged: Pi as the only worker runtime; landing and publication remain owner-authorized; the merger is a delegated step, not a second authority.
+
+**2. Single goal-owner session coordinating background work: adapt (note only), with a weaker fit than item 1.**
+- Problem it addresses: overnight and AFK runs that stall. Owner-cited example: session `01a11007` on 2026-10-06. The useful parts are one owner per goal, all work delegated to background children, sparse pointer-based reports, and a standing strategic track that improves the environment while the tactical work proceeds.
+- Comparison with current Workbench, stated honestly:
+  - **Workstreams** already restore attention across sessions durably ([`docs/contracts/workstreams.md`](../../contracts/workstreams.md)). `chief-of-staff` keeps its "tribal knowledge" in one session's context, which compaction and session death destroy. Workbench is better on durability. It has no explicit goal-owner role; the attended lead plays that role informally.
+  - **`define-goal`** gives a verifiable objective and success criteria ([`skills/define-goal/SKILL.md`](../../../skills/define-goal/SKILL.md)). `chief-of-staff` has no done condition or evidence bar. Workbench is better here.
+  - **`model-orchestration`** routes children by Cognitive Role and requires independent review ([`skills/model-orchestration/SKILL.md`](../../../skills/model-orchestration/SKILL.md)). `chief-of-staff` says nothing about model choice or review. Workbench is better here.
+  - On stalls, `chief-of-staff` assumes the long session stays alive. Workbench background children die on `session_shutdown`, and durable unattended execution is deferred to the controller ([`extensions/subagent/README.md`](../../../extensions/subagent/README.md)). The skill is a prompt and gives no stall detection or recovery, so it does not fix the observed failure by itself.
+  - The strategic track overlaps `skills/compound`. "FIRST consider how the environment might be improved" can crowd out the tactical task unless it is bounded.
+- What is worth noting: the two-track framing and the explicit goal-owner stance on top of `define-goal`, Workstreams, and background subagents. Upstream is converging on the Workbench design rather than ahead of it.
+- Evidence that would prove it: a goal-owner AFK run whose stall rate and owner interventions are lower than the 2026-10-06 baseline, with at least one environment improvement landed per run that does not delay the tactical deliverable.
+- Must stay unchanged: Workstreams grant no execution authority; FirstMate stays non-mutating; durable recovery remains a controller concern and does not move into a long session's context.
+
+**3. `GLOSSARY.md` rename: no Pi Workbench change.** Workbench terminology lives in [`docs/foundation/vocabulary.md`](../../foundation/vocabulary.md), and this repository has no `CONTEXT.md`. The rename affects repositories that use the vendored `domain-modeling` family, and those must `git mv` their `CONTEXT.md`. That migration belongs to each repository and to the skill-incubator vendoring, not to Workbench.
+
+**4. "Call the Skill tool" convention: adapt (wording only, unverified).** Pi has no `Skill` tool. Pi loads a skill when the agent reads the `SKILL.md` listed in its skill catalog. The transferable lesson is that an operative, explicit instruction beats a bare `/name` mention. For Workbench-authored skills, the equivalent wording is "Load the `x` skill" (read its `SKILL.md`). Vendored upstream skills keep the literal "Call the Skill tool" text, and nobody has yet checked whether Pi agents reliably follow it.
+
+**5. `PHASE-BOUNDARIES.md` tree versus `compact_and_continue`: no new lesson.** [`extensions/context-checkpoint/`](../../../extensions/context-checkpoint/README.md) already limits compaction to a completed phase whose next phase is concrete and benefits from a smaller context. That covers the tree's "continue first, compact last" ordering for one mechanism. The tree's ordering of clear, handoff, and subagent is still not stated locally. The v1.2 recommendation to fold it into session-boundary guidance ([`../reports/aihero-skills-v1.2-analysis.md`](../reports/aihero-skills-v1.2-analysis.md), item 2) remains open, and v1.3 adds no new evidence.
+
+**Not decided:** `retro`'s environment categories, especially "mechanical violation → deterministic check", are candidates for `skills/compound`'s evaluation questions. `pr`'s merge-danger call is a candidate for PR-body guidance. Both need an owner decision before anyone acts on them.

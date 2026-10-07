@@ -13,7 +13,7 @@ in `adopt`, `adapt`, `experiment`, or `reject` on its own evidence.
 
 | Source | Ledger | Watch for updates | Last reviewed |
 | --- | --- | --- | --- |
-| Matt Pocock — AI Hero skills and workflow | [`aihero.md`](aihero.md), [`ai-engineer-wiki.md`](ai-engineer-wiki.md) | [AI Hero skills changelog](https://www.aihero.dev/skills) and posts | 2026-08-07 |
+| Matt Pocock — AI Hero skills and workflow | [`aihero.md`](aihero.md), [`ai-engineer-wiki.md`](ai-engineer-wiki.md) | [AI Hero skills changelog](https://www.aihero.dev/skills) and posts | 2026-10-06 |
 | kunchenguid — FirstMate | [`firstmate.md`](firstmate.md), [`afk-supervision-packages.md`](afk-supervision-packages.md) | [Repository commits and docs](https://github.com/kunchenguid/firstmate) | 2026-07-18 |
 | DODOREACH — personal Pi tool shaping | [`dodo-reach-pi-tool-shaping.md`](dodo-reach-pi-tool-shaping.md) and the mechanism ledgers below | [Pi setup threads](https://x.com/DODOREACH) and [public remixes](https://github.com/dodo-reach) | 2026-08-11 |
 
