@@ -78,8 +78,8 @@ Workstream requires explicit human instruction and preserves unresolved context 
 files.
 
 The owner currently inspects Workstream projections through the terminal skill. A later graphical
-slice will present the same canonical projection directly. No FirstMate or other model broker
-performs portfolio synthesis.
+slice will present the same canonical projection directly. [FirstMate](../plans/firstmate.md) (Decision 127, unbuilt) is the planned cross-session
+coordinator; no model broker performs portfolio synthesis today.
 
 ## Managed Run model (unbuilt)
 
@@ -198,7 +198,7 @@ correctable checkpoints, restart and resume, Human Tasks and links, and human-in
 The archived Level 1 plan preserves the earlier PI WEB-first sequence only as provenance.
 
 V1 does not include autonomous model-session replacement, a Run Controller, managed execution,
-unattended work, or FirstMate. Browser or Workbench web-client replacement must preserve session
+unattended work, or FirstMate, which is approved but unbuilt (Decision 127). Browser or Workbench web-client replacement must preserve session
 and Workstream state without restarting PI WEB's session daemon. Machine loss, multi-user control,
 and portable cross-machine handoff remain outside V1.
 

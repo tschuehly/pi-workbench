@@ -8,7 +8,7 @@ The [Attention and Interface Specification](interfaces.md) remains authoritative
 
 ## Scope
 
-V1 does not launch FirstMate, use another model to synthesize portfolio priorities, or mix future managed Run attention into Workstream views.
+V1 graphical attention does not include FirstMate, which has its own window and [plan](../plans/firstmate.md), and does not use another model to synthesize portfolio priorities, or mix future managed Run attention into Workstream views.
 
 Chat consumes PI WEB runtime session state. A Workstream surface consumes canonical Workstream snapshots, revisions, and ordered watch results. The Workstream Store remains authoritative. The client does not infer Workstream state from Chat, terminal output, tool activity, or visual state.
 
