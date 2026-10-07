@@ -5,10 +5,10 @@ export const checks = {
       const { q, ok, until, input, post } = C;
       await until(() => q('#review-count').textContent === '2 / 4 sichtbar');
       ok(!q('#item-a').hidden && !q('#item-d').hidden && q('#item-b').hidden && q('#item-c').hidden, 'pending predicate, including open Decision');
-      const verdict=await post({type:'verdict',key:'queue/item-a',ver:'artifact-a1',scale:'Confirm|Redo',value:'Confirm'});
+      const answer=await post({type:'decide',decision:'queue/item-a',key:'queue/item-a',ver:'artifact-a1',options:'Confirm|Redo',option:'Confirm'});
       q('#review-refresh').click();await until(()=>q('#item-a').hidden);
-      await post({type:'undo',target:verdict.seq});q('#review-refresh').click();await until(()=>!q('#item-a').hidden);
-      await post({type:'verdict',key:'queue/item-a',ver:'older-artifact',scale:'Confirm|Redo',value:'Confirm'});
+      await post({type:'undo',target:answer.seq});q('#review-refresh').click();await until(()=>!q('#item-a').hidden);
+      await post({type:'decide',decision:'queue/item-a',key:'queue/item-a',ver:'older-artifact',options:'Confirm|Redo',option:'Confirm'});
       q('#review-refresh').click();await until(()=>q('#review-count').textContent==='2 / 4 sichtbar');
       input('#review-query','absent');ok(!q('#review-empty').hidden,'empty state');
       input('#review-view','all');input('#review-query','Ergebnis B');

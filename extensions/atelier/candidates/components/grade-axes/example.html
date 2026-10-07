@@ -7,9 +7,8 @@
 <article atl-key="run-example"><section atl-key="turn-example" atl-ver="answer-1:criteria-1:truth-1">
 <p><strong>Frage:</strong> Welche Exporte gibt es? <strong>Antwort:</strong> CSV.</p>
 <p><strong>Referenz:</strong> CSV und JSON. <strong>Erwartet:</strong> Beide Formate nennen.</p>
-<section atl-key="correct" atl-verdict="PASS|FAIL"><h2>Correct</h2><p>Judge: PASS — CSV ist verfügbar. Menschliches Verdict separat darunter.</p></section>
-<section atl-key="complete" atl-verdict="PASS|PARTIAL|FAIL"><h2>Complete</h2><p>Judge: PARTIAL — JSON fehlt. Menschliches Verdict separat darunter.</p></section>
+<section atl-key="correct" atl-decide="PASS|FAIL" atl-note="FAIL"><h2>Correct</h2><p>Judge: PASS — CSV ist verfügbar. Menschliche Decision separat darunter.</p></section>
+<section atl-key="complete" atl-decide="PASS|PARTIAL|FAIL" atl-note="PARTIAL|FAIL"><h2>Complete</h2><p>Judge: PARTIAL — JSON fehlt. Menschliche Decision separat darunter.</p></section>
 <section atl-key="taste"><h2>Taste</h2><p>Judge: knapp formuliert. Stilhinweise als Comment, getrennt von sachlichen Fehlern.</p></section>
-<p>Ein begründeter Override braucht Urteil plus Notiz. Der Kernel bietet hier keine atomare Pflichtnotiz;
-ein separater Comment dokumentiert einen Grund, erzwingt ihn aber nicht.</p>
+<p>Ein begründeter Override braucht Urteil plus Notiz: <code>atl-note</code> verlangt sie für FAIL und PARTIAL.</p>
 </section></article></main><script type="module" src="atelier.js"></script></body></html>

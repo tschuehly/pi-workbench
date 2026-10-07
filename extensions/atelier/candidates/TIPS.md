@@ -60,7 +60,7 @@ Pick what answers the real task; these are evidence-backed options, not content 
   layouts here are optional compositions (D117; history report).
 - **Fake zoom, frozen ledgers, unlabeled green samples, live-from-in_progress, automatic cost stops:** recorded
   failures, not shortcuts to reliable status (PL §1/T2/T7/R4).
-- **Selector hit as verification, exhaustive screenshot programs, Reset as a Verdict:** six claims were confirmed
+- **Selector hit as verification, exhaustive screenshot programs, Reset as a Decision option:** six claims were confirmed
   against a 404; actual scenarios matter, and Confirm/Redo was enough (LAU via WC T2/§3).
 - **Default mobile/tunnels or multi-user auth:** Mac-local is the settled default (D132); a 390px embedded app
   tests that app, not mobile Atelier support. A standalone theme switch earned no remaining desktop need (VR T1).

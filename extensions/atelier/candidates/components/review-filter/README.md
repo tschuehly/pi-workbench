@@ -3,11 +3,11 @@
 **Pick:** a list contains items that are ready, processing, judged or waiting on a Decision.
 **Lesson:** pending = !currentHumanJudgment && !processing && (ready || openDecision).
 Thomas asked to hide judged and in-progress videos, not just to show everything without a score
-([VR T6](../../SOURCES.md)); a stale-version Verdict does not judge the current result.
+([VR T6](../../SOURCES.md)); an answer on a stale version does not judge the current result.
 
 **Use:** copy [example.html](example.html)'s markup and module. Supply domain readiness/processing attributes;
-`derive` from the copied Kernel handles logged Verdicts, undo and Decisions. Keys include ancestors.
-The example treats any current Verdict as judged: multi-axis tasks need their own explicit done predicate.
+`derive` from the copied Kernel handles answered Decisions, undo and version. Keys include ancestors.
+The example treats any current answer as judged: multi-axis tasks need their own explicit done predicate.
 
 **Update:** view/search come from namespaced URL parameters; render runs on `atelier:update`, then reads
 the Event Log again. “Urteile neu lesen” refreshes between Updates. A failed read suspends status filtering

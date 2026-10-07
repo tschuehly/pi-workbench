@@ -2,7 +2,7 @@
 
 **Pick when:** answers or artifacts need evaluation on independent dimensions and human correction of a judge.
 
-**Hierarchy:** headline finding → result and expected behavior → judge grades by axis → human Verdict or
+**Hierarchy:** headline finding → result and expected behavior → judge grades by axis → human Decision or
 Comment alongside each axis → supporting calls/log/raw evidence. A challenge to the test itself becomes a
 Kernel Decision on the test, not an unexplained score change. History can follow the per-result view.
 
@@ -15,5 +15,5 @@ Add [review-filter](../components/review-filter/README.md) for a queue only afte
 otherwise lived only in chat. The existing report used Headline → False claims and cause → Other findings
 ([ME T4/T6/T7, O L2827, RESULT-stack-final2](../SOURCES.md)). No eval studio had yet been built.
 
-**Does not fit:** a single subjective media score. Kernel Verdicts lack a required note/prefill workflow;
-separate Comments are not atomic overrides. Required-note grading needs Kernel support, not a fake local form.
+**Does not fit:** a single subjective media score. `atl-note` makes an override carry its
+reason; prefill is not implemented, and a fake local form is no substitute.

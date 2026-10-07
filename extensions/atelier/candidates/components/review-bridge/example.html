@@ -34,7 +34,7 @@ addEventListener('message',e=>{
   const m=e.data;
   if(m.type==='review-ready'){ready=true;send({type:'review-items',items:[{id:'send-failure',selector:'#target-send'}]});if(picking)send({type:'review-pick'});}
   if(m.type==='review-resolved'&&!selected&&!locator&&Array.isArray(m.ids)&&m.ids.every(id=>id==='send-failure'))status=`${m.ids.length} Ziel(e) gefunden; Szenario und Verhalten nicht geprüft.`;
-  if(m.type==='review-select'&&m.id==='send-failure'){selected=true;status='Prüfpunkt gewählt: Sendefehler. Noch kein Verdict.';}
+  if(m.type==='review-select'&&m.id==='send-failure'){selected=true;status='Prüfpunkt gewählt: Sendefehler. Noch keine Decision.';}
   if(m.type==='review-picked'){
     const l=m.locator;
     if(!l||typeof l.cssPath!=='string'||!l.cssPath||l.cssPath.length>2000||typeof l.text!=='string'||l.text.length>160||typeof l.route!=='string'||l.route.length>2000||!l.rect||!l.viewport||!['x','y','w','h'].every(k=>Number.isFinite(l.rect[k]))||l.rect.w<0||l.rect.h<0||!['w','h'].every(k=>Number.isFinite(l.viewport[k])&&l.viewport[k]>0))return;

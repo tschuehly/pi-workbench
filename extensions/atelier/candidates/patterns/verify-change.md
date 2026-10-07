@@ -3,7 +3,7 @@
 **Pick when:** the human must check whether an implemented change actually works, not merely whether it exists.
 
 **Hierarchy:** Before/Now claim → reachable target and setup → numbered exercise with Expected result →
-observed outcome → Confirm/Redo. An inaccessible scenario stays explicitly unverified and has no Verdict
+observed outcome → Confirm/Redo. An inaccessible scenario stays explicitly unverified and has no Decision
 control. If the human spots something else, a locator becomes a typed Request to make a new claim.
 
 **Compose:** [claim-card](../components/claim-card/README.md) is sufficient for text or an external app link;

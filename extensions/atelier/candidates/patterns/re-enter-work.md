@@ -13,7 +13,7 @@ Use neither history Component if one sourced finding answers the task; Kernel th
 
 **Why:** Thomas asked chat what was learned even though a 222 KB report already contained the evidence;
 it began with how the pipeline worked, not the conclusion (WC T1). After overnight work he asked status,
-and the needed verdict was buried inside a status message ([ME T3; WC T1](../SOURCES.md)).
+and the needed decision was buried inside a status message ([ME T3; WC T1](../SOURCES.md)).
 
 **Does not fit:** first-time process teaching or a live control panel. “Changed” needs a named baseline;
 opening the page is not acceptance. Inline liked/disliked/fact/gap labels can separate voices without

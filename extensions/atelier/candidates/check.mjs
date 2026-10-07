@@ -96,7 +96,7 @@ try {
     const authored=html.replace('</body>','<p id="check-revision">REVISION</p></body>');
     await writeFile(page,authored.replace('REVISION','0'));const {url}=await host.open(page);
     if(name==='review-filter') {
-      host.postHuman(page,{type:'verdict',key:'queue/item-b',ver:'artifact-b1',scale:'Confirm|Redo',value:'Confirm'});
+      host.postHuman(page,{type:'decide',decision:'queue/item-b',key:'queue/item-b',ver:'artifact-b1',options:'Confirm|Redo',option:'Confirm'});
       for(const key of ['queue/item-c','queue/item-d'])host.agent(page,{type:'ask',decision:{id:key,key,question:'Example?',options:[{label:'Keep',consequence:'Keep it',recommended:true},{label:'Change',consequence:'Rework it'}]}});
     }
     if(name==='review-bridge')host.postHuman(page,{type:'comment',key:'trial-app',ver:'build-example-1',text:'Saved thread outside the clipping stage'});

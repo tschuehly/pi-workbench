@@ -29,7 +29,7 @@ builders need their task and the Kernel, not the research analyses. Examples use
 - [flow-map](components/flow-map/README.md) — distinguish real sequence/parallelism and what a check does NOT prove; pairs with attempt-timeline.
 - [attempt-timeline](components/attempt-timeline/README.md) — retain rejected attempts, every step and attributed evidence; pairs with flow-map or video-stage.
 - [claim-card](components/claim-card/README.md) — separate locating a target, exercising its scenario and observing a result; pairs with review-bridge or grade-axes.
-- [grade-axes](components/grade-axes/README.md) — separate correctness, completeness and taste, then judge output from human Verdict; pairs with run-matrix.
+- [grade-axes](components/grade-axes/README.md) — separate correctness, completeness and taste, then judge output from human Decision; pairs with run-matrix.
 - [run-matrix](components/run-matrix/README.md) — align comparable cases across pinned runs and name incomparable cells; pairs with grade-axes or claim-card.
 - [review-filter](components/review-filter/README.md) — pending excludes processing and current human judgments; script restores URL filters and replays the Event Log on Update.
 - [video-stage](components/video-stage/README.md) — one versioned media container for time-anchored Comments; script restores size without replacing the video.
@@ -43,8 +43,8 @@ builders need their task and the Kernel, not the research analyses. Examples use
   browser checks hit-test the Kernel Comment button and a saved thread before/after Update.
 - **K1 pending:** Kernel jump opens `<details>`, not hidden tabs/filter rows. Examples keep decision-bearing
   flow content visible; clear review filters before using global jump. A universal reveal hook needs Kernel work.
-- **K2 pending:** Verdict buttons have no required override-note field. A separate Comment is possible,
-  but is not an atomic, required-note override. Do not claim that workflow is implemented.
+- **K2 fixed (decision 133):** a Page-declared Decision's `atl-note` options post only with a note, so an
+  override carries its reason in the same event. Prefill is still not implemented.
 - **K3 bounded:** review-filter reads Kernel `derive` on load/Update/explicit refresh; no public live-state
   notification. It does not auto-advance from a click or include unsaved/offline local events.
 - **K4/K8 pending real media:** Kernel records a container's media time, but does not capture frames or

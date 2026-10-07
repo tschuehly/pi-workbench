@@ -7,10 +7,10 @@
 <label>Suchen <input id="review-query" type="search"></label>
 <label>Ansicht <select id="review-view"><option value="pending">Ausstehend</option><option value="all">Alle</option><option value="processing">In Bearbeitung</option></select></label>
 <button id="review-refresh" type="button">Urteile neu lesen</button><p><output id="review-count" aria-live="polite"></output></p>
-<p>Nach einem Verdict neu lesen. Vor „next ↓“ im Kernel „Alle“ wählen und Suche leeren.</p>
+<p>Nach einer Decision neu lesen. Vor „next ↓“ im Kernel „Alle“ wählen und Suche leeren.</p>
 <div class="items">
-<article id="item-a" atl-key="item-a" atl-ver="artifact-a1" atl-verdict="Confirm|Redo" data-ready="true" data-processing="false"><h2>Ergebnis A</h2><p>Bereit zur Prüfung.</p></article>
-<article id="item-b" atl-key="item-b" atl-ver="artifact-b1" atl-verdict="Confirm|Redo" data-ready="true" data-processing="false"><h2>Ergebnis B</h2><p>Bereit zur Prüfung.</p></article>
+<article id="item-a" atl-key="item-a" atl-ver="artifact-a1" atl-decide="Confirm|Redo" atl-note="Redo" data-ready="true" data-processing="false"><h2>Ergebnis A</h2><p>Bereit zur Prüfung.</p></article>
+<article id="item-b" atl-key="item-b" atl-ver="artifact-b1" atl-decide="Confirm|Redo" atl-note="Redo" data-ready="true" data-processing="false"><h2>Ergebnis B</h2><p>Bereit zur Prüfung.</p></article>
 <article id="item-c" atl-key="item-c" atl-ver="artifact-c1" data-ready="false" data-processing="true"><h2>Ergebnis C</h2><p>Wird erzeugt; auch bei offener Frage nicht ausstehend.</p></article>
 <article id="item-d" atl-key="item-d" atl-ver="artifact-d1" data-ready="false" data-processing="false"><h2>Ergebnis D</h2><p>Noch nicht bereit; eine offene Decision kann es in die Auswahl bringen.</p></article>
 </div><p id="review-empty" hidden>Kein Treffer für diesen Filter.</p>
@@ -26,7 +26,7 @@ function render() {
   const rows=[...root.querySelectorAll('.items>article')], versions=new Map(rows.map(r=>[address(r),r.closest('[atl-ver]')?.getAttribute('atl-ver')]));
   const state=derive(entries||[],key=>versions.get(key)??null);
   for(const row of rows) {
-    const key=address(row), verdict=state.verdicts.get(key), judged=verdict&&!verdict.stale;
+    const key=address(row), decision=state.decisions.find(d=>d.id===key&&d.answer), judged=decision&&!decision.stale;
     const pending=!judged&&row.dataset.processing!=='true'&&(row.dataset.ready==='true'||state.toAnswer.some(d=>d.key===key));
     const text=[...row.children].filter(n=>!n.hasAttribute('atl-ui')).map(n=>n.textContent).join(' ');
     row.hidden=!text.toLocaleLowerCase().includes(query.toLocaleLowerCase())||(entries!==null&&!(view==='all'||(view==='pending'?pending:row.dataset.processing==='true')));

@@ -18,7 +18,7 @@ Retained Workstream `ws-atelier-native-20261006`, artifact `use-cases/`, analyse
   Its rebuilt real-batch comparison remains pending, not evidence for this catalogue.
 
 In `skill-incubator-private/atelier/docs/` (no source licence found):
-- **VV** `variant-verdict-20261006.md`: Thomas's confirmed verdicts, not the agents' prototype ranking.
+- **VV** `variant-verdict-20261006.md`: Thomas's confirmed judgments, not the agents' prototype ranking.
 - **JV** `judging-2026-10-06-verdicts.json`: structured marks behind VV.
 - **LAU** `live-annotation-use.md`: useful verification cards and false confirmation against inaccessible scenarios.
 - **history / AgentClick / html-plan reports**: `evidence/design-research-20261006/{atelier-history,agentclick,html-plan}.md`;
