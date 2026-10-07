@@ -43,7 +43,7 @@ builders need their task and the Kernel, not the research analyses. Examples use
   browser checks hit-test the Kernel Comment button and a saved thread before/after Update.
 - **K1 pending:** Kernel jump opens `<details>`, not hidden tabs/filter rows. Examples keep decision-bearing
   flow content visible; clear review filters before using global jump. A universal reveal hook needs Kernel work.
-- **K2 fixed (decision 133):** a Page-declared Decision's `atl-note` options post only with a note, so an
+- **K2 fixed (decision 155):** a Page-declared Decision's `atl-note` options post only with a note, so an
   override carries its reason in the same event. Prefill is still not implemented.
 - **K3 bounded:** review-filter reads Kernel `derive` on load/Update/explicit refresh; no public live-state
   notification. It does not auto-advance from a click or include unsaved/offline local events.

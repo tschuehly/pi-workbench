@@ -30,5 +30,5 @@ In `skill-incubator-private/atelier/docs/` (no source licence found):
 - Bridge/picker inspiration: [Worlds Console review bridge](https://github.com/embabel-worlds/worlds-console/blob/af61a2664c1d2413862e0ede5c23189a99f65410/app/src/reviewBridge.ts), no root licence found; original adaptation here.
 - Pending predicate/media lessons: [Review Studio](https://github.com/tschuehly/PhotoQuest-studio/blob/d95a02a81e3e5fe281d47e165980dc48e1342b57/tools/review-studio.html), no root licence found; original adaptation here.
 - Current authority: [Kernel](../kernel/atelier.js), [Page contract](../../../skills/atelier/SKILL.md),
-  [decisions 107–132](../../../docs/foundation/decisions.md#atelier-agent-built-pages). Older analyses' questions
+  [decisions 129–154](../../../docs/foundation/decisions.md#atelier-agent-built-pages). Older analyses' questions
   about versions, Delivery, undo and phone support do not reopen those settled decisions.

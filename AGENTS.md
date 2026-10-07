@@ -24,7 +24,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Installed vs development checkouts, promotion | `docs/contracts/harness.md` ("Installed and Development Checkouts") |
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
 | Pi CLI activity presentation | `extensions/activity/` |
-| Atelier Pages: Kernel, page server, Delivery of human events | `extensions/atelier/`, `skills/atelier/`, decisions 107-132 in `docs/foundation/decisions.md` |
+| Atelier Pages: Kernel, page server, Delivery of human events | `extensions/atelier/`, `skills/atelier/`, decisions 129-156 in `docs/foundation/decisions.md` |
 | Per-session scratch folder (`PI_TMP`) and its cleanup | `extensions/pi-tmp/` |
 | Low-disk nudges for agents (below 50 GB) | `extensions/storage-guard/`, `docs/plans/storage-aware-agents.md` |
 | Secret redaction of tool output, assistant text, and context | `extensions/secret-redaction/` |

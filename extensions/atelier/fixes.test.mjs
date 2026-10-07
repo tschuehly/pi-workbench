@@ -193,7 +193,7 @@ test("B: a Page outside the project serves only its own directory", async () => 
     assert.equal(post.status, 200);
     assert.equal(readLog(path.join(dir, "far.html")).at(-1).text, "hi");
     const port = new URL(url).port;
-    assert.match(await raw(Number(port), `GET /${page} HTTP/1.1\r\nHost: evil.example:${port}\r\nConnection: close\r\n\r\n`), /^HTTP\/1\.1 403/, "Host check (130)");
+    assert.match(await raw(Number(port), `GET /${page} HTTP/1.1\r\nHost: evil.example:${port}\r\nConnection: close\r\n\r\n`), /^HTTP\/1\.1 403/, "Host check (152)");
   } finally { s.handlers.session_shutdown(); p.done(); rmSync(outside, { recursive: true, force: true }); }
 });
 

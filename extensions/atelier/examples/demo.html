@@ -15,7 +15,7 @@
 <!-- Every Kernel primitive on one Page: Keys and versions, Comments (Key, text quote, selector),
      an asked Decision with material, Page-declared Decisions (a 1–5 scale, Confirm/Redo with a required
      note, one in a table cell via atl-slot), Requests (button and form), grouped Send,
-     and a data file read at load (decision 130). The agent posts the Decision with `atelier ask`. -->
+     and a data file read at load (decision 152). The agent posts the Decision with `atelier ask`. -->
 <p>This run checks whether the assistant answers the onboarding questions correctly. Select any sentence here and press the Comment button beside it to comment on the text itself.</p>
 
 <label>Filter turns <input id="filter" placeholder="type to filter"></label>
@@ -50,7 +50,7 @@
 
 <script type="module" src="atelier.js"></script>
 <script type="module">
-  // Page data comes from a project file, so filtering needs no agent turn (decision 130).
+  // Page data comes from a project file, so filtering needs no agent turn (decision 152).
   async function stats() {
     const data = await (await fetch("demo-data.json", { cache: "no-store" })).json().catch(() => ({ turns: [] }));
     const f = document.getElementById("filter").value.trim();

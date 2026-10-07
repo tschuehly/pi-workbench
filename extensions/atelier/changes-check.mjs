@@ -1,4 +1,4 @@
-// Real-browser check of the change indicators (decision 134). Needs agent-browser and PI_TMP:
+// Real-browser check of the change indicators (decision 156). Needs agent-browser and PI_TMP:
 //   node extensions/atelier/changes-check.mjs [screenshot.png]
 // Rewrites a Page through the real host and checks colour by kind on the spot, in the table of contents and on the
 // rail, the accumulated word diff, the removed placeholder, the hidden-tab mark, and clearing after 5 s in view.

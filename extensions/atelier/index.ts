@@ -10,7 +10,7 @@ import { Type } from "typebox";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { CLASSES, REQUEST_STATES, UNDO_MS, compose, derive, inGroup, keyTexts } from "./kernel/atelier.js";
 
-// Atelier extension (decisions 107-133): the `atelier` tool, a per-session page server, and Delivery of
+// Atelier extension (decisions 129-155): the `atelier` tool, a per-session page server, and Delivery of
 // human events from a Page's Event Log into this Pi session. The Page side lives in kernel/atelier.js.
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
@@ -27,7 +27,7 @@ type Message = { customType: string; content: string; display: true; details: { 
 
 export const logPath = (page: string) => `${page}.events.jsonl`;
 
-/** The Event Log (121): append-only JSON lines beside the Page. A torn last line is skipped, never fatal. */
+/** The Event Log (143): append-only JSON lines beside the Page. A torn last line is skipped, never fatal. */
 export function readLog(page: string): Entry[] {
   let text: string;
   try { text = readFileSync(logPath(page), "utf8"); } catch { return []; }
@@ -58,7 +58,7 @@ const lockPath = (page: string) => `${logPath(page)}.lock`;
 const alive = (pid: unknown) => { try { process.kill(Number(pid), 0); return true; } catch (error: any) { return error.code === "EPERM"; } };
 
 /**
- * One live session owns a Page: it alone appends to the Event Log and delivers its events (109, 121). The
+ * One live session owns a Page: it alone appends to the Event Log and delivers its events (131, 143). The
  * first session to open the Page takes `<page>.events.jsonl.lock`; a lock whose recorded process is gone is stale.
  * The lock is linked from a fully written temp file, so no contender ever sees it empty.
  */
@@ -88,7 +88,7 @@ function releasePage(page: string, session: string) {
 }
 
 /**
- * Which human events are due for Delivery (128, 129): Immediate events and Sends whose 10-second undo
+ * Which human events are due for Delivery (150, 151): Immediate events and Sends whose 10-second undo
  * window has closed, never undone and not yet received. A Send carries the drafts its group covers
  * (Review Studio's one "flush" boundary per "Offene senden"). Record events are never delivered.
  */
@@ -113,9 +113,9 @@ const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const STAMP = /^\/\/ atelier-copy (\S+) sha256:([0-9a-f]{64})[^\n]*\n/;
 
 /**
- * Copies the Kernel beside the Page with a version stamp (111). An existing copy is never overwritten:
- * a locally changed copy is a Contribution candidate (114), and a Registry fix reaches an unchanged copy
- * only through a diff the owner accepts (114), so an older copy is only reported as behind.
+ * Copies the Kernel beside the Page with a version stamp (133). An existing copy is never overwritten:
+ * a locally changed copy is a Contribution candidate (136), and a Registry fix reaches an unchanged copy
+ * only through a diff the owner accepts (136), so an older copy is only reported as behind.
  */
 export function copyKernel(dir: string) {
   return KERNEL_FILES.map((file) => {
@@ -123,7 +123,7 @@ export function copyKernel(dir: string) {
     const target = path.join(dir, file);
     if (isLink(target)) return { file, outcome: "symlink" as const };
     if (!existsSync(target)) {
-      writeFileSync(target, `// atelier-copy ${KERNEL_VERSION} sha256:${sha(source)} from pi-workbench extensions/atelier/kernel/${file}; change it here and send the change back as a Contribution (decisions 111, 114).\n${source}`);
+      writeFileSync(target, `// atelier-copy ${KERNEL_VERSION} sha256:${sha(source)} from pi-workbench extensions/atelier/kernel/${file}; change it here and send the change back as a Contribution (decisions 133, 136).\n${source}`);
       return { file, outcome: "copied" as const };
     }
     const text = readFileSync(target, "utf8");
@@ -148,14 +148,14 @@ export function inside(root: string, candidate: string): string | undefined {
   } catch { return undefined; }
 }
 
-// Fields each human event may carry, checked before the Event Log (109, 125); other fields are dropped.
+// Fields each human event may carry, checked before the Event Log (131, 147); other fields are dropped.
 const str = (v: unknown) => typeof v === "string";
 const opt = (ok: (v: any) => boolean) => (v: unknown) => v == null || ok(v);
 const seqNo = (v: unknown) => Number.isInteger(v);
 const ANCHOR = { key: opt(str), ver: opt(str), t: opt(Number.isFinite), quote: opt((q) => str(q.exact) && str(q.prefix) && str(q.suffix)), selector: opt((s) => str(s.sel) && str(s.snap)) };
 const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   comment: { ...ANCHOR, text: str, thread: opt(seqNo) },
-  // previous: the answer this one changes (133); options and rec: a Page-declared Decision's atl-decide and atl-rec.
+  // previous: the answer this one changes (155); options and rec: a Page-declared Decision's atl-decide and atl-rec.
   decide: { decision: str, option: str, previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str) },
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
@@ -165,9 +165,9 @@ const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
 export type Host = ReturnType<typeof createHost>;
 
 /**
- * One page server per session runtime (132: 127.0.0.1 only), serving project files read-only (130) and
+ * One page server per session runtime (154: 127.0.0.1 only), serving project files read-only (152) and
  * taking human events for the Pages this session opened. Every event is appended to the Event Log first
- * (109, 125); Delivery goes through `send` after the undo window.
+ * (131, 147); Delivery goes through `send` after the undo window.
  */
 export function createHost(options: {
   root: string;
@@ -197,7 +197,7 @@ export function createHost(options: {
     t.unref?.();
     timers.add(t);
   };
-  // A Page inside the project is served with the project's files (130); one outside it only with its own directory.
+  // A Page inside the project is served with the project's files (152); one outside it only with its own directory.
   const inProject = (abs: string) => abs.startsWith(root + path.sep);
   const mount = (abs: string) => `~${sha(path.dirname(abs)).slice(0, 12)}`;
   const rel = (abs: string) => inProject(abs) ? path.relative(root, abs).split(path.sep).join("/") : abs;
@@ -265,9 +265,9 @@ export function createHost(options: {
       if (log.some((e) => e.type === "undo" && e.target === target.seq)) return { status: 409, json: { error: "Already undone." } };
       if (now() - target.at >= undoMs) return { status: 409, json: { error: "The 10-second undo window has closed." } };
     }
-    // Decision 133: a Page-declared Decision is Immediate by default; atl-delivery may declare another class.
+    // Decision 155: a Page-declared Decision is Immediate by default; atl-delivery may declare another class.
     const delivery = body.type === "decide" && ["record", "send", "immediate"].includes(asked) ? asked
-      : body.type === "comment" && asked === "send" ? "send" : cls; // a Page may batch Comments (134)
+      : body.type === "comment" && asked === "send" ? "send" : cls; // a Page may batch Comments (156)
     const entry = append(page, { ...event, origin: "human", delivery });
     if (delivery === "immediate" || delivery === "boundary") later(undoMs + 50, () => deliverDue(page));
     return { status: 200, json: { entry, undoMs } };
@@ -299,7 +299,7 @@ export function createHost(options: {
   }
 
   function handle(req: IncomingMessage, res: ServerResponse) {
-    // Not access control (115): a Host check only keeps DNS-rebinding pages from reading project files (130).
+    // Not access control (137): a Host check only keeps DNS-rebinding pages from reading project files (152).
     if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) return json(res, 403, { error: "Use http://127.0.0.1" });
     let u: URL;
     try { u = new URL(req.url ?? "/", `http://127.0.0.1:${port}`); } catch { return json(res, 400, { error: "Bad request target" }); }
@@ -356,7 +356,7 @@ export function createHost(options: {
     postHuman,
     isOpen: (page: string) => pages.has(page),
     clients: (page: string) => pages.get(page)?.size ?? 0,
-    /** Starts serving the Page, copies the Kernel, and hands undelivered events to this session (109). */
+    /** Starts serving the Page, copies the Kernel, and hands undelivered events to this session (131). */
     async open(page: string) {
       claimPage(page, sessionId);
       await listen();
@@ -368,7 +368,7 @@ export function createHost(options: {
       return { url: url(page), kernel, replayed };
     },
     agent(page: string, entry: Record<string, unknown>) { return append(page, { ...entry, origin: "agent" }); },
-    /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (134). */
+    /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */
     update(page: string, note?: string) {
       if (note) append(page, { origin: "agent", type: "update", note });
       broadcast(page, "update", { mtime: statSync(page).mtimeMs, note });
@@ -378,7 +378,7 @@ export function createHost(options: {
       if (!details?.page || !Array.isArray(details.seqs) || !pages.has(details.page)) return;
       append(details.page, { origin: "kernel", type: "received", of: details.seqs });
     },
-    /** A message reached the session (message_end); its receipt waits for agent_settled, when the session file holds it (109). */
+    /** A message reached the session (message_end); its receipt waits for agent_settled, when the session file holds it (131). */
     seen(details: { page?: string; seqs?: number[] } | undefined) {
       if (!details?.page || !Array.isArray(details.seqs) || !pages.has(details.page)) return;
       for (const s of details.seqs) (seen.get(details.page) ?? seen.set(details.page, new Set()).get(details.page)!).add(s);
@@ -416,7 +416,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
   let current: ExtensionContext | undefined;
   let sessionId: string | undefined;
 
-  // Delivery (109, 128): a follow-up custom message that wakes the session, held by the context-checkpoint barrier like Subagent wakes.
+  // Delivery (131, 150): a follow-up custom message that wakes the session, held by the context-checkpoint barrier like Subagent wakes.
   // A send to an idle session starts a run, but Pi marks the session streaming only at agent_start; a second
   // send in that gap starts a concurrent prompt that fails silently (measured in an RPC session). Hold later
   // sends until the run has started.
@@ -489,8 +489,8 @@ export default function atelierExtension(pi: ExtensionAPI) {
       if (params.action === "open") {
         const opened = await host.open(page);
         const notes = opened.kernel.flatMap(({ file, outcome }) =>
-          outcome === "changed" ? [`${file} beside the Page was changed locally and was not overwritten. It is a Contribution candidate: raise a pull request against pi-workbench (decision 114).`]
-          : outcome === "behind" ? [`${file} beside the Page is an older Kernel; offer the owner the diff before replacing it (decision 114).`]
+          outcome === "changed" ? [`${file} beside the Page was changed locally and was not overwritten. It is a Contribution candidate: raise a pull request against pi-workbench (decision 136).`]
+          : outcome === "behind" ? [`${file} beside the Page is an older Kernel; offer the owner the diff before replacing it (decision 136).`]
           : outcome === "symlink" ? [`${file} beside the Page is a symlink and was left alone.`] : []);
         return text([
           `Page open: ${opened.url}`,
@@ -509,7 +509,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
       if (params.action === "ask") {
         const d = params.decision;
         if (!d) throw new Error("ask needs decision.");
-        if (d.options.filter((o: any) => o.recommended === true).length > 1) throw new Error("A Decision recommends at most one option (decision 133).");
+        if (d.options.filter((o: any) => o.recommended === true).length > 1) throw new Error("A Decision recommends at most one option (decision 155).");
         const entry = host.agent(page, { type: "ask", decision: d });
         return text(`Decision ${d.id} posted (#${entry.seq}). End your turn; the answer arrives as a message after its 10-second undo window.`, { seq: entry.seq });
       }

@@ -1,4 +1,4 @@
-// Real-browser check of the Kernel's human controls (decision 133). Needs agent-browser and PI_TMP:
+// Real-browser check of the Kernel's human controls (decision 155). Needs agent-browser and PI_TMP:
 //   node extensions/atelier/kernel-check.mjs [screenshot.png]
 // Serves a light Page through the real host and drives it with real pointer and keyboard input.
 import assert from "node:assert/strict";
@@ -81,7 +81,7 @@ try {
   await click("[atl-ui=composer] [data-atl=dismiss]");
 
   // A Page-declared Decision: the first answer is delivered; a change inside the next undo window replaces the
-  // unsent one, so the agent gets one "3 → 5" (134).
+  // unsent one, so the agent gets one "3 → 5" (156).
   const choose = async (v) => { await click(`[data-atl=decide][data-id="run/turn-1"][data-label="${v}"]`); await until(`document.querySelector('[data-id="run/turn-1"][data-label="${v}"]').classList.contains('atl-chosen')`); };
   await choose("3"); await sleep(3100); host.deliverDue(page);
   await choose("4"); await choose("5");

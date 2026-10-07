@@ -216,7 +216,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
     writeFileSync(file, edited);
     assert.equal(copyKernel(dir)[0].outcome, "changed");
     assert.equal(readFileSync(file, "utf8"), edited, "the local change survives");
-    // An unchanged older copy is reported, not replaced (decision 114).
+    // An unchanged older copy is reported, not replaced (decision 136).
     const old = "// atelier-copy 0.9.0 sha256:" + "0".repeat(64) + " old\n";
     const body = "export {};\n";
     writeFileSync(file, old.replace("0".repeat(64), createHash("sha256").update(body).digest("hex")) + body);
@@ -278,7 +278,7 @@ test("the extension delivers as an atelier follow-up message and records the rec
     assert.deepEqual(readLog(path.join(root, "page.html")).slice(-2).map((e) => e.type), ["delivered", "received"]);
     await assert.rejects(run({ action: "ask", decision: { id: "e", question: "?", options: [{ label: "A", consequence: "", recommended: true }, { label: "B", consequence: "", recommended: true }] } }), /at most one/);
     const asked = await run({ action: "ask", decision: { id: "e", question: "?", options: [{ label: "A", consequence: "" }, { label: "B", consequence: "" }] } });
-    assert.match(asked.content[0].text, /posted/, "a recommendation is optional (133)");
+    assert.match(asked.content[0].text, /posted/, "a recommendation is optional (155)");
     assert.match(tool.description, /recommend one option only when you have a basis/);
     assert.match(asked.content[0].text, /End your turn/);
     assert.match((await run({ action: "update" })).content[0].text, /No tab is connected/);
@@ -316,7 +316,7 @@ test("dueMessages skips in-flight events and covers only drafts before the Send"
   assert.deepEqual(dueMessages(log, UNDO, UNDO, new Set([1, 2])), []);
 });
 
-// Decision 133: a Page declares Decisions with atl-decide, and answers stay editable.
+// Decision 155: a Page declares Decisions with atl-decide, and answers stay editable.
 const turn = { id: "run/turn-1", key: "run/turn-1", declared: true, options: [{ label: "Confirm", recommended: true }, { label: "Redo", recommended: false }], note: ["Redo"] };
 
 test("a Page-declared Decision posts a decide event whose id is the Key address", async () => {
@@ -423,7 +423,7 @@ test("Delivery gives each Comment its Key's text from the Page source, and each 
   } finally { host.stop(); p.done(); }
 });
 
-test("send on save: a Comment goes out after its undo window without a Send; an undone answer is replaced (134)", async () => {
+test("send on save: a Comment goes out after its undo window without a Send; an undone answer is replaced (156)", async () => {
   const p = project();
   const { host, page, sent, tick, human } = await hostOn(p);
   try {
@@ -443,7 +443,7 @@ test("send on save: a Comment goes out after its undo window without a Send; an 
   } finally { host.stop(); rmSync(p.root, { recursive: true, force: true }); }
 });
 
-test("update logs its one-line note for the change indicators (134)", async () => {
+test("update logs its one-line note for the change indicators (156)", async () => {
   const p = project();
   const { host, page } = await hostOn(p);
   try {

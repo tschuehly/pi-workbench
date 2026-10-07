@@ -1,4 +1,4 @@
-// idiomorph 0.8.0 (0BSD), copied unchanged from https://registry.npmjs.org/idiomorph/-/idiomorph-0.8.0.tgz package/dist/idiomorph.esm.js sha256:e1e2c7dbd606233d302bac48074fd1307c15609b77ea485c18f1b13d6be67c14 (decision 123)
+// idiomorph 0.8.0 (0BSD), copied unchanged from https://registry.npmjs.org/idiomorph/-/idiomorph-0.8.0.tgz package/dist/idiomorph.esm.js sha256:e1e2c7dbd606233d302bac48074fd1307c15609b77ea485c18f1b13d6be67c14 (decision 145)
 /**
  * @typedef {object} ConfigHead
  *

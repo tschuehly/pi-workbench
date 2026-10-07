@@ -1,23 +1,23 @@
-// Atelier Kernel 2.1.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 107-134).
-// A dependency-free ES module with no build step (120), copied beside each Page (111). A change made in
-// a copy is a Contribution: raise it as a pull request against pi-workbench (114).
+// Atelier Kernel 2.1.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
+// a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
-// Page contract (mechanics only, decision 117):
+// Page contract (mechanics only, decision 139):
 //   <script type="module" src="atelier.js"></script>   the Kernel; idiomorph.js sits beside it
-//   atl-key="turn-3"           an element the human judges; nested Keys form the address run-12/turn-3 (118)
-//   atl-ver="sha-or-rev"       version of the content under it; every event records it (127)
-//   atl-decide="A|B|C"        a Decision on a keyed element; its id is the Key address (133). Optional:
+//   atl-key="turn-3"           an element the human judges; nested Keys form the address run-12/turn-3 (140)
+//   atl-ver="sha-or-rev"       version of the content under it; every event records it (149)
+//   atl-decide="A|B|C"        a Decision on a keyed element; its id is the Key address (155). Optional:
 //     atl-rec="A"              the recommended option
 //     atl-note="Redo"          options that need a note before they post
-//     atl-delivery="record|send|immediate" (default immediate); atl-material="key" counts as opened (113)
+//     atl-delivery="record|send|immediate" (default immediate); atl-material="key" counts as opened (135)
 //   atl-slot                   inside a Decision: where its options render, e.g. one table cell; else at the end
-//   atl-request="job"          a button or form that asks the agent for a typed job; form fields become its input (108)
-//   atl-group                  on a keyed element: its batched Comments get their own "Send (n)" (128)
-//   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (134)
-//   atl-changes="off"          anywhere on the Page: no change indicators after Updates (134)
+//   atl-request="job"          a button or form that asks the agent for a typed job; form fields become its input (130)
+//   atl-group                  on a keyed element: its batched Comments get their own "Send (n)" (150)
+//   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (156)
+//   atl-changes="off"          anywhere on the Page: no change indicators after Updates (156)
 //   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab
-//   document "atelier:update"  fires after each Update, so page scripts re-read their data files (130)
-// Human state lives only in <page>.events.jsonl, never in the HTML (125).
+//   document "atelier:update"  fires after each Update, so page scripts re-read their data files (152)
+// Human state lives only in <page>.events.jsonl, never in the HTML (147).
 // Kernel controls take the Page's colours: override --atl-bg, --atl-fg, --atl-muted, --atl-line, --atl-accent, --atl-warn.
 //
 // Icons: Lucide (lucide-static 1.52.0), ISC License, Copyright (c) 2026 Lucide Icons and Contributors.
@@ -29,10 +29,10 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 import { Idiomorph } from "./idiomorph.js";
 
-export const UNDO_MS = 10_000; // decision 129
-export const SEEN_MS = 5_000; // decision 134: a change counts as seen after 5 s in view
-// Delivery class per human event type (128). `boundary` is the Send that releases drafts; `control` is undo.
-// A Comment goes out when saved, after its undo window (134); a Page opts into batching with atl-delivery="send".
+export const UNDO_MS = 10_000; // decision 151
+export const SEEN_MS = 5_000; // decision 156: a change counts as seen after 5 s in view
+// Delivery class per human event type (150). `boundary` is the Send that releases drafts; `control` is undo.
+// A Comment goes out when saved, after its undo window (156); a Page opts into batching with atl-delivery="send".
 export const CLASSES = {
   comment: "immediate", decide: "immediate", request: "immediate", cancel: "immediate", rework: "immediate",
   accept: "record", opened: "record", close: "record", still: "record", send: "boundary", undo: "control",
@@ -42,12 +42,12 @@ export const REQUEST_STATES = ["queued", "running", "done", "failed", "cancelled
 export const inGroup = (key, group) => !group || key === group || (typeof key === "string" && key.startsWith(`${group}/`));
 
 const pipe = (s) => String(s ?? "").split("|").map((x) => x.trim()).filter(Boolean);
-// A Page-declared Decision (133): its id and Key are the element's address; it has no question beyond the Page.
+// A Page-declared Decision (155): its id and Key are the element's address; it has no question beyond the Page.
 const declaredDecision = (id, options, rec, extra = {}) => ({ id, key: id, declared: true, options: pipe(options).map((label) => ({ label, recommended: label === rec })), ...extra });
 
 /**
- * Replays the Event Log into the state the Page shows. `currentVer(key)` reads atl-ver on the live Page (127);
- * `declared` lists the Page's atl-decide Decisions, so unanswered ones count as to answer (133).
+ * Replays the Event Log into the state the Page shows. `currentVer(key)` reads atl-ver on the live Page (149);
+ * `declared` lists the Page's atl-decide Decisions, so unanswered ones count as to answer (155).
  */
 export function derive(entries, currentVer = () => null, declared = []) {
   const undone = new Set(entries.filter((e) => e.type === "undo").map((e) => e.target));
@@ -92,7 +92,7 @@ export function derive(entries, currentVer = () => null, declared = []) {
     else if (e.type === "decide") {
       // A Page-declared answer carries its options, so the Decision replays even where the Page is not loaded.
       if (!decisions.has(e.decision) && e.options) decisions.set(e.decision, { ...declaredDecision(e.decision, e.options, e.rec), answer: null, opened: false });
-      const d = decisions.get(e.decision); if (d) d.answer = e; // the newest answer counts; the human may change it any time (133)
+      const d = decisions.get(e.decision); if (d) d.answer = e; // the newest answer counts; the human may change it any time (155)
     }
     else if (e.type === "request") requests.set(e.seq, { req: e, state: null, revision: 1, note: null, cancel: false, accepted: false, rework: null });
     else if (e.type === "status") {
@@ -106,7 +106,7 @@ export function derive(entries, currentVer = () => null, declared = []) {
     } else if (e.type === "cancel") { const r = requests.get(e.target); if (r) r.cancel = true; }
     else if (e.type === "accept") { const r = requests.get(e.target); if (r) r.accepted = true; }
   }
-  // Decision 127: a close or an answer holds for the version it was made on; a newer version reopens it.
+  // Decision 149: a close or an answer holds for the version it was made on; a newer version reopens it.
   for (const t of threads.values()) { t.stale = stale(t.key, t.ver); if (t.stale) t.closed = false; }
   for (const d of decisions.values()) d.stale = d.answer !== null && stale(d.key ?? d.answer.key, d.answer.ver);
   const drafts = live.filter((e) => status(e) === "draft");
@@ -180,7 +180,7 @@ export function describe(e, entries, excerpt) {
       // html-plan's decision receipt: changed / kept / not opened; an unopened default is not agreement.
       const receipt = rec === undefined ? "" : e.option === rec ? "kept the recommendation" : `changed from the recommendation ${quote(rec)}`;
       const opened = d?.material || typeof e.opened === "boolean" ? (e.opened ? "material opened" : "material NOT opened; do not read this as agreement") : "";
-      // A changed answer names the one it replaces (133): "Revise → Promote".
+      // A changed answer names the one it replaces (155): "Revise → Promote".
       const choice = e.previous != null ? `${e.previous} → ${e.option}` : e.option;
       return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : ""].filter(Boolean).join("; ")}`;
     }
@@ -277,7 +277,7 @@ function boot() {
   };
   const verOf = (el) => el?.closest("[atl-ver]")?.getAttribute("atl-ver") ?? null;
   const currentVer = (addr) => verOf(findKey(addr));
-  // Decisions the Page declares with atl-decide (133); the first element at an address wins, like findKey.
+  // Decisions the Page declares with atl-decide (155); the first element at an address wins, like findKey.
   const declared = () => keyed().filter((el) => el.hasAttribute("atl-decide")).map((el) => {
     const id = keyOf(el);
     return declaredDecision(id, el.getAttribute("atl-decide"), el.getAttribute("atl-rec"), { note: pipe(el.getAttribute("atl-note")), material: el.getAttribute("atl-material") ?? undefined, delivery: el.getAttribute("atl-delivery") ?? undefined });
@@ -344,7 +344,7 @@ function boot() {
       } catch { /* no server: fall through */ }
       conn = "no session";
     }
-    // No session serves this Page: keep the event here and offer Copy (decision 109; pi-artifacts' 503 + Copy).
+    // No session serves this Page: keep the event here and offer Copy (decision 131; pi-artifacts' 503 + Copy).
     if (body.type === "undo") { local = local.filter((e) => e.seq !== body.target); render(); return; }
     const e = { ...body, seq: -(local.length + 1), at: now(), origin: "human", local: true, delivery: body.delivery ?? CLASSES[body.type] };
     local.push(e); render(); return e;
@@ -361,7 +361,7 @@ function boot() {
   // pi-artifacts 1.5.0: one EventSource per tab, closed while hidden, so many tabs never starve the connection limit.
   document.addEventListener("visibilitychange", () => { if (document.hidden) { es?.close(); es = null; } else connect(); });
 
-  // ---- Update (123): morph the body with idiomorph and keep the human's open input.
+  // ---- Update (145): morph the body with idiomorph and keep the human's open input.
   async function morph() {
     const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
     const doc = new DOMParser().parseFromString(html, "text/html");
@@ -414,7 +414,7 @@ function boot() {
     const best = hits.find((i) => idx.text.slice(Math.max(0, i - qt.prefix.length), i).endsWith(qt.prefix) && idx.text.slice(i + qt.exact.length).startsWith(qt.suffix)) ?? (hits.length === 1 ? hits[0] : undefined);
     return best === undefined ? null : rangeAt(idx, best, best + qt.exact.length);
   }
-  // A verified selector for unkeyed spots (decision 118): unique match plus a text snapshot, else Unanchored.
+  // A verified selector for unkeyed spots (decision 140): unique match plus a text snapshot, else Unanchored.
   function selectorFor(el) {
     if (el.id) return `#${CSS.escape(el.id)}`;
     const parts = [];
@@ -423,7 +423,7 @@ function boot() {
   }
   function findSelector(s) { try { const hits = document.querySelectorAll(s.sel); return hits.length === 1 && !isUi(hits[0]) && hits[0].textContent.trim().startsWith(s.snap) ? hits[0] : null; } catch { return null; } }
 
-  // Where a thread is drawn: its Key, else its quote or selector, else Unanchored (118).
+  // Where a thread is drawn: its Key, else its quote or selector, else Unanchored (140).
   // A Key's own text without Kernel UI, for the excerpt a copied message carries.
   function keyText(el) {
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => isUi(n.parentElement) || n.parentElement.closest("script,style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
@@ -462,7 +462,7 @@ function boot() {
       ${materialHtml(d)}<div class="atl-opts">${opts}</div>${receiptHtml(d, st)}`;
   }
   const materialHtml = (d) => d.material ? `<button data-atl="material" data-id="${esc(d.id)}">${d.opened ? `${icon("check")} Material opened` : `${icon("eye")} Open the material`}</button>` : "";
-  // The current answer, what it changed from, and the recommendation receipt; always editable (133).
+  // The current answer, what it changed from, and the recommendation receipt; always editable (155).
   function receiptHtml(d, st) {
     const a = d.answer;
     if (!a) return "";
@@ -470,7 +470,7 @@ function boot() {
     return `<div class="atl-dim">${[`Your answer: ${esc(a.option)}`, a.previous != null ? `changed from ${esc(a.previous)}` : "", rec === undefined ? "" : a.option === rec ? "kept the recommendation" : "not the recommendation", d.material ? `material ${a.opened ? "opened" : "not opened"}` : "", a.note ? `note: ${esc(a.note)}` : "", esc(statusText(st, a))].filter(Boolean).join(" · ")}</div>`;
   }
 
-  // A Page-declared Decision renders as a row of options in its atl-slot, or at the end of its element (133).
+  // A Page-declared Decision renders as a row of options in its atl-slot, or at the end of its element (155).
   function declaredHtml(d, st) {
     const a = d.answer;
     return d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}" aria-pressed="${a?.option === o.label}" class="${o.recommended ? "atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"${o.recommended ? ` title="Recommended"` : ""}>${esc(o.label)}${o.recommended ? `<span class="atl-sr"> (recommended)</span>` : ""}</button>`).join("")
@@ -625,13 +625,13 @@ function boot() {
   addEventListener("scroll", () => { if (!selBtn.hidden) placeSel(); }, { capture: true, passive: true });
 
   function renderUndo(undoable) {
-    // Decision 129: every interaction can be undone for 10 seconds, with a visible countdown.
+    // Decision 151: every interaction can be undone for 10 seconds, with a visible countdown.
     const label = (e) => ({ comment: "Comment saved", decide: e.previous != null ? `Changed ${e.previous} → ${e.option}` : `Chose ${e.option}`, request: `Requested ${e.job}`, send: "Comments sent", close: "Closed", still: "Marked still applies", opened: "Material opened", cancel: "Cancel requested", accept: "Accepted", rework: "Rework requested" })[e.type] ?? e.type;
     set(panel.querySelector(".atl-undo"), undoable.map((e) => `<div class="atl-toast">${esc(label(e))} <button data-atl="undo" data-seq="${e.seq}">${icon("undo")} Undo (${left(e)} s)</button></div>`).join(""));
   }
   setInterval(() => { if (panel.querySelector(".atl-toast") || panel.innerHTML.includes("sends in")) render(); }, 1000);
 
-  // ---- change indicators (134): what an Update changed, marked on the spot, in the Page's navigation and on a
+  // ---- change indicators (156): what an Update changed, marked on the spot, in the Page's navigation and on a
   // right-edge rail, until the human has had it in view for 5 s. One trace per Key accumulates every Update since.
   const changesOn = () => !document.querySelector('[atl-changes="off"]');
   const traces = new Map(), everSeen = new Set(), view = new WeakMap();
@@ -815,7 +815,7 @@ function boot() {
       const text = node.querySelector("textarea").value.trim();
       if (!text) return;
       composer = null; node.remove();
-      // A Page batches Comments only where it declares atl-delivery="send" (128, 134).
+      // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
       const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
       await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery });
     });
@@ -851,9 +851,9 @@ function boot() {
         flash(`${label} needs a note.`);
         return;
       }
-      // Always editable (133): a change is a new answer that names the one it replaces.
+      // Always editable (155): a change is a new answer that names the one it replaces.
       let previous = d.answer && d.answer.option !== label ? d.answer.option : undefined;
-      // A change inside the undo window replaces the unsent answer, so only the last one is delivered (134).
+      // A change inside the undo window replaces the unsent answer, so only the last one is delivered (156).
       const a = d.answer;
       if (a?.origin === "human" && left(a) > 0 && ["pending", "local"].includes(st.status(a))) {
         if (await post({ type: "undo", target: a.seq }) !== undefined || a.local) { // the server may have closed the window
@@ -939,7 +939,7 @@ function boot() {
     const b = [...note.parentElement.querySelectorAll("[data-atl=decide]")].find((x) => x.dataset.label === note.dataset.pending);
     if (b) actions.decide(b);
   });
-  // Decision 113: only the human's own click or key on the material counts as opened (expanding and playing start
+  // Decision 135: only the human's own click or key on the material counts as opened (expanding and playing start
   // with one). toggle and play also fire for the Page's own <details open>, Updates and autoplay, so they never count.
   const opening = new Set(); // one POST in flight per Decision; after it, the log says whether it is opened
   function markOpened(d) {
@@ -956,7 +956,7 @@ function boot() {
 
   function flash(text) { const n = h(`<div class="atl-toast" role="status">${esc(text)}</div>`); panel.querySelector(".atl-undo").before(n); setTimeout(() => n.remove(), 4000); }
 
-  // Pages render keyed rows from their data files after load (130); draw their Kernel UI once the page settles.
+  // Pages render keyed rows from their data files after load (152); draw their Kernel UI once the page settles.
   let queued = false;
   new MutationObserver((records) => {
     const pageChange = records.some((r) => !isUi(r.target) && [...r.addedNodes, ...r.removedNodes].some((n) => n.nodeType === 1 && !n.hasAttribute("atl-ui")));
