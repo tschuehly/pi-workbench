@@ -1,0 +1,197 @@
+// Regression tests for kernel review 1 (Sol, 2026-10-07), one per finding, and the owner decision on Page paths.
+// Browser-side findings 4, 10, 11 and 12 are checked with agent-browser (see the fix-round report).
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test, { mock } from "node:test";
+import atelierExtension, { appendLog, copyKernel, createHost, readLog } from "./index.ts";
+import { derive } from "./kernel/atelier.js";
+
+const UNDO = 10_000;
+const PAGE = "<!doctype html><title>t</title><div atl-key='a' atl-ver='1'>A</div>";
+
+function project() {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "atelier-fix-")));
+  const page = path.join(root, "page.html");
+  writeFileSync(page, PAGE);
+  return { root, page, done: () => rmSync(root, { recursive: true, force: true }) };
+}
+const dueDecide = (page) => appendLog(page, { origin: "human", type: "decide", decision: "d", option: "A", delivery: "immediate" }, Date.now() - 60_000);
+
+// A fake Pi around the real extension.
+function pi(ctx) {
+  const tools = new Map(), handlers = {}, messages = [];
+  atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: (m) => messages.push(m) });
+  handlers.session_start({}, ctx);
+  const run = (params) => tools.get("atelier").execute("id", params, undefined, undefined, ctx);
+  return { handlers, messages, run };
+}
+const session = (cwd, id) => ({ cwd, isIdle: () => true, sessionManager: { getSessionId: () => `${id}-${process.pid}` } });
+const raw = (port, request) => new Promise((resolve, reject) => {
+  const s = connect(port, "127.0.0.1", () => s.end(request));
+  let out = ""; s.on("data", (d) => { out += d; }); s.on("end", () => resolve(out)); s.on("error", reject);
+});
+
+test("1: a receipt waits for agent_settled; an unconfirmed message is re-delivered to the next opener", async () => {
+  const p = project();
+  dueDecide(p.page);
+  const a = pi(session(p.root, "s1a"));
+  await a.run({ action: "open", page: "page.html" });
+  const message = { role: "custom", ...a.messages[0] };
+  a.handlers.message_start?.({ message });
+  a.handlers.message_end?.({ message });
+  assert.ok(!readLog(p.page).some((e) => e.type === "received"), "not received before the session settles");
+  a.handlers.session_shutdown(); // ended before the session file held it
+  const b = pi(session(p.root, "s1b"));
+  try {
+    await b.run({ action: "open", page: "page.html" });
+    assert.equal(b.messages.length, 1, "re-delivered");
+    const again = { role: "custom", ...b.messages[0] };
+    b.handlers.message_end({ message: again });
+    b.handlers.agent_settled();
+    assert.deepEqual(readLog(p.page).filter((e) => e.type === "received").map((e) => e.of), [[1]]);
+  } finally { b.handlers.session_shutdown(); p.done(); }
+});
+
+test("2+3: one live session owns a Page's appends and Delivery; a dead owner's lock is stale", async () => {
+  const p = project();
+  const sent = [];
+  const make = (sessionId) => createHost({ root: p.root, sessionId, send: (m, done) => { sent.push(m); done(true); } });
+  const a = make("a"), b = make("b");
+  try {
+    await a.open(p.page);
+    await assert.rejects(b.open(p.page), /another live Pi session/, "a second session neither appends nor delivers");
+    dueDecide(p.page);
+    assert.equal(a.deliverDue(p.page) + b.deliverDue(p.page), 1, "only the owner delivers");
+    a.stop();
+    await b.open(p.page);
+    b.stop();
+    const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+    writeFileSync(`${p.page}.events.jsonl.lock`, JSON.stringify({ pid: dead, session: "gone" }));
+    const c = make("c");
+    await c.open(p.page);
+    c.stop();
+    writeFileSync(`${p.page}.events.jsonl.lock`, JSON.stringify({ pid: process.ppid, session: "other process" }));
+    await assert.rejects(make("d").open(p.page), /another live Pi session/);
+  } finally { a.stop(); b.stop(); p.done(); }
+});
+
+test("5: a stale start-fallback timer never releases a later held send", async () => {
+  const p = project();
+  for (const name of ["p1.html", "p2.html", "p3.html"]) { writeFileSync(path.join(p.root, name), PAGE); dueDecide(path.join(p.root, name)); }
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const s = pi(session(p.root, "s5"));
+  try {
+    await s.run({ action: "open", page: "p1.html" }); // run 1 starting; fallback timer due at 15 s
+    mock.timers.tick(1_000);
+    s.handlers.agent_start();
+    mock.timers.tick(10_000);
+    await s.run({ action: "open", page: "p2.html" }); // run 2 starting at 11 s
+    mock.timers.tick(5_000); // 16 s: run 1's timer must not release run 2's hold
+    await s.run({ action: "open", page: "p3.html" });
+    assert.equal(s.messages.length, 2, "the third send waits for run 2 to start");
+    s.handlers.agent_start();
+    assert.equal(s.messages.length, 3);
+  } finally { s.handlers.session_shutdown(); mock.timers.reset(); p.done(); }
+});
+
+test("6: a symlinked Event Log or Kernel copy is refused", () => {
+  const p = project();
+  const outside = realpathSync(mkdtempSync(path.join(tmpdir(), "atelier-outside-")));
+  const victim = path.join(outside, "victim.txt");
+  writeFileSync(victim, "keep\n");
+  try {
+    symlinkSync(victim, `${p.page}.events.jsonl`);
+    assert.throws(() => appendLog(p.page, { origin: "human", type: "comment", text: "x" }), /symlink/);
+    assert.equal(readFileSync(victim, "utf8"), "keep\n");
+    symlinkSync(path.join(outside, "planted.js"), path.join(p.root, "atelier.js")); // dangling
+    assert.equal(copyKernel(p.root)[0].outcome, "symlink");
+    assert.equal(existsSync(path.join(outside, "planted.js")), false);
+  } finally { p.done(); rmSync(outside, { recursive: true, force: true }); }
+});
+
+test("7: a malformed request target is a 400 and the server stays up", async () => {
+  const p = project();
+  const host = createHost({ root: p.root, send: () => {} });
+  try {
+    const { url } = await host.open(p.page);
+    const port = Number(new URL(url).port);
+    assert.match(await raw(port, `GET http://[ HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`), /^HTTP\/1\.1 400/);
+    assert.equal((await fetch(url)).status, 200, "still serving");
+  } finally { host.stop(); p.done(); }
+});
+
+test("8: malformed events are refused before the log; a line that cannot be composed never throws out of Delivery", async () => {
+  const p = project();
+  let clock = 1_000_000;
+  const sent = [];
+  const host = createHost({ root: p.root, now: () => clock, send: (m, done) => { sent.push(m); done(true); } });
+  try {
+    await host.open(p.page);
+    assert.equal(host.postHuman(p.page, { type: "comment", text: "x", quote: { exact: 5 } }).status, 400);
+    assert.equal(host.postHuman(p.page, { type: "close", target: "1" }).status, 400);
+    assert.equal(readLog(p.page).length, 0);
+    assert.equal(host.postHuman(p.page, { type: "comment", text: "ok", junk: "x" }).json.entry.junk, undefined, "unknown fields are dropped");
+    // A line the old server accepted: composing it throws.
+    appendLog(p.page, { origin: "human", type: "request", job: "old", delivery: "immediate", quote: { exact: 5 } }, clock);
+    clock += UNDO;
+    assert.doesNotThrow(() => host.deliverDue(p.page));
+    assert.equal(readLog(p.page).at(-1).type, "unconfirmed", "the Page shows it as not delivered, with Copy");
+    host.postHuman(p.page, { type: "request", job: "rerun", input: {} });
+    clock += UNDO;
+    host.deliverDue(p.page);
+    assert.ok(sent.some((m) => /Request "rerun"/.test(m.content)), "later events still deliver");
+  } finally { host.stop(); p.done(); }
+});
+
+test("9: closure and answers are version-scoped; stale items stay open", () => {
+  const log = [
+    { seq: 1, at: 0, origin: "human", type: "comment", key: "k", ver: "v1", text: "x", delivery: "send" },
+    { seq: 2, at: 0, origin: "human", type: "send", delivery: "boundary" },
+    { seq: 3, at: 0, origin: "human", type: "close", target: 1, ver: "v1", delivery: "record" },
+    { seq: 4, at: 0, origin: "agent", type: "ask", decision: { id: "d", key: "k", question: "?", options: [] } },
+    { seq: 5, at: 0, origin: "human", type: "decide", decision: "d", option: "A", key: "k", ver: "v1", delivery: "immediate" },
+  ];
+  assert.equal(derive(log, () => "v1").openThreads.length + derive(log, () => "v1").toAnswer.length, 0);
+  const moved = derive(log, () => "v2");
+  assert.equal(moved.openThreads.length, 1, "closed on v1, content now v2: open again");
+  assert.equal(moved.toAnswer.length, 1, "answered on v1: to answer again");
+  const checked = derive([...log, { seq: 6, at: 0, origin: "human", type: "close", target: 1, ver: "v2" }, { seq: 7, at: 0, origin: "human", type: "decide", decision: "d", option: "A", key: "k", ver: "v2" }], () => "v2");
+  assert.equal(checked.openThreads.length + checked.toAnswer.length, 0);
+});
+
+test("B: a Page outside the project serves only its own directory", async () => {
+  const p = project();
+  const outside = realpathSync(mkdtempSync(path.join(tmpdir(), "atelier-elsewhere-")));
+  const dir = path.join(outside, "pages");
+  mkdirSync(path.join(dir, "data"), { recursive: true });
+  writeFileSync(path.join(dir, "far.html"), PAGE);
+  writeFileSync(path.join(dir, "data", "runs.json"), "[1]");
+  writeFileSync(path.join(outside, "secret.txt"), "no");
+  symlinkSync(path.join(outside, "secret.txt"), path.join(dir, "link.txt"));
+  writeFileSync(path.join(p.root, "project.json"), "{}");
+  dueDecide(path.join(dir, "far.html"));
+  const s = pi(session(p.root, "sB"));
+  try {
+    const { url } = (await s.run({ action: "open", page: path.join(dir, "far.html") })).details;
+    assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/~[0-9a-f]+\/far\.html$/);
+    const base = url.replace(/far\.html$/, "");
+    const origin = new URL(url).origin;
+    assert.equal((await fetch(url)).status, 200);
+    assert.equal((await fetch(`${base}atelier.js`)).status, 200, "Kernel copied beside it");
+    assert.equal((await fetch(`${base}data/runs.json`)).status, 200);
+    assert.equal((await fetch(`${base}..%2Fsecret.txt`)).status, 404, "no traversal");
+    assert.equal((await fetch(`${base}link.txt`)).status, 404, "no symlink out");
+    assert.equal((await fetch(`${origin}/project.json`)).status, 200, "project files as before");
+    assert.equal(s.messages.length, 1, "undelivered events replayed");
+    const page = new URL(url).pathname.slice(1);
+    const post = await fetch(`${origin}/.atelier/events?page=${encodeURIComponent(page)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "comment", text: "hi" }) });
+    assert.equal(post.status, 200);
+    assert.equal(readLog(path.join(dir, "far.html")).at(-1).text, "hi");
+    const port = new URL(url).port;
+    assert.match(await raw(Number(port), `GET /${page} HTTP/1.1\r\nHost: evil.example:${port}\r\nConnection: close\r\n\r\n`), /^HTTP\/1\.1 403/, "Host check (130)");
+  } finally { s.handlers.session_shutdown(); p.done(); rmSync(outside, { recursive: true, force: true }); }
+});

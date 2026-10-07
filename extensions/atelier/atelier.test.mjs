@@ -182,7 +182,7 @@ test("events on an earlier version are marked, stay open, and can be re-bound", 
   assert.equal(moved.decisions[0].stale, true);
   const still = derive([...log, { seq: 6, at: 0, origin: "human", type: "still", target: 1, ver: "v2" }], () => "v2");
   assert.equal(still.threads[0].stale, false);
-  const fixed = derive([...log, { seq: 6, at: 0, origin: "human", type: "close", target: 1 }], () => "v2");
+  const fixed = derive([...log, { seq: 6, at: 0, origin: "human", type: "close", target: 1, ver: "v2" }], () => "v2");
   assert.equal(fixed.openThreads.length, 0);
 });
 
@@ -271,7 +271,8 @@ test("the extension delivers as an atelier follow-up message and records the rec
     assert.equal(messages[0].m.display, true);
     assert.match(messages[0].m.content, /^Atelier Page page\.html/);
     assert.match(messages[0].m.content, /kept the recommendation/);
-    handlers.message_start({ message: { role: "custom", ...messages[0].m } });
+    handlers.message_end({ message: { role: "custom", ...messages[0].m } });
+    handlers.agent_settled();
     assert.deepEqual(readLog(path.join(root, "page.html")).slice(-2).map((e) => e.type), ["delivered", "received"]);
     await assert.rejects(run({ action: "ask", decision: { id: "e", question: "?", options: [{ label: "A", consequence: "" }, { label: "B", consequence: "" }] } }), /exactly one recommended/);
     const asked = await run({ action: "ask", decision: { id: "e", question: "?", options: [{ label: "A", consequence: "", recommended: true }, { label: "B", consequence: "" }] } });

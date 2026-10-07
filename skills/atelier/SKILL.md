@@ -5,7 +5,7 @@ description: "Page contract and Registry index for the atelier tool. Use before 
 
 # Atelier
 
-A Page is one HTML file in the project. Write it, then call `atelier` with `open` and link the
+A Page is one HTML file, in the project or at any absolute path. Write it, then call `atelier` with `open` and link the
 returned URL in the Chat. Terms: `extensions/atelier/GLOSSARY.md` in pi-workbench.
 
 ## Page contract
@@ -21,7 +21,8 @@ returned URL in the Chat. Terms: `extensions/atelier/GLOSSARY.md` in pi-workbenc
 - `atl-request="job"` on a button or form lets the human ask for a typed job; form fields become
   its input. Move it with `status`.
 - `atl-group` on a keyed element gives its Comments their own "Send (n)".
-- Read changing data from project files with `fetch` (read-only). Re-read it on the
+- Read changing data with `fetch` (read-only): project files, or for a Page outside the project only
+  files in its own directory. Re-read it on the
   `atelier:update` document event, which fires after every Update.
 - Never write `<page>.events.jsonl` and never keep human state in the HTML. After rewriting the
   Page, call `update`.

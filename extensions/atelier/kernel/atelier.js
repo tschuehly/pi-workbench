@@ -59,7 +59,7 @@ export function derive(entries, currentVer = () => null) {
       if (root) { root.msgs.push(e); root.closed = false; }
       else threads.set(e.seq, { root: e, msgs: [e], closed: false, ver: e.ver ?? null, key: e.key ?? null });
     } else if (e.type === "answer") threads.get(rootOf(e.target))?.msgs.push(e);
-    else if (e.type === "close") { const t = threads.get(rootOf(e.target)); if (t) t.closed = true; }
+    else if (e.type === "close") { const t = threads.get(rootOf(e.target)); if (t) { t.closed = true; if (e.ver !== undefined) t.ver = e.ver; } } // closed on the version the human saw
     else if (e.type === "still") { const t = threads.get(rootOf(e.target)); if (t) { t.ver = e.ver ?? null; t.closed = false; } }
     else if (e.type === "ask") decisions.set(e.decision.id, { ...e.decision, askSeq: e.seq, answer: null, opened: false });
     else if (e.type === "opened") { const d = decisions.get(e.decision); if (d) d.opened = true; }
@@ -77,7 +77,8 @@ export function derive(entries, currentVer = () => null) {
     } else if (e.type === "cancel") { const r = requests.get(e.target); if (r) r.cancel = true; }
     else if (e.type === "accept") { const r = requests.get(e.target); if (r) r.accepted = true; }
   }
-  for (const t of threads.values()) t.stale = stale(t.key, t.ver);
+  // Decision 127: a close or an answer holds for the version it was made on; a newer version reopens it.
+  for (const t of threads.values()) { t.stale = stale(t.key, t.ver); if (t.stale) t.closed = false; }
   for (const d of decisions.values()) d.stale = d.answer !== null && stale(d.key ?? d.answer.key, d.answer.ver);
   const verdictList = [...verdicts.values()].map((v) => ({ ...v, stale: stale(v.key, v.ver) }));
   const drafts = live.filter((e) => status(e) === "draft");
@@ -85,7 +86,7 @@ export function derive(entries, currentVer = () => null) {
     threads: [...threads.values()], decisions: [...decisions.values()], verdicts: new Map(verdictList.map((v) => [v.key, v])),
     requests: [...requests.values()], drafts, status,
     openThreads: [...threads.values()].filter((t) => !t.closed && status(t.root) !== "draft"),
-    toAnswer: [...decisions.values()].filter((d) => d.answer === null),
+    toAnswer: [...decisions.values()].filter((d) => d.answer === null || d.stale),
   };
 }
 
@@ -134,7 +135,7 @@ function boot() {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const readKey = `atelier-read:${page}`;
   const read = JSON.parse(localStorage.getItem(readKey) || "{}");
-  let entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0;
+  let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0;
   const touched = new WeakSet(), keyUis = new Map(), cards = new Map();
 
   const isUi = (n) => n.closest?.("[atl-ui]");
@@ -181,11 +182,13 @@ function boot() {
   }
   async function pull() {
     if (!online) return;
-    const since = entries.length ? entries[entries.length - 1].seq : 0;
     try {
-      const r = await fetch(`/.atelier/events${q}&since=${since}`, { cache: "no-store" });
+      // Only a pull moves the cursor: a POST's own entry may be newer than another tab's unfetched one.
+      const r = await fetch(`/.atelier/events${q}&since=${cursor}`, { cache: "no-store" });
       if (!r.ok) throw new Error((await r.json()).error);
-      if (add((await r.json()).entries)) render();
+      const list = (await r.json()).entries;
+      cursor = list.reduce((max, e) => Math.max(max, e.seq), cursor);
+      if (add(list)) render();
     } catch { conn = "no session"; render(); }
   }
 
@@ -305,7 +308,7 @@ function boot() {
     const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}" class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
     const rec = d.options.find((o) => o.recommended)?.label;
     const receipt = a ? `<div class="atl-dim">You chose ${esc(a.option)} · ${a.option === rec ? "kept the recommendation" : "changed from the recommendation"}${d.material ? ` · material ${a.opened ? "opened" : "not opened"}` : ""} · ${esc(statusText(st, a))}</div>` : "";
-    return `<div class="atl-head"><span class="atl-tag">${a ? "answered" : "to answer"}</span>${d.stale ? `<span class="atl-tag atl-warn">answered on an earlier version</span>` : ""}</div>
+    return `<div class="atl-head"><span class="atl-tag">${a && !d.stale ? "answered" : "to answer"}</span>${d.stale ? `<span class="atl-tag atl-warn">answered on an earlier version</span>` : ""}</div>
       <div class="atl-q">${esc(d.question)}</div>${d.detail ? `<div class="atl-dim">${esc(d.detail)}</div>` : ""}
       ${d.material ? `<button data-atl="material" data-id="${esc(d.id)}">${d.opened ? "Material opened ✓" : "Open the material"}</button>` : ""}
       <div class="atl-opts">${opts}</div>${receipt}`;
@@ -345,14 +348,18 @@ function boot() {
       const groupDrafts = el.hasAttribute("atl-group") ? st.drafts.filter((d) => inGroup(d.key, addr)).length : 0;
       set(ui.firstElementChild, `<button data-atl="comment" data-key="${esc(addr)}" class="atl-add" title="Comment on ${esc(addr)}">💬</button>${verdict}${groupDrafts ? `<button data-atl="send" data-key="${esc(addr)}">Send (${groupDrafts})</button>` : ""}`);
       reconcile(ui.children[1], [
-        ...st.decisions.filter((d) => d.key === addr).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st), open: !d.answer, extra: `<input class="atl-note" placeholder="Optional note with your answer" aria-label="Note">` })),
+        ...st.decisions.filter((d) => d.key === addr).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st), open: !d.answer || d.stale, extra: `<input class="atl-note" placeholder="Optional note with your answer" aria-label="Note">` })),
         ...st.threads.filter((t) => placed.get(t.root.seq).where === "key" && t.root.key === addr).map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })),
       ]);
     }
-    for (const [addr, ui] of keyUis) if (!seen.has(addr)) { ui.remove(); keyUis.delete(addr); }
+    for (const [addr, ui] of keyUis) {
+      if (seen.has(addr)) continue;
+      if (composer && ui.contains(composer.node)) panel.querySelector(".atl-slot").append(composer.node); // an Update removed its Key: keep the text
+      ui.remove(); keyUis.delete(addr);
+    }
 
     // Decisions with no Key on the Page sit in the reading path, capped at 50vh (Review Studio a41040901).
-    reconcile(orphans, st.decisions.filter((d) => !findKey(d.key)).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st), open: !d.answer, extra: `<input class="atl-note" placeholder="Optional note with your answer" aria-label="Note">` })));
+    reconcile(orphans, st.decisions.filter((d) => !findKey(d.key)).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st), open: !d.answer || d.stale, extra: `<input class="atl-note" placeholder="Optional note with your answer" aria-label="Note">` })));
 
     const onText = st.threads.filter((t) => placed.get(t.root.seq).where === "text");
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
@@ -423,7 +430,7 @@ function boot() {
   const actions = {
     comment: (b) => openComposer({ label: `Comment on ${b.dataset.key}`, anchor: anchorForKey(b.dataset.key) }, slotFor(b.dataset.key)),
     reply: (b) => { const seq = +b.dataset.seq; const root = all().find((e) => e.seq === seq); markRead(seq); openComposer({ label: `Reply in thread #${seq}`, anchor: { thread: seq, key: root?.key, ver: root?.key ? currentVer(root.key) : undefined } }, b.closest("[atl-ui=key]")?.querySelector(".atl-slot") ?? panel.querySelector(".atl-slot")); },
-    close: (b) => post({ type: "close", target: +b.dataset.seq }),
+    close: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "close", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : undefined }); },
     still: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "still", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : null }); },
     jump: (b) => { const t = derive(all(), currentVer).threads.find((x) => x.root.seq === +b.dataset.seq); const p = t && placeThread(t, textIndex()); markRead(+b.dataset.seq); if (p?.range) { p.range.startContainer.parentElement.scrollIntoView({ block: "center", behavior: "smooth" }); } else jumpTo(p?.el); },
     decide: (b) => {
@@ -432,7 +439,7 @@ function boot() {
       post({ type: "decide", decision: b.dataset.id, option: b.dataset.label, opened: d?.material ? d.opened : null, note: note?.value.trim() || undefined, key: d?.key, ver: d?.key ? currentVer(d.key) : undefined });
       if (note) note.value = "";
     },
-    material: (b) => { const d = derive(all(), currentVer).decisions.find((x) => x.id === b.dataset.id); jumpTo(findKey(d?.material)); if (d && !d.opened && !openedSent.has(d.askSeq)) { openedSent.add(d.askSeq); post({ type: "opened", decision: d.id }); } },
+    material: (b) => { const d = derive(all(), currentVer).decisions.find((x) => x.id === b.dataset.id); jumpTo(findKey(d?.material)); if (d && !d.opened) markOpened(d); },
     verdict: (b) => { const el = findKey(b.dataset.key); post({ type: "verdict", key: b.dataset.key, ver: verOf(el), scale: el.getAttribute("atl-verdict"), value: b.dataset.value, delivery: el.getAttribute("atl-delivery") ?? undefined }); },
     send: (b) => post({ type: "send", key: b.dataset.key || undefined }),
     undo: (b) => post({ type: "undo", target: +b.dataset.seq }),
@@ -484,18 +491,20 @@ function boot() {
     post({ type: "request", job: form.getAttribute("atl-request"), key: keyOf(form), ver: verOf(form), input: Object.fromEntries(new FormData(form)) });
   });
   document.addEventListener("input", (ev) => { if (!isUi(ev.target)) touched.add(ev.target); }, true);
-  // Decision 113: only an explicit action on the material counts as opened: click, expand or play. Scrolling never does.
-  const openedSent = new Set(); // pointerdown and toggle fire together; record one opening per Decision
+  // Decision 113: only the human's own click or key on the material counts as opened (expanding and playing start
+  // with one). toggle and play also fire for the Page's own <details open>, Updates and autoplay, so they never count.
+  const opening = new Set(); // one POST in flight per Decision; after it, the log says whether it is opened
+  function markOpened(d) {
+    if (opening.has(d.askSeq)) return;
+    opening.add(d.askSeq);
+    post({ type: "opened", decision: d.id }).finally(() => opening.delete(d.askSeq));
+  }
   const opened = (ev) => {
-    if (isUi(ev.target)) return;
-    for (const d of derive(all(), currentVer).decisions) {
-      if (d.answer || d.opened || !d.material || openedSent.has(d.askSeq)) continue;
-      if (findKey(d.material)?.contains(ev.target)) { openedSent.add(d.askSeq); post({ type: "opened", decision: d.id }); }
-    }
+    if (!ev.isTrusted || isUi(ev.target) || (ev.type === "keydown" && ev.key !== "Enter" && ev.key !== " ")) return;
+    for (const d of derive(all(), currentVer).decisions) if (!d.answer && !d.opened && d.material && findKey(d.material)?.contains(ev.target)) markOpened(d);
   };
   document.addEventListener("pointerdown", opened, true);
-  document.addEventListener("toggle", opened, true);
-  document.addEventListener("play", opened, true);
+  document.addEventListener("keydown", opened, true);
 
   function flash(text) { const n = h(`<div class="atl-toast" role="status">${esc(text)}</div>`); panel.querySelector(".atl-undo").before(n); setTimeout(() => n.remove(), 4000); }
 
