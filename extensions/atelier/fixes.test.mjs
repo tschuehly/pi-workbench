@@ -135,11 +135,12 @@ test("8: malformed events are refused before the log; a line that cannot be comp
     assert.equal(host.postHuman(p.page, { type: "close", target: "1" }).status, 400);
     assert.equal(readLog(p.page).length, 0);
     assert.equal(host.postHuman(p.page, { type: "comment", text: "ok", junk: "x" }).json.entry.junk, undefined, "unknown fields are dropped");
-    // A line the old server accepted: composing it throws.
-    appendLog(p.page, { origin: "human", type: "request", job: "old", delivery: "immediate", quote: { exact: 5 } }, clock);
+    // Lines the old server accepted: composing the answer to an option-less Decision throws.
+    appendLog(p.page, { origin: "agent", type: "ask", decision: { id: "old" } }, clock);
+    appendLog(p.page, { origin: "human", type: "decide", decision: "old", option: "A", delivery: "immediate" }, clock);
     clock += UNDO;
     assert.doesNotThrow(() => host.deliverDue(p.page));
-    assert.match(sent.at(-1).content, /#\d+ request could not be rendered/, "delivered, named as unreadable");
+    assert.match(sent.at(-1).content, /#\d+ decide could not be rendered/, "delivered, named as unreadable");
     host.postHuman(p.page, { type: "request", job: "rerun", input: {} });
     clock += UNDO;
     host.deliverDue(p.page);
@@ -244,11 +245,11 @@ test("R2: a Comment thread may only reference an earlier Comment; a bad referenc
 });
 
 test("R3: composition names an entry it cannot render instead of throwing, for Delivery and Copy", () => {
-  const bad = { seq: 4, at: 0, origin: "human", type: "request", job: "old", delivery: "immediate", quote: { exact: 5 } };
+  const bad = { seq: 4, at: 0, origin: "human", type: "decide", decision: "old", option: "A", delivery: "immediate" };
   const good = { seq: 5, at: 0, origin: "human", type: "comment", text: "fine", delivery: "immediate" };
-  const log = [bad, good, { seq: 6, at: 0, origin: "kernel", type: "unconfirmed", of: [4, 5] }];
+  const log = [{ seq: 3, at: 0, origin: "agent", type: "ask", decision: { id: "old" } }, bad, good, { seq: 6, at: 0, origin: "kernel", type: "unconfirmed", of: [4, 5] }];
   let text;
   assert.doesNotThrow(() => { text = compose("page.html", "", [bad, good], log); });
-  assert.match(text, /#4 request could not be rendered/);
+  assert.match(text, /#4 decide could not be rendered/);
   assert.match(text, /#5 Comment/);
 });

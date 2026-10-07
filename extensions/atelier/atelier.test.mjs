@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import atelierExtension, { appendLog, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
-import { derive } from "./kernel/atelier.js";
+import { compose, derive, keyTexts, palette, threadLayout } from "./kernel/atelier.js";
 
 const UNDO = 10_000;
 
@@ -44,7 +44,8 @@ test("an event is appended to the Event Log before it is delivered, and marked d
     assert.equal(host.deliverDue(page), 1);
     assert.deepEqual(sent[0].logAtSend, ["ask", "decide"], "the log held the event before the send");
     assert.equal(sent[0].message.customType, "atelier:immediate");
-    assert.match(sent[0].message.content, /grants no authority/);
+    assert.match(sent[0].message.content, /^Atelier · page\.html \(http:\/\/127\.0\.0\.1:\d+\/page\.html\)\n- #2 Decision d1: B;/, "one header line, then one line per event");
+    assert.doesNotMatch(sent[0].message.content, /grants no authority|Answer each Comment/, "the rules live in the tool description");
     assert.match(sent[0].message.content, /changed from the recommendation "A"; material NOT opened; do not read this as agreement/);
     assert.equal(readLog(page).at(-1).type, "delivered");
     assert.equal(host.deliverDue(page), 0, "in flight events are not sent twice");
@@ -62,7 +63,7 @@ test("undo inside the window cancels delivery; after the window it is refused", 
     tick(5_000);
     assert.equal(host.deliverDue(page), 0);
     assert.equal(sent.length, 0);
-    const late = human({ type: "verdict", key: "a", scale: "1|2|3", value: "2" }).json.entry;
+    const late = human({ type: "decide", decision: "a", options: "1|2|3", option: "2", key: "a" }).json.entry;
     tick(UNDO);
     assert.equal(human({ type: "undo", target: late.seq }).status, 409, "window closed");
   } finally { host.stop(); p.done(); }
@@ -72,7 +73,7 @@ test("delivery classes: Record stays in the log, Send batches drafts per group, 
   const p = project();
   const { host, page, sent, tick, human } = await hostOn(p);
   try {
-    human({ type: "verdict", key: "a", scale: "1|2|3|4|5", value: "4" });
+    human({ type: "decide", decision: "a", options: "1|2|3|4|5", option: "4", key: "a", delivery: "record" });
     human({ type: "comment", key: "run-1/turn-1", text: "one" });
     human({ type: "comment", key: "run-1/turn-2", text: "two" });
     human({ type: "comment", key: "run-2/turn-1", text: "three" });
@@ -84,7 +85,7 @@ test("delivery classes: Record stays in the log, Send batches drafts per group, 
     assert.equal(sent[0].message.customType, "atelier:send");
     assert.match(sent[0].message.content, /Comments on run-1/);
     assert.match(sent[0].message.content, /"one"[\s\S]*"two"/);
-    assert.doesNotMatch(sent[0].message.content, /three|Verdict/);
+    assert.doesNotMatch(sent[0].message.content, /three|Decision/);
     host.receipt(sent[0].message.details);
     human({ type: "send" });
     human({ type: "decide", decision: "x", option: "A" });
@@ -98,10 +99,11 @@ test("delivery classes: Record stays in the log, Send batches drafts per group, 
     tick(UNDO);
     assert.equal(host.deliverDue(page), 0);
     assert.equal(readLog(page).at(-1).note, "nothing to send");
-    // A Page may make a Verdict Immediate.
-    human({ type: "verdict", key: "a", scale: "Confirm|Redo", value: "Redo", delivery: "immediate" });
+    // A Page-declared Decision is Immediate unless its atl-delivery says otherwise.
+    human({ type: "decide", decision: "b", options: "Confirm|Redo", option: "Redo", key: "b" });
     tick(UNDO);
     assert.equal(host.deliverDue(page), 1);
+    assert.equal(human({ type: "decide", decision: "b", option: "Confirm", delivery: "later" }).json.entry.delivery, "immediate", "unknown classes fall back");
   } finally { host.stop(); p.done(); }
 });
 
@@ -115,7 +117,7 @@ test("events the ended session never delivered go to the next session that opens
   try {
     next.tick(UNDO);
     assert.equal(next.host.deliverDue(next.page, true), 1);
-    assert.match(next.sent[0].message.content, /Delivered to this session because it opened the Page/);
+    assert.match(next.sent[0].message.content, /^Atelier · page\.html \(http[^)]*\) · replayed from an earlier session\n/);
     assert.equal(next.sent[0].message.details.replay, true);
   } finally { next.host.stop(); p.done(); }
 });
@@ -123,14 +125,14 @@ test("events the ended session never delivered go to the next session that opens
 test("open replays at once what an earlier session left undelivered", async () => {
   const p = project();
   appendLog(p.page, { origin: "human", type: "request", job: "rerun", delivery: "immediate" }, Date.now() - 60_000);
-  appendLog(p.page, { origin: "human", type: "verdict", delivery: "record", key: "a", value: "3" }, Date.now() - 60_000);
+  appendLog(p.page, { origin: "human", type: "decide", delivery: "record", decision: "a", options: "1|2|3", option: "3", key: "a" }, Date.now() - 60_000);
   const sent = [];
   const host = createHost({ root: p.root, send: (m, done) => { sent.push(m); done(true); } });
   try {
     const opened = await host.open(path.join(host.root, "page.html"));
     assert.equal(opened.replayed, 1);
     assert.match(sent[0].content, /Request "rerun"/);
-    assert.doesNotMatch(sent[0].content, /Verdict/);
+    assert.doesNotMatch(sent[0].content, /Decision/);
   } finally { host.stop(); p.done(); }
 });
 
@@ -169,7 +171,7 @@ test("events on an earlier version are marked, stay open, and can be re-bound", 
   const log = [
     { seq: 1, at: 0, origin: "human", type: "comment", key: "run/t1", ver: "v1", text: "wrong", delivery: "send" },
     { seq: 2, at: 0, origin: "human", type: "send", delivery: "boundary" },
-    { seq: 3, at: 0, origin: "human", type: "verdict", key: "run/t1", ver: "v1", value: "2", delivery: "record" },
+    { seq: 3, at: 0, origin: "human", type: "decide", decision: "run/t1", options: "1|2|3", option: "2", key: "run/t1", ver: "v1", delivery: "record" },
     { seq: 4, at: 0, origin: "agent", type: "ask", decision: { id: "d", key: "run/t1", question: "?", options: [] } },
     { seq: 5, at: 0, origin: "human", type: "decide", decision: "d", option: "A", key: "run/t1", ver: "v1", delivery: "immediate" },
   ];
@@ -178,8 +180,8 @@ test("events on an earlier version are marked, stay open, and can be re-bound", 
   const moved = derive(log, () => "v2");
   assert.equal(moved.threads[0].stale, true);
   assert.equal(moved.openThreads.length, 1, "stays open until the human checks it");
-  assert.equal(moved.verdicts.get("run/t1").stale, true);
-  assert.equal(moved.decisions[0].stale, true);
+  assert.equal(moved.decisions.find((d) => d.id === "run/t1").stale, true, "a Page-declared answer on v1");
+  assert.equal(moved.decisions.find((d) => d.id === "d").stale, true);
   const still = derive([...log, { seq: 6, at: 0, origin: "human", type: "still", target: 1, ver: "v2" }], () => "v2");
   assert.equal(still.threads[0].stale, false);
   const fixed = derive([...log, { seq: 6, at: 0, origin: "human", type: "close", target: 1, ver: "v2" }], () => "v2");
@@ -207,7 +209,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 1\.0\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.0\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -269,13 +271,15 @@ test("the extension delivers as an atelier follow-up message and records the rec
     assert.deepEqual(messages[0].o, { triggerTurn: true, deliverAs: "followUp" });
     assert.equal(messages[0].m.customType, "atelier:immediate");
     assert.equal(messages[0].m.display, true);
-    assert.match(messages[0].m.content, /^Atelier Page page\.html/);
+    assert.match(messages[0].m.content, /^Atelier · page\.html \(http/);
     assert.match(messages[0].m.content, /kept the recommendation/);
     handlers.message_end({ message: { role: "custom", ...messages[0].m } });
     handlers.agent_settled();
     assert.deepEqual(readLog(path.join(root, "page.html")).slice(-2).map((e) => e.type), ["delivered", "received"]);
-    await assert.rejects(run({ action: "ask", decision: { id: "e", question: "?", options: [{ label: "A", consequence: "" }, { label: "B", consequence: "" }] } }), /exactly one recommended/);
-    const asked = await run({ action: "ask", decision: { id: "e", question: "?", options: [{ label: "A", consequence: "", recommended: true }, { label: "B", consequence: "" }] } });
+    await assert.rejects(run({ action: "ask", decision: { id: "e", question: "?", options: [{ label: "A", consequence: "", recommended: true }, { label: "B", consequence: "", recommended: true }] } }), /at most one/);
+    const asked = await run({ action: "ask", decision: { id: "e", question: "?", options: [{ label: "A", consequence: "" }, { label: "B", consequence: "" }] } });
+    assert.match(asked.content[0].text, /posted/, "a recommendation is optional (133)");
+    assert.match(tool.description, /recommend one option only when you have a basis/);
     assert.match(asked.content[0].text, /End your turn/);
     assert.match((await run({ action: "update" })).content[0].text, /No tab is connected/);
     await assert.rejects(run({ action: "answer", comment: 1, text: "x" }), /Comment/);
@@ -310,4 +314,113 @@ test("dueMessages skips in-flight events and covers only drafts before the Send"
   ];
   assert.deepEqual(dueMessages(log, UNDO).map((m) => m.seqs), [[1, 2]]);
   assert.deepEqual(dueMessages(log, UNDO, UNDO, new Set([1, 2])), []);
+});
+
+// Decision 133: a Page declares Decisions with atl-decide, and answers stay editable.
+const turn = { id: "run/turn-1", key: "run/turn-1", declared: true, options: [{ label: "Confirm", recommended: true }, { label: "Redo", recommended: false }], note: ["Redo"] };
+
+test("a Page-declared Decision posts a decide event whose id is the Key address", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const r = human({ type: "decide", decision: "run/turn-1", key: "run/turn-1", ver: "v1", options: "Confirm|Redo", rec: "Confirm", option: "Confirm", opened: null, junk: 1 });
+    assert.equal(r.status, 200);
+    const { seq, at, ...entry } = r.json.entry;
+    assert.deepEqual(entry, { type: "decide", decision: "run/turn-1", option: "Confirm", options: "Confirm|Redo", rec: "Confirm", opened: null, key: "run/turn-1", ver: "v1", origin: "human", delivery: "immediate" });
+    const st = derive(readLog(page), () => "v1");
+    assert.deepEqual(st.decisions.map((d) => [d.id, d.key, d.declared, d.answer.option]), [["run/turn-1", "run/turn-1", true, "Confirm"]], "replays without the Page");
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent[0].message.content, /\n- #1 Decision run\/turn-1 \(version v1\): Confirm; kept the recommendation$/);
+  } finally { host.stop(); p.done(); }
+});
+
+test("changing an answer carries the previous option and is delivered as X → Y; undo restores the earlier answer", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    host.agent(page, { type: "ask", decision: { id: "gate-g0", question: "Promote?", options: [{ label: "Promote", consequence: "ships" }, { label: "Revise", consequence: "waits" }] } });
+    human({ type: "decide", decision: "gate-g0", option: "Revise" });
+    tick(UNDO);
+    host.deliverDue(page);
+    const changed = human({ type: "decide", decision: "gate-g0", option: "Promote", previous: "Revise" }).json.entry;
+    assert.equal(changed.previous, "Revise");
+    assert.equal(derive(readLog(page)).decisions[0].answer.option, "Promote", "the newest answer counts");
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent.at(-1).message.content, /- #\d+ Decision gate-g0: Revise → Promote$/);
+    assert.doesNotMatch(sent.at(-1).message.content, /recommendation/, "no recommendation, no receipt");
+    const again = human({ type: "decide", decision: "gate-g0", option: "Revise", previous: "Promote" }).json.entry;
+    human({ type: "undo", target: again.seq });
+    assert.equal(derive(readLog(page)).decisions[0].answer.option, "Promote", "undo applies to each change");
+  } finally { host.stop(); p.done(); }
+});
+
+test("unanswered Page-declared Decisions count as to answer; atl-note options are declared for the Kernel", () => {
+  const log = [{ seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "d", question: "?", options: [{ label: "A" }, { label: "B" }] } }];
+  const st = derive(log, () => null, [turn, { ...turn, id: "run/turn-2", key: "run/turn-2" }]);
+  assert.deepEqual(st.toAnswer.map((d) => d.id), ["run/turn-1", "run/turn-2", "d"]);
+  assert.deepEqual(st.decisions[0].note, ["Redo"], "the Kernel refuses Redo without a note (browser-checked)");
+  const answered = derive([...log, { seq: 2, at: 0, origin: "human", type: "decide", decision: "run/turn-1", key: "run/turn-1", option: "Redo", note: "blurry" }], () => null, [turn]);
+  assert.deepEqual(answered.toAnswer.map((d) => d.id), ["d"]);
+});
+
+test("Verdict is gone: atl-verdict and verdict events are no longer recognised", async () => {
+  const p = project();
+  const { host, page, human } = await hostOn(p);
+  try {
+    assert.equal(human({ type: "verdict", key: "a", scale: "1|2", value: "1" }).status, 400);
+    assert.equal(readLog(page).length, 0);
+    const kernel = readFileSync(new URL("./kernel/atelier.js", import.meta.url), "utf8");
+    assert.doesNotMatch(kernel, /verdict/i);
+    assert.equal(derive([{ seq: 1, at: 0, origin: "human", type: "verdict", key: "a", value: "1", delivery: "record" }]).decisions.length, 0);
+  } finally { host.stop(); p.done(); }
+});
+
+test("the Kernel palette is light unless the Page declares dark", () => {
+  assert.doesNotMatch(palette(""), /prefers-color-scheme|#151b23/, "no Page declaration: light, whatever the OS");
+  assert.match(palette("normal"), /--atl-bg:#fff/);
+  assert.match(palette("light dark "), /^:where\(:root\)\{--atl-bg:#fff.*@media \(prefers-color-scheme:dark\)/, "light dark: follows the OS");
+  assert.match(palette(" dark"), /^:where\(:root\)\{--atl-bg:#151b23/);
+  assert.doesNotMatch(readFileSync(new URL("./kernel/atelier.js", import.meta.url), "utf8"), /color-scheme:\s*light dark|Canvas|ButtonFace/, "no system colours");
+});
+
+test("the delivery message is one header line and one line per event", () => {
+  const c = { seq: 6, at: 0, origin: "human", type: "comment", key: "how/step-write", text: "too long", delivery: "send" };
+  assert.equal(compose("/abs/dir/atelier.html", "http://127.0.0.1:1/x", [c], [c]), 'Atelier · atelier.html (http://127.0.0.1:1/x)\n- #6 Comment on how/step-write: "too long"');
+});
+
+test("a thread shows every message in order; only threads over four messages fold their middle", () => {
+  const msgs = (n) => Array.from({ length: n }, (_, i) => ({ seq: i + 1 }));
+  assert.deepEqual(threadLayout(msgs(2)), { head: msgs(2), folded: [], tail: [] }, "the human's own Comment stays visible");
+  assert.deepEqual(threadLayout(msgs(4)).head.length, 4);
+  const long = threadLayout(msgs(7));
+  assert.deepEqual([long.head, long.folded, long.tail].map((part) => part.map((m) => m.seq)), [[1], [2, 3, 4, 5], [6, 7]]);
+  assert.equal(threadLayout(msgs(7), true).head.length, 7, "expanded");
+});
+
+test("Delivery gives each Comment its Key's text from the Page source, and each reply its thread", async () => {
+  const p = project();
+  writeFileSync(p.page, `<!doctype html><title>t</title><section atl-key="how"><p>Intro</p><div atl-key="step-act" atl-ver="1"><h3>Act &mdash; You comment, rate, decide</h3><p>${"long text ".repeat(30)}</p><img src="x.png"></div><script>let s = "<div atl-key='fake'>";</script></section><script type="module" src="atelier.js"></script>`);
+  assert.equal(keyTexts(readFileSync(p.page, "utf8")).has("fake"), false, "script text is not markup");
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    human({ type: "comment", key: "how/step-act", ver: "1", text: "why not?" });
+    human({ type: "comment", key: "how/step-act", quote: { exact: "comment, rate", prefix: "You ", suffix: ", decide" }, text: "this bit" });
+    const root = human({ type: "comment", key: "how", text: "I think we need to give subagents the tool aswell" }).json.entry;
+    human({ type: "send" });
+    tick(UNDO);
+    host.deliverDue(page);
+    host.agent(page, { type: "answer", target: root.seq, text: `Agreed — it's the biggest gap. ${"x".repeat(300)}` });
+    human({ type: "comment", key: "how", thread: root.seq, text: "ok do it" });
+    human({ type: "send" });
+    tick(UNDO);
+    host.deliverDue(page);
+    const [first, second] = sent.map((s) => s.message.content);
+    assert.match(first, /\n- #1 Comment on how\/step-act \("Act — You comment, rate, decide long text long text [^"]*…"\) \(version 1\): "why not\?"/);
+    assert.match(first, /\n- #2 Comment on the text "comment, rate" in how\/step-act: "this bit"/, "a quoted selection stands for itself");
+    assert.match(first, /\n- #3 Comment on how \("Intro Act/);
+    assert.match(second, /\n- #7 Reply in thread #3 \(You: "I think we need to give subagents the tool aswell" · Agent: "Agreed — it's the biggest gap\. x{150,}…"\): "ok do it"$/);
+    assert.ok(second.split("Agent: ")[1].indexOf("…") <= 200, "earlier messages are clipped to ~200 characters");
+  } finally { host.stop(); p.done(); }
 });
