@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>State stepper · Atelier candidate</title>
+  <!-- Original example; provenance and licence assessment: README.md. -->
+  <style>
+    .candidate { color:var(--candidate-ink,#20252b); background:var(--candidate-paper,#fff); font:1rem/1.5 system-ui,sans-serif; padding:1rem; }
+    .candidate *, .candidate *::before, .candidate *::after { box-sizing:border-box; }
+    .candidate :is(button,input,select,textarea) { font:inherit; }
+    .candidate button, .candidate select { min-height:2rem; cursor:pointer; }
+    .candidate :focus-visible { outline:2px solid var(--candidate-link,#1257a0); outline-offset:3px; }
+    .candidate a { color:var(--candidate-link,#1257a0); text-underline-offset:.2em; }
+    .candidate [hidden] { display:none!important; }
+    .candidate :is(pre,code) { overflow-wrap:anywhere; } .candidate pre { overflow:auto; }
+    .candidate :is(section,article,figure,div) { min-width:0; }
+    .candidate :is(h1,h2,h3,p,figure) { margin:0 0 .75rem; }
+    .candidate h1 { font-size:1.5rem; } .candidate h2 { font-size:1.25rem; }
+    .candidate small { font-size:.875rem; } .candidate table { border-collapse:collapse; }
+    .candidate :is(th,td) { text-align:left; padding:.4rem .7rem; border-bottom:1px solid #a8adb3; }
+    .candidate [atl-key] { scroll-margin-block:5rem; }
+
+  </style>
+</head>
+<body>
+<main class="candidate state-stepper" data-component="state-stepper">
+  <p data-demo><small>Beispieldaten · Ohne Kernel wird nichts gespeichert.</small></p>
+  <h1>Was ein Fehler verändert</h1>
+  <label>Schritt <input type="range" min="0" max="2" value="0" step="1"></label><output aria-live="polite"></output>
+  <section data-state="0" atl-key="draft"><h2>Entwurf</h2><p>Text bleibt editierbar.</p></section>
+  <section data-state="1" atl-key="sending" hidden><h2>Senden</h2><p>Eine Anfrage läuft; der Entwurf bleibt erhalten.</p></section>
+  <section data-state="2" atl-key="failed" hidden><h2>Fehler</h2><p>Fehlerhinweis und unveränderter Entwurf sind sichtbar.</p></section>
+</main>
+<script>
+(() => {
+  const root = document.currentScript.previousElementSibling;
+  function show(){const step=root.querySelector('input').value;root.querySelectorAll('[data-state]').forEach(s=>s.hidden=s.dataset.state!==step);root.querySelector('output').textContent=` ${Number(step)+1} / 3`;}
+  root.querySelector('input').addEventListener('input',show);show();
+})();
+</script>
+</body>
+</html>

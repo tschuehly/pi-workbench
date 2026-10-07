@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Item navigation · Atelier candidate</title>
+  <!-- Original example; provenance and licence assessment: README.md. -->
+  <style>
+    .candidate { color:var(--candidate-ink,#20252b); background:var(--candidate-paper,#fff); font:1rem/1.5 system-ui,sans-serif; padding:1rem; }
+    .candidate *, .candidate *::before, .candidate *::after { box-sizing:border-box; }
+    .candidate :is(button,input,select,textarea) { font:inherit; }
+    .candidate button, .candidate select { min-height:2rem; cursor:pointer; }
+    .candidate :focus-visible { outline:2px solid var(--candidate-link,#1257a0); outline-offset:3px; }
+    .candidate a { color:var(--candidate-link,#1257a0); text-underline-offset:.2em; }
+    .candidate [hidden] { display:none!important; }
+    .candidate :is(pre,code) { overflow-wrap:anywhere; } .candidate pre { overflow:auto; }
+    .candidate :is(section,article,figure,div) { min-width:0; }
+    .candidate :is(h1,h2,h3,p,figure) { margin:0 0 .75rem; }
+    .candidate h1 { font-size:1.5rem; } .candidate h2 { font-size:1.25rem; }
+    .candidate small { font-size:.875rem; } .candidate table { border-collapse:collapse; }
+    .candidate :is(th,td) { text-align:left; padding:.4rem .7rem; border-bottom:1px solid #a8adb3; }
+    .candidate [atl-key] { scroll-margin-block:5rem; }
+    .item-pager article { padding-block:2rem; border-bottom:1px solid #a8adb3; }
+  </style>
+</head>
+<body>
+<main class="candidate item-pager" data-component="item-pager">
+  <p data-demo><small>Beispieldaten · Ohne Kernel wird nichts gespeichert.</small></p>
+  <h1>Prüfliste</h1>
+  <nav aria-label="Einträge"><button data-delta="-1" aria-label="Vorheriger Eintrag">←</button> <button data-delta="1" aria-label="Nächster Eintrag">→</button></nav>
+  <details><summary>Tastatur</summary>j: weiter · k: zurück. Eingabefelder behalten ihre Tasten.</details>
+  <article atl-key="claim-a" tabindex="-1"><h2>Eintrag A</h2><label>Notiz <input></label></article>
+  <article atl-key="claim-b" tabindex="-1"><h2>Eintrag B</h2><p>Die nächste Prüfung.</p></article>
+</main>
+<script>
+(() => {
+  const root = document.currentScript.previousElementSibling;
+  let index=-1;
+  function move(delta) {
+    const items=[...root.querySelectorAll('article')].filter(e=>!e.hidden);
+    if(!items.length) return;
+    index=Math.max(0,Math.min(items.length-1,index+delta));
+    items[index].focus({preventScroll:true}); items[index].scrollIntoView({block:'nearest'});
+  }
+  root.addEventListener('click',e=>{ const b=e.target.closest('[data-delta]'); if(b) move(Number(b.dataset.delta)); });
+  root.addEventListener('keydown',e=>{
+    if(e.target.closest('input,textarea,select,[contenteditable]')||e.ctrlKey||e.metaKey||e.altKey) return;
+    if(['j','k'].includes(e.key)){ e.preventDefault(); move(e.key==='j'?1:-1); }
+  });
+})();
+</script>
+</body>
+</html>

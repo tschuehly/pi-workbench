@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Review bridge · Atelier candidate</title>
+<style>
+.review-bridge { font:1rem/1.5 system-ui,sans-serif; color:#20252b; background:#fff; padding:1rem; }
+.review-bridge :is(button,input,textarea) { font:inherit; } .review-bridge :focus-visible { outline:2px solid #1257a0; outline-offset:3px; }
+.review-bridge iframe { width:100%; height:18rem; border:1px solid #777; }
+.review-bridge pre { white-space:pre-wrap; overflow-wrap:anywhere; } .review-bridge [hidden] { display:none; }
+</style><body>
+<main class="candidate review-bridge" data-component="review-bridge">
+  <small>Beispieldaten · Ohne Kernel wird nichts gespeichert.</small><h1>Prüfpunkt in einer App markieren</h1>
+  <p class="state" role="status">Für die App-Bridge diesen Ordner auf 127.0.0.1 per HTTP öffnen.</p>
+  <button data-focus disabled>Ziel zeigen</button> <button data-pick disabled>Stelle markieren</button> <button data-cancel disabled>Markieren beenden</button>
+  <iframe title="Isolierte synthetische Test-App"></iframe>
+  <section atl-key="picked-region" atl-ver="nothing-picked" hidden>
+    <h2>Markierung als Arbeit anfragen</h2><pre></pre>
+    <form atl-request="create-review-claim"><input type="hidden" name="locator"><label>Was soll geprüft werden? <textarea name="note" required></textarea></label><button>Prüfpunkt anfragen</button></form>
+  </section>
+</main><script>
+(() => {
+  const root=document.currentScript.previousElementSibling, frame=root.querySelector('iframe'), status=root.querySelector('.state');
+  if(location.protocol!=='http:') return;
+  const url=new URL('target.html?review=1',location.href), send=data=>frame.contentWindow.postMessage(data,url.origin);
+  addEventListener('message',e=>{
+    if(e.source!==frame.contentWindow||e.origin!==url.origin||!e.data||typeof e.data!=='object')return;
+    const m=e.data;
+    if(m.type==='review-ready'){send({type:'review-items',items:[{id:'send-failure',selector:'#target-send'}]});root.querySelectorAll('button[disabled]').forEach(b=>b.disabled=false);}
+    if(m.type==='review-resolved'&&Array.isArray(m.ids))status.textContent=`${m.ids.length} Ziel(e) gefunden; Szenario und Verhalten nicht geprüft.`;
+    if(m.type==='review-select'&&m.id==='send-failure')status.textContent='Prüfpunkt gewählt: Sendefehler. Noch kein Verdict.';
+    if(m.type==='review-picked'){
+      const l=m.locator;
+      if(!l||typeof l.cssPath!=='string'||l.cssPath.length>2000||typeof l.text!=='string'||l.text.length>160||typeof l.route!=='string'||l.route.length>2000||!l.rect||!l.viewport||!['x','y','w','h'].every(k=>Number.isFinite(l.rect[k]))||!['w','h'].every(k=>Number.isFinite(l.viewport[k])&&l.viewport[k]>0))return;
+      const data=JSON.stringify({cssPath:l.cssPath,text:l.text,route:l.route,rect:{x:l.rect.x,y:l.rect.y,w:l.rect.w,h:l.rect.h},viewport:{w:l.viewport.w,h:l.viewport.h}}), section=root.querySelector('section');
+      section.hidden=false;section.setAttribute('atl-ver',`build-example-1:${l.route}:${l.cssPath}`);
+      section.querySelector('pre').textContent=data;section.querySelector('input').value=data;
+    }
+  });
+  root.querySelector('[data-focus]').onclick=()=>send({type:'review-focus',id:'send-failure'});
+  root.querySelector('[data-pick]').onclick=()=>send({type:'review-pick'});
+  root.querySelector('[data-cancel]').onclick=()=>send({type:'review-pick-off'});
+  root.querySelector('form').onsubmit=e=>e.preventDefault();frame.src=url.href;
+})();
+</script></body></html>

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Turn by run matrix · Atelier candidate</title>
+  <!-- Original example; provenance and licence assessment: README.md. -->
+  <style>
+    .candidate { color:var(--candidate-ink,#20252b); background:var(--candidate-paper,#fff); font:1rem/1.5 system-ui,sans-serif; padding:1rem; }
+    .candidate *, .candidate *::before, .candidate *::after { box-sizing:border-box; }
+    .candidate :is(button,input,select,textarea) { font:inherit; }
+    .candidate button, .candidate select { min-height:2rem; cursor:pointer; }
+    .candidate :focus-visible { outline:2px solid var(--candidate-link,#1257a0); outline-offset:3px; }
+    .candidate a { color:var(--candidate-link,#1257a0); text-underline-offset:.2em; }
+    .candidate [hidden] { display:none!important; }
+    .candidate :is(pre,code) { overflow-wrap:anywhere; } .candidate pre { overflow:auto; }
+    .candidate :is(section,article,figure,div) { min-width:0; }
+    .candidate :is(h1,h2,h3,p,figure) { margin:0 0 .75rem; }
+    .candidate h1 { font-size:1.5rem; } .candidate h2 { font-size:1.25rem; }
+    .candidate small { font-size:.875rem; } .candidate table { border-collapse:collapse; }
+    .candidate :is(th,td) { text-align:left; padding:.4rem .7rem; border-bottom:1px solid #a8adb3; }
+    .candidate [atl-key] { scroll-margin-block:5rem; }
+    .run-matrix .scroll { overflow:auto; }
+  </style>
+</head>
+<body>
+<main class="candidate run-matrix" data-component="run-matrix">
+  <p data-demo><small>Beispieldaten · Ohne Kernel wird nichts gespeichert.</small></p>
+  <h1>Build B verbessert die Vollständigkeit</h1>
+  <div class="scroll"><table><caption>Beispiel · C = Correct, K = Complete</caption>
+    <thead><tr><th scope="col">Turn</th><th scope="col">Run A · build-a · model-x/low</th><th scope="col">Run B · build-b · model-x/low</th></tr></thead>
+    <tbody><tr><th scope="row">Frage 1</th><td atl-key="run-a-turn-1">C PASS / K PARTIAL</td><td atl-key="run-b-turn-1">C PASS / K PASS</td></tr>
+    <tr><th scope="row">Frage 2</th><td atl-key="run-a-turn-2">C FAIL / K FAIL</td><td atl-key="run-b-turn-2">Nicht vergleichbar: Kriterien geändert</td></tr></tbody></table></div>
+  <p>Beispielbefund, keine reale Qualitätsaussage. Menschliche Overrides separat kennzeichnen.</p>
+</main>
+</body>
+</html>
