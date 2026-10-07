@@ -1,28 +1,13 @@
-# Turn by run matrix
+# run-matrix
 
-Candidate Component · Owner-spec · ME. Not a Registry admission (decision 107).
+**Pick:** compare the same cases across builds/models/efforts without hiding changed criteria.
+**Lesson:** case × run cells with evidence identity; missing results and incomparable criteria remain
+explicit, not zeros or favorable colors. Judge values and human overrides have different authors.
 
-Align Correct/Complete results across runs while keeping build, model and effort visible.
+**Why:** Thomas already compared turn-level C/K results across builds in RESULT-stack-final2;
+rebuilding a later comparison at HEAD would silently change its numbers ([ME T7; WC S L61](../../SOURCES.md)).
 
-## Choose
-- **Use:** ME historical comparison
-- **Skip:** aggregating incomparable questions or silently using judge grades over human overrides
-
-## Copy and connect
-Copy `example.html`'s `.candidate` subtree, its scoped CSS and script (if present).
-Drop `data-demo` and the document shell when composing; keep the script directly after its subtree.
-Rename HTML IDs per instance and replace example Keys/versions with stable domain identities.
-The standalone preview uses synthetic data and loads no Kernel or external resource.
-In a real Page, load the project's copied Kernel once; see [Kernel contract](../../SOURCES.md#kernel).
-- **Kernel / Keys:** Run/turn Keys per cell; Comment on differences; human Verdicts are read from the Kernel, not reconstructed from colored cells.
-- **Adapt:** Pin criteria/truth versions and show non-comparable cells. Pair with sparkline only for a genuinely comparable time series.
-
-## Evidence and provenance
-- **Best source:** [ME analysis](../../SOURCES.md#use-cases), §2 T7, `CDF/RESULT-stack-final2.md` Summary; [Lavish](../../SOURCES.md#lavish), table playbook (MIT).
-- **Owner for / against:** Owner already compared C/K columns in hand-written reports; none of the 39 tools is an eval analytics product.
-- **Implementation:** original minimal HTML/CSS/JS, not vendored source. Upstream licences describe
-  inspected sources, not a grant to copy private artifacts. No production data is included.
-
-## Check
-Open `example.html`; run `node extensions/atelier/candidates/check.mjs --browser` from the repository.
-Kernel Delivery, undo, replay and Update preservation are integration checks, not preview guarantees.
+**Use:** copy [example.html](example.html)'s native table, including row/column headers and each judged
+cell's Key/version. Replace the synthetic identities and link each cell's evidence. Pair with grade-axes
+for detailed disagreement or claim-card for live verification. No sparkline is implied by this table.
+**Skip:** heterogeneous cases without shared expectations, or an overall winner unsupported by the cells.

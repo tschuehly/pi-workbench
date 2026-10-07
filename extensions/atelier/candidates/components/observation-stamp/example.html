@@ -1,39 +1,16 @@
 <!doctype html>
-<html lang="de">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Observation stamp · Atelier candidate</title>
-  <!-- Original example; provenance and licence assessment: README.md. -->
-  <style>
-    .candidate { color:var(--candidate-ink,#20252b); background:var(--candidate-paper,#fff); font:1rem/1.5 system-ui,sans-serif; padding:1rem; }
-    .candidate *, .candidate *::before, .candidate *::after { box-sizing:border-box; }
-    .candidate :is(button,input,select,textarea) { font:inherit; }
-    .candidate button, .candidate select { min-height:2rem; cursor:pointer; }
-    .candidate :focus-visible { outline:2px solid var(--candidate-link,#1257a0); outline-offset:3px; }
-    .candidate a { color:var(--candidate-link,#1257a0); text-underline-offset:.2em; }
-    .candidate [hidden] { display:none!important; }
-    .candidate :is(pre,code) { overflow-wrap:anywhere; } .candidate pre { overflow:auto; }
-    .candidate :is(section,article,figure,div) { min-width:0; }
-    .candidate :is(h1,h2,h3,p,figure) { margin:0 0 .75rem; }
-    .candidate h1 { font-size:1.5rem; } .candidate h2 { font-size:1.25rem; }
-    .candidate small { font-size:.875rem; } .candidate table { border-collapse:collapse; }
-    .candidate :is(th,td) { text-align:left; padding:.4rem .7rem; border-bottom:1px solid #a8adb3; }
-    .candidate [atl-key] { scroll-margin-block:5rem; }
-
-  </style>
-</head>
-<body>
-<main class="candidate observation-stamp" data-component="observation-stamp">
-  <p data-demo><small>Beispieldaten · Ohne Kernel wird nichts gespeichert.</small></p>
-  <section atl-key="observation" atl-ver="probe-example-1">
-    <h1>Zuletzt beobachtet</h1>
-    <dl><dt>Zeit</dt><dd><time datetime="2026-10-07T08:00:00Z">07.10.2026, 08:00 UTC</time></dd>
-    <dt>Build</dt><dd><code>example-1</code> · aus Startprotokoll</dd>
-    <dt>Modell / Effort</dt><dd>Beispielmodell / medium · aus Konfigurationsabfrage</dd>
-    <dt>Zugangsdaten</dt><dd>Vorhanden; Wert wird nicht angezeigt</dd>
-    <dt>Prozess</dt><dd>Jetzt nicht geprüft — keine Aussage zur aktuellen Aktivität</dd></dl>
-  </section>
-</main>
-</body>
-</html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beobachtung, nicht Live-Status</title>
+<style>.observation-stamp{font:1rem/1.5 system-ui;max-width:70ch;padding:1rem}.observation-stamp dt{font-weight:600}.observation-stamp dd{margin:0 0 .7rem}</style>
+<body><main class="observation-stamp" id="observation-stamp">
+<h1>Zuletzt beobachtet</h1><p>Synthetisches Beispiel · keine echte Prozessmessung.</p>
+<section atl-key="run-example" atl-ver="probe-example-1">
+<dl><dt>Beobachtung / Quelle</dt><dd><time datetime="2026-10-07T08:00:00Z">07.10.2026, 08:00 UTC</time> · Startprotokoll, Revision example-1</dd>
+<dt>Build / Eingabe</dt><dd><code>build-example-1 / input-example-1</code> · nicht der aktuelle Branch-HEAD</dd>
+<dt>Modell / Effort</dt><dd>Beispielmodell / medium · damalige Konfigurationsabfrage</dd>
+<dt>Aktivität jetzt</dt><dd>Nicht geprüft. Der historische Eintrag „running“ ist kein Lebenszeichen.</dd>
+<dt>Prüfung</dt><dd>UNMEASURED — nach vorherigem Fehler nicht ausgeführt; weder PASS noch n.a.</dd>
+<dt>Laufzeit / Warten auf Mensch</dt><dd>4 min gemessen / nicht gemessen. Keine laufende Uhr aus einem alten Ledger.</dd>
+<dt>Kosten</dt><dd>0,03 USD bekannt, Teilsumme; weiterer Schritt nicht gemessen, nicht 0 USD.</dd>
+<dt>Nächster Schritt / Zuständig</dt><dd>Agent: Prozess und Artefakt erneut prüfen, bevor Fortsetzung vorgeschlagen wird.</dd></dl>
+</section></main><script type="module" src="atelier.js"></script></body></html>

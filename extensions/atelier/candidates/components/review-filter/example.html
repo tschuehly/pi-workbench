@@ -1,57 +1,55 @@
 <!doctype html>
-<html lang="de">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Review filter · Atelier candidate</title>
-  <!-- Original example; provenance and licence assessment: README.md. -->
-  <style>
-    .candidate { color:var(--candidate-ink,#20252b); background:var(--candidate-paper,#fff); font:1rem/1.5 system-ui,sans-serif; padding:1rem; }
-    .candidate *, .candidate *::before, .candidate *::after { box-sizing:border-box; }
-    .candidate :is(button,input,select,textarea) { font:inherit; }
-    .candidate button, .candidate select { min-height:2rem; cursor:pointer; }
-    .candidate :focus-visible { outline:2px solid var(--candidate-link,#1257a0); outline-offset:3px; }
-    .candidate a { color:var(--candidate-link,#1257a0); text-underline-offset:.2em; }
-    .candidate [hidden] { display:none!important; }
-    .candidate :is(pre,code) { overflow-wrap:anywhere; } .candidate pre { overflow:auto; }
-    .candidate :is(section,article,figure,div) { min-width:0; }
-    .candidate :is(h1,h2,h3,p,figure) { margin:0 0 .75rem; }
-    .candidate h1 { font-size:1.5rem; } .candidate h2 { font-size:1.25rem; }
-    .candidate small { font-size:.875rem; } .candidate table { border-collapse:collapse; }
-    .candidate :is(th,td) { text-align:left; padding:.4rem .7rem; border-bottom:1px solid #a8adb3; }
-    .candidate [atl-key] { scroll-margin-block:5rem; }
-    .review-filter .filters { position:sticky; top:0; background:var(--candidate-paper,#fff); display:flex; gap:1rem; padding:.5rem 0; flex-wrap:wrap; }
-  </style>
-</head>
-<body>
-<main class="candidate review-filter" data-component="review-filter">
-  <p data-demo><small>Beispieldaten · Ohne Kernel wird nichts gespeichert.</small></p>
-  <h1>Bereit zur Prüfung</h1>
-  <div class="filters"><label>Suchen <input type="search"></label>
-    <label>Ansicht <select><option value="pending">Ausstehend</option><option value="all">Alle</option><option value="processing">In Bearbeitung</option></select></label>
-    <output aria-live="polite"></output></div>
-  <div class="items">
-    <article atl-key="video-a" data-ready="true" data-judged="false" data-processing="false"><h2>Video A</h2><p>Bereit, noch nicht bewertet.</p></article>
-    <article atl-key="video-b" data-ready="true" data-judged="true" data-processing="false"><h2>Video B</h2><p>Bereits bewertet.</p></article>
-    <article atl-key="video-c" data-ready="false" data-judged="false" data-processing="true"><h2>Video C</h2><p>Wird noch erzeugt.</p></article>
-  </div><p class="empty" hidden>Kein Treffer für diesen Filter.</p>
-</main>
-<script>
-(() => {
-  const root = document.currentScript.previousElementSibling;
-  function filter() {
-    const query=root.querySelector('input').value.toLocaleLowerCase(); const view=root.querySelector('select').value;
-    const rows=[...root.querySelectorAll('.items article')];
-    for(const row of rows) {
-      const d=row.dataset; const pending=d.judged!=='true' && d.processing!=='true' && (d.ready==='true'||d.openDecision==='true');
-      row.hidden=!row.textContent.toLocaleLowerCase().includes(query) || !(view==='all'||(view==='pending'?pending:d.processing==='true'));
-    }
-    const count=rows.filter(r=>!r.hidden).length;
-    root.querySelector('output').textContent=`${count} / ${rows.length} sichtbar`;
-    root.querySelector('.empty').hidden=count>0;
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nur prüfbare, unbewertete Ergebnisse</title>
+<style>.review-filter{font:1rem/1.5 system-ui;padding:1rem}.review-filter label{margin-right:1rem}.review-filter :is(input,select,button){font:inherit}.review-filter [hidden]{display:none!important}.review-filter article{margin-block:2rem}</style>
+<body><main class="review-filter" id="review-filter" atl-key="queue">
+<h1>Bereit zur Prüfung</h1><p>Synthetische Bereitschaftsdaten; menschliche Urteile liest der Kernel aus dem Event Log.</p>
+<label>Suchen <input id="review-query" type="search"></label>
+<label>Ansicht <select id="review-view"><option value="pending">Ausstehend</option><option value="all">Alle</option><option value="processing">In Bearbeitung</option></select></label>
+<button id="review-refresh" type="button">Urteile neu lesen</button><p><output id="review-count" aria-live="polite"></output></p>
+<p>Nach einem Verdict neu lesen. Vor „next ↓“ im Kernel „Alle“ wählen und Suche leeren.</p>
+<div class="items">
+<article id="item-a" atl-key="item-a" atl-ver="artifact-a1" atl-verdict="Confirm|Redo" data-ready="true" data-processing="false"><h2>Ergebnis A</h2><p>Bereit zur Prüfung.</p></article>
+<article id="item-b" atl-key="item-b" atl-ver="artifact-b1" atl-verdict="Confirm|Redo" data-ready="true" data-processing="false"><h2>Ergebnis B</h2><p>Bereit zur Prüfung.</p></article>
+<article id="item-c" atl-key="item-c" atl-ver="artifact-c1" data-ready="false" data-processing="true"><h2>Ergebnis C</h2><p>Wird erzeugt; auch bei offener Frage nicht ausstehend.</p></article>
+<article id="item-d" atl-key="item-d" atl-ver="artifact-d1" data-ready="false" data-processing="false"><h2>Ergebnis D</h2><p>Noch nicht bereit; eine offene Decision kann es in die Auswahl bringen.</p></article>
+</div><p id="review-empty" hidden>Kein Treffer für diesen Filter.</p>
+</main><script type="module" src="atelier.js"></script>
+<script type="module">
+import { derive } from './atelier.js';
+const root=document.getElementById('review-filter'), q=s=>root.querySelector(s);
+let entries=null, generation=0;
+const address=el=>{const parts=[];for(let n=el;n;n=n.parentElement?.closest('[atl-key]'))parts.unshift(n.getAttribute('atl-key'));return parts.join('/');};
+function render() {
+  const params=new URL(location.href).searchParams, view=['all','processing'].includes(params.get('review-view'))?params.get('review-view'):'pending';
+  const query=params.get('review-query')||''; q('#review-query').value=query; q('#review-view').value=view;
+  const rows=[...root.querySelectorAll('.items>article')], versions=new Map(rows.map(r=>[address(r),r.closest('[atl-ver]')?.getAttribute('atl-ver')]));
+  const state=derive(entries||[],key=>versions.get(key)??null);
+  for(const row of rows) {
+    const key=address(row), verdict=state.verdicts.get(key), judged=verdict&&!verdict.stale;
+    const pending=!judged&&row.dataset.processing!=='true'&&(row.dataset.ready==='true'||state.toAnswer.some(d=>d.key===key));
+    const text=[...row.children].filter(n=>!n.hasAttribute('atl-ui')).map(n=>n.textContent).join(' ');
+    row.hidden=!text.toLocaleLowerCase().includes(query.toLocaleLowerCase())||(entries!==null&&!(view==='all'||(view==='pending'?pending:row.dataset.processing==='true')));
   }
-  root.addEventListener('input',filter); root.addEventListener('change',filter); filter();
-})();
-</script>
-</body>
-</html>
+  const count=rows.filter(r=>!r.hidden).length;
+  q('#review-count').textContent=`${count} / ${rows.length} sichtbar${entries===null?' · Urteile nicht verfügbar; Statusfilter ausgesetzt':''}`;
+  q('#review-empty').hidden=count>0;
+}
+async function refresh() {
+  const ticket=++generation;
+  try {
+    const page=decodeURIComponent(location.pathname.slice(1));
+    const response=await fetch(`/.atelier/events?page=${encodeURIComponent(page)}`,{cache:'no-store'});
+    if(!response.ok)throw Error('Event Log unavailable');
+    const data=await response.json(); if(!Array.isArray(data.entries))throw Error('Invalid Event Log');
+    if(ticket===generation)entries=data.entries;
+  } catch { if(ticket===generation)entries=null; }
+  if(ticket===generation)render();
+}
+root.addEventListener('input',e=>{
+  if(!e.target.matches('#review-query,#review-view'))return;
+  const url=new URL(location.href);url.searchParams.set('review-query',q('#review-query').value);url.searchParams.set('review-view',q('#review-view').value);history.replaceState(null,'',url);render();
+});
+root.addEventListener('click',e=>{if(e.target.id==='review-refresh')refresh();});
+addEventListener('popstate',render);document.addEventListener('atelier:update',()=>{render();refresh();});render();refresh();
+</script></body></html>

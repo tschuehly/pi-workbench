@@ -1,28 +1,14 @@
-# Levelled flow map
+# flow-map
 
-Candidate Component · Owner-spec · PL WC. Not a Registry admission (decision 107).
+**Pick:** the human needs execution order AND the limits of a check, not just a list of statuses.
+**Lesson:** actual sequence/parallelism plus process → step → check hierarchy; beside it, what the check
+always does, origin defect, effect, proof limit and broken/clean expected-versus-measured cases.
 
-Pair a horizontally scrollable pipeline map with a half-width explanation and real pipeline/stage/gate drill-down.
+**Why:** Thomas asked “Laufen diese Prüfungen alle parallel?” and rejected a ledger without flow;
+word-budget guidance had removed what gates prove ([PL T2/T3; VV lines 35–36](../../SOURCES.md)).
 
-## Choose
-- **Use:** PL audit or WC stage explanation
-- **Skip:** a giant fixed graph, fake zoom controls, or conflating sequential and parallel checks
-
-## Copy and connect
-Copy `example.html`'s `.candidate` subtree, its scoped CSS and script (if present).
-Drop `data-demo` and the document shell when composing; keep the script directly after its subtree.
-Rename HTML IDs per instance and replace example Keys/versions with stable domain identities.
-The standalone preview uses synthetic data and loads no Kernel or external resource.
-In a real Page, load the project's copied Kernel once; see [Kernel contract](../../SOURCES.md#kernel).
-- **Kernel / Keys:** Nested pipeline/s5/audio Keys identify content once; navigation buttons refer to those Keys. Comment and Decision material remain on content, not duplicate map labels.
-- **Adapt:** Use one domain model for all levels; this tiny fixed example has real drill-down, not geometric zoom. Replace order/parallel labels from code evidence.
-
-## Evidence and provenance
-- **Best source:** [P1](../../SOURCES.md#prototypes), `p1/build.mjs`; [Effective HTML](../../SOURCES.md#effective-html), `workspaces-architecture.html` (MIT); C4 model/views is corroboration in [landscape](../../SOURCES.md#landscape).
-- **Owner for / against:** VV P1 explicitly requests half map/half explanation, scrolling and C4-like levels. PL §2 traces stop/fail-fast versus Promise.all to project code.
-- **Implementation:** original minimal HTML/CSS/JS, not vendored source. Upstream licences describe
-  inspected sources, not a grant to copy private artifacts. No production data is included.
-
-## Check
-Open `example.html`; run `node extensions/atelier/candidates/check.mjs --browser` from the repository.
-Kernel Delivery, undo, replay and Update preservation are integration checks, not preview guarantees.
+**Use:** copy [example.html](example.html)'s map/detail split; replace topology and cases from actual code.
+Nested Keys follow domain IDs. All levels remain visible: native anchors need no hidden-tab reveal hook,
+script or fake zoom. Kernel Decisions can name a check as `material`. Pair with attempt-timeline to
+separate how the process works from what an individual artifact went through. Absorbs gate-detail/named-flow.
+**Skip:** one flat result or quality comparisons that have no meaningful execution path.

@@ -1,141 +1,122 @@
-// Run from any directory. --browser uses the already-installed agent-browser CLI, no npm install.
+// From any cwd: node check.mjs [--browser]. No installed checkout or real Page is modified.
 import assert from 'node:assert/strict';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, cp, mkdtemp, writeFile, rm, realpath } from 'node:fs/promises';
 import { dirname, join, resolve, relative, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Script } from 'node:vm';
-import { createServer } from 'node:http';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { checks } from './browser-checks.mjs';
 
-const root = dirname(fileURLToPath(import.meta.url)), run = promisify(execFile);
+const root=dirname(fileURLToPath(import.meta.url)), run=promisify(execFile);
 async function walk(dir) {
-  const out = [];
-  for (const e of await readdir(dir, { withFileTypes: true })) out.push(...(e.isDirectory() ? await walk(join(dir, e.name)) : [join(dir, e.name)]));
-  return out;
+  const files=[];
+  for(const e of await readdir(dir,{withFileTypes:true}))files.push(...(e.isDirectory()?await walk(join(dir,e.name)):[join(dir,e.name)]));
+  return files;
 }
-const files = await walk(root), index = await readFile(join(root, 'INDEX.md'), 'utf8');
-const components = (await readdir(join(root, 'components'))).sort();
-const patterns = (await readdir(join(root, 'patterns'))).sort();
-assert.equal(components.length, 40); assert.equal(patterns.length, 11);
-for (const name of components) {
-  assert.equal(index.split(`](components/${name}/README.md)`).length - 1, 1, `Index Component ${name}`);
-  const dir = join(root, 'components', name), list = await walk(dir);
-  const readme = await readFile(join(dir, 'README.md'), 'utf8');
-  assert.match(readme, /Kernel \/ Keys/); assert.match(readme, /Evidence and provenance/);
-  await stat(join(dir, 'example.html'));
-  const lines = (await Promise.all(list.map(async f => (await readFile(f, 'utf8')).trimEnd().split('\n').length))).reduce((a, b) => a + b, 0);
-  assert(lines <= (name === 'review-bridge' ? 160 : 120), `${name}: ${lines} lines`);
+const files=await walk(root), index=await readFile(join(root,'INDEX.md'),'utf8');
+const components=(await readdir(join(root,'components'),{withFileTypes:true})).filter(e=>e.isDirectory()).map(e=>e.name).sort();
+const patterns=(await readdir(join(root,'patterns'))).filter(n=>n.endsWith('.md')).sort();
+const scripted=new Set();let links=0;
+for(const name of components) {
+  assert.equal(index.split(`](components/${name}/README.md)`).length-1,1,`Index Component ${name}`);
+  await stat(join(root,'components',name,'README.md'));
+  const html=await readFile(join(root,'components',name,'example.html'),'utf8');
+  assert.match(html,/<script type="module" src="atelier.js"><\/script>/,`${name}: loads real copied Kernel`);
 }
-for (const name of patterns) assert.equal(index.split(`](patterns/${name})`).length - 1, 1, `Index Pattern ${name}`);
-let scripts = 0, links = 0;
-for (const file of files) {
-  const text = await readFile(file, 'utf8');
-  if (extname(file) === '.md') for (const m of text.matchAll(/\]\(([^)]+)\)/g)) {
-    if (/^https?:/.test(m[1])) continue;
-    const [path, hash] = m[1].split('#'), target = path ? resolve(dirname(file), path) : file;
-    await stat(target); links++;
-    if (hash && extname(target) === '.md') {
-      const doc = await readFile(target, 'utf8');
-      const anchors = [...doc.matchAll(/^#+ (.+)$/gm)].map(m => m[1].toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, '').replace(/ /g, '-'));
-      assert(anchors.includes(hash) || doc.includes(`id="${hash}"`), `${relative(root, file)}: missing #${hash}`);
+for(const name of patterns) {
+  assert.equal(index.split(`](patterns/${name})`).length-1,1,`Index Pattern ${name}`);
+  const text=await readFile(join(root,'patterns',name),'utf8');
+  const refs=[...text.matchAll(/\]\(\.\.\/components\/([^/]+)\/README\.md\)/g)];
+  assert(refs.length,`${name}: names Components`);
+  for(const [,component] of refs)assert(components.includes(component),`${name}: missing Component ${component}`);
+}
+for(const file of files) {
+  const text=await readFile(file,'utf8');
+  if(extname(file)==='.md')for(const [,href] of text.matchAll(/\]\(([^)]+)\)/g)) {
+    if(/^https?:/.test(href))continue;
+    const [path,hash]=href.split('#'), target=path?resolve(dirname(file),path):file;
+    await stat(target);links++;
+    if(hash&&extname(target)==='.md') {
+      const doc=await readFile(target,'utf8');
+      const anchors=[...doc.matchAll(/^#+ (.+)$/gm)].map(m=>m[1].toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu,'').replace(/ /g,'-'));
+      assert(anchors.includes(hash)||doc.includes(`id="${hash}"`),`${file}: missing #${hash}`);
     }
   }
-  if (extname(file) === '.html') {
-    assert.match(text, /<html lang="de"/); assert.match(text, /<title>/);
-    for (const m of text.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)) {
-      const src = /src="([^"]+)"/.exec(m[1]);
-      if (src) { assert(!/^(https?:)?\/\//.test(src[1]), 'No external scripts'); await stat(resolve(dirname(file), src[1])); }
-      else { new Script(m[2], { filename: relative(root, file) }); scripts++; }
-    }
+  if(extname(file)==='.html')for(const [,attrs,body] of text.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)) {
+    const src=/src="([^"]+)"/.exec(attrs)?.[1];
+    if(src==='atelier.js')continue;
+    scripted.add(relative(root,file).split('/')[1]);
+    if(src) {assert(!/^(https?:)?\/\//.test(src),'no external dependency');await stat(resolve(dirname(file),src));}
+    else {const result=spawnSync(process.execPath,['--check','--input-type=module'],{input:body,encoding:'utf8'});assert.equal(result.status,0,`${file}: ${result.stderr}`);}
   }
-  if (extname(file) === '.js') { new Script(text, { filename: relative(root, file) }); scripts++; }
+  if(['.js','.mjs'].includes(extname(file)))assert.equal(spawnSync(process.execPath,['--check',file]).status,0,`syntax ${file}`);
 }
-console.log(`PASS: 40 Components, 11 Patterns, ${links} local Markdown links, ${scripts} parsed scripts; size ceiling 120 lines (bridge exception ≤160).`);
-if (!process.argv.includes('--browser')) process.exit(0);
+assert.deepEqual([...scripted].sort(),Object.keys(checks).sort(),'Every scripted Component has an Update-survival scenario; no stale scenarios');
+console.log(`PASS static: ${components.length} Components, ${patterns.length} Patterns, ${links} links, ${scripted.size} scripted Components covered.`);
+if(!process.argv.includes('--browser'))process.exit(0);
 
-// A test-only loopback static server; production Pages use their own copied Kernel/server.
-const server = createServer(async (req, res) => {
-  try {
-    const pathname = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname);
-    const file = resolve(root, `.${pathname}`);
-    if (pathname === '/favicon.ico') { res.writeHead(204).end(); return; }
-    if (!file.startsWith(`${root}/`) || !['.html', '.js'].includes(extname(file))) { res.writeHead(404).end(); return; }
-    res.setHeader('Content-Type', extname(file) === '.js' ? 'text/javascript' : 'text/html; charset=utf-8');
-    res.end(await readFile(file));
-  } catch { res.writeHead(404).end(); }
-});
-await new Promise(ok => server.listen(0, '127.0.0.1', ok));
-const session = `atelier-candidates-${process.pid}`, url = `http://127.0.0.1:${server.address().port}`;
+// Use the same host.update called by the atelier tool: real SSE -> Kernel morph -> atelier:update.
+const {createHost}=await import('../index.ts');
+assert(process.env.PI_TMP,'Set PI_TMP to a disposable directory (fixtures are removed in finally).');
+const tmp=await realpath(await mkdtemp(join(process.env.PI_TMP,'atelier-catalogue-')));
+const host=createHost({root:tmp,send:()=>{}}), session=`atelier-catalogue-${process.pid}`;
 async function browser(...args) {
-  const { stdout } = await run('agent-browser', ['--session', session, '--json', ...args], { maxBuffer: 5_000_000, timeout: 60_000 });
-  const result = JSON.parse(stdout); assert(result.success, JSON.stringify(result)); return result.data;
+  const {stdout}=await run('agent-browser',['--session',session,'--json',...args],{maxBuffer:5_000_000,timeout:60_000});
+  const result=JSON.parse(stdout);assert(result.success,JSON.stringify(result));return result.data;
 }
-const interactions = {
-  'collapsible-outline': `q('[popovertarget]').click(); ok(q('nav').matches(':popover-open'),'opens'); q('a').click(); ok(!q('nav').matches(':popover-open'),'closes');`,
-  'section-switcher': `q('[data-panel="switch-run"]').click(); q('input').value='draft'; q('[data-panel="switch-audit"]').click(); ok(q('#switch-run').hidden,'switch'); location.hash='switch-draft'; await wait(60); ok(!q('#switch-run').hidden && q('input').value==='draft','reveal keeps draft');`,
-  'variant-picker': `q('select').value='b'; q('select').dispatchEvent(new Event('change')); ok(!q('[data-variant=b]').hidden && new URL(location.href).searchParams.get('v')==='b','deep link');`,
-  'review-filter': `ok(q('output').textContent.startsWith('1 /'),'pending'); q('select').value='all'; q('select').dispatchEvent(new Event('change',{bubbles:true})); ok(q('output').textContent.startsWith('3 /'),'all'); q('input').value='absent'; q('input').dispatchEvent(new Event('input',{bubbles:true})); ok(!q('.empty').hidden,'empty'); q('input').value=''; q('select').value='pending'; const row=q('[atl-key=video-c]'); row.dataset.processing='false'; row.dataset.openDecision='true'; q('select').dispatchEvent(new Event('change',{bubbles:true})); ok(q('output').textContent.startsWith('2 /'),'open Decision pending');`,
-  'item-pager': `q('[data-delta="1"]').click(); ok(document.activeElement===q('article'),'next focuses'); q('input').focus(); q('input').dispatchEvent(new KeyboardEvent('keydown',{key:'j',bubbles:true})); ok(document.activeElement===q('input'),'typing not hijacked'); q('article').focus(); q('article').dispatchEvent(new KeyboardEvent('keydown',{key:'j',bubbles:true})); ok(document.activeElement===qa('article')[1],'keyboard navigation');`,
-  'manual-turn': `q('[data-copy]').click(); await wait(100); ok(q('output').textContent.trim().length>0,'copy or selection fallback'); ok(!q('form').checkValidity(),'reply required');`,
-  'edit-set': `ok(!q('form').checkValidity(),'note required'); q('textarea').value='reason'; ok(q('form').checkValidity(),'valid edit');`,
-  'run-request': `ok(q('form').checkValidity(),'valid example'); q('[name=selection]').value=''; ok(!q('form').checkValidity(),'empty selection blocked');`,
-  'action-dialog': `q('[data-open]').click(); ok(q('dialog').open,'modal opens'); q('form button').click(); ok(!q('dialog').open,'modal closes');`,
-  'sparkline': `ok(qa('circle').length===3 && qa('line').length===1,'missing point not connected');`,
-  'flow-map': `q('[data-view=stage]').click(); ok(!q('#map-stage').hidden,'stage'); q('[data-view=gate]').click(); ok(!q('#map-gate').hidden,'gate'); q('[data-view=overview]').click(); ok(q('#map-stage').hidden && !q('#map-overview').hidden,'overview');`,
-  'named-flow': `q('select').value='retry'; q('select').dispatchEvent(new Event('change')); ok(qa('ol li').length===2 && qa('path.active').length===1,'scenario path and ordered text');`,
-  'video-stage': `q('button').click(); ok(q('figure').classList.contains('small'),'small video'); q('button').click(); ok(!q('figure').classList.contains('small'),'large video');`,
-  'safe-zone': `q('input').click(); ok(q('.zone').hidden,'overlay toggles'); ok(getComputedStyle(q('.zone')).pointerEvents==='none','overlay passes clicks');`,
-  'frame-strip': `q('button').click(); ok(q('output').textContent.includes('laden'),'missing media handled');`,
-  'viewport-frame': `q('select').value='390'; q('select').dispatchEvent(new Event('change')); await wait(100); ok(q('iframe').style.width==='390px','real CSS viewport'); ok(q('.stage').clientHeight>0,'scaled stage height');`,
-  'state-stepper': `q('input').value='2'; q('input').dispatchEvent(new Event('input')); ok(!q('[data-state="2"]').hidden && q('[data-state="0"]').hidden,'state changed');`,
-  'theme-switch': `q('button').click(); ok(root.classList.contains('dark'),'dark toggle'); ok(getComputedStyle(q('.media-swatch')).filter==='none','media untouched');`,
-  'review-bridge': `
-    for(let n=0;n<30 && q('[data-pick]').disabled;n++) await wait(50);
-    ok(!q('[data-pick]').disabled,'bridge ready'); await wait(80);
-    const frame=q('iframe'), w=frame.contentWindow, doc=frame.contentDocument, before=q('.state').textContent;
-    ok(doc.querySelectorAll('[data-review-pins] button').length===1,'visible selector pin');
-    dispatchEvent(new MessageEvent('message',{source:w,origin:'https://invalid.example',data:{type:'review-select',id:'send-failure'}}));
-    dispatchEvent(new MessageEvent('message',{source:window,origin:location.origin,data:{type:'review-select',id:'send-failure'}}));
-    ok(q('.state').textContent===before,'parent rejects wrong origin/source');
-    w.dispatchEvent(new MessageEvent('message',{source:window,origin:'https://invalid.example',data:{type:'review-items',items:[]}}));
-    w.dispatchEvent(new MessageEvent('message',{source:w,origin:location.origin,data:{type:'review-items',items:[]}}));
-    await wait(80); ok(doc.querySelectorAll('[data-review-pins] button').length===1,'target rejects wrong origin/source');
-    const old=doc.querySelector('#target-send'); old.replaceWith(old.cloneNode(true)); await wait(80);
-    ok(doc.querySelectorAll('[data-review-pins] button').length===1,'pin survives node replacement');
-    doc.querySelector('[data-review-pins] button').click(); await wait(80); ok(q('.state').textContent.includes('gewählt'),'pin selects claim');
-    q('[data-pick]').click(); await wait(80); doc.querySelector('#target-send').click(); await wait(80);
-    ok(!q('section').hidden && JSON.parse(q('[name=locator]').value).cssPath==='#target-send','pick returns precise locator');
-    const saved=q('[name=locator]').value; dispatchEvent(new MessageEvent('message',{source:w,origin:location.origin,data:{type:'review-picked',locator:{cssPath:17}}}));
-    ok(q('[name=locator]').value===saved,'bad locator rejected');
-    const cyclic={...JSON.parse(saved)}; cyclic.extra=cyclic;
-    dispatchEvent(new MessageEvent('message',{source:w,origin:location.origin,data:{type:'review-picked',locator:cyclic}}));
-    ok(!('extra' in JSON.parse(q('[name=locator]').value)),'only allowlisted locator fields copied');
-    q('[data-pick]').click(); await wait(50); q('[data-cancel]').click(); await wait(50); ok(doc.body.style.cursor==='','picker cancels');`,
-};
-let opened = 0, exercised = 0;
+const evaluate=code=>browser('eval',code);
+const phase=fn=>evaluate(`(${fn.toString().replace(/^async (\w+)\(/,'async function $1(')})()`);
+function setup() {
+  const q=s=>document.querySelector(s), ok=(v,m)=>{if(!v)throw Error(m);};
+  window.C={q,ok,
+    until:async f=>{for(let n=0;n<150;n++){if(f())return;await new Promise(r=>setTimeout(r,40));}throw Error(`Timed out: ${f}`);},
+    input:(selector,value)=>{const el=q(selector);el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));},
+    post:async body=>{const page=decodeURIComponent(location.pathname.slice(1));const r=await fetch(`/.atelier/events?page=${encodeURIComponent(page)}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});ok(r.ok,'real host accepts event');return(await r.json()).entry;},
+    hit:el=>{ok(el,'element exists');el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);ok(r.width>0&&r.height>0&&(el===hit||el.contains(hit)),'Kernel control/thread is not clipped or covered');},
+  };
+  window.updates=0;document.addEventListener('atelier:update',()=>updates++);
+  ok(globalThis.__atelierKernel&&q('[atl-ui=panel]'),'real Kernel booted');
+  ok(parseFloat(getComputedStyle(q('main h1')).fontSize)>=1.25*parseFloat(getComputedStyle(q('main')).fontSize),'native heading hierarchy (static detector cannot infer UA sizes)');
+  const ids=[...document.querySelectorAll('[id]')].map(e=>e.id);ok(ids.length===new Set(ids).size,'unique IDs');
+  const keys=[...document.querySelectorAll('[atl-key]')].map(el=>{const parts=[];for(let n=el;n;n=n.parentElement?.closest('[atl-key]'))parts.unshift(n.getAttribute('atl-key'));return parts.join('/');});
+  ok(keys.length===new Set(keys).size,'unique nested Keys');
+}
+// A tiny silent WAV exercises real media time/Range without shipping assets or requiring ffmpeg.
+function wav() {
+  const samples=8000*3, b=Buffer.alloc(44+samples*2);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);
+  b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(8000,24);b.writeUInt32LE(16000,28);
+  b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(samples*2,40);return b;
+}
+let morphs=0;
 try {
-  for (const file of files.filter(f => f.endsWith('.html')).sort()) {
-    await browser('open', `${url}/${relative(root, file)}`);
-    const name = relative(root, file).split('/')[1];
-    const code = file.endsWith('/example.html') ? interactions[name] ?? '' : '';
-    await browser('eval', `(async()=>{
-      const root=document.querySelector('main')||document.body,q=s=>root.querySelector(s),qa=s=>[...root.querySelectorAll(s)];
-      const ok=(v,m)=>{if(!v)throw Error(m)},wait=ms=>new Promise(r=>setTimeout(r,ms));
-      const ids=[...document.querySelectorAll('[id]')].map(e=>e.id);ok(ids.length===new Set(ids).size,'unique HTML IDs');
-      const keys=qa('[atl-key]').map(e=>{const a=[];for(let n=e;n;n=n.parentElement?.closest('[atl-key]'))a.unshift(n.getAttribute('atl-key'));return a.join('/')});ok(keys.length===new Set(keys).size,'unique nested Keys');
-      qa('a[href^="#"]').forEach(a=>ok(document.getElementById(a.hash.slice(1)),'anchor target'));
-      qa('button').forEach(b=>ok(b.textContent.trim()||b.getAttribute('aria-label'),'named button'));
-      ${code}
-      return {checked:true};
-    })()`);
-    const errors = await browser('errors');
-    assert.deepEqual(errors.errors ?? [], [], `${name}: page errors`);
-    opened++; if (code) exercised++;
-    console.log(`PASS browser: ${relative(root, file)}${code ? ' + interactions' : ''}`);
+  for(const name of components) {
+    const dir=join(tmp,name);await cp(join(root,'components',name),dir,{recursive:true});
+    const page=join(dir,'example.html');let html=await readFile(page,'utf8');
+    if(name==='video-stage'){await writeFile(join(dir,'probe.wav'),wav());html=html.replace('<video id="review-video"','<video src="probe.wav" id="review-video"');}
+    const authored=html.replace('</body>','<p id="check-revision">REVISION</p></body>');
+    await writeFile(page,authored.replace('REVISION','0'));const {url}=await host.open(page);
+    if(name==='review-filter') {
+      host.postHuman(page,{type:'verdict',key:'queue/item-b',ver:'artifact-b1',scale:'Confirm|Redo',value:'Confirm'});
+      for(const key of ['queue/item-c','queue/item-d'])host.agent(page,{type:'ask',decision:{id:key,key,question:'Example?',options:[{label:'Keep',consequence:'Keep it',recommended:true},{label:'Change',consequence:'Rework it'}]}});
+    }
+    if(name==='review-bridge')host.postHuman(page,{type:'comment',key:'trial-app',ver:'build-example-1',text:'Saved thread outside the clipping stage'});
+    await browser('open',url);await browser('wait','--fn',"document.querySelector('.atl-conn')?.textContent==='live'");
+    await phase(setup);
+    if(name==='video-stage')assert.equal((await fetch(new URL('probe.wav',url),{headers:{Range:'bytes=0-31'}})).status,206,'real host Range support');
+    const scenario=checks[name];
+    if(scenario){await phase(scenario.prepare);await phase(scenario.verify);}
+    async function update(revision,verify) {
+      await writeFile(page,authored.replace('REVISION',String(revision)));
+      assert(host.update(page)>0,`${name}: connected tab receives atelier update`);
+      await browser('wait','--fn',`updates===${revision}&&document.getElementById('check-revision').textContent==='${revision}'`);
+      if(verify)await phase(verify);morphs++;
+    }
+    await update(1,scenario?.verify);
+    if(scenario){await update(2,scenario.verify);await phase(scenario.change);await phase(scenario.verifyChanged);await update(3,scenario.verifyChanged);}
+    const errors=await browser('errors');assert.deepEqual(errors.errors??[],[],`${name}: no browser errors`);
+    console.log(`PASS Kernel: ${name}${scenario?' · state survives repeated Updates and later interactions':' · loaded + morphed'}`);
   }
-  console.log(`PASS: ${opened} HTML opens, ${exercised} interaction checks, no uncaught page errors.`);
+  console.log(`PASS browser: ${scripted.size} scripted Components survive real Kernel Updates; ${morphs} morphs; B2 hit tests and bridge validation pass.`);
 } finally {
-  await browser('close').catch(() => {});
-  server.closeAllConnections(); await new Promise(ok => server.close(ok));
+  await browser('close').catch(()=>{});host.stop();await rm(tmp,{recursive:true,force:true});
 }

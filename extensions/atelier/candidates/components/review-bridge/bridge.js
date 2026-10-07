@@ -36,6 +36,7 @@ window.installAtelierReviewBridge = ({ dev, parentOrigin }) => {
   addEventListener('message', e => {
     if (e.source !== parent || e.origin !== origin || !e.data || typeof e.data !== 'object') return;
     const m = e.data;
+    if (m.type === 'review-hello') send({ type: 'review-ready' });
     if (m.type === 'review-items' && Array.isArray(m.items) && m.items.length <= 200) {
       items = m.items.filter(x => x && typeof x.id === 'string' && /^[\w-]{1,80}$/.test(x.id) && typeof x.selector === 'string' && x.selector.length <= 500);
       items = [...new Map(items.map(x => [x.id, x])).values()]; schedule();
@@ -54,7 +55,7 @@ window.installAtelierReviewBridge = ({ dev, parentOrigin }) => {
     }
     send({ type: 'review-picked', locator: { cssPath: parts.join(' > '), text: el.textContent.trim().slice(0, 160),
       rect: { x: r.x / innerWidth, y: r.y / innerHeight, w: r.width / innerWidth, h: r.height / innerHeight },
-      viewport: { w: innerWidth, h: innerHeight }, route: location.pathname + location.hash } });
+      viewport: { w: innerWidth, h: innerHeight }, route: location.pathname + location.search + location.hash } });
   }, true);
   addEventListener('scroll', schedule, true); addEventListener('resize', schedule); addEventListener('hashchange', schedule);
   // ponytail: O(items × DOM) re-resolution, max 200 items; cache selectors if profiling shows churn.

@@ -1,38 +1,22 @@
 <!doctype html>
-<html lang="de">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Claim card · Atelier candidate</title>
-  <!-- Original example; provenance and licence assessment: README.md. -->
-  <style>
-    .candidate { color:var(--candidate-ink,#20252b); background:var(--candidate-paper,#fff); font:1rem/1.5 system-ui,sans-serif; padding:1rem; }
-    .candidate *, .candidate *::before, .candidate *::after { box-sizing:border-box; }
-    .candidate :is(button,input,select,textarea) { font:inherit; }
-    .candidate button, .candidate select { min-height:2rem; cursor:pointer; }
-    .candidate :focus-visible { outline:2px solid var(--candidate-link,#1257a0); outline-offset:3px; }
-    .candidate a { color:var(--candidate-link,#1257a0); text-underline-offset:.2em; }
-    .candidate [hidden] { display:none!important; }
-    .candidate :is(pre,code) { overflow-wrap:anywhere; } .candidate pre { overflow:auto; }
-    .candidate :is(section,article,figure,div) { min-width:0; }
-    .candidate :is(h1,h2,h3,p,figure) { margin:0 0 .75rem; }
-    .candidate h1 { font-size:1.5rem; } .candidate h2 { font-size:1.25rem; }
-    .candidate small { font-size:.875rem; } .candidate table { border-collapse:collapse; }
-    .candidate :is(th,td) { text-align:left; padding:.4rem .7rem; border-bottom:1px solid #a8adb3; }
-    .candidate [atl-key] { scroll-margin-block:5rem; }
-
-  </style>
-</head>
-<body>
-<main class="candidate claim-card" data-component="claim-card">
-  <p data-demo><small>Beispieldaten · Ohne Kernel wird nichts gespeichert.</small></p>
-  <article atl-key="change-example" atl-ver="build-example-1" atl-verdict="Confirm|Redo">
-    <h1>Entwurf bleibt bei Sendefehler erhalten</h1>
-    <p><strong>Vorher:</strong> Der Entwurf verschwand. <strong>Jetzt:</strong> Er bleibt editierbar.</p>
-    <details open atl-key="verify"><summary>So prüfst du es</summary><ol><li>Den benannten Fehlerfall laden.</li><li>Text eingeben und senden.</li></ol>
-      <p><strong>Erwartet:</strong> Text bleibt stehen; Fehler erscheint neben dem Eingabefeld.</p></details>
-    <p>Prüfumgebung fehlt in diesem Beispiel; hier noch kein belastbares Urteil.</p>
-  </article>
-</main>
-</body>
-</html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Behauptung wirklich prüfen</title>
+<style>.claim-card{font:1rem/1.5 system-ui;max-width:70ch;padding:1rem}.claim-card article{margin-block:2rem}.claim-card textarea{font:inherit;display:block}</style>
+<body><main class="claim-card" id="claim-card">
+<h1>Entwurf bleibt bei Sendefehler erhalten</h1><p>Synthetisches Beispiel.</p>
+<article atl-key="change-example" atl-ver="build-example-1">
+<p><strong>Vorher:</strong> Der Entwurf verschwand. <strong>Jetzt behauptet:</strong> Er bleibt editierbar.</p>
+<p><strong>Ziel gefunden:</strong> Eingabefeld vorhanden. <strong>Szenario:</strong> Fehlerfall noch nicht erreichbar.</p>
+<section atl-key="verify"><h2>So wäre es prüfbar</h2>
+<ol><li>Den definierten Sendefehler auslösen können.</li><li>Text eingeben und senden.</li><li>Nach dem Fehler denselben Entwurf bearbeiten.</li></ol>
+<p><strong>Erwartet:</strong> Text bleibt stehen; Fehler erscheint neben dem Feld.</p></section>
+<p><strong>Beobachtung:</strong> Noch nicht geprüft. Kein Confirm/Redo, solange der Fehlerfall fehlt.</p>
+<!-- Add atl-verdict="Confirm|Redo" only after this scenario is actually available. -->
+</article>
+<article atl-key="local-exercise" atl-ver="exercise-1" atl-verdict="Confirm|Redo">
+<h2>Erreichbare Übung: mehrzeiligen Text eingeben</h2>
+<p><strong>Vorher:</strong> Einzeilig. <strong>Jetzt:</strong> Mehrzeiliges Feld.</p>
+<label>Übungsentwurf <textarea id="claim-draft" rows="3"></textarea></label>
+<ol><li>Zwei Zeilen eingeben.</li><li>Die erste Zeile bearbeiten.</li></ol>
+<p><strong>Erwartet:</strong> Beide Zeilen bleiben editierbar. Das ist keine Prüfung des Sendefehlers oben.</p>
+</article></main><script type="module" src="atelier.js"></script></body></html>
