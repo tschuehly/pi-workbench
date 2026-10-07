@@ -42,7 +42,7 @@ _Avoid_: command, action, task
 
 **Update**:
 An agent change to a Page shown live, without a reload and without destroying the human's open
-input.
+input. It carries a one-line note, and the Page marks what it changed until the human has seen it.
 _Avoid_: Ready, refresh, publish
 
 **Event Log**:

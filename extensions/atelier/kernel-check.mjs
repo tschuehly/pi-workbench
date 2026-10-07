@@ -22,7 +22,7 @@ await writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><tit
 <table><tr atl-key="row-a" id="ra" atl-decide="Keep|Drop"><td>Row A</td><td atl-slot id="slot"></td></tr></table>
 <script type="module" src="atelier.js"></script></body></html>`);
 const sent = [];
-const host = createHost({ root: dir, undoMs: 400, send: (m, done) => { sent.push(m.content); done(true); } });
+const host = createHost({ root: dir, undoMs: 3000, send: (m, done) => { sent.push(m.content); done(true); } });
 const b = async (...args) => { const { stdout } = await run("agent-browser", ["--session", session, "--json", ...args], { timeout: 60_000 }); const r = JSON.parse(stdout); assert(r.success, JSON.stringify(r)); return r.data; };
 const js = async (code) => (await b("eval", code)).result;
 const until = (code) => b("wait", "--fn", code);
@@ -80,10 +80,14 @@ try {
   await until("document.querySelector('[atl-ui=composer] .atl-label')?.textContent.startsWith('Comment on “Select')");
   await click("[atl-ui=composer] [data-atl=dismiss]");
 
-  // A Page-declared Decision changed twice: each change carries the previous option.
-  for (const v of ["3", "4", "5"]) { await click(`[data-atl=decide][data-id="run/turn-1"][data-label="${v}"]`); await until(`document.querySelector('[data-id="run/turn-1"][data-label="${v}"]').classList.contains('atl-chosen')`); }
-  assert.deepEqual(decides().map((e) => [e.decision, e.option, e.previous, e.options, e.ver]), [["run/turn-1", "3", undefined, "1|2|3|4|5", "v1"], ["run/turn-1", "4", "3", "1|2|3|4|5", "v1"], ["run/turn-1", "5", "4", "1|2|3|4|5", "v1"]]);
-  assert.match(await js("document.querySelector('[atl-ui=decide] .atl-dstate').textContent"), /Your answer: 5 · changed from 4/);
+  // A Page-declared Decision: the first answer is delivered; a change inside the next undo window replaces the
+  // unsent one, so the agent gets one "3 → 5" (134).
+  const choose = async (v) => { await click(`[data-atl=decide][data-id="run/turn-1"][data-label="${v}"]`); await until(`document.querySelector('[data-id="run/turn-1"][data-label="${v}"]').classList.contains('atl-chosen')`); };
+  await choose("3"); await sleep(3100); host.deliverDue(page);
+  await choose("4"); await choose("5");
+  assert.deepEqual(decides().map((e) => [e.decision, e.option, e.previous, e.options, e.ver]), [["run/turn-1", "3", undefined, "1|2|3|4|5", "v1"], ["run/turn-1", "4", "3", "1|2|3|4|5", "v1"], ["run/turn-1", "5", "3", "1|2|3|4|5", "v1"]]);
+  assert.deepEqual(readLog(page).filter((e) => e.type === "undo").map((e) => e.target), [decides()[1].seq], "the unsent 4 is undone");
+  assert.match(await js("document.querySelector('[atl-ui=decide] .atl-dstate').textContent"), /Your answer: 5 · changed from 3/);
   assert.match(await js("document.querySelector('.atl-bar').textContent"), /2 to answer/);
 
   // atl-note: Redo needs a note; nothing posts without it, Enter posts it with the note.
@@ -104,11 +108,11 @@ try {
   const [row, rowPin] = [await box("#ra"), await box('[atl-ui=pin][data-key="row-a"] .atl-add')];
   assert(Math.abs(row.right - rowPin.right) <= 8 && Math.abs(row.y - rowPin.y) <= 8, "at the row's corner");
 
-  await sleep(600); host.deliverDue(page);
-  assert.match(sent.join("\n"), /Decision run\/turn-1 \(version v1\): 4 → 5\n/, `delivery: ${sent.join("\n")}`);
+  await sleep(3200); host.deliverDue(page);
+  assert.match(sent.join("\n"), /Decision run\/turn-1 \(version v1\): 3 → 5\n/, `delivery: ${sent.join("\n")}`);
   if (process.argv[2]) await b("screenshot", process.argv[2]);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision changed twice, required note.");
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

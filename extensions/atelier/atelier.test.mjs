@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import atelierExtension, { appendLog, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
-import { compose, derive, keyTexts, palette, threadLayout } from "./kernel/atelier.js";
+import { compose, derive, diffPreview, keyTexts, palette, threadLayout, wordDiff } from "./kernel/atelier.js";
 
 const UNDO = 10_000;
 
@@ -74,9 +74,9 @@ test("delivery classes: Record stays in the log, Send batches drafts per group, 
   const { host, page, sent, tick, human } = await hostOn(p);
   try {
     human({ type: "decide", decision: "a", options: "1|2|3|4|5", option: "4", key: "a", delivery: "record" });
-    human({ type: "comment", key: "run-1/turn-1", text: "one" });
-    human({ type: "comment", key: "run-1/turn-2", text: "two" });
-    human({ type: "comment", key: "run-2/turn-1", text: "three" });
+    human({ type: "comment", key: "run-1/turn-1", text: "one", delivery: "send" });
+    human({ type: "comment", key: "run-1/turn-2", text: "two", delivery: "send" });
+    human({ type: "comment", key: "run-2/turn-1", text: "three", delivery: "send" });
     tick(UNDO);
     assert.equal(host.deliverDue(page), 0, "Record and unsent drafts never wake the agent");
     human({ type: "send", key: "run-1" });
@@ -209,7 +209,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.0\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.1\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -408,19 +408,56 @@ test("Delivery gives each Comment its Key's text from the Page source, and each 
     human({ type: "comment", key: "how/step-act", ver: "1", text: "why not?" });
     human({ type: "comment", key: "how/step-act", quote: { exact: "comment, rate", prefix: "You ", suffix: ", decide" }, text: "this bit" });
     const root = human({ type: "comment", key: "how", text: "I think we need to give subagents the tool aswell" }).json.entry;
-    human({ type: "send" });
     tick(UNDO);
     host.deliverDue(page);
     host.agent(page, { type: "answer", target: root.seq, text: `Agreed — it's the biggest gap. ${"x".repeat(300)}` });
     human({ type: "comment", key: "how", thread: root.seq, text: "ok do it" });
-    human({ type: "send" });
     tick(UNDO);
     host.deliverDue(page);
     const [first, second] = sent.map((s) => s.message.content);
     assert.match(first, /\n- #1 Comment on how\/step-act \("Act — You comment, rate, decide long text long text [^"]*…"\) \(version 1\): "why not\?"/);
     assert.match(first, /\n- #2 Comment on the text "comment, rate" in how\/step-act: "this bit"/, "a quoted selection stands for itself");
     assert.match(first, /\n- #3 Comment on how \("Intro Act/);
-    assert.match(second, /\n- #7 Reply in thread #3 \(You: "I think we need to give subagents the tool aswell" · Agent: "Agreed — it's the biggest gap\. x{150,}…"\): "ok do it"$/);
+    assert.match(second, /\n- #6 Reply in thread #3 \(You: "I think we need to give subagents the tool aswell" · Agent: "Agreed — it's the biggest gap\. x{150,}…"\): "ok do it"$/);
     assert.ok(second.split("Agent: ")[1].indexOf("…") <= 200, "earlier messages are clipped to ~200 characters");
   } finally { host.stop(); p.done(); }
+});
+
+test("send on save: a Comment goes out after its undo window without a Send; an undone answer is replaced (134)", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    human({ type: "comment", key: "a", text: "saved" });
+    tick(UNDO);
+    assert.equal(host.deliverDue(page), 1, "no Send needed");
+    assert.match(sent[0].message.content, /"saved"/);
+    // The Kernel replaces an unsent answer by undoing it and posting the new one with the old previous.
+    const first = human({ type: "decide", decision: "d", options: "Keep|Revert", option: "Revert" }).json.entry;
+    human({ type: "undo", target: first.seq });
+    human({ type: "decide", decision: "d", options: "Keep|Revert", option: "Keep" });
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.equal(sent.length, 2, "one message for the Decision");
+    assert.match(sent[1].message.content, /Decision d: Keep/);
+    assert.doesNotMatch(sent[1].message.content, /Revert/);
+  } finally { host.stop(); rmSync(p.root, { recursive: true, force: true }); }
+});
+
+test("update logs its one-line note for the change indicators (134)", async () => {
+  const p = project();
+  const { host, page } = await hostOn(p);
+  try {
+    host.update(page, "Shortened the intro");
+    host.update(page);
+    assert.deepEqual(readLog(page).filter((e) => e.type === "update").map((e) => e.note), ["Shortened the intro"]);
+  } finally { host.stop(); rmSync(p.root, { recursive: true, force: true }); }
+});
+
+test("wordDiff marks inserted and deleted words; diffPreview names the first change", () => {
+  const parts = wordDiff("Comments wait for Send and go out together", "Comments go out when saved");
+  assert.equal(parts.filter(([op]) => op !== "+").map(([, w]) => w).join(" "), "Comments wait for Send and go out together");
+  assert.equal(parts.filter(([op]) => op !== "-").map(([, w]) => w).join(" "), "Comments go out when saved");
+  assert.equal(diffPreview(wordDiff("undo lasts 30 s", "undo lasts 10 s")), "…undo lasts 30 → 10…");
+  assert.deepEqual(wordDiff("same", "same"), [["=", "same"]]);
+  assert.equal(diffPreview(wordDiff("same", "same")), "");
 });

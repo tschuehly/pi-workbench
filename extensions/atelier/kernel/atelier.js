@@ -1,4 +1,4 @@
-// Atelier Kernel 2.0.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 107-133).
+// Atelier Kernel 2.1.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 107-134).
 // A dependency-free ES module with no build step (120), copied beside each Page (111). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (114).
 //
@@ -12,7 +12,10 @@
 //     atl-delivery="record|send|immediate" (default immediate); atl-material="key" counts as opened (113)
 //   atl-slot                   inside a Decision: where its options render, e.g. one table cell; else at the end
 //   atl-request="job"          a button or form that asks the agent for a typed job; form fields become its input (108)
-//   atl-group                  on a keyed element: its Comments get their own "Send (n)" (128)
+//   atl-group                  on a keyed element: its batched Comments get their own "Send (n)" (128)
+//   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (134)
+//   atl-changes="off"          anywhere on the Page: no change indicators after Updates (134)
+//   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab
 //   document "atelier:update"  fires after each Update, so page scripts re-read their data files (130)
 // Human state lives only in <page>.events.jsonl, never in the HTML (125).
 // Kernel controls take the Page's colours: override --atl-bg, --atl-fg, --atl-muted, --atl-line, --atl-accent, --atl-warn.
@@ -27,9 +30,11 @@
 import { Idiomorph } from "./idiomorph.js";
 
 export const UNDO_MS = 10_000; // decision 129
+export const SEEN_MS = 5_000; // decision 134: a change counts as seen after 5 s in view
 // Delivery class per human event type (128). `boundary` is the Send that releases drafts; `control` is undo.
+// A Comment goes out when saved, after its undo window (134); a Page opts into batching with atl-delivery="send".
 export const CLASSES = {
-  comment: "send", decide: "immediate", request: "immediate", cancel: "immediate", rework: "immediate",
+  comment: "immediate", decide: "immediate", request: "immediate", cancel: "immediate", rework: "immediate",
   accept: "record", opened: "record", close: "record", still: "record", send: "boundary", undo: "control",
 };
 export const REQUEST_STATES = ["queued", "running", "done", "failed", "cancelled"];
@@ -198,8 +203,8 @@ export function compose(page, url, events, entries, { replay = false, group, exc
   ].join("\n");
 }
 
-const LIGHT = "--atl-bg:#fff;--atl-fg:#1f2328;--atl-muted:#59636e;--atl-line:#d1d9e0;--atl-accent:#0969da;--atl-warn:#9a6700";
-const DARK = "--atl-bg:#151b23;--atl-fg:#e6edf3;--atl-muted:#9198a1;--atl-line:#3d444d;--atl-accent:#4493f8;--atl-warn:#d29922";
+const LIGHT = "--atl-bg:#fff;--atl-fg:#1f2328;--atl-muted:#59636e;--atl-line:#d1d9e0;--atl-accent:#0969da;--atl-warn:#9a6700;--atl-ch-reworded:#0969da;--atl-ch-added:#1a7f37;--atl-ch-removed:#818b98;--atl-ch-needs:#bf8700";
+const DARK = "--atl-bg:#151b23;--atl-fg:#e6edf3;--atl-muted:#9198a1;--atl-line:#3d444d;--atl-accent:#4493f8;--atl-warn:#d29922;--atl-ch-reworded:#4493f8;--atl-ch-added:#3fb950;--atl-ch-removed:#9198a1;--atl-ch-needs:#d29922";
 /**
  * The Kernel palette follows the Page, not the OS: light unless the Page declares dark through
  * <meta name="color-scheme"> or :root color-scheme; a Page declaring both follows prefers-color-scheme.
@@ -223,6 +228,29 @@ const ICONS = {
   eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
   alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
 };
+/** Word diff (LCS) of two texts as [op, words] runs, op "=", "-" or "+". */
+// ponytail: O(n·m) table; above 250k cells the whole text counts as replaced.
+export function wordDiff(a, b) {
+  const x = a ? String(a).split(" ") : [], y = b ? String(b).split(" ") : [];
+  if (x.length * y.length > 250_000) return [["-", x.join(" ")], ["+", y.join(" ")]].filter(([, w]) => w);
+  const L = Array.from({ length: x.length + 1 }, () => new Uint16Array(y.length + 1));
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [], push = (op, w) => { const last = out[out.length - 1]; if (last?.[0] === op) last[1] += ` ${w}`; else out.push([op, w]); };
+  let i = 0, j = 0;
+  while (i < x.length && j < y.length) { if (x[i] === y[j]) { push("=", x[i]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) push("-", x[i++]); else push("+", y[j++]); }
+  while (i < x.length) push("-", x[i++]);
+  while (j < y.length) push("+", y[j++]);
+  return out;
+}
+/** One line for a tooltip: the first change with three words before it, "…was → is…". */
+export function diffPreview(parts) {
+  const k = parts.findIndex(([op]) => op !== "=");
+  if (k < 0) return "";
+  const ctx = k > 0 ? parts[k - 1][1].split(" ").slice(-3).join(" ") : "";
+  const del = parts[k][0] === "-" ? parts[k][1] : "", ins = parts[k][0] === "+" ? parts[k][1] : parts[k + 1]?.[0] === "+" ? parts[k + 1][1] : "";
+  return clip(`…${ctx} ${del && ins ? `${del} → ${ins}` : del ? `${del} (removed)` : ins}…`, 100);
+}
+
 const icon = (name) => `<svg class="atl-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 
 // ---------------------------------------------------------------- browser side
@@ -264,8 +292,9 @@ function boot() {
   // Shown beside a text selection on the Page; pointerdown keeps the selection it comments on.
   const selBtn = h(`<button atl-ui="sel" class="atl-selbtn" data-atl="selcomment" hidden>${icon("comment-plus")} Comment</button>`);
   selBtn.addEventListener("pointerdown", (ev) => ev.preventDefault());
+  const rail = h(`<nav atl-ui="rail" class="atl-rail" aria-label="Changes" hidden></nav>`);
   document.body.prepend(orphans);
-  document.body.append(panel, selBtn);
+  document.body.append(panel, selBtn, rail);
 
   function h(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
   function set(el, html) { if (el && el.__html !== html) { el.__html = html; el.innerHTML = html; } }
@@ -287,8 +316,9 @@ function boot() {
     const known = new Set(entries.map((e) => e.seq));
     const fresh = list.filter((e) => !known.has(e.seq));
     if (fresh.length) { entries.push(...fresh); entries.sort((a, b) => a.seq - b.seq); }
-    return fresh.length;
+    return fresh;
   }
+  let first = true;
   async function pull() {
     if (!online) return;
     try {
@@ -297,7 +327,10 @@ function boot() {
       if (!r.ok) throw new Error((await r.json()).error);
       const list = (await r.json()).entries;
       cursor = list.reduce((max, e) => Math.max(max, e.seq), cursor);
-      if (add(list)) render();
+      const fresh = add(list);
+      if (!first) markAgent(fresh);
+      first = false;
+      if (fresh.length) render();
     } catch { conn = "no session"; render(); }
   }
 
@@ -322,7 +355,7 @@ function boot() {
     es = new EventSource(`/.atelier/stream${q}`);
     es.addEventListener("hello", (m) => { const t = JSON.parse(m.data).mtime; if (mtime !== null && t !== mtime) morph(); mtime = t; conn = "live"; render(); pull(); });
     es.addEventListener("log", pull);
-    es.addEventListener("update", (m) => { mtime = JSON.parse(m.data).mtime; morph(); });
+    es.addEventListener("update", (m) => { const d = JSON.parse(m.data); mtime = d.mtime; pendingNote = d.note ?? null; morph(); });
     es.onerror = () => { conn = "reconnecting"; render(); };
   }
   // pi-artifacts 1.5.0: one EventSource per tab, closed while hidden, so many tabs never starve the connection limit.
@@ -332,6 +365,7 @@ function boot() {
   async function morph() {
     const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
     const doc = new DOMParser().parseFromString(html, "text/html");
+    const before = changesOn() ? snapshot() : null;
     const active = document.activeElement;
     const range = active && "selectionStart" in active ? [active.selectionStart, active.selectionEnd] : null;
     // Lift out only top-level Kernel nodes; a composer inside a Key's UI travels with it.
@@ -352,7 +386,10 @@ function boot() {
     });
     document.querySelectorAll('[id^="atl-key:"]').forEach((el) => el.removeAttribute("id"));
     document.body.prepend(orphans);
-    document.body.append(panel, selBtn);
+    document.body.append(panel, selBtn, rail);
+    keyMap = null;
+    if (before) diffMarks(before);
+    pendingNote = null;
     render();
     if (active?.isConnected && document.activeElement !== active) { active.focus({ preventScroll: true }); if (range) active.setSelectionRange(...range); }
     document.dispatchEvent(new CustomEvent("atelier:update"));
@@ -514,7 +551,7 @@ function boot() {
     const undoable = all().filter((e) => e.origin === "human" && e.type !== "undo" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
     const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
     const open = st.openThreads.length + st.toAnswer.length;
-    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}<button data-atl="send" class="atl-primary" ${st.drafts.length ? "" : "disabled"}>${icon("send")} Send (${st.drafts.length})</button><button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button><span class="atl-dim atl-conn">${esc(conn)}</span>`);
+    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button><span class="atl-dim atl-conn">${esc(conn)}</span>`);
     renderUndo(undoable);
     const section = (title, items) => items.length ? `<h4>${title}</h4>` : "";
     const list = panel.querySelector(".atl-list");
@@ -538,6 +575,8 @@ function boot() {
       const n = d.querySelectorAll(".atl-open-item").length;
       if (n) d.querySelector("summary")?.append(h(`<span atl-ui="badge" class="atl-tag">${n} open</span>`));
     }
+    for (const el of keyed()) io.observe(el);
+    renderMarks();
     positionPins();
   }
 
@@ -549,7 +588,7 @@ function boot() {
     const p = pin.getBoundingClientRect(), r = el.getBoundingClientRect();
     pin.style.translate = `${Math.round(r.right - p.left - b.offsetWidth - 4)}px ${Math.round(r.top - p.top + 4)}px`;
   }
-  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); }
+  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); positionMarks(); }
   function setHot(target) {
     const el = target?.closest?.("[atl-key]:not([atl-slot])");
     const addr = el && !isUi(el) ? keyOf(el) : null;
@@ -592,6 +631,178 @@ function boot() {
   }
   setInterval(() => { if (panel.querySelector(".atl-toast") || panel.innerHTML.includes("sends in")) render(); }, 1000);
 
+  // ---- change indicators (134): what an Update changed, marked on the spot, in the Page's navigation and on a
+  // right-edge rail, until the human has had it in view for 5 s. One trace per Key accumulates every Update since.
+  const changesOn = () => !document.querySelector('[atl-changes="off"]');
+  const traces = new Map(), everSeen = new Set(), view = new WeakMap();
+  const RANK = { needs: 4, added: 3, removed: 2, reworded: 1 };
+  const KIND = { needs: "Needs you", added: "New", removed: "Removed", reworded: "Reworded" };
+  let pendingNote = null;
+  const inView = (x) => x.isIntersecting && (x.intersectionRatio >= 0.5 || x.intersectionRect.height >= innerHeight * 0.4);
+  const io = new IntersectionObserver((list) => {
+    for (const x of list) { const v = inView(x); view.set(x.target, v); if (v && !isUi(x.target)) everSeen.add(keyOf(x.target)); }
+  }, { threshold: [0, 0.25, 0.5, 0.75, 1] });
+  // A Key's own words, without nested Keys, so a change marks the innermost Key that changed.
+  function ownText(el) {
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => isUi(n.parentElement) || n.parentElement.closest("script,style") || n.parentElement.closest("[atl-key]") !== el ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    let t = ""; for (let n = w.nextNode(); n; n = w.nextNode()) t += `${n.data} `;
+    return t.replace(/\s+/g, " ").trim();
+  }
+  // ponytail: clones every Key before each Update so a removed one can be shown; fine for hundreds of Keys.
+  function snapshot() {
+    const snap = new Map();
+    for (const el of keyed()) {
+      const addr = keyOf(el); if (snap.has(addr)) continue;
+      let next = el.nextElementSibling; while (next && (isUi(next) || !next.hasAttribute("atl-key"))) next = next.nextElementSibling;
+      const old = el.cloneNode(true); old.querySelectorAll("[atl-ui]").forEach((n) => n.remove());
+      snap.set(addr, { text: ownText(el), old, title: titleOf(el, addr), parent: keyOf(el.parentElement), next: next ? keyOf(next) : undefined });
+    }
+    return snap;
+  }
+  const parentAddr = (addr) => addr.includes("/") ? addr.slice(0, addr.lastIndexOf("/")) : null;
+  const titleOf = (el, addr) => clip(el?.querySelector?.("h1,h2,h3,h4,h5,h6,summary,figcaption,caption")?.textContent || (el ? ownText(el) : "") || addr, 60);
+  function mark(addr, kind, extra = {}, note = pendingNote) {
+    const t = traces.get(addr) ?? { kinds: new Set(), notes: [], ms: 0, nodes: {} };
+    t.kinds.add(kind);
+    t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0];
+    if (note && t.notes[0] !== note) t.notes.unshift(note);
+    for (const [k, v] of Object.entries(extra)) if (!(k in t) || k === "after") t[k] = v; // the baseline is what the human last saw
+    Object.assign(t, { ms: 0, fading: false });
+    traces.set(addr, t);
+  }
+  function diffMarks(before) {
+    const after = new Map();
+    for (const el of keyed()) { const a = keyOf(el); if (!after.has(a)) after.set(a, ownText(el)); }
+    for (const [addr, text] of after) {
+      const b = before.get(addr), p = parentAddr(addr);
+      if (!b) { if (!p || before.has(p)) mark(addr, "added"); } // only the outermost new Key
+      else if (b.text !== text && (everSeen.has(addr) || traces.has(addr))) {
+        mark(addr, "reworded", { before: b.text, after: text });
+        const t = traces.get(addr);
+        if (t.kinds.size === 1 && t.before === text) { removeTrace(addr); } // changed back to what the human saw
+      }
+    }
+    for (const [addr, b] of before) {
+      const p = parentAddr(addr);
+      if (!after.has(addr) && everSeen.has(addr) && (!p || after.has(p))) mark(addr, "removed", { old: b.old, title: b.title, parent: b.parent, next: b.next });
+    }
+  }
+  // An agent reply or a new Decision needs the human, even where nothing on the Page changed.
+  function markAgent(fresh) {
+    if (!changesOn()) return;
+    const st = state();
+    for (const e of fresh.filter((x) => x.origin === "agent")) {
+      if (e.type === "answer") { const t = st.threads.find((x) => x.msgs.some((m) => m.seq === e.seq)); if (t?.root.key && findKey(t.root.key)) mark(t.root.key, "needs", {}, `Agent replied: ${clip(e.text, 80)}`); }
+      if (e.type === "ask" && e.decision.key && findKey(e.decision.key)) mark(e.decision.key, "needs", {}, `New Decision: ${clip(e.decision.question, 80)}`);
+    }
+    if (fresh.length) renderMarks();
+  }
+  // Where a change shows on the Page: the Key itself, else the tab or summary that hides it, else a visible ancestor.
+  function visibleSpot(el) {
+    if (el.getClientRects().length) return el;
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (p.id) { const tab = [...document.querySelectorAll(`[aria-controls="${CSS.escape(p.id)}"]`)].find((t) => t.getClientRects().length); if (tab) return tab; }
+      if (p.matches("details:not([open])")) { const s = p.querySelector(":scope > summary"); if (s) return s; }
+      if (p.getClientRects().length) return p;
+    }
+    return el;
+  }
+  const navDots = new Map(); // in-page link -> its dot; one per link, coloured by its strongest change
+  const nodesOf = (t) => [t.nodes.mark, t.nodes.gone, t.nodes.diff, t.nodes.rail].filter(Boolean);
+  function removeTrace(addr) { const t = traces.get(addr); if (t) nodesOf(t).forEach((n) => n.remove()); traces.delete(addr); }
+  function clearTrace(addr) {
+    const t = traces.get(addr);
+    if (!t || t.fading) return;
+    t.fading = true;
+    nodesOf(t).forEach((n) => n.classList.add("atl-fade"));
+    renderMarks(); // a nav dot fades when every change under it fades
+    setTimeout(() => { if (traces.get(addr) === t && t.fading) { removeTrace(addr); renderMarks(); } }, 600);
+  }
+  const traceTarget = (addr, t) => t.kind === "removed" ? t.nodes.gone : findKey(addr);
+  function tipOf(addr, t) {
+    const parts = t.before != null && t.after != null ? wordDiff(t.before, t.after) : [];
+    return [`${KIND[t.kind]}: ${t.title ?? titleOf(findKey(addr), addr)}`, ...t.notes.map((n) => `• ${n}`), diffPreview(parts)].filter(Boolean).join("\n");
+  }
+  function renderMarks() {
+    rail.hidden = !traces.size;
+    const links = traces.size ? [...document.querySelectorAll('a[href^="#"]')].filter((a) => !isUi(a) && a.hash.length > 1) : [];
+    const height = document.documentElement.scrollHeight || 1, nav = new Map();
+    for (const [addr, t] of [...traces]) {
+      const n = t.nodes, cls = `atl-k-${t.kind}`, tip = tipOf(addr, t);
+      let el;
+      if (t.kind === "removed") {
+        n.gone ??= h(`<div atl-ui="gone" class="atl-gone"><button data-atl="chgone" data-addr="${esc(addr)}">Removed · show</button><div class="atl-old" hidden></div></div>`);
+        if (!n.gone.lastElementChild.firstChild) n.gone.lastElementChild.append(t.old);
+        n.gone.firstElementChild.title = tip;
+        const next = t.next && findKey(t.next), parent = t.parent && findKey(t.parent);
+        if (next) { if (next.previousElementSibling !== n.gone) next.before(n.gone); }
+        else if (parent) { if (n.gone.parentElement !== parent) parent.append(n.gone); }
+        else { removeTrace(addr); continue; }
+        el = n.gone;
+        io.observe(el);
+      } else {
+        el = findKey(addr);
+        if (!el) { removeTrace(addr); continue; }
+        const spot = visibleSpot(el), bar = spot === el;
+        n.mark ??= h(`<span atl-ui="mark"></span>`);
+        n.mark.className = `atl-mark ${cls} ${bar ? "atl-mark-bar" : "atl-mark-dot"}`;
+        set(n.mark, bar ? `<button data-atl="chmark" data-addr="${esc(addr)}" aria-label="${esc(tip)}" title="${esc(tip)}${t.before != null ? "\n(click: show changes)" : ""}"></button>` : `<span class="atl-dot" title="${esc(tip)}"></span>`);
+        if (n.mark.parentElement !== spot) place(n.mark, spot);
+        if (t.open && n.diff && n.diff.parentElement !== el) place(n.diff, el);
+      }
+      // The Page's own navigation: the in-page link to the innermost section that holds the change.
+      const hits = links.map((a) => ({ a, to: document.getElementById(decodeURIComponent(a.hash.slice(1))) })).filter(({ a, to }) => to && to.contains(el) && !to.contains(a));
+      for (const { a, to } of hits) if (!hits.some((o) => o.to !== to && to.contains(o.to))) nav.set(a, [...nav.get(a) ?? [], { t, tip }]);
+      n.rail ??= h(`<button data-atl="chrail" data-addr="${esc(addr)}"></button>`);
+      n.rail.className = cls; n.rail.title = tip; n.rail.setAttribute("aria-label", tip);
+      const top = (t.kind === "removed" ? el : visibleSpot(el)).getBoundingClientRect().top + scrollY;
+      n.rail.style.top = `${Math.min(98, Math.max(0, (top / height) * 100)).toFixed(2)}%`;
+      if (n.rail.parentElement !== rail) rail.append(n.rail);
+    }
+    for (const [a, dot] of navDots) if (!nav.has(a)) { dot.remove(); navDots.delete(a); }
+    for (const [a, list] of nav) {
+      const dot = navDots.get(a) ?? h(`<span atl-ui="dot"></span>`);
+      const best = list.reduce((x, y) => RANK[y.t.kind] > RANK[x.t.kind] ? y : x);
+      dot.className = `atl-dot atl-k-${best.t.kind}${list.every((x) => x.t.fading) ? " atl-fade" : ""}`;
+      dot.title = list.map((x) => x.tip).join("\n\n");
+      navDots.set(a, dot);
+      if (dot.parentElement !== a) a.append(dot);
+    }
+    positionMarks();
+  }
+  function positionMarks() {
+    for (const [addr, t] of traces) {
+      const m = t.nodes.mark, el = findKey(addr);
+      if (!m?.classList.contains("atl-mark-bar") || !el || !m.isConnected) continue;
+      m.style.translate = "";
+      const p = m.getBoundingClientRect(), r = el.getBoundingClientRect();
+      m.style.translate = `${Math.round(Math.max(2, r.left - 10) - p.left)}px ${Math.round(r.top - p.top)}px`;
+      m.firstElementChild.style.height = `${Math.round(r.height)}px`;
+    }
+  }
+  // Seen: 5 s in view, paused while the pointer rests on it or its changes are open; then everything fades at once.
+  setInterval(() => {
+    for (const [addr, t] of traces) {
+      const target = traceTarget(addr, t);
+      if (!target?.isConnected || t.open || t.fading || !view.get(target) || target.matches(":hover")) continue;
+      if ((t.ms += 500) >= SEEN_MS) clearTrace(addr);
+    }
+  }, 500);
+  // A tab switch or an opened details moves the in-page mark.
+  document.addEventListener("click", () => { if (traces.size) requestAnimationFrame(renderMarks); });
+  document.addEventListener("toggle", () => { if (traces.size) requestAnimationFrame(renderMarks); }, true);
+  function toggleDiff(addr) {
+    const t = traces.get(addr), el = findKey(addr);
+    if (!t || !el) return;
+    if (t.before == null) { clearTrace(addr); return; } // New or Needs you: a click acknowledges it
+    if (t.open) { t.open = false; clearTrace(addr); return; } // seen once the human closes the changes
+    t.open = true;
+    const diff = wordDiff(t.before, t.after).map(([op, w]) => op === "=" ? esc(w) : op === "+" ? `<ins>${esc(w)}</ins>` : `<del>${esc(w)}</del>`).join(" ");
+    t.nodes.diff?.remove();
+    t.nodes.diff = h(`<div atl-ui="diff" class="atl-diff"><div class="atl-dim">Changes since you last saw it${t.notes.length ? `: ${esc(t.notes.join(" · "))}` : ""}</div><div>${diff}</div><button data-atl="chmark" data-addr="${esc(addr)}">${icon("x")} Hide changes</button></div>`);
+    place(t.nodes.diff, el);
+  }
+
   // ---- composer: one per slot, persistent while open so typing survives every render and morph
   function openComposer(spec, slot) {
     composer?.node.remove();
@@ -604,7 +815,9 @@ function boot() {
       const text = node.querySelector("textarea").value.trim();
       if (!text) return;
       composer = null; node.remove();
-      await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text });
+      // A Page batches Comments only where it declares atl-delivery="send" (128, 134).
+      const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
+      await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery });
     });
   }
   const slotFor = (addr) => (addr && keyUis.get(addr)?.querySelector(".atl-slot")) || panel.querySelector(".atl-slot");
@@ -626,8 +839,8 @@ function boot() {
     close: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "close", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : undefined }); },
     still: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "still", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : null }); },
     jump: (b) => { const t = state().threads.find((x) => x.root.seq === +b.dataset.seq); const p = t && placeThread(t, textIndex()); markRead(+b.dataset.seq); if (p?.range) { p.range.startContainer.parentElement.scrollIntoView({ block: "center", behavior: "smooth" }); } else jumpTo(p?.el); },
-    decide: (b) => {
-      const d = state().decisions.find((x) => x.id === b.dataset.id);
+    decide: async (b) => {
+      const st = state(), d = st.decisions.find((x) => x.id === b.dataset.id);
       if (!d) return;
       const label = b.dataset.label, note = b.closest(".atl-card,[atl-ui=decide]")?.querySelector(".atl-note"), text = note?.value.trim();
       if (d.answer?.option === label && !d.stale && !text) return; // already the answer
@@ -639,7 +852,15 @@ function boot() {
         return;
       }
       // Always editable (133): a change is a new answer that names the one it replaces.
-      const previous = d.answer && d.answer.option !== label ? d.answer.option : undefined;
+      let previous = d.answer && d.answer.option !== label ? d.answer.option : undefined;
+      // A change inside the undo window replaces the unsent answer, so only the last one is delivered (134).
+      const a = d.answer;
+      if (a?.origin === "human" && left(a) > 0 && ["pending", "local"].includes(st.status(a))) {
+        if (await post({ type: "undo", target: a.seq }) !== undefined || a.local) { // the server may have closed the window
+          previous = a.previous;
+          if (previous === label && !text) return; // back to the delivered answer: nothing new to send
+        }
+      }
       const page = d.declared ? { options: d.options.map((o) => o.label).join("|"), rec: d.options.find((o) => o.recommended)?.label, delivery: d.delivery } : {};
       post({ type: "decide", decision: d.id, option: label, previous, opened: d.material ? d.opened : null, note: text || undefined, key: d.key, ver: d.key ? currentVer(d.key) : undefined, ...page });
       if (note) { note.value = ""; note.removeAttribute("aria-invalid"); delete note.dataset.pending; if (d.declared) note.hidden = true; }
@@ -651,6 +872,20 @@ function boot() {
     accept: (b) => post({ type: "accept", target: +b.dataset.seq }),
     rework: (b) => openComposer({ label: `What should change in Request #${b.dataset.seq}?`, kind: "rework", target: +b.dataset.seq }, panel.querySelector(".atl-slot")),
     expand: (b) => { expanded.add(+b.dataset.seq); render(); },
+    chmark: (b) => toggleDiff(b.dataset.addr),
+    chgone: (b) => {
+      const t = traces.get(b.dataset.addr), old = b.nextElementSibling;
+      if (!t) return;
+      if (t.open) { t.open = false; clearTrace(b.dataset.addr); return; }
+      t.open = true; old.hidden = false; b.textContent = "Removed · hide";
+    },
+    chrail: (b) => {
+      const addr = b.dataset.addr, t = traces.get(addr), el = t && (t.kind === "removed" ? t.nodes.gone : findKey(addr));
+      if (!el) return;
+      const spot = visibleSpot(el);
+      if (spot !== el && spot.matches("[aria-controls]")) spot.click(); // open the tab that hides it
+      requestAnimationFrame(() => jumpTo(el));
+    },
     dismiss: () => { composer?.node.remove(); composer = null; },
     next: () => {
       const items = [...document.querySelectorAll(".atl-open-item")];
@@ -775,6 +1010,20 @@ const STYLE = `
 .atl-composer{display:grid;gap:6px;margin:6px 0}
 .atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
 ::highlight(atl-quote){background:#fde68a;color:#000}
+.atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
+.atl-mark-bar{position:absolute;width:0;height:0;z-index:2147481000}
+[atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}
+[atl-ui].atl-mark-bar>button:hover{width:6px}
+.atl-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--atl-ch);margin:0 0 0 6px;vertical-align:middle}
+.atl-rail{position:fixed;top:8px;bottom:8px;right:3px;width:12px;z-index:2147482500;pointer-events:none}
+[atl-ui].atl-rail>button{position:absolute;right:0;width:12px;height:12px;min-height:0;padding:0;border-radius:50%;border:2px solid var(--atl-bg);background:var(--atl-ch);pointer-events:auto}
+.atl-gone{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0}.atl-gone::before{content:"";flex:1;border-top:1px solid var(--atl-ch-removed)}
+[atl-ui].atl-gone>button{min-height:0;border:0;padding:0 2px;font-size:11px;color:var(--atl-muted);background:none;text-decoration:underline}
+.atl-old{flex-basis:100%;opacity:.55;text-decoration:line-through;font-size:.9em}
+.atl-diff{border:1px solid var(--atl-line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--atl-bg);display:grid;gap:6px;justify-items:start}
+.atl-diff ins{background:color-mix(in srgb,var(--atl-ch-added) 22%,transparent);text-decoration:none}
+.atl-diff del{background:color-mix(in srgb,#cf222e 16%,transparent)}
+.atl-fade{transition:opacity .6s;opacity:0!important}
 [atl-ui] h4{margin:8px 0 2px;font-size:12px}
 `;
 

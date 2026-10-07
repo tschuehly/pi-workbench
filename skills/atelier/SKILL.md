@@ -25,12 +25,16 @@ returned URL in the Chat; if the tool is missing, call `tools_enable` with group
   change arrives as "X → Y".
 - `atl-request="job"` on a button or form lets the human ask for a typed job; form fields become
   its input. Move it with `status`.
-- `atl-group` on a keyed element gives its Comments their own "Send (n)".
+- Comments go out when saved. `atl-delivery="send"` on a keyed element batches the Comments inside
+  it until the human sends them; `atl-group` gives such a batch its own "Send (n)".
 - Read changing data with `fetch` (read-only): project files, or for a Page outside the project only
   files in its own directory. Re-read it on the
   `atelier:update` document event, which fires after every Update.
 - Never write `<page>.events.jsonl` and never keep human state in the HTML. After rewriting the
-  Page, call `update`.
+  Page, call `update` with `text`: one line on what changed. The Kernel marks every changed Key until
+  the human has seen it. For marks on tabs, give each hidden panel an `id` and its tab
+  `aria-controls`; in-page links (`href="#id"`) get a dot for changes in their section.
+  `atl-changes="off"` turns the marks off.
 - Kernel controls take the Page's colours: light by default, dark only when the Page declares
   `color-scheme` dark. Override `--atl-bg`, `--atl-fg`, `--atl-muted`, `--atl-line`, `--atl-accent`,
   `--atl-warn` to match a Page.
@@ -49,7 +53,7 @@ returned URL in the Chat; if the tool is missing, call `tools_enable` with group
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.0.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.1.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench.
