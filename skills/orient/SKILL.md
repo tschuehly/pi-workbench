@@ -27,11 +27,13 @@ Reconstruct the causal sequence before writing: what the owner originally wanted
 
 **Refresh remote state.** Remote objects change without any session: others merge, review, comment, and CI reruns. For every GitHub PR or issue, Linear issue, or CI run that the checkpoints, plan, or links name as part of the current gate, read its live state with the available CLI or MCP tool: open/merged/closed, review decision and requested reviewers, comments and reviews newer than the last checkpoint, and required checks. Include the PR's CI even when merge state looks fine. Use live state over recorded claims and name what changed since the last session. Batch these reads; skip objects that are already merged or closed in the record unless they gate the next move. If a tool or login is unavailable, say which objects are **unchecked**.
 
+**Check overlap.** When the next move depends on unmerged repository changes, inspect live target-branch commits absent from the working branch (this includes other people's merged pull requests) and open pull/merge requests touching the affected files, including those opened before the last checkpoint. Treat same-file changes as candidates; report only those that could change the next move, with their integration or coordination consequence. Keep the compared revisions and search coverage in the underlying evidence. Mark incomplete or unavailable checks **unchecked**.
+
 **Check storage.** For a Workstream, run `mac-storage-workspaces --workstream <id>` and note what looks deletable: owned items the current position no longer needs, and unlinked worktrees in the same repositories without recent activity. Do not delete anything here; the next checkpoint's storage step does that.
 
 Note any stored state this evidence contradicts—an overview that describes a superseded position, a pending Human Task the owner already answered or deferred, or a `waitingOn` that no longer holds—so the owner or the next checkpoint can correct it. Do not edit it here.
 
-**Complete when:** the proposed next move does not repeat a resolved request or silently ignore a newer correction, and every remote object that gates it reflects live state or is marked unchecked.
+**Complete when:** the proposed next move does not repeat a resolved request or silently ignore a newer correction, every remote object that gates it reflects live state or is marked **unchecked**, and each applicable overlap check records consequential findings, confirms no relevant overlap within its checked scope, or is marked **unchecked**.
 
 ## 3. Orient the owner
 
