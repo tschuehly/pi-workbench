@@ -1,14 +1,14 @@
 // Regression tests for kernel review 1 (Sol, 2026-10-07), one per finding, and the owner decision on Page paths.
 // Browser-side findings 4, 10, 11 and 12 are checked with agent-browser (see the fix-round report).
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { mock } from "node:test";
 import atelierExtension, { appendLog, copyKernel, createHost, readLog } from "./index.ts";
-import { derive } from "./kernel/atelier.js";
+import { compose, derive } from "./kernel/atelier.js";
 
 const UNDO = 10_000;
 const PAGE = "<!doctype html><title>t</title><div atl-key='a' atl-ver='1'>A</div>";
@@ -139,7 +139,7 @@ test("8: malformed events are refused before the log; a line that cannot be comp
     appendLog(p.page, { origin: "human", type: "request", job: "old", delivery: "immediate", quote: { exact: 5 } }, clock);
     clock += UNDO;
     assert.doesNotThrow(() => host.deliverDue(p.page));
-    assert.equal(readLog(p.page).at(-1).type, "unconfirmed", "the Page shows it as not delivered, with Copy");
+    assert.match(sent.at(-1).content, /#\d+ request could not be rendered/, "delivered, named as unreadable");
     host.postHuman(p.page, { type: "request", job: "rerun", input: {} });
     clock += UNDO;
     host.deliverDue(p.page);
@@ -194,4 +194,61 @@ test("B: a Page outside the project serves only its own directory", async () => 
     const port = new URL(url).port;
     assert.match(await raw(Number(port), `GET /${page} HTTP/1.1\r\nHost: evil.example:${port}\r\nConnection: close\r\n\r\n`), /^HTTP\/1\.1 403/, "Host check (130)");
   } finally { s.handlers.session_shutdown(); p.done(); rmSync(outside, { recursive: true, force: true }); }
+});
+
+// Re-check of review 1 (Sol): one regression test per finding.
+test("R1: concurrent hosts on fresh Pages: exactly one claims each Page", async () => {
+  const p = project();
+  const pages = Array.from({ length: 100 }, (_, i) => path.join(p.root, `p${i}.html`));
+  const start = Date.now() + 1_500;
+  const child = `import { claimPage } from ${JSON.stringify(new URL("./index.ts", import.meta.url).href)};
+const pages = JSON.parse(process.argv[1]); const won = [];
+while (Date.now() < ${start}) {}
+for (const [i, page] of pages.entries()) { try { claimPage(page, "c"); won.push(i); } catch {} }
+console.log(JSON.stringify(won));
+process.stdin.resume().on("end", () => process.exit());`; // stay alive (lock not stale) until every child has tried
+  const children = [];
+  try {
+    const runs = await Promise.all(Array.from({ length: 6 }, () => new Promise((resolve, reject) => {
+      let out = "";
+      const c = spawn(process.execPath, ["--input-type=module", "-e", child, JSON.stringify(pages)]);
+      children.push(c);
+      c.stdout.on("data", (d) => { out += d; if (out.includes("\n")) resolve(JSON.parse(out)); });
+      c.on("error", reject);
+      c.on("close", (code) => reject(new Error(`child exited ${code}`)));
+    })));
+    const claims = new Map();
+    for (const won of runs) for (const i of won) claims.set(i, (claims.get(i) ?? 0) + 1);
+    assert.deepEqual(pages.map((_, i) => claims.get(i) ?? 0).filter((n) => n !== 1), [], "every Page has exactly one owner");
+  } finally { children.forEach((c) => c.stdin.end()); p.done(); }
+});
+
+test("R2: a Comment thread may only reference an earlier Comment; a bad reference never hangs replay", async () => {
+  const p = project();
+  const host = createHost({ root: p.root, send: () => {} });
+  try {
+    await host.open(p.page);
+    assert.equal(host.postHuman(p.page, { type: "comment", text: "self", thread: 1 }).status, 400, "self reference");
+    const first = host.postHuman(p.page, { type: "comment", text: "root" }).json.entry;
+    assert.equal(host.postHuman(p.page, { type: "comment", text: "forward", thread: first.seq + 5 }).status, 400, "forward reference");
+    assert.equal(host.postHuman(p.page, { type: "comment", text: "reply", thread: first.seq }).status, 200);
+  } finally { host.stop(); p.done(); }
+  const legacy = [
+    { seq: 1, at: 0, origin: "human", type: "comment", text: "self", thread: 1, delivery: "send" },
+    { seq: 2, at: 0, origin: "human", type: "comment", text: "a", thread: 3, delivery: "send" },
+    { seq: 3, at: 0, origin: "human", type: "comment", text: "b", thread: 2, delivery: "send" },
+  ];
+  // In a child with a timeout: a looping replay must fail, not hang the suite.
+  const replay = spawnSync(process.execPath, ["--input-type=module", "-e", `import { derive } from ${JSON.stringify(new URL("./kernel/atelier.js", import.meta.url).href)}; console.log(derive(${JSON.stringify(legacy)}).threads.length);`], { timeout: 5_000, encoding: "utf8" });
+  assert.equal(replay.stdout.trim(), "2", "a self or forward reference starts its own thread");
+});
+
+test("R3: composition names an entry it cannot render instead of throwing, for Delivery and Copy", () => {
+  const bad = { seq: 4, at: 0, origin: "human", type: "request", job: "old", delivery: "immediate", quote: { exact: 5 } };
+  const good = { seq: 5, at: 0, origin: "human", type: "comment", text: "fine", delivery: "immediate" };
+  const log = [bad, good, { seq: 6, at: 0, origin: "kernel", type: "unconfirmed", of: [4, 5] }];
+  let text;
+  assert.doesNotThrow(() => { text = compose("page.html", "", [bad, good], log); });
+  assert.match(text, /#4 request could not be rendered/);
+  assert.match(text, /#5 Comment/);
 });

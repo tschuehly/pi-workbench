@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, createReadStream, existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, createReadStream, existsSync, linkSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
@@ -59,20 +59,25 @@ const alive = (pid: unknown) => { try { process.kill(Number(pid), 0); return tru
 
 /**
  * One live session owns a Page: it alone appends to the Event Log and delivers its events (109, 121). The
- * first session to open the Page takes `<page>.events.jsonl.lock`; a lock whose process is gone is stale.
+ * first session to open the Page takes `<page>.events.jsonl.lock`; a lock whose recorded process is gone is stale.
+ * The lock is linked from a fully written temp file, so no contender ever sees it empty.
  */
 export function claimPage(page: string, session: string) {
   const lock = lockPath(page);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { writeFileSync(lock, JSON.stringify({ pid: process.pid, session }), { flag: "wx" }); return; } catch (error: any) { if (error.code !== "EEXIST") throw error; }
-    let owner: { pid?: number; session?: string } = {};
-    try { owner = JSON.parse(readFileSync(lock, "utf8")); } catch { /* torn: stale */ }
-    if (owner.pid === process.pid && owner.session === session) return;
-    if (alive(owner.pid)) throw new Error(`This Page is open in another live Pi session (${owner.session}, pid ${owner.pid}); its human events go there. End that session first, or delete ${lock} if it is gone.`);
-    // ponytail: two sessions breaking one stale lock can race; fine for a lock that only a crash leaves behind.
-    unlinkSync(lock);
-  }
-  throw new Error(`Could not take ${lock}.`);
+  const tmp = `${lock}.${process.pid}.${randomUUID()}`;
+  writeFileSync(tmp, JSON.stringify({ pid: process.pid, session }));
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try { linkSync(tmp, lock); return; } catch (error: any) { if (error.code !== "EEXIST") throw error; }
+      let owner: { pid?: number; session?: string };
+      try { owner = JSON.parse(readFileSync(lock, "utf8")); } catch { throw new Error(`Cannot read ${lock}; delete it if no Pi session has this Page open.`); }
+      if (owner.pid === process.pid && owner.session === session) return;
+      if (!Number.isInteger(owner.pid) || alive(owner.pid)) throw new Error(`This Page is open in another live Pi session (${owner.session}, pid ${owner.pid}); its human events go there. End that session first, or delete ${lock} if it is gone.`);
+      // ponytail: two sessions breaking one stale lock can race; fine for a lock that only a crash leaves behind.
+      unlinkSync(lock);
+    }
+    throw new Error(`Could not take ${lock}.`);
+  } finally { unlinkSync(tmp); }
 }
 
 function releasePage(page: string, session: string) {
@@ -219,9 +224,7 @@ export function createHost(options: {
       if (due.events.length === 0) { append(page, { origin: "kernel", type: "received", of: due.seqs, note: "nothing to send" }); continue; }
       due.seqs.forEach((s) => flying(page).add(s));
       const failed = () => due.seqs.forEach((s) => flying(page).delete(s));
-      let content: string;
-      // A line the Kernel cannot describe stays claimed and shows as not delivered, with Copy.
-      try { content = compose(rel(page), url(page), due.events, entries, { replay, group: due.group }); } catch (error) { append(page, { origin: "kernel", type: "unconfirmed", of: due.seqs, error: String(error) }); continue; }
+      const content = compose(rel(page), url(page), due.events, entries, { replay, group: due.group });
       try {
         options.send({ customType: due.customType, content, display: true, details: { page, seqs: due.seqs, replay } }, (idle) => {
           append(page, { origin: "kernel", type: "delivered", of: due.seqs, session: sessionId });
@@ -251,6 +254,7 @@ export function createHost(options: {
       if (body[field] !== undefined) event[field] = body[field];
     }
     const asked = body.delivery;
+    if (body.type === "comment" && body.thread !== undefined && !readLog(page).some((e) => e.seq === body.thread && e.type === "comment")) return { status: 400, json: { error: `No Comment #${body.thread} to reply to.` } };
     if (body.type === "undo") {
       const log = readLog(page);
       const target = log.find((e) => e.seq === body.target && e.origin === "human" && e.type !== "undo");
