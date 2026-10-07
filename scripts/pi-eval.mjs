@@ -123,7 +123,8 @@ function sandboxProfile(trialDir) {
   const home = homedir();
   const projects = real(path.resolve(ROOT, ".."));
   const deny = [projects, real(EVAL_HOME), real(path.join(home, ".pi/agent/sessions")), real(path.join(home, ".pi-web"))];
-  const allow = [...readdirSync(projects).filter((d) => d.endsWith(".installed")).map((d) => path.join(projects, d)), real(trialDir)];
+  // pi-extensions holds Pi startup packages (settings.json), not case sources; Pi exits with EPERM without it.
+  const allow = [...readdirSync(projects).filter((d) => d.endsWith(".installed") || d === "pi-extensions").map((d) => path.join(projects, d)), real(trialDir)];
   const rule = (verb, p) => `(${verb} file-read-data (subpath ${JSON.stringify(p)}))`;
   return `(version 1)(allow default)${deny.map((p) => rule("deny", p)).join("")}${allow.map((p) => rule("allow", p)).join("")}`;
 }
@@ -346,7 +347,13 @@ async function run(campaignPath, flags) {
   writeFileSync(catalogFile, sh("pi --no-extensions --list-models", { timeout: 120_000 }).stdout);
   writeFileSync(path.join(outDir, "campaign.json"), JSON.stringify({ ...campaign, harness }, null, 2));
   let stopped = null;
+  // Difficulty ladder: cases are listed easy → hard; an arm stops after N consecutive failed checks.
+  const fails = new Map();
   for (const [i, { c, arm, rep }] of plan.entries()) {
+    if (campaign.stopAfterFails && (fails.get(arm.id) ?? 0) >= campaign.stopAfterFails) {
+      appendFileSync(results, JSON.stringify({ runId, trial: i, case: c.id, role: c.role, arm: arm.id, rep, harness, status: "not-run", reason: `ladder: ${campaign.stopAfterFails} consecutive fails`, endedAt: new Date().toISOString() }) + "\n");
+      continue;
+    }
     if (!stopped && campaign.stopBelowPercent !== undefined) stopped = quotaStop(campaign.stopBelowPercent);
     if (stopped) {
       appendFileSync(results, JSON.stringify({ runId, trial: i, case: c.id, role: c.role, arm: arm.id, rep, harness, status: "not-run", reason: stopped, endedAt: new Date().toISOString() }) + "\n");
@@ -358,7 +365,7 @@ async function run(campaignPath, flags) {
     const record = { runId, trial: i, trialDir: path.basename(trialDir), case: c.id, role: c.role, arm: arm.id, rep, harness, caseCommit: c.commit ?? null, startedAt: new Date().toISOString() };
     const members = [...(arm.panel ?? [arm]), ...(arm.combiner ? [arm.combiner] : [])];
     // Panel members run the case's role; the combiner is the lead model and is admitted as implementation.
-    const admissions = members.map((m) => admit(m === arm.combiner ? "implementation" : c.role, m.model, m.effort));
+    const admissions = members.map((m) => admit(m === arm.combiner ? "implementation" : campaign.admitAs ?? c.role, m.model, m.effort)  /* admitAs: smoke screens test frontier cases below the frontier effort floor */);
     record.bindings = admissions.map((a, k) => a.binding ?? { model: members[k].model, effort: members[k].effort, blocked: a.reason });
     process.stdout.write(`[${i + 1}/${plan.length}] ${c.id} × ${arm.id} … `);
     if (admissions.some((a) => !a.ok)) {
@@ -398,6 +405,7 @@ async function run(campaignPath, flags) {
       record.quotaAfter = quota();
     }
     record.endedAt = new Date().toISOString();
+    if (record.check) fails.set(arm.id, record.check.pass ? 0 : (fails.get(arm.id) ?? 0) + 1);
     appendFileSync(results, JSON.stringify(record) + "\n");
     console.log(`${record.status}${record.check ? ` pass=${record.check.pass}` : ""}${record.judgment ? ` merge=${record.judgment.mergeability}` : ""}${record.reason ? ` (${record.reason})` : ""}`);
   }
