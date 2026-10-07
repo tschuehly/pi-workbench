@@ -62,7 +62,7 @@ not in the authoritative decision record.
 - [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — implemented durable Worker
   identity and resumable dispatch.
 - [`plans/subagent-worker-iterative-improvement.md`](plans/subagent-worker-iterative-improvement.md) —
-  attended evaluation through the [`compound`](../skills/compound/SKILL.md) skill.
+  attended evaluation of Subagent and Worker behavior.
 - [`plans/workstream-store-lock-recovery-experiment.md`](plans/workstream-store-lock-recovery-experiment.md)
   — approved experiment required by the durable-Worker lock rationale.
 - [`archive/pi-web-ui/`](archive/pi-web-ui/) — stopped PI WEB shell and unified-UI campaigns, with a

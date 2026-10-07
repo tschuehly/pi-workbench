@@ -116,7 +116,7 @@ _Avoid_: Operating Level, workflow profile, authority grant, agent tier
 The proposed session-local, owner-facing result of the `Reconcile and End` trial. It explains what
 one Pi session changed, what remains, and what comes next to an owner returning to that same
 session. It is not a Workstream checkpoint, next-day re-entry state, compaction summary, or
-`compound` analysis.
+session retrospective.
 _Avoid_: Checkpoint, Continuation Artifact, transcript summary
 
 **Autonomy Envelope:**
