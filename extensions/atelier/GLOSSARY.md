@@ -16,7 +16,7 @@ address, such as `run-12/turn-3`.
 _Avoid_: Region, id, selector
 
 **Kernel**:
-The small script and Pi extension that carry Comments, Decisions, Requests and Updates between a
+The small script and Pi extension that carry Comments, Decisions, Verdicts, Requests and Updates between a
 Page and the agent.
 _Avoid_: core, runtime, SDK, kit
 
@@ -29,9 +29,14 @@ A Comment whose anchor can no longer be found on the Page; it stays listed, neve
 _Avoid_: lost comment, orphan
 
 **Decision**:
-A question the agent asks with options and one recommended option. The human's answer can be
-revoked for 10 seconds and records whether the human opened the question's material first.
+A question the agent asks with options and one recommended option. The answer records whether the
+human opened the question's material first.
 _Avoid_: Proposal, choice, approval
+
+**Verdict**:
+The human's rating of one item on a declared scale, such as a 1–5 score or Confirm/Redo.
+Logged, not delivered on its own.
+_Avoid_: grade, score, review, approval
 
 **Request**:
 A typed job the human asks the agent to do from a Page, with a status: queued, running, done,
@@ -48,8 +53,8 @@ The append-only, numbered record of every human and agent event on one Page, kep
 _Avoid_: store, inbox, queue
 
 **Delivery**:
-Handing a human event to an agent's Pi session as a message. An event not yet delivered goes to
-the next session that opens the Page.
+Handing a human event to an agent's Pi session as a message, after its 10-second undo window. An
+event not yet delivered goes to the next session that opens the Page.
 _Avoid_: poll, wake, notify
 
 ## Registry
