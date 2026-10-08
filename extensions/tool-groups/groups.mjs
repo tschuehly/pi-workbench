@@ -3,7 +3,6 @@
 export const GROUPS = {
   workers: { names: ["worker_create", "worker_dispatch", "worker_status", "worker_retire"] },
   monitor: { source: /pi-process-monitor/ },
-  mcp: { source: /pi-mcp-adapter/ },
   atelier: { names: ["atelier"] },
 };
 
@@ -40,7 +39,3 @@ export function goalActive(entries) {
   const last = entries.findLast((entry) => entry.type === "custom" && entry.customType === "goal-state");
   return last?.data?.goal?.status === "active";
 }
-
-/** MCP servers reachable through the adapter's per-server proxy tools (`mcp__<server>`). */
-export const mcpServers = (tools) =>
-  tools.filter((tool) => inGroup("mcp", tool) && /^mcp__[^_]/.test(tool.name) && !tool.name.slice(5).includes("__")).map((tool) => tool.name.slice(5));

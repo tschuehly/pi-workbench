@@ -7,7 +7,6 @@ Keeps rarely used tool groups out of the lead's startup context. A new session s
 | --- | --- | --- |
 | `workers` | `worker_create`, `worker_dispatch`, `worker_status`, `worker_retire` | Orchestration is Workers |
 | `monitor` | every tool from pi-process-monitor | — |
-| `mcp` | every tool from pi-mcp-adapter (`mcp`, `mcpScript`, `mcp__<server>`) | — |
 | `atelier` | `atelier` (extensions/atelier) | — |
 | goal | `goal_complete`, `goal_blocked`, `goal_wait` | a `/goal` is active (not enableable) |
 
@@ -21,6 +20,8 @@ Keeps rarely used tool groups out of the lead's startup context. A new session s
 - **Resume:** a resumed branch keeps every group its transcript had active; a session from before
   tool declarations keeps everything.
 - **Aliases:** pi-claude-code-use `mcp__<extension>__<tool>` aliases are hidden with their tools.
+- **MCP** is not a group: Pi's built-in MCP support exposes server tools through `codemode` or
+  `tool_search` (see `mcp.json`), so they cost no startup context.
 - **Children** are untouched: `--tools` allowlists never register these tools or `tools_enable`.
 
 `npm run test:tool-groups-extension` runs a real Pi session against a scripted model.

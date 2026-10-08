@@ -5,7 +5,7 @@
 - [ ] On or after 2026-10-06, verify the context-reduction changes (installed at bfff4ff) in real use, from session files in `~/.pi/agent/sessions` and telemetry dated 2026-09-30 onward. Context: `~/.pi-workbench/handoffs/context-reduction-2026-09-29.md` and the reports in `~/.pi-workbench/evals/reports/`. Check that:
   - child session headers carry `parentSession`;
   - children call `web_enable` when they need the web, and the web tools then work;
-  - models call `tools_enable` when they need workers, the monitor, or MCP, and never fail to find those tools;
+  - models call `tools_enable` when they need workers, the monitor, or Atelier, and never fail to find those tools;
   - goal tools appear during `/goal`;
   - prompt-cache reads stay high after a mid-session enable;
   - startup tokens match `node scripts/context-usage.mjs` (2026-09-29: lead 16,899, child 13,487).

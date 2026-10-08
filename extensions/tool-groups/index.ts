@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { GOAL_TOOLS, GROUPS, enabledGroups, goalActive, hiddenNames, inGroup, mcpServers } from "./groups.mjs";
+import { GOAL_TOOLS, GROUPS, enabledGroups, goalActive, hiddenNames, inGroup } from "./groups.mjs";
 
 type Group = keyof typeof GROUPS;
 const GROUP_IDS = Object.keys(GROUPS) as Group[];
@@ -11,7 +11,6 @@ const GROUP_IDS = Object.keys(GROUPS) as Group[];
 export default function toolGroups(pi: ExtensionAPI) {
   let enabled = new Set<string>();
   let workersMode = false;
-  let snippet = "";
   const isEnabled = (id: string) => enabled.has(id) || (id === "workers" && workersMode);
 
   function activate(names: string[]) {
@@ -41,24 +40,18 @@ export default function toolGroups(pi: ExtensionAPI) {
     activate(GOAL_TOOLS.filter((name) => registered.has(name)));
   };
 
-  function register(servers: string[]) {
-    const next = `Call tools_enable first when you need durable workers, the background process monitor, MCP servers${servers.length ? ` (${servers.join(", ")})` : ""}, or Atelier Pages (interactive HTML the human comments on and decides in); the tools appear on the next model request.`;
-    if (next === snippet) return;
-    snippet = next;
-    pi.registerTool({
-      name: "tools_enable",
-      label: "Enable Tools",
-      description: "Enable a tool group. workers: worker_create/dispatch/status/retire. monitor: monitor* tools for background processes and logs. mcp: MCP gateway (mcp, mcpScript, per-server proxies). atelier: the atelier tool for Pages.",
-      promptSnippet: snippet,
-      parameters: Type.Object({ group: StringEnum(GROUP_IDS) }, { additionalProperties: false }),
-      async execute(_id, { group }) {
-        const names = enable(group as Group);
-        if (!names.length) throw new Error(`No ${group} tools are registered in this session.`);
-        return { content: [{ type: "text" as const, text: `Enabled: ${names.join(", ")}.` }], details: { group, enabled: names } };
-      },
-    });
-  }
-  register([]);
+  pi.registerTool({
+    name: "tools_enable",
+    label: "Enable Tools",
+    description: "Enable a tool group. workers: worker_create/dispatch/status/retire. monitor: monitor* tools for background processes and logs. atelier: the atelier tool for Pages.",
+    promptSnippet: "Call tools_enable first when you need durable workers, the background process monitor, or Atelier Pages (interactive HTML the human comments on and decides in); the tools appear on the next model request.",
+    parameters: Type.Object({ group: StringEnum(GROUP_IDS) }, { additionalProperties: false }),
+    async execute(_id, { group }) {
+      const names = enable(group as Group);
+      if (!names.length) throw new Error(`No ${group} tools are registered in this session.`);
+      return { content: [{ type: "text" as const, text: `Enabled: ${names.join(", ")}.` }], details: { group, enabled: names } };
+    },
+  });
 
   pi.events.on("pi-workbench:working-mode", (value: any) => {
     workersMode = value?.selected?.orchestration === "Workers";
@@ -69,14 +62,12 @@ export default function toolGroups(pi: ExtensionAPI) {
     // A resumed branch keeps the groups its transcript had active; a new session starts with none.
     const resumed = ctx.sessionManager.getBranch().some((entry) => entry.type === "message");
     enabled = resumed ? enabledGroups(pi.getAllTools(), pi.getActiveTools()) : new Set();
-    register(mcpServers(pi.getAllTools()));
     gate(ctx);
     showGoalTools();
   };
   pi.on("session_start", restore);
   pi.on("session_tree", restore);
-  // Other extensions re-activate tools they own (pi-mcp-adapter after a metadata refresh), and
-  // pi-claude-code-use re-adds aliases; gate again before every model request.
+  // Other extensions may re-activate tools they own, and pi-claude-code-use re-adds aliases; gate again before every model request.
   pi.on("before_agent_start", (_event, ctx) => gate(ctx));
   pi.on("turn_end", (_event, ctx) => gate(ctx));
   pi.on("agent_settled", showGoalTools);

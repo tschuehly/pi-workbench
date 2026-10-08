@@ -5,7 +5,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { Type } from "typebox";
 import workingMode from "../working-mode/index.ts";
 import toolGroups from "./index.ts";
-import { enabledGroups, goalActive, hiddenNames, mcpServers } from "./groups.mjs";
+import { enabledGroups, goalActive, hiddenNames } from "./groups.mjs";
 
 const cwd = "/tmp/tool-groups-test";
 const agentDir = `${cwd}/agent`;
@@ -100,16 +100,12 @@ test("groups match by package source and cover claude-code-use aliases", () => {
   const tools = [
     { name: "monitor", sourceInfo: { source: "npm:pi-process-monitor@2" } },
     { name: "mcp__process_monitor__monitor", sourceInfo: { source: "npm:@benvargas/pi-claude-code-use" } },
-    { name: "mcp", sourceInfo: { source: "npm:pi-mcp-adapter" } },
-    { name: "mcpScript", sourceInfo: { source: "npm:pi-mcp-adapter" } },
-    { name: "mcp__linear", sourceInfo: { source: "npm:pi-mcp-adapter" } },
-    { name: "mcp__mcp_adapter__mcpscript", sourceInfo: { source: "npm:@benvargas/pi-claude-code-use" } },
+    { name: "mcp__linear__list_issues", sourceInfo: { source: "builtin:mcp" } },
     { name: "read", sourceInfo: { source: "builtin" } },
     { name: "atelier", sourceInfo: { source: "/x/pi-workbench" } },
   ];
-  assert.deepEqual([...hiddenNames(tools, (id) => id === "monitor", false)].sort(), ["atelier", "mcp", "mcpScript", "mcp__linear", "mcp__mcp_adapter__mcpscript"]);
+  assert.deepEqual([...hiddenNames(tools, (id) => id === "monitor", false)].sort(), ["atelier"]);
   assert.deepEqual([...hiddenNames(tools, (id) => id !== "monitor", true)].sort(), ["mcp__process_monitor__monitor", "monitor"]);
-  assert.deepEqual([...enabledGroups(tools, ["read", "mcp"])], ["mcp"]);
-  assert.deepEqual(mcpServers(tools), ["linear"]);
+  assert.deepEqual([...enabledGroups(tools, ["read", "monitor"])], ["monitor"]);
   assert.equal(goalActive([{ type: "custom", customType: "goal-state", data: { goal: { status: "active" } } }, { type: "custom", customType: "goal-state", data: { goal: { status: "paused" } } }]), false);
 });

@@ -36,7 +36,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Attended human–Pi work | `docs/contracts/execution.md`, `docs/contracts/workstreams.md` |
 | Child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |
 | Subagent and Worker evaluation | `docs/plans/subagent-worker-iterative-improvement.md`, `docs/plans/model-role-evaluation.md`, `scripts/pi-eval.mjs` |
-| Lazy tool groups (`tools_enable`: worker, monitor, MCP; goal tools) | `extensions/tool-groups/` |
+| Lazy tool groups (`tools_enable`: worker, monitor, Atelier; goal tools) | `extensions/tool-groups/` |
 | Working Mode (Alignment, Attention, Checking, Orchestration) | `extensions/working-mode/`, `docs/foundation/working-mode.md`, `docs/plans/working-mode.md` |
 | Model routing, unmanaged lead launch, and lead usage-limit fallback | `skills/model-orchestration/`, `scripts/pi-role`, `extensions/lead-fallback/`, `docs/plans/model-orchestration-redesign.md` |
 | Controller lifecycle and protocol | `docs/contracts/controller.md`, `packages/controller/`, `schemas/` |
