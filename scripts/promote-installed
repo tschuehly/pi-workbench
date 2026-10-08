@@ -81,6 +81,11 @@ check_settings() { # [settings.json]
     process.exit(bad.length?6:0)' "${1:-$HOME/.pi/agent/settings.json}" "$STORE" "$HOME/.pi-web/plugins/pi-workbench"
 }
 
+link_cli() { # skills/workstreams calls `workstreams` on PATH; Pi puts ~/.pi/agent/bin on PATH.
+  mkdir -p "$HOME/.pi/agent/bin" &&
+    ln -sfn "$PROJECTS/pi-workbench.installed/skills/workstreams/scripts/workstreams.mjs" "$HOME/.pi/agent/bin/workstreams"
+}
+
 healthy() {
   curl -fsS --max-time 3 http://127.0.0.1:$PORT/api/plugins 2>/dev/null | node -e '
     let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const p=JSON.parse(d).plugins.find(x=>x.id==="pi-workbench");
@@ -143,6 +148,7 @@ fi
 if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   check_settings || { echo "refusing: Pi would not load the promoted Pi Workbench; fix the paths above" >&2; exit 6; }
   mkdir -p "$STORE"
+  link_cli
   wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
   link=$PROJECTS/pi-workbench.installed
   previous=$(readlink "$link" || true)
@@ -154,6 +160,7 @@ fi
 [[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,32p' "$0"; exit 2; }
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
+link_cli
 wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
 pw=$(prepare_one pi-web "$3") || { echo "prepare pi-web failed" >&2; exit 1; }
 echo "prepared: $wb"

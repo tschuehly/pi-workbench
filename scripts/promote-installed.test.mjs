@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync, readlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -57,6 +57,9 @@ test("--force skips the idle check", () => {
   const result = run([...quiet, child], "--force", "switch", "HEAD", "HEAD", "5");
   assert.doesNotMatch(result.stderr, /refusing/);
   assert.match(result.stderr, /prepare pi-workbench failed/);
+  // 01a11a8b and five other sessions hit `workstreams: command not found`; promotion links the CLI.
+  assert.equal(readlinkSync(join(dir, ".pi/agent/bin/workstreams")),
+    join(dir, "pi-workbench.installed/skills/workstreams/scripts/workstreams.mjs"));
 });
 
 test("sessiond-unchanged follows the daemon's imports and the lock, ignoring web-only files", () => {
