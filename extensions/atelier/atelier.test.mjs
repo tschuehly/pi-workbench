@@ -397,6 +397,8 @@ test("a thread shows every message in order; only threads over four messages fol
   const long = threadLayout(msgs(7));
   assert.deepEqual([long.head, long.folded, long.tail].map((part) => part.map((m) => m.seq)), [[1], [2, 3, 4, 5], [6, 7]]);
   assert.equal(threadLayout(msgs(7), true).head.length, 7, "expanded");
+  assert.deepEqual(threadLayout(msgs(2), false, true), { head: [], folded: msgs(2), tail: [] }, "closed collapses");
+  assert.equal(threadLayout(msgs(2), true, true).head.length, 2, "closed, opened");
 });
 
 test("Delivery gives each Comment its Key's text from the Page source, and each reply its thread", async () => {
