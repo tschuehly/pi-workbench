@@ -85,7 +85,7 @@ const CHILD_UPDATE = "pi-workbench:child-update";
 const RETAINED_TEXT_MAX = 8_000;
 
 const Params = Type.Object({
-  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …' (a checkable finish line), 'Stop and ask only if …', and the expected output" }),
+  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …' (a checkable finish line), 'Stop and ask only if …', and the expected output with the evidence to show" }),
   name: Type.Optional(Type.String({ minLength: 1, description: "Short human-readable label for this child, a few words not a sentence (e.g. 'Fix login redirect'). Names the delegate roster row and the child session; falls back to a label derived from task when omitted." })),
   profile: StringEnum(LEAF_PROFILES, { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: ROLE_GUIDE }),
@@ -122,7 +122,7 @@ const WorkerCreateParams = Type.Object({
 });
 const WorkerDispatchParams = Type.Object({
   workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
-  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …', 'Stop and ask only if …', and the expected output. Continuity supplements explicit tasking; it never replaces it." }),
+  task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …', 'Stop and ask only if …', and the expected output with the evidence to show. Continuity supplements explicit tasking; it never replaces it." }),
   cognitiveRole: StringEnum(WORKER_ROLES, { description: `${ROLE_GUIDE}\nreview roles are subagent-only here: independence requires fresh context` }),
   modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'" })),
   effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
@@ -228,7 +228,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Delegate execution only after the assignment's direction and verification are established. Use a subagent when context isolation, mechanical volume, parallelism, or genuinely independent judgment materially improves the result; work inline while the task needs continuous owner steering or is smaller than a handoff brief.",
       "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
-      "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output. Do not add 'think carefully' lines; Model Effort controls thinking.",
+      "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output with the evidence to show; a result missing that evidence is a gap, not a pass. Do not add 'think carefully' lines; Model Effort controls thinking.",
       "Adjust a running child with subagent_steer; when the assignment itself changes, cancel it and launch a new child. Do not imply managed authority, recovery, or durable background work that survives the session.",
       "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review never go below xhigh.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
@@ -578,7 +578,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     promptSnippet: "Dispatch one bounded assignment to a durable attended worker",
     promptGuidelines: [
       "Prefer fresh subagents; dispatch a worker only when its preserved scope context is valuable for this assignment.",
-      "Keep every worker task self-contained with paths, constraints, 'Done means …', 'Stop and ask only if …', and expected output; continuity supplements explicit tasking.",
+      "Keep every worker task self-contained with paths, constraints, 'Done means …', 'Stop and ask only if …', and expected output with the evidence to show; continuity supplements explicit tasking.",
       "Independence roles are subagent-only: never present worker output as independent judgment or review.",
       "A worker runs one dispatch at a time; a busy worker fails preflight instead of queueing.",
       "After an outcome_unknown dispatch, inspect the worker before dispatching again with acknowledgeInspection:true.",
