@@ -71,6 +71,16 @@ try {
   assert.equal(await opacity("plain"), "1", "a Key with threads keeps its count badge");
   assert.equal(await js("document.querySelector('[atl-ui=pin][data-key=plain] .atl-add').textContent"), "1");
 
+  // Closing collapses the thread to one line; its messages open and collapse again on demand.
+  const msgsIn = "document.querySelectorAll('[atl-ui=key][data-key=plain] .atl-msg').length";
+  await js("document.querySelector('[atl-ui=key][data-key=plain] [data-atl=close]').click(); true");
+  await until(`${msgsIn}===0`);
+  assert.match(await js("document.querySelector('[atl-ui=key][data-key=plain] [data-atl=expand]').textContent"), /2 messages/);
+  await js("document.querySelector('[atl-ui=key][data-key=plain] [data-atl=expand]').click(); true");
+  await until(`${msgsIn}===2`);
+  await js("document.querySelector('[atl-ui=key][data-key=plain] [data-atl=collapse]').click(); true");
+  await until(`${msgsIn}===0`);
+
   // Selection: a real drag shows the floating Comment button beside it.
   const intro = await box("#intro");
   await at(intro.x + 2, intro.y + intro.h / 2); await b("mouse", "down");

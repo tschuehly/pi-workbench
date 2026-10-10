@@ -157,8 +157,9 @@ export function keyTexts(html) {
   return texts;
 }
 
-/** Which messages a thread card shows: all of a short thread; of a long one the first, a fold, and the last two. */
-export function threadLayout(msgs, expanded = false) {
+/** Which messages a thread card shows: none of a closed one until opened; all of a short thread; of a long one the first, a fold, and the last two. */
+export function threadLayout(msgs, expanded = false, closed = false) {
+  if (closed && !expanded) return { head: [], folded: msgs, tail: [] };
   if (expanded || msgs.length <= 4) return { head: msgs, folded: [], tail: [] };
   return { head: msgs.slice(0, 1), folded: msgs.slice(1, -2), tail: msgs.slice(-2) };
 }
@@ -447,9 +448,14 @@ function boot() {
     const lastRead = read[t.root.seq] ?? 0;
     const unread = t.msgs.filter((m) => m.origin === "agent" && m.seq > lastRead).length;
     const msg = (m) => `<div class="atl-msg ${m.origin === "agent" ? "atl-agent" : "atl-you"}"><div class="atl-who"><b>${m.origin === "agent" ? "Agent" : "You"}</b> <span class="atl-dim">#${m.seq}${m.origin === "human" ? ` · ${esc(statusText(st, m))}` : ""}</span></div><div>${esc(m.text)}</div></div>`;
-    const { head, folded, tail } = threadLayout(t.msgs, expanded.has(t.root.seq));
+    const open = expanded.has(t.root.seq);
+    const { head, folded, tail } = threadLayout(t.msgs, open, t.closed);
+    if (t.closed && !open) { // a closed thread collapses to its head; its messages open on demand
+      const anchor = t.root.quote ? `“${esc(t.root.quote.exact.slice(0, 80))}”` : esc(String(t.root.text ?? "").slice(0, 80));
+      return `<div class="atl-head"><span class="atl-tag">closed</span>${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}<button data-atl="expand" data-seq="${t.root.seq}" class="atl-earlier">${folded.length} message${folded.length === 1 ? "" : "s"}</button></div><div class="atl-dim">${anchor}</div>`;
+    }
     const anchor = t.root.quote ? `<div class="atl-quote">“${esc(t.root.quote.exact.slice(0, 140))}”</div>` : t.root.t != null ? `<div class="atl-dim">at ${Number(t.root.t).toFixed(1)} s</div>` : "";
-    return `<div class="atl-head"><span class="atl-tag">${t.closed ? "closed" : "open"}</span>${t.stale ? `<span class="atl-tag atl-warn">${icon("alert")} on an earlier version</span>` : ""}${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}</div>${anchor}
+    return `<div class="atl-head"><span class="atl-tag">${t.closed ? "closed" : "open"}</span>${t.closed ? `<button data-atl="collapse" data-seq="${t.root.seq}" class="atl-earlier">Collapse</button>` : ""}${t.stale ? `<span class="atl-tag atl-warn">${icon("alert")} on an earlier version</span>` : ""}${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}</div>${anchor}
       ${head.map(msg).join("")}${folded.length ? `<button data-atl="expand" data-seq="${t.root.seq}" class="atl-earlier">${folded.length} earlier</button>` : ""}${tail.map(msg).join("")}
       <div class="atl-actions"><button data-atl="reply" data-seq="${t.root.seq}">${icon("pencil")} Reply</button>${t.stale && !t.closed ? `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Fixed: close</button><button data-atl="still" data-seq="${t.root.seq}">Still applies</button>` : t.closed ? "" : `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Close</button>`}${t.root.key || t.root.quote || t.root.selector ? `<button data-atl="jump" data-seq="${t.root.seq}">${icon("eye")} Show</button>` : ""}</div>`;
   }
@@ -872,6 +878,7 @@ function boot() {
     accept: (b) => post({ type: "accept", target: +b.dataset.seq }),
     rework: (b) => openComposer({ label: `What should change in Request #${b.dataset.seq}?`, kind: "rework", target: +b.dataset.seq }, panel.querySelector(".atl-slot")),
     expand: (b) => { expanded.add(+b.dataset.seq); render(); },
+    collapse: (b) => { expanded.delete(+b.dataset.seq); render(); },
     chmark: (b) => toggleDiff(b.dataset.addr),
     chgone: (b) => {
       const t = traces.get(b.dataset.addr), old = b.nextElementSibling;
