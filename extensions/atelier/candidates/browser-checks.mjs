@@ -31,6 +31,7 @@ export const checks = {
       await until(()=>savedVideo.readyState>=1);savedVideo.currentTime=1.25;
       await until(()=>Math.abs(savedVideo.currentTime-1.25)<.05);
       q('#video-size').click();ok(new URL(location.href).searchParams.get('video-size')==='small','size URL');
+      q('[atl-key="video-example"]').dispatchEvent(new PointerEvent('pointerover',{bubbles:true})); // the Comment button comes on hover
       q('[data-atl=comment][data-key="video-example"]').click();
       C.input('[atl-ui=composer] textarea','time-bound note');q('[atl-ui=composer] button[type=submit]').click();
       await until(()=>document.querySelector('.atl-msg')?.textContent.includes('time-bound note'));

@@ -66,6 +66,11 @@ builders need their task and the Kernel, not the research analyses. Examples use
 - **K13 fixed, regression checked (k-test-host):** builders without the tool could not test persistence, Delivery or
   Updates, and wrote stand-in hosts. `extensions/atelier/serve.mjs` runs the real host (`host.ts`, shared with the
   tool) for one Page without a Pi session; `fixes.test.mjs` drives it. The skill points builders to it.
+- **K14 fixed, regression checked (k-buttons):** the dock and its undo rows covered Page content (27 stacked undo rows
+  after a batch) and every Key carried a Comment button (109–589 per Page). Pending undos share one row with
+  "Undo all n"; the idle dock shrinks to its bar; `atl-dock` places it in the Page's layout; only the hovered or
+  focused Key (and Keys with threads) has a Comment button (`kernel-check.mjs`). A keyboard user reaches a Key's
+  button only from focus inside that Key.
 
 ## Check before reuse
 

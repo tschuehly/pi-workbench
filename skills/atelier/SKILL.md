@@ -54,6 +54,10 @@ browser; serve a copy if the Page's Event Log must stay untouched; stop it befor
 - Kernel controls take the Page's colours: light by default, dark only when the Page declares
   `color-scheme` dark. Override `--atl-bg`, `--atl-fg`, `--atl-muted`, `--atl-line`, `--atl-accent`,
   `--atl-warn` to match a Page.
+- The Kernel panel floats at the bottom right. Where it would cover content, put an empty
+  `<div atl-dock></div>` where it should sit in the Page's layout (a sidebar, a header row), or move it
+  with `--atl-dock-right` and `--atl-dock-bottom`. Every Key gets its Comment button on hover or focus;
+  a Key with threads keeps a count.
 - For icons in Page content use Lucide (ISC), inlined as SVG like the Kernel's; no emoji as icons.
 
 ## Principles (working theory, provisional — iterate with Thomas)
