@@ -54,6 +54,9 @@ builders need their task and the Kernel, not the research analyses. Examples use
 - **K9 pending:** example prose is German; Kernel controls remain English.
 - **K10 fixed, regression checked (k-body):** an Update nested a second `<body>` (trial C, 1 → 2 bodies). The
   Kernel morphs the new body's children; `kernel-check.mjs` asserts one `<body>` after a real Update.
+- **K11 fixed, regression checked (k-script-rows):** an Update closed `<details>` the human opened and emptied
+  rows a page script built. `<details>` the human toggled keep his state (`kernel-check.mjs`); script-built
+  rows are the Page's to re-render on `atelier:update`, as the atelier skill now says (static keyed HTML preferred).
 
 ## Check before reuse
 

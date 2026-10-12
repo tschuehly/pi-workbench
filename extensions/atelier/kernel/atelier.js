@@ -264,6 +264,7 @@ function boot() {
   const read = JSON.parse(localStorage.getItem(readKey) || "{}");
   let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0;
   const expanded = new Set(); // threads whose folded middle the human opened
+  const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
   const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), cards = new Map();
   let hot = null, savedRange = null;
 
@@ -384,7 +385,18 @@ function boot() {
     // The new body's children, not the body: idiomorph would nest a second <body> inside the first.
     Idiomorph.morph(document.body, doc.body.childNodes, {
       morphStyle: "innerHTML", ignoreActiveValue: true, restoreFocus: true,
-      callbacks: { beforeAttributeUpdated: (name, el) => !(touched.has(el) && /^(value|checked|selected)$/.test(name)) },
+      callbacks: {
+        beforeAttributeUpdated: (name, el) => !(touched.has(el) && /^(value|checked|selected)$/.test(name)),
+        // A <details> the human opened or closed keeps his state; one he left follows the new source.
+        beforeNodeMorphed: (old, next) => {
+          if (old.localName === "details" && next.localName === "details") {
+            const said = next.hasAttribute("open");
+            if (sourceOpen.has(old) && old.open !== sourceOpen.get(old)) next.open = old.open;
+            sourceOpen.set(old, said);
+          }
+          return true;
+        },
+      },
     });
     document.querySelectorAll('[id^="atl-key:"]').forEach((el) => el.removeAttribute("id"));
     document.body.prepend(orphans);
@@ -575,6 +587,7 @@ function boot() {
       const ranges = st.threads.filter((t) => !t.closed && t.root.quote).map((t) => findQuote(t.root.quote, idx)).filter(Boolean);
       CSS.highlights.set("atl-quote", new Highlight(...ranges));
     }
+    for (const d of document.querySelectorAll("details")) if (!sourceOpen.has(d)) sourceOpen.set(d, d.open); // new from the source or a page script
     // html-plan: a closed parent shows how many decisions wait inside it.
     document.querySelectorAll("[atl-ui=badge]").forEach((b) => b.remove());
     for (const d of document.querySelectorAll("details:not([open])")) {

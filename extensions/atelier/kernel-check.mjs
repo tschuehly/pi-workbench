@@ -19,6 +19,7 @@ const write = (plain = "A plain keyed paragraph.") => writeFile(page, `<!doctype
 <section atl-key="run" atl-ver="v1" id="run"><h2>Run</h2>
 <div atl-key="turn-1" id="t1" atl-decide="1|2|3|4|5">Turn one answer text.</div>
 <div atl-key="turn-2" id="t2" atl-decide="Confirm|Redo" atl-rec="Confirm" atl-note="Redo">Turn two answer.</div></section>
+<details id="more"><summary id="more-s">More</summary><p>Inside.</p></details><details id="less" open><summary id="less-s">Less</summary><p>Open by the Page.</p></details>
 <table><tr atl-key="row-a" id="ra" atl-decide="Keep|Drop"><td>Row A</td><td atl-slot id="slot"></td></tr></table>
 <script type="module" src="atelier.js"></script></body></html>`);
 await write();
@@ -123,11 +124,15 @@ try {
   assert.match(sent.join("\n"), /Decision run\/turn-1 \(version v1\): 3 → 5\n/, `delivery: ${sent.join("\n")}`);
 
   // Update (145): the morph replaces the body's children, never nests a second <body> (k-body).
+  // The <details> the human opened or closed keep his state (k-script-rows).
   await js("window.updates=0; document.addEventListener('atelier:update',()=>updates++); true");
+  await click("#more-s"); await click("#less-s");
+  await until("document.querySelector('#more').open && !document.querySelector('#less').open");
   await write("A plain keyed paragraph, rewritten.");
   host.update(page);
   await until("updates===1");
   assert.deepEqual(await js("[document.querySelectorAll('body').length, document.querySelector('#plain').firstChild.textContent]"), [1, "A plain keyed paragraph, rewritten."], "one <body> after an Update");
+  assert.deepEqual(await js("[document.querySelector('#more').open, document.querySelector('#less').open]"), [true, false], "an Update keeps the details the human opened or closed");
 
   if (process.argv[2]) await b("screenshot", process.argv[2]);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
