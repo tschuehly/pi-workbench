@@ -284,9 +284,11 @@ function boot() {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const readKey = `atelier-read:${page}`;
   const read = JSON.parse(localStorage.getItem(readKey) || "{}");
-  let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0;
+  let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0, testHost = false;
   const expanded = new Set(); // threads whose folded middle the human opened
   const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
+  const held = new WeakSet(); // <details> the human opened or closed: his state wins over every later source
+  const tabbed = new WeakSet(); // Keys the Kernel made focusable, so the keyboard reaches their Comment button
   const threadCount = new Map(); // Key address -> its threads, for the Comment button made on hover
   const quoteUis = new Map(); // block holding a quoted Comment -> the Kernel UI under it
   const BLOCK = "p,li,dd,dt,td,th,blockquote,pre,figcaption,h1,h2,h3,h4,h5,h6";
@@ -384,7 +386,7 @@ function boot() {
   function connect() {
     if (!online || es) return;
     es = new EventSource(`/.atelier/stream${q}`);
-    es.addEventListener("hello", (m) => { const t = JSON.parse(m.data).mtime; if (mtime !== null && t !== mtime) morph(); mtime = t; conn = "live"; render(); pull(); });
+    es.addEventListener("hello", (m) => { const d = JSON.parse(m.data); if (mtime !== null && d.mtime !== mtime) morph(); mtime = d.mtime; testHost = !!d.test; conn = "live"; render(); pull(); });
     es.addEventListener("log", pull);
     es.addEventListener("update", (m) => { const d = JSON.parse(m.data); mtime = d.mtime; pendingNote = d.note ?? null; morph(); });
     es.onerror = () => { conn = "reconnecting"; render(); };
@@ -415,12 +417,16 @@ function boot() {
     Idiomorph.morph(document.body, doc.body.childNodes, {
       morphStyle: "innerHTML", ignoreActiveValue: true, restoreFocus: true,
       callbacks: {
-        beforeAttributeUpdated: (name, el) => !(touched.has(el) && /^(value|checked|selected)$/.test(name)),
-        // A <details> the human opened or closed keeps his state; one he left follows the new source.
+        beforeAttributeUpdated: (name, el, type) => {
+          if (name === "tabindex" && tabbed.has(el)) { if (type === "remove") return false; tabbed.delete(el); } // the source now sets its own
+          return !(touched.has(el) && /^(value|checked|selected)$/.test(name));
+        },
+        // A <details> the human opened or closed keeps his state through every later Update, even once the source
+        // has said the same; one he never touched follows the new source.
         beforeNodeMorphed: (old, next) => {
           if (old.localName === "details" && next.localName === "details") {
             const said = next.hasAttribute("open");
-            if (sourceOpen.has(old) && old.open !== sourceOpen.get(old)) next.open = old.open;
+            if (held.has(old) || (sourceOpen.has(old) && old.open !== sourceOpen.get(old))) { held.add(old); next.open = old.open; }
             sourceOpen.set(old, said);
           }
           return true;
@@ -428,6 +434,11 @@ function boot() {
       },
     });
     document.querySelectorAll('[id^="atl-key:"]').forEach((el) => el.removeAttribute("id"));
+    // The morph covers the body's children; <html> and <body> take the new source's attributes (class, style, data-*).
+    for (const [mine, theirs] of [[document.documentElement, doc.documentElement], [document.body, doc.body]]) {
+      for (const a of [...mine.attributes]) if (!theirs.hasAttribute(a.name)) mine.removeAttribute(a.name);
+      for (const a of theirs.attributes) if (mine.getAttribute(a.name) !== a.value) mine.setAttribute(a.name, a.value);
+    }
     document.body.prepend(orphans);
     dock().append(panel);
     document.body.append(selBtn, rail);
@@ -485,7 +496,7 @@ function boot() {
   // ---- rendering
   const STATUS = { draft: "draft, not sent", pending: "waiting", queued: "queued for the agent", delivered: "delivered", unconfirmed: "not confirmed: Copy it", local: "no session: Copy it", recorded: "recorded" };
   const left = (e) => Math.ceil((e.at + UNDO_MS - now()) / 1000);
-  const statusText = (st, e) => { const s = st.status(e); return s === "pending" && left(e) > 0 ? `sends in ${left(e)} s` : STATUS[s] ?? ""; };
+  const statusText = (st, e) => { const s = st.status(e); return s === "pending" && left(e) > 0 ? `sends in ${left(e)} s` : testHost && s === "delivered" ? "printed by the test host" : STATUS[s] ?? ""; };
 
   function threadHtml(t, st) {
     const lastRead = read[t.root.seq] ?? 0;
@@ -582,6 +593,8 @@ function boot() {
       // The Comment button: only the hovered or focused Key has one, not every Key; with threads it stays as a count.
       // A Key that only marks a Decision's slot gets none.
       if (!el.hasAttribute("atl-slot")) {
+        // A Key with nothing focusable in itself takes a tab stop, so Tab reaches it and then its Comment button.
+        if (!el.hasAttribute("tabindex") && el.tabIndex < 0) { el.tabIndex = 0; tabbed.add(el); }
         threadCount.set(addr, threadsHere.length);
         if (threadsHere.length || addr === hot || pins.get(addr)?.contains(document.activeElement)) kept.add(pinFor(addr, el));
       }
@@ -611,7 +624,7 @@ function boot() {
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
     const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
     const open = st.openThreads.length + st.toAnswer.length;
-    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button><span class="atl-dim atl-conn">${esc(conn)}</span>`);
+    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")} Test host, no Pi session</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
     renderUndo(undoable());
     const section = (title, items) => items.length ? `<h4>${title}</h4>` : "";
     const list = panel.querySelector(".atl-list");
@@ -623,6 +636,10 @@ function boot() {
     reconcile(list.querySelector(".atl-text"), onText.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed })));
     set(list.querySelector(".atl-h-un"), section(`Unanchored (${unanchored.length})`, unanchored));
     reconcile(list.querySelector(".atl-un"), unanchored.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed })));
+    // An open reply follows its thread wherever this render put it (under a quote, at its Key, in the panel), so an
+    // Update that moves the thread or drops its quote holder keeps the typed text.
+    const replyTo = composer?.spec.anchor?.thread, home = replyTo != null && cards.get(`t:${replyTo}`)?.closest("[atl-ui=key],[atl-ui=panel]")?.querySelector(".atl-slot");
+    if (home && composer.node.parentElement !== home) home.append(composer.node);
 
     if (globalThis.Highlight && CSS.highlights) {
       const ranges = st.threads.filter((t) => !t.closed && t.root.quote).map((t) => findQuote(t.root.quote, idx)).filter(Boolean);

@@ -10,9 +10,10 @@ returned URL in the Chat; if the tool is missing, call `tools_enable` with group
 
 Building without the `atelier` tool, e.g. as a subagent? Prove the Page on the real host before handing it
 over: from the project directory run `node ../../extensions/atelier/serve.mjs <page.html>` (path relative to
-this skill) in the background. It serves the Page like `open`, keeps its Event Log, prints each Delivery to
-stdout as the agent would receive it, and sends an Update whenever the Page file changes. Drive it in a real
-browser; serve a copy if the Page's Event Log must stay untouched; stop it before the agent opens the Page.
+this skill) in the background. It serves a test copy beside the Page (`<name>.atelier-test.html`) with its own
+empty Event Log, so the human's waiting input in the Page's real log is never touched; the Kernel bar says
+"Test host, no Pi session". It prints each Delivery to stdout as the agent would receive it, and sends an
+Update whenever the Page file changes. Drive it in a real browser; stopping it deletes the copy and its log.
 
 ## Page contract
 
@@ -36,8 +37,8 @@ browser; serve a copy if the Page's Event Log must stay untouched; stop it befor
 - Prefer static keyed HTML: write rows and cards into the Page file. An Update makes the body match
   the new file, so anything a page script built is gone until the script renders it again; render
   from one function on load and on the `atelier:update` document event, which fires after every
-  Update. `<details>` the human opened or closed keep his state; other view state (tabs, filters) the
-  script restores itself.
+  Update, and `<html>` and `<body>` take the new file's attributes. `<details>` the human opened or closed
+  keep his state through every later Update; other view state (tabs, filters) the script restores itself.
 - A page script that needs to know what the human answered (progress, "next open", resume) reads
   `atelier.state()`, never Kernel markup: plain data with `decisions` (`id`, `options`, `recommended`,
   `answer`, `previous`, `note`, `status`, `stale`), `threads`, `requests`, `toAnswer` (ids), `open`,
@@ -57,7 +58,8 @@ browser; serve a copy if the Page's Event Log must stay untouched; stop it befor
 - The Kernel panel floats at the bottom right. Where it would cover content, put an empty
   `<div atl-dock></div>` where it should sit in the Page's layout (a sidebar, a header row), or move it
   with `--atl-dock-right` and `--atl-dock-bottom`. Every Key gets its Comment button on hover or focus;
-  a Key with threads keeps a count.
+  a Key with threads keeps a count. A Key with nothing focusable gets `tabindex="0"` so the keyboard
+  reaches it; an authored `tabindex` stays.
 - For icons in Page content use Lucide (ISC), inlined as SVG like the Kernel's; no emoji as icons.
 
 ## Principles (working theory, provisional — iterate with Thomas)

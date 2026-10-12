@@ -176,6 +176,8 @@ export function createHost(options: {
   now?: () => number;
   undoMs?: number;
   watchdogMs?: number;
+  /** serve.mjs: the Kernel marks the Page as served by a test host, not a Pi session. */
+  test?: boolean;
 }) {
   const root = realpathSync(options.root);
   const sessionId = options.sessionId ?? randomUUID();
@@ -325,7 +327,7 @@ export function createHost(options: {
       if (u.pathname === "/.atelier/stream") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
         pages.get(page)!.add(res);
-        res.write(`event: hello\ndata: ${JSON.stringify({ mtime: statSync(page).mtimeMs })}\n\n`);
+        res.write(`event: hello\ndata: ${JSON.stringify({ mtime: statSync(page).mtimeMs, test: options.test || undefined })}\n\n`);
         req.on("close", () => pages.get(page)?.delete(res));
         return;
       }

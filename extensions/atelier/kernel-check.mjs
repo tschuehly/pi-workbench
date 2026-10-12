@@ -12,16 +12,18 @@ const run = promisify(execFile), session = `atelier-kernel-${process.pid}`;
 assert(process.env.PI_TMP, "Set PI_TMP to a disposable directory.");
 const dir = await realpath(await mkdtemp(path.join(process.env.PI_TMP, "atelier-kernel-")));
 const page = path.join(dir, "page.html");
-const write = (plain = "A plain keyed paragraph.", dock = "") => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Kernel check</title>
+// flip: the source opens #more and closes #less, as the human did; body: attributes on <body>.
+const write = ({ plain = "A plain keyed paragraph.", dock = "", phrase = "Pick this phrase to comment on it.", flip = false, body = "" } = {}) => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Kernel check</title>
 <style>body{font:15px/1.5 system-ui;max-width:700px;margin:24px auto;background:#fff;color:#111}section,div[atl-key],p[atl-key]{border:1px solid #ccc;padding:8px;margin:8px 0}</style>
-<body>${dock}<p id="intro">Select this sentence to comment on the text itself.</p>
+<body${body}>${dock}<p id="intro">Select this sentence to comment on the text itself.</p>
 <p atl-key="plain" id="plain">${plain}</p>
 <section atl-key="run" atl-ver="v1" id="run"><h2>Run</h2>
 <div atl-key="turn-1" id="t1" atl-decide="1|2|3|4|5">Turn one answer text.</div>
 <div atl-key="turn-2" id="t2" atl-decide="Confirm|Redo" atl-rec="Confirm" atl-note="Redo">Turn two answer.</div></section>
-<details id="more"><summary id="more-s">More</summary><p>Inside.</p></details><details id="less" open><summary id="less-s">Less</summary><p>Open by the Page.</p></details>
+<details id="more"${flip ? " open" : ""}><summary id="more-s">More</summary><p>Inside.</p></details><details id="less"${flip ? "" : " open"}><summary id="less-s">Less</summary><p>Open by the Page.</p></details>
+<p atl-key="quiet" id="quiet">Plain text with nothing focusable.</p>
 <table><tr atl-key="row-a" id="ra" atl-decide="Keep|Drop"><td>Row A</td><td atl-slot id="slot"></td></tr></table>
-<section atl-key="long" id="long"><p id="phrase">Pick this phrase to comment on it.</p>${"<p>Filler below the phrase.</p>".repeat(40)}</section>
+<section atl-key="long" id="long"><p id="phrase">${phrase}</p>${"<p>Filler below the phrase.</p>".repeat(40)}</section>
 <script>window.states=[];document.addEventListener("atelier:state",(e)=>states.push(e.detail));</script>
 <script type="module" src="atelier.js"></script></body></html>`);
 await write();
@@ -44,6 +46,7 @@ try {
   await b("open", url);
   await until("document.querySelector('.atl-conn')?.textContent==='live'");
 
+  assert.equal(await js("document.querySelector('.atl-test')"), null, "a Pi session's host shows no test mark");
   // Palette follows the Page, not the OS.
   assert.equal(await js("getComputedStyle(document.querySelector('[atl-ui=panel]')).backgroundColor"), "rgb(255, 255, 255)", "light panel on a light Page under a dark OS");
   // Comment button: no layout space, hidden until hover, innermost Key only, at the top-right corner.
@@ -122,6 +125,16 @@ try {
   assert.equal(await js("document.getElementById('phrase').nextElementSibling?.querySelector('.atl-msg>div:last-child')?.textContent"), "Here.", "and stays there through an Update");
   await js("document.querySelector('[data-atl=undo]').click(); true");
   await until("document.querySelector('[atl-ui=key][data-key=long] .atl-msg')===null");
+  // Review 2 finding 1: an unsaved reply under a quoted paragraph survives an Update that rewrites the quote.
+  const onQuote = host.postHuman(page, { type: "comment", key: "long", quote: { exact: "Pick this phrase", prefix: "", suffix: "" }, text: "Quoted." }).json.entry;
+  await until("document.getElementById('phrase').nextElementSibling?.matches('.atl-at-quote')");
+  await js(`document.querySelector('.atl-at-quote [data-atl=reply][data-seq="${onQuote.seq}"]').click(); true`);
+  await until("document.activeElement?.matches('.atl-at-quote [atl-ui=composer] textarea')");
+  await b("keyboard", "type", "Unsaved reply.");
+  await write({ phrase: "Pick that phrase, rewritten." }); host.update(page); await until("u6===2");
+  assert.deepEqual(await js("(()=>{const t=document.querySelector('[atl-ui=composer] textarea');return [t?.value??null, document.activeElement===t, !!t?.closest('[atl-ui=key][data-key=long]')]})()"), ["Unsaved reply.", true, true], "the reply keeps its text and focus and moves to its Key");
+  await js("document.querySelector('[atl-ui=composer] [data-atl=dismiss]').click(); true");
+  await write(); host.update(page); await until("u6===3");
   await js("scrollTo(0,0); true");
 
   // A Page-declared Decision: the first answer is delivered; a change inside the next undo window replaces the
@@ -158,6 +171,16 @@ try {
   assert.equal(await opacity("row-a"), "1", "focus shows the button");
   const [row, rowPin] = [await box("#ra"), await box('[atl-ui=pin][data-key="row-a"] .atl-add')];
   assert(Math.abs(row.right - rowPin.right) <= 8 && Math.abs(row.y - rowPin.y) <= 8, "at the row's corner");
+  // Review 2 finding 4: a plain-text Key takes a tab stop, and Tab goes on to its Comment button.
+  await js("document.getElementById('less-s').focus(); true");
+  await b("press", "Tab"); await sleep(300);
+  assert.equal(await js("document.activeElement.id"), "quiet", "Tab reaches a Key with nothing focusable");
+  await b("press", "Tab"); await sleep(300);
+  assert.deepEqual([await js("document.activeElement.closest('[atl-ui=pin]')?.dataset.key"), await opacity("quiet")], ["quiet", "1"], "then its Comment button");
+  await b("press", "Enter");
+  await until("document.querySelector('[atl-ui=composer] .atl-label')?.textContent==='Comment on quiet'");
+  await js("document.querySelector('[atl-ui=composer] [data-atl=dismiss]').click(); true");
+  assert.equal(await js("document.querySelector('#plain').getAttribute('tabindex')"), "0");
 
   await sleep(3200); host.deliverDue(page);
   assert.match(sent.join("\n"), /Decision run\/turn-1 \(version v1\): 3 → 5\n/, `delivery: ${sent.join("\n")}`);
@@ -167,11 +190,17 @@ try {
   await js("window.updates=0; document.addEventListener('atelier:update',()=>updates++); true");
   await click("#more-s"); await click("#less-s");
   await until("document.querySelector('#more').open && !document.querySelector('#less').open");
-  await write("A plain keyed paragraph, rewritten.");
+  const plain = "A plain keyed paragraph, rewritten.", details = "[document.querySelector('#more').open, document.querySelector('#less').open]";
+  await write({ plain });
   host.update(page);
   await until("updates===1");
-  assert.deepEqual(await js("[document.querySelectorAll('body').length, document.querySelector('#plain').firstChild.textContent]"), [1, "A plain keyed paragraph, rewritten."], "one <body> after an Update");
-  assert.deepEqual(await js("[document.querySelector('#more').open, document.querySelector('#less').open]"), [true, false], "an Update keeps the details the human opened or closed");
+  assert.deepEqual(await js("[document.querySelectorAll('body').length, document.querySelector('#plain').firstChild.textContent]"), [1, plain], "one <body> after an Update");
+  assert.deepEqual(await js(details), [true, false], "an Update keeps the details the human opened or closed");
+  // Review 2 finding 3: still after the source catches up with him and then changes back.
+  await write({ plain, flip: true }); host.update(page); await until("updates===2");
+  await write({ plain }); host.update(page); await until("updates===3");
+  assert.deepEqual(await js(details), [true, false], "the human's details state outlasts later source defaults");
+  assert.equal(await js("document.querySelector('#plain').getAttribute('tabindex')"), "0", "a Kernel tab stop survives Updates");
 
   // Undo all takes back every action still in its window.
   await click('[data-atl=decide][data-id="row-a"][data-label=Keep]');
@@ -184,14 +213,28 @@ try {
   await until("!document.querySelector('[atl-ui=panel] [role=status],[atl-ui=panel] .atl-toast')"); // flashes and undo rows gone
   const idle = await js("[document.querySelector('[atl-ui=panel]').getBoundingClientRect().width, document.querySelector('[atl-ui=panel]').innerText]");
   assert(idle[0] < 340, `idle dock shrinks to its bar: ${JSON.stringify(idle)}`);
-  await write("A plain keyed paragraph, rewritten.", `<div atl-dock id="dock"></div>`);
+  // Review 2 finding 5: an Update applies the new <body> attributes too.
+  await write({ plain, dock: `<div atl-dock id="dock"></div>`, body: ` class="v2" data-mode="review" style="background:rgb(250, 250, 250)"` });
   host.update(page);
-  await until("updates===2");
+  await until("updates===4");
   assert.deepEqual(await js("[document.querySelector('[atl-ui=panel]').parentElement.id, getComputedStyle(document.querySelector('[atl-ui=panel]')).position]"), ["dock", "static"], "docked in the Page's flow");
+  assert.deepEqual(await js("[document.querySelectorAll('body').length, document.body.className, document.body.dataset.mode, getComputedStyle(document.body).backgroundColor]"), [1, "v2", "review", "rgb(250, 250, 250)"], "body attributes follow the source");
+  await write({ plain, dock: `<div atl-dock id="dock"></div>` }); host.update(page); await until("updates===5");
+  assert.deepEqual(await js("[document.body.getAttribute('class'), document.body.getAttribute('data-mode'), document.body.getAttribute('style')]"), [null, null, null], "and go when the source drops them");
 
   if (process.argv[2]) await b("screenshot", process.argv[2]);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body and opened details, selection Comment at the selection.");
+  // Review 2 finding 2: a Page served by a test host (serve.mjs) says so in the Kernel bar.
+  const copy = path.join(dir, "copy.html");
+  await writeFile(copy, `<!doctype html><title>Copy</title><p atl-key="a">A</p><script type="module" src="atelier.js"></script>`);
+  const testHost = createHost({ root: dir, test: true, send: (_m, done) => done(true) });
+  try {
+    await b("open", (await testHost.open(copy)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live'");
+    assert.equal(await js("document.querySelector('.atl-test')?.textContent.trim()"), "Test host, no Pi session");
+  } finally { testHost.stop(); }
+
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }
