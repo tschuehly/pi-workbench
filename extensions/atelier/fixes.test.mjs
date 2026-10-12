@@ -280,8 +280,7 @@ test("k-test-host: serve.mjs serves a Page without a Pi session, persists events
     await until(/^Update sent to 1 tab\(s\)\.$/m);
     await stream.cancel();
   } finally {
-    child.kill("SIGTERM");
-    await new Promise((r) => child.on("exit", r));
+    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); await new Promise((r) => child.on("exit", r)); }
     assert.equal(existsSync(`${p.page}.events.jsonl.lock`), false, "stopping releases the Page");
     p.done();
   }
