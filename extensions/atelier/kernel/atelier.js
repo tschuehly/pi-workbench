@@ -17,6 +17,8 @@
 //   atl-changes="off"          anywhere on the Page: no change indicators after Updates (156)
 //   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab
 //   document "atelier:update"  fires after each Update, so page scripts re-read their data files (152)
+//   window.atelier.state()     read-only Kernel state (Decisions and answers, threads, Requests); document
+//                              "atelier:state" carries it in detail whenever it changes. Kernel markup is not an API.
 // Human state lives only in <page>.events.jsonl, never in the HTML (147).
 // Kernel controls take the Page's colours: override --atl-bg, --atl-fg, --atl-muted, --atl-line, --atl-accent, --atl-warn.
 //
@@ -115,6 +117,24 @@ export function derive(entries, currentVer = () => null, declared = []) {
     requests: [...requests.values()], drafts, status,
     openThreads: [...threads.values()].filter((t) => !t.closed && status(t.root) !== "draft"),
     toAnswer: [...decisions.values()].filter((d) => d.answer === null || d.stale),
+  };
+}
+
+/**
+ * The Kernel state a Page script may rely on, as plain data: window.atelier.state() returns it and the document
+ * event "atelier:state" carries it in `detail` whenever it changes. Kernel markup is not an API. `loaded` turns true
+ * once the Event Log has been read (or there is no session to read it from).
+ */
+export function publicState(st, { conn = "no session", loaded = false } = {}) {
+  const status = (e) => e ? st.status(e) : null;
+  return {
+    conn, loaded, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
+    decisions: st.decisions.map((d) => ({
+      id: d.id, key: d.key ?? null, declared: !!d.declared, options: d.options.map((o) => o.label), recommended: d.options.find((o) => o.recommended)?.label ?? null,
+      answer: d.answer?.option ?? null, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, status: status(d.answer), stale: !!d.stale, opened: !!d.opened,
+    })),
+    threads: st.threads.map((t) => ({ seq: t.root.seq, key: t.root.key ?? null, closed: t.closed, stale: !!t.stale, messages: t.msgs.length, status: status(t.root) })),
+    requests: st.requests.map((r) => ({ seq: r.req.seq, job: r.req.job, key: r.req.key ?? null, state: r.state, revision: r.revision, accepted: r.accepted, cancel: r.cancel })),
   };
 }
 
@@ -286,6 +306,8 @@ function boot() {
   });
   const all = () => [...entries, ...local];
   const state = () => derive(all(), currentVer, declared());
+  let loaded = !online, published = null;
+  globalThis.atelier = Object.freeze({ state: () => publicState(state(), { conn, loaded }) });
   const now = () => Date.now();
 
   // ---- UI roots. Everything the Kernel draws carries atl-ui and is lifted out before each morph.
@@ -331,9 +353,8 @@ function boot() {
       cursor = list.reduce((max, e) => Math.max(max, e.seq), cursor);
       const fresh = add(list);
       if (!first) markAgent(fresh);
-      first = false;
-      if (fresh.length) render();
-    } catch { conn = "no session"; render(); }
+      if (fresh.length || first) { first = false; loaded = true; render(); }
+    } catch { conn = "no session"; loaded = true; render(); }
   }
 
   async function post(body) {
@@ -598,6 +619,8 @@ function boot() {
     for (const el of keyed()) io.observe(el);
     renderMarks();
     positionPins();
+    const pub = publicState(st, { conn, loaded }), json = JSON.stringify(pub);
+    if (json !== published) { published = json; document.dispatchEvent(new CustomEvent("atelier:state", { detail: pub })); }
   }
 
   // ---- the floating Comment button: only the innermost hovered or focused Key shows it (no stacked duplicates)

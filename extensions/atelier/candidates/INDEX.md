@@ -46,8 +46,11 @@ builders need their task and the Kernel, not the research analyses. Examples use
   flow content visible; clear review filters before using global jump. A universal reveal hook needs Kernel work.
 - **K2 fixed (decision 155):** a Page-declared Decision's `atl-note` options post only with a note, so an
   override carries its reason in the same event. Prefill is still not implemented.
-- **K3 bounded:** review-filter reads Kernel `derive` on load/Update/explicit refresh; no public live-state
-  notification. It does not auto-advance from a click or include unsaved/offline local events.
+- **K3 fixed, regression checked (k-state-hook):** all five bite builders scraped Kernel markup (`.atl-open-item`,
+  `.atl-chosen`, `aria-pressed`) to learn which Decisions were answered. The Kernel now exposes read-only
+  `atelier.state()` and the document event `atelier:state` (`atelier.test.mjs` `publicState`, `kernel-check.mjs`).
+  review-filter still reads `derive` on load/Update/refresh and skips unsaved/offline local events; moving it to
+  `atelier:state` is open.
 - **K4/K8 pending real media:** Kernel records a container's media time, but does not capture frames or
   seek from a Comment. Supply project-owned frames/captions; check actual playback/Range and changed bytes.
 - **K6/K7 domain work:** typed job validation, safe queueing, production approval and legacy lifecycle mapping

@@ -38,6 +38,12 @@ browser; serve a copy if the Page's Event Log must stay untouched; stop it befor
   from one function on load and on the `atelier:update` document event, which fires after every
   Update. `<details>` the human opened or closed keep his state; other view state (tabs, filters) the
   script restores itself.
+- A page script that needs to know what the human answered (progress, "next open", resume) reads
+  `atelier.state()`, never Kernel markup: plain data with `decisions` (`id`, `options`, `recommended`,
+  `answer`, `previous`, `note`, `status`, `stale`), `threads`, `requests`, `toAnswer` (ids), `open`,
+  `conn`, and `loaded` (true once the Event Log is read). The document event `atelier:state` carries the
+  same object in `detail` whenever it changes, including unsent answers; register it before the Kernel loads
+  to get the first one.
 - Read changing data with `fetch` (read-only): project files, or for a Page outside the project only
   files in its own directory. Re-read it on `atelier:update`.
 - Never write `<page>.events.jsonl` and never keep human state in the HTML. After rewriting the

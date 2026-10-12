@@ -21,6 +21,7 @@ const write = (plain = "A plain keyed paragraph.") => writeFile(page, `<!doctype
 <div atl-key="turn-2" id="t2" atl-decide="Confirm|Redo" atl-rec="Confirm" atl-note="Redo">Turn two answer.</div></section>
 <details id="more"><summary id="more-s">More</summary><p>Inside.</p></details><details id="less" open><summary id="less-s">Less</summary><p>Open by the Page.</p></details>
 <table><tr atl-key="row-a" id="ra" atl-decide="Keep|Drop"><td>Row A</td><td atl-slot id="slot"></td></tr></table>
+<script>window.states=[];document.addEventListener("atelier:state",(e)=>states.push(e.detail));</script>
 <script type="module" src="atelier.js"></script></body></html>`);
 await write();
 const sent = [];
@@ -101,6 +102,11 @@ try {
   assert.deepEqual(readLog(page).filter((e) => e.type === "undo").map((e) => e.target), [decides()[1].seq], "the unsent 4 is undone");
   assert.match(await js("document.querySelector('[atl-ui=decide] .atl-dstate').textContent"), /Your answer: 5 · changed from 3/);
   assert.match(await js("document.querySelector('.atl-bar').textContent"), /2 to answer/);
+  // k-state-hook: Pages read Kernel state through window.atelier and the atelier:state event, not Kernel markup.
+  const turn1 = "(s)=>s.decisions.find((d)=>d.id==='run/turn-1')";
+  assert.deepEqual(await js(`(${turn1})(atelier.state())`), { id: "run/turn-1", key: "run/turn-1", declared: true, options: ["1", "2", "3", "4", "5"], recommended: null, answer: "5", previous: "3", note: null, status: "pending", stale: false, opened: false });
+  assert.equal(await js(`states.at(-1).loaded && (${turn1})(states.at(-1)).answer`), "5", "the event carries the new state");
+  assert.deepEqual(await js("[states[0].loaded, states.some((s)=>s.toAnswer.length===3), atelier.state().toAnswer]"), [false, true, ["run/turn-2", "row-a"]]);
 
   // atl-note: Redo needs a note; nothing posts without it, Enter posts it with the note.
   await click('[data-atl=decide][data-id="run/turn-2"][data-label="Redo"]');

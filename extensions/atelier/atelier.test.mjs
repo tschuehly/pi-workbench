@@ -468,3 +468,19 @@ test("wordDiff marks inserted and deleted words; diffPreview names the first cha
   assert.deepEqual(wordDiff("same", "same"), [["=", "same"]]);
   assert.equal(diffPreview(wordDiff("same", "same")), "");
 });
+
+test("publicState: the read-only Kernel state a Page script may rely on (k-state-hook)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "ship", key: "a", question: "Ship?", options: [{ label: "Yes", recommended: true }, { label: "No" }] } },
+    { seq: 2, at: 0, origin: "human", type: "decide", decision: "row-1", key: "row-1", options: "Keep|Drop", option: "Drop", note: "old", delivery: "immediate" },
+    { seq: 3, at: 0, origin: "kernel", type: "delivered", of: [2] },
+    { seq: 4, at: 0, origin: "human", type: "comment", key: "a", text: "x", delivery: "immediate" },
+  ];
+  const s = publicState(derive(log, () => null, [{ id: "row-2", key: "row-2", declared: true, options: [{ label: "Keep" }, { label: "Drop" }] }]), { conn: "live", loaded: true });
+  assert.deepEqual(s.decisions.map((d) => [d.id, d.declared, d.recommended, d.answer, d.note, d.status]), [["row-2", true, null, null, null, null], ["ship", false, "Yes", null, null, null], ["row-1", true, null, "Drop", "old", "queued"]]);
+  assert.deepEqual(s.toAnswer, ["row-2", "ship"]);
+  assert.deepEqual(s.threads, [{ seq: 4, key: "a", closed: false, stale: false, messages: 1, status: "pending" }]);
+  assert.deepEqual([s.conn, s.loaded, s.open, s.drafts], ["live", true, 3, 0]);
+  assert.doesNotThrow(() => JSON.stringify(s), "plain data");
+});
