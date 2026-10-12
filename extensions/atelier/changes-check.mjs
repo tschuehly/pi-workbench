@@ -29,22 +29,31 @@ const b = async (...args) => { const { stdout } = await run("agent-browser", ["-
 const js = async (code) => (await b("eval", code)).result;
 const until = (code) => b("wait", "--fn", code);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const update = async (opts, note) => { await write(opts); host.update(page, note); await sleep(600); };
+// Waits for the Kernel's morph, not a fixed time: the marks are drawn before atelier:update fires.
+const update = async (opts, note) => { const n = await js("window.updates"); await write(opts); host.update(page, note); await until(`window.updates>${n}`); };
 const marks = () => js(`JSON.stringify({
   spot: [...document.querySelectorAll("[atl-ui=mark]")].map((m) => [m.parentElement.closest("[id]")?.id, m.className.match(/atl-k-(\\w+)/)[1], m.classList.contains("atl-mark-bar") ? "bar" : "dot"]),
   toc: [...document.querySelectorAll("nav.toc a")].filter((a) => a.querySelector(".atl-dot")).map((a) => [a.textContent, a.querySelector(".atl-dot").className.match(/atl-k-(\\w+)/)[1]]),
   rail: [...document.querySelectorAll("[atl-ui=rail] button")].map((r) => [r.className.replace("atl-k-", ""), r.title.split("\\n")[0]]),
   gone: document.querySelectorAll("[atl-ui=gone]").length })`).then(JSON.parse);
 const scrollTo = (id) => js(`document.getElementById("${id}").scrollIntoView({block:"start"}); true`);
+// A change counts only on a Key the Kernel saw. A fixed sleep raced its IntersectionObserver: with the Log tab closed
+// again before the observer ran, the Log Key was never seen and its hidden-tab mark was missing (the old flake at
+// the tab assertion). An observer made after the Kernel's is notified in the same task, right after it.
+const seen = async (id) => {
+  await js(`(()=>{window.seen=false;const o=new IntersectionObserver(([x])=>{if(x.isIntersecting&&x.intersectionRatio>=0.5){window.seen=true;o.disconnect()}},{threshold:[0.5,1]});o.observe(document.getElementById("${id}"));return true})()`);
+  await until("window.seen");
+};
 
 try {
   const { url } = await host.open(page);
   await b("set", "viewport", "1280", "800");
   await b("open", url);
   await until("document.querySelector('.atl-conn')?.textContent==='live'");
+  await js("window.updates=0; document.addEventListener('atelier:update',()=>updates++); true");
   // Read the whole Page once (the Log tab too), then go to the bottom so nothing changed is in view.
-  for (const id of ["intro", "blocks", "after-table"]) { await scrollTo(id); await sleep(200); }
-  await js(`document.getElementById("tab-log").click(); document.getElementById("log").scrollIntoView(); true`); await sleep(300);
+  for (const id of ["intro", "blocks", "after-table"]) { await scrollTo(id); await seen(id); }
+  await js(`document.getElementById("tab-log").click(); document.getElementById("log").scrollIntoView(); true`); await seen("log");
   await js(`document.getElementById("tab-flow").click(); scrollTo(0, document.body.scrollHeight); true`); await sleep(200);
 
   // Reworded twice before seeing it: one trace, diffed against the first text, both notes newest first.
