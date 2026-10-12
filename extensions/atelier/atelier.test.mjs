@@ -222,6 +222,11 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
     writeFileSync(file, old.replace("0".repeat(64), createHash("sha256").update(body).digest("hex")) + body);
     assert.equal(copyKernel(dir)[0].outcome, "behind");
     assert.match(readFileSync(file, "utf8"), /0\.9\.0/);
+    // k-stamp: a hand-copied Kernel, byte-identical but without the stamp line, is current, not changed.
+    const source = readFileSync(new URL("./kernel/atelier.js", import.meta.url), "utf8");
+    writeFileSync(file, source);
+    assert.equal(copyKernel(dir)[0].outcome, "current");
+    assert.equal(readFileSync(file, "utf8"), source, "left as it is");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

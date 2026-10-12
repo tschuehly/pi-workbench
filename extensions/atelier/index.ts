@@ -115,7 +115,8 @@ const STAMP = /^\/\/ atelier-copy (\S+) sha256:([0-9a-f]{64})[^\n]*\n/;
 /**
  * Copies the Kernel beside the Page with a version stamp (133). An existing copy is never overwritten:
  * a locally changed copy is a Contribution candidate (136), and a Registry fix reaches an unchanged copy
- * only through a diff the owner accepts (136), so an older copy is only reported as behind.
+ * only through a diff the owner accepts (136), so an older copy is only reported as behind. A copy whose
+ * content equals the Kernel is current, stamped or not (a builder may have copied it by hand).
  */
 export function copyKernel(dir: string) {
   return KERNEL_FILES.map((file) => {
@@ -128,8 +129,10 @@ export function copyKernel(dir: string) {
     }
     const text = readFileSync(target, "utf8");
     const stamp = STAMP.exec(text);
-    if (!stamp || sha(text.slice(stamp[0].length)) !== stamp[2]) return { file, outcome: "changed" as const };
-    return { file, outcome: stamp[2] === sha(source) ? "current" as const : "behind" as const };
+    const body = stamp ? text.slice(stamp[0].length) : text;
+    if (body === source) return { file, outcome: "current" as const };
+    if (!stamp || sha(body) !== stamp[2]) return { file, outcome: "changed" as const };
+    return { file, outcome: "behind" as const }; // an unchanged copy of another Kernel version
   });
 }
 

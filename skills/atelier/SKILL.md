@@ -11,7 +11,7 @@ returned URL in the Chat; if the tool is missing, call `tools_enable` with group
 ## Page contract
 
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`
-  and `idiomorph.js` beside the Page.
+  and `idiomorph.js` beside the Page; let it, rather than copying them by hand.
 - `atl-key="name"` on every element the human judges. Nested Keys form an address such as
   `run-12/turn-3`; use domain ids, and keep them stable across Updates.
 - `atl-ver="…"` on content that changes, such as a build SHA or a content hash. Events record it,

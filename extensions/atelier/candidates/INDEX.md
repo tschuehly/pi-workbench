@@ -57,6 +57,8 @@ builders need their task and the Kernel, not the research analyses. Examples use
 - **K11 fixed, regression checked (k-script-rows):** an Update closed `<details>` the human opened and emptied
   rows a page script built. `<details>` the human toggled keep his state (`kernel-check.mjs`); script-built
   rows are the Page's to re-render on `atelier:update`, as the atelier skill now says (static keyed HTML preferred).
+- **K12 fixed, regression checked (k-stamp):** `open` reported a byte-identical, hand-copied (unstamped) Kernel as
+  "changed locally". A copy whose content equals the Kernel is current (`atelier.test.mjs`); the skill says let `open` copy.
 
 ## Check before reuse
 
