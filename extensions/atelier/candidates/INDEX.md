@@ -52,6 +52,8 @@ builders need their task and the Kernel, not the research analyses. Examples use
 - **K6/K7 domain work:** typed job validation, safe queueing, production approval and legacy lifecycle mapping
   belong to the project. A score is not acceptance; only the human accepts completed work.
 - **K9 pending:** example prose is German; Kernel controls remain English.
+- **K10 fixed, regression checked (k-body):** an Update nested a second `<body>` (trial C, 1 → 2 bodies). The
+  Kernel morphs the new body's children; `kernel-check.mjs` asserts one `<body>` after a real Update.
 
 ## Check before reuse
 

@@ -12,15 +12,16 @@ const run = promisify(execFile), session = `atelier-kernel-${process.pid}`;
 assert(process.env.PI_TMP, "Set PI_TMP to a disposable directory.");
 const dir = await realpath(await mkdtemp(path.join(process.env.PI_TMP, "atelier-kernel-")));
 const page = path.join(dir, "page.html");
-await writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Kernel check</title>
+const write = (plain = "A plain keyed paragraph.") => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Kernel check</title>
 <style>body{font:15px/1.5 system-ui;max-width:700px;margin:24px auto;background:#fff;color:#111}section,div[atl-key],p[atl-key]{border:1px solid #ccc;padding:8px;margin:8px 0}</style>
 <body><p id="intro">Select this sentence to comment on the text itself.</p>
-<p atl-key="plain" id="plain">A plain keyed paragraph.</p>
+<p atl-key="plain" id="plain">${plain}</p>
 <section atl-key="run" atl-ver="v1" id="run"><h2>Run</h2>
 <div atl-key="turn-1" id="t1" atl-decide="1|2|3|4|5">Turn one answer text.</div>
 <div atl-key="turn-2" id="t2" atl-decide="Confirm|Redo" atl-rec="Confirm" atl-note="Redo">Turn two answer.</div></section>
 <table><tr atl-key="row-a" id="ra" atl-decide="Keep|Drop"><td>Row A</td><td atl-slot id="slot"></td></tr></table>
 <script type="module" src="atelier.js"></script></body></html>`);
+await write();
 const sent = [];
 const host = createHost({ root: dir, undoMs: 3000, send: (m, done) => { sent.push(m.content); done(true); } });
 const b = async (...args) => { const { stdout } = await run("agent-browser", ["--session", session, "--json", ...args], { timeout: 60_000 }); const r = JSON.parse(stdout); assert(r.success, JSON.stringify(r)); return r.data; };
@@ -120,6 +121,14 @@ try {
 
   await sleep(3200); host.deliverDue(page);
   assert.match(sent.join("\n"), /Decision run\/turn-1 \(version v1\): 3 → 5\n/, `delivery: ${sent.join("\n")}`);
+
+  // Update (145): the morph replaces the body's children, never nests a second <body> (k-body).
+  await js("window.updates=0; document.addEventListener('atelier:update',()=>updates++); true");
+  await write("A plain keyed paragraph, rewritten.");
+  host.update(page);
+  await until("updates===1");
+  assert.deepEqual(await js("[document.querySelectorAll('body').length, document.querySelector('#plain').firstChild.textContent]"), [1, "A plain keyed paragraph, rewritten."], "one <body> after an Update");
+
   if (process.argv[2]) await b("screenshot", process.argv[2]);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
   console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note.");

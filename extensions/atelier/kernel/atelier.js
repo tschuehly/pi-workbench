@@ -381,7 +381,8 @@ function boot() {
     // survives even among same-tag siblings, and with it any state the page script holds on it.
     const lend = (root) => root.querySelectorAll("[atl-key]:not([id])").forEach((el) => { if (!isUi(el)) el.id = `atl-key:${keyOf(el)}`; });
     lend(document); lend(doc);
-    Idiomorph.morph(document.body, doc.body, {
+    // The new body's children, not the body: idiomorph would nest a second <body> inside the first.
+    Idiomorph.morph(document.body, doc.body.childNodes, {
       morphStyle: "innerHTML", ignoreActiveValue: true, restoreFocus: true,
       callbacks: { beforeAttributeUpdated: (name, el) => !(touched.has(el) && /^(value|checked|selected)$/.test(name)) },
     });
