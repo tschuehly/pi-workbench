@@ -11,7 +11,8 @@ builders need their task and the Kernel, not the research analyses. Examples use
 3. Bind domain IDs to stable Keys and content hashes to versions. Scope repeated Component IDs,
    selectors and URL parameters per instance. Nest Components under the judged item, not under controls.
 4. Read [TIPS](TIPS.md) for optional content examples and rejected approaches. Verify your assembled
-   Page with a real Update while interacting; candidates being tested does not prove the composition.
+   Page with a real Update while interacting (without the tool: `node extensions/atelier/serve.mjs <page>`);
+   candidates being tested does not prove the composition.
 
 ## Patterns — choose a hierarchy, not a template
 
@@ -59,6 +60,9 @@ builders need their task and the Kernel, not the research analyses. Examples use
   rows are the Page's to re-render on `atelier:update`, as the atelier skill now says (static keyed HTML preferred).
 - **K12 fixed, regression checked (k-stamp):** `open` reported a byte-identical, hand-copied (unstamped) Kernel as
   "changed locally". A copy whose content equals the Kernel is current (`atelier.test.mjs`); the skill says let `open` copy.
+- **K13 fixed, regression checked (k-test-host):** builders without the tool could not test persistence, Delivery or
+  Updates, and wrote stand-in hosts. `extensions/atelier/serve.mjs` runs the real host (`host.ts`, shared with the
+  tool) for one Page without a Pi session; `fixes.test.mjs` drives it. The skill points builders to it.
 
 ## Check before reuse
 

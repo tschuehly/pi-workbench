@@ -8,6 +8,12 @@ description: "Page contract and Registry index for the atelier tool. Use before 
 A Page is one HTML file, in the project or at any absolute path. Write it, then call `atelier` with `open` and link the
 returned URL in the Chat; if the tool is missing, call `tools_enable` with group `atelier` first. Terms: `extensions/atelier/GLOSSARY.md` in pi-workbench.
 
+Building without the `atelier` tool, e.g. as a subagent? Prove the Page on the real host before handing it
+over: from the project directory run `node ../../extensions/atelier/serve.mjs <page.html>` (path relative to
+this skill) in the background. It serves the Page like `open`, keeps its Event Log, prints each Delivery to
+stdout as the agent would receive it, and sends an Update whenever the Page file changes. Drive it in a real
+browser; serve a copy if the Page's Event Log must stay untouched; stop it before the agent opens the Page.
+
 ## Page contract
 
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`

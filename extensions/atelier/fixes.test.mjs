@@ -253,3 +253,36 @@ test("R3: composition names an entry it cannot render instead of throwing, for D
   assert.match(text, /#4 decide could not be rendered/);
   assert.match(text, /#5 Comment/);
 });
+
+// k-test-host: builders without the atelier tool run the real host for a Page with serve.mjs.
+test("k-test-host: serve.mjs serves a Page without a Pi session, persists events, prints Delivery and sends Updates", async () => {
+  const p = project();
+  dueDecide(p.page);
+  const child = spawn(process.execPath, [new URL("./serve.mjs", import.meta.url).pathname, "page.html"], { cwd: p.root });
+  let out = "";
+  child.stdout.on("data", (d) => { out += d; });
+  const until = async (re) => { for (let i = 0; i < 200 && !re.test(out); i++) await new Promise((r) => setTimeout(r, 25)); assert.match(out, re); return re.exec(out); };
+  try {
+    const [, url] = await until(/^Page open: (\S+)$/m);
+    await until(/^Atelier · page\.html \(http\S+\) · replayed from an earlier session\n- #1 Decision d: A$/m);
+    await until(/^Kernel: atelier\.js copied, idiomorph\.js copied$/m);
+    assert.deepEqual(readLog(p.page).slice(-2).map((e) => e.type), ["delivered", "received"], "printing it is the receipt");
+    const origin = new URL(url).origin, q = "?page=page.html";
+    const post = await fetch(`${origin}/.atelier/events${q}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "comment", key: "a", text: "persisted" }) });
+    assert.equal(post.status, 200);
+    assert.equal(readLog(p.page).at(-1).text, "persisted");
+    const stream = (await fetch(`${origin}/.atelier/stream${q}`)).body.getReader();
+    let events = "";
+    const read = async (re) => { while (!re.test(events)) events += new TextDecoder().decode((await stream.read()).value); };
+    await read(/event: hello/);
+    writeFileSync(p.page, PAGE.replace(">A<", ">B<"));
+    await read(/event: update/);
+    await until(/^Update sent to 1 tab\(s\)\.$/m);
+    await stream.cancel();
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((r) => child.on("exit", r));
+    assert.equal(existsSync(`${p.page}.events.jsonl.lock`), false, "stopping releases the Page");
+    p.done();
+  }
+});
