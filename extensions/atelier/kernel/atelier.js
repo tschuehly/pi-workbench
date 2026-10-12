@@ -288,6 +288,8 @@ function boot() {
   const expanded = new Set(); // threads whose folded middle the human opened
   const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
   const threadCount = new Map(); // Key address -> its threads, for the Comment button made on hover
+  const quoteUis = new Map(); // block holding a quoted Comment -> the Kernel UI under it
+  const BLOCK = "p,li,dd,dt,td,th,blockquote,pre,figcaption,h1,h2,h3,h4,h5,h6";
   const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), cards = new Map();
   let hot = null, savedRange = null;
 
@@ -398,7 +400,7 @@ function boot() {
     const active = document.activeElement;
     const range = active && "selectionStart" in active ? [active.selectionStart, active.selectionEnd] : null;
     // Lift out only top-level Kernel nodes; a composer inside a Key's UI travels with it.
-    document.querySelectorAll("[atl-ui]").forEach((n) => { if (!n.parentElement.closest("[atl-ui]")) n.remove(); });
+    document.body.querySelectorAll("[atl-ui]").forEach((n) => { if (!n.parentElement.closest("[atl-ui]")) n.remove(); });
     const sheet = (d) => [...d.head.querySelectorAll("style,link[rel=stylesheet]")];
     if (sheet(document).map((n) => n.outerHTML).join() !== sheet(doc).map((n) => n.outerHTML).join()) {
       sheet(document).forEach((n) => n.remove());
@@ -546,13 +548,24 @@ function boot() {
     set(panel.querySelector(".atl-palette"), palette(`${document.querySelector('meta[name="color-scheme"]')?.content ?? ""} ${getComputedStyle(document.documentElement).colorScheme ?? ""}`));
     const idx = textIndex();
     const placed = new Map(st.threads.map((t) => [t.root.seq, placeThread(t, idx)]));
-    const seen = new Set(), kept = new Set();
+    const seen = new Set(), kept = new Set(), atQuote = new Map();
     for (const el of keyed()) {
       const addr = keyOf(el);
       if (seen.has(addr)) continue; seen.add(addr);
       let ui = keyUis.get(addr);
       if (!ui) { ui = h(`<div atl-ui="key" data-key="${esc(addr)}"><div class="atl-khead"></div><div class="atl-kbody"></div><div class="atl-slot"></div></div>`); keyUis.set(addr, ui); }
       const threadsHere = st.threads.filter((t) => placed.get(t.root.seq).where === "key" && t.root.key === addr);
+      // A thread on selected text sits under the paragraph (or in the list item or cell) that holds its quote,
+      // not at the end of a long Key (Fix 6); one holder per block keeps several threads in order.
+      const atKeyEnd = threadsHere.filter((t) => {
+        const range = t.root.quote && findQuote(t.root.quote, idx), block = range?.startContainer.parentElement?.closest(BLOCK);
+        if (!block || block === el || !el.contains(block) || isUi(block)) return true;
+        let holder = quoteUis.get(block);
+        if (!holder) { holder = h(`<div atl-ui="key" class="atl-at-quote" data-key="${esc(addr)}"><div class="atl-khead"></div><div class="atl-kbody"></div><div class="atl-slot"></div></div>`); quoteUis.set(block, holder); }
+        if (block.matches("li,td,th,dd,dt")) { if (holder.parentElement !== block) block.append(holder); } else if (block.nextElementSibling !== holder) block.after(holder);
+        (atQuote.get(holder) ?? atQuote.set(holder, []).get(holder)).push(t);
+        return false;
+      });
       // A Decision renders before the threads, so its options stay where the Page put them.
       const d = el.hasAttribute("atl-decide") ? st.decisions.find((x) => x.id === addr && x.declared) : undefined;
       if (d) {
@@ -576,8 +589,13 @@ function boot() {
       set(ui.firstElementChild, groupDrafts ? `<button data-atl="send" data-key="${esc(addr)}" class="atl-primary">${icon("send")} Send (${groupDrafts})</button>` : "");
       reconcile(ui.children[1], [
         ...st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st), open: !x.answer || x.stale, extra: `<input class="atl-note" placeholder="Optional note with your answer" aria-label="Note">` })),
-        ...threadsHere.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })),
+        ...atKeyEnd.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })),
       ]);
+    }
+    for (const [block, holder] of quoteUis) {
+      const list = atQuote.get(holder);
+      if (!list) { holder.remove(); quoteUis.delete(block); continue; }
+      reconcile(holder.children[1], list.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })));
     }
     for (const map of [pins, decUis]) for (const [addr, node] of map) if (!kept.has(node)) { node.remove(); map.delete(addr); }
     for (const [addr, ui] of keyUis) {
@@ -643,7 +661,7 @@ function boot() {
     const p = pin.getBoundingClientRect(), r = el.getBoundingClientRect();
     pin.style.translate = `${Math.round(r.right - p.left - b.offsetWidth - 4)}px ${Math.round(r.top - p.top + 4)}px`;
   }
-  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); positionMarks(); }
+  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); positionMarks(); placePop(); }
   function setHot(target) {
     const el = target?.closest?.("[atl-key]:not([atl-slot])");
     const addr = el && !isUi(el) ? keyOf(el) : null;
@@ -863,18 +881,33 @@ function boot() {
     place(t.nodes.diff, el);
   }
 
-  // ---- composer: one per slot, persistent while open so typing survives every render and morph
+  // ---- composer: one per slot, persistent while open so typing survives every render and morph. A Comment on
+  // selected text opens beside the selection (spec.range), outside <body> so no Update lifts it, and never scrolls.
+  function closeComposer() { composer?.node.remove(); composer = null; CSS.highlights?.delete("atl-pending"); }
+  function placePop() {
+    const range = composer?.spec.range, node = composer?.node;
+    if (!range) return;
+    const r = range.getBoundingClientRect(), w = node.offsetWidth, ht = node.offsetHeight;
+    if (!r.width && !r.height) return; // the text went away in an Update: stay where it was
+    const below = r.bottom + 6 + ht <= innerHeight || r.top - 6 - ht < 0;
+    node.style.left = `${Math.round(scrollX + Math.max(4, Math.min(innerWidth - w - 4, r.left)))}px`;
+    node.style.top = `${Math.round(scrollY + (below ? r.bottom + 6 : r.top - 6 - ht))}px`;
+  }
   function openComposer(spec, slot) {
-    composer?.node.remove();
-    const node = h(`<form atl-ui="composer" class="atl-composer"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="3" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
+    closeComposer();
+    const node = h(`<form atl-ui="composer" class="atl-composer${spec.range ? " atl-pop" : ""}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="3" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
     composer = { spec, node };
-    slot.append(node);
-    node.querySelector("textarea").focus();
+    if (spec.range) {
+      document.documentElement.append(node);
+      placePop();
+      if (globalThis.Highlight && CSS.highlights) CSS.highlights.set("atl-pending", new Highlight(spec.range)); // the quote stays marked
+    } else slot.append(node);
+    node.querySelector("textarea").focus({ preventScroll: !!spec.range });
     node.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const text = node.querySelector("textarea").value.trim();
       if (!text) return;
-      composer = null; node.remove();
+      closeComposer();
       // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
       const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
       await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery });
@@ -948,7 +981,7 @@ function boot() {
       if (spot !== el && spot.matches("[aria-controls]")) spot.click(); // open the tab that hides it
       requestAnimationFrame(() => jumpTo(el));
     },
-    dismiss: () => { composer?.node.remove(); composer = null; },
+    dismiss: closeComposer,
     next: () => {
       const items = [...document.querySelectorAll(".atl-open-item")];
       if (!items.length) return;
@@ -963,7 +996,7 @@ function boot() {
       if (start < 0 || !exact) { flash("Select text on the Page first."); return; }
       const key = keyOf(r.commonAncestorContainer.nodeType === 1 ? r.commonAncestorContainer : r.commonAncestorContainer.parentElement);
       const anchor = { quote: { exact: exact.slice(0, 500), prefix: idx.text.slice(Math.max(0, start - 32), start), suffix: idx.text.slice(end, end + 32) }, ...(key ? anchorForKey(key) : {}) };
-      openComposer({ label: `Comment on “${exact.slice(0, 60)}”`, anchor }, slotFor(key));
+      openComposer({ label: `Comment on “${exact.slice(0, 60)}”`, anchor, range: r.cloneRange() });
     },
     copy: async () => {
       const st = state();
@@ -1072,8 +1105,9 @@ const STYLE = `
 .atl-quote{font-style:italic;border-left:3px solid var(--atl-warn);padding-left:6px}
 .atl-toast{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:2px 0}
 .atl-composer{display:grid;gap:6px;margin:6px 0}
+.atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(340px,calc(100vw - 8px));margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
 .atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
-::highlight(atl-quote){background:#fde68a;color:#000}
+::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
 .atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
 .atl-mark-bar{position:absolute;width:0;height:0;z-index:2147481000}
 [atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}

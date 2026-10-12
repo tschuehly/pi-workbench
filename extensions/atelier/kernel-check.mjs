@@ -21,6 +21,7 @@ const write = (plain = "A plain keyed paragraph.", dock = "") => writeFile(page,
 <div atl-key="turn-2" id="t2" atl-decide="Confirm|Redo" atl-rec="Confirm" atl-note="Redo">Turn two answer.</div></section>
 <details id="more"><summary id="more-s">More</summary><p>Inside.</p></details><details id="less" open><summary id="less-s">Less</summary><p>Open by the Page.</p></details>
 <table><tr atl-key="row-a" id="ra" atl-decide="Keep|Drop"><td>Row A</td><td atl-slot id="slot"></td></tr></table>
+<section atl-key="long" id="long"><p id="phrase">Pick this phrase to comment on it.</p>${"<p>Filler below the phrase.</p>".repeat(40)}</section>
 <script>window.states=[];document.addEventListener("atelier:state",(e)=>states.push(e.detail));</script>
 <script type="module" src="atelier.js"></script></body></html>`);
 await write();
@@ -97,13 +98,39 @@ try {
   await until("document.querySelector('[atl-ui=composer] .atl-label')?.textContent.startsWith('Comment on “Select')");
   await click("[atl-ui=composer] [data-atl=dismiss]");
 
+  // Fix 6: a Comment on text inside a long Key opens beside the selection, not at the Key's end, and nothing scrolls.
+  await js("document.getElementById('phrase').scrollIntoView({block:'center'}); true"); await sleep(300);
+  const phrase = await box("#phrase"), y0 = await js("scrollY");
+  await at(phrase.x + 2, phrase.y + phrase.h / 2); await b("mouse", "down");
+  await at(phrase.x + 90, phrase.y + phrase.h / 2); await b("mouse", "up");
+  await until("!document.querySelector('[atl-ui=sel]').hidden");
+  await click("[atl-ui=sel]");
+  await until("document.activeElement?.matches('[atl-ui=composer] textarea')");
+  await sleep(300);
+  const [pop, quoted, y1, vh] = await js("(()=>{const r=document.querySelector('[atl-ui=composer]').getBoundingClientRect(), h=CSS.highlights.get('atl-pending'), q=h&&[...h][0].getBoundingClientRect();return [{top:r.top,bottom:r.bottom}, q&&{bottom:q.bottom}, scrollY, innerHeight]})()");
+  assert.equal(y1, y0, "the Page does not scroll");
+  assert(quoted && pop.top >= quoted.bottom && pop.top - quoted.bottom <= 12 && pop.bottom <= vh, `the editor sits under the highlighted selection: ${JSON.stringify({ pop, quoted, vh })}`);
+  assert.match(await js("document.querySelector('[atl-ui=composer] .atl-label').textContent"), /^Comment on “Pick this/);
+  await b("keyboard", "type", "Here.");
+  await click("[atl-ui=composer] [type=submit]");
+  await until("document.querySelector('[atl-ui=key][data-key=long] .atl-msg')!==null");
+  assert.equal(await js("scrollY"), y0, "saving does not scroll either");
+  assert.equal(await js("document.getElementById('phrase').nextElementSibling?.querySelector('.atl-msg>div:last-child')?.textContent"), "Here.", "the saved thread sits right under its paragraph, not at the Key's end");
+  assert.equal(await js("CSS.highlights.has('atl-pending')"), false, "the pending highlight goes with the editor");
+  await js("window.u6=0; document.addEventListener('atelier:update',()=>u6++); true");
+  host.update(page); await until("u6===1");
+  assert.equal(await js("document.getElementById('phrase').nextElementSibling?.querySelector('.atl-msg>div:last-child')?.textContent"), "Here.", "and stays there through an Update");
+  await js("document.querySelector('[data-atl=undo]').click(); true");
+  await until("document.querySelector('[atl-ui=key][data-key=long] .atl-msg')===null");
+  await js("scrollTo(0,0); true");
+
   // A Page-declared Decision: the first answer is delivered; a change inside the next undo window replaces the
   // unsent one, so the agent gets one "3 → 5" (156).
   const choose = async (v) => { await click(`[data-atl=decide][data-id="run/turn-1"][data-label="${v}"]`); await until(`document.querySelector('[data-id="run/turn-1"][data-label="${v}"]').classList.contains('atl-chosen')`); };
   await choose("3"); await sleep(3100); host.deliverDue(page);
   await choose("4"); await choose("5");
   assert.deepEqual(decides().map((e) => [e.decision, e.option, e.previous, e.options, e.ver]), [["run/turn-1", "3", undefined, "1|2|3|4|5", "v1"], ["run/turn-1", "4", "3", "1|2|3|4|5", "v1"], ["run/turn-1", "5", "3", "1|2|3|4|5", "v1"]]);
-  assert.deepEqual(readLog(page).filter((e) => e.type === "undo").map((e) => e.target), [decides()[1].seq], "the unsent 4 is undone");
+  assert.deepEqual(readLog(page).filter((e) => e.type === "undo" && decides().some((d) => d.seq === e.target)).map((e) => e.target), [decides()[1].seq], "the unsent 4 is undone");
   assert.match(await js("document.querySelector('[atl-ui=decide] .atl-dstate').textContent"), /Your answer: 5 · changed from 3/);
   assert.match(await js("document.querySelector('.atl-bar').textContent"), /2 to answer/);
   // k-state-hook: Pages read Kernel state through window.atelier and the atelier:state event, not Kernel markup.
@@ -164,7 +191,7 @@ try {
 
   if (process.argv[2]) await b("screenshot", process.argv[2]);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body and opened details.");
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body and opened details, selection Comment at the selection.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

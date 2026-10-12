@@ -71,6 +71,10 @@ builders need their task and the Kernel, not the research analyses. Examples use
   "Undo all n"; the idle dock shrinks to its bar; `atl-dock` places it in the Page's layout; only the hovered or
   focused Key (and Keys with threads) has a Comment button (`kernel-check.mjs`). A keyboard user reaches a Key's
   button only from focus inside that Key.
+- **K15 fixed, regression checked (selection Comments, from Thomas):** commenting on selected text inside a Key opened
+  the editor at the Key's end and scrolled the Page away. The editor now opens as a popover under the highlighted
+  selection without scrolling, and the saved thread sits under the paragraph, list item or cell that holds the
+  quote, through Updates (`kernel-check.mjs`). A quote in a Key's own direct text stays at the Key's end.
 
 ## Check before reuse
 
