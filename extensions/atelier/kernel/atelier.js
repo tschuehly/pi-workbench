@@ -1,4 +1,4 @@
-// Atelier Kernel 2.1.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.2.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -15,8 +15,12 @@
 //   atl-group                  on a keyed element: its batched Comments get their own "Send (n)" (150)
 //   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (156)
 //   atl-changes="off"          anywhere on the Page: no change indicators after Updates (156)
+//   atl-dock                   an empty element where the Kernel panel sits in the Page's layout; else it floats at the
+//                              bottom right, offset by --atl-dock-right and --atl-dock-bottom
 //   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab
 //   document "atelier:update"  fires after each Update, so page scripts re-read their data files (152)
+//   window.atelier.state()     read-only Kernel state (Decisions and answers, threads, Requests); document
+//                              "atelier:state" carries it in detail whenever it changes. Kernel markup is not an API.
 // Human state lives only in <page>.events.jsonl, never in the HTML (147).
 // Kernel controls take the Page's colours: override --atl-bg, --atl-fg, --atl-muted, --atl-line, --atl-accent, --atl-warn.
 //
@@ -115,6 +119,24 @@ export function derive(entries, currentVer = () => null, declared = []) {
     requests: [...requests.values()], drafts, status,
     openThreads: [...threads.values()].filter((t) => !t.closed && status(t.root) !== "draft"),
     toAnswer: [...decisions.values()].filter((d) => d.answer === null || d.stale),
+  };
+}
+
+/**
+ * The Kernel state a Page script may rely on, as plain data: window.atelier.state() returns it and the document
+ * event "atelier:state" carries it in `detail` whenever it changes. Kernel markup is not an API. `loaded` turns true
+ * once the Event Log has been read (or there is no session to read it from).
+ */
+export function publicState(st, { conn = "no session", loaded = false } = {}) {
+  const status = (e) => e ? st.status(e) : null;
+  return {
+    conn, loaded, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
+    decisions: st.decisions.map((d) => ({
+      id: d.id, key: d.key ?? null, declared: !!d.declared, options: d.options.map((o) => o.label), recommended: d.options.find((o) => o.recommended)?.label ?? null,
+      answer: d.answer?.option ?? null, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, status: status(d.answer), stale: !!d.stale, opened: !!d.opened,
+    })),
+    threads: st.threads.map((t) => ({ seq: t.root.seq, key: t.root.key ?? null, closed: t.closed, stale: !!t.stale, messages: t.msgs.length, status: status(t.root) })),
+    requests: st.requests.map((r) => ({ seq: r.req.seq, job: r.req.job, key: r.req.key ?? null, state: r.state, revision: r.revision, accepted: r.accepted, cancel: r.cancel })),
   };
 }
 
@@ -262,8 +284,14 @@ function boot() {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const readKey = `atelier-read:${page}`;
   const read = JSON.parse(localStorage.getItem(readKey) || "{}");
-  let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0;
+  let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0, testHost = false;
   const expanded = new Set(); // threads whose folded middle the human opened
+  const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
+  const held = new WeakSet(); // <details> the human opened or closed: his state wins over every later source
+  const tabbed = new WeakSet(); // Keys the Kernel made focusable, so the keyboard reaches their Comment button
+  const threadCount = new Map(); // Key address -> its threads, for the Comment button made on hover
+  const quoteUis = new Map(); // block holding a quoted Comment -> the Kernel UI under it
+  const BLOCK = "p,li,dd,dt,td,th,blockquote,pre,figcaption,h1,h2,h3,h4,h5,h6";
   const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), cards = new Map();
   let hot = null, savedRange = null;
 
@@ -285,6 +313,8 @@ function boot() {
   });
   const all = () => [...entries, ...local];
   const state = () => derive(all(), currentVer, declared());
+  let loaded = !online, published = null;
+  globalThis.atelier = Object.freeze({ state: () => publicState(state(), { conn, loaded }) });
   const now = () => Date.now();
 
   // ---- UI roots. Everything the Kernel draws carries atl-ui and is lifted out before each morph.
@@ -294,8 +324,11 @@ function boot() {
   const selBtn = h(`<button atl-ui="sel" class="atl-selbtn" data-atl="selcomment" hidden>${icon("comment-plus")} Comment</button>`);
   selBtn.addEventListener("pointerdown", (ev) => ev.preventDefault());
   const rail = h(`<nav atl-ui="rail" class="atl-rail" aria-label="Changes" hidden></nav>`);
+  // The panel docks where the Page puts an atl-dock element, else it floats at the bottom right.
+  const dock = () => [...document.querySelectorAll("[atl-dock]")].find((d) => !isUi(d)) ?? document.body;
   document.body.prepend(orphans);
-  document.body.append(panel, selBtn, rail);
+  dock().append(panel);
+  document.body.append(selBtn, rail);
 
   function h(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
   function set(el, html) { if (el && el.__html !== html) { el.__html = html; el.innerHTML = html; } }
@@ -330,9 +363,8 @@ function boot() {
       cursor = list.reduce((max, e) => Math.max(max, e.seq), cursor);
       const fresh = add(list);
       if (!first) markAgent(fresh);
-      first = false;
-      if (fresh.length) render();
-    } catch { conn = "no session"; render(); }
+      if (fresh.length || first) { first = false; loaded = true; render(); }
+    } catch { conn = "no session"; loaded = true; render(); }
   }
 
   async function post(body) {
@@ -354,7 +386,7 @@ function boot() {
   function connect() {
     if (!online || es) return;
     es = new EventSource(`/.atelier/stream${q}`);
-    es.addEventListener("hello", (m) => { const t = JSON.parse(m.data).mtime; if (mtime !== null && t !== mtime) morph(); mtime = t; conn = "live"; render(); pull(); });
+    es.addEventListener("hello", (m) => { const d = JSON.parse(m.data); if (mtime !== null && d.mtime !== mtime) morph(); mtime = d.mtime; testHost = !!d.test; conn = "live"; render(); pull(); });
     es.addEventListener("log", pull);
     es.addEventListener("update", (m) => { const d = JSON.parse(m.data); mtime = d.mtime; pendingNote = d.note ?? null; morph(); });
     es.onerror = () => { conn = "reconnecting"; render(); };
@@ -370,7 +402,7 @@ function boot() {
     const active = document.activeElement;
     const range = active && "selectionStart" in active ? [active.selectionStart, active.selectionEnd] : null;
     // Lift out only top-level Kernel nodes; a composer inside a Key's UI travels with it.
-    document.querySelectorAll("[atl-ui]").forEach((n) => { if (!n.parentElement.closest("[atl-ui]")) n.remove(); });
+    document.body.querySelectorAll("[atl-ui]").forEach((n) => { if (!n.parentElement.closest("[atl-ui]")) n.remove(); });
     const sheet = (d) => [...d.head.querySelectorAll("style,link[rel=stylesheet]")];
     if (sheet(document).map((n) => n.outerHTML).join() !== sheet(doc).map((n) => n.outerHTML).join()) {
       sheet(document).forEach((n) => n.remove());
@@ -381,13 +413,35 @@ function boot() {
     // survives even among same-tag siblings, and with it any state the page script holds on it.
     const lend = (root) => root.querySelectorAll("[atl-key]:not([id])").forEach((el) => { if (!isUi(el)) el.id = `atl-key:${keyOf(el)}`; });
     lend(document); lend(doc);
-    Idiomorph.morph(document.body, doc.body, {
+    // The new body's children, not the body: idiomorph would nest a second <body> inside the first.
+    Idiomorph.morph(document.body, doc.body.childNodes, {
       morphStyle: "innerHTML", ignoreActiveValue: true, restoreFocus: true,
-      callbacks: { beforeAttributeUpdated: (name, el) => !(touched.has(el) && /^(value|checked|selected)$/.test(name)) },
+      callbacks: {
+        beforeAttributeUpdated: (name, el, type) => {
+          if (name === "tabindex" && tabbed.has(el)) { if (type === "remove") return false; tabbed.delete(el); } // the source now sets its own
+          return !(touched.has(el) && /^(value|checked|selected)$/.test(name));
+        },
+        // A <details> the human opened or closed keeps his state through every later Update, even once the source
+        // has said the same; one he never touched follows the new source.
+        beforeNodeMorphed: (old, next) => {
+          if (old.localName === "details" && next.localName === "details") {
+            const said = next.hasAttribute("open");
+            if (held.has(old) || (sourceOpen.has(old) && old.open !== sourceOpen.get(old))) { held.add(old); next.open = old.open; }
+            sourceOpen.set(old, said);
+          }
+          return true;
+        },
+      },
     });
     document.querySelectorAll('[id^="atl-key:"]').forEach((el) => el.removeAttribute("id"));
+    // The morph covers the body's children; <html> and <body> take the new source's attributes (class, style, data-*).
+    for (const [mine, theirs] of [[document.documentElement, doc.documentElement], [document.body, doc.body]]) {
+      for (const a of [...mine.attributes]) if (!theirs.hasAttribute(a.name)) mine.removeAttribute(a.name);
+      for (const a of theirs.attributes) if (mine.getAttribute(a.name) !== a.value) mine.setAttribute(a.name, a.value);
+    }
     document.body.prepend(orphans);
-    document.body.append(panel, selBtn, rail);
+    dock().append(panel);
+    document.body.append(selBtn, rail);
     keyMap = null;
     if (before) diffMarks(before);
     pendingNote = null;
@@ -442,7 +496,7 @@ function boot() {
   // ---- rendering
   const STATUS = { draft: "draft, not sent", pending: "waiting", queued: "queued for the agent", delivered: "delivered", unconfirmed: "not confirmed: Copy it", local: "no session: Copy it", recorded: "recorded" };
   const left = (e) => Math.ceil((e.at + UNDO_MS - now()) / 1000);
-  const statusText = (st, e) => { const s = st.status(e); return s === "pending" && left(e) > 0 ? `sends in ${left(e)} s` : STATUS[s] ?? ""; };
+  const statusText = (st, e) => { const s = st.status(e); return s === "pending" && left(e) > 0 ? `sends in ${left(e)} s` : testHost && s === "delivered" ? "printed by the test host" : STATUS[s] ?? ""; };
 
   function threadHtml(t, st) {
     const lastRead = read[t.root.seq] ?? 0;
@@ -505,13 +559,24 @@ function boot() {
     set(panel.querySelector(".atl-palette"), palette(`${document.querySelector('meta[name="color-scheme"]')?.content ?? ""} ${getComputedStyle(document.documentElement).colorScheme ?? ""}`));
     const idx = textIndex();
     const placed = new Map(st.threads.map((t) => [t.root.seq, placeThread(t, idx)]));
-    const seen = new Set(), kept = new Set();
+    const seen = new Set(), kept = new Set(), atQuote = new Map();
     for (const el of keyed()) {
       const addr = keyOf(el);
       if (seen.has(addr)) continue; seen.add(addr);
       let ui = keyUis.get(addr);
       if (!ui) { ui = h(`<div atl-ui="key" data-key="${esc(addr)}"><div class="atl-khead"></div><div class="atl-kbody"></div><div class="atl-slot"></div></div>`); keyUis.set(addr, ui); }
       const threadsHere = st.threads.filter((t) => placed.get(t.root.seq).where === "key" && t.root.key === addr);
+      // A thread on selected text sits under the paragraph (or in the list item or cell) that holds its quote,
+      // not at the end of a long Key (Fix 6); one holder per block keeps several threads in order.
+      const atKeyEnd = threadsHere.filter((t) => {
+        const range = t.root.quote && findQuote(t.root.quote, idx), block = range?.startContainer.parentElement?.closest(BLOCK);
+        if (!block || block === el || !el.contains(block) || isUi(block)) return true;
+        let holder = quoteUis.get(block);
+        if (!holder) { holder = h(`<div atl-ui="key" class="atl-at-quote" data-key="${esc(addr)}"><div class="atl-khead"></div><div class="atl-kbody"></div><div class="atl-slot"></div></div>`); quoteUis.set(block, holder); }
+        if (block.matches("li,td,th,dd,dt")) { if (holder.parentElement !== block) block.append(holder); } else if (block.nextElementSibling !== holder) block.after(holder);
+        (atQuote.get(holder) ?? atQuote.set(holder, []).get(holder)).push(t);
+        return false;
+      });
       // A Decision renders before the threads, so its options stay where the Page put them.
       const d = el.hasAttribute("atl-decide") ? st.decisions.find((x) => x.id === addr && x.declared) : undefined;
       if (d) {
@@ -525,22 +590,25 @@ function boot() {
         kept.add(dec);
       }
       place(ui, el);
-      // The Comment button floats at the element's top-right, takes no layout space, and shows on hover or focus;
-      // with threads it stays as a count. A Key that only marks a Decision's slot gets none.
+      // The Comment button: only the hovered or focused Key has one, not every Key; with threads it stays as a count.
+      // A Key that only marks a Decision's slot gets none.
       if (!el.hasAttribute("atl-slot")) {
-        let pin = pins.get(addr);
-        if (!pin) { pin = h(`<span atl-ui="pin" class="atl-pin" data-key="${esc(addr)}"></span>`); pins.set(addr, pin); }
-        place(pin, el);
-        set(pin, `<button data-atl="comment" data-key="${esc(addr)}" class="atl-add" aria-label="Comment on ${esc(addr)}${threadsHere.length ? ` (${threadsHere.length} threads)` : ""}" title="Comment on ${esc(addr)}">${icon("comment")}${threadsHere.length ? `<span>${threadsHere.length}</span>` : ""}</button>`);
-        pin.classList.toggle("atl-has", threadsHere.length > 0);
-        kept.add(pin);
+        // A Key with nothing focusable in itself takes a tab stop, so Tab reaches it and then its Comment button.
+        if (!el.hasAttribute("tabindex") && el.tabIndex < 0) { el.tabIndex = 0; tabbed.add(el); }
+        threadCount.set(addr, threadsHere.length);
+        if (threadsHere.length || addr === hot || pins.get(addr)?.contains(document.activeElement)) kept.add(pinFor(addr, el));
       }
       const groupDrafts = el.hasAttribute("atl-group") ? st.drafts.filter((x) => inGroup(x.key, addr)).length : 0;
       set(ui.firstElementChild, groupDrafts ? `<button data-atl="send" data-key="${esc(addr)}" class="atl-primary">${icon("send")} Send (${groupDrafts})</button>` : "");
       reconcile(ui.children[1], [
         ...st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st), open: !x.answer || x.stale, extra: `<input class="atl-note" placeholder="Optional note with your answer" aria-label="Note">` })),
-        ...threadsHere.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })),
+        ...atKeyEnd.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })),
       ]);
+    }
+    for (const [block, holder] of quoteUis) {
+      const list = atQuote.get(holder);
+      if (!list) { holder.remove(); quoteUis.delete(block); continue; }
+      reconcile(holder.children[1], list.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })));
     }
     for (const map of [pins, decUis]) for (const [addr, node] of map) if (!kept.has(node)) { node.remove(); map.delete(addr); }
     for (const [addr, ui] of keyUis) {
@@ -554,11 +622,10 @@ function boot() {
 
     const onText = st.threads.filter((t) => placed.get(t.root.seq).where === "text");
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
-    const undoable = all().filter((e) => e.origin === "human" && e.type !== "undo" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
     const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
     const open = st.openThreads.length + st.toAnswer.length;
-    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button><span class="atl-dim atl-conn">${esc(conn)}</span>`);
-    renderUndo(undoable);
+    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")} Test host, no Pi session</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
+    renderUndo(undoable());
     const section = (title, items) => items.length ? `<h4>${title}</h4>` : "";
     const list = panel.querySelector(".atl-list");
     if (!list.firstChild) list.append(h(`<div><div class="atl-h-copy"></div><div class="atl-h-req"></div><div class="atl-req"></div><div class="atl-h-text"></div><div class="atl-text"></div><div class="atl-h-un"></div><div class="atl-un"></div></div>`));
@@ -569,11 +636,16 @@ function boot() {
     reconcile(list.querySelector(".atl-text"), onText.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed })));
     set(list.querySelector(".atl-h-un"), section(`Unanchored (${unanchored.length})`, unanchored));
     reconcile(list.querySelector(".atl-un"), unanchored.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed })));
+    // An open reply follows its thread wherever this render put it (under a quote, at its Key, in the panel), so an
+    // Update that moves the thread or drops its quote holder keeps the typed text.
+    const replyTo = composer?.spec.anchor?.thread, home = replyTo != null && cards.get(`t:${replyTo}`)?.closest("[atl-ui=key],[atl-ui=panel]")?.querySelector(".atl-slot");
+    if (home && composer.node.parentElement !== home) home.append(composer.node);
 
     if (globalThis.Highlight && CSS.highlights) {
       const ranges = st.threads.filter((t) => !t.closed && t.root.quote).map((t) => findQuote(t.root.quote, idx)).filter(Boolean);
       CSS.highlights.set("atl-quote", new Highlight(...ranges));
     }
+    for (const d of document.querySelectorAll("details")) if (!sourceOpen.has(d)) sourceOpen.set(d, d.open); // new from the source or a page script
     // html-plan: a closed parent shows how many decisions wait inside it.
     document.querySelectorAll("[atl-ui=badge]").forEach((b) => b.remove());
     for (const d of document.querySelectorAll("details:not([open])")) {
@@ -584,9 +656,21 @@ function boot() {
     for (const el of keyed()) io.observe(el);
     renderMarks();
     positionPins();
+    const pub = publicState(st, { conn, loaded }), json = JSON.stringify(pub);
+    if (json !== published) { published = json; document.dispatchEvent(new CustomEvent("atelier:state", { detail: pub })); }
   }
 
-  // ---- the floating Comment button: only the innermost hovered or focused Key shows it (no stacked duplicates)
+  // ---- the floating Comment button: at the top-right of the innermost hovered or focused Key, taking no layout space
+  function pinFor(addr, el = findKey(addr)) {
+    if (!el) return null;
+    let pin = pins.get(addr);
+    if (!pin) { pin = h(`<span atl-ui="pin" class="atl-pin" data-key="${esc(addr)}"></span>`); pins.set(addr, pin); }
+    const n = threadCount.get(addr) ?? 0;
+    place(pin, el);
+    set(pin, `<button data-atl="comment" data-key="${esc(addr)}" class="atl-add" aria-label="Comment on ${esc(addr)}${n ? ` (${n} threads)` : ""}" title="Comment on ${esc(addr)}">${icon("comment")}${n ? `<span>${n}</span>` : ""}</button>`);
+    pin.classList.toggle("atl-has", n > 0);
+    return pin;
+  }
   function pinAt(pin) {
     const el = findKey(pin.dataset.key), b = pin.firstElementChild;
     if (!el || !b) return;
@@ -594,19 +678,21 @@ function boot() {
     const p = pin.getBoundingClientRect(), r = el.getBoundingClientRect();
     pin.style.translate = `${Math.round(r.right - p.left - b.offsetWidth - 4)}px ${Math.round(r.top - p.top + 4)}px`;
   }
-  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); positionMarks(); }
+  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); positionMarks(); placePop(); }
   function setHot(target) {
     const el = target?.closest?.("[atl-key]:not([atl-slot])");
     const addr = el && !isUi(el) ? keyOf(el) : null;
     if (addr === hot) return;
     pins.get(hot)?.classList.remove("atl-hot");
     hot = addr;
-    const pin = pins.get(addr);
+    for (const [a, pin] of pins) if (a !== hot && !pin.classList.contains("atl-has") && !pin.contains(document.activeElement)) { pin.remove(); pins.delete(a); }
+    const pin = addr && pinFor(addr);
     if (pin) { pin.classList.add("atl-hot"); pinAt(pin); }
   }
-  document.addEventListener("pointerover", (ev) => { if (!isUi(ev.target)) setHot(ev.target); });
+  // Kernel UI inside a Key (its Decision options, its threads) counts as the Key; the button itself keeps it.
+  document.addEventListener("pointerover", (ev) => { if (!ev.target.closest?.("[atl-ui=pin]")) setHot(ev.target); });
   document.documentElement.addEventListener("pointerleave", () => setHot(null));
-  document.addEventListener("focusin", (ev) => { const pin = ev.target.closest?.("[atl-ui=pin]"); if (pin) pinAt(pin); else if (!isUi(ev.target)) setHot(ev.target); });
+  document.addEventListener("focusin", (ev) => { const pin = ev.target.closest?.("[atl-ui=pin]"); if (pin) pinAt(pin); else setHot(ev.target); });
   addEventListener("resize", positionPins);
   new ResizeObserver(() => positionPins()).observe(document.body);
 
@@ -630,10 +716,13 @@ function boot() {
   document.addEventListener("selectionchange", () => { if (!selQueued) { selQueued = true; requestAnimationFrame(() => { selQueued = false; placeSel(); }); } });
   addEventListener("scroll", () => { if (!selBtn.hidden) placeSel(); }, { capture: true, passive: true });
 
-  function renderUndo(undoable) {
-    // Decision 151: every interaction can be undone for 10 seconds, with a visible countdown.
+  const undoable = () => all().filter((e) => e.origin === "human" && e.type !== "undo" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
+  function renderUndo(list) {
+    // Decision 151: every interaction can be undone for 10 seconds, with a visible countdown. One row for all of them,
+    // so a batch of answers never stacks rows over the Page (k-buttons).
     const label = (e) => ({ comment: "Comment saved", decide: e.previous != null ? `Changed ${e.previous} → ${e.option}` : `Chose ${e.option}`, request: `Requested ${e.job}`, send: "Comments sent", close: "Closed", still: "Marked still applies", opened: "Material opened", cancel: "Cancel requested", accept: "Accepted", rework: "Rework requested" })[e.type] ?? e.type;
-    set(panel.querySelector(".atl-undo"), undoable.map((e) => `<div class="atl-toast">${esc(label(e))} <button data-atl="undo" data-seq="${e.seq}">${icon("undo")} Undo (${left(e)} s)</button></div>`).join(""));
+    const e = list.at(-1), more = list.length - 1;
+    set(panel.querySelector(".atl-undo"), e ? `<div class="atl-toast">${esc(label(e))}${more ? ` and ${more} more` : ""} <button data-atl="undo" data-seq="${e.seq}">${icon("undo")} Undo (${left(e)} s)</button>${more ? `<button data-atl="undoall">Undo all ${list.length}</button>` : ""}</div>` : "");
   }
   setInterval(() => { if (panel.querySelector(".atl-toast") || panel.innerHTML.includes("sends in")) render(); }, 1000);
 
@@ -809,18 +898,33 @@ function boot() {
     place(t.nodes.diff, el);
   }
 
-  // ---- composer: one per slot, persistent while open so typing survives every render and morph
+  // ---- composer: one per slot, persistent while open so typing survives every render and morph. A Comment on
+  // selected text opens beside the selection (spec.range), outside <body> so no Update lifts it, and never scrolls.
+  function closeComposer() { composer?.node.remove(); composer = null; CSS.highlights?.delete("atl-pending"); }
+  function placePop() {
+    const range = composer?.spec.range, node = composer?.node;
+    if (!range) return;
+    const r = range.getBoundingClientRect(), w = node.offsetWidth, ht = node.offsetHeight;
+    if (!r.width && !r.height) return; // the text went away in an Update: stay where it was
+    const below = r.bottom + 6 + ht <= innerHeight || r.top - 6 - ht < 0;
+    node.style.left = `${Math.round(scrollX + Math.max(4, Math.min(innerWidth - w - 4, r.left)))}px`;
+    node.style.top = `${Math.round(scrollY + (below ? r.bottom + 6 : r.top - 6 - ht))}px`;
+  }
   function openComposer(spec, slot) {
-    composer?.node.remove();
-    const node = h(`<form atl-ui="composer" class="atl-composer"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="3" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
+    closeComposer();
+    const node = h(`<form atl-ui="composer" class="atl-composer${spec.range ? " atl-pop" : ""}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="3" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
     composer = { spec, node };
-    slot.append(node);
-    node.querySelector("textarea").focus();
+    if (spec.range) {
+      document.documentElement.append(node);
+      placePop();
+      if (globalThis.Highlight && CSS.highlights) CSS.highlights.set("atl-pending", new Highlight(spec.range)); // the quote stays marked
+    } else slot.append(node);
+    node.querySelector("textarea").focus({ preventScroll: !!spec.range });
     node.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const text = node.querySelector("textarea").value.trim();
       if (!text) return;
-      composer = null; node.remove();
+      closeComposer();
       // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
       const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
       await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery });
@@ -874,6 +978,7 @@ function boot() {
     material: (b) => { const d = state().decisions.find((x) => x.id === b.dataset.id); jumpTo(findKey(d?.material)); if (d && !d.opened) markOpened(d); },
     send: (b) => post({ type: "send", key: b.dataset.key || undefined }),
     undo: (b) => post({ type: "undo", target: +b.dataset.seq }),
+    undoall: async () => { for (const e of undoable().reverse()) await post({ type: "undo", target: e.seq }); },
     cancel: (b) => post({ type: "cancel", target: +b.dataset.seq }),
     accept: (b) => post({ type: "accept", target: +b.dataset.seq }),
     rework: (b) => openComposer({ label: `What should change in Request #${b.dataset.seq}?`, kind: "rework", target: +b.dataset.seq }, panel.querySelector(".atl-slot")),
@@ -893,7 +998,7 @@ function boot() {
       if (spot !== el && spot.matches("[aria-controls]")) spot.click(); // open the tab that hides it
       requestAnimationFrame(() => jumpTo(el));
     },
-    dismiss: () => { composer?.node.remove(); composer = null; },
+    dismiss: closeComposer,
     next: () => {
       const items = [...document.querySelectorAll(".atl-open-item")];
       if (!items.length) return;
@@ -908,7 +1013,7 @@ function boot() {
       if (start < 0 || !exact) { flash("Select text on the Page first."); return; }
       const key = keyOf(r.commonAncestorContainer.nodeType === 1 ? r.commonAncestorContainer : r.commonAncestorContainer.parentElement);
       const anchor = { quote: { exact: exact.slice(0, 500), prefix: idx.text.slice(Math.max(0, start - 32), start), suffix: idx.text.slice(end, end + 32) }, ...(key ? anchorForKey(key) : {}) };
-      openComposer({ label: `Comment on “${exact.slice(0, 60)}”`, anchor }, slotFor(key));
+      openComposer({ label: `Comment on “${exact.slice(0, 60)}”`, anchor, range: r.cloneRange() });
     },
     copy: async () => {
       const st = state();
@@ -978,7 +1083,9 @@ function boot() {
 const STYLE = `
 [atl-ui]{font:13px/1.4 system-ui,sans-serif;color:var(--atl-fg)}
 [atl-ui][hidden],[atl-ui] [hidden]{display:none!important}
-[atl-ui=panel]{position:fixed;right:12px;bottom:12px;z-index:2147483000;width:340px;max-height:70vh;overflow:auto;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;padding:8px;box-shadow:0 4px 18px #0002}
+[atl-ui=panel]{position:fixed;right:var(--atl-dock-right,12px);bottom:var(--atl-dock-bottom,12px);z-index:2147483000;box-sizing:border-box;width:max-content;max-width:min(340px,calc(100vw - 24px));max-height:70vh;overflow:auto;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;padding:8px;box-shadow:0 4px 18px #0002}
+[atl-ui=panel]:has(.atl-card,.atl-composer,.atl-warn){width:340px}
+[atl-dock]>[atl-ui=panel]{position:static;width:auto;max-width:none;max-height:none;box-shadow:none}
 [atl-ui=orphans]:not(:empty){max-height:50vh;overflow:auto;margin:8px;display:grid;gap:8px}
 [atl-ui=key]{margin:4px 0}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
 .atl-i{width:14px;height:14px;flex:none}
@@ -1015,8 +1122,9 @@ const STYLE = `
 .atl-quote{font-style:italic;border-left:3px solid var(--atl-warn);padding-left:6px}
 .atl-toast{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:2px 0}
 .atl-composer{display:grid;gap:6px;margin:6px 0}
+.atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(340px,calc(100vw - 8px));margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
 .atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
-::highlight(atl-quote){background:#fde68a;color:#000}
+::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
 .atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
 .atl-mark-bar{position:absolute;width:0;height:0;z-index:2147481000}
 [atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}

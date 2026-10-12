@@ -209,7 +209,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.1\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.2\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -222,6 +222,11 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
     writeFileSync(file, old.replace("0".repeat(64), createHash("sha256").update(body).digest("hex")) + body);
     assert.equal(copyKernel(dir)[0].outcome, "behind");
     assert.match(readFileSync(file, "utf8"), /0\.9\.0/);
+    // k-stamp: a hand-copied Kernel, byte-identical but without the stamp line, is current, not changed.
+    const source = readFileSync(new URL("./kernel/atelier.js", import.meta.url), "utf8");
+    writeFileSync(file, source);
+    assert.equal(copyKernel(dir)[0].outcome, "current");
+    assert.equal(readFileSync(file, "utf8"), source, "left as it is");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -462,4 +467,20 @@ test("wordDiff marks inserted and deleted words; diffPreview names the first cha
   assert.equal(diffPreview(wordDiff("undo lasts 30 s", "undo lasts 10 s")), "…undo lasts 30 → 10…");
   assert.deepEqual(wordDiff("same", "same"), [["=", "same"]]);
   assert.equal(diffPreview(wordDiff("same", "same")), "");
+});
+
+test("publicState: the read-only Kernel state a Page script may rely on (k-state-hook)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "ship", key: "a", question: "Ship?", options: [{ label: "Yes", recommended: true }, { label: "No" }] } },
+    { seq: 2, at: 0, origin: "human", type: "decide", decision: "row-1", key: "row-1", options: "Keep|Drop", option: "Drop", note: "old", delivery: "immediate" },
+    { seq: 3, at: 0, origin: "kernel", type: "delivered", of: [2] },
+    { seq: 4, at: 0, origin: "human", type: "comment", key: "a", text: "x", delivery: "immediate" },
+  ];
+  const s = publicState(derive(log, () => null, [{ id: "row-2", key: "row-2", declared: true, options: [{ label: "Keep" }, { label: "Drop" }] }]), { conn: "live", loaded: true });
+  assert.deepEqual(s.decisions.map((d) => [d.id, d.declared, d.recommended, d.answer, d.note, d.status]), [["row-2", true, null, null, null, null], ["ship", false, "Yes", null, null, null], ["row-1", true, null, "Drop", "old", "queued"]]);
+  assert.deepEqual(s.toAnswer, ["row-2", "ship"]);
+  assert.deepEqual(s.threads, [{ seq: 4, key: "a", closed: false, stale: false, messages: 1, status: "pending" }]);
+  assert.deepEqual([s.conn, s.loaded, s.open, s.drafts], ["live", true, 3, 0]);
+  assert.doesNotThrow(() => JSON.stringify(s), "plain data");
 });

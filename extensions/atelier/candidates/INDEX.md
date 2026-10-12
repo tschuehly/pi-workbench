@@ -11,7 +11,8 @@ builders need their task and the Kernel, not the research analyses. Examples use
 3. Bind domain IDs to stable Keys and content hashes to versions. Scope repeated Component IDs,
    selectors and URL parameters per instance. Nest Components under the judged item, not under controls.
 4. Read [TIPS](TIPS.md) for optional content examples and rejected approaches. Verify your assembled
-   Page with a real Update while interacting; candidates being tested does not prove the composition.
+   Page with a real Update while interacting (without the tool: `node extensions/atelier/serve.mjs <page>`);
+   candidates being tested does not prove the composition.
 
 ## Patterns — choose a hierarchy, not a template
 
@@ -45,13 +46,40 @@ builders need their task and the Kernel, not the research analyses. Examples use
   flow content visible; clear review filters before using global jump. A universal reveal hook needs Kernel work.
 - **K2 fixed (decision 155):** a Page-declared Decision's `atl-note` options post only with a note, so an
   override carries its reason in the same event. Prefill is still not implemented.
-- **K3 bounded:** review-filter reads Kernel `derive` on load/Update/explicit refresh; no public live-state
-  notification. It does not auto-advance from a click or include unsaved/offline local events.
+- **K3 fixed, regression checked (k-state-hook):** all five bite builders scraped Kernel markup (`.atl-open-item`,
+  `.atl-chosen`, `aria-pressed`) to learn which Decisions were answered. The Kernel now exposes read-only
+  `atelier.state()` and the document event `atelier:state` (`atelier.test.mjs` `publicState`, `kernel-check.mjs`).
+  review-filter still reads `derive` on load/Update/refresh and skips unsaved/offline local events; moving it to
+  `atelier:state` is open.
 - **K4/K8 pending real media:** Kernel records a container's media time, but does not capture frames or
   seek from a Comment. Supply project-owned frames/captions; check actual playback/Range and changed bytes.
 - **K6/K7 domain work:** typed job validation, safe queueing, production approval and legacy lifecycle mapping
   belong to the project. A score is not acceptance; only the human accepts completed work.
 - **K9 pending:** example prose is German; Kernel controls remain English.
+- **K10 fixed, regression checked (k-body):** an Update nested a second `<body>` (trial C, 1 → 2 bodies). The
+  Kernel morphs the new body's children and copies the new `<html>` and `<body>` attributes (review 2: class,
+  style and data changes were ignored); `kernel-check.mjs` asserts one `<body>` and its new attributes.
+- **K11 fixed, regression checked (k-script-rows):** an Update closed `<details>` the human opened and emptied
+  rows a page script built. `<details>` the human toggled keep his state through every later Update, also once the
+  source has caught up and changed back (review 2; `kernel-check.mjs`); script-built
+  rows are the Page's to re-render on `atelier:update`, as the atelier skill now says (static keyed HTML preferred).
+- **K12 fixed, regression checked (k-stamp):** `open` reported a byte-identical, hand-copied (unstamped) Kernel as
+  "changed locally". A copy whose content equals the Kernel is current (`atelier.test.mjs`); the skill says let `open` copy.
+- **K13 fixed, regression checked (k-test-host):** builders without the tool could not test persistence, Delivery or
+  Updates, and wrote stand-in hosts. `extensions/atelier/serve.mjs` runs the real host (`host.ts`, shared with the
+  tool) for one Page without a Pi session; `fixes.test.mjs` drives it. The skill points builders to it. Review 2: it
+  wrote receipts into the Page's real Event Log, consuming the human's waiting input. It now serves a test copy
+  with its own log, deletes both on stop, and the Kernel bar says "Test host, no Pi session".
+- **K14 fixed, regression checked (k-buttons):** the dock and its undo rows covered Page content (27 stacked undo rows
+  after a batch) and every Key carried a Comment button (109–589 per Page). Pending undos share one row with
+  "Undo all n"; the idle dock shrinks to its bar; `atl-dock` places it in the Page's layout; only the hovered or
+  focused Key (and Keys with threads) has a Comment button (`kernel-check.mjs`). A keyboard user reaches a Key's
+  button from focus inside that Key; a Key with nothing focusable gets `tabindex="0"` (review 2), an authored one stays.
+- **K15 fixed, regression checked (selection Comments, from Thomas):** commenting on selected text inside a Key opened
+  the editor at the Key's end and scrolled the Page away. The editor now opens as a popover under the highlighted
+  selection without scrolling, and the saved thread sits under the paragraph, list item or cell that holds the
+  quote, through Updates (`kernel-check.mjs`). A quote in a Key's own direct text stays at the Key's end. An open
+  reply follows its thread, so an Update that rewrites the quote keeps the typed text (review 2).
 
 ## Check before reuse
 
