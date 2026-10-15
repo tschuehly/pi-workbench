@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, createReadStream, existsSync, linkSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
@@ -12,17 +12,24 @@ import { CLASSES, UNDO_MS, compose, inGroup, keyTexts } from "./kernel/atelier.j
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-const KERNEL_VERSION = "2.2.0";
+const KERNEL_VERSION = "2.3.0";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
 export const WATCHDOG_MS = 15_000;
+// A Decision's answer may name up to four images, each uploaded on its own (POST /.atelier/image) before the answer
+// posts, so an event body stays small.
+export const IMAGE_MAX = 10 * 1024 * 1024;
+const IMAGES_MAX = 4;
+const UPLOADS_MAX = 4; // ponytail: images receiving at once per host (4 x 10 MB in memory); raise it if tabs upload in parallel
 const BODY_MAX = 64 * 1024;
 
 type Entry = { seq: number; at: number; origin: string; type: string; [field: string]: any };
 export type Message = { customType: string; content: string; display: true; details: { page: string; seqs: number[]; replay: boolean } };
 
 export const logPath = (page: string) => `${page}.events.jsonl`;
+/** Images the human attaches to a Decision's answer live beside the Event Log; the log names them relative to the Page's directory. */
+export const imagesDir = (page: string) => `${page}.images`;
 
 /** The Event Log (143): append-only JSON lines beside the Page. A torn last line is skipped, never fatal. */
 export function readLog(page: string): Entry[] {
@@ -106,7 +113,7 @@ export function dueMessages(entries: Entry[], now: number, undoMs = UNDO_MS, ski
   return out;
 }
 
-const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+const sha = (text: string | Buffer) => createHash("sha256").update(text).digest("hex");
 const STAMP = /^\/\/ atelier-copy (\S+) sha256:([0-9a-f]{64})[^\n]*\n/;
 
 /**
@@ -156,11 +163,56 @@ const ANCHOR = { key: opt(str), ver: opt(str), t: opt(Number.isFinite), quote: o
 const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   comment: { ...ANCHOR, text: str, thread: opt(seqNo) },
   // previous: the answer this one changes (155); options and rec: a Page-declared Decision's atl-decide and atl-rec.
-  decide: { decision: str, option: str, previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str) },
+  decide: { decision: str, option: str, previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str),
+    images: opt((v) => Array.isArray(v) && v.length <= IMAGES_MAX && v.every(str)) },
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
   close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str }, send: { key: opt(str) },
 };
+
+// The bytes decide an image's type; the client's declared type and file name are never trusted.
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const sniff = (b: Buffer) => b.subarray(0, 8).equals(PNG) ? "png"
+  : b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? "jpg"
+  : /^GIF8[79]a$/.test(b.toString("latin1", 0, 6)) ? "gif"
+  : b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP" ? "webp" : undefined;
+
+const IMAGE_NAME = /^[0-9a-f]{16}\.(png|jpg|gif|webp)$/;
+
+/**
+ * Stores one uploaded image in <page>.images/ under its content hash and returns its name relative to the Page's
+ * directory. It is written to a temp file and renamed over the name, so whatever already sits there is replaced, never trusted.
+ */
+export function storeImage(page: string, bytes: Buffer): { status: number; json: { name?: string; error?: string } } {
+  const ext = sniff(bytes);
+  if (!ext) return { status: 415, json: { error: "Images must be PNG, JPEG, WebP or GIF." } };
+  const dir = imagesDir(page), base = `${sha(bytes).slice(0, 16)}.${ext}`, tmp = path.join(dir, `.upload-${randomUUID()}`);
+  try {
+    mkdirSync(dir, { recursive: true });
+    if (!lstatSync(dir).isDirectory()) throw new Error(`${dir} is not a directory`); // a symlink would store outside the Page's directory
+    writeFileSync(tmp, bytes, { flag: "wx" });
+    renameSync(tmp, path.join(dir, base));
+  } catch (error) {
+    rmSync(tmp, { force: true });
+    return { status: 409, json: { error: `Could not store the image: ${String(error)}` } };
+  }
+  return { status: 200, json: { name: `${path.basename(dir)}/${base}` } };
+}
+
+/** A name a decide event may carry: a regular file (no symlink) directly in a real <page>.images/, hash-named, within size, its bytes the type its name says. */
+function storedImage(page: string, name: string) {
+  const dir = imagesDir(page), prefix = `${path.basename(dir)}/`, base = name.slice(prefix.length), ext = IMAGE_NAME.exec(base)?.[1];
+  if (!name.startsWith(prefix) || !ext) return false;
+  let fd: number | undefined;
+  try {
+    if (!lstatSync(dir).isDirectory() || !lstatSync(path.join(dir, base)).isFile()) return false; // a FIFO would block open
+    fd = openSync(path.join(dir, base), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const s = fstatSync(fd), head = Buffer.alloc(12);
+    if (!s.isFile() || s.size > IMAGE_MAX) return false;
+    readSync(fd, head, 0, head.length, 0);
+    return sniff(head) === ext;
+  } catch { return false; } finally { if (fd !== undefined) closeSync(fd); }
+}
 
 export type Host = ReturnType<typeof createHost>;
 
@@ -229,7 +281,7 @@ export function createHost(options: {
       if (due.events.length === 0) { append(page, { origin: "kernel", type: "received", of: due.seqs, note: "nothing to send" }); continue; }
       due.seqs.forEach((s) => flying(page).add(s));
       const failed = () => due.seqs.forEach((s) => flying(page).delete(s));
-      const content = compose(rel(page), url(page), due.events, entries, { replay, group: due.group, excerpt: (key: string) => excerpts().get(key) });
+      const content = compose(rel(page), url(page), due.events, entries, { replay, group: due.group, excerpt: (key: string) => excerpts().get(key), file: (name: string) => path.join(path.dirname(page), name) });
       try {
         options.send({ customType: due.customType, content, display: true, details: { page, seqs: due.seqs, replay } }, (idle) => {
           append(page, { origin: "kernel", type: "delivered", of: due.seqs, session: sessionId });
@@ -258,6 +310,11 @@ export function createHost(options: {
       if (!ok(body[field])) return { status: 400, json: { error: `Bad ${field} on ${body.type}` } };
       if (body[field] !== undefined) event[field] = body[field];
     }
+    if (Array.isArray(event.images)) {
+      const bad = (event.images as string[]).find((x) => !storedImage(page, x));
+      if (bad !== undefined) return { status: 400, json: { error: `No stored image ${bad}; upload it first.` } };
+      if (!(event.images as string[]).length) delete event.images;
+    }
     const asked = body.delivery;
     if (body.type === "comment" && body.thread !== undefined && !readLog(page).some((e) => e.seq === body.thread && e.type === "comment")) return { status: 400, json: { error: `No Comment #${body.thread} to reply to.` } };
     if (body.type === "undo") {
@@ -279,6 +336,28 @@ export function createHost(options: {
     res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
   };
+
+  // One image per request, its raw bytes as the body. A refusal answers at once and closes the connection, so the
+  // rest of an oversized body is never received.
+  let uploads = 0;
+  function upload(page: string, req: IncomingMessage, res: ServerResponse) {
+    const refuse = (status: number, error: string) => { res.setHeader("connection", "close"); json(res, status, { error }); };
+    if (uploads >= UPLOADS_MAX) return refuse(429, "Too many images uploading at once; try again.");
+    uploads += 1;
+    req.once("close", () => { uploads -= 1; });
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => {
+      if (res.headersSent) return;
+      size += c.length;
+      if (size <= IMAGE_MAX) chunks.push(c);
+      else { chunks.length = 0; refuse(413, "An image may be at most 10 MB."); }
+    });
+    req.on("end", () => {
+      if (res.headersSent) return;
+      try { const r = storeImage(page, Buffer.concat(chunks)); json(res, r.status, r.json); } catch (error) { json(res, 500, { error: String(error) }); }
+    });
+  }
 
   function serveFile(req: IncomingMessage, res: ServerResponse, pathname: string) {
     let decoded: string;
@@ -324,6 +403,7 @@ export function createHost(options: {
         });
         return;
       }
+      if (u.pathname === "/.atelier/image" && req.method === "POST") return upload(page, req, res);
       if (u.pathname === "/.atelier/stream") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
         pages.get(page)!.add(res);

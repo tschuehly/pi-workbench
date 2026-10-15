@@ -31,8 +31,9 @@ _Avoid_: lost comment, orphan
 **Decision**:
 A choice the human answers among declared options: one the agent asks, or one a Page declares on a
 Key, such as a 1–5 score or Confirm/Redo. It may recommend one option, and may require a note for
-some options. The human can change the answer at any time; the answer records what it replaced and
-whether the human opened the material first.
+some options. Any answer may carry a note and images, which the Event Log keeps beside the Page.
+The human can change the answer at any time; the answer records what it replaced and whether the
+human opened the material first.
 _Avoid_: grade, score, proposal, approval
 
 **Request**:

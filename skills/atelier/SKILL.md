@@ -27,6 +27,8 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
   Key address. Optional: `atl-rec="Confirm"` (recommended option), `atl-note="Redo"` (options that
   need a note), `atl-delivery="record|send|immediate"` (default immediate), `atl-material="key"`.
   Options render in a descendant `atl-slot` (e.g. one table cell), else at the end of the element.
+  Every Decision lets the human add a note and up to four images (PNG, JPEG, WebP, GIF, 10 MB each);
+  the Delivery names each image's absolute path, so read it.
 - Decisions with consequences per option go through `ask`. Recommend one option when you have a
   basis; none for ratings or gates without evidence. The human may change any answer later; a
   change arrives as "X → Y".
@@ -57,10 +59,35 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
   `--atl-warn` to match a Page.
 - The Kernel panel floats at the bottom right. Where it would cover content, put an empty
   `<div atl-dock></div>` where it should sit in the Page's layout (a sidebar, a header row), or move it
-  with `--atl-dock-right` and `--atl-dock-bottom`. Every Key gets its Comment button on hover or focus;
-  a Key with threads keeps a count. A Key with nothing focusable gets `tabindex="0"` so the keyboard
-  reaches it; an authored `tabindex` stays.
+  with `--atl-dock-right` and `--atl-dock-bottom`. Placed anywhere but directly in `<body>`, the panel
+  takes its container's width (up to 760px) and scrolls inside when the Page limits its height.
+  Every Key gets its Comment button on hover or focus; a Key with threads keeps a count. A Key with
+  nothing focusable gets `tabindex="0"` so the keyboard reaches it; an authored `tabindex` stays.
 - For icons in Page content use Lucide (ISC), inlined as SVG like the Kernel's; no emoji as icons.
+
+## Page rules (from Thomas's walkthroughs, 2026-10-10 to 10-13)
+
+Every trial Page failed on the same points. Before opening a Page, check it against each rule.
+
+- **Little text.** A heading and at most two short sentences per item. Plain words for what he sees, one
+  change per sentence. No jargon (state capsules, role IDs, pin, scope), no meta-text about how the Page
+  is grouped, no disclaimers about what was not measured, no repeated instructions; options explain themselves.
+- **No provenance noise.** No Git SHAs, app ids, timestamps, viewport/pointer/scale lines or "evidence
+  limit" boxes on the Page; keep them in `atl-ver` or data files.
+- **Use the full desktop width.** No narrow centred column with empty margins; use several columns, compact
+  padding, and one-line headers. Navigation collapses so content can take the screen.
+- **Detail opens where it is clicked.** A box or stage that acts as navigation opens its content in place (tab
+  panel or expand), never by jumping far down the Page. Navigation shows progress and what needs him, not a wall of links.
+- **The choice sits at its evidence.** Put the Decision on each version or stage where he sees it (under its
+  screenshot), not in a row at the end; one Decision per grain where versions differ (e.g. per viewport).
+  For a long section, keep the Decision in view (sticky top or bottom bar).
+- **One comparison per view.** Show Before once; put 1–2 versions side by side, not many stacked.
+- **Pictures carry claims.** Every compared claim has its screenshot. Screenshots open in a zoom modal with
+  pinch-to-zoom, not a new tab. Portrait shots fit one row of cards; wide shots get at most two per row;
+  for a small change, crop to the changed region and keep the full shot behind the modal. Highlights come
+  from the changed element's measured bounds, or are left out; a wrong mark is worse than none.
+- **A builder needs real content and direction.** A brief says what the Page is for, what Thomas must see or
+  decide, and supplies the real content; a thin brief gets padded with text.
 
 ## Principles (working theory, provisional — iterate with Thomas)
 
@@ -75,7 +102,7 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.2.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.3.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench.

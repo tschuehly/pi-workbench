@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -209,7 +211,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.2\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.3\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -473,14 +475,86 @@ test("publicState: the read-only Kernel state a Page script may rely on (k-state
   const { publicState } = await import("./kernel/atelier.js");
   const log = [
     { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "ship", key: "a", question: "Ship?", options: [{ label: "Yes", recommended: true }, { label: "No" }] } },
-    { seq: 2, at: 0, origin: "human", type: "decide", decision: "row-1", key: "row-1", options: "Keep|Drop", option: "Drop", note: "old", delivery: "immediate" },
+    { seq: 2, at: 0, origin: "human", type: "decide", decision: "row-1", key: "row-1", options: "Keep|Drop", option: "Drop", note: "old", images: ["p.html.images/0123456789abcdef.png"], delivery: "immediate" },
     { seq: 3, at: 0, origin: "kernel", type: "delivered", of: [2] },
     { seq: 4, at: 0, origin: "human", type: "comment", key: "a", text: "x", delivery: "immediate" },
   ];
   const s = publicState(derive(log, () => null, [{ id: "row-2", key: "row-2", declared: true, options: [{ label: "Keep" }, { label: "Drop" }] }]), { conn: "live", loaded: true });
   assert.deepEqual(s.decisions.map((d) => [d.id, d.declared, d.recommended, d.answer, d.note, d.status]), [["row-2", true, null, null, null, null], ["ship", false, "Yes", null, null, null], ["row-1", true, null, "Drop", "old", "queued"]]);
+  assert.deepEqual(s.decisions.map((d) => d.images), [[], [], ["p.html.images/0123456789abcdef.png"]]);
   assert.deepEqual(s.toAnswer, ["row-2", "ship"]);
   assert.deepEqual(s.threads, [{ seq: 4, key: "a", closed: false, stale: false, messages: 1, status: "pending" }]);
   assert.deepEqual([s.conn, s.loaded, s.open, s.drafts], ["live", true, 3, 0]);
   assert.doesNotThrow(() => JSON.stringify(s), "plain data");
+});
+
+// POSTs one image's bytes to the upload endpoint, chunked; `end: false` leaves the body open. Resolves with the response.
+function upload(host, page, chunks, { end = true } = {}) {
+  const req = http.request(`${new URL(host.url(page)).origin}/.atelier/image?page=${encodeURIComponent(host.rel(page))}`, { method: "POST" });
+  req.on("error", () => {}); // the host may close the connection after refusing
+  const response = new Promise((resolve, reject) => {
+    req.on("response", (res) => { let body = ""; res.on("data", (c) => { body += c; }); res.on("end", () => resolve({ status: res.statusCode, json: JSON.parse(body) })); });
+    setTimeout(() => reject(new Error("no response while the body was still open")), 5000).unref();
+  });
+  for (const c of chunks) req.write(c);
+  if (end) req.end();
+  return { req, response };
+}
+
+test("a Decision's answer carries a note and images: uploaded one by one, stored beside the Page by their bytes, delivered by absolute path", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("rest of a png")]);
+    const base = new URL(host.url(page)).origin, dir = path.join(host.root, "page.html.images");
+    // The bytes decide: a non-image is refused whatever the client calls it.
+    assert.equal((await upload(host, page, [Buffer.from("<svg/>")]).response).status, 415);
+    // An oversized image is refused while it is still arriving, not at its end: this body never ends.
+    const big = upload(host, page, Array(11).fill(Buffer.alloc(1024 * 1024, 1)), { end: false });
+    assert.equal((await big.response).status, 413);
+    big.req.destroy();
+    // A hash-named file already at the destination is replaced, never trusted: here a symlink out of the directory.
+    const outside = path.join(host.root, "outside.png"), hashed = `${createHash("sha256").update(png).digest("hex").slice(0, 16)}.png`;
+    writeFileSync(outside, png); mkdirSync(dir); symlinkSync(outside, path.join(dir, hashed));
+    const stored = await upload(host, page, [png.subarray(0, 5), png.subarray(5)]).response;
+    assert.deepEqual(stored, { status: 200, json: { name: `page.html.images/${hashed}` } }, "named by content hash and sniffed type");
+    assert(lstatSync(path.join(dir, hashed)).isFile(), "the symlink is replaced by the stored bytes");
+    assert.deepEqual(readFileSync(path.join(dir, hashed)), png);
+    const name = stored.json.name;
+    // Only a few uploads receive at once; the next is refused until one finishes.
+    const open = Array.from({ length: 4 }, () => upload(host, page, [png.subarray(0, 4)], { end: false }));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal((await upload(host, page, [png]).response).status, 429);
+    open.forEach((o) => o.req.destroy());
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal((await upload(host, page, [png]).response).status, 200, "free again once they close");
+
+    // A decide event names only stored images: no data, symlink, directory, foreign name or missing file, at most four.
+    writeFileSync(path.join(dir, "shot.png"), png);
+    symlinkSync(path.join(dir, hashed), path.join(dir, "aaaaaaaaaaaaaaaa.png"));
+    mkdirSync(path.join(dir, "bbbbbbbbbbbbbbbb.png"));
+    writeFileSync(path.join(dir, "cccccccccccccccc.gif"), png); // bytes that are not what the name says
+    execFileSync("mkfifo", [path.join(dir, "dddddddddddddddd.png")]); // opening a FIFO would block the host forever
+    for (const bad of [`data:image/png;base64,${png.toString("base64")}`, "page.html.images/aaaaaaaaaaaaaaaa.png", "page.html.images/bbbbbbbbbbbbbbbb.png",
+      "page.html.images/shot.png", "page.html.images/cccccccccccccccc.gif", "page.html.images/dddddddddddddddd.png", "page.html.images/0123456789abcdef.png", `page.html.images/../page.html.images/${hashed}`, `other.html.images/${hashed}`])
+      assert.equal(human({ type: "decide", decision: "d", option: "A", images: [bad] }).status, 400, bad);
+    assert.equal(human({ type: "decide", decision: "d", option: "A", images: Array(5).fill(name) }).status, 400);
+    // The event body is bounded as before images existed.
+    const long = await fetch(`${base}/.atelier/events?page=page.html`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "comment", text: "x".repeat(65 * 1024) }) });
+    assert.equal(long.status, 413);
+    assert.equal(readLog(page).length, 0);
+
+    const first = human({ type: "decide", decision: "d", options: "A|B", option: "A", note: "see shot", images: [name] }).json.entry;
+    assert.deepEqual(first.images, [name]);
+    // An answer changed inside its undo window keeps the stored images of the one it replaces.
+    human({ type: "undo", target: first.seq });
+    const changed = human({ type: "decide", decision: "d", options: "A|B", option: "B", note: "see shot", images: [name] });
+    assert.deepEqual(changed.json.entry.images, [name]);
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent[0].message.content, new RegExp(`Decision d: B; note "see shot"; image ${JSON.stringify(path.join(host.root, name)).replace(/[.\\/]/g, "\\$&")}$`));
+    assert.equal((await fetch(`${base}/${name}`)).headers.get("content-type"), "image/png", "the Page shows it as a thumbnail");
+    // Copy from a Page without a session names browser-only images instead of pasting their data.
+    assert.match(compose("p", "", [{ seq: 1, type: "decide", decision: "d", option: "A", images: [`data:image/png;base64,${png.toString("base64")}`] }], []), /Decision d: A; image \(kept in the browser only\)$/);
+  } finally { host.stop(); p.done(); }
 });

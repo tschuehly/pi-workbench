@@ -13,7 +13,7 @@ assert(process.env.PI_TMP, "Set PI_TMP to a disposable directory.");
 const dir = await realpath(await mkdtemp(path.join(process.env.PI_TMP, "atelier-kernel-")));
 const page = path.join(dir, "page.html");
 // flip: the source opens #more and closes #less, as the human did; body: attributes on <body>.
-const write = ({ plain = "A plain keyed paragraph.", dock = "", phrase = "Pick this phrase to comment on it.", flip = false, body = "" } = {}) => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Kernel check</title>
+const write = ({ plain = "A plain keyed paragraph.", dock = "", phrase = "Pick this phrase to comment on it.", flip = false, body = "", more = "" } = {}) => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Kernel check</title>
 <style>body{font:15px/1.5 system-ui;max-width:700px;margin:24px auto;background:#fff;color:#111}section,div[atl-key],p[atl-key]{border:1px solid #ccc;padding:8px;margin:8px 0}</style>
 <body${body}>${dock}<p id="intro">Select this sentence to comment on the text itself.</p>
 <p atl-key="plain" id="plain">${plain}</p>
@@ -22,7 +22,7 @@ const write = ({ plain = "A plain keyed paragraph.", dock = "", phrase = "Pick t
 <div atl-key="turn-2" id="t2" atl-decide="Confirm|Redo" atl-rec="Confirm" atl-note="Redo">Turn two answer.</div></section>
 <details id="more"${flip ? " open" : ""}><summary id="more-s">More</summary><p>Inside.</p></details><details id="less"${flip ? "" : " open"}><summary id="less-s">Less</summary><p>Open by the Page.</p></details>
 <p atl-key="quiet" id="quiet">Plain text with nothing focusable.</p>
-<table><tr atl-key="row-a" id="ra" atl-decide="Keep|Drop"><td>Row A</td><td atl-slot id="slot"></td></tr></table>
+<table><tr atl-key="row-a" id="ra" atl-decide="Keep|Drop"><td>Row A</td><td atl-slot id="slot"></td></tr></table>${more}
 <section atl-key="long" id="long"><p id="phrase">${phrase}</p>${"<p>Filler below the phrase.</p>".repeat(40)}</section>
 <script>window.states=[];document.addEventListener("atelier:state",(e)=>states.push(e.detail));</script>
 <script type="module" src="atelier.js"></script></body></html>`);
@@ -148,7 +148,7 @@ try {
   assert.match(await js("document.querySelector('.atl-bar').textContent"), /2 to answer/);
   // k-state-hook: Pages read Kernel state through window.atelier and the atelier:state event, not Kernel markup.
   const turn1 = "(s)=>s.decisions.find((d)=>d.id==='run/turn-1')";
-  assert.deepEqual(await js(`(${turn1})(atelier.state())`), { id: "run/turn-1", key: "run/turn-1", declared: true, options: ["1", "2", "3", "4", "5"], recommended: null, answer: "5", previous: "3", note: null, status: "pending", stale: false, opened: false });
+  assert.deepEqual(await js(`(${turn1})(atelier.state())`), { id: "run/turn-1", key: "run/turn-1", declared: true, options: ["1", "2", "3", "4", "5"], recommended: null, answer: "5", previous: "3", note: null, images: [], status: "pending", stale: false, opened: false });
   assert.equal(await js(`states.at(-1).loaded && (${turn1})(states.at(-1)).answer`), "5", "the event carries the new state");
   assert.deepEqual(await js("[states[0].loaded, states.some((s)=>s.toAnswer.length===3), atelier.state().toAnswer]"), [false, true, ["run/turn-2", "row-a"]]);
 
@@ -165,7 +165,7 @@ try {
 
   // Keyboard: Tab reaches a Key's Comment button, which then shows at its corner.
   await b("mouse", "move", "1", "1");
-  await js("document.querySelector('[data-id=\"row-a\"][data-label=Drop]').focus(); true");
+  await js("document.querySelector('[aria-label=\"Decision on row-a\"] [data-atl=addnote]').focus(); true"); // after the options, its note-or-image button
   await b("press", "Tab"); await sleep(300);
   assert.equal(await js("document.activeElement.closest('[atl-ui=pin]')?.dataset.key"), "row-a");
   assert.equal(await opacity("row-a"), "1", "focus shows the button");
@@ -222,6 +222,74 @@ try {
   await write({ plain, dock: `<div atl-dock id="dock"></div>` }); host.update(page); await until("updates===5");
   assert.deepEqual(await js("[document.body.getAttribute('class'), document.body.getAttribute('data-mode'), document.body.getAttribute('style')]"), [null, null, null], "and go when the source drops them");
 
+  // Every Decision takes an optional note and images behind one quiet button (owner rule 2026-10-13): picked and pasted
+  // images travel with the answer, are stored beside the Page, show as thumbnails and keep through a change in the window.
+  await write({ plain, dock: `<div atl-dock id="dock"></div>`, more: `<div atl-key="shot" id="shot" atl-decide="Ship|Hold">Shot</div>` }); host.update(page); await until("updates===6");
+  const shot = '[atl-ui=decide][aria-label="Decision on shot"]';
+  assert.equal(await js(`document.querySelector('${shot} .atl-extra').hidden`), true, "no note field until asked for");
+  await click(`${shot} [data-atl=addnote]`);
+  await until(`document.activeElement===document.querySelector('${shot} .atl-note')`);
+  await b("keyboard", "type", "see the shots");
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", GIF = "R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
+  const picked = path.join(dir, "picked-by-human.png"); await writeFile(picked, Buffer.from(PNG, "base64"));
+  await b("upload", `${shot} .atl-file`, picked);
+  await until(`document.querySelectorAll('${shot} .atl-attached img').length===1`);
+  await js(`(()=>{const dt=new DataTransfer();dt.items.add(new File([Uint8Array.from(atob("${GIF}"),(c)=>c.charCodeAt(0))],"x.gif",{type:"image/gif"}));document.querySelector('${shot} .atl-note').dispatchEvent(new ClipboardEvent("paste",{clipboardData:dt,bubbles:true,cancelable:true}));return true})()`);
+  await until(`document.querySelectorAll('${shot} .atl-attached img').length===2`);
+  await click(`[data-atl=decide][data-id=shot][data-label=Hold]`);
+  await until(`document.querySelectorAll('${shot} .atl-dstate .atl-thumbs img').length===2`);
+  const held = decides().at(-1);
+  assert.deepEqual([held.option, held.note, held.images.map((x) => path.extname(x))], ["Hold", "see the shots", [".png", ".gif"]]);
+  assert.equal(await js(`[...document.querySelectorAll('${shot} .atl-dstate img')].every((i)=>i.complete&&i.naturalWidth===1)`), true, "thumbnails load from the stored files");
+  assert.equal(await js(`document.querySelector('${shot} .atl-extra').hidden && document.querySelectorAll('${shot} .atl-attached img').length===0`), true, "the field closes and empties once posted");
+  await click(`[data-atl=decide][data-id=shot][data-label=Ship]`); // a change inside the undo window keeps the note and images
+  await until("atelier.state().decisions.find((d)=>d.id==='shot').answer==='Ship'");
+  assert.deepEqual(await js("(({answer,note,images})=>[answer,note,images])(atelier.state().decisions.find((d)=>d.id==='shot'))"), ["Ship", "see the shots", held.images]);
+  await sleep(3200); host.deliverDue(page);
+  assert.match(sent.at(-1), new RegExp(`Decision shot: Ship; note "see the shots"; images ${held.images.map((x) => JSON.stringify(path.join(dir, x)).replace(/[.\\/]/g, "\\$&")).join(", ")}`), sent.at(-1));
+  // Review finding 3: images upload before anything posts. A change inside the undo window whose image the host
+  // refuses (bytes that are no image, though the browser calls them PNG) leaves the answer it would replace intact.
+  await click(`[data-atl=decide][data-id=shot][data-label=Hold]`);
+  await until("atelier.state().decisions.find((d)=>d.id==='shot').answer==='Hold'");
+  const hold = decides().at(-1); // one eval, so the change lands well inside the host's 3-second window
+  await js(`(async()=>{const dt=new DataTransfer();dt.items.add(new File(["not an image"],"fake.png",{type:"image/png"}));document.querySelector('${shot} .atl-note').dispatchEvent(new ClipboardEvent("paste",{clipboardData:dt,bubbles:true,cancelable:true}));while(!document.querySelector('${shot} .atl-attached img'))await new Promise((r)=>setTimeout(r,20));document.querySelector('[data-atl=decide][data-id=shot][data-label=Ship]').click();return true})()`);
+  await until("[...document.querySelectorAll('.atl-toast')].some((t)=>/did not change/.test(t.textContent))");
+  assert.deepEqual(readLog(page).filter((e) => e.seq > hold.seq && e.origin === "human"), [], "no undo and no decide after the refused upload");
+  assert.deepEqual(await js("(({answer,previous})=>[answer,previous])(atelier.state().decisions.find((d)=>d.id==='shot'))"), ["Hold", "Ship"]);
+  assert.equal(await js(`document.querySelectorAll('${shot} .atl-attached img').length`), 1, "the refused image stays attached to drop or replace");
+  await click(`${shot} [data-atl=dropimg]`);
+  // Re-review finding 1: an upload that fails on the network (any connection state) also posts nothing.
+  await b("upload", `${shot} .atl-file`, picked);
+  await until(`document.querySelectorAll('${shot} .atl-attached img').length===1`);
+  await js(`(()=>{window.__fetch=window.fetch;window.fetch=(u,o)=>String(u).includes("/.atelier/image")?Promise.reject(new TypeError("offline")):window.__fetch(u,o);document.querySelector('[data-atl=decide][data-id=shot][data-label=Ship]').click();return true})()`);
+  await until("[...document.querySelectorAll('.atl-toast')].filter((t)=>/did not change/.test(t.textContent)).length>=1");
+  await sleep(300);
+  assert.deepEqual(readLog(page).filter((e) => e.seq > hold.seq && e.origin === "human"), [], "no undo and no decide after a failed upload");
+  await js(`(()=>{window.fetch=(u,o)=>String(u).includes("/.atelier/image")?Promise.resolve(new Response("{}",{status:404})):window.__fetch(u,o);document.querySelector('[data-atl=decide][data-id=shot][data-label=Ship]').click();return true})()`);
+  await until("[...document.querySelectorAll('.atl-toast')].filter((t)=>/did not change/.test(t.textContent)).length>=1");
+  await sleep(300);
+  assert.deepEqual(readLog(page).filter((e) => e.seq > hold.seq && e.origin === "human"), [], "no undo and no decide after an image 404");
+  // Re-review finding 3: a second click while the first upload is slow is ignored, so the slow one cannot overwrite it.
+  await js(`(()=>{let release;window.__gate=new Promise((r)=>release=r);window.__release=release;window.fetch=async(u,o)=>{if(String(u).includes("/.atelier/image"))await window.__gate;return window.__fetch(u,o)};document.querySelector('[data-atl=decide][data-id=shot][data-label=Ship]').click();document.querySelector('[data-atl=decide][data-id=shot][data-label=Hold]').click();return true})()`);
+  await sleep(200);
+  await js("(()=>{window.__release();return true})()");
+  await until("atelier.state().decisions.find((d)=>d.id==='shot').answer==='Ship'");
+  await sleep(300);
+  assert.deepEqual(readLog(page).filter((e) => e.seq > hold.seq && e.type === "decide").map((e) => e.option), ["Ship"], "only the first click posts");
+  await js("(()=>{window.fetch=window.__fetch;return true})()");
+
+  // A Decision the agent asks takes the same quiet note-or-image button instead of a permanent note field.
+  host.agent(page, { type: "ask", decision: { id: "ask-1", key: "plain", question: "Keep it?", options: [{ label: "Yes", consequence: "kept" }, { label: "No", consequence: "dropped" }] } });
+  const card = '[data-id="d:ask-1"]';
+  await until(`document.querySelector('${card} .atl-extra')?.hidden===true`);
+  await js(`document.querySelector('${card}').scrollIntoView({block:'center'}); true`);
+  await click(`${card} [data-atl=addnote]`);
+  await until(`document.activeElement===document.querySelector('${card} .atl-note')`);
+  await b("keyboard", "type", "only the intro");
+  await click(`${card} [data-atl=decide][data-label=No]`);
+  await until("atelier.state().decisions.find((d)=>d.id==='ask-1').answer==='No'");
+  assert.equal(decides().at(-1).note, "only the intro");
+
   if (process.argv[2]) await b("screenshot", process.argv[2]);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
   // Review 2 finding 2: a Page served by a test host (serve.mjs) says so in the Kernel bar.
@@ -234,7 +302,37 @@ try {
     assert.equal(await js("document.querySelector('.atl-test')?.textContent.trim()"), "Test host, no Pi session");
   } finally { testHost.stop(); }
 
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection.");
+  // A Page that moves the panel into a sticky column (the iterate trial, owner 2026-10-13): the panel takes the column's
+  // width up to 760px and, held to 300px by the Page, scrolls inside so every control stays reachable; also after an
+  // Update and under a transformed ancestor (review findings 4 and 5: no pinning machinery to break there).
+  const sticky = path.join(dir, "sticky.html");
+  const writeSticky = (col = "") => writeFile(sticky, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Sticky</title>
+<style>body{margin:0;font:15px system-ui}main{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;padding:16px}#col{position:sticky;top:8px;align-self:start;${col}}#app{height:110vh;background:#eee}#queue{height:400vh}body [atl-ui=panel]{position:relative;left:auto;right:auto;bottom:auto;width:100%;max-height:300px;margin:12px 0}</style>
+<body><main><section id="col"><div id="app" atl-key="app">Live app</div><div id="spot"></div></section><div id="queue"><p atl-key="q">Queue</p></div></main>
+<script>addEventListener("load",()=>{const move=()=>{const p=document.querySelector("[atl-ui=panel]");if(p&&p.parentElement.id!=="spot")document.getElementById("spot").append(p)};move();document.addEventListener("atelier:update",move)})</script>
+<script type="module" src="atelier.js"></script></body></html>`);
+  await writeSticky();
+  await b("set", "viewport", "1400", "800");
+  await b("open", (await host.open(sticky)).url);
+  await until("document.querySelector('.atl-conn')?.textContent==='live' && document.querySelector('[atl-ui=panel]').parentElement.id==='spot'");
+  for (let i = 1; i <= 5; i += 1) host.postHuman(sticky, { type: "comment", quote: { exact: "Live app", prefix: "", suffix: "" }, text: `In the panel, number ${i}, long enough to wrap in a narrow column.` });
+  await until("document.querySelectorAll('[atl-ui=panel] [data-atl=jump]').length===5");
+  // Each visible control, brought into view by scrolling the panel alone, is the element at its centre.
+  const panelAt = () => js("(()=>{const p=document.querySelector('[atl-ui=panel]'),y=scrollY,r=p.getBoundingClientRect(),reach=[...p.querySelectorAll('[data-atl]')].filter((x)=>x.getClientRects().length).map((x)=>{p.scrollTop+=x.getBoundingClientRect().top-p.getBoundingClientRect().top-8;const c=x.getBoundingClientRect();return document.elementFromPoint(c.x+c.width/2,c.y+c.height/2)?.closest('[data-atl]')===x&&c.bottom<=p.getBoundingClientRect().bottom});return {inSpot:p.parentElement.id==='spot',scrolls:p.scrollHeight>p.clientHeight,top:r.top,bottom:r.bottom,width:Math.round(r.width),spot:Math.round(document.getElementById('spot').getBoundingClientRect().width),vh:innerHeight,windowMoved:scrollY!==y,controls:reach.length,reach}})()");
+  const checkSticky = async (when) => {
+    await js("scrollTo(0,document.documentElement.scrollHeight); true"); await sleep(300);
+    const at = await panelAt();
+    assert(at.inSpot && at.scrolls && at.top >= 0 && at.bottom <= at.vh && at.width === Math.min(760, at.spot) && !at.windowMoved && at.controls >= 10 && at.reach.every(Boolean), `${when}: column-wide, scrolling inside, every control reachable: ${JSON.stringify(at)}`);
+  };
+  await checkSticky("first load");
+  await js("window.updates=0; document.addEventListener('atelier:update',()=>updates++); true");
+  host.update(sticky); await until("updates===1 && document.querySelector('[atl-ui=panel]').parentElement.id==='spot' && document.querySelectorAll('[atl-ui=panel] [data-atl=jump]').length===5");
+  await checkSticky("after an Update");
+  await writeSticky("transform:translateZ(0)"); host.update(sticky);
+  await until("updates===2 && getComputedStyle(document.getElementById('col')).transform!=='none' && document.querySelector('[atl-ui=panel]').parentElement.id==='spot'");
+  await checkSticky("under a transformed ancestor");
+
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, the panel in a sticky column scrolls inside after Updates and under a transform.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

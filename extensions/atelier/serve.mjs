@@ -6,7 +6,7 @@
 // own empty Event Log: the Page's real Event Log and the human input waiting in it are never read or touched. The
 // Kernel shows "Test host, no Pi session". It prints every Delivery to stdout exactly as the agent would receive it,
 // and copies the Page and sends an Update to open tabs whenever the Page file changes. Ctrl-C stops it and deletes
-// the copy and its log.
+// the copy, its log and its images.
 import { readFileSync, realpathSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -16,10 +16,10 @@ let page;
 try { page = realpathSync(path.resolve(arg)); if (!statSync(page).isFile()) throw new Error(); } catch { console.error(`No Page file at ${arg}.`); process.exit(2); }
 
 process.removeAllListeners("warning"); // Node's notice that host.ts is TypeScript in a typeless package
-const { createHost, logPath } = await import("./host.ts");
+const { createHost, imagesDir, logPath } = await import("./host.ts");
 const copy = page.replace(/(\.html?)?$/i, ".atelier-test$1");
 // ponytail: two serve.mjs on one Page share and clobber this copy; run one per Page.
-const clean = () => { for (const file of [copy, logPath(copy), `${logPath(copy)}.lock`]) rmSync(file, { force: true }); };
+const clean = () => { for (const file of [copy, logPath(copy), `${logPath(copy)}.lock`, imagesDir(copy)]) rmSync(file, { force: true, recursive: true }); };
 let text = readFileSync(page, "utf8"), timer;
 clean();
 writeFileSync(copy, text);
