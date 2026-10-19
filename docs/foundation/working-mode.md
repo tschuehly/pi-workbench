@@ -47,11 +47,11 @@ in the conversation, so the selected value alone chooses the channel.
 | --- | --- |
 | `Default` | Add no Attention-specific behavior; existing instructions apply. |
 | `Focused` | Thomas is watching: work in short, reported steps and ask one question at a time as soon as it arises. |
-| `Switching` | Thomas reads occasionally: keep working on unblocked parts, write only when blocked or finished, then send one status line and a numbered list of decisions with recommended defaults. Each message is self-contained and supersedes the earlier ones. |
+| `Switching` | Thomas reads occasionally: keep working on unblocked parts and post each open decision with `ask_user` (self-contained context, recommended option), updating or withdrawing it when it changes; write in the conversation only when blocked or finished, as one status line. |
 | `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools and never in the conversation, even if Thomas also replies there. Send one update when a milestone finishes or work stops to wait. |
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
-Only Phone uses `ask_human` and `notify_human`. Focused and Switching ask in the session
+Only Phone uses `ask_human` and `notify_human`. Only Switching offers PI WEB's `ask_user`; the extension deactivates it in every other value. Focused and Switching ask in the session
 conversation. Thomas switches to Focused when he returns to the conversation.
 
 ### AFK adaptation and fallback

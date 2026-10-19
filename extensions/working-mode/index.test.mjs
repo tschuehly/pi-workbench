@@ -9,7 +9,7 @@ const agentDir = `${cwd}/agent`;
 
 // A real Pi session with a scripted model: records every request the model receives.
 // `gate`, when given, holds the first reply open until it resolves so a test can act mid-run.
-async function session(entries, gate) {
+async function session(entries, gate, { factories = [], tools } = {}) {
   const faux = fauxProvider();
   const requests = [];
   const reply = async (context) => {
@@ -26,13 +26,13 @@ async function session(entries, gate) {
     extensionFactories: [(pi) => {
       pi.registerProvider(faux.provider);
       pi.events.on("pi-workbench:working-mode", (value) => snapshots.push(value));
-    }, workingMode],
+    }, ...factories, workingMode],
   });
   await resourceLoader.reload();
   const modelRuntime = await ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: null, refreshOnCreate: false });
   const sessionManager = entries ? SessionManager.inMemory(cwd, undefined, entries) : SessionManager.inMemory(cwd);
   const { session } = await createAgentSession({
-    cwd, agentDir, modelRuntime, resourceLoader, settingsManager, sessionManager, model: faux.getModel(), noTools: "all",
+    cwd, agentDir, modelRuntime, resourceLoader, settingsManager, sessionManager, model: faux.getModel(), ...(tools ? { tools } : { noTools: "all" }),
     sessionStartEvent: { type: "session_start", reason: entries ? "resume" : "startup" },
   });
   await session.bindExtensions({});
@@ -174,7 +174,7 @@ test("a queued steer counts as visible; a dropped one is attached again", async 
     on: (name, handler) => handlers.set(name, handler),
     registerCommand: (_name, value) => { command = value; },
     sendMessage: (message, options) => sent.push({ message, options }),
-    registerTool() {},
+    registerTool() {}, getActiveTools: () => [], setActiveTools() {},
     events: { emit() {} },
   });
   const ctx = {
@@ -224,7 +224,7 @@ test("the terminal picker changes one axis; cancel changes nothing", async () =>
   let command;
   const statuses = [];
   const choices = [];
-  workingMode({ on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, registerTool() {}, events: { emit() {} } });
+  workingMode({ on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, registerTool() {}, getActiveTools: () => [], setActiveTools() {}, events: { emit() {} } });
   const ctx = {
     mode: "tui", hasUI: true,
     sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
@@ -250,7 +250,7 @@ function fakePi(branch = []) {
   workingMode({
     on: (name, handler) => handlers.set(name, handler),
     registerCommand: (_name, value) => { command = value; },
-    registerTool: (value) => { tools[value.name] = value; },
+    registerTool: (value) => { tools[value.name] = value; }, getActiveTools: () => [], setActiveTools() {},
     events: { emit: (_name, value) => snapshots.push(value) },
   });
   const context = [];
@@ -334,4 +334,19 @@ test("resume after a reset restores unaligned state", () => {
     { type: "message", message: { role: "toolResult", toolName: ALIGNMENT_RESET_TOOL, isError: false } },
   ];
   assert.equal(fakePi(branch).snapshots.at(-1).aligned, false);
+});
+
+test("ask_user is offered to the model only in Switching", async () => {
+  const askUser = (pi) => pi.registerTool({ name: "ask_user", label: "Ask", description: "ask", parameters: { type: "object", properties: {} }, async execute() { return { content: [] }; } });
+  const s = await session(undefined, undefined, { factories: [askUser], tools: ["ask_user"] });
+  const offered = () => s.session.getActiveToolNames().includes("ask_user");
+  await s.session.prompt("default");
+  assert.equal(offered(), false);
+  await s.session.prompt("/mode attention switching");
+  await s.session.prompt("switching");
+  assert.equal(offered(), true);
+  await s.session.prompt("/mode attention focused");
+  await s.session.prompt("focused");
+  assert.equal(offered(), false);
+  s.session.dispose();
 });
