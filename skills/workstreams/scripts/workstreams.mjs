@@ -17,7 +17,7 @@ const SELF = fileURLToPath(import.meta.url);
 const STORE_DIR = process.env.PI_WORKBENCH_WORKSTREAM_DIR ?? join(homedir(), ".pi-workbench", "workstreams");
 const tilde = (path) => path.startsWith(homedir()) ? `~${path.slice(homedir().length)}` : path;
 const WAITING = ["owner", "agent", "external"];
-const SUMMARY_FIELDS = ["id", "title", "group", "revision", "createdAt", "updatedAt", "lastCheckpointAt", "next", "waitingOn", "activeSessionCount", "pendingSessionCount", "failedSessionCount", "unresolvedHumanTaskCount", "closed"];
+const SUMMARY_FIELDS = ["id", "title", "group", "revision", "createdAt", "updatedAt", "lastCheckpointAt", "next", "waitingOn", "activeSessionCount", "pendingSessionCount", "failedSessionCount", "visitingSessionCount", "unresolvedHumanTaskCount", "closed"];
 const LIST_COLUMNS = ["id", "title", "group", "waitingOn", "updatedAt"];
 const LIST_LIMIT = 8;
 // Store limits (packages/workstream-store/src/model.js), checked here so errors name the flag.
@@ -77,7 +77,8 @@ Examples:
     help: `workstreams associate <id>
 
 Makes this session (PI_SESSION_ID) an active session of <id>. Repeating it is a no-op.
-A session belongs to exactly one Workstream; the CLI names the other one if it is taken.
+A session has exactly one home Workstream; the CLI names the other one if it is taken.
+Visiting checkpoints elsewhere do not count.
 
 Examples:
   workstreams associate ws-example
@@ -90,7 +91,9 @@ Examples:
     required: ["what", "remains", "next", "waiting"],
     help: `workstreams checkpoint <id> --what "…" --remains "…" --next "…" --waiting owner|agent|external [--title "…"] [--ref PATH]...
 
-Replaces this session's checkpoint (PI_SESSION_ID; run associate first). Repeating it is a no-op.
+Replaces this session's checkpoint (PI_SESSION_ID). Repeating it is a no-op. If this session is not
+active in <id>, it writes a visiting checkpoint there: <id> shows it, waitingOn and next follow it,
+and this session's home Workstream stays unchanged.
   --what            what now exists or works (max ${MAX.text})
   --remains         what is blocked or still owed (max ${MAX.text})
   --next            the next action, starting with the actor (max ${MAX.text})
@@ -432,7 +435,8 @@ async function checkpoint(store, [id], flags) {
   references.forEach((reference) => checkReference("ref", reference));
   const snapshot = await store.inspect(id);
   const session = snapshot.sessions.find((candidate) => candidate.id === sessionId);
-  if (session?.status !== "active") throw new Usage(`session ${sessionId} is not active in ${id}`, `workstreams associate ${id}`);
+  const visiting = session === undefined || session.status === "visiting";
+  if (!visiting && session.status !== "active") throw new Usage(`session ${sessionId} is ${session.status} in ${id}`, `workstreams show ${id}`);
   const content = {
     whatChanged: flags.what,
     remains: flags.remains,
@@ -441,14 +445,16 @@ async function checkpoint(store, [id], flags) {
     ...(flags.title === undefined ? {} : { sessionTitle: flags.title }),
     ...(references.length ? { references } : {}),
   };
-  const latest = session.latestCheckpoint;
+  const latest = session?.latestCheckpoint;
   if (latest && Object.keys(content).every((key) => JSON.stringify(latest[key]) === JSON.stringify(content[key]))
     && (latest.sessionTitle ?? undefined) === content.sessionTitle && (latest.references?.length ?? 0) === references.length) {
     return noop(`checkpoint ${latest.id} already says this`);
   }
   const checkpointId = `cp-${hash([id, sessionId, snapshot.revision, content])}`;
-  const receipt = await write(store, snapshot, "checkpoint", [record("checkpoint.replaced", { sessionId, checkpoint: { id: checkpointId, ...content } }, flags)]);
-  done(receipt, `checkpoint ${checkpointId} written to ${id}`, [`tell the owner what it says; correct it with another checkpoint`]);
+  const type = visiting ? "checkpoint.visiting" : "checkpoint.replaced";
+  const receipt = await write(store, snapshot, "checkpoint", [record(type, { sessionId, checkpoint: { id: checkpointId, ...content } }, flags)]);
+  const home = visiting ? ` (home: ${(await store.list({ sessionId, includeClosed: true }))[0]?.id ?? "none"})` : "";
+  done(receipt, `${visiting ? "visiting " : ""}checkpoint ${checkpointId} written to ${id}${home}`, [`tell the owner what it says; correct it with another checkpoint`]);
 }
 
 async function overview(store, [id], flags) {
@@ -592,7 +598,7 @@ function record(type, payload, flags) {
 
 function recordHelp(type) {
   const verb = {
-    "checkpoint.replaced": "checkpoint", "overview.replaced": "overview", "link.upsert": "link", "link.removed": "unlink",
+    "checkpoint.replaced": "checkpoint", "checkpoint.visiting": "checkpoint", "overview.replaced": "overview", "link.upsert": "link", "link.removed": "unlink",
     "title.set": "title", "group.set": "group", "human-task.resolved": "resolve-task", "session.pending": "associate", "session.confirmed": "associate",
   }[type];
   return verb ? `use the verb instead: workstreams ${verb} --help` : "record shapes: packages/workstream-store/src/index.d.ts (WorkstreamRecord)";

@@ -127,6 +127,8 @@ export function joinChatsAndWorkstreams(nativeSnapshot, workstreamProjection) {
   const anchorlessAssociations = new Set();
   for (const workstream of workstreamProjection.snapshots) {
     for (const session of workstream.sessions) {
+      // A visiting session only left a checkpoint here; its Chat stays with its home (or in Chats).
+      if (session.status === "visiting") continue;
       if (completeWorkstreamSession(session)) anchoredAssociations.add(nativeSessionIdentity({ machineId: session.machineId, sessionId: session.id }));
       else anchorlessAssociations.add(session.id);
     }
@@ -279,7 +281,7 @@ function isWorkstreamSnapshot(value) {
 }
 
 function isWorkstreamSession(value) {
-  return isRecord(value) && nonEmpty(value.id) && ["active", "pending", "failed"].includes(value.status)
+  return isRecord(value) && nonEmpty(value.id) && ["active", "pending", "failed", "visiting"].includes(value.status)
     && [value.machineId, value.projectId, value.workspaceId].every((part) => part === undefined || nonEmpty(part));
 }
 

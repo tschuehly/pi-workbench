@@ -111,9 +111,47 @@ test("checkpoint fills the session envelope; raw append points to the verb", asy
     assert.match(raw.out, /payload\.sessionId/);
     assert.match(raw.out, /^help: use the verb instead: workstreams checkpoint --help$/m);
 
-    const unassociated = run(directory, ["checkpoint", "ws-a", ...checkpointArgs], { env: { PI_SESSION_ID: "session-b" } });
-    assert.equal(unassociated.status, 2);
-    assert.match(unassociated.out, /help: workstreams associate ws-a/);
+  });
+});
+
+test("checkpoint from a session not active there writes a visiting checkpoint without changing its home", async () => {
+  await withStore(async (directory) => {
+    seed(directory, "ws-home");
+    assert.equal(run(directory, ["create", "ws-visited", "--title", "Visited"]).status, 0);
+    const visit = ["checkpoint", "ws-visited", "--what", "Wrote the overview.", "--remains", "Owner picks.", "--next", "Thomas picks A or B.", "--waiting", "owner"];
+
+    const written = run(directory, visit, { env: session });
+    assert.equal(written.status, 0, written.stdout);
+    assert.match(written.out, /^ok: visiting checkpoint cp-[0-9a-f]+ written to ws-visited \(home: ws-home\) \(rev 2\)/);
+    assert.match(run(directory, visit, { env: session }).out, /^\(no-op\)/);
+    const replaced = run(directory, [...visit.slice(0, -1), "agent"], { env: session });
+    assert.match(replaced.out, /^ok: visiting checkpoint/);
+
+    const snapshot = JSON.parse(run(directory, ["show", "ws-visited", "--json"]).out);
+    assert.deepEqual(snapshot.sessions.map(({ id, status }) => [id, status]), [["session-a", "visiting"]]);
+    assert.equal(snapshot.sessions[0].latestCheckpoint.waitingOn, "agent");
+    assert.match(run(directory, ["show", "ws-visited"]).out, /^waiting: agent \| next: Thomas picks A or B\.$/m);
+    assert.match(run(directory, ["show", "ws-visited"]).out, /^  session-a \| - \| visiting \| agent \|/m);
+    assert.match(run(directory, [], { env: session }).out, /^this session: ws-home \|/m);
+
+    const homeless = run(directory, visit, { env: { PI_SESSION_ID: "session-b" } });
+    assert.match(homeless.out, /^ok: visiting checkpoint cp-[0-9a-f]+ written to ws-visited \(home: none\)/);
+    assert.match(run(directory, [], { env: { PI_SESSION_ID: "session-b" } }).out, /^this session: not in a Workstream$/m);
+    assert.equal(run(directory, ["create", "ws-later", "--title", "Later"]).status, 0);
+    assert.match(run(directory, ["associate", "ws-later"], { env: { PI_SESSION_ID: "session-b" } }).out, /^ok: session session-b associated with ws-later/);
+
+    const joiner = { PI_SESSION_ID: "session-c" };
+    assert.equal(run(directory, visit, { env: joiner }).status, 0);
+    assert.match(run(directory, ["associate", "ws-visited"], { env: joiner }).out, /^ok: session session-c associated/);
+    const joined = JSON.parse(run(directory, ["show", "ws-visited", "--json"]).out).sessions.find(({ id }) => id === "session-c");
+    assert.equal(joined.status, "active");
+    assert.match(run(directory, ["checkpoint", "ws-visited", ...checkpointArgs], { env: joiner }).out, /^ok: checkpoint cp-[0-9a-f]+ written to ws-visited \(rev/);
+
+    const revision = JSON.parse(run(directory, ["show", "ws-visited", "--json"]).out).revision;
+    assert.equal(run(directory, ["close", "ws-visited", "--expect", String(revision)]).status, 0);
+    const closed = run(directory, visit, { env: { PI_SESSION_ID: "session-d" } });
+    assert.equal(closed.status, 1);
+    assert.match(closed.out, /WORKSTREAM_CLOSED/);
   });
 });
 
