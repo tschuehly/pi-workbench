@@ -64,6 +64,24 @@ try {
   assert.equal(await js("document.querySelector('#slot [atl-ui=decide]')!==null"), true, "row options render in its atl-slot cell");
   assert.match(await js("document.querySelector('.atl-bar').textContent"), /3 to answer/, "Page-declared Decisions count");
 
+  // A Key's Comment opens as a box floating right beside its button, outside <body>, and the Page never scrolls
+  // (owner 2026-10-19: "Comment on q1-overview" jumped far down a long Key). Esc closes it and focus returns.
+  await js("document.getElementById('long').scrollIntoView({block:'start'}); true"); await sleep(300);
+  const longTop = await box("#long"), yKey = await js("scrollY");
+  await at(longTop.x + 40, longTop.y + 20); await sleep(300);
+  const addBtn = await box('[atl-ui=pin][data-key="long"] .atl-add');
+  await click('[atl-ui=pin][data-key="long"] .atl-add');
+  await until("document.querySelector('[atl-ui=composer] textarea')===document.activeElement");
+  await sleep(300);
+  const kpop = await js("(()=>{const f=document.querySelector('[atl-ui=composer]'),r=f.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,outside:f.parentElement===document.documentElement,vh:innerHeight,vw:document.documentElement.clientWidth,y:scrollY}})()");
+  assert.equal(kpop.y, yKey, "a Key Comment does not scroll the Page");
+  assert(kpop.outside && kpop.top >= 0 && kpop.bottom <= kpop.vh && kpop.right <= kpop.vw && (Math.abs(kpop.top - addBtn.y - addBtn.h) <= 12 || Math.abs(addBtn.y - kpop.bottom) <= 12) && kpop.left <= addBtn.right && kpop.right >= addBtn.x, `the box floats right beside its Comment button: ${JSON.stringify({ kpop, addBtn })}`);
+  await b("press", "Escape");
+  await until("document.querySelector('[atl-ui=composer]')===null");
+  assert.equal(await js("document.activeElement.closest('[atl-ui=pin]')?.dataset.key"), "long", "Esc returns focus to the Comment button");
+  assert.equal(await js("scrollY"), yKey, "and nothing scrolled");
+  await js("scrollTo(0,0); true"); await sleep(300);
+
   // Comment through the hover button; the composer is styled from the palette.
   await b("hover", "#plain"); await sleep(300);
   await click('[atl-ui=pin][data-key="plain"] .atl-add');
@@ -72,25 +90,49 @@ try {
   assert.deepEqual(look, ["rgb(255, 255, 255)", "1px", "rgb(9, 105, 218)", "8px", "vertical", true, "rgb(9, 105, 218)", "rgb(255, 255, 255)", "rgb(255, 255, 255)", true, "rgb(89, 99, 110)"], "composer: page background, accent focus border, 8px radius, accent Save, quiet Cancel, muted label");
   await b("keyboard", "type", "Needs a source.");
   await click("[atl-ui=composer] [type=submit]");
-  await until("document.querySelector('[atl-ui=key][data-key=plain] .atl-msg')!==null");
+  // The thread shows as a marker on its Key: a chip titled with the first words of its first message. Nothing is
+  // added to the Page's flow.
+  const chip = '[atl-ui=pin][data-key=plain] [data-atl=thread]';
+  await until(`document.querySelector('${chip}')!==null`);
+  assert.equal(await js(`document.querySelector('${chip}').textContent`), "Needs a source.", "the chip is the thread's short title");
+  assert.equal(await js("document.body.querySelector('.atl-msg')"), null, "no thread card in the Page's flow");
+  assert.equal((await box("#plain")).h, without, "the marker takes no layout space");
   const root = readLog(page).find((e) => e.type === "comment");
   host.agent(page, { type: "answer", target: root.seq, text: "Added the source." });
-  await until("document.querySelectorAll('[atl-ui=key][data-key=plain] .atl-msg').length===2");
-  assert.deepEqual(await js("[...document.querySelectorAll('[atl-ui=key][data-key=plain] .atl-msg')].map(m=>[m.className,m.querySelector('b').textContent])"), [["atl-msg atl-you", "You"], ["atl-msg atl-agent", "Agent"]], "whole thread in order, You and Agent distinct");
+  await until(`document.querySelector('${chip}')?.classList.contains('atl-unread')`);
+  assert.deepEqual(await js(`[document.querySelector('${chip}').textContent, document.querySelector('${chip}').getAttribute('aria-label')]`), ["Needs a source.1", `Thread #${root.seq}: Needs a source. · Open, 1 reply, 1 new`], "reply count and new replies on the marker");
   await b("mouse", "move", "1", "1"); await sleep(300);
-  assert.equal(await opacity("plain"), "1", "a Key with threads keeps its count badge");
+  assert.equal(await js(`getComputedStyle(document.querySelector('${chip}')).opacity`), "1", "the marker stays without hover");
   assert.deepEqual(await buttons(), ["plain"]);
-  assert.equal(await js("document.querySelector('[atl-ui=pin][data-key=plain] .atl-add').textContent"), "1");
-
-  // Closing collapses the thread to one line; its messages open and collapse again on demand.
-  const msgsIn = "document.querySelectorAll('[atl-ui=key][data-key=plain] .atl-msg').length";
-  await js("document.querySelector('[atl-ui=key][data-key=plain] [data-atl=close]').click(); true");
-  await until(`${msgsIn}===0`);
-  assert.match(await js("document.querySelector('[atl-ui=key][data-key=plain] [data-atl=expand]').textContent"), /2 messages/);
-  await js("document.querySelector('[atl-ui=key][data-key=plain] [data-atl=expand]').click(); true");
-  await until(`${msgsIn}===2`);
-  await js("document.querySelector('[atl-ui=key][data-key=plain] [data-atl=collapse]').click(); true");
-  await until(`${msgsIn}===0`);
+  // Clicking the marker opens the thread floating beside it; focus moves in and the Page does not scroll.
+  const yThread = await js("scrollY"), chipBox = await box(chip);
+  await click(chip);
+  await until("document.activeElement?.closest('[atl-ui=thread]')!=null");
+  await sleep(200);
+  const msgs = "[...document.querySelectorAll('[atl-ui=thread] .atl-msg')].map(m=>[m.className,m.querySelector('b').textContent])";
+  assert.deepEqual(await js(msgs), [["atl-msg atl-you", "You"], ["atl-msg atl-agent", "Agent"]], "whole thread in order, You and Agent distinct");
+  const tp = await js("(()=>{const p=document.querySelector('[atl-ui=thread]'),r=p.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,outside:p.parentElement===document.documentElement,role:p.getAttribute('role'),vh:innerHeight,y:scrollY}})()");
+  assert(tp.outside && tp.role === "dialog" && tp.y === yThread && tp.top >= 0 && tp.bottom <= tp.vh && (Math.abs(tp.top - chipBox.y - chipBox.h) <= 12 || Math.abs(chipBox.y - tp.bottom) <= 12) && tp.left <= chipBox.right && tp.right >= chipBox.x, `the thread floats beside its marker: ${JSON.stringify({ tp, chipBox, yThread })}`);
+  // Esc closes it, focus returns to the marker, and the reply now counts as read.
+  await b("press", "Escape");
+  await until("document.querySelector('[atl-ui=thread]')===null");
+  assert.equal(await js("document.activeElement.dataset.atl+':'+document.activeElement.closest('[atl-ui=pin]')?.dataset.key"), "thread:plain", "focus returns to the marker");
+  assert.equal(await js(`document.querySelector('${chip}').classList.contains('atl-unread')`), false, "read once opened");
+  // Reply inside the floating thread; then close the thread there: the marker shows it closed.
+  await click(chip);
+  await until("document.activeElement?.closest('[atl-ui=thread]')!=null");
+  await click("[atl-ui=thread] [data-atl=reply]");
+  await until("document.activeElement?.matches('[atl-ui=thread] [atl-ui=composer] textarea')");
+  await b("keyboard", "type", "Thanks.");
+  await click("[atl-ui=thread] [atl-ui=composer] [type=submit]");
+  await until("document.querySelectorAll('[atl-ui=thread] .atl-msg').length===3");
+  assert.equal(await js(`document.querySelector('${chip} .atl-cn').textContent`), "2");
+  await click("[atl-ui=thread] [data-atl=close]");
+  await until(`document.querySelector('${chip}')?.classList.contains('atl-closed')`);
+  assert.equal(await js("document.querySelectorAll('[atl-ui=thread] .atl-msg').length"), 3, "a closed thread opened from its marker still shows its messages");
+  await click("[atl-ui=thread] [data-atl=hidethread]");
+  await until("document.querySelector('[atl-ui=thread]')===null");
+  assert.equal(await js("scrollY"), yThread, "reading, replying and closing never scrolled");
 
   // Selection: a real drag shows the floating Comment button beside it.
   const intro = await box("#intro");
@@ -118,24 +160,32 @@ try {
   assert.equal(popW[0], popW[1], `the selection editor is wide enough to write in ("the comment box is very narrow"): ${JSON.stringify(popW)}`);
   await b("keyboard", "type", "Here.");
   await click("[atl-ui=composer] [type=submit]");
-  await until("document.querySelector('[atl-ui=key][data-key=long] .atl-msg')!==null");
+  // A selection-anchored thread keeps its highlight and gets the same marker, at the end of the quote.
+  const spot = "document.querySelector('#phrase [atl-ui=spot] [data-atl=thread]')";
+  await until(`${spot}!==null`);
   assert.equal(await js("scrollY"), y0, "saving does not scroll either");
-  assert.equal(await js("document.getElementById('phrase').nextElementSibling?.querySelector('.atl-msg>div:last-child')?.textContent"), "Here.", "the saved thread sits right under its paragraph, not at the Key's end");
+  const spotAt = () => js(`(()=>{const s=${spot}.getBoundingClientRect(),q=[...CSS.highlights.get('atl-quote')][0].getClientRects();const l=q[q.length-1];return Math.abs(s.left-l.right)<=12&&Math.abs(s.bottom-l.top)<=16})()`);
+  assert.equal(await spotAt(), true, "the marker sits at the end of the highlighted quote");
+  assert.equal(await js("document.body.querySelector('.atl-msg')"), null, "no thread card in the Page's flow");
   assert.equal(await js("CSS.highlights.has('atl-pending')"), false, "the pending highlight goes with the editor");
   await js("window.u6=0; document.addEventListener('atelier:update',()=>u6++); true");
   host.update(page); await until("u6===1");
-  assert.equal(await js("document.getElementById('phrase').nextElementSibling?.querySelector('.atl-msg>div:last-child')?.textContent"), "Here.", "and stays there through an Update");
+  assert.equal(await spotAt(), true, "and stays there through an Update");
   await js("document.querySelector('[data-atl=undo]').click(); true");
-  await until("document.querySelector('[atl-ui=key][data-key=long] .atl-msg')===null");
-  // Review 2 finding 1: an unsaved reply under a quoted paragraph survives an Update that rewrites the quote.
+  await until(`${spot}===null`);
+  // Review 2 finding 1: an unsaved reply in a floating thread survives an Update that rewrites its quote.
   const onQuote = host.postHuman(page, { type: "comment", key: "long", quote: { exact: "Pick this phrase", prefix: "", suffix: "" }, text: "Quoted." }).json.entry;
-  await until("document.getElementById('phrase').nextElementSibling?.matches('.atl-at-quote')");
-  await js(`document.querySelector('.atl-at-quote [data-atl=reply][data-seq="${onQuote.seq}"]').click(); true`);
-  await until("document.activeElement?.matches('.atl-at-quote [atl-ui=composer] textarea')");
+  await until(`${spot}?.dataset.seq==="${onQuote.seq}"`);
+  await js(`${spot}.click(); true`);
+  await until("document.querySelector('[atl-ui=thread] [data-atl=reply]')!==null");
+  await js("document.querySelector('[atl-ui=thread] [data-atl=reply]').click(); true");
+  await until("document.activeElement?.matches('[atl-ui=thread] [atl-ui=composer] textarea')");
   await b("keyboard", "type", "Unsaved reply.");
   await write({ phrase: "Pick that phrase, rewritten." }); host.update(page); await until("u6===2");
-  assert.deepEqual(await js("(()=>{const t=document.querySelector('[atl-ui=composer] textarea');return [t?.value??null, document.activeElement===t, !!t?.closest('[atl-ui=key][data-key=long]')]})()"), ["Unsaved reply.", true, true], "the reply keeps its text and focus and moves to its Key");
+  assert.deepEqual(await js("(()=>{const t=document.querySelector('[atl-ui=composer] textarea');return [t?.value??null, document.activeElement===t, !!t?.closest('[atl-ui=thread]')]})()"), ["Unsaved reply.", true, true], "the reply keeps its text and focus in its floating thread");
+  await until(`document.querySelector('[atl-ui=pin][data-key=long] [data-atl=thread][data-seq="${onQuote.seq}"]')!==null`); // the quote is gone: its marker moves to the Key
   await js("document.querySelector('[atl-ui=composer] [data-atl=dismiss]').click(); true");
+  await js("document.querySelector('[atl-ui=thread] [data-atl=hidethread]').click(); true");
   await write(); host.update(page); await until("u6===3");
   await js("scrollTo(0,0); true");
 
@@ -173,6 +223,11 @@ try {
   assert.equal(await opacity("row-a"), "1", "focus shows the button");
   const [row, rowPin] = [await box("#ra"), await box('[atl-ui=pin][data-key="row-a"] .atl-add')];
   assert(Math.abs(row.right - rowPin.right) <= 8 && Math.abs(row.y - rowPin.y) <= 8, "at the row's corner");
+  // A thread's chip never covers the Page's own controls in that corner (here the row's Decision options).
+  host.postHuman(page, { type: "comment", key: "row-a", text: "A thread on the row" });
+  await until("document.querySelector('[atl-ui=pin][data-key=row-a] [data-atl=thread]')!==null"); await sleep(200);
+  const covered = await js("(()=>{const c=document.querySelector('[atl-ui=pin][data-key=row-a] [data-atl=thread]').getBoundingClientRect();return [...document.querySelectorAll('#ra [data-atl=decide],#ra [data-atl=addnote]')].map((b)=>b.getBoundingClientRect()).filter((b)=>b.left<c.right&&b.right>c.left&&b.top<c.bottom&&b.bottom>c.top).length})()");
+  assert.equal(covered, 0, "the chip sits clear of the row's Decision options");
   // Review 2 finding 4: a plain-text Key takes a tab stop, and Tab goes on to its Comment button.
   await js("document.getElementById('less-s').focus(); true");
   await b("press", "Tab"); await sleep(300);
@@ -229,6 +284,7 @@ try {
   await write({ plain, dock: `<div atl-dock id="dock"></div>`, more: `<div atl-key="shot" id="shot" atl-decide="Ship|Hold">Shot</div>` }); host.update(page); await until("updates===6");
   const shot = '[atl-ui=decide][aria-label="Decision on shot"]';
   assert.equal(await js(`document.querySelector('${shot} .atl-extra').hidden`), true, "no note field until asked for");
+  await js(`document.querySelector('${shot}').scrollIntoView({block:'center'}); true`); // threads no longer push it into view
   await click(`${shot} [data-atl=addnote]`);
   await until(`document.activeElement===document.querySelector('${shot} .atl-note')`);
   await b("keyboard", "type", "see the shots");
@@ -326,7 +382,7 @@ try {
     await dismiss();
     assert.equal(await js("document.querySelector('[atl-ui=composer]')"), null, "Cancel closes the popped box");
     const wide = await openOn("wide");
-    assert(fits(wide) && wide.inKey === (w === "1440"), `${w}px: a wide Key keeps the box inside it where it fits: ${JSON.stringify(wide)}`);
+    assert(fits(wide) && !wide.inKey, `${w}px: a wide Key's box floats too, never in the Key's flow: ${JSON.stringify(wide)}`);
     await dismiss();
   }
   await js("window.un=0; document.addEventListener('atelier:update',()=>un++); true");
@@ -335,16 +391,20 @@ try {
   assert.deepEqual(await js("(()=>{const t=document.querySelector('[atl-ui=composer] textarea');return [t?.value??null, document.activeElement===t]})()"), ["Unsaved on a frame.", true], "the popped box keeps its text and focus through an Update");
   assert(fits(await composerAt()), "and stays on screen");
   await click("[atl-ui=composer] [type=submit]");
-  await until("document.querySelector('[atl-ui=key][data-key=f1] [data-atl=reply]')!==null");
-  await js("document.querySelector('[atl-ui=key][data-key=f1] [data-atl=reply]').click(); true");
+  await until("document.querySelector('[atl-ui=pin][data-key=f1] [data-atl=thread]')!==null");
+  await js("document.querySelector('[atl-ui=pin][data-key=f1] [data-atl=thread]').click(); true");
+  await until("document.querySelector('[atl-ui=thread] [data-atl=reply]')!==null");
+  await js("document.querySelector('[atl-ui=thread] [data-atl=reply]').click(); true");
   await until("document.activeElement?.matches('[atl-ui=composer] textarea')");
-  const reply = await composerAt();
-  assert(fits(reply) && /^Reply/.test(await js("document.querySelector('[atl-ui=composer] .atl-label').textContent")), `a reply in a narrow Key's thread is wide enough too: ${JSON.stringify(reply)}`);
+  const reply = await js("(()=>{const p=document.querySelector('[atl-ui=thread]').getBoundingClientRect(),vw=document.documentElement.clientWidth;return {w:Math.round(p.width),need:Math.min(560,vw-16),left:p.left,right:p.right,top:p.top,bottom:p.bottom,vw,vh:innerHeight}})()");
+  assert(reply.w >= reply.need && reply.left >= 0 && reply.right <= reply.vw && reply.top >= 0 && reply.bottom <= reply.vh && /^Reply/.test(await js("document.querySelector('[atl-ui=composer] .atl-label').textContent")), `a reply in a narrow Key's thread is wide enough too: ${JSON.stringify(reply)}`);
   await dismiss();
+  await b("press", "Escape");
+  await until("document.querySelector('[atl-ui=thread]')===null");
 
-  // "One word per line" (2.3.2, a real check row): a Key that is itself a grid or flex row made its threads one cell, 280px
-  // of a 1374px row. Its thread now spans the Key's content width, in a wrapping and a nowrap row too; an inline, a
-  // plain and a media Key keep their place.
+  // "One word per line" (2.3.2, a real check row): a Key that is itself a grid or flex row made its Kernel UI one cell,
+  // 280px of a 1374px row. Its UI (an asked Decision; threads are markers now) spans the Key's content width, in a
+  // wrapping and a nowrap row too; an inline, a plain and a media Key keep their place.
   const rowPage = path.join(dir, "rows.html");
   await writeFile(rowPage, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Rows</title>
 <style>body{margin:16px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:8px 0}#grid{display:grid;grid-template-columns:11em 1fr auto;gap:8px}#wrap{display:flex;flex-wrap:wrap;gap:8px}#nowrap{display:flex;gap:8px}</style>
@@ -361,11 +421,7 @@ try {
     const got = [];
     for (const key of ["grid", "wrap", "nowrap", "plain", "inline", "media"]) {
       await js(`document.getElementById("${key}").scrollIntoView({block:"center"}); true`);
-      // ponytail: one retry, because a pin click here sometimes opens nothing (seen on 2.3.2 too); trace it if it recurs.
-      const c = await openOn(key).catch(() => openOn(key));
-      if (w === "1440" && key === "grid") assert(c.inKey, `1440px: the box on a wide grid Key opens inside it: ${JSON.stringify(c)}`);
-      await b("keyboard", "type", "A comment that should read as a line, not one word per line.");
-      await click("[atl-ui=composer] [type=submit]");
+      host.agent(rowPage, { type: "ask", decision: { id: `ask-${key}-${w}`, key, question: "A question that should read as a line, not one word per line?", options: [{ label: "Yes", consequence: "kept" }, { label: "No", consequence: "dropped" }] } });
       await until(`document.querySelector('[atl-ui=key][data-key="${key}"] .atl-card')!==null`);
       got.push(await spanOf(key));
     }
@@ -495,7 +551,43 @@ try {
   await until("updates===2 && getComputedStyle(document.getElementById('col')).transform!=='none' && document.querySelector('[atl-ui=panel]').parentElement.id==='spot'");
   await checkSticky("under a transformed ancestor");
 
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, threads that span a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform.");
+  // An Event Log written by Kernel 2.3 renders unchanged: a closed Key thread with replies, a quote on a Key, a quote
+  // and a selector without one, and an Unanchored Comment. Every thread gets its marker; the panel still lists them.
+  const legacy = path.join(dir, "legacy.html"), t0 = Date.now() - 86_400_000;
+  await writeFile(legacy, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Legacy</title><body>
+<p id="free">Free text on the Page.</p><div id="box"><span>Box</span></div><section atl-key="s" atl-ver="v1" id="s"><p id="sp">Keyed words to quote.</p><button id="pc" atl-comment>Comment</button></section>
+<script type="module" src="atelier.js"></script></body></html>`);
+  const old = [
+    { seq: 1, type: "comment", key: "s", ver: "v1", text: "First remark on the section", origin: "human", delivery: "immediate" },
+    { seq: 2, type: "answer", target: 1, text: "Done.", origin: "agent" },
+    { seq: 3, type: "comment", thread: 1, key: "s", ver: "v1", text: "Good.", origin: "human", delivery: "immediate" },
+    { seq: 4, type: "close", target: 1, ver: "v1", origin: "human", delivery: "record" },
+    { seq: 5, type: "comment", key: "s", ver: "v1", quote: { exact: "words to quote", prefix: "Keyed ", suffix: "." }, text: "On the words", origin: "human", delivery: "immediate" },
+    { seq: 6, type: "comment", quote: { exact: "Free text", prefix: "", suffix: " on" }, text: "On free text", origin: "human", delivery: "immediate" },
+    { seq: 7, type: "comment", selector: { sel: "#box", snap: "Box" }, text: "On the box", origin: "human", delivery: "immediate" },
+    { seq: 8, type: "comment", key: "gone", text: "Its Key was removed", origin: "human", delivery: "immediate" },
+    { seq: 9, type: "delivered", of: [1, 3, 5, 6, 7, 8], origin: "kernel" },
+    { seq: 10, type: "received", of: [1, 3, 5, 6, 7, 8], origin: "kernel" },
+  ].map((e, i) => JSON.stringify({ ...e, at: t0 + i }));
+  await writeFile(`${legacy}.events.jsonl`, `${old.join("\n")}\n`);
+  await b("open", (await host.open(legacy)).url);
+  await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded");
+  await until("document.querySelectorAll('[data-atl=thread]').length===4");
+  const marks = await js("[...document.querySelectorAll('[data-atl=thread]')].map((m)=>[m.dataset.seq,m.closest('[atl-ui]').getAttribute('atl-ui'),m.closest('[atl-ui]').parentElement.id,m.classList.contains('atl-closed'),m.querySelector('.atl-cn')?.textContent??''])");
+  assert.deepEqual(marks.sort(), [["1", "pin", "s", true, "2"], ["5", "spot", "sp", false, ""], ["6", "spot", "free", false, ""], ["7", "spot", "box", false, ""]], `old threads get markers: ${JSON.stringify(marks)}`);
+  assert.match(await js("document.querySelector('[atl-ui=panel] .atl-list').textContent"), /On the text[\s\S]*On free text[\s\S]*On the box[\s\S]*Unanchored \(1\)[\s\S]*Its Key was removed/, "the panel still lists threads on the text and Unanchored ones");
+  await js("document.querySelector('[data-atl=thread][data-seq=\"1\"]').click(); true");
+  await until("document.querySelectorAll('[atl-ui=thread] .atl-msg').length===3");
+  assert.deepEqual(await js("[...document.querySelectorAll('[atl-ui=thread] .atl-msg>div:last-child')].map((d)=>d.textContent)"), ["First remark on the section", "Done.", "Good."]);
+  await js("document.querySelector('[atl-ui=thread]') && document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true");
+  await js("document.getElementById('pc').click(); true");
+  await until("document.querySelector('[atl-ui=composer]')?.isConnected");
+  const pcAt = await js("(()=>{const c=document.querySelector('[atl-ui=composer]').getBoundingClientRect(),p=document.getElementById('pc').getBoundingClientRect();return {label:document.querySelector('[atl-ui=composer] .atl-label').textContent,gap:Math.round(Math.min(Math.abs(c.top-p.bottom),Math.abs(p.top-c.bottom)))}})()");
+  assert.ok(pcAt.label === "Comment on s" && pcAt.gap <= 12, `an atl-comment button opens its Key's Comment beside it: ${JSON.stringify(pcAt)}`);
+  await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true");
+  assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
+
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

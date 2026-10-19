@@ -1,4 +1,4 @@
-// Atelier Kernel 2.5.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.6.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -306,11 +306,11 @@ function boot() {
   const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
   const held = new WeakSet(); // <details> the human opened or closed: his state wins over every later source
   const tabbed = new WeakSet(); // Keys the Kernel made focusable, so the keyboard reaches their Comment button
-  const threadCount = new Map(); // Key address -> its threads, for the Comment button made on hover
-  const quoteUis = new Map(); // block holding a quoted Comment -> the Kernel UI under it
+  const chipsAt = new Map(); // Key address -> the markers of its threads, for the Comment button made on hover
+  const spots = new Map(); // thread seq -> its marker at a quote or a selector-anchored element
   const BLOCK = "p,li,dd,dt,td,th,blockquote,pre,figcaption,h1,h2,h3,h4,h5,h6";
   const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), cards = new Map(), wipLabels = new Map();
-  let hot = null, savedRange = null;
+  let hot = null, savedRange = null, thread = null; // thread: the one open in the floating thread box
 
   const isUi = (n) => n.closest?.("[atl-ui]");
   const keyOf = (el) => { const parts = []; for (let n = el?.closest?.("[atl-key]"); n; n = n.parentElement?.closest("[atl-key]")) if (!isUi(n)) parts.unshift(n.getAttribute("atl-key")); return parts.join("/") || undefined; };
@@ -340,7 +340,9 @@ function boot() {
   const now = () => Date.now();
 
   // ---- UI roots. Everything the Kernel draws carries atl-ui and is lifted out before each morph.
-  const panel = h(`<aside atl-ui="panel" aria-label="Atelier"><style class="atl-palette"></style><style>${STYLE}</style><div class="atl-bar"></div><div class="atl-undo" aria-live="polite"></div><div class="atl-slot"></div><div class="atl-list"></div></aside>`);
+  const panel = h(`<aside atl-ui="panel" aria-label="Atelier"><style class="atl-palette"></style><style>${STYLE}</style><div class="atl-bar"></div><div class="atl-undo" aria-live="polite"></div><div class="atl-list"></div></aside>`);
+  // A thread opened from its marker floats beside it, outside <body> like every Comment box, so no Update lifts it.
+  const tpop = h(`<div atl-ui="thread" class="atl-pop atl-tpop" role="dialog" tabindex="-1"><div class="atl-tbar"><span class="atl-label"></span><button type="button" data-atl="hidethread" aria-label="Close this box" title="Close (Esc)">${icon("x")}</button></div><div class="atl-tcard"></div><div class="atl-slot"></div></div>`);
   const orphans = h(`<section atl-ui="orphans" aria-label="Decisions"></section>`);
   // Shown beside a text selection on the Page; pointerdown keeps the selection it comments on.
   const selBtn = h(`<button atl-ui="sel" class="atl-selbtn" data-atl="selcomment" hidden>${icon("comment-plus")} Comment</button>`);
@@ -440,7 +442,7 @@ function boot() {
     const before = changesOn() ? snapshot() : null;
     const active = document.activeElement;
     const range = active && "selectionStart" in active ? [active.selectionStart, active.selectionEnd] : null;
-    // Lift out only top-level Kernel nodes; a composer inside a Key's UI travels with it.
+    // Lift out only top-level Kernel nodes; those inside a Key's UI travel with it.
     document.body.querySelectorAll("[atl-ui]").forEach((n) => { if (!n.parentElement.closest("[atl-ui]")) n.remove(); });
     const sheet = (d) => [...d.head.querySelectorAll("style,link[rel=stylesheet]")];
     if (sheet(document).map((n) => n.outerHTML).join() !== sheet(doc).map((n) => n.outerHTML).join()) {
@@ -537,20 +539,30 @@ function boot() {
   const left = (e) => Math.ceil((e.at + UNDO_MS - now()) / 1000);
   const statusText = (st, e) => { const s = st.status(e); return s === "pending" && left(e) > 0 ? `sends in ${left(e)} s` : testHost && s === "delivered" ? "printed by the test host" : STATUS[s] ?? ""; };
 
-  function threadHtml(t, st) {
-    const lastRead = read[t.root.seq] ?? 0;
-    const unread = t.msgs.filter((m) => m.origin === "agent" && m.seq > lastRead).length;
+  const unreadIn = (t) => t.msgs.filter((m) => m.origin === "agent" && m.seq > (read[t.root.seq] ?? 0)).length;
+  // A thread's marker: a chip titled with the first words of its first message and its reply count; compact (no
+  // title) at a quote, where it would cover the text. New agent replies show as a dot.
+  function chipHtml(t, st, compact = false) {
+    const seq = t.root.seq, unread = unreadIn(t), replies = t.msgs.length - 1, draft = st.status(t.root) === "draft";
+    const label = `Thread #${seq}: ${clip(t.root.text, 80)} · ${t.closed ? "Closed" : "Open"}, ${replies} repl${replies === 1 ? "y" : "ies"}${unread ? `, ${unread} new` : ""}${t.stale ? ", on an earlier version" : ""}${draft ? ", not sent" : ""}`;
+    const cls = ["atl-chip", compact && "atl-compact", !t.closed && !draft && "atl-open-item", t.closed && "atl-closed", unread && "atl-unread", t.stale && "atl-stale", draft && "atl-draft"].filter(Boolean).join(" ");
+    return `<button type="button" data-atl="thread" data-seq="${seq}" class="${cls}" aria-haspopup="dialog" aria-expanded="${thread?.seq === seq}" aria-label="${esc(label)}" title="${esc(label)}">${icon("comment")}${compact ? "" : `<span class="atl-ct">${esc(clip(t.root.text, 24))}</span>`}${replies ? `<span class="atl-cn">${replies}</span>` : ""}${unread ? `<span class="atl-nd"></span>` : ""}</button>`;
+  }
+
+  // inPop: the thread opened from its marker, which shows its messages even when closed and needs no Show.
+  function threadHtml(t, st, inPop = false) {
+    const unread = unreadIn(t);
     const msg = (m) => `<div class="atl-msg ${m.origin === "agent" ? "atl-agent" : "atl-you"}"><div class="atl-who"><b>${m.origin === "agent" ? "Agent" : "You"}</b> <span class="atl-dim">#${m.seq}${m.origin === "human" ? ` · ${esc(statusText(st, m))}` : ""}</span></div><div>${esc(m.text)}</div></div>`;
     const open = expanded.has(t.root.seq);
-    const { head, folded, tail } = threadLayout(t.msgs, open, t.closed);
-    if (t.closed && !open) { // a closed thread collapses to its head; its messages open on demand
+    const { head, folded, tail } = threadLayout(t.msgs, open, t.closed && !inPop);
+    if (t.closed && !open && !inPop) { // a closed thread collapses to its head; its messages open on demand
       const anchor = t.root.quote ? `“${esc(t.root.quote.exact.slice(0, 80))}”` : esc(String(t.root.text ?? "").slice(0, 80));
       return `<div class="atl-head"><span class="atl-tag">closed</span>${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}<button data-atl="expand" data-seq="${t.root.seq}" class="atl-earlier">${folded.length} message${folded.length === 1 ? "" : "s"}</button></div><div class="atl-dim">${anchor}</div>`;
     }
     const anchor = t.root.quote ? `<div class="atl-quote">“${esc(t.root.quote.exact.slice(0, 140))}”</div>` : t.root.t != null ? `<div class="atl-dim">at ${Number(t.root.t).toFixed(1)} s</div>` : "";
-    return `<div class="atl-head"><span class="atl-tag">${t.closed ? "closed" : "open"}</span>${t.closed ? `<button data-atl="collapse" data-seq="${t.root.seq}" class="atl-earlier">Collapse</button>` : ""}${t.stale ? `<span class="atl-tag atl-warn">${icon("alert")} on an earlier version</span>` : ""}${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}</div>${anchor}
+    return `<div class="atl-head">${inPop && !t.closed ? "" : `<span class="atl-tag">${t.closed ? "closed" : "open"}</span>`}${t.closed && !inPop ? `<button data-atl="collapse" data-seq="${t.root.seq}" class="atl-earlier">Collapse</button>` : ""}${t.stale ? `<span class="atl-tag atl-warn">${icon("alert")} on an earlier version</span>` : ""}${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}</div>${anchor}
       ${head.map(msg).join("")}${folded.length ? `<button data-atl="expand" data-seq="${t.root.seq}" class="atl-earlier">${folded.length} earlier</button>` : ""}${tail.map(msg).join("")}
-      <div class="atl-actions"><button data-atl="reply" data-seq="${t.root.seq}">${icon("pencil")} Reply</button>${t.stale && !t.closed ? `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Fixed: close</button><button data-atl="still" data-seq="${t.root.seq}">Still applies</button>` : t.closed ? "" : `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Close</button>`}${t.root.key || t.root.quote || t.root.selector ? `<button data-atl="jump" data-seq="${t.root.seq}">${icon("eye")} Show</button>` : ""}</div>`;
+      <div class="atl-actions"><button data-atl="reply" data-seq="${t.root.seq}">${icon("pencil")} Reply</button>${t.stale && !t.closed ? `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Fixed: close</button><button data-atl="still" data-seq="${t.root.seq}">Still applies</button>` : t.closed ? "" : `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Close</button>`}${!inPop && (t.root.key || t.root.quote || t.root.selector) ? `<button data-atl="jump" data-seq="${t.root.seq}">${icon("eye")} Show</button>` : ""}</div>`;
   }
 
   // `lock`: the atl-wip text of a region holding the Decision; its options are disabled with that text as their title.
@@ -589,7 +601,7 @@ function boot() {
   }
 
   // A Key's UI goes inside it, except where children would not show: after media and void elements, into a row's last cell.
-  // A Key's threads and composer span a grid or flex-row Key rather than squeeze into one cell (2.3.2: 280px of a
+  // A Key's UI (its asked Decisions) spans a grid or flex-row Key rather than squeeze into one cell (2.3.2: 280px of a
   // 1374px 3-column row): CSS spans the grid columns, a wrapping row gives them a line of their own, and a nowrap
   // row, which no child can break, gets them after the Key like media.
   function place(ui, el) {
@@ -606,23 +618,20 @@ function boot() {
     set(panel.querySelector(".atl-palette"), palette(`${document.querySelector('meta[name="color-scheme"]')?.content ?? ""} ${getComputedStyle(document.documentElement).colorScheme ?? ""}`));
     const idx = textIndex();
     const placed = new Map(st.threads.map((t) => [t.root.seq, placeThread(t, idx)]));
-    const seen = new Set(), kept = new Set(), atQuote = new Map();
+    const seen = new Set(), kept = new Set(), atText = [];
     for (const el of keyed()) {
       const addr = keyOf(el);
       if (seen.has(addr)) continue; seen.add(addr);
       let ui = keyUis.get(addr);
-      if (!ui) { ui = h(`<div atl-ui="key" data-key="${esc(addr)}"><div class="atl-khead"></div><div class="atl-kbody"></div><div class="atl-slot"></div></div>`); keyUis.set(addr, ui); }
-      const threadsHere = st.threads.filter((t) => placed.get(t.root.seq).where === "key" && t.root.key === addr);
-      // A thread on selected text sits under the paragraph (or in the list item or cell) that holds its quote,
-      // not at the end of a long Key (Fix 6); one holder per block keeps several threads in order.
-      const atKeyEnd = threadsHere.filter((t) => {
-        const range = t.root.quote && findQuote(t.root.quote, idx), block = range?.startContainer.parentElement?.closest(BLOCK);
-        if (!block || block === el || !el.contains(block) || isUi(block)) return true;
-        let holder = quoteUis.get(block);
-        if (!holder) { holder = h(`<div atl-ui="key" class="atl-at-quote" data-key="${esc(addr)}"><div class="atl-khead"></div><div class="atl-kbody"></div><div class="atl-slot"></div></div>`); quoteUis.set(block, holder); }
-        if (block.matches("li,td,th,dd,dt")) { if (holder.parentElement !== block) block.append(holder); } else if (block.nextElementSibling !== holder) block.after(holder);
-        (atQuote.get(holder) ?? atQuote.set(holder, []).get(holder)).push(t);
-        return false;
+      if (!ui) { ui = h(`<div atl-ui="key" data-key="${esc(addr)}"><div class="atl-khead"></div><div class="atl-kbody"></div></div>`); keyUis.set(addr, ui); }
+      // Threads take no space in the Page's flow: each is a marker, a chip on its Key, or at its quote when it
+      // was made on selected text (Fix 6: never at the end of a long Key). A Key that only marks a slot has no pin.
+      const onKey = st.threads.filter((t) => {
+        if (placed.get(t.root.seq).where !== "key" || t.root.key !== addr) return false;
+        const range = t.root.quote && findQuote(t.root.quote, idx);
+        if (range && el.contains(range.commonAncestorContainer)) { atText.push({ t, at: range }); return false; }
+        if (el.hasAttribute("atl-slot")) { atText.push({ t, at: el }); return false; }
+        return true;
       });
       // A Decision renders before the threads, so its options stay where the Page put them.
       const d = el.hasAttribute("atl-decide") ? st.decisions.find((x) => x.id === addr && x.declared) : undefined;
@@ -637,31 +646,40 @@ function boot() {
         kept.add(dec);
       }
       place(ui, el);
-      // The Comment button: only the hovered or focused Key has one, not every Key; with threads it stays as a count.
+      // The Comment button: only the hovered or focused Key has one, not every Key; its thread markers stay.
       // A Key that only marks a Decision's slot gets none.
       if (!el.hasAttribute("atl-slot")) {
         // A Key with nothing focusable in itself takes a tab stop, so Tab reaches it and then its Comment button.
         if (!el.hasAttribute("tabindex") && el.tabIndex < 0) { el.tabIndex = 0; tabbed.add(el); }
-        threadCount.set(addr, threadsHere.length);
-        if (threadsHere.length || addr === hot || pins.get(addr)?.contains(document.activeElement)) kept.add(pinFor(addr, el));
+        chipsAt.set(addr, onKey.map((t) => chipHtml(t, st)).join(""));
+        if (onKey.length || addr === hot || composer?.pinKey === addr || pins.get(addr)?.contains(document.activeElement)) kept.add(pinFor(addr, el));
       }
       const groupDrafts = el.hasAttribute("atl-group") ? st.drafts.filter((x) => inGroup(x.key, addr)).length : 0;
       set(ui.firstElementChild, groupDrafts ? `<button data-atl="send" data-key="${esc(addr)}" class="atl-primary">${icon("send")} Send (${groupDrafts})</button>` : "");
-      reconcile(ui.children[1], [
-        ...st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st, lockOf(el)), open: !x.answer || x.stale, extra: `<div class="atl-dextra">${EXTRA}</div>` })),
-        ...atKeyEnd.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })),
-      ]);
-    }
-    for (const [block, holder] of quoteUis) {
-      const list = atQuote.get(holder);
-      if (!list) { holder.remove(); quoteUis.delete(block); continue; }
-      reconcile(holder.children[1], list.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })));
+      reconcile(ui.children[1], st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st, lockOf(el)), open: !x.answer || x.stale, extra: `<div class="atl-dextra">${EXTRA}</div>` })));
     }
     for (const map of [pins, decUis]) for (const [addr, node] of map) if (!kept.has(node)) { node.remove(); map.delete(addr); }
-    for (const [addr, ui] of keyUis) {
-      if (seen.has(addr)) continue;
-      if (composer && ui.contains(composer.node)) panel.querySelector(".atl-slot").append(composer.node); // an Update removed its Key: keep the text
-      ui.remove(); keyUis.delete(addr);
+    for (const [addr, ui] of keyUis) if (!seen.has(addr)) { ui.remove(); keyUis.delete(addr); }
+    // Markers at a quote (inside the block that holds it) or on a selector-anchored element; the panel lists these too.
+    for (const t of st.threads) { const p = placed.get(t.root.seq); if (p.where === "text") atText.push({ t, at: p.range ?? p.el }); }
+    const spotted = new Set();
+    for (const { t, at } of atText) {
+      const start = at instanceof Range ? at.startContainer.parentElement : at, host = at instanceof Range ? start?.closest(BLOCK) ?? start : at;
+      if (!host || isUi(host)) continue;
+      let s = spots.get(t.root.seq);
+      if (!s) { s = h(`<span atl-ui="spot" class="atl-pin atl-spot"></span>`); spots.set(t.root.seq, s); }
+      s.at = at; place(s, host); set(s, chipHtml(t, st, true)); spotted.add(t.root.seq);
+    }
+    for (const [seq, s] of spots) if (!spotted.has(seq)) { s.remove(); spots.delete(seq); }
+    if (thread) {
+      const t = st.threads.find((x) => x.root.seq === thread.seq);
+      if (!t) closeThread(false, false); // undone, or gone from the log
+      else {
+        const where = t.root.quote ? `“${clip(t.root.quote.exact, 40)}”` : t.root.key ?? t.root.selector?.sel ?? "the Page";
+        set(tpop.querySelector(".atl-label"), `Thread on ${esc(where)}`);
+        tpop.setAttribute("aria-label", `Thread on ${where}`);
+        reconcile(tpop.querySelector(".atl-tcard"), [{ id: `p:${t.root.seq}`, html: threadHtml(t, st, true) }]);
+      }
     }
 
     // Decisions with no Key on the Page sit in the reading path, capped at 50vh (Review Studio a41040901).
@@ -683,11 +701,6 @@ function boot() {
     reconcile(list.querySelector(".atl-text"), onText.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed })));
     set(list.querySelector(".atl-h-un"), section(`Unanchored (${unanchored.length})`, unanchored));
     reconcile(list.querySelector(".atl-un"), unanchored.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed })));
-    // An open reply follows its thread wherever this render put it (under a quote, at its Key, in the panel), so an
-    // Update that moves the thread or drops its quote holder keeps the typed text.
-    const replyTo = composer?.spec.anchor?.thread, home = replyTo != null && cards.get(`t:${replyTo}`)?.closest("[atl-ui=key],[atl-ui=panel]")?.querySelector(".atl-slot");
-    if (home && !composer.at && composer.node.parentElement !== home) home.append(composer.node);
-
     if (globalThis.Highlight && CSS.highlights) {
       const ranges = st.threads.filter((t) => !t.closed && t.root.quote).map((t) => findQuote(t.root.quote, idx)).filter(Boolean);
       CSS.highlights.set("atl-quote", new Highlight(...ranges));
@@ -716,25 +729,48 @@ function boot() {
     if (json !== published) { published = json; document.dispatchEvent(new CustomEvent("atelier:state", { detail: pub })); }
   }
 
-  // ---- the floating Comment button: at the top-right of the innermost hovered or focused Key, taking no layout space
+  // ---- the floating Comment button: at the top-right of the innermost hovered or focused Key, taking no layout space,
+  // after the Key's thread markers, which stay without hover
   function pinFor(addr, el = findKey(addr)) {
     if (!el) return null;
     let pin = pins.get(addr);
     if (!pin) { pin = h(`<span atl-ui="pin" class="atl-pin" data-key="${esc(addr)}"></span>`); pins.set(addr, pin); }
-    const n = threadCount.get(addr) ?? 0;
+    const chips = chipsAt.get(addr) ?? "";
     place(pin, el);
-    set(pin, `<button data-atl="comment" data-key="${esc(addr)}" class="atl-add" aria-label="Comment on ${esc(addr)}${n ? ` (${n} threads)` : ""}" title="Comment on ${esc(addr)}">${icon("comment")}${n ? `<span>${n}</span>` : ""}</button>`);
-    pin.classList.toggle("atl-has", n > 0);
+    set(pin, `${chips ? `<span class="atl-prow">${chips}</span>` : ""}<button type="button" data-atl="comment" data-key="${esc(addr)}" class="atl-add" aria-label="Comment on ${esc(addr)}" title="Comment on ${esc(addr)}">${icon("comment-plus")}</button>`);
+    pin.classList.toggle("atl-has", !!chips);
     return pin;
   }
+  // A quote's marker sits just above the end of the quote; a selector-anchored element's at its top-right corner.
+  function spotAt(s) {
+    const b = s.firstElementChild, rects = s.at?.getClientRects?.();
+    if (!b || !rects?.length) return;
+    s.style.translate = "";
+    const p = s.getBoundingClientRect(), r = s.at instanceof Range ? rects[rects.length - 1] : s.at.getBoundingClientRect();
+    const x = s.at instanceof Range ? r.right + 2 : r.right - b.offsetWidth - 4, y = s.at instanceof Range ? r.top - b.offsetHeight + 4 : r.top + 4;
+    s.style.translate = `${Math.round(Math.min(x, document.documentElement.clientWidth - b.offsetWidth - 4) - p.left)}px ${Math.round(y - p.top)}px`;
+  }
+  // The Comment button sits in the Key's top-right corner; its thread chips left of it, moved further left of the
+  // Page's own controls in that band (Decision options, buttons, links), or below them where the row has no room.
+  const CONTROLS = "button,a[href],input,select,textarea,summary";
+  const controlsIn = (el) => [...el.querySelectorAll(CONTROLS)].filter((c) => !isUi(c) || c.closest("[atl-ui=decide]")).map((c) => c.getBoundingClientRect()).filter((c) => c.width); // the Page's, and its Decision options
+  // ponytail: measures the Key's controls on every placement; fine for a few hundred Keys with threads.
   function pinAt(pin) {
-    const el = findKey(pin.dataset.key), b = pin.firstElementChild;
+    const el = findKey(pin.dataset.key), b = pin.querySelector(".atl-add"), row = pin.querySelector(".atl-prow");
     if (!el || !b) return;
     pin.style.translate = "";
-    const p = pin.getBoundingClientRect(), r = el.getBoundingClientRect();
-    pin.style.translate = `${Math.round(r.right - p.left - b.offsetWidth - 4)}px ${Math.round(r.top - p.top + 4)}px`;
+    const p = pin.getBoundingClientRect(), r = el.getBoundingClientRect(), x0 = r.right - b.offsetWidth - 4, top = r.top + 4;
+    pin.style.translate = `${Math.round(x0 - p.left)}px ${Math.round(top - p.top)}px`;
+    if (!row) return;
+    const w = row.offsetWidth, ht = row.offsetHeight;
+    const band = controlsIn(el).filter((c) => c.bottom > top && c.top < top + ht);
+    let x = x0 - 4 - w, y = top;
+    for (let hit = band; (hit = band.filter((c) => c.left < x + w + 8 && c.right > x - 4)).length;) x = Math.min(...hit.map((c) => c.left)) - 10 - w;
+    if (x < r.left + 4) { x = x0 - 4 - w; if (band.length) y = Math.max(...band.map((c) => c.bottom)) + 4; }
+    x = Math.max(x, 4);
+    row.style.left = `${Math.round(x - x0)}px`; row.style.top = `${Math.round(y - top)}px`;
   }
-  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); positionMarks(); placePop(); positionWip(); }
+  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); for (const s of spots.values()) spotAt(s); positionMarks(); placePops(); positionWip(); }
   // ponytail: labels sit at document coordinates, so a region inside its own scrolling box leaves its label behind.
   function positionWip() {
     for (const [el, label] of wipLabels) {
@@ -749,7 +785,7 @@ function boot() {
     if (addr === hot) return;
     pins.get(hot)?.classList.remove("atl-hot");
     hot = addr;
-    for (const [a, pin] of pins) if (a !== hot && !pin.classList.contains("atl-has") && !pin.contains(document.activeElement)) { pin.remove(); pins.delete(a); }
+    for (const [a, pin] of pins) if (a !== hot && !pin.classList.contains("atl-has") && !pin.contains(document.activeElement) && composer?.pinKey !== a) { pin.remove(); pins.delete(a); }
     const pin = addr && pinFor(addr);
     if (pin) { pin.classList.add("atl-hot"); pinAt(pin); }
   }
@@ -778,7 +814,12 @@ function boot() {
   }
   let selQueued = false;
   document.addEventListener("selectionchange", () => { if (!selQueued) { selQueued = true; requestAnimationFrame(() => { selQueued = false; placeSel(); }); } });
-  addEventListener("scroll", () => { if (!selBtn.hidden) placeSel(); }, { capture: true, passive: true });
+  // A floating box follows its anchor through any scroll, the Page's or an inner container's, and stays on screen.
+  let popQueued = false;
+  addEventListener("scroll", () => {
+    if (!selBtn.hidden) placeSel();
+    if ((composer || thread) && !popQueued) { popQueued = true; requestAnimationFrame(() => { popQueued = false; placePops(); }); }
+  }, { capture: true, passive: true });
 
   const undoable = () => all().filter((e) => e.origin === "human" && e.type !== "undo" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
   function renderUndo(list) {
@@ -960,50 +1001,71 @@ function boot() {
     place(t.nodes.diff, el);
   }
 
-  // ---- composer: one per slot, persistent while open so typing survives every render and morph. A Comment on
-  // selected text opens beside the selection (spec.range), outside <body> so no Update lifts it, and never scrolls.
-  function closeComposer() { composer?.node.remove(); composer = null; CSS.highlights?.delete("atl-pending"); }
-  function placePop() {
-    const at = composer?.spec.range ?? composer?.at?.(), node = composer?.node;
-    if (!at) return;
+  // ---- composer: one at a time, persistent while open so typing survives every render and morph. Every Comment box
+  // floats right beside what opened it (a Key's Comment button, the selection, a panel card), outside <body> so no
+  // Update lifts it, and never scrolls the Page; a reply opens inside its floating thread. `from` gets focus back.
+  function closeComposer(back = false) {
+    const c = composer;
+    if (!c) return;
+    c.node.remove(); composer = null; CSS.highlights?.delete("atl-pending");
+    const to = !back ? null : c.inline ? tpop : c.from?.isConnected ? c.from : c.pinKey && pins.get(c.pinKey)?.querySelector(".atl-add");
+    if (to?.isConnected) to.focus({ preventScroll: true });
+  }
+  // Under its anchor (above where there is no room), inside the viewport; it stays put while the anchor has no box.
+  // Opened from a pin, it also clears the Page's own controls beside the pin (a Decision's options in the same row).
+  function placeNear(node, at) {
+    if (!at || !node.isConnected) return;
     const r = at.getBoundingClientRect(), w = node.offsetWidth, ht = node.offsetHeight, vw = document.documentElement.clientWidth;
     if (!r.width && !r.height) return; // the text or Key went away in an Update: stay where it was
-    const below = r.bottom + 6 + ht <= innerHeight || r.top - 6 - ht < 0, top = below ? r.bottom + 6 : r.top - 6 - ht;
+    const key = at.closest?.("[atl-ui=pin]") && findKey(at.closest("[atl-ui=pin]").dataset.key);
+    const bottom = Math.max(r.bottom, ...(key ? controlsIn(key) : []).filter((c) => c.bottom > r.top && c.top < r.bottom).map((c) => c.bottom));
+    const below = bottom + 6 + ht <= innerHeight || r.top - 6 - ht < 0, top = below ? bottom + 6 : r.top - 6 - ht;
     node.style.left = `${Math.round(scrollX + Math.max(4, Math.min(vw - w - 4, r.left)))}px`;
     node.style.top = `${Math.round(scrollY + Math.max(4, Math.min(innerHeight - ht - 4, top)))}px`;
   }
-  function openComposer(spec, slot) {
+  const markerOf = (seq) => document.querySelector(`[data-atl=thread][data-seq="${seq}"]`);
+  function placePops() {
+    if (composer && !composer.inline) placeNear(composer.node, composer.spec.range ?? composer.at?.());
+    if (thread) placeNear(tpop, markerOf(thread.seq));
+  }
+  // A thread opens from its marker into the floating box; closing it puts focus back on the marker (Esc, ×, a click
+  // elsewhere) and counts its replies as read.
+  function openThread(seq) {
+    if (composer && (composer.inline || !composer.node.querySelector("textarea").value.trim())) closeComposer();
+    if (thread && thread.seq !== seq) markRead(thread.seq);
+    thread = { seq };
+    document.documentElement.append(tpop);
+    render();
+    tpop.focus({ preventScroll: true });
+  }
+  function closeThread(back = true, rerender = true) {
+    if (!thread) return;
+    const { seq } = thread;
+    thread = null;
+    if (composer?.inline) closeComposer();
+    tpop.remove(); markRead(seq);
+    if (rerender) render();
+    if (back) markerOf(seq)?.focus({ preventScroll: true });
+  }
+  function openComposer(spec, { at, inside, from, pinKey } = {}) {
     closeComposer();
-    const node = h(`<form atl-ui="composer" class="atl-composer${spec.range ? " atl-pop" : ""}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="5" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
-    composer = { spec, node };
-    if (spec.range) {
-      document.documentElement.append(node);
-      placePop();
-      if (globalThis.Highlight && CSS.highlights) CSS.highlights.set("atl-pending", new Highlight(spec.range)); // the quote stays marked
-    } else {
-      slot.append(node);
-      // A Key narrower than the box (a card, thumbnail, phone frame, table cell) would squeeze it: it opens as a
-      // popover by its thread or Key instead, outside <body> like the selection editor ("still very narrow", 2.3.1).
-      if (slot.closest("[atl-ui=key]") && node.getBoundingClientRect().width < Math.min(560, document.documentElement.clientWidth - 16)) {
-        const { key, thread } = spec.anchor ?? {};
-        composer.at = () => (thread != null && cards.get(`t:${thread}`)?.isConnected && cards.get(`t:${thread}`)) || findKey(key);
-        node.classList.add("atl-pop");
-        document.documentElement.append(node);
-        placePop();
-      }
-    }
-    node.querySelector("textarea").focus({ preventScroll: !!(spec.range || composer.at) });
+    if (!inside) closeThread(false);
+    const node = h(`<form atl-ui="composer" class="atl-composer${inside ? "" : " atl-pop"}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="5" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
+    composer = { spec, node, at, from, pinKey, inline: !!inside };
+    if (inside) inside.append(node);
+    else { document.documentElement.append(node); placePops(); }
+    if (spec.range && globalThis.Highlight && CSS.highlights) CSS.highlights.set("atl-pending", new Highlight(spec.range)); // the quote stays marked
+    node.querySelector("textarea").focus({ preventScroll: true });
     node.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const text = node.querySelector("textarea").value.trim();
       if (!text) return;
-      closeComposer();
+      closeComposer(true);
       // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
       const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
       await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery });
     });
   }
-  const slotFor = (addr) => (addr && keyUis.get(addr)?.querySelector(".atl-slot")) || panel.querySelector(".atl-slot");
   const mediaTime = (el) => { const m = el?.querySelector("video,audio"); return m ? Math.round(m.currentTime * 10) / 10 : undefined; };
   function anchorForKey(addr) { const el = findKey(addr); return { key: addr, ver: verOf(el), t: mediaTime(el) }; }
 
@@ -1053,8 +1115,14 @@ function boot() {
   }
 
   const actions = {
-    comment: (b) => openComposer({ label: `Comment on ${b.dataset.key}`, anchor: anchorForKey(b.dataset.key) }, slotFor(b.dataset.key)),
-    reply: (b) => { const seq = +b.dataset.seq; const root = all().find((e) => e.seq === seq); markRead(seq); openComposer({ label: `Reply in thread #${seq}`, anchor: { thread: seq, key: root?.key, ver: root?.key ? currentVer(root.key) : undefined } }, b.closest("[atl-ui=key]")?.querySelector(".atl-slot") ?? panel.querySelector(".atl-slot")); },
+    comment: (b) => { const key = b.dataset.key; openComposer({ label: `Comment on ${key}`, anchor: anchorForKey(key) }, { at: () => pins.get(key)?.querySelector(".atl-add") ?? findKey(key), from: b instanceof Element ? b : null, pinKey: key }); },
+    reply: (b) => {
+      const seq = +b.dataset.seq, root = all().find((e) => e.seq === seq), inside = b.closest("[atl-ui=thread]")?.querySelector(".atl-slot");
+      markRead(seq);
+      openComposer({ label: `Reply in thread #${seq}`, anchor: { thread: seq, key: root?.key, ver: root?.key ? currentVer(root.key) : undefined } }, inside ? { inside } : { at: () => cards.get(`t:${seq}`), from: b });
+    },
+    thread: (b) => { const seq = +b.dataset.seq; if (thread?.seq === seq) closeThread(); else openThread(seq); },
+    hidethread: () => closeThread(),
     close: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "close", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : undefined }); },
     still: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "still", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : null }); },
     jump: (b) => { const t = state().threads.find((x) => x.root.seq === +b.dataset.seq); const p = t && placeThread(t, textIndex()); markRead(+b.dataset.seq); if (p?.range) { p.range.startContainer.parentElement.scrollIntoView({ block: "center", behavior: "smooth" }); } else jumpTo(p?.el); },
@@ -1074,7 +1142,7 @@ function boot() {
     undoall: async () => { for (const e of undoable().reverse()) await post({ type: "undo", target: e.seq }); },
     cancel: (b) => post({ type: "cancel", target: +b.dataset.seq }),
     accept: (b) => post({ type: "accept", target: +b.dataset.seq }),
-    rework: (b) => openComposer({ label: `What should change in Request #${b.dataset.seq}?`, kind: "rework", target: +b.dataset.seq }, panel.querySelector(".atl-slot")),
+    rework: (b) => openComposer({ label: `What should change in Request #${b.dataset.seq}?`, kind: "rework", target: +b.dataset.seq }, { at: () => cards.get(`r:${b.dataset.seq}`), from: b }),
     expand: (b) => { expanded.add(+b.dataset.seq); render(); },
     collapse: (b) => { expanded.delete(+b.dataset.seq); render(); },
     chmark: (b) => toggleDiff(b.dataset.addr),
@@ -1093,11 +1161,13 @@ function boot() {
       if (spot !== el && spot.matches("[aria-controls]")) spot.click(); // open the tab that hides it
       requestAnimationFrame(() => jumpTo(el));
     },
-    dismiss: closeComposer,
+    dismiss: () => closeComposer(true),
     next: () => {
       const items = [...document.querySelectorAll(".atl-open-item")];
       if (!items.length) return;
-      jumpTo(items[nextIndex++ % items.length]);
+      const el = items[nextIndex++ % items.length];
+      jumpTo(el);
+      if (el.dataset.atl === "thread") openThread(+el.dataset.seq); // a thread's marker opens the thread
     },
     selcomment: () => {
       const r = pageRange() ?? savedRange, idx = textIndex();
@@ -1123,13 +1193,27 @@ function boot() {
     if (b && isUi(b)) { ev.preventDefault(); actions[b.dataset.atl]?.(b); return; }
     const req = ev.target.closest?.("[atl-request]:not(form)");
     if (req && !isUi(req)) { ev.preventDefault(); post({ type: "request", job: req.getAttribute("atl-request"), key: keyOf(req), ver: verOf(req), input: {} }); return; }
+    // A Page button with atl-comment opens a Comment on its Key, floating beside that button (e.g. in a sticky bar).
+    const pc = ev.target.closest?.("[atl-comment]");
+    if (pc && !isUi(pc) && keyOf(pc)) { ev.preventDefault(); const key = keyOf(pc); openComposer({ label: `Comment on ${key}`, anchor: anchorForKey(key) }, { at: () => pc, from: pc }); return; }
     // Alt+click comments on the nearest Key, or on a verified selector where there is none.
     if (ev.altKey && !isUi(ev.target)) {
       ev.preventDefault();
       const key = keyOf(ev.target);
       if (key) actions.comment({ dataset: { key } });
-      else openComposer({ label: `Comment on ${ev.target.localName}`, anchor: { selector: { sel: selectorFor(ev.target), snap: ev.target.textContent.trim().slice(0, 80) } } }, panel.querySelector(".atl-slot"));
+      else { const target = ev.target; openComposer({ label: `Comment on ${target.localName}`, anchor: { selector: { sel: selectorFor(target), snap: target.textContent.trim().slice(0, 80) } } }, { at: () => target }); }
     }
+  });
+  // Esc closes the Comment box first, then the floating thread; a click elsewhere closes the thread unless a reply is typed.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape" || (!composer && !thread)) return;
+    ev.preventDefault();
+    if (composer) closeComposer(true); else closeThread();
+  });
+  document.addEventListener("pointerdown", (ev) => {
+    if (!thread || tpop.contains(ev.target) || ev.target.closest?.("[data-atl=thread]")) return;
+    if (composer?.inline && composer.node.querySelector("textarea").value.trim()) return;
+    closeThread(false);
   });
   document.addEventListener("submit", (ev) => {
     const form = ev.target.closest?.("form[atl-request]");
@@ -1206,8 +1290,7 @@ const STYLE = `
 [atl-ui][hidden],[atl-ui] [hidden]{display:none!important}
 [atl-ui=panel]{box-sizing:border-box;width:100%;max-width:760px;min-height:0;overflow:auto;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;padding:8px}
 body>[atl-ui=panel]{position:fixed;right:var(--atl-dock-right,12px);bottom:var(--atl-dock-bottom,12px);z-index:2147483000;width:max-content;max-width:min(340px,calc(100vw - 24px));max-height:70vh;box-shadow:0 4px 18px #0002}
-body>[atl-ui=panel]:has(.atl-card,.atl-composer,.atl-warn){width:340px}
-body>[atl-ui=panel]:has(.atl-composer){width:560px;max-width:min(560px,calc(100vw - 24px))}
+body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui=orphans]:not(:empty){max-height:50vh;overflow:auto;margin:8px;display:grid;gap:8px}
 [atl-wip]:not([atl-ui]){opacity:.55;outline:2px dashed var(--atl-warn);outline-offset:2px}
 .atl-wip{position:absolute;z-index:2147481500;translate:0 -50%;max-width:min(40ch,calc(100vw - 16px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;padding:0 6px;border:1px solid var(--atl-warn);border-radius:4px;background:var(--atl-bg);color:var(--atl-warn);pointer-events:none}
@@ -1239,9 +1322,20 @@ body>[atl-ui=panel]:has(.atl-composer){width:560px;max-width:min(560px,calc(100v
 .atl-thumb{position:relative;display:inline-block}.atl-thumb img{display:block;height:48px;max-width:96px;object-fit:cover;border:1px solid var(--atl-line);border-radius:4px}
 [atl-ui] .atl-thumb button{position:absolute;top:-6px;right:-6px;min-height:0;width:18px;height:18px;padding:0;justify-content:center;border-radius:50%}
 .atl-pin{position:absolute;width:0;height:0;z-index:2147482000}
-.atl-pin .atl-add{position:absolute;left:0;top:0;min-height:0;height:24px;padding:0 5px;gap:3px;color:var(--atl-muted);box-shadow:0 1px 3px #0002;opacity:0;pointer-events:none;transition:opacity .12s}
-.atl-pin.atl-hot .atl-add,.atl-pin.atl-has .atl-add,.atl-pin .atl-add:focus-visible{opacity:1!important;pointer-events:auto!important}
-.atl-pin.atl-has .atl-add,.atl-pin .atl-add:hover{color:var(--atl-accent)}
+.atl-pin .atl-add,.atl-spot>button{position:absolute;left:0;top:0}.atl-prow{position:absolute;display:flex;gap:6px;align-items:center;width:max-content}
+.atl-pin .atl-add{min-height:0;height:24px;padding:0 5px;gap:3px;color:var(--atl-muted);box-shadow:0 1px 3px #0002;opacity:0;pointer-events:none;transition:opacity .12s}
+.atl-pin.atl-hot .atl-add,.atl-pin .atl-add:focus-visible{opacity:1!important;pointer-events:auto!important}
+.atl-pin .atl-add:hover{color:var(--atl-accent)}
+[atl-ui] button.atl-chip{min-height:0;height:22px;max-width:220px;padding:0 8px;gap:4px;border-radius:11px;font-size:12px;border-color:color-mix(in srgb,var(--atl-accent) 45%,var(--atl-line));box-shadow:0 1px 3px #0002}
+[atl-ui] button.atl-chip.atl-compact{height:16px;padding:0 4px;gap:2px;font-size:11px}.atl-chip.atl-compact .atl-i{width:10px;height:10px}
+.atl-chip .atl-i{width:12px;height:12px;color:var(--atl-accent)}
+.atl-ct{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.atl-cn{color:var(--atl-muted);font-variant-numeric:tabular-nums}
+.atl-nd{width:8px;height:8px;border-radius:50%;background:var(--atl-accent);flex:none;box-shadow:0 0 0 2px var(--atl-bg)}
+[atl-ui] button.atl-chip.atl-unread{font-weight:600}
+[atl-ui] button.atl-chip.atl-closed{border-color:var(--atl-line);color:var(--atl-muted);box-shadow:none}.atl-chip.atl-closed .atl-i{color:var(--atl-muted)}
+[atl-ui] button.atl-chip.atl-stale{border-color:var(--atl-warn)}[atl-ui] button.atl-chip.atl-draft{border-style:dashed}
+[atl-ui] button.atl-chip[aria-expanded=true]{border-color:var(--atl-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--atl-accent) 40%,transparent)}
 .atl-selbtn{position:fixed;z-index:2147483001;box-shadow:0 2px 8px #0003}
 .atl-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;border:1px solid var(--atl-line);border-radius:9px;padding:0 6px;color:var(--atl-muted)}
 .atl-warn,.atl-tag.atl-warn{color:var(--atl-warn)}.atl-tag.atl-new{background:var(--atl-accent);border-color:var(--atl-accent);color:#fff}
@@ -1253,7 +1347,10 @@ body>[atl-ui=panel]:has(.atl-composer){width:560px;max-width:min(560px,calc(100v
 .atl-quote{font-style:italic;border-left:3px solid var(--atl-warn);padding-left:6px}
 .atl-toast{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:2px 0}
 .atl-composer{display:grid;gap:6px;margin:6px 0}
-.atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(560px,calc(100vw - 8px));margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
+.atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(560px,calc(100vw - 8px));max-height:calc(100vh - 8px);overflow:auto;margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
+.atl-tpop{display:grid;gap:4px}.atl-tbar{display:flex;align-items:center;justify-content:space-between;gap:6px}
+[atl-ui] .atl-tbar button{min-height:24px;padding:0 5px;border-color:transparent;background:none;color:var(--atl-muted)}
+.atl-tpop .atl-card{border:0;padding:0;margin:0}.atl-tpop .atl-composer{margin:0}
 .atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
 ::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
 .atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}

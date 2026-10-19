@@ -66,8 +66,12 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
   `<div atl-dock></div>` where it should sit in the Page's layout (a sidebar, a header row), or move it
   with `--atl-dock-right` and `--atl-dock-bottom`. Placed anywhere but directly in `<body>`, the panel
   takes its container's width (up to 760px) and scrolls inside when the Page limits its height.
-  Every Key gets its Comment button on hover or focus; a Key with threads keeps a count. A Key with
-  nothing focusable gets `tabindex="0"` so the keyboard reaches it; an authored `tabindex` stays.
+  Every Key gets its Comment button on hover or focus; the Comment box floats beside the button and
+  never scrolls the Page. Each thread shows as a chip on its Key (its first words, reply count, a dot
+  for new replies), or at the end of its quote for a Comment on selected text; the chip opens the
+  thread floating beside it. Threads take no space in the Page's layout. A Page button with `atl-comment`
+  inside a Key opens that Key's Comment box beside the button (e.g. in a sticky decision bar). A Key with nothing
+  focusable gets `tabindex="0"` so the keyboard reaches it; an authored `tabindex` stays.
 - For icons in Page content use Lucide (ISC), inlined as SVG like the Kernel's; no emoji as icons.
 
 ## Page rules (from Thomas's walkthroughs, 2026-10-10 to 10-13)
@@ -107,7 +111,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.5.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.6.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench.
