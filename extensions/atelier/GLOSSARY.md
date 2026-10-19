@@ -43,7 +43,8 @@ _Avoid_: command, action, task
 
 **Update**:
 An agent change to a Page shown live, without a reload and without destroying the human's open
-input. It carries a one-line note, and the Page marks what it changed until the human has seen it.
+input. It carries a one-line note, and the Page marks what it changed until the human marks it seen:
+he opens and closes its changes, clicks its "Seen", or clicks "Mark all seen". No timer clears a mark.
 _Avoid_: Ready, refresh, publish
 
 **Under Construction**:

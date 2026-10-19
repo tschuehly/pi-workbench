@@ -1,4 +1,4 @@
-// Atelier Kernel 2.4.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.5.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -18,7 +18,8 @@
 //   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (156)
 //   atl-wip="Reworking scene 3"  on a Key or any element: under construction while an agent reworks it; the Kernel
 //                              dims it, labels it and locks its Decisions (answers stay shown, Comments stay open)
-//   atl-changes="off"          anywhere on the Page: no change indicators after Updates (156)
+//   atl-changes="off"          anywhere on the Page: no change indicators after Updates. Otherwise a mark stays until the
+//                              human opens and closes its changes, clicks its "Seen", or "Mark all seen" (156)
 //   atl-dock                   an empty element where the Kernel panel sits in the Page's layout; else it floats at the
 //                              bottom right, offset by --atl-dock-right and --atl-dock-bottom. Outside <body>'s own children
 //                              (atl-dock, or a Page script moving it) the panel takes its container's width up to 760px;
@@ -40,7 +41,6 @@
 import { Idiomorph } from "./idiomorph.js";
 
 export const UNDO_MS = 10_000; // decision 151
-export const SEEN_MS = 5_000; // decision 156: a change counts as seen after 5 s in view
 // Delivery class per human event type (150). `boundary` is the Send that releases drafts; `control` is undo.
 // A Comment goes out when saved, after its undo window (156); a Page opts into batching with atl-delivery="send".
 export const CLASSES = {
@@ -346,6 +346,7 @@ function boot() {
   const selBtn = h(`<button atl-ui="sel" class="atl-selbtn" data-atl="selcomment" hidden>${icon("comment-plus")} Comment</button>`);
   selBtn.addEventListener("pointerdown", (ev) => ev.preventDefault());
   const rail = h(`<nav atl-ui="rail" class="atl-rail" aria-label="Changes" hidden></nav>`);
+  const allSeen = h(`<button data-atl="chall" class="atl-allseen" title="Clear every change mark">${icon("check")} Mark all seen</button>`);
   // The panel docks where the Page puts an atl-dock element, else it floats at the bottom right.
   const dock = () => [...document.querySelectorAll("[atl-dock]")].find((d) => !isUi(d)) ?? document.body;
   document.body.prepend(orphans);
@@ -790,15 +791,17 @@ function boot() {
   setInterval(() => { if (panel.querySelector(".atl-toast") || panel.innerHTML.includes("sends in")) render(); }, 1000);
 
   // ---- change indicators (156): what an Update changed, marked on the spot, in the Page's navigation and on a
-  // right-edge rail, until the human has had it in view for 5 s. One trace per Key accumulates every Update since.
+  // right-edge rail, until the human says he has seen it: he opens and closes its changes, clicks its "Seen", or
+  // "Mark all seen" on the rail. No timer clears a mark (2.5.0). One trace per Key accumulates every Update since.
+  // ponytail: traces live in memory only, so a reload drops them; persisting them would need new Event Log events.
   const changesOn = () => !document.querySelector('[atl-changes="off"]');
-  const traces = new Map(), everSeen = new Set(), view = new WeakMap();
+  const traces = new Map(), everSeen = new Set();
   const RANK = { needs: 4, added: 3, removed: 2, reworded: 1 };
   const KIND = { needs: "Needs you", added: "New", removed: "Removed", reworded: "Reworded" };
   let pendingNote = null;
   const inView = (x) => x.isIntersecting && (x.intersectionRatio >= 0.5 || x.intersectionRect.height >= innerHeight * 0.4);
   const io = new IntersectionObserver((list) => {
-    for (const x of list) { const v = inView(x); view.set(x.target, v); if (v && !isUi(x.target)) everSeen.add(keyOf(x.target)); }
+    for (const x of list) if (inView(x) && !isUi(x.target)) everSeen.add(keyOf(x.target));
   }, { threshold: [0, 0.25, 0.5, 0.75, 1] });
   // A Key's own words, without nested Keys, so a change marks the innermost Key that changed.
   function ownText(el) {
@@ -820,12 +823,12 @@ function boot() {
   const parentAddr = (addr) => addr.includes("/") ? addr.slice(0, addr.lastIndexOf("/")) : null;
   const titleOf = (el, addr) => clip(el?.querySelector?.("h1,h2,h3,h4,h5,h6,summary,figcaption,caption")?.textContent || (el ? ownText(el) : "") || addr, 60);
   function mark(addr, kind, extra = {}, note = pendingNote) {
-    const t = traces.get(addr) ?? { kinds: new Set(), notes: [], ms: 0, nodes: {} };
+    const t = traces.get(addr) ?? { kinds: new Set(), notes: [], nodes: {} };
     t.kinds.add(kind);
     t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0];
     if (note && t.notes[0] !== note) t.notes.unshift(note);
     for (const [k, v] of Object.entries(extra)) if (!(k in t) || k === "after") t[k] = v; // the baseline is what the human last saw
-    Object.assign(t, { ms: 0, fading: false });
+    t.fading = false;
     traces.set(addr, t);
   }
   function diffMarks(before) {
@@ -876,20 +879,20 @@ function boot() {
     renderMarks(); // a nav dot fades when every change under it fades
     setTimeout(() => { if (traces.get(addr) === t && t.fading) { removeTrace(addr); renderMarks(); } }, 600);
   }
-  const traceTarget = (addr, t) => t.kind === "removed" ? t.nodes.gone : findKey(addr);
   function tipOf(addr, t) {
     const parts = t.before != null && t.after != null ? wordDiff(t.before, t.after) : [];
     return [`${KIND[t.kind]}: ${t.title ?? titleOf(findKey(addr), addr)}`, ...t.notes.map((n) => `• ${n}`), diffPreview(parts)].filter(Boolean).join("\n");
   }
   function renderMarks() {
     rail.hidden = !traces.size;
+    if (rail.firstElementChild !== allSeen) rail.prepend(allSeen);
     const links = traces.size ? [...document.querySelectorAll('a[href^="#"]')].filter((a) => !isUi(a) && a.hash.length > 1) : [];
     const height = document.documentElement.scrollHeight || 1, nav = new Map();
     for (const [addr, t] of [...traces]) {
       const n = t.nodes, cls = `atl-k-${t.kind}`, tip = tipOf(addr, t);
       let el;
       if (t.kind === "removed") {
-        n.gone ??= h(`<div atl-ui="gone" class="atl-gone"><button data-atl="chgone" data-addr="${esc(addr)}">Removed · show</button><div class="atl-old" hidden></div></div>`);
+        n.gone ??= h(`<div atl-ui="gone" class="atl-gone"><button data-atl="chgone" data-addr="${esc(addr)}">Removed · show</button><button data-atl="chseen" data-addr="${esc(addr)}">Seen</button><div class="atl-old" hidden></div></div>`);
         if (!n.gone.lastElementChild.firstChild) n.gone.lastElementChild.append(t.old);
         n.gone.firstElementChild.title = tip;
         const next = t.next && findKey(t.next), parent = t.parent && findKey(t.parent);
@@ -904,7 +907,7 @@ function boot() {
         const spot = visibleSpot(el), bar = spot === el;
         n.mark ??= h(`<span atl-ui="mark"></span>`);
         n.mark.className = `atl-mark ${cls} ${bar ? "atl-mark-bar" : "atl-mark-dot"}`;
-        set(n.mark, bar ? `<button data-atl="chmark" data-addr="${esc(addr)}" aria-label="${esc(tip)}" title="${esc(tip)}${t.before != null ? "\n(click: show changes)" : ""}"></button>` : `<span class="atl-dot" title="${esc(tip)}"></span>`);
+        set(n.mark, bar ? `<button data-atl="chmark" data-addr="${esc(addr)}" aria-label="${esc(tip)}" title="${esc(tip)}${t.before != null ? "\n(click: show changes)" : ""}"></button><button data-atl="chseen" data-addr="${esc(addr)}" class="atl-seen" title="Mark this change as seen">${icon("check")} Seen</button>` : `<span class="atl-dot" title="${esc(tip)}"></span>`);
         if (n.mark.parentElement !== spot) place(n.mark, spot);
         if (t.open && n.diff && n.diff.parentElement !== el) place(n.diff, el);
       }
@@ -936,16 +939,12 @@ function boot() {
       const p = m.getBoundingClientRect(), r = el.getBoundingClientRect();
       m.style.translate = `${Math.round(Math.max(2, r.left - 10) - p.left)}px ${Math.round(r.top - p.top)}px`;
       m.firstElementChild.style.height = `${Math.round(r.height)}px`;
+      // "Seen" sits in the gutter left of the bar; without room there, above the Key's top edge at the bar.
+      // ponytail: above the Key can touch the element before it on a Page with no gap; move it if that bites.
+      const s = m.lastElementChild; s.classList.remove("atl-seen-up");
+      if (s.getBoundingClientRect().left < 2) s.classList.add("atl-seen-up");
     }
   }
-  // Seen: 5 s in view, paused while the pointer rests on it or its changes are open; then everything fades at once.
-  setInterval(() => {
-    for (const [addr, t] of traces) {
-      const target = traceTarget(addr, t);
-      if (!target?.isConnected || t.open || t.fading || !view.get(target) || target.matches(":hover")) continue;
-      if ((t.ms += 500) >= SEEN_MS) clearTrace(addr);
-    }
-  }, 500);
   // A tab switch or an opened details moves the in-page mark.
   document.addEventListener("click", () => { if (traces.size) requestAnimationFrame(renderMarks); });
   document.addEventListener("toggle", () => { if (traces.size) requestAnimationFrame(renderMarks); }, true);
@@ -1079,8 +1078,10 @@ function boot() {
     expand: (b) => { expanded.add(+b.dataset.seq); render(); },
     collapse: (b) => { expanded.delete(+b.dataset.seq); render(); },
     chmark: (b) => toggleDiff(b.dataset.addr),
+    chseen: (b) => clearTrace(b.dataset.addr),
+    chall: () => { for (const addr of traces.keys()) clearTrace(addr); },
     chgone: (b) => {
-      const t = traces.get(b.dataset.addr), old = b.nextElementSibling;
+      const t = traces.get(b.dataset.addr), old = b.parentElement.querySelector(".atl-old");
       if (!t) return;
       if (t.open) { t.open = false; clearTrace(b.dataset.addr); return; }
       t.open = true; old.hidden = false; b.textContent = "Removed · hide";
@@ -1259,6 +1260,11 @@ body>[atl-ui=panel]:has(.atl-composer){width:560px;max-width:min(560px,calc(100v
 .atl-mark-bar{position:absolute;width:0;height:0;z-index:2147481000}
 [atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}
 [atl-ui].atl-mark-bar>button:hover{width:6px}
+[atl-ui].atl-mark-bar>button.atl-seen,[atl-ui].atl-rail>button.atl-allseen{display:flex;align-items:center;gap:3px;width:auto;min-height:0;padding:1px 6px;border:1px solid var(--atl-line);border-radius:9px;background:var(--atl-bg);color:var(--atl-muted);font:11px/16px system-ui,sans-serif;white-space:nowrap;cursor:pointer}
+[atl-ui].atl-mark-bar>button.atl-seen{left:auto;right:4px}[atl-ui].atl-mark-bar>button.atl-seen.atl-seen-up{right:auto;left:0;top:auto;bottom:0}
+[atl-ui].atl-mark-bar>button.atl-seen:hover,[atl-ui].atl-rail>button.atl-allseen:hover{width:auto;color:var(--atl-fg)}
+[atl-ui].atl-rail>button.atl-allseen{top:0;right:16px;height:auto;pointer-events:auto}
+.atl-seen svg,.atl-allseen svg{width:12px;height:12px}
 .atl-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--atl-ch);margin:0 0 0 6px;vertical-align:middle}
 .atl-rail{position:fixed;top:8px;bottom:8px;right:3px;width:12px;z-index:2147482500;pointer-events:none}
 [atl-ui].atl-rail>button{position:absolute;right:0;width:12px;height:12px;min-height:0;padding:0;border-radius:50%;border:2px solid var(--atl-bg);background:var(--atl-ch);pointer-events:auto}

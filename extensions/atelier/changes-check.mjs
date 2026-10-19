@@ -1,7 +1,7 @@
 // Real-browser check of the change indicators (decision 156). Needs agent-browser and PI_TMP:
 //   node extensions/atelier/changes-check.mjs [screenshot.png]
 // Rewrites a Page through the real host and checks colour by kind on the spot, in the table of contents and on the
-// rail, the accumulated word diff, the removed placeholder, the hidden-tab mark, and clearing after 5 s in view.
+// rail, the accumulated word diff, the removed placeholder, the hidden-tab mark, and that marks stay until seen.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -34,7 +34,7 @@ const update = async (opts, note) => { const n = await js("window.updates"); awa
 const marks = () => js(`JSON.stringify({
   spot: [...document.querySelectorAll("[atl-ui=mark]")].map((m) => [m.parentElement.closest("[id]")?.id, m.className.match(/atl-k-(\\w+)/)[1], m.classList.contains("atl-mark-bar") ? "bar" : "dot"]),
   toc: [...document.querySelectorAll("nav.toc a")].filter((a) => a.querySelector(".atl-dot")).map((a) => [a.textContent, a.querySelector(".atl-dot").className.match(/atl-k-(\\w+)/)[1]]),
-  rail: [...document.querySelectorAll("[atl-ui=rail] button")].map((r) => [r.className.replace("atl-k-", ""), r.title.split("\\n")[0]]),
+  rail: [...document.querySelectorAll("[atl-ui=rail] [data-atl=chrail]")].map((r) => [r.className.replace("atl-k-", ""), r.title.split("\\n")[0]]),
   gone: document.querySelectorAll("[atl-ui=gone]").length })`).then(JSON.parse);
 const scrollTo = (id) => js(`document.getElementById("${id}").scrollIntoView({block:"start"}); true`);
 // A change counts only on a Key the Kernel saw. A fixed sleep raced its IntersectionObserver: with the Log tab closed
@@ -63,7 +63,7 @@ try {
   assert.deepEqual(m.spot, [["intro", "reworded", "bar"]]);
   assert.deepEqual(m.toc, [["How it works", "reworded"]]);
   assert.deepEqual(m.rail, [["reworded", "Reworded: Comments go out when you save them."]]);
-  const tip = await js(`document.querySelector("[atl-ui=rail] button").title`);
+  const tip = await js(`document.querySelector("[atl-ui=rail] [data-atl=chrail]").title`);
   assert.match(tip, /• Reworded again\n• Comments send on save/, "notes newest first");
 
   // Removed table: a thin line, its original table on show. Added paragraph: green. Hidden tab: the tab gets the dot.
@@ -91,17 +91,19 @@ try {
   await sleep(800);
   assert.equal(await js(`document.querySelectorAll('[data-addr="how/intro"]').length`), 0, "closing the changes clears them");
 
-  // Seen: 5 s in view clears the added paragraph (not before), the hidden-tab change only once its tab is open.
+  // No timer clears a mark (2.5.0): the added paragraph is still marked after 6 s in view; its Seen clears it.
   await b("mouse", "move", "1200", "10");
-  await scrollTo("new-p"); await sleep(3000);
-  assert.equal(await js(`document.querySelectorAll('[data-addr="how/new-p"]').length`), 2, "still marked after 3 s: bar and rail");
-  await sleep(3000);
-  assert.equal(await js(`document.querySelectorAll('[data-addr="how/new-p"]').length`), 0, "cleared after 5 s in view");
-  await js(`document.querySelector('[atl-ui=rail] button[data-addr="proto/log"]').click(); true`); await sleep(6500);
+  await scrollTo("new-p"); await sleep(6000);
+  assert.equal(await js(`document.querySelectorAll('[data-addr="how/new-p"]').length`), 3, "still marked after 6 s in view: bar, Seen and rail");
+  await js(`document.querySelector('[atl-ui=mark] [data-atl=chseen][data-addr="how/new-p"]').click(); true`); await sleep(800);
+  assert.equal(await js(`document.querySelectorAll('[data-addr="how/new-p"]').length`), 0, "Seen clears it");
+  await js(`document.querySelector('[atl-ui=rail] button[data-addr="proto/log"]').click(); true`); await sleep(1000);
   assert.equal(await js(`document.getElementById("p-log").hidden`), false, "the rail opens the tab");
-  assert.equal(await js(`document.querySelectorAll('[data-addr="proto/log"]').length`), 0, "cleared once read in its tab");
+  assert.equal(await js(`document.querySelectorAll('[atl-ui=mark] [data-addr="proto/log"]').length`), 2, "read in its tab, still marked: bar and Seen");
+  await js(`document.querySelector("[atl-ui=rail] .atl-allseen").click(); true`); await sleep(800);
+  assert.equal(await js(`document.querySelectorAll("[atl-ui=mark],[atl-ui=gone],[atl-ui=rail] [data-atl=chrail],nav.toc .atl-dot").length`), 0, "Mark all seen clears every mark");
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
-  console.log("PASS change indicators: four kinds, accumulated diff, nav and rail, removed block, hidden tab, 5 s seen.");
+  console.log("PASS change indicators: four kinds, accumulated diff, nav and rail, removed block, hidden tab, marks stay until Seen or Mark all seen.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

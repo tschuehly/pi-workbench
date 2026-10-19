@@ -415,6 +415,56 @@ try {
     await until("atelier.state().decisions.find(d=>d.id==='s1').answer==='Redo'");
   }
 
+  // Change marks stay until seen (2.5.0, owner 2026-10-19: clearing after 5 s in view was too fast). A mark outlives
+  // 10 s in view and another Update; its "Seen" clears it, opening and closing its changes clears it, "Mark all seen"
+  // clears the rest. Its "Seen" sits on screen at 1440 and 390 px. atl-changes="off" draws none.
+  for (const [w, h] of [["1440", "900"], ["390", "844"]]) {
+    const chPage = path.join(dir, `changes-${w}.html`);
+    const writeCh = (words, off = false) => writeFile(chPage, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Changes</title>
+<style>body{margin:16px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:24px 0}</style>
+<body${off ? ' atl-changes="off"' : ""}>${words.map((x, i) => `<p atl-key="c${i + 1}" id="c${i + 1}">${x}</p>`).join("")}
+<script type="module" src="atelier.js"></script></body></html>`);
+    const base = ["First words.", "Second words.", "Third words."];
+    const count = () => js("document.querySelectorAll('[atl-ui=rail] [data-atl=chrail]').length");
+    const marksNow = () => js("JSON.stringify({rail:document.querySelectorAll('[atl-ui=rail] [data-atl=chrail]').length,bars:document.querySelectorAll('[atl-ui=mark] [data-atl=chmark]').length})");
+    let n = 0;
+    const updateCh = async (words, off) => { await writeCh(words, off); host.update(chPage); n += 1; await until(`updates===${n}`); };
+    await writeCh(base);
+    await b("set", "viewport", w, h);
+    await b("open", (await host.open(chPage)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live'");
+    await js("window.updates=0; document.addEventListener('atelier:update',()=>updates++); true"); await sleep(500); // every Key seen once
+    await updateCh(["First words, changed.", "Second words, changed.", "Third words, changed."]);
+    const seenAt = await js("[...document.querySelectorAll('[atl-ui=mark] .atl-seen')].map((s)=>{const r=s.getBoundingClientRect();return [Math.round(r.left),Math.round(r.right),Math.round(r.top)]})");
+    console.log(`changes ${w}px after Update ${await marksNow()}, Seen chips ${JSON.stringify(seenAt)}`);
+    assert.equal(await count(), 3, `${w}px: three reworded Keys marked`);
+    assert(seenAt.length === 3 && seenAt.every(([l, r]) => l >= 0 && r <= +w), `${w}px: every Seen is on screen: ${JSON.stringify(seenAt)}`);
+    await b("mouse", "move", "5", "5"); await sleep(10_500);
+    console.log(`changes ${w}px after 10.5 s in view ${await marksNow()}`);
+    assert.equal(await count(), 3, `${w}px: no mark clears with time`);
+    await updateCh(["First words, changed again.", "Second words, changed.", "Third words, changed."]);
+    assert.equal(await count(), 3, `${w}px: marks outlast another Update`);
+    await click('[atl-ui=mark] .atl-seen[data-addr="c1"]');
+    await until("!document.querySelector('[data-addr=\"c1\"]')");
+    console.log(`changes ${w}px after Seen on c1 ${await marksNow()}`);
+    assert.equal(await count(), 2, `${w}px: Seen clears one mark`);
+    await click('[atl-ui=mark] [data-atl=chmark][data-addr="c2"]');
+    await until("document.querySelector('[atl-ui=diff]')");
+    assert.equal(await count(), 2, `${w}px: opening the changes keeps the mark`);
+    await click("[atl-ui=diff] button");
+    await until("!document.querySelector('[data-addr=\"c2\"]')");
+    console.log(`changes ${w}px after open and close on c2 ${await marksNow()}`);
+    assert.equal(await count(), 1, `${w}px: opening and closing clears that mark`);
+    await updateCh(["First words, changed a third time.", "Second words, changed.", "Third words, changed."]);
+    assert.equal(await count(), 2, `${w}px: a new change marks again`);
+    await click("[atl-ui=rail] .atl-allseen");
+    await until("!document.querySelector('[data-atl=chrail]') && document.querySelector('[atl-ui=rail]').hidden");
+    console.log(`changes ${w}px after Mark all seen ${await marksNow()}`);
+    await updateCh(["First words, changed a third time.", "Second words, changed.", "Third words, changed."], true); // the Page turns marks off
+    await updateCh(["Off: first.", "Off: second.", "Off: third."], true); await sleep(300);
+    assert.equal(await count(), 0, `${w}px: atl-changes="off" draws no marks`);
+  }
+
   // A Page that moves the panel into a sticky column (the iterate trial, owner 2026-10-13): the panel takes the column's
   // width up to 760px and, held to 300px by the Page, scrolls inside so every control stays reachable; also after an
   // Update and under a transformed ancestor (review findings 4 and 5: no pinning machinery to break there).
@@ -445,7 +495,7 @@ try {
   await until("updates===2 && getComputedStyle(document.getElementById('col')).transform!=='none' && document.querySelector('[atl-ui=panel]').parentElement.id==='spot'");
   await checkSticky("under a transformed ancestor");
 
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, threads that span a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, the panel in a sticky column scrolls inside after Updates and under a transform.");
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, threads that span a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }
