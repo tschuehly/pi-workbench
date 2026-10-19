@@ -1,4 +1,4 @@
-// Atelier Kernel 2.3.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.3.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -943,7 +943,7 @@ function boot() {
   }
   function openComposer(spec, slot) {
     closeComposer();
-    const node = h(`<form atl-ui="composer" class="atl-composer${spec.range ? " atl-pop" : ""}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="3" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
+    const node = h(`<form atl-ui="composer" class="atl-composer${spec.range ? " atl-pop" : ""}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="5" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
     composer = { spec, node };
     if (spec.range) {
       document.documentElement.append(node);
@@ -1163,6 +1163,7 @@ const STYLE = `
 [atl-ui=panel]{box-sizing:border-box;width:100%;max-width:760px;min-height:0;overflow:auto;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;padding:8px}
 body>[atl-ui=panel]{position:fixed;right:var(--atl-dock-right,12px);bottom:var(--atl-dock-bottom,12px);z-index:2147483000;width:max-content;max-width:min(340px,calc(100vw - 24px));max-height:70vh;box-shadow:0 4px 18px #0002}
 body>[atl-ui=panel]:has(.atl-card,.atl-composer,.atl-warn){width:340px}
+body>[atl-ui=panel]:has(.atl-composer){width:560px;max-width:min(560px,calc(100vw - 24px))}
 [atl-ui=orphans]:not(:empty){max-height:50vh;overflow:auto;margin:8px;display:grid;gap:8px}
 [atl-ui=key]{margin:4px 0}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
 .atl-i{width:14px;height:14px;flex:none}
@@ -1206,7 +1207,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-composer,.atl-warn){width:340px}
 .atl-quote{font-style:italic;border-left:3px solid var(--atl-warn);padding-left:6px}
 .atl-toast{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:2px 0}
 .atl-composer{display:grid;gap:6px;margin:6px 0}
-.atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(340px,calc(100vw - 8px));margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
+.atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(560px,calc(100vw - 8px));margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
 .atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
 ::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
 .atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
