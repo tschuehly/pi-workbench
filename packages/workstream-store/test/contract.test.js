@@ -700,7 +700,6 @@ test("a session homed elsewhere writes a visiting checkpoint that feeds the summ
   assert.equal(summary.waitingOn, "owner");
   assert.equal(summary.next, "Thomas chooses A or B");
   assert.equal(summary.activeSessionCount, 0);
-  assert.equal(summary.visitingSessionCount, 1);
   assert.deepEqual((await store.list({ sessionId: "session-1" })).map(({ id }) => id), ["ws-1"]);
   assert.equal((await store.inspect("ws-1")).sessions[0].status, "active");
 });
@@ -725,7 +724,46 @@ test("a visiting checkpoint does not block a later association elsewhere or in t
   await second.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "stale", records: [{ type: "checkpoint.stale", producer: "owner", payload: { sessionId: "session-1", checkpointId: "cp-visit", reason: "Superseded" } }] });
 });
 
-test("visiting checkpoints reject active sessions, failed checkpoints, and closed Workstreams", async () => {
+test("a visiting checkpoint can be marked failed or stale, and neither reserves a home", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "visit", records: [visitingCheckpoint("cp-visit")] });
+  const health = (type, payload) => ({ type, producer: "owner", payload: { sessionId: "session-1", reason: "Workspace removed", ...payload } });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "failed", records: [health("checkpoint.failed")] });
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "stale-old", records: [health("checkpoint.stale", { checkpointId: "cp-old" })] }),
+    (error) => error.code === "INVALID_TRANSITION",
+  );
+  await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "stale", records: [health("checkpoint.stale", { checkpointId: "cp-visit" })] });
+  const [visitor] = (await store.inspect("ws-1")).sessions;
+  assert.equal(visitor.status, "visiting");
+  assert.equal(visitor.checkpointFailure, "Workspace removed");
+  assert.equal(visitor.checkpointStaleness.checkpointId, "cp-visit");
+  assert.equal(visitor.latestCheckpoint.id, "cp-visit");
+
+  await store.create({ workstreamId: "ws-2", idempotencyKey: "create-2", title: "Home", producer: "session" });
+  await store.append({ workstreamId: "ws-2", expectedRevision: 1, idempotencyKey: "home", records: associationRecords.slice(0, 2) });
+  assert.deepEqual((await store.list({ sessionId: "session-1" })).map(({ id }) => id), ["ws-2"]);
+});
+
+test("cancelling or failing a join keeps the session's visiting checkpoint", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "visit", records: [visitingCheckpoint("cp-visit")] });
+  const pending = (associationKey) => ({ type: "session.pending", producer: "pi-web", payload: { sessionId: "session-1", associationKey } });
+  const end = (type, associationKey) => ({ type, producer: "pi-web", payload: { sessionId: "session-1", associationKey, reason: "Owner stopped it" } });
+  const visitor = async () => (await store.inspect("ws-1")).sessions.map(({ id, status, latestCheckpoint }) => [id, status, latestCheckpoint?.id]);
+
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "join-1", records: [pending("join-1")] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "cancel", records: [end("session.cancelled", "join-1")] });
+  assert.deepEqual(await visitor(), [["session-1", "visiting", "cp-visit"]]);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 4, idempotencyKey: "join-2", records: [pending("join-2"), end("session.failed", "join-2")] });
+  assert.deepEqual(await visitor(), [["session-1", "visiting", "cp-visit"]]);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 5, idempotencyKey: "visit-again", records: [visitingCheckpoint("cp-again")] });
+  assert.deepEqual(await visitor(), [["session-1", "visiting", "cp-again"]]);
+});
+
+test("visiting checkpoints reject active sessions, replaced checkpoints, and closed Workstreams", async () => {
   const { store } = memoryStore();
   await store.create(createRequest);
   await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "home", records: associationRecords.slice(0, 2) });

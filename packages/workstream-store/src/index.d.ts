@@ -194,7 +194,6 @@ export interface WorkstreamSummary {
   activeSessionCount: number;
   pendingSessionCount: number;
   failedSessionCount: number;
-  visitingSessionCount: number;
   unresolvedHumanTaskCount: number;
   closed: boolean;
 }

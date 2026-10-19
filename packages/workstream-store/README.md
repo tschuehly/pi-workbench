@@ -56,8 +56,14 @@ Neither state is inferred from Chat or tool activity.
 checkpoint here; it projects the session with status `visiting`, and a later one replaces it. A
 visiting session is never an association: it does not occupy the session id for
 `SESSION_ASSIGNED_ELSEWHERE`, `list({ sessionId })` ignores it, and a later association in this
-Workstream turns it into a normal pending/active session that keeps the visiting checkpoint. Summary
-`next`, `waitingOn`, and `lastCheckpointAt` include visiting checkpoints.
+Workstream turns it into a normal pending/active session that keeps the visiting checkpoint;
+cancelling or failing that association leaves it visiting. `checkpoint.failed` and `checkpoint.stale`
+apply to visiting sessions as to active ones. Summary `next`, `waitingOn`, and `lastCheckpointAt`
+include visiting checkpoints.
+
+Promote this store, the `workstreams` CLI, and the PI WEB plugin together and restart the PI WEB
+UI/API service. Rolling back to a pre-visiting reader once visiting records exist is unsupported:
+old readers drop visitors and may wrongly report `SESSION_ASSIGNED_ELSEWHERE`.
 
 A replacement checkpoint may carry `waitingOn` (`owner`, `agent`, or `external`); projection
 exposes `null` when it is absent. `nextSessionPrompt` is legacy and optional: when present it must

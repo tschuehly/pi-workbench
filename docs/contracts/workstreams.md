@@ -29,7 +29,9 @@ Several Workstreams may remain active at once, and one Workstream may contain se
 
 Every associated interactive session has exactly one home Workstream. Other Workstreams may reference that session's checkpoint or artifacts, but they cannot become a second home ledger.
 
-A session may also leave a *visiting checkpoint* in an open Workstream that is not its home, for example one it just created for another topic. The Workstream then lists the session as `visiting` with that session's latest visiting checkpoint. Visiting is not an association: it never makes that Workstream the session's home, never counts for home lookups, never blocks a later association elsewhere, and is never a Chat-to-Workstream association in PI WEB. If the session later associates with that same Workstream, it becomes pending and active there normally and keeps its visiting checkpoint as its latest checkpoint.
+A session may also leave a *visiting checkpoint* in an open Workstream that is not its home, for example one it just created for another topic. The Workstream then lists the session as `visiting` with that session's latest visiting checkpoint. Visiting is not an association: it never makes that Workstream the session's home, never counts for home lookups, never blocks a later association elsewhere, and is never a Chat-to-Workstream association in PI WEB. If the session later associates with that same Workstream, it becomes pending and active there normally and keeps its visiting checkpoint as its latest checkpoint; if that association is cancelled or fails, the session stays visiting. Checkpoint failure and staleness apply to a visiting checkpoint as to an active one.
+
+The Workstream Store, the `workstreams` CLI, and the PI WEB plugin must be promoted together, followed by a restart of the PI WEB UI/API service. Rolling back to a reader without visiting support after visiting records exist is unsupported: it drops visitors and may wrongly report `SESSION_ASSIGNED_ELSEWHERE`.
 
 Host-coordinated launch follows one handshake:
 

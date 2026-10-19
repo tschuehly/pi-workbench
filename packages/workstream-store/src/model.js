@@ -334,6 +334,12 @@ function visitingSession(sessions, key) {
   return session?.status === "visiting" ? session : undefined;
 }
 
+// Only a visitor's join carries a checkpoint while pending; ending that join leaves it visiting.
+function revisit(session) {
+  const { id, latestCheckpoint, checkpointFailure, checkpointStaleness } = session;
+  return latestCheckpoint === null ? undefined : { id, status: "visiting", latestCheckpoint, checkpointFailure, checkpointStaleness, launchFailure: null };
+}
+
 function projectHumanTask(task, record) {
   const typed = task.answerKind !== undefined;
   return {
@@ -391,8 +397,8 @@ export function rebuildSnapshot(ledger) {
           ...(payload.workspaceId === undefined ? {} : { workspaceId: payload.workspaceId }),
           ...(payload.derivationKind === undefined ? {} : { derivationKind: payload.derivationKind }),
           latestCheckpoint: visiting?.latestCheckpoint ?? null,
-          checkpointFailure: null,
-          checkpointStaleness: null,
+          checkpointFailure: visiting?.checkpointFailure ?? null,
+          checkpointStaleness: visiting?.checkpointStaleness ?? null,
           launchFailure: null,
         });
         break;
@@ -445,7 +451,7 @@ export function rebuildSnapshot(ledger) {
           const [pendingKey, session] = failedEntry;
           const failedId = payload.sessionId ?? pendingKey;
           sessions.delete(pendingKey);
-          sessions.set(failedId, {
+          sessions.set(failedId, revisit(session) ?? {
             ...session,
             id: failedId,
             status: "failed",
@@ -465,7 +471,9 @@ export function rebuildSnapshot(ledger) {
         const cancelledEntry = [...sessions.entries()].find(([id, session]) => payload.associationKey !== undefined
           ? session.associationKey === payload.associationKey
           : id === payload.sessionId);
-        if (cancelledEntry?.[1].status === "pending") sessions.delete(cancelledEntry[0]);
+        if (cancelledEntry?.[1].status !== "pending") break;
+        sessions.delete(cancelledEntry[0]);
+        if (revisit(cancelledEntry[1])) sessions.set(cancelledEntry[0], revisit(cancelledEntry[1]));
         break;
       }
       case "checkpoint.replaced": {

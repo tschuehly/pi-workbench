@@ -17,7 +17,7 @@ const SELF = fileURLToPath(import.meta.url);
 const STORE_DIR = process.env.PI_WORKBENCH_WORKSTREAM_DIR ?? join(homedir(), ".pi-workbench", "workstreams");
 const tilde = (path) => path.startsWith(homedir()) ? `~${path.slice(homedir().length)}` : path;
 const WAITING = ["owner", "agent", "external"];
-const SUMMARY_FIELDS = ["id", "title", "group", "revision", "createdAt", "updatedAt", "lastCheckpointAt", "next", "waitingOn", "activeSessionCount", "pendingSessionCount", "failedSessionCount", "visitingSessionCount", "unresolvedHumanTaskCount", "closed"];
+const SUMMARY_FIELDS = ["id", "title", "group", "revision", "createdAt", "updatedAt", "lastCheckpointAt", "next", "waitingOn", "activeSessionCount", "pendingSessionCount", "failedSessionCount", "unresolvedHumanTaskCount", "closed"];
 const LIST_COLUMNS = ["id", "title", "group", "waitingOn", "updatedAt"];
 const LIST_LIMIT = 8;
 // Store limits (packages/workstream-store/src/model.js), checked here so errors name the flag.

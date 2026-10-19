@@ -147,6 +147,11 @@ export class WorkstreamStore {
   }
 }
 
+// Only a visitor's join carries a checkpoint while pending; ending that join leaves it visiting.
+function revisit(pending) {
+  return pending.checkpointId === undefined ? undefined : { status: "visiting", checkpointId: pending.checkpointId };
+}
+
 function validateTransitions(database, workstreamId, before, records) {
   const sessions = new Map(before.sessions.map((session) => [session.id, {
     status: session.status,
@@ -171,8 +176,8 @@ function validateTransitions(database, workstreamId, before, records) {
   for (const entry of Object.values(database.workstreams)) {
     for (const record of entry.ledger) {
       const sessionId = record.payload?.sessionId;
-      // Visiting checkpoints never assign a session to the Workstream that holds them.
-      if (sessionId && record.type !== "checkpoint.visiting" && entry.ledger[0].workstreamId !== workstreamId) historicalSessionIds.add(sessionId);
+      // Only association records assign a session; a visitor's checkpoint and health records never do.
+      if (sessionId && record.type.startsWith("session.") && entry.ledger[0].workstreamId !== workstreamId) historicalSessionIds.add(sessionId);
       if (record.type === "session.pending" && record.payload?.associationKey) historicalAssociationKeys.add(record.payload.associationKey);
     }
   }
@@ -231,7 +236,7 @@ function validateTransitions(database, workstreamId, before, records) {
         if (pendingId !== failedId && sessions.has(failedId)) fail("INVALID_TRANSITION", `session ${failedId} already exists in this workstream`);
         sessions.delete(pendingId);
         pendingByAssociation.delete(pending.associationKey);
-        sessions.set(failedId, { ...pending, status: "failed", associationKey: associationKey ?? pending.associationKey });
+        sessions.set(failedId, revisit(pending) ?? { ...pending, status: "failed", associationKey: associationKey ?? pending.associationKey });
         break;
       }
       case "session.cancelled": {
@@ -241,6 +246,7 @@ function validateTransitions(database, workstreamId, before, records) {
         const pending = sessions.get(pendingId);
         sessions.delete(pendingId);
         pendingByAssociation.delete(pending.associationKey);
+        if (revisit(pending)) sessions.set(pendingId, revisit(pending));
         break;
       }
       case "checkpoint.replaced": {
@@ -255,11 +261,11 @@ function validateTransitions(database, workstreamId, before, records) {
         break;
       }
       case "checkpoint.failed":
-        if (sessions.get(sessionId)?.status !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
+        if (!["active", "visiting"].includes(sessions.get(sessionId)?.status)) fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
         break;
       case "checkpoint.stale": {
         const session = sessions.get(sessionId);
-        if (session?.status !== "active") fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
+        if (!["active", "visiting"].includes(session?.status)) fail("INVALID_TRANSITION", `session ${sessionId} is not active`);
         if (session.checkpointId !== record.payload.checkpointId) fail("INVALID_TRANSITION", `checkpoint ${record.payload.checkpointId} is not the latest confirmed checkpoint for session ${sessionId}`);
         break;
       }
@@ -367,7 +373,6 @@ function toSummary(snapshot) {
     activeSessionCount: snapshot.sessions.filter((session) => session.status === "active").length,
     pendingSessionCount: snapshot.sessions.filter((session) => session.status === "pending").length,
     failedSessionCount: snapshot.sessions.filter((session) => session.status === "failed").length,
-    visitingSessionCount: snapshot.sessions.filter((session) => session.status === "visiting").length,
     unresolvedHumanTaskCount: snapshot.humanTasks.filter((task) => task.status === "pending").length,
     closed: snapshot.closed,
   };
