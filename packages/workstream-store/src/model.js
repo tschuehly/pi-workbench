@@ -25,6 +25,7 @@ const RECORD_TYPES = new Set([
   "session.failed",
   "session.cancelled",
   "checkpoint.replaced",
+  "checkpoint.visiting",
   "checkpoint.failed",
   "checkpoint.stale",
   "human-task.upsert",
@@ -186,23 +187,8 @@ function validateRecord(record, limits, field) {
     },
     "session.failed": () => validateSessionTerminal(record.payload, limits, `${field}.payload`),
     "session.cancelled": () => validateSessionTerminal(record.payload, limits, `${field}.payload`),
-    "checkpoint.replaced": () => {
-      keys(record.payload, ["sessionId", "checkpoint"], `${field}.payload`);
-      id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
-      const checkpoint = object(record.payload.checkpoint, `${field}.payload.checkpoint`);
-      keys(checkpoint, ["id", "whatChanged", "remains", "next", "nextSessionPrompt", "waitingOn", "sessionTitle", "references"], `${field}.payload.checkpoint`);
-      id(checkpoint.id, `${field}.payload.checkpoint.id`, limits);
-      string(checkpoint.whatChanged, `${field}.payload.checkpoint.whatChanged`, limits.maxTextLength);
-      string(checkpoint.remains, `${field}.payload.checkpoint.remains`, limits.maxTextLength);
-      string(checkpoint.next, `${field}.payload.checkpoint.next`, limits.maxTextLength);
-      string(checkpoint.nextSessionPrompt, `${field}.payload.checkpoint.nextSessionPrompt`, limits.maxCheckpointPromptLength, { optional: true });
-      string(checkpoint.sessionTitle, `${field}.payload.checkpoint.sessionTitle`, 80, { optional: true });
-      if (checkpoint.waitingOn !== undefined && !WAITING_ON.has(checkpoint.waitingOn)) fail("INVALID_REQUEST", `${field}.payload.checkpoint.waitingOn must be owner, agent, or external`);
-      if (checkpoint.references !== undefined) {
-        if (!Array.isArray(checkpoint.references) || checkpoint.references.length > 20) fail("INVALID_RECORD", `${field}.payload.checkpoint.references must be an array of at most 20 strings`);
-        checkpoint.references.forEach((reference, index) => durableReference(reference, `${field}.payload.checkpoint.references[${index}]`, limits));
-      }
-    },
+    "checkpoint.replaced": () => validateCheckpointPayload(record.payload, limits, `${field}.payload`),
+    "checkpoint.visiting": () => validateCheckpointPayload(record.payload, limits, `${field}.payload`),
     "checkpoint.failed": () => {
       keys(record.payload, ["sessionId", "reason"], `${field}.payload`);
       id(record.payload.sessionId, `${field}.payload.sessionId`, limits);
@@ -264,6 +250,24 @@ function validateRecord(record, limits, field) {
   if (byteSize(record) > limits.maxRecordBytes) fail("RECORD_TOO_LARGE", `${field} exceeds ${limits.maxRecordBytes} bytes`);
 }
 
+function validateCheckpointPayload(payload, limits, field) {
+  keys(payload, ["sessionId", "checkpoint"], field);
+  id(payload.sessionId, `${field}.sessionId`, limits);
+  const checkpoint = object(payload.checkpoint, `${field}.checkpoint`);
+  keys(checkpoint, ["id", "whatChanged", "remains", "next", "nextSessionPrompt", "waitingOn", "sessionTitle", "references"], `${field}.checkpoint`);
+  id(checkpoint.id, `${field}.checkpoint.id`, limits);
+  string(checkpoint.whatChanged, `${field}.checkpoint.whatChanged`, limits.maxTextLength);
+  string(checkpoint.remains, `${field}.checkpoint.remains`, limits.maxTextLength);
+  string(checkpoint.next, `${field}.checkpoint.next`, limits.maxTextLength);
+  string(checkpoint.nextSessionPrompt, `${field}.checkpoint.nextSessionPrompt`, limits.maxCheckpointPromptLength, { optional: true });
+  string(checkpoint.sessionTitle, `${field}.checkpoint.sessionTitle`, 80, { optional: true });
+  if (checkpoint.waitingOn !== undefined && !WAITING_ON.has(checkpoint.waitingOn)) fail("INVALID_REQUEST", `${field}.checkpoint.waitingOn must be owner, agent, or external`);
+  if (checkpoint.references !== undefined) {
+    if (!Array.isArray(checkpoint.references) || checkpoint.references.length > 20) fail("INVALID_RECORD", `${field}.checkpoint.references must be an array of at most 20 strings`);
+    checkpoint.references.forEach((reference, index) => durableReference(reference, `${field}.checkpoint.references[${index}]`, limits));
+  }
+}
+
 function validateSessionTerminal(payload, limits, field) {
   keys(payload, ["sessionId", "associationKey", "reason"], field);
   if (payload.sessionId !== undefined) id(payload.sessionId, `${field}.sessionId`, limits);
@@ -321,6 +325,21 @@ function validateHumanTaskAnswer(value, limits, field) {
   fail("INVALID_RECORD", `${field}.kind is not supported`);
 }
 
+function projectCheckpoint(checkpoint, record) {
+  return { ...clone(checkpoint), nextSessionPrompt: checkpoint.nextSessionPrompt ?? null, waitingOn: checkpoint.waitingOn ?? null, sessionTitle: checkpoint.sessionTitle ?? null, recordedAt: record.recordedAt };
+}
+
+function visitingSession(sessions, key) {
+  const session = sessions.get(key);
+  return session?.status === "visiting" ? session : undefined;
+}
+
+// Only a visitor's join carries a checkpoint while pending; ending that join leaves it visiting.
+function revisit(session) {
+  const { id, latestCheckpoint, checkpointFailure, checkpointStaleness } = session;
+  return latestCheckpoint === null ? undefined : { id, status: "visiting", latestCheckpoint, checkpointFailure, checkpointStaleness, launchFailure: null };
+}
+
 function projectHumanTask(task, record) {
   const typed = task.answerKind !== undefined;
   return {
@@ -368,6 +387,7 @@ export function rebuildSnapshot(ledger) {
     switch (record.type) {
       case "session.pending": {
         const key = payload.sessionId ?? `pending:${payload.associationKey}`;
+        const visiting = visitingSession(sessions, key);
         sessions.set(key, {
           id: key,
           status: "pending",
@@ -376,16 +396,17 @@ export function rebuildSnapshot(ledger) {
           ...(payload.projectId === undefined ? {} : { projectId: payload.projectId }),
           ...(payload.workspaceId === undefined ? {} : { workspaceId: payload.workspaceId }),
           ...(payload.derivationKind === undefined ? {} : { derivationKind: payload.derivationKind }),
-          latestCheckpoint: null,
-          checkpointFailure: null,
-          checkpointStaleness: null,
+          latestCheckpoint: visiting?.latestCheckpoint ?? null,
+          checkpointFailure: visiting?.checkpointFailure ?? null,
+          checkpointStaleness: visiting?.checkpointStaleness ?? null,
           launchFailure: null,
         });
         break;
       }
       case "session.confirmed": {
-        const pendingEntry = [...sessions.entries()].find(([id, session]) =>
-          id === payload.sessionId || (payload.associationKey !== undefined && session.associationKey === payload.associationKey));
+        const visiting = visitingSession(sessions, payload.sessionId);
+        const pendingEntry = [...sessions.entries()].find(([id, session]) => session.status !== "visiting"
+          && (id === payload.sessionId || (payload.associationKey !== undefined && session.associationKey === payload.associationKey)));
         const [pendingKey, session] = pendingEntry ?? [payload.sessionId, {
           id: payload.sessionId,
           latestCheckpoint: null,
@@ -399,6 +420,7 @@ export function rebuildSnapshot(ledger) {
           id: payload.sessionId,
           status: "active",
           associationKey: payload.associationKey ?? session.associationKey,
+          latestCheckpoint: session.latestCheckpoint ?? visiting?.latestCheckpoint ?? null,
           launchFailure: null,
         };
         delete confirmed.derivationKind;
@@ -429,7 +451,7 @@ export function rebuildSnapshot(ledger) {
           const [pendingKey, session] = failedEntry;
           const failedId = payload.sessionId ?? pendingKey;
           sessions.delete(pendingKey);
-          sessions.set(failedId, {
+          sessions.set(failedId, revisit(session) ?? {
             ...session,
             id: failedId,
             status: "failed",
@@ -449,16 +471,31 @@ export function rebuildSnapshot(ledger) {
         const cancelledEntry = [...sessions.entries()].find(([id, session]) => payload.associationKey !== undefined
           ? session.associationKey === payload.associationKey
           : id === payload.sessionId);
-        if (cancelledEntry?.[1].status === "pending") sessions.delete(cancelledEntry[0]);
+        if (cancelledEntry?.[1].status !== "pending") break;
+        sessions.delete(cancelledEntry[0]);
+        if (revisit(cancelledEntry[1])) sessions.set(cancelledEntry[0], revisit(cancelledEntry[1]));
         break;
       }
       case "checkpoint.replaced": {
         const session = sessions.get(payload.sessionId);
         if (session) sessions.set(payload.sessionId, {
           ...session,
-          latestCheckpoint: { ...clone(payload.checkpoint), nextSessionPrompt: payload.checkpoint.nextSessionPrompt ?? null, waitingOn: payload.checkpoint.waitingOn ?? null, sessionTitle: payload.checkpoint.sessionTitle ?? null, recordedAt: record.recordedAt },
+          latestCheckpoint: projectCheckpoint(payload.checkpoint, record),
           checkpointFailure: null,
           checkpointStaleness: null,
+        });
+        break;
+      }
+      // A session homed elsewhere (or nowhere) left its latest checkpoint here; it is never an association.
+      case "checkpoint.visiting": {
+        const session = sessions.get(payload.sessionId);
+        if (session === undefined || session.status === "visiting") sessions.set(payload.sessionId, {
+          id: payload.sessionId,
+          status: "visiting",
+          latestCheckpoint: projectCheckpoint(payload.checkpoint, record),
+          checkpointFailure: null,
+          checkpointStaleness: null,
+          launchFailure: null,
         });
         break;
       }

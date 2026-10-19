@@ -673,3 +673,128 @@ test("file adapter survives store reconstruction without persisting generated ru
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+const visitingCheckpoint = (id, waitingOn = "owner") => ({
+  type: "checkpoint.visiting",
+  producer: "session",
+  sourceSessionId: "session-1",
+  payload: { sessionId: "session-1", checkpoint: { id, whatChanged: "Wrote the overview", remains: "Owner picks a direction", next: "Thomas chooses A or B", waitingOn } },
+});
+
+test("a session homed elsewhere writes a visiting checkpoint that feeds the summary but never the home lookup", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "home", records: associationRecords.slice(0, 2) });
+  await store.create({ workstreamId: "ws-2", idempotencyKey: "create-2", title: "Visited", producer: "session" });
+
+  await store.append({ workstreamId: "ws-2", expectedRevision: 1, idempotencyKey: "visit-1", records: [visitingCheckpoint("cp-visit-1", "agent")] });
+  await store.append({ workstreamId: "ws-2", expectedRevision: 2, idempotencyKey: "visit-2", records: [visitingCheckpoint("cp-visit-2")] });
+
+  const visited = await store.inspect("ws-2");
+  assert.equal(visited.sessions.length, 1);
+  assert.equal(visited.sessions[0].id, "session-1");
+  assert.equal(visited.sessions[0].status, "visiting");
+  assert.equal(visited.sessions[0].latestCheckpoint.id, "cp-visit-2");
+  assert.equal(visited.sessions[0].latestCheckpoint.waitingOn, "owner");
+  const summary = (await store.list()).find(({ id }) => id === "ws-2");
+  assert.equal(summary.waitingOn, "owner");
+  assert.equal(summary.next, "Thomas chooses A or B");
+  assert.equal(summary.activeSessionCount, 0);
+  assert.deepEqual((await store.list({ sessionId: "session-1" })).map(({ id }) => id), ["ws-1"]);
+  assert.equal((await store.inspect("ws-1")).sessions[0].status, "active");
+});
+
+test("a visiting checkpoint does not block a later association elsewhere or in the visited Workstream", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "visit", records: [visitingCheckpoint("cp-visit")] });
+  await store.create({ workstreamId: "ws-2", idempotencyKey: "create-2", title: "Home", producer: "session" });
+  await store.append({ workstreamId: "ws-2", expectedRevision: 1, idempotencyKey: "home", records: associationRecords.slice(0, 2) });
+  assert.equal((await store.inspect("ws-2")).sessions[0].status, "active");
+  assert.deepEqual((await store.list({ sessionId: "session-1" })).map(({ id }) => id), ["ws-2"]);
+
+  const { store: second } = memoryStore();
+  await second.create(createRequest);
+  await second.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "visit", records: [visitingCheckpoint("cp-visit")] });
+  await second.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "join", records: associationRecords.slice(0, 2) });
+  const joined = (await second.inspect("ws-1")).sessions;
+  assert.equal(joined.length, 1);
+  assert.equal(joined[0].status, "active");
+  assert.equal(joined[0].latestCheckpoint.id, "cp-visit");
+  await second.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "stale", records: [{ type: "checkpoint.stale", producer: "owner", payload: { sessionId: "session-1", checkpointId: "cp-visit", reason: "Superseded" } }] });
+});
+
+test("a visiting checkpoint can be marked failed or stale, and neither reserves a home", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "visit", records: [visitingCheckpoint("cp-visit")] });
+  const health = (type, payload) => ({ type, producer: "owner", payload: { sessionId: "session-1", reason: "Workspace removed", ...payload } });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "failed", records: [health("checkpoint.failed")] });
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "stale-old", records: [health("checkpoint.stale", { checkpointId: "cp-old" })] }),
+    (error) => error.code === "INVALID_TRANSITION",
+  );
+  await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "stale", records: [health("checkpoint.stale", { checkpointId: "cp-visit" })] });
+  const [visitor] = (await store.inspect("ws-1")).sessions;
+  assert.equal(visitor.status, "visiting");
+  assert.equal(visitor.checkpointFailure, "Workspace removed");
+  assert.equal(visitor.checkpointStaleness.checkpointId, "cp-visit");
+  assert.equal(visitor.latestCheckpoint.id, "cp-visit");
+
+  await store.create({ workstreamId: "ws-2", idempotencyKey: "create-2", title: "Home", producer: "session" });
+  await store.append({ workstreamId: "ws-2", expectedRevision: 1, idempotencyKey: "home", records: associationRecords.slice(0, 2) });
+  assert.deepEqual((await store.list({ sessionId: "session-1" })).map(({ id }) => id), ["ws-2"]);
+});
+
+test("cancelling or failing a join keeps the session's visiting checkpoint", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "visit", records: [visitingCheckpoint("cp-visit")] });
+  const pending = (associationKey) => ({ type: "session.pending", producer: "pi-web", payload: { sessionId: "session-1", associationKey } });
+  const end = (type, associationKey) => ({ type, producer: "pi-web", payload: { sessionId: "session-1", associationKey, reason: "Owner stopped it" } });
+  const visitor = async () => (await store.inspect("ws-1")).sessions.map(({ id, status, latestCheckpoint }) => [id, status, latestCheckpoint?.id]);
+
+  await store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "join-1", records: [pending("join-1")] });
+  await store.append({ workstreamId: "ws-1", expectedRevision: 3, idempotencyKey: "cancel", records: [end("session.cancelled", "join-1")] });
+  assert.deepEqual(await visitor(), [["session-1", "visiting", "cp-visit"]]);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 4, idempotencyKey: "join-2", records: [pending("join-2"), end("session.failed", "join-2")] });
+  assert.deepEqual(await visitor(), [["session-1", "visiting", "cp-visit"]]);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 5, idempotencyKey: "visit-again", records: [visitingCheckpoint("cp-again")] });
+  assert.deepEqual(await visitor(), [["session-1", "visiting", "cp-again"]]);
+});
+
+test("visiting checkpoints reject active sessions, replaced checkpoints, and closed Workstreams", async () => {
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  await store.append({ workstreamId: "ws-1", expectedRevision: 1, idempotencyKey: "home", records: associationRecords.slice(0, 2) });
+  await assert.rejects(
+    store.append({ workstreamId: "ws-1", expectedRevision: 2, idempotencyKey: "visit-home", records: [visitingCheckpoint("cp-home")] }),
+    (error) => error.code === "INVALID_TRANSITION",
+  );
+  await store.create({ workstreamId: "ws-2", idempotencyKey: "create-2", title: "Visited", producer: "session" });
+  await store.append({ workstreamId: "ws-2", expectedRevision: 1, idempotencyKey: "visit", records: [visitingCheckpoint("cp-visit")] });
+  await assert.rejects(
+    store.append({ workstreamId: "ws-2", expectedRevision: 2, idempotencyKey: "replace", records: [{ ...visitingCheckpoint("cp-replace"), type: "checkpoint.replaced" }] }),
+    (error) => error.code === "INVALID_TRANSITION",
+  );
+  await store.close({ workstreamId: "ws-2", expectedRevision: 2, idempotencyKey: "close", producer: "owner" });
+  await assert.rejects(
+    store.append({ workstreamId: "ws-2", expectedRevision: 3, idempotencyKey: "visit-closed", records: [visitingCheckpoint("cp-closed")] }),
+    (error) => error.code === "WORKSTREAM_CLOSED",
+  );
+});
+
+test("replays a ledger written before visiting checkpoints unchanged", () => {
+  const at = (second) => `2026-01-01T00:00:0${second}.000Z`;
+  const ledger = [
+    { type: "workstream.created", workstreamId: "ws-old", title: "Old", producer: "owner", revision: 1, recordedAt: at(0) },
+    { type: "session.pending", workstreamId: "ws-old", producer: "session", payload: { sessionId: "s-1", associationKey: "s-1" }, revision: 2, position: 0, recordedAt: at(1) },
+    { type: "session.confirmed", workstreamId: "ws-old", producer: "session", payload: { sessionId: "s-1", associationKey: "s-1" }, revision: 2, position: 1, recordedAt: at(1) },
+    { type: "checkpoint.replaced", workstreamId: "ws-old", producer: "session", sourceSessionId: "s-1", payload: { sessionId: "s-1", checkpoint: { id: "cp-1", whatChanged: "a", remains: "b", next: "c", waitingOn: "agent" } }, revision: 3, position: 0, recordedAt: at(2) },
+    { type: "session.pending", workstreamId: "ws-old", producer: "pi-web", payload: { associationKey: "launch-2" }, revision: 4, position: 0, recordedAt: at(3) },
+  ];
+  assert.deepEqual(rebuildSnapshot(ledger).sessions, [
+    { id: "pending:launch-2", status: "pending", associationKey: "launch-2", latestCheckpoint: null, checkpointFailure: null, checkpointStaleness: null, launchFailure: null },
+    { id: "s-1", status: "active", associationKey: "s-1", latestCheckpoint: { id: "cp-1", whatChanged: "a", remains: "b", next: "c", waitingOn: "agent", nextSessionPrompt: null, sessionTitle: null, recordedAt: at(2) }, checkpointFailure: null, checkpointStaleness: null, launchFailure: null },
+  ]);
+});

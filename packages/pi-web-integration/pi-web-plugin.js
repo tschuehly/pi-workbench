@@ -2075,7 +2075,8 @@ function renderWorkstreamBrief(brief, snapshot, view) {
     const row = document.createElement("div");
     row.className = "brief-index-row";
     row.append(strong(`Session ${session.id}`), message(humanize(session.status), `session-status ${session.status}`));
-    row.append(message(session.anchor.complete ? sessionAnchor(session.anchor) : "Complete checkout anchor missing", session.anchor.complete ? "session-anchor" : "checkpoint-error inline-error"));
+    if (session.status === "visiting") row.append(message("Visiting checkpoint; this session's home is elsewhere", "muted"));
+    else row.append(message(session.anchor.complete ? sessionAnchor(session.anchor) : "Complete checkout anchor missing", session.anchor.complete ? "session-anchor" : "checkpoint-error inline-error"));
     index.append(row);
   }
   content.append(index);
