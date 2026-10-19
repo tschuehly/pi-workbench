@@ -51,7 +51,7 @@ in the conversation, so the selected value alone chooses the channel.
 | `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools and never in the conversation, even if Thomas also replies there. Send one update when a milestone finishes or work stops to wait. |
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
-Only Phone uses `ask_human` and `notify_human`. Only Switching offers PI WEB's `ask_user`; the extension deactivates it in every other value. Focused and Switching ask in the session
+Only Phone uses `ask_human` and `notify_human`. PI WEB's `ask_user` stays available in every value; Switching is the one that directs decisions to it. Focused and Switching ask in the session
 conversation. Thomas switches to Focused when he returns to the conversation.
 
 ### AFK adaptation and fallback
