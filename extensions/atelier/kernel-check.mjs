@@ -114,6 +114,8 @@ try {
   assert.equal(y1, y0, "the Page does not scroll");
   assert(quoted && pop.top >= quoted.bottom && pop.top - quoted.bottom <= 12 && pop.bottom <= vh, `the editor sits under the highlighted selection: ${JSON.stringify({ pop, quoted, vh })}`);
   assert.match(await js("document.querySelector('[atl-ui=composer] .atl-label').textContent"), /^Comment on “Pick this/);
+  const popW = await js("[Math.round(document.querySelector('[atl-ui=composer]').getBoundingClientRect().width), Math.min(560, innerWidth - 8)]");
+  assert.equal(popW[0], popW[1], `the selection editor is wide enough to write in ("the comment box is very narrow"): ${JSON.stringify(popW)}`);
   await b("keyboard", "type", "Here.");
   await click("[atl-ui=composer] [type=submit]");
   await until("document.querySelector('[atl-ui=key][data-key=long] .atl-msg')!==null");
