@@ -287,7 +287,7 @@ test("AFK with an Alignment value stays interactive until alignment is reached",
   assert.match(await s.confirm(), /^Alignment recorded\. AFK starts now: .*Do not contact Thomas/);
   assert.equal(s.snapshots.at(-1).aligned, true);
   const started = s.prompt().content;
-  assert.match(started, /Alignment is reached\./);
+  assert.match(started, /Alignment is reached\. When Thomas changes the scope or direction, call `alignment_reset` before continuing\./);
   assert.match(started, /Attention — AFK: .*Do not contact Thomas/);
   assert.equal(s.prompt(), undefined, "unchanged state posts nothing");
 
