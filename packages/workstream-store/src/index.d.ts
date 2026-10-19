@@ -30,6 +30,8 @@ export type WorkstreamRecord =
   | SemanticRecord<"session.failed", { sessionId?: string; associationKey?: string; reason: string }>
   | SemanticRecord<"session.cancelled", { sessionId?: string; associationKey?: string; reason: string }>
   | SemanticRecord<"checkpoint.replaced", { sessionId: string; checkpoint: Checkpoint }>
+  /** Latest checkpoint from a session that is not associated with this Workstream; it never makes the session a member. */
+  | SemanticRecord<"checkpoint.visiting", { sessionId: string; checkpoint: Checkpoint }>
   | SemanticRecord<"checkpoint.failed", { sessionId: string; reason: string }>
   | SemanticRecord<"checkpoint.stale", { sessionId: string; checkpointId: string; reason: string }>
   | SemanticRecord<"human-task.upsert", { task: HumanTaskInput }>
@@ -148,7 +150,8 @@ export interface WorkstreamRecordProvenance {
 
 export interface WorkstreamSession {
   id: string;
-  status: "pending" | "active" | "failed";
+  /** visiting: the session only left a checkpoint here; its home (if any) is another Workstream. */
+  status: "pending" | "active" | "failed" | "visiting";
   associationKey?: string;
   machineId?: string;
   projectId?: string;
@@ -191,10 +194,12 @@ export interface WorkstreamSummary {
   activeSessionCount: number;
   pendingSessionCount: number;
   failedSessionCount: number;
+  visitingSessionCount: number;
   unresolvedHumanTaskCount: number;
   closed: boolean;
 }
 
+/** sessionId matches the session's home Workstream; visiting checkpoints never match. */
 export interface WorkstreamQuery { includeClosed?: boolean; sessionId?: string; text?: string }
 export interface WorkstreamWatch { afterSequence?: number; workstreamId?: WorkstreamId; limit?: number }
 export type WorkstreamEventBatch =

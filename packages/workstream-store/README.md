@@ -52,6 +52,13 @@ Failed launches remain as `failed` sessions with their association anchor and a 
 provenance-bearing `checkpointStaleness` value that only a later `checkpoint.replaced` clears.
 Neither state is inferred from Chat or tool activity.
 
+`checkpoint.visiting` lets a session that is not a member of this Workstream leave its own latest
+checkpoint here; it projects the session with status `visiting`, and a later one replaces it. A
+visiting session is never an association: it does not occupy the session id for
+`SESSION_ASSIGNED_ELSEWHERE`, `list({ sessionId })` ignores it, and a later association in this
+Workstream turns it into a normal pending/active session that keeps the visiting checkpoint. Summary
+`next`, `waitingOn`, and `lastCheckpointAt` include visiting checkpoints.
+
 A replacement checkpoint may carry `waitingOn` (`owner`, `agent`, or `external`); projection
 exposes `null` when it is absent. `nextSessionPrompt` is legacy and optional: when present it must
 be non-empty and at most 2,000 characters, and projection exposes `null` when it is absent. Clients

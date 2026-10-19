@@ -29,6 +29,8 @@ Several Workstreams may remain active at once, and one Workstream may contain se
 
 Every associated interactive session has exactly one home Workstream. Other Workstreams may reference that session's checkpoint or artifacts, but they cannot become a second home ledger.
 
+A session may also leave a *visiting checkpoint* in an open Workstream that is not its home, for example one it just created for another topic. The Workstream then lists the session as `visiting` with that session's latest visiting checkpoint. Visiting is not an association: it never makes that Workstream the session's home, never counts for home lookups, never blocks a later association elsewhere, and is never a Chat-to-Workstream association in PI WEB. If the session later associates with that same Workstream, it becomes pending and active there normally and keeps its visiting checkpoint as its latest checkpoint.
+
 Host-coordinated launch follows one handshake:
 
 1. Record a pending association under one idempotency key.
@@ -80,7 +82,7 @@ The ledger may record:
 - session association;
 - explicit launch cancellation;
 - append-only session-anchor repair;
-- checkpoint replacement;
+- checkpoint replacement, including visiting checkpoints;
 - Human Task changes;
 - relevant links; and
 - closure.
@@ -91,6 +93,7 @@ Current state is a separate mechanical projection over accepted records. It incl
 
 - the latest Workstream title;
 - pending, active, and failed session associations and their latest projected anchors;
+- visiting sessions, which carry only their latest visiting checkpoint;
 - each session's latest confirmed checkpoint, plus explicit failure or staleness;
 - durable Human Tasks and answer receipts;
 - relevant links; and
@@ -144,7 +147,9 @@ The active session writes for the owner who will read the checkpoint later and f
 
 Optional `sessionTitle` names the session's goal in a few words (at most 80 characters). PI WEB renames the checkpointed Chat to it unless the owner named that Chat by hand; it changes only when the session's goal changes, never for status.
 
-The Workstream's current `waitingOn` is the one on its newest checkpoint. Checkpoints written before the field existed project `waitingOn: null`.
+A session not active in the Workstream it checkpoints writes a visiting checkpoint (`checkpoint.visiting`) under the same field rules; a later one from that session replaces it. Closed Workstreams reject it like any write.
+
+The Workstream's current `waitingOn` is the one on its newest checkpoint, visiting checkpoints included. Checkpoints written before the field existed project `waitingOn: null`.
 
 A new Chat resumes a Workstream by starting with the `orient` skill, not from a stored prompt. Durable checkpoint and link references must not point into operating-system temporary directories such as `/tmp`, `/private/tmp`, `/var/tmp`, or macOS temporary folders; the Store rejects those references instead of creating future stale launch targets. It also rejects references under the swept `PI_TMP` root (`~/.pi-workbench/tmp/`); use a repository path and commit or a retained artifact such as `~/.pi-workbench/reports/`.
 
