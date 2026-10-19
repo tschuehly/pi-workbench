@@ -21,7 +21,7 @@ enum WindowRestoration {
         let items = (parts.queryItems ?? []).filter { $0.name != "message" }
         let values = Dictionary(grouping: items, by: \.name)
         guard values.values.allSatisfy({ $0.count == 1 }),
-              values.keys.allSatisfy({ ["machine", "project", "workspace", "session", "view"].contains($0) }),
+              values.keys.allSatisfy({ ["machine", "project", "workspace", "session", "view", "win"].contains($0) }),
               (values["project"] == nil) == (values["workspace"] == nil),
               (values["session"] != nil || values["view"] == nil),
               values["view"] == nil || values["view"]?.first?.value == "chat",

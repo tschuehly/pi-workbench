@@ -7,10 +7,12 @@ import AppKit
         let chooser = server
         let selectedChooser = URL(string: "http://127.0.0.1:8505/?project=p&workspace=w")!
         let folderChat = URL(string: "http://127.0.0.1:8505/?session=s&view=chat")!
+        let windowChat = URL(string: "http://127.0.0.1:8505/?session=s&view=chat&win=abc123")!
         assert(WindowRestoration.applicationURL(chat, server: server) != nil)
         assert(WindowRestoration.applicationURL(chooser, server: server) == chooser)
         assert(WindowRestoration.applicationURL(selectedChooser, server: server) != nil)
         assert(WindowRestoration.applicationURL(folderChat, server: server) != nil)
+        assert(URLComponents(url: WindowRestoration.applicationURL(windowChat, server: server)!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "win" })?.value == "abc123")
         for text in [
             "http://evil.test/?project=p&workspace=w&session=s",
             "http://127.0.0.1:8506/?project=p&workspace=w&session=s",
