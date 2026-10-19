@@ -304,6 +304,44 @@ try {
     assert.equal(await js("document.querySelector('.atl-test')?.textContent.trim()"), "Test host, no Pi session");
   } finally { testHost.stop(); }
 
+  // "Still very narrow" (owner, after 2.3.1): a Comment or reply on a Key narrower than the box (a 191px storyboard
+  // frame) opens at least min(560px, viewport - 16px) wide and fully on screen; a wide Key keeps it inside; typing
+  // survives an Update.
+  const narrow = path.join(dir, "narrow.html");
+  const writeNarrow = (word = "Frame") => writeFile(narrow, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Narrow</title>
+<style>body{margin:0;font:15px system-ui}.row{display:flex;flex-wrap:wrap;gap:12px;padding:16px}.frame{width:191px;flex:none;border:1px solid #ccc}#wide{max-width:900px;margin:16px;border:1px solid #ccc}</style>
+<body><div class="row"><div class="frame" atl-key="f1" id="f1">${word} one<br><br><br>shot</div><div class="frame" atl-key="f2" id="f2">Frame two</div></div><p atl-key="wide" id="wide">A wide Key keeps its comment box inside.</p>
+<script type="module" src="atelier.js"></script></body></html>`);
+  await writeNarrow();
+  const composerAt = () => js("(()=>{const f=document.querySelector('[atl-ui=composer]'),r=f.getBoundingClientRect(),t=f.querySelector('textarea').getBoundingClientRect(),vw=document.documentElement.clientWidth;return {w:Math.round(r.width),ta:Math.round(t.width),left:Math.round(r.left),right:Math.round(r.right),top:Math.round(r.top),bottom:Math.round(r.bottom),inKey:!!f.closest('[atl-ui=key]'),need:Math.min(560,vw-16),vw,vh:innerHeight,overflow:document.documentElement.scrollWidth>vw,focused:document.activeElement===f.querySelector('textarea')}})()");
+  const openOn = async (key) => { await b("hover", `#${key}`); await sleep(300); await click(`[atl-ui=pin][data-key="${key}"] .atl-add`); await until("document.activeElement?.matches('[atl-ui=composer] textarea')"); return composerAt(); };
+  const fits = (c) => c.w >= c.need && c.left >= 0 && c.right <= c.vw && c.top >= 0 && c.bottom <= c.vh && !c.overflow && c.focused;
+  const dismiss = () => click("[atl-ui=composer] [data-atl=dismiss]");
+  for (const [w, h] of [["1440", "900"], ["390", "844"]]) {
+    await b("set", "viewport", w, h);
+    await b("open", (await host.open(narrow)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live'");
+    const c = await openOn("f1");
+    assert(fits(c), `${w}px: the box on a 191px Key is wide enough and on screen: ${JSON.stringify(c)}`);
+    await dismiss();
+    assert.equal(await js("document.querySelector('[atl-ui=composer]')"), null, "Cancel closes the popped box");
+    const wide = await openOn("wide");
+    assert(fits(wide) && wide.inKey === (w === "1440"), `${w}px: a wide Key keeps the box inside it where it fits: ${JSON.stringify(wide)}`);
+    await dismiss();
+  }
+  await js("window.un=0; document.addEventListener('atelier:update',()=>un++); true");
+  await openOn("f1"); await b("keyboard", "type", "Unsaved on a frame.");
+  await writeNarrow("Frame, rewritten,"); host.update(narrow); await until("un===1");
+  assert.deepEqual(await js("(()=>{const t=document.querySelector('[atl-ui=composer] textarea');return [t?.value??null, document.activeElement===t]})()"), ["Unsaved on a frame.", true], "the popped box keeps its text and focus through an Update");
+  assert(fits(await composerAt()), "and stays on screen");
+  await click("[atl-ui=composer] [type=submit]");
+  await until("document.querySelector('[atl-ui=key][data-key=f1] [data-atl=reply]')!==null");
+  await js("document.querySelector('[atl-ui=key][data-key=f1] [data-atl=reply]').click(); true");
+  await until("document.activeElement?.matches('[atl-ui=composer] textarea')");
+  const reply = await composerAt();
+  assert(fits(reply) && /^Reply/.test(await js("document.querySelector('[atl-ui=composer] .atl-label').textContent")), `a reply in a narrow Key's thread is wide enough too: ${JSON.stringify(reply)}`);
+  await dismiss();
+
   // A Page that moves the panel into a sticky column (the iterate trial, owner 2026-10-13): the panel takes the column's
   // width up to 760px and, held to 300px by the Page, scrolls inside so every control stays reachable; also after an
   // Update and under a transformed ancestor (review findings 4 and 5: no pinning machinery to break there).
@@ -334,7 +372,7 @@ try {
   await until("updates===2 && getComputedStyle(document.getElementById('col')).transform!=='none' && document.querySelector('[atl-ui=panel]').parentElement.id==='spot'");
   await checkSticky("under a transformed ancestor");
 
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, the panel in a sticky column scrolls inside after Updates and under a transform.");
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, the panel in a sticky column scrolls inside after Updates and under a transform.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

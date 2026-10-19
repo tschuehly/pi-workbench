@@ -1,4 +1,4 @@
-// Atelier Kernel 2.3.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.3.2: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -670,7 +670,7 @@ function boot() {
     // An open reply follows its thread wherever this render put it (under a quote, at its Key, in the panel), so an
     // Update that moves the thread or drops its quote holder keeps the typed text.
     const replyTo = composer?.spec.anchor?.thread, home = replyTo != null && cards.get(`t:${replyTo}`)?.closest("[atl-ui=key],[atl-ui=panel]")?.querySelector(".atl-slot");
-    if (home && composer.node.parentElement !== home) home.append(composer.node);
+    if (home && !composer.at && composer.node.parentElement !== home) home.append(composer.node);
 
     if (globalThis.Highlight && CSS.highlights) {
       const ranges = st.threads.filter((t) => !t.closed && t.root.quote).map((t) => findQuote(t.root.quote, idx)).filter(Boolean);
@@ -933,13 +933,13 @@ function boot() {
   // selected text opens beside the selection (spec.range), outside <body> so no Update lifts it, and never scrolls.
   function closeComposer() { composer?.node.remove(); composer = null; CSS.highlights?.delete("atl-pending"); }
   function placePop() {
-    const range = composer?.spec.range, node = composer?.node;
-    if (!range) return;
-    const r = range.getBoundingClientRect(), w = node.offsetWidth, ht = node.offsetHeight;
-    if (!r.width && !r.height) return; // the text went away in an Update: stay where it was
-    const below = r.bottom + 6 + ht <= innerHeight || r.top - 6 - ht < 0;
-    node.style.left = `${Math.round(scrollX + Math.max(4, Math.min(innerWidth - w - 4, r.left)))}px`;
-    node.style.top = `${Math.round(scrollY + (below ? r.bottom + 6 : r.top - 6 - ht))}px`;
+    const at = composer?.spec.range ?? composer?.at?.(), node = composer?.node;
+    if (!at) return;
+    const r = at.getBoundingClientRect(), w = node.offsetWidth, ht = node.offsetHeight, vw = document.documentElement.clientWidth;
+    if (!r.width && !r.height) return; // the text or Key went away in an Update: stay where it was
+    const below = r.bottom + 6 + ht <= innerHeight || r.top - 6 - ht < 0, top = below ? r.bottom + 6 : r.top - 6 - ht;
+    node.style.left = `${Math.round(scrollX + Math.max(4, Math.min(vw - w - 4, r.left)))}px`;
+    node.style.top = `${Math.round(scrollY + Math.max(4, Math.min(innerHeight - ht - 4, top)))}px`;
   }
   function openComposer(spec, slot) {
     closeComposer();
@@ -949,8 +949,19 @@ function boot() {
       document.documentElement.append(node);
       placePop();
       if (globalThis.Highlight && CSS.highlights) CSS.highlights.set("atl-pending", new Highlight(spec.range)); // the quote stays marked
-    } else slot.append(node);
-    node.querySelector("textarea").focus({ preventScroll: !!spec.range });
+    } else {
+      slot.append(node);
+      // A Key narrower than the box (a card, thumbnail, phone frame, table cell) would squeeze it: it opens as a
+      // popover by its thread or Key instead, outside <body> like the selection editor ("still very narrow", 2.3.1).
+      if (slot.closest("[atl-ui=key]") && node.getBoundingClientRect().width < Math.min(560, document.documentElement.clientWidth - 16)) {
+        const { key, thread } = spec.anchor ?? {};
+        composer.at = () => (thread != null && cards.get(`t:${thread}`)?.isConnected && cards.get(`t:${thread}`)) || findKey(key);
+        node.classList.add("atl-pop");
+        document.documentElement.append(node);
+        placePop();
+      }
+    }
+    node.querySelector("textarea").focus({ preventScroll: !!(spec.range || composer.at) });
     node.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const text = node.querySelector("textarea").value.trim();
