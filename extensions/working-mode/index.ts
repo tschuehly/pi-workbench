@@ -113,7 +113,7 @@ export function renderBlock(selection: WorkingModeState, seq: number, aligned = 
       : `${axes[axis].label} — ${selection[axis]}: ${(axes[axis].values as Record<string, string>)[selection[axis]]}`);
   return [
     `<working-mode seq="${seq}">`,
-    `Thomas selected Working Mode ${summary}.${aligned ? " Alignment is reached." : ""}`,
+    `Thomas selected Working Mode ${summary}.${aligned ? " Alignment is reached. When Thomas changes the scope or direction, call `alignment_reset` before continuing." : ""}`,
     guidance.length
       ? "Follow this guidance until a newer block replaces it. It grants no extra permissions, and Thomas's explicit instructions in the conversation override it.\n\n" + guidance.join("\n\n")
       : "Every value is at its starting setting; no Working Mode guidance applies.",
@@ -242,7 +242,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: ALIGNMENT_RESET_TOOL,
     label: "Alignment reset",
-    description: "Clear the confirmed alignment when the work turns to a new task that needs a new agreement with Thomas.",
+    description: "Clear the confirmed alignment as soon as Thomas changes the scope or direction, or the work turns to a new task that needs a new agreement with Thomas.",
     parameters: Type.Object({ reason: Type.String({ minLength: 1, description: "The new task, briefly" }) }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       aligned = false;
