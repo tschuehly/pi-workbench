@@ -375,6 +375,46 @@ try {
     assert(grid.inside && wrap.inside && plain.inside && inline.inside && nowrap.after && media.after, `${w}px: each UI sits where expected: ${JSON.stringify(got)}`);
   }
 
+  // atl-wip (2.4.0): a region under construction is dimmed and labelled, and its Decisions are locked with the label as
+  // their title while the answer stays shown; Comments stay open; an Update that drops the mark restores all of it.
+  for (const [w, h] of [["1440", "900"], ["390", "844"]]) {
+    const wipPage = path.join(dir, `wip-${w}.html`);
+    const writeWip = (on) => writeFile(wipPage, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Wip</title>
+<style>body{margin:16px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:24px 0}</style>
+<body><section id="sec"${on ? ' atl-wip="Reworking scene 3"' : ""}><div atl-key="s1" id="s1" atl-decide="Keep|Redo">Scene 3, inside a marked section.</div></section>
+<div atl-key="s2" id="s2" atl-decide="1|2|3"${on ? ' atl-wip=""' : ""}>A marked Key without a reason.</div><p atl-key="free" id="free" atl-decide="Yes|No">Not marked.</p>
+<script type="module" src="atelier.js"></script></body></html>`);
+    const wipNow = () => js(`(()=>{const opts=(k)=>[...document.querySelectorAll('#'+k+' [data-atl=decide]')].map(b=>[b.dataset.label,b.disabled,b.title,b.getAttribute('aria-pressed')]),labels=[...document.querySelectorAll('.atl-wip')].map(l=>{const r=l.getBoundingClientRect();return {text:l.textContent,shown:!l.hidden&&r.width>0,x:Math.round(r.left),y:Math.round(r.top+r.height/2),w:Math.round(r.width)}}),at=(id)=>{const r=document.getElementById(id).getBoundingClientRect();return {x:Math.round(r.left),y:Math.round(r.top)}};return {s1:opts('s1'),s2:opts('s2'),free:opts('free'),labels,sec:at('sec'),s2at:at('s2'),dim:getComputedStyle(document.getElementById('sec')).opacity,outline:getComputedStyle(document.getElementById('s2')).outlineStyle,wip:atelier.state().wip,s1answer:atelier.state().decisions.find(d=>d.id==='s1').answer,overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth}})()`);
+    await writeWip(false);
+    await b("set", "viewport", w, h);
+    await b("open", (await host.open(wipPage)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live'");
+    await click('#s1 [data-atl=decide][data-label="Keep"]');
+    await until("atelier.state().decisions.find(d=>d.id==='s1').answer==='Keep'");
+    await writeWip(true); host.update(wipPage);
+    await until("atelier.state().wip.length===2");
+    const on = await wipNow();
+    console.log(`wip ${w}px on ${JSON.stringify(on)}`);
+    assert.deepEqual(on.wip, [{ key: null, text: "Reworking scene 3" }, { key: "s2", text: "Work in progress" }], "state().wip lists both marked regions");
+    assert.deepEqual(on.s1, [["Keep", true, "Reworking scene 3", "true"], ["Redo", true, "Reworking scene 3", "false"]], `${w}px: a Decision inside the marked section is locked, its answer still shown`);
+    assert(on.s2.every(([, off, title]) => off && title === "Work in progress") && on.free.every(([, off]) => !off), `${w}px: a marked Key locks, an unmarked one does not: ${JSON.stringify(on)}`);
+    assert(on.dim === "0.55" && on.outline === "dashed" && !on.overflow, `${w}px: the region is dimmed and outlined`);
+    const [l1, l2] = on.labels;
+    assert(on.labels.length === 2 && l1.shown && l2.shown && l1.text === "Reworking scene 3" && Math.abs(l1.x - on.sec.x) <= 1 && Math.abs(l1.y - on.sec.y) <= 1 && Math.abs(l2.x - on.s2at.x) <= 1 && Math.abs(l2.y - on.s2at.y) <= 1, `${w}px: each region's label sits on its top-left corner: ${JSON.stringify(on.labels)}`);
+    const before = readLog(wipPage).filter((e) => e.type === "decide").length;
+    await click('#s1 [data-atl=decide][data-label="Redo"]'); await sleep(500);
+    assert.deepEqual([readLog(wipPage).filter((e) => e.type === "decide").length, await js("atelier.state().decisions.find(d=>d.id==='s1').answer")], [before, "Keep"], "a click on a locked option answers nothing");
+    assert((await openOn("s1")).focused, "Comments stay open inside a marked region");
+    await dismiss();
+    await writeWip(false); host.update(wipPage);
+    await until("atelier.state().wip.length===0");
+    const off = await wipNow();
+    console.log(`wip ${w}px off ${JSON.stringify({ s1: off.s1, labels: off.labels, dim: off.dim, outline: off.outline })}`);
+    assert(off.labels.length === 0 && off.dim === "1" && [...off.s1, ...off.s2].every(([, d, title]) => !d && title !== "Reworking scene 3"), `${w}px: removing the mark in an Update restores the region: ${JSON.stringify(off)}`);
+    await click('#s1 [data-atl=decide][data-label="Redo"]');
+    await until("atelier.state().decisions.find(d=>d.id==='s1').answer==='Redo'");
+  }
+
   // A Page that moves the panel into a sticky column (the iterate trial, owner 2026-10-13): the panel takes the column's
   // width up to 760px and, held to 300px by the Page, scrolls inside so every control stays reachable; also after an
   // Update and under a transformed ancestor (review findings 4 and 5: no pinning machinery to break there).
@@ -405,7 +445,7 @@ try {
   await until("updates===2 && getComputedStyle(document.getElementById('col')).transform!=='none' && document.querySelector('[atl-ui=panel]').parentElement.id==='spot'");
   await checkSticky("under a transformed ancestor");
 
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, threads that span a grid or flex-row Key, the panel in a sticky column scrolls inside after Updates and under a transform.");
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, threads that span a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, the panel in a sticky column scrolls inside after Updates and under a transform.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

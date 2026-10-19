@@ -32,6 +32,10 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
 - Decisions with consequences per option go through `ask`. Recommend one option when you have a
   basis; none for ratings or gates without evidence. The human may change any answer later; a
   change arrives as "X → Y".
+- `atl-wip="Reworking scene 3"` on a Key or any element containing Keys marks it under construction
+  while you rework it: the Kernel dims it, labels it with the text and locks its Decisions (answers stay
+  shown; Comments stay open). Remove it in the Update that delivers the rework; `atelier.state().wip`
+  lists the marked regions as `{key, text}`.
 - `atl-request="job"` on a button or form lets the human ask for a typed job; form fields become
   its input. Move it with `status`.
 - Comments go out when saved. `atl-delivery="send"` on a keyed element batches the Comments inside
@@ -44,7 +48,7 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
 - A page script that needs to know what the human answered (progress, "next open", resume) reads
   `atelier.state()`, never Kernel markup: plain data with `decisions` (`id`, `options`, `recommended`,
   `answer`, `previous`, `note`, `status`, `stale`), `threads`, `requests`, `toAnswer` (ids), `open`,
-  `conn`, and `loaded` (true once the Event Log is read). The document event `atelier:state` carries the
+  `wip`, `conn`, and `loaded` (true once the Event Log is read). The document event `atelier:state` carries the
   same object in `detail` whenever it changes, including unsent answers; register it before the Kernel loads
   to get the first one.
 - Read changing data with `fetch` (read-only): project files, or for a Page outside the project only
@@ -102,7 +106,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.3.3 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.4.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench.
