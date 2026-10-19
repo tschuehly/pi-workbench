@@ -46,6 +46,11 @@ An agent change to a Page shown live, without a reload and without destroying th
 input. It carries a one-line note, and the Page marks what it changed until the human has seen it.
 _Avoid_: Ready, refresh, publish
 
+**Under Construction**:
+The state of a Page region the agent is reworking, marked with `atl-wip` and a one-line reason: the
+Kernel dims it and locks its Decisions until an Update removes the mark.
+_Avoid_: draft, pending, locked
+
 **Event Log**:
 The append-only, numbered record of every human and agent event on one Page, kept on disk.
 _Avoid_: store, inbox, queue

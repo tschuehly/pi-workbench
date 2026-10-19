@@ -342,6 +342,79 @@ try {
   assert(fits(reply) && /^Reply/.test(await js("document.querySelector('[atl-ui=composer] .atl-label').textContent")), `a reply in a narrow Key's thread is wide enough too: ${JSON.stringify(reply)}`);
   await dismiss();
 
+  // "One word per line" (2.3.2, a real check row): a Key that is itself a grid or flex row made its threads one cell, 280px
+  // of a 1374px row. Its thread now spans the Key's content width, in a wrapping and a nowrap row too; an inline, a
+  // plain and a media Key keep their place.
+  const rowPage = path.join(dir, "rows.html");
+  await writeFile(rowPage, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Rows</title>
+<style>body{margin:16px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:8px 0}#grid{display:grid;grid-template-columns:11em 1fr auto;gap:8px}#wrap{display:flex;flex-wrap:wrap;gap:8px}#nowrap{display:flex;gap:8px}</style>
+<body><div atl-key="grid" id="grid"><b>Check</b><span>Every frame keeps the caption inside the safe zone.</span><span>pass</span></div>
+<div atl-key="wrap" id="wrap"><b>Check</b><span>A wrapping row.</span><span>pass</span></div>
+<div atl-key="nowrap" id="nowrap"><b>Check</b><span>A nowrap row.</span><span>pass</span></div>
+<p atl-key="plain" id="plain">A plain block Key.</p><p>Text with <span atl-key="inline" id="inline">an inline Key</span> inside.</p><canvas atl-key="media" id="media" width="120" height="60"></canvas>
+<script type="module" src="atelier.js"></script></body></html>`);
+  const spanOf = (key) => js(`(()=>{const k=document.getElementById("${key}"),u=document.querySelector('[atl-ui=key][data-key="${key}"]'),s=getComputedStyle(k),w=k.clientWidth-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight);return {key:"${key}",keyW:Math.round(w),uiW:Math.round(u.getBoundingClientRect().width),inside:k.contains(u),after:!k.contains(u)&&k.parentElement===u.parentElement,overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth}})()`);
+  for (const [w, h] of [["1440", "900"], ["390", "844"]]) {
+    await b("set", "viewport", w, h);
+    await b("open", (await host.open(rowPage)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live'");
+    const got = [];
+    for (const key of ["grid", "wrap", "nowrap", "plain", "inline", "media"]) {
+      await js(`document.getElementById("${key}").scrollIntoView({block:"center"}); true`);
+      // ponytail: one retry, because a pin click here sometimes opens nothing (seen on 2.3.2 too); trace it if it recurs.
+      const c = await openOn(key).catch(() => openOn(key));
+      if (w === "1440" && key === "grid") assert(c.inKey, `1440px: the box on a wide grid Key opens inside it: ${JSON.stringify(c)}`);
+      await b("keyboard", "type", "A comment that should read as a line, not one word per line.");
+      await click("[atl-ui=composer] [type=submit]");
+      await until(`document.querySelector('[atl-ui=key][data-key="${key}"] .atl-card')!==null`);
+      got.push(await spanOf(key));
+    }
+    console.log(`rows ${w}px ${JSON.stringify(got)}`);
+    const [grid, wrap, nowrap, plain, inline, media] = got;
+    for (const m of [grid, wrap, nowrap, plain]) assert(m.uiW >= 0.9 * m.keyW && !m.overflow, `${w}px: the thread spans the ${m.key} Key: ${JSON.stringify(m)}`);
+    assert(grid.inside && wrap.inside && plain.inside && inline.inside && nowrap.after && media.after, `${w}px: each UI sits where expected: ${JSON.stringify(got)}`);
+  }
+
+  // atl-wip (2.4.0): a region under construction is dimmed and labelled, and its Decisions are locked with the label as
+  // their title while the answer stays shown; Comments stay open; an Update that drops the mark restores all of it.
+  for (const [w, h] of [["1440", "900"], ["390", "844"]]) {
+    const wipPage = path.join(dir, `wip-${w}.html`);
+    const writeWip = (on) => writeFile(wipPage, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Wip</title>
+<style>body{margin:16px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:24px 0}</style>
+<body><section id="sec"${on ? ' atl-wip="Reworking scene 3"' : ""}><div atl-key="s1" id="s1" atl-decide="Keep|Redo">Scene 3, inside a marked section.</div></section>
+<div atl-key="s2" id="s2" atl-decide="1|2|3"${on ? ' atl-wip=""' : ""}>A marked Key without a reason.</div><p atl-key="free" id="free" atl-decide="Yes|No">Not marked.</p>
+<script type="module" src="atelier.js"></script></body></html>`);
+    const wipNow = () => js(`(()=>{const opts=(k)=>[...document.querySelectorAll('#'+k+' [data-atl=decide]')].map(b=>[b.dataset.label,b.disabled,b.title,b.getAttribute('aria-pressed')]),labels=[...document.querySelectorAll('.atl-wip')].map(l=>{const r=l.getBoundingClientRect();return {text:l.textContent,shown:!l.hidden&&r.width>0,x:Math.round(r.left),y:Math.round(r.top+r.height/2),w:Math.round(r.width)}}),at=(id)=>{const r=document.getElementById(id).getBoundingClientRect();return {x:Math.round(r.left),y:Math.round(r.top)}};return {s1:opts('s1'),s2:opts('s2'),free:opts('free'),labels,sec:at('sec'),s2at:at('s2'),dim:getComputedStyle(document.getElementById('sec')).opacity,outline:getComputedStyle(document.getElementById('s2')).outlineStyle,wip:atelier.state().wip,s1answer:atelier.state().decisions.find(d=>d.id==='s1').answer,overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth}})()`);
+    await writeWip(false);
+    await b("set", "viewport", w, h);
+    await b("open", (await host.open(wipPage)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live'");
+    await click('#s1 [data-atl=decide][data-label="Keep"]');
+    await until("atelier.state().decisions.find(d=>d.id==='s1').answer==='Keep'");
+    await writeWip(true); host.update(wipPage);
+    await until("atelier.state().wip.length===2");
+    const on = await wipNow();
+    console.log(`wip ${w}px on ${JSON.stringify(on)}`);
+    assert.deepEqual(on.wip, [{ key: null, text: "Reworking scene 3" }, { key: "s2", text: "Work in progress" }], "state().wip lists both marked regions");
+    assert.deepEqual(on.s1, [["Keep", true, "Reworking scene 3", "true"], ["Redo", true, "Reworking scene 3", "false"]], `${w}px: a Decision inside the marked section is locked, its answer still shown`);
+    assert(on.s2.every(([, off, title]) => off && title === "Work in progress") && on.free.every(([, off]) => !off), `${w}px: a marked Key locks, an unmarked one does not: ${JSON.stringify(on)}`);
+    assert(on.dim === "0.55" && on.outline === "dashed" && !on.overflow, `${w}px: the region is dimmed and outlined`);
+    const [l1, l2] = on.labels;
+    assert(on.labels.length === 2 && l1.shown && l2.shown && l1.text === "Reworking scene 3" && Math.abs(l1.x - on.sec.x) <= 1 && Math.abs(l1.y - on.sec.y) <= 1 && Math.abs(l2.x - on.s2at.x) <= 1 && Math.abs(l2.y - on.s2at.y) <= 1, `${w}px: each region's label sits on its top-left corner: ${JSON.stringify(on.labels)}`);
+    const before = readLog(wipPage).filter((e) => e.type === "decide").length;
+    await click('#s1 [data-atl=decide][data-label="Redo"]'); await sleep(500);
+    assert.deepEqual([readLog(wipPage).filter((e) => e.type === "decide").length, await js("atelier.state().decisions.find(d=>d.id==='s1').answer")], [before, "Keep"], "a click on a locked option answers nothing");
+    assert((await openOn("s1")).focused, "Comments stay open inside a marked region");
+    await dismiss();
+    await writeWip(false); host.update(wipPage);
+    await until("atelier.state().wip.length===0");
+    const off = await wipNow();
+    console.log(`wip ${w}px off ${JSON.stringify({ s1: off.s1, labels: off.labels, dim: off.dim, outline: off.outline })}`);
+    assert(off.labels.length === 0 && off.dim === "1" && [...off.s1, ...off.s2].every(([, d, title]) => !d && title !== "Reworking scene 3"), `${w}px: removing the mark in an Update restores the region: ${JSON.stringify(off)}`);
+    await click('#s1 [data-atl=decide][data-label="Redo"]');
+    await until("atelier.state().decisions.find(d=>d.id==='s1').answer==='Redo'");
+  }
+
   // A Page that moves the panel into a sticky column (the iterate trial, owner 2026-10-13): the panel takes the column's
   // width up to 760px and, held to 300px by the Page, scrolls inside so every control stays reachable; also after an
   // Update and under a transformed ancestor (review findings 4 and 5: no pinning machinery to break there).
@@ -372,7 +445,7 @@ try {
   await until("updates===2 && getComputedStyle(document.getElementById('col')).transform!=='none' && document.querySelector('[atl-ui=panel]').parentElement.id==='spot'");
   await checkSticky("under a transformed ancestor");
 
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, the panel in a sticky column scrolls inside after Updates and under a transform.");
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, threads that span a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, the panel in a sticky column scrolls inside after Updates and under a transform.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

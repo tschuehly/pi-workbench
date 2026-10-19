@@ -1,4 +1,4 @@
-// Atelier Kernel 2.3.2: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.4.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -16,6 +16,8 @@
 //   atl-request="job"          a button or form that asks the agent for a typed job; form fields become its input (130)
 //   atl-group                  on a keyed element: its batched Comments get their own "Send (n)" (150)
 //   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (156)
+//   atl-wip="Reworking scene 3"  on a Key or any element: under construction while an agent reworks it; the Kernel
+//                              dims it, labels it and locks its Decisions (answers stay shown, Comments stay open)
 //   atl-changes="off"          anywhere on the Page: no change indicators after Updates (156)
 //   atl-dock                   an empty element where the Kernel panel sits in the Page's layout; else it floats at the
 //                              bottom right, offset by --atl-dock-right and --atl-dock-bottom. Outside <body>'s own children
@@ -129,12 +131,12 @@ export function derive(entries, currentVer = () => null, declared = []) {
 /**
  * The Kernel state a Page script may rely on, as plain data: window.atelier.state() returns it and the document
  * event "atelier:state" carries it in `detail` whenever it changes. Kernel markup is not an API. `loaded` turns true
- * once the Event Log has been read (or there is no session to read it from).
+ * once the Event Log has been read (or there is no session to read it from). `wip` lists the atl-wip regions as {key, text}.
  */
-export function publicState(st, { conn = "no session", loaded = false } = {}) {
+export function publicState(st, { conn = "no session", loaded = false, wip = [] } = {}) {
   const status = (e) => e ? st.status(e) : null;
   return {
-    conn, loaded, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
+    conn, loaded, wip, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
     decisions: st.decisions.map((d) => ({
       id: d.id, key: d.key ?? null, declared: !!d.declared, options: d.options.map((o) => o.label), recommended: d.options.find((o) => o.recommended)?.label ?? null,
       answer: d.answer?.option ?? null, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, opened: !!d.opened,
@@ -307,7 +309,7 @@ function boot() {
   const threadCount = new Map(); // Key address -> its threads, for the Comment button made on hover
   const quoteUis = new Map(); // block holding a quoted Comment -> the Kernel UI under it
   const BLOCK = "p,li,dd,dt,td,th,blockquote,pre,figcaption,h1,h2,h3,h4,h5,h6";
-  const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), cards = new Map();
+  const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), cards = new Map(), wipLabels = new Map();
   let hot = null, savedRange = null;
 
   const isUi = (n) => n.closest?.("[atl-ui]");
@@ -329,7 +331,12 @@ function boot() {
   const all = () => [...entries, ...local];
   const state = () => derive(all(), currentVer, declared());
   let loaded = !online, published = null;
-  globalThis.atelier = Object.freeze({ state: () => publicState(state(), { conn, loaded }) });
+  // atl-wip: a region an agent is reworking; its text labels it and locks the Decisions inside it.
+  const wips = () => [...document.querySelectorAll("[atl-wip]")].filter((el) => !isUi(el));
+  const wipText = (el) => el.getAttribute("atl-wip") || "Work in progress";
+  const lockOf = (el) => { const w = el.closest("[atl-wip]"); return w ? wipText(w) : null; };
+  const wipState = () => wips().map((el) => ({ key: keyOf(el) ?? null, text: wipText(el) }));
+  globalThis.atelier = Object.freeze({ state: () => publicState(state(), { conn, loaded, wip: wipState() }) });
   const now = () => Date.now();
 
   // ---- UI roots. Everything the Kernel draws carries atl-ui and is lifted out before each morph.
@@ -545,9 +552,11 @@ function boot() {
       <div class="atl-actions"><button data-atl="reply" data-seq="${t.root.seq}">${icon("pencil")} Reply</button>${t.stale && !t.closed ? `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Fixed: close</button><button data-atl="still" data-seq="${t.root.seq}">Still applies</button>` : t.closed ? "" : `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Close</button>`}${t.root.key || t.root.quote || t.root.selector ? `<button data-atl="jump" data-seq="${t.root.seq}">${icon("eye")} Show</button>` : ""}</div>`;
   }
 
-  function decisionHtml(d, st) {
+  // `lock`: the atl-wip text of a region holding the Decision; its options are disabled with that text as their title.
+  const locked = (lock) => lock == null ? "" : ` disabled title="${esc(lock)}"`;
+  function decisionHtml(d, st, lock = null) {
     const a = d.answer;
-    const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}" class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
+    const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}"${locked(lock)} class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
     return `<div class="atl-head"><span class="atl-tag">${a && !d.stale ? "answered" : "to answer"}</span>${d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : ""}</div>
       <div class="atl-q">${esc(d.question)}</div>${d.detail ? `<div class="atl-dim">${esc(d.detail)}</div>` : ""}
       ${materialHtml(d)}<div class="atl-opts">${opts}</div>${receiptHtml(d, st)}`;
@@ -562,9 +571,9 @@ function boot() {
   }
 
   // A Page-declared Decision renders as a row of options in its atl-slot, or at the end of its element (155).
-  function declaredHtml(d, st) {
+  function declaredHtml(d, st, lock = null) {
     const a = d.answer;
-    return d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}" aria-pressed="${a?.option === o.label}" class="${o.recommended ? "atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"${o.recommended ? ` title="Recommended"` : ""}>${esc(o.label)}${o.recommended ? `<span class="atl-sr"> (recommended)</span>` : ""}</button>`).join("")
+    return d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}" aria-pressed="${a?.option === o.label}" class="${o.recommended ? "atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"${lock != null ? locked(lock) : o.recommended ? ` title="Recommended"` : ""}>${esc(o.label)}${o.recommended ? `<span class="atl-sr"> (recommended)</span>` : ""}</button>`).join("")
       + materialHtml(d) + (d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : "");
   }
 
@@ -579,8 +588,14 @@ function boot() {
   }
 
   // A Key's UI goes inside it, except where children would not show: after media and void elements, into a row's last cell.
+  // A Key's threads and composer span a grid or flex-row Key rather than squeeze into one cell (2.3.2: 280px of a
+  // 1374px 3-column row): CSS spans the grid columns, a wrapping row gives them a line of their own, and a nowrap
+  // row, which no child can break, gets them after the Key like media.
   function place(ui, el) {
-    if (el.matches("img,video,audio,canvas,iframe,input,textarea,select,svg,hr,br")) { if (el.nextSibling !== ui) el.after(ui); }
+    const s = ui.matches("[atl-ui=key]") && getComputedStyle(el), row = s && s.display.endsWith("flex") && !s.flexDirection.startsWith("column");
+    const after = el.matches("img,video,audio,canvas,iframe,input,textarea,select,svg,hr,br") || (row && s.flexWrap === "nowrap");
+    if (s) { ui.classList.toggle("atl-after", after); ui.classList.toggle("atl-row", row && !after); }
+    if (after) { if (el.nextSibling !== ui) el.after(ui); }
     else { const box = el.matches("tr") ? el.lastElementChild ?? el : el; if (ui.parentElement !== box) box.append(ui); }
   }
 
@@ -615,7 +630,7 @@ function boot() {
         if (!dec) { dec = h(`<span atl-ui="decide" class="atl-decide" role="group" aria-label="Decision on ${esc(addr)}"><span class="atl-dopts"></span>${EXTRA}<span class="atl-dstate"></span></span>`); decUis.set(addr, dec); }
         const slot = [...el.querySelectorAll("[atl-slot]")].find((s) => !isUi(s) && s.closest("[atl-decide]") === el);
         if (slot) { if (dec.parentElement !== slot) slot.append(dec); } else place(dec, el);
-        set(dec.firstElementChild, declaredHtml(d, st));
+        set(dec.firstElementChild, declaredHtml(d, st, lockOf(el)));
         set(dec.lastElementChild, receiptHtml(d, st));
         dec.classList.toggle("atl-open-item", !d.answer || d.stale);
         kept.add(dec);
@@ -632,7 +647,7 @@ function boot() {
       const groupDrafts = el.hasAttribute("atl-group") ? st.drafts.filter((x) => inGroup(x.key, addr)).length : 0;
       set(ui.firstElementChild, groupDrafts ? `<button data-atl="send" data-key="${esc(addr)}" class="atl-primary">${icon("send")} Send (${groupDrafts})</button>` : "");
       reconcile(ui.children[1], [
-        ...st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st), open: !x.answer || x.stale, extra: `<div class="atl-dextra">${EXTRA}</div>` })),
+        ...st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st, lockOf(el)), open: !x.answer || x.stale, extra: `<div class="atl-dextra">${EXTRA}</div>` })),
         ...atKeyEnd.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed && st.status(t.root) !== "draft" })),
       ]);
     }
@@ -685,9 +700,18 @@ function boot() {
       if (n) d.querySelector("summary")?.append(h(`<span atl-ui="badge" class="atl-tag">${n} open</span>`));
     }
     for (const el of keyed()) io.observe(el);
+    // Each atl-wip region gets its label outside <body> (like the popped composer), so neither its dimming nor an
+    // Update touches it; an Update that drops the attribute drops the label.
+    const wipNow = wips();
+    for (const [el, label] of wipLabels) if (!wipNow.includes(el)) { label.remove(); wipLabels.delete(el); }
+    for (const el of wipNow) {
+      const label = wipLabels.get(el) ?? wipLabels.set(el, h(`<span atl-ui="wip" class="atl-wip"></span>`)).get(el);
+      if (label.textContent !== wipText(el)) label.textContent = wipText(el);
+      if (!label.isConnected) document.documentElement.append(label);
+    }
     renderMarks();
     positionPins();
-    const pub = publicState(st, { conn, loaded }), json = JSON.stringify(pub);
+    const pub = publicState(st, { conn, loaded, wip: wipState() }), json = JSON.stringify(pub);
     if (json !== published) { published = json; document.dispatchEvent(new CustomEvent("atelier:state", { detail: pub })); }
   }
 
@@ -709,7 +733,15 @@ function boot() {
     const p = pin.getBoundingClientRect(), r = el.getBoundingClientRect();
     pin.style.translate = `${Math.round(r.right - p.left - b.offsetWidth - 4)}px ${Math.round(r.top - p.top + 4)}px`;
   }
-  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); positionMarks(); placePop(); }
+  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); positionMarks(); placePop(); positionWip(); }
+  // ponytail: labels sit at document coordinates, so a region inside its own scrolling box leaves its label behind.
+  function positionWip() {
+    for (const [el, label] of wipLabels) {
+      const r = el.getBoundingClientRect();
+      label.hidden = !r.width && !r.height;
+      label.style.left = `${Math.round(scrollX + r.left)}px`; label.style.top = `${Math.round(scrollY + r.top)}px`;
+    }
+  }
   function setHot(target) {
     const el = target?.closest?.("[atl-key]:not([atl-slot])");
     const addr = el && !isUi(el) ? keyOf(el) : null;
@@ -988,7 +1020,7 @@ function boot() {
   const deciding = new Set();
   async function decide(b) {
     let st = state(), d = st.decisions.find((x) => x.id === b.dataset.id);
-    if (!d) return;
+    if (!d || b.disabled) return; // locked by atl-wip, also against Enter in a required note
     const label = b.dataset.label, extra = b.closest(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra"), note = extra?.querySelector(".atl-note");
     const text = note?.value.trim(), images = (extra && attached.get(extra)) ?? [];
     if (d.answer?.option === label && !d.stale && !text && !images.length) return; // already the answer
@@ -1176,7 +1208,9 @@ body>[atl-ui=panel]{position:fixed;right:var(--atl-dock-right,12px);bottom:var(-
 body>[atl-ui=panel]:has(.atl-card,.atl-composer,.atl-warn){width:340px}
 body>[atl-ui=panel]:has(.atl-composer){width:560px;max-width:min(560px,calc(100vw - 24px))}
 [atl-ui=orphans]:not(:empty){max-height:50vh;overflow:auto;margin:8px;display:grid;gap:8px}
-[atl-ui=key]{margin:4px 0}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
+[atl-wip]:not([atl-ui]){opacity:.55;outline:2px dashed var(--atl-warn);outline-offset:2px}
+.atl-wip{position:absolute;z-index:2147481500;translate:0 -50%;max-width:min(40ch,calc(100vw - 16px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;padding:0 6px;border:1px solid var(--atl-warn);border-radius:4px;background:var(--atl-bg);color:var(--atl-warn);pointer-events:none}
+[atl-ui=key]{margin:4px 0}[atl-key]>[atl-ui=key]:not(.atl-after){grid-column:1/-1}[atl-ui=key].atl-row{flex-basis:100%}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
 .atl-i{width:14px;height:14px;flex:none}
 [atl-ui] button,button[atl-ui]{font:inherit;line-height:1.2;display:inline-flex;align-items:center;gap:5px;box-sizing:border-box;min-height:28px;padding:0 10px;border:1px solid var(--atl-line);border-radius:6px;background:var(--atl-bg);color:var(--atl-fg);cursor:pointer}
 [atl-ui] button:hover:not(:disabled),button[atl-ui]:hover{border-color:var(--atl-muted)}
