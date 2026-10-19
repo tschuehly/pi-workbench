@@ -174,7 +174,7 @@ test("a queued steer counts as visible; a dropped one is attached again", async 
     on: (name, handler) => handlers.set(name, handler),
     registerCommand: (_name, value) => { command = value; },
     sendMessage: (message, options) => sent.push({ message, options }),
-    registerTool() {}, getActiveTools: () => [], setActiveTools() {},
+    registerTool() {},
     events: { emit() {} },
   });
   const ctx = {
@@ -224,7 +224,7 @@ test("the terminal picker changes one axis; cancel changes nothing", async () =>
   let command;
   const statuses = [];
   const choices = [];
-  workingMode({ on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, registerTool() {}, getActiveTools: () => [], setActiveTools() {}, events: { emit() {} } });
+  workingMode({ on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, registerTool() {}, events: { emit() {} } });
   const ctx = {
     mode: "tui", hasUI: true,
     sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
@@ -250,7 +250,7 @@ function fakePi(branch = []) {
   workingMode({
     on: (name, handler) => handlers.set(name, handler),
     registerCommand: (_name, value) => { command = value; },
-    registerTool: (value) => { tools[value.name] = value; }, getActiveTools: () => [], setActiveTools() {},
+    registerTool: (value) => { tools[value.name] = value; },
     events: { emit: (_name, value) => snapshots.push(value) },
   });
   const context = [];
@@ -336,17 +336,17 @@ test("resume after a reset restores unaligned state", () => {
   assert.equal(fakePi(branch).snapshots.at(-1).aligned, false);
 });
 
-test("ask_user is offered to the model only in Switching", async () => {
+test("ask_user stays offered to the model in every Attention value", async () => {
   const askUser = (pi) => pi.registerTool({ name: "ask_user", label: "Ask", description: "ask", parameters: { type: "object", properties: {} }, async execute() { return { content: [] }; } });
   const s = await session(undefined, undefined, { factories: [askUser], tools: ["ask_user"] });
   const offered = () => s.session.getActiveToolNames().includes("ask_user");
   await s.session.prompt("default");
-  assert.equal(offered(), false);
+  assert.equal(offered(), true);
   await s.session.prompt("/mode attention switching");
   await s.session.prompt("switching");
   assert.equal(offered(), true);
   await s.session.prompt("/mode attention focused");
   await s.session.prompt("focused");
-  assert.equal(offered(), false);
+  assert.equal(offered(), true);
   s.session.dispose();
 });

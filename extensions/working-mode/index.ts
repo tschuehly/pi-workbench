@@ -53,7 +53,6 @@ export type WorkingModeSnapshot = {
 export type WorkingModeDetails = { schemaVersion: 2; seq: number; selection: WorkingModeState; aligned?: boolean };
 
 export const ALIGNMENT_TOOL = "alignment_reached";
-export const ASK_USER_TOOL = "ask_user";
 export const ALIGNMENT_RESET_TOOL = "alignment_reset";
 
 /** How each Alignment value reaches alignment before AFK starts; Default needs none. */
@@ -191,7 +190,6 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         }
         queued = message.details;
         applied = { ...selected };
-        gateAskUser();
         publish(ctx, "applied");
         // Idle: starts a turn. Streaming: steers the running turn after its current tool calls.
         pi.sendMessage(message, { triggerTurn: true, deliverAs: "steer" });
@@ -218,17 +216,8 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     },
   });
 
-  // ask_user (registered by PI WEB) is offered only in Switching; other modes ask in the conversation or by phone.
-  // setActiveTools ignores the name where PI WEB did not register the tool.
-  function gateAskUser() {
-    const active = pi.getActiveTools();
-    const want = applied?.attention === "Switching";
-    if (want !== active.includes(ASK_USER_TOOL)) pi.setActiveTools(want ? [...active, ASK_USER_TOOL] : active.filter((name) => name !== ASK_USER_TOOL));
-  }
-
   pi.on("before_agent_start", (_event, ctx) => {
     applied = { ...selected };
-    gateAskUser();
     publish(ctx, "applied");
     const message = pendingBlock(ctx, false);
     return message ? { message } : undefined;
