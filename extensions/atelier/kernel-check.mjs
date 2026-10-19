@@ -342,6 +342,39 @@ try {
   assert(fits(reply) && /^Reply/.test(await js("document.querySelector('[atl-ui=composer] .atl-label').textContent")), `a reply in a narrow Key's thread is wide enough too: ${JSON.stringify(reply)}`);
   await dismiss();
 
+  // "One word per line" (2.3.2, a real check row): a Key that is itself a grid or flex row made its threads one cell, 280px
+  // of a 1374px row. Its thread now spans the Key's content width, in a wrapping and a nowrap row too; an inline, a
+  // plain and a media Key keep their place.
+  const rowPage = path.join(dir, "rows.html");
+  await writeFile(rowPage, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Rows</title>
+<style>body{margin:16px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:8px 0}#grid{display:grid;grid-template-columns:11em 1fr auto;gap:8px}#wrap{display:flex;flex-wrap:wrap;gap:8px}#nowrap{display:flex;gap:8px}</style>
+<body><div atl-key="grid" id="grid"><b>Check</b><span>Every frame keeps the caption inside the safe zone.</span><span>pass</span></div>
+<div atl-key="wrap" id="wrap"><b>Check</b><span>A wrapping row.</span><span>pass</span></div>
+<div atl-key="nowrap" id="nowrap"><b>Check</b><span>A nowrap row.</span><span>pass</span></div>
+<p atl-key="plain" id="plain">A plain block Key.</p><p>Text with <span atl-key="inline" id="inline">an inline Key</span> inside.</p><canvas atl-key="media" id="media" width="120" height="60"></canvas>
+<script type="module" src="atelier.js"></script></body></html>`);
+  const spanOf = (key) => js(`(()=>{const k=document.getElementById("${key}"),u=document.querySelector('[atl-ui=key][data-key="${key}"]'),s=getComputedStyle(k),w=k.clientWidth-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight);return {key:"${key}",keyW:Math.round(w),uiW:Math.round(u.getBoundingClientRect().width),inside:k.contains(u),after:!k.contains(u)&&k.parentElement===u.parentElement,overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth}})()`);
+  for (const [w, h] of [["1440", "900"], ["390", "844"]]) {
+    await b("set", "viewport", w, h);
+    await b("open", (await host.open(rowPage)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live'");
+    const got = [];
+    for (const key of ["grid", "wrap", "nowrap", "plain", "inline", "media"]) {
+      await js(`document.getElementById("${key}").scrollIntoView({block:"center"}); true`);
+      // ponytail: one retry, because a pin click here sometimes opens nothing (seen on 2.3.2 too); trace it if it recurs.
+      const c = await openOn(key).catch(() => openOn(key));
+      if (w === "1440" && key === "grid") assert(c.inKey, `1440px: the box on a wide grid Key opens inside it: ${JSON.stringify(c)}`);
+      await b("keyboard", "type", "A comment that should read as a line, not one word per line.");
+      await click("[atl-ui=composer] [type=submit]");
+      await until(`document.querySelector('[atl-ui=key][data-key="${key}"] .atl-card')!==null`);
+      got.push(await spanOf(key));
+    }
+    console.log(`rows ${w}px ${JSON.stringify(got)}`);
+    const [grid, wrap, nowrap, plain, inline, media] = got;
+    for (const m of [grid, wrap, nowrap, plain]) assert(m.uiW >= 0.9 * m.keyW && !m.overflow, `${w}px: the thread spans the ${m.key} Key: ${JSON.stringify(m)}`);
+    assert(grid.inside && wrap.inside && plain.inside && inline.inside && nowrap.after && media.after, `${w}px: each UI sits where expected: ${JSON.stringify(got)}`);
+  }
+
   // A Page that moves the panel into a sticky column (the iterate trial, owner 2026-10-13): the panel takes the column's
   // width up to 760px and, held to 300px by the Page, scrolls inside so every control stays reachable; also after an
   // Update and under a transformed ancestor (review findings 4 and 5: no pinning machinery to break there).
@@ -372,7 +405,7 @@ try {
   await until("updates===2 && getComputedStyle(document.getElementById('col')).transform!=='none' && document.querySelector('[atl-ui=panel]').parentElement.id==='spot'");
   await checkSticky("under a transformed ancestor");
 
-  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, the panel in a sticky column scrolls inside after Updates and under a transform.");
+  console.log("PASS Kernel browser check: palette, hover button, badge, composer, thread, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply under a rewritten quote, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, threads that span a grid or flex-row Key, the panel in a sticky column scrolls inside after Updates and under a transform.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

@@ -1,4 +1,4 @@
-// Atelier Kernel 2.3.2: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.3.3: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -579,8 +579,14 @@ function boot() {
   }
 
   // A Key's UI goes inside it, except where children would not show: after media and void elements, into a row's last cell.
+  // A Key's threads and composer span a grid or flex-row Key rather than squeeze into one cell (2.3.2: 280px of a
+  // 1374px 3-column row): CSS spans the grid columns, a wrapping row gives them a line of their own, and a nowrap
+  // row, which no child can break, gets them after the Key like media.
   function place(ui, el) {
-    if (el.matches("img,video,audio,canvas,iframe,input,textarea,select,svg,hr,br")) { if (el.nextSibling !== ui) el.after(ui); }
+    const s = ui.matches("[atl-ui=key]") && getComputedStyle(el), row = s && s.display.endsWith("flex") && !s.flexDirection.startsWith("column");
+    const after = el.matches("img,video,audio,canvas,iframe,input,textarea,select,svg,hr,br") || (row && s.flexWrap === "nowrap");
+    if (s) { ui.classList.toggle("atl-after", after); ui.classList.toggle("atl-row", row && !after); }
+    if (after) { if (el.nextSibling !== ui) el.after(ui); }
     else { const box = el.matches("tr") ? el.lastElementChild ?? el : el; if (ui.parentElement !== box) box.append(ui); }
   }
 
@@ -1176,7 +1182,7 @@ body>[atl-ui=panel]{position:fixed;right:var(--atl-dock-right,12px);bottom:var(-
 body>[atl-ui=panel]:has(.atl-card,.atl-composer,.atl-warn){width:340px}
 body>[atl-ui=panel]:has(.atl-composer){width:560px;max-width:min(560px,calc(100vw - 24px))}
 [atl-ui=orphans]:not(:empty){max-height:50vh;overflow:auto;margin:8px;display:grid;gap:8px}
-[atl-ui=key]{margin:4px 0}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
+[atl-ui=key]{margin:4px 0}[atl-key]>[atl-ui=key]:not(.atl-after){grid-column:1/-1}[atl-ui=key].atl-row{flex-basis:100%}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
 .atl-i{width:14px;height:14px;flex:none}
 [atl-ui] button,button[atl-ui]{font:inherit;line-height:1.2;display:inline-flex;align-items:center;gap:5px;box-sizing:border-box;min-height:28px;padding:0 10px;border:1px solid var(--atl-line);border-radius:6px;background:var(--atl-bg);color:var(--atl-fg);cursor:pointer}
 [atl-ui] button:hover:not(:disabled),button[atl-ui]:hover{border-color:var(--atl-muted)}
