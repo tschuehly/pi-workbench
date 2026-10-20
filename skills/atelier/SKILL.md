@@ -13,7 +13,7 @@ over: from the project directory run `node ../../extensions/atelier/serve.mjs <p
 this skill) in the background. It serves a test copy beside the Page (`<name>.atelier-test.html`) with its own
 empty Event Log, so the human's waiting input in the Page's real log is never touched; the Kernel bar says
 "Test host, no Pi session". It prints each Delivery to stdout as the agent would receive it, and sends an
-Update whenever the Page file changes. Drive it in a real browser; stopping it deletes the copy and its log.
+Update whenever the Page file changes. Drive it in a real browser before reporting; stopping it deletes the copy and its log.
 
 ## Page contract
 
@@ -31,7 +31,9 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
   the Delivery names each image's absolute path, so read it. Every Decision also offers "Other…": the human's
   own answer, delivered as `own answer: "…"`. It answers the Decision like an option; act on its text.
 - Decisions with consequences per option go through `ask`. Recommend one option when you have a
-  basis; none for ratings or gates without evidence. The human may change any answer later; a
+  basis; none for ratings or gates without evidence. Once a Page is open, ask every question there, not in the
+  Chat: a reply that offers choices, or free text you need settled, becomes an `ask` at its Key ("Other…" covers
+  answers that fit no option), never numbered options in a reply. The human may change any answer later; a
   change arrives as "X → Y".
 - `atl-wip="Reworking scene 3"` on a Key or any element containing Keys marks it under construction
   while you rework it: the Kernel dims it, labels it with the text and locks its Decisions (answers stay
@@ -39,6 +41,8 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
   lists the marked regions as `{key, text}`.
 - `atl-request="job"` on a button or form lets the human ask for a typed job; form fields become
   its input. Move it with `status`.
+- Close the loop on every thread you answered or acted on: the `answer` says what you did and where, so he
+  can close it at a glance (only the human closes a thread).
 - Comments go out when saved and, like replies, may carry up to four images; the Delivery names their paths. `atl-delivery="send"` on a keyed element batches the Comments inside
   it until the human sends them; `atl-group` gives such a batch its own "Send (n)".
 - Prefer static keyed HTML: write rows and cards into the Page file. An Update makes the body match
@@ -82,6 +86,9 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 - **Little text.** A heading and at most two short sentences per item. Plain words for what he sees, one
   change per sentence. No jargon (state capsules, role IDs, pin, scope), no meta-text about how the Page
   is grouped, no disclaimers about what was not measured, no repeated instructions; options explain themselves.
+- **Explain before asking.** Before any judgement, show how the thing works: one real item step by step, each
+  step with its real content (the 5 ideas, not field names or codes), as a diagram. Concrete over abstract; an
+  image over prose.
 - **No provenance noise.** No Git SHAs, app ids, timestamps, viewport/pointer/scale lines or "evidence
   limit" boxes on the Page; keep them in `atl-ver` or data files.
 - **Use the full desktop width.** No narrow centred column with empty margins; use several columns, compact
@@ -97,7 +104,8 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
   for a small change, crop to the changed region and keep the full shot behind the modal. Highlights come
   from the changed element's measured bounds, or are left out; a wrong mark is worse than none.
 - **A builder needs real content and direction.** A brief says what the Page is for, what Thomas must see or
-  decide, and supplies the real content; a thin brief gets padded with text.
+  decide, and supplies the real content; a thin brief gets padded with text. It quotes Thomas, adds no design
+  constraint he did not give, and lets the builder run `serve.mjs`.
 
 ## Principles (working theory, provisional — iterate with Thomas)
 
@@ -115,5 +123,6 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 | Kernel 2.7.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
-Kernel is a Contribution: raise it as a pull request against pi-workbench.
+Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of
+Thomas's actual Page with its Event Log, at his viewport, not only on the example Page.
 Example Page: `extensions/atelier/examples/demo.html`.
