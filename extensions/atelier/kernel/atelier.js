@@ -1,4 +1,4 @@
-// Atelier Kernel 2.7.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.7.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -694,7 +694,7 @@ function boot() {
     }
 
     // Decisions with no Key on the Page sit in the reading path, capped at 50vh (Review Studio a41040901).
-    reconcile(orphans, st.decisions.filter((d) => !d.declared && !findKey(d.key)).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st), open: !d.answer || d.stale, extra: `<div class="atl-dextra">${EXTRA}</div>` })));
+    reconcile(orphans, st.decisions.filter((d) => !d.declared && !findKey(d.key)).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st, lockOf(orphans)), open: !d.answer || d.stale, extra: `<div class="atl-dextra">${EXTRA}</div>` })));
 
     const onText = st.threads.filter((t) => placed.get(t.root.seq).where === "text");
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
@@ -782,12 +782,13 @@ function boot() {
     row.style.left = `${Math.round(x - x0)}px`; row.style.top = `${Math.round(y - top)}px`;
   }
   function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); for (const s of spots.values()) spotAt(s); positionMarks(); placePops(); positionWip(); }
-  // ponytail: labels sit at document coordinates, so a region inside its own scrolling box leaves its label behind.
+  // At the region's top-left corner, kept inside the right edge so a long label never scrolls the Page sideways.
   function positionWip() {
+    const vw = document.documentElement.clientWidth;
     for (const [el, label] of wipLabels) {
       const r = el.getBoundingClientRect();
       label.hidden = !r.width && !r.height;
-      label.style.left = `${Math.round(scrollX + r.left)}px`; label.style.top = `${Math.round(scrollY + r.top)}px`;
+      label.style.left = `${Math.round(scrollX + Math.max(0, Math.min(r.left, vw - label.offsetWidth - 4)))}px`; label.style.top = `${Math.round(scrollY + r.top)}px`;
     }
   }
   function setHot(target) {
@@ -825,11 +826,11 @@ function boot() {
   }
   let selQueued = false;
   document.addEventListener("selectionchange", () => { if (!selQueued) { selQueued = true; requestAnimationFrame(() => { selQueued = false; placeSel(); }); } });
-  // A floating box follows its anchor through any scroll, the Page's or an inner container's, and stays on screen.
+  // A floating box or an atl-wip label follows its anchor through any scroll, the Page's or an inner container's.
   let popQueued = false;
   addEventListener("scroll", () => {
     if (!selBtn.hidden) placeSel();
-    if ((composer || thread) && !popQueued) { popQueued = true; requestAnimationFrame(() => { popQueued = false; placePops(); }); }
+    if ((composer || thread || wipLabels.size) && !popQueued) { popQueued = true; requestAnimationFrame(() => { popQueued = false; placePops(); positionWip(); }); }
   }, { capture: true, passive: true });
 
   const undoable = () => all().filter((e) => e.origin === "human" && e.type !== "undo" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
@@ -923,14 +924,19 @@ function boot() {
   const navDots = new Map(); // in-page link -> its dot; one per link, coloured by its strongest change
   const nodesOf = (t) => [t.nodes.mark, t.nodes.gone, t.nodes.diff, t.nodes.rail].filter(Boolean);
   function removeTrace(addr) { const t = traces.get(addr); if (t) nodesOf(t).forEach((n) => n.remove()); traces.delete(addr); }
-  function clearTrace(addr) {
-    const t = traces.get(addr);
-    if (!t || t.fading) return;
-    t.fading = true;
-    nodesOf(t).forEach((n) => n.classList.add("atl-fade"));
+  // Fades them all, renders once, removes them together: "Mark all seen" on n marks is one render, not n.
+  function clearTraces(addrs) {
+    const fading = addrs.map((a) => [a, traces.get(a)]).filter(([, t]) => t && !t.fading);
+    if (!fading.length) return;
+    for (const [, t] of fading) { t.fading = true; nodesOf(t).forEach((n) => n.classList.add("atl-fade")); }
     renderMarks(); // a nav dot fades when every change under it fades
-    setTimeout(() => { if (traces.get(addr) === t && t.fading) { removeTrace(addr); renderMarks(); } }, 600);
+    setTimeout(() => {
+      const gone = fading.filter(([a, t]) => traces.get(a) === t && t.fading);
+      gone.forEach(([a]) => removeTrace(a));
+      if (gone.length) renderMarks();
+    }, 600);
   }
+  const clearTrace = (addr) => clearTraces([addr]);
   function tipOf(addr, t) {
     const parts = t.before != null && t.after != null ? wordDiff(t.before, t.after) : [];
     return [`${KIND[t.kind]}: ${t.title ?? titleOf(findKey(addr), addr)}`, ...t.notes.map((n) => `• ${n}`), diffPreview(parts)].filter(Boolean).join("\n");
@@ -1196,7 +1202,7 @@ function boot() {
     collapse: (b) => { expanded.delete(+b.dataset.seq); render(); },
     chmark: (b) => toggleDiff(b.dataset.addr),
     chseen: (b) => clearTrace(b.dataset.addr),
-    chall: () => { for (const addr of traces.keys()) clearTrace(addr); },
+    chall: () => clearTraces([...traces.keys()]),
     chgone: (b) => {
       const t = traces.get(b.dataset.addr), old = b.parentElement.querySelector(".atl-old");
       if (!t) return;
@@ -1274,7 +1280,7 @@ function boot() {
   // Enter in a Decision's note posts: the own answer while "Other…" is open, else the option that asked for the note.
   document.addEventListener("keydown", (ev) => {
     const note = ev.target.closest?.("[atl-ui] .atl-note"), own = note?.parentElement.querySelector(".atl-own:not([hidden]) [data-atl=decideown]");
-    if (!note || ev.key !== "Enter" || !(own || note.dataset.pending)) return;
+    if (!note || ev.isComposing || ev.key !== "Enter" || !(own || note.dataset.pending)) return;
     ev.preventDefault();
     if (own) { own.click(); return; }
     const b = [...note.closest(".atl-card,[atl-ui=decide]").querySelectorAll("[data-atl=decide]")].find((x) => x.dataset.label === note.dataset.pending);
@@ -1282,7 +1288,7 @@ function boot() {
   });
   // Enter in the own-answer field of "Other…" posts it.
   document.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Enter" || !ev.target.matches?.("[atl-ui] .atl-ownans")) return;
+    if (ev.isComposing || ev.key !== "Enter" || !ev.target.matches?.("[atl-ui] .atl-ownans")) return;
     ev.preventDefault();
     ev.target.nextElementSibling.click();
   });

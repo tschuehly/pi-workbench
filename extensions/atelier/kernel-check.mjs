@@ -734,7 +734,75 @@ try {
   await js("(()=>{FileReader.prototype.readAsDataURL=window.__read;return true})()");
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors after the race checks");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing.");
+  // 2.7.1 (Copilot review triage): each check runs on its own, so one run names every fix that is missing.
+  const fails = [];
+  const fixCheck = async (name, fn) => { try { await fn(); console.log(`ok ${name}`); } catch (e) { fails.push(name); console.log(`FAIL ${name}: ${e.message}`); } };
+  const fixes = path.join(dir, "fixes.html");
+  const writeFixes = (pageWip = false) => writeFile(fixes, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Fixes</title>
+<style>body{margin:16px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:24px 0}#box{height:200px;overflow:auto;border:1px solid #999}#edge{position:absolute;right:8px;top:8px;width:40px;margin:0}</style>
+<body${pageWip ? ' atl-wip="Rebuilding the whole Page"' : ""}><div id="box"><div style="height:300px"></div><div atl-key="inner" id="inner" atl-wip="Inner rework">Inside a scroller.</div><div style="height:400px"></div></div>
+<span atl-key="edge" id="edge" atl-wip="A long label that cannot fit beside the right edge of the Page">Edge</span>
+<div atl-key="ime" id="ime" atl-decide="Keep|Redo" atl-note="Redo">Typed with an input method.</div>
+<script type="module" src="atelier.js"></script></body></html>`);
+  await writeFixes();
+  await b("set", "viewport", "1440", "900");
+  await b("open", (await host.open(fixes)).url);
+  await until("document.querySelector('.atl-conn')?.textContent==='live' && document.querySelectorAll('.atl-wip').length===2");
+  const labelOf = (id) => `[...document.querySelectorAll('.atl-wip')].find((l)=>l.textContent===document.getElementById('${id}').getAttribute('atl-wip'))`;
+  await fixCheck("2.7.1-fix1-wip-label-follows-inner-scroll", async () => {
+    await js("document.getElementById('box').scrollTop=120; true");
+    await js("new Promise((r)=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true))))");
+    const at = await js(`(()=>{const l=${labelOf("inner")}.getBoundingClientRect(),r=document.getElementById('inner').getBoundingClientRect();return {label:Math.round(l.top+l.height/2),region:Math.round(r.top)}})()`);
+    assert(Math.abs(at.label - at.region) <= 1, `the label moves with its region inside a scroll container: ${JSON.stringify(at)}`);
+  });
+  await fixCheck("2.7.1-fix4-wip-label-clamped-at-right-edge", async () => {
+    const at = await js(`(()=>{const l=${labelOf("edge")}.getBoundingClientRect(),vw=document.documentElement.clientWidth;return {right:Math.round(l.right),vw,scrollW:document.documentElement.scrollWidth}})()`);
+    assert(at.right <= at.vw && at.scrollW <= at.vw, `a long label at the right edge stays on screen and the Page does not scroll sideways: ${JSON.stringify(at)}`);
+  });
+  await fixCheck("2.7.1-fix5-enter-while-composing-posts-nothing", async () => {
+    const ime = '[atl-ui=decide][aria-label="Decision on ime"]', n = () => readLog(fixes).filter((e) => e.type === "decide").length;
+    const enter = (sel, composing) => js(`document.querySelector('${sel}').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:${composing},bubbles:true,cancelable:true})); true`);
+    await click(`${ime} [data-atl=other]`);
+    await until(`document.activeElement===document.querySelector('${ime} .atl-ownans')`);
+    await b("keyboard", "type", "Halb");
+    await enter(`${ime} .atl-ownans`, true); await sleep(500);
+    assert.equal(n(), 0, "Enter while composing in the own answer posts nothing");
+    await enter(`${ime} .atl-ownans`, false);
+    await until("atelier.state().decisions.find((d)=>d.id==='ime').answer==='Halb'"); // the same event without composing posts
+    await click("[data-atl=decide][data-id=ime][data-label=Redo]");
+    await until(`document.activeElement===document.querySelector('${ime} .atl-note')`);
+    await b("keyboard", "type", "hal");
+    await enter(`${ime} .atl-note`, true); await sleep(500);
+    assert.equal(n(), 1, "Enter while composing in a required note posts nothing");
+  });
+  await fixCheck("2.7.1-fix3-page-wide-wip-locks-decisions-without-key", async () => {
+    await js("window.uf=0; document.addEventListener('atelier:update',()=>uf++); true");
+    await writeFixes(true); host.update(fixes); await until("uf===1");
+    host.agent(fixes, { type: "ask", decision: { id: "orphan", key: "nowhere", question: "Keep the draft?", options: [{ label: "Yes", consequence: "kept" }, { label: "No", consequence: "dropped" }] } });
+    await until("document.querySelectorAll('[atl-ui=orphans] [data-atl=decide]').length===2");
+    const opts = await js("[...document.querySelectorAll('[atl-ui=orphans] [data-atl=decide],[atl-ui=orphans] [data-atl=other]')].map((b)=>[b.disabled,b.title])");
+    assert(opts.length === 3 && opts.every(([off, title]) => off && title === "Rebuilding the whole Page"), `a Decision without a Key is locked by a Page-wide atl-wip: ${JSON.stringify(opts)}`);
+  });
+  await fixCheck("2.7.1-fix2-mark-all-seen-renders-once", async () => {
+    const many = path.join(dir, "many.html");
+    const writeMany = (v) => writeFile(many, `<!doctype html><html lang="de"><meta charset="utf-8"><title>Many</title>
+<style>body{margin:16px;font:11px system-ui;display:grid;grid-template-columns:repeat(8,1fr);gap:4px}[atl-key]{margin:0}</style>
+<body>${Array.from({ length: 64 }, (_, i) => `<p atl-key="m${i}" id="m${i}">${v ? "Die überarbeitete Fassung von Satz" : "Die erste Fassung von Satz"} ${i}, mit ein paar Wörtern mehr.</p>`).join("")}
+<script type="module" src="atelier.js"></script></body></html>`);
+    await writeMany(false);
+    await b("open", (await host.open(many)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live'");
+    await js("window.um=0; document.addEventListener('atelier:update',()=>um++); true"); await sleep(500); // every Key seen once
+    await writeMany(true); host.update(many); await until("um===1");
+    await until("document.querySelectorAll('[atl-ui=rail] [data-atl=chrail]').length===64");
+    // Every render of the marks sets each rail button's title once, so title writes count renders.
+    const got = await js(`new Promise((done)=>{const rail=document.querySelector('[atl-ui=rail]');let total=0;const o=new MutationObserver((l)=>{total+=l.filter((m)=>m.attributeName==='title').length});o.observe(rail,{subtree:true,attributes:true,attributeFilter:['title']});const t0=performance.now();rail.querySelector('.atl-allseen').click();const ms=Math.round(performance.now()-t0),sync=o.takeRecords().filter((m)=>m.attributeName==='title').length;total+=sync;setTimeout(()=>{total+=o.takeRecords().length;o.disconnect();done({sync,total,ms,left:rail.querySelectorAll('[data-atl=chrail]').length})},900)})`);
+    console.log(`2.7.1 Mark all seen on 64 marks ${JSON.stringify(got)}`);
+    assert(got.sync <= 64 && got.total <= 128 && got.left === 0, `Mark all seen renders the marks once, not once per mark: ${JSON.stringify(got)}`);
+  });
+  assert.deepEqual(fails, [], "every 2.7.1 fix holds");
+
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }
