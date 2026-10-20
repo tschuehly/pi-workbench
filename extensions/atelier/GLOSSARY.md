@@ -21,7 +21,7 @@ Page and the agent.
 _Avoid_: core, runtime, SDK, kit
 
 **Comment**:
-A human remark anchored to text, an element or a point on a Page.
+A human remark anchored to text, an element or a point on a Page; it and each reply may carry images.
 _Avoid_: Thread, annotation, note
 
 **Unanchored Comment**:
@@ -29,7 +29,7 @@ A Comment whose anchor can no longer be found on the Page; it stays listed, neve
 _Avoid_: lost comment, orphan
 
 **Decision**:
-A choice the human answers among declared options: one the agent asks, or one a Page declares on a
+A choice the human answers among declared options, or with his own answer ("Other…"): one the agent asks, or one a Page declares on a
 Key, such as a 1–5 score or Confirm/Redo. It may recommend one option, and may require a note for
 some options. Any answer may carry a note and images, which the Event Log keeps beside the Page.
 The human can change the answer at any time; the answer records what it replaced and whether the

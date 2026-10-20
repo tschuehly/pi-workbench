@@ -28,7 +28,8 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
   need a note), `atl-delivery="record|send|immediate"` (default immediate), `atl-material="key"`.
   Options render in a descendant `atl-slot` (e.g. one table cell), else at the end of the element.
   Every Decision lets the human add a note and up to four images (PNG, JPEG, WebP, GIF, 10 MB each);
-  the Delivery names each image's absolute path, so read it.
+  the Delivery names each image's absolute path, so read it. Every Decision also offers "Other…": the human's
+  own answer, delivered as `own answer: "…"`. It answers the Decision like an option; act on its text.
 - Decisions with consequences per option go through `ask`. Recommend one option when you have a
   basis; none for ratings or gates without evidence. The human may change any answer later; a
   change arrives as "X → Y".
@@ -38,7 +39,7 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
   lists the marked regions as `{key, text}`.
 - `atl-request="job"` on a button or form lets the human ask for a typed job; form fields become
   its input. Move it with `status`.
-- Comments go out when saved. `atl-delivery="send"` on a keyed element batches the Comments inside
+- Comments go out when saved and, like replies, may carry up to four images; the Delivery names their paths. `atl-delivery="send"` on a keyed element batches the Comments inside
   it until the human sends them; `atl-group` gives such a batch its own "Send (n)".
 - Prefer static keyed HTML: write rows and cards into the Page file. An Update makes the body match
   the new file, so anything a page script built is gone until the script renders it again; render
@@ -47,7 +48,7 @@ Update whenever the Page file changes. Drive it in a real browser; stopping it d
   keep his state through every later Update; other view state (tabs, filters) the script restores itself.
 - A page script that needs to know what the human answered (progress, "next open", resume) reads
   `atelier.state()`, never Kernel markup: plain data with `decisions` (`id`, `options`, `recommended`,
-  `answer`, `previous`, `note`, `status`, `stale`), `threads`, `requests`, `toAnswer` (ids), `open`,
+  `answer`, `custom` (an own answer), `previous`, `note`, `status`, `stale`), `threads`, `requests`, `toAnswer` (ids), `open`,
   `wip`, `conn`, and `loaded` (true once the Event Log is read). The document event `atelier:state` carries the
   same object in `detail` whenever it changes, including unsent answers; register it before the Kernel loads
   to get the first one.
@@ -111,7 +112,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.6.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.7.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench.
