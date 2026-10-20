@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import UserNotifications
 
 protocol UserNotificationCenter {
@@ -236,8 +236,8 @@ struct WindowRoute {
 struct NotificationWindowCandidate {
     let url: URL?
     let isOnActiveSpace: Bool
-    /// Its page answered that its window holds the Chat among its tabs.
-    var holdsChat = false
+    /// Its page's answer whether its window holds the Chat among its tabs; nil when it did not answer.
+    var holdsChat: Bool? = nil
     /// A live PI WEB page, not the native startup or failure page.
     var showsApplication = true
 }
@@ -252,12 +252,14 @@ enum NotificationRoute: Equatable {
     case newWindow(URL?)
 }
 
-/// Pick the window for a notification's Chat from windows ordered front to back: the one holding the Chat (so its
-/// Space comes forward), else the one on the Space the owner is looking at, else the frontmost. A live page is never
-/// reloaded: a reload would make the page claim its window again and take Chats from their windows.
-func notificationRoute(_ windows: [NotificationWindowCandidate], sessionId: String?, chatURL: URL?) -> NotificationRoute {
-    // ponytail: the shown-URL match ignores the machine (window URLs omit the local one); the page's own answer compares both.
-    let holder = sessionId.flatMap { session in windows.firstIndex { $0.holdsChat || chatSessionId(of: $0.url) == session } }
+/// Pick the window for a notification's Chat from windows ordered front to back: the one whose page confirms it holds
+/// the Chat (so its Space comes forward), else the one on the Space the owner is looking at, else the frontmost.
+/// Only when no page answered does the shown URL stand in: a URL can be stale while a Chat moves between windows.
+/// A live page is never reloaded: a reload would make the page claim its window again and take Chats from their windows.
+func notificationRoute(_ windows: [NotificationWindowCandidate], machineId: String?, sessionId: String?, chatURL: URL?) -> NotificationRoute {
+    let thread = machineId.flatMap { machine in sessionId.map { notificationThreadIdentifier(machineId: machine, sessionId: $0) } }
+    let holder = windows.firstIndex { $0.holdsChat == true }
+        ?? (windows.allSatisfy { $0.holdsChat == nil } ? thread.flatMap { thread in windows.firstIndex { chatThreadIdentifier(of: $0.url) == thread } } : nil)
     guard let index = holder ?? windows.firstIndex(where: \.isOnActiveSpace) ?? (windows.isEmpty ? nil : 0) else { return .newWindow(chatURL) }
     guard let chatURL else { return .focus(index) }
     if windows[index].showsApplication { return .open(index) }
@@ -268,7 +270,7 @@ func notificationRoute(_ windows: [NotificationWindowCandidate], sessionId: Stri
 }
 
 /// Route first so the chosen window is key before activation; activating first would bring forward
-/// whichever window was key, possibly on another Space. Routing finishes once every window answered.
+/// whichever window was key, possibly on another Space. Routing finishes once a page holds the Chat, all answered, or 0.5 s passed.
 func activateFromNotificationClick(
     activateApplication: @escaping () -> Void,
     routeChat: (@escaping () -> Void) -> Void,
@@ -277,5 +279,53 @@ func activateFromNotificationClick(
     routeChat {
         activateApplication()
         complete()
+    }
+}
+
+/// Asks the pages at `indices` whether they hold the Chat and finishes exactly once: at the first yes, once every page
+/// replied, or when `deadline` fires with the answers so far. A page blocked by a JS dialog never replies; a failed
+/// call (nil) is no answer.
+func collectHolderAnswers(
+    _ indices: [Int],
+    ask: (Int, @escaping (Bool?) -> Void) -> Void,
+    deadline: (@escaping () -> Void) -> Void,
+    finish: @escaping ([Int: Bool]) -> Void
+) {
+    var answers: [Int: Bool] = [:], pending = indices.count, finished = false
+    let complete = {
+        guard !finished else { return }
+        finished = true
+        finish(answers)
+    }
+    guard pending > 0 else { complete(); return }
+    for index in indices {
+        ask(index) { held in
+            guard !finished else { return }
+            if let held { answers[index] = held }
+            pending -= 1
+            if held == true || pending == 0 { complete() }
+        }
+    }
+    deadline(complete)
+}
+
+/// Lifts `.moveToActiveSpace` while a notification click switches to a window's Space. Overlapping clicks keep the
+/// behaviour captured by the first, and only the last click's delay restores it.
+struct SpaceSwitchHold {
+    private var original: NSWindow.CollectionBehavior?
+    private var clicks = 0
+
+    mutating func lift(_ current: NSWindow.CollectionBehavior) -> (behavior: NSWindow.CollectionBehavior, click: Int) {
+        let own = original ?? current
+        original = own
+        clicks += 1
+        return (own.subtracting(.moveToActiveSpace), clicks)
+    }
+
+    /// The behaviour to restore when `click`'s delay ends; nil while a later click still waits.
+    mutating func restore(after click: Int) -> NSWindow.CollectionBehavior? {
+        guard click == clicks, let own = original else { return nil }
+        original = nil
+        return own
     }
 }
