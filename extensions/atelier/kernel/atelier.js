@@ -1306,8 +1306,9 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui] textarea:focus,[atl-ui] input:focus{outline:none;border-color:var(--atl-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--atl-accent) 22%,transparent)}
 [atl-ui] [aria-invalid=true]{border-color:var(--atl-warn)}
 [atl-ui] ::placeholder{color:var(--atl-muted);opacity:1}
-.atl-bar,.atl-khead,.atl-actions,.atl-head{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.atl-bar,.atl-khead,.atl-actions,.atl-head{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.atl-c>.atl-actions:empty{display:none}
 .atl-card{border:1px solid var(--atl-line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--atl-bg);display:grid;gap:6px}
+.atl-c{display:grid;gap:6px}.atl-head:empty{display:none}[atl-ui] .atl-c>button{justify-self:start}
 .atl-card.atl-open-item{border-left:3px solid var(--atl-accent)}
 .atl-opts{display:grid;gap:4px}[atl-ui] button.atl-opt{display:grid;justify-items:start;text-align:left;padding:4px 10px}
 [atl-ui] button.atl-rec{border-color:var(--atl-accent);border-style:dashed}
@@ -1350,7 +1351,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(560px,calc(100vw - 8px));max-height:calc(100vh - 8px);overflow:auto;margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
 .atl-tpop{display:grid;gap:4px}.atl-tbar{display:flex;align-items:center;justify-content:space-between;gap:6px}
 [atl-ui] .atl-tbar button{min-height:24px;padding:0 5px;border-color:transparent;background:none;color:var(--atl-muted)}
-.atl-tpop .atl-card{border:0;padding:0;margin:0}.atl-tpop .atl-composer{margin:0}
+.atl-tpop .atl-card{border:0;padding:0;margin:0}.atl-tpop>.atl-slot:empty{display:none}.atl-tpop .atl-composer{margin:0}
 .atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
 ::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
 .atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
