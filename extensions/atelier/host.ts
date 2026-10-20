@@ -17,7 +17,7 @@ const KERNEL_VERSION = "2.6.0";
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
 export const WATCHDOG_MS = 15_000;
-// A Decision's answer may name up to four images, each uploaded on its own (POST /.atelier/image) before the answer
+// A Decision's answer, a Comment or a reply may name up to four images, each uploaded on its own (POST /.atelier/image) before the answer
 // posts, so an event body stays small.
 export const IMAGE_MAX = 10 * 1024 * 1024;
 const IMAGES_MAX = 4;
@@ -28,7 +28,7 @@ type Entry = { seq: number; at: number; origin: string; type: string; [field: st
 export type Message = { customType: string; content: string; display: true; details: { page: string; seqs: number[]; replay: boolean } };
 
 export const logPath = (page: string) => `${page}.events.jsonl`;
-/** Images the human attaches to a Decision's answer live beside the Event Log; the log names them relative to the Page's directory. */
+/** Images the human attaches to a Decision's answer or a Comment live beside the Event Log; the log names them relative to the Page's directory. */
 export const imagesDir = (page: string) => `${page}.images`;
 
 /** The Event Log (143): append-only JSON lines beside the Page. A torn last line is skipped, never fatal. */
@@ -160,12 +160,12 @@ const str = (v: unknown) => typeof v === "string";
 const opt = (ok: (v: any) => boolean) => (v: unknown) => v == null || ok(v);
 const seqNo = (v: unknown) => Number.isInteger(v);
 const ANCHOR = { key: opt(str), ver: opt(str), t: opt(Number.isFinite), quote: opt((q) => str(q.exact) && str(q.prefix) && str(q.suffix)), selector: opt((s) => str(s.sel) && str(s.snap)) };
+const images = opt((v) => Array.isArray(v) && v.length <= IMAGES_MAX && v.every(str));
 const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
-  comment: { ...ANCHOR, text: str, thread: opt(seqNo) },
+  comment: { ...ANCHOR, text: str, thread: opt(seqNo), images },
   // previous: the answer this one changes (155); options and rec: a Page-declared Decision's atl-decide and atl-rec;
   // custom: the human wrote his own answer ("Other…") instead of picking an option.
-  decide: { decision: str, option: str, custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str),
-    images: opt((v) => Array.isArray(v) && v.length <= IMAGES_MAX && v.every(str)) },
+  decide: { decision: str, option: str, custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str), images },
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
   close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str }, send: { key: opt(str) },
@@ -200,7 +200,7 @@ export function storeImage(page: string, bytes: Buffer): { status: number; json:
   return { status: 200, json: { name: `${path.basename(dir)}/${base}` } };
 }
 
-/** A name a decide event may carry: a regular file (no symlink) directly in a real <page>.images/, hash-named, within size, its bytes the type its name says. */
+/** A name a decide or comment event may carry: a regular file (no symlink) directly in a real <page>.images/, hash-named, within size, its bytes the type its name says. */
 function storedImage(page: string, name: string) {
   const dir = imagesDir(page), prefix = `${path.basename(dir)}/`, base = name.slice(prefix.length), ext = IMAGE_NAME.exec(base)?.[1];
   if (!name.startsWith(prefix) || !ext) return false;

@@ -89,7 +89,14 @@ try {
   const look = await js(`(()=>{const s=(q)=>getComputedStyle(document.querySelector(q));const t=s('[atl-ui=composer] textarea'),v=s('[atl-ui=composer] [type=submit]'),c=s('[atl-ui=composer] [data-atl=dismiss]'),l=s('[atl-ui=composer] .atl-label');return [t.backgroundColor,t.borderTopWidth,t.borderTopColor,t.borderTopLeftRadius,t.resize,parseFloat(t.minHeight)>=60,v.backgroundColor,v.color,c.backgroundColor,c.borderTopLeftRadius===v.borderTopLeftRadius&&c.height===v.height,l.color]})()`);
   assert.deepEqual(look, ["rgb(255, 255, 255)", "1px", "rgb(9, 105, 218)", "8px", "vertical", true, "rgb(9, 105, 218)", "rgb(255, 255, 255)", "rgb(255, 255, 255)", true, "rgb(89, 99, 110)"], "composer: page background, accent focus border, 8px radius, accent Save, quiet Cancel, muted label");
   await b("keyboard", "type", "Needs a source.");
+  // 2.7.0: a Comment takes images like a Decision's answer: picked here, stored beside the Page, named in the event.
+  const ONE_PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  const commentShot = path.join(dir, "comment-shot.png"); await writeFile(commentShot, Buffer.from(ONE_PX, "base64"));
+  await b("upload", "[atl-ui=composer] .atl-file", commentShot);
+  await until("document.querySelectorAll('[atl-ui=composer] .atl-attached img').length===1");
   await click("[atl-ui=composer] [type=submit]");
+  await until("document.querySelector('[atl-ui=composer]')===null");
+  assert.match(readLog(page).find((e) => e.type === "comment")?.images?.[0] ?? "", /^page\.html\.images\/[0-9a-f]{16}\.png$/, "the Comment names its stored image");
   // The thread shows as a marker on its Key: a chip titled with the first words of its first message. Nothing is
   // added to the Page's flow.
   const chip = '[atl-ui=pin][data-key=plain] [data-atl=thread]';
@@ -111,6 +118,7 @@ try {
   await sleep(200);
   const msgs = "[...document.querySelectorAll('[atl-ui=thread] .atl-msg')].map(m=>[m.className,m.querySelector('b').textContent])";
   assert.deepEqual(await js(msgs), [["atl-msg atl-you", "You"], ["atl-msg atl-agent", "Agent"]], "whole thread in order, You and Agent distinct");
+  assert.equal(await js("document.querySelectorAll('[atl-ui=thread] .atl-msg .atl-thumbs img').length"), 1, "the thread shows the Comment's image");
   // 2.7.0: the parts of a thread keep a 6px gap (2.6.0 stacked them at 0px), and the box is as even below as above.
   const gaps = await js("(()=>{const p=document.querySelector('[atl-ui=thread]'),r=p.getBoundingClientRect(),k=[...p.querySelectorAll('.atl-c>*')].map((n)=>n.getBoundingClientRect()).filter((b)=>b.height),t=p.querySelector('.atl-tbar').getBoundingClientRect();return {between:k.slice(1).map((b,i)=>Math.round(b.top-k[i].bottom)),top:Math.round(t.top-r.top),bottom:Math.round(r.bottom-k.at(-1).bottom)}})()");
   assert(gaps.between.length >= 2 && gaps.between.every((g) => g === 6) && Math.abs(gaps.top - gaps.bottom) <= 1, `thread parts 6px apart, even top and bottom: ${JSON.stringify(gaps)}`);
@@ -614,7 +622,7 @@ try {
   await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true");
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

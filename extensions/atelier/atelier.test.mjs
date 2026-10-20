@@ -584,3 +584,25 @@ test("Other…: an own answer posts as a custom decide event, is delivered as ow
     assert.equal(derive(readLog(page)).decisions[0].answer.option, "Clear", "undo restores the earlier answer");
   } finally { host.stop(); p.done(); }
 });
+
+test("a Comment and a reply carry images: only stored ones, delivered by absolute path (2.7.0)", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("a screenshot")]);
+    const name = (await upload(host, page, [png]).response).json.name;
+    for (const bad of [[`data:image/png;base64,${png.toString("base64")}`], ["page.html.images/0123456789abcdef.png"], ["../outside.png"], Array(5).fill(name), "page.html.images/x.png", [1]])
+      assert.equal(human({ type: "comment", key: "a", text: "see", images: bad }).status, 400, JSON.stringify(bad));
+    const root = human({ type: "comment", key: "a", text: "this looks off", images: [name] }).json.entry;
+    assert.deepEqual(root.images, [name]);
+    const reply = human({ type: "comment", thread: root.seq, key: "a", text: "and here", images: [name, name] }).json.entry;
+    assert.equal(human({ type: "comment", key: "a", text: "no images", images: [] }).json.entry.images, undefined, "an empty list is dropped");
+    tick(UNDO);
+    host.deliverDue(page);
+    const file = JSON.stringify(path.join(host.root, name));
+    const lines = sent.at(-1).message.content.split("\n");
+    assert.equal(lines.find((l) => l.includes(`#${root.seq} Comment`)).endsWith(`: "this looks off"; image ${file}`), true, lines.join("\n"));
+    assert.equal(lines.find((l) => l.includes(`#${reply.seq} Reply`)).endsWith(`: "and here"; images ${file}, ${file}`), true);
+    assert.match(compose("p", "", [{ seq: 9, type: "comment", text: "t", images: ["data:image/png;base64,AA"] }], []), /Comment on the Page: "t"; image \(kept in the browser only\)$/);
+  } finally { host.stop(); p.done(); }
+});

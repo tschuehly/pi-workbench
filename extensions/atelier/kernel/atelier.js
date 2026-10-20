@@ -12,6 +12,7 @@
 //                              (paste, pick or drop; PNG, JPEG, WebP or GIF up to 10 MB each, at most four); each uploads
 //                              to the host, which stores it in <page>.images/, before the decide event names them in `images`.
 //                              Every Decision also offers "Other…": the human's own answer, posted with `custom: true`.
+//                              Comments and replies take images the same way.
 //     atl-delivery="record|send|immediate" (default immediate); atl-material="key" counts as opened (135)
 //   atl-slot                   inside a Decision: where its options render, e.g. one table cell; else at the end
 //   atl-request="job"          a button or form that asks the agent for a typed job; form fields become its input (130)
@@ -194,15 +195,18 @@ export function threadLayout(msgs, expanded = false, closed = false) {
 }
 
 /** One line per human event, numbered like the Page's markers (pi-artifacts `[annotationId]`, Plannotator numbering). */
+// Images name the files the host stored, so the agent can read them; one only a browser holds says so.
+const imagesText = (e, file) => e.images?.length ? `image${e.images.length > 1 ? "s" : ""} ${e.images.map((x) => x.startsWith("data:") ? "(kept in the browser only)" : quote(file ? file(x) : x)).join(", ")}` : "";
 export function describe(e, entries, excerpt, file) {
   const ask = (id) => [...entries].reverse().find((x) => x.type === "ask" && x.decision.id === id)?.decision;
+  const withImages = (line) => e.images?.length ? `${line}; ${imagesText(e, file)}` : line;
   switch (e.type) {
     case "comment": {
-      if (e.thread === undefined) return `#${e.seq} Comment ${at(e, excerpt)}: ${quote(e.text)}`;
+      if (e.thread === undefined) return withImages(`#${e.seq} Comment ${at(e, excerpt)}: ${quote(e.text)}`);
       // A reply carries the thread so far, oldest first, so it reads without the Page.
       const earlier = derive(entries).threads.find((t) => t.msgs.some((m) => m.seq === e.seq))?.msgs.filter((m) => m.seq < e.seq) ?? [];
       const context = earlier.map((m) => `${m.origin === "agent" ? "Agent" : "You"}: ${quote(clip(m.text, 200))}`).join(" · ");
-      return `#${e.seq} Reply in thread #${e.thread}${context ? ` (${context})` : ""}: ${quote(e.text)}`;
+      return withImages(`#${e.seq} Reply in thread #${e.thread}${context ? ` (${context})` : ""}: ${quote(e.text)}`);
     }
     case "decide": {
       const d = ask(e.decision) ?? (e.options ? declaredDecision(e.decision, e.options, e.rec) : undefined);
@@ -214,9 +218,7 @@ export function describe(e, entries, excerpt, file) {
       // "Other…": none of the options; the human wrote his own answer.
       const option = e.custom ? `own answer: ${quote(e.option)}` : e.option;
       const choice = e.previous != null ? `${e.previous} → ${option}` : option;
-      // Images name the files the host stored, so the agent can read them; one only a browser holds says so.
-      const images = e.images?.length ? `image${e.images.length > 1 ? "s" : ""} ${e.images.map((x) => x.startsWith("data:") ? "(kept in the browser only)" : quote(file ? file(x) : x)).join(", ")}` : "";
-      return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", images].filter(Boolean).join("; ")}`;
+      return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", imagesText(e, file)].filter(Boolean).join("; ")}`;
     }
     case "request": return `#${e.seq} Request ${quote(e.job)} ${at(e, excerpt)}${e.input && Object.keys(e.input).length ? ` with input ${JSON.stringify(e.input)}` : ""}`;
     case "rework": return `#${e.seq} Rework requested for Request #${e.target}${e.note ? `: ${quote(e.note)}` : ""}`;
@@ -299,9 +301,11 @@ function boot() {
   // still require the note. The host checks the bytes again and stores the images beside the Page.
   const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"], IMAGE_MAX = 10 * 1024 * 1024, IMAGES_MAX = 4;
   const EXTRA = `<button type="button" data-atl="addnote" class="atl-addnote" aria-expanded="false" aria-label="Add a note or image" title="Add a note or image">${icon("paperclip")}</button><span class="atl-extra" hidden><span class="atl-own" hidden><input class="atl-ownans" aria-label="Your own answer" placeholder="Your own answer"><button type="button" data-atl="decideown" class="atl-primary">${icon("check")} Answer</button></span><input class="atl-note" aria-label="Note" placeholder="Optional note"><button type="button" data-atl="pickimg" aria-label="Attach an image" title="Attach an image; paste or drop one too">${icon("image")}</button><input type="file" class="atl-file" accept="${IMAGE_TYPES.join(",")}" multiple hidden><span class="atl-attached"></span></span>`;
+  // A Comment or reply takes images the same way (2.7.0): its box carries its own .atl-extra without the note.
+  const IMAGES = `<span class="atl-extra atl-cimg"><button type="button" data-atl="pickimg" aria-label="Attach an image" title="Attach an image; paste or drop one too">${icon("image")}</button><input type="file" class="atl-file" accept="${IMAGE_TYPES.join(",")}" multiple hidden><span class="atl-attached"></span></span>`;
   // "Other…": the human's own answer beside the options, on every Decision (2.7.0).
   const otherHtml = (d, lock) => `<button type="button" data-atl="other" data-id="${esc(d.id)}" class="atl-other${d.answer?.custom ? " atl-chosen" : ""}" aria-pressed="${!!d.answer?.custom}"${locked(lock)}>Other…</button>`;
-  const attached = new WeakMap(); // .atl-extra -> data: URLs of the images waiting for an answer
+  const attached = new WeakMap(); // .atl-extra -> data: URLs of the images waiting for an answer or a Comment
   const imgSrc = (x) => x.startsWith("data:") ? x : x.split("/").map(encodeURIComponent).join("/"); // stored beside the Page
   const thumbs = (list, removable) => list.map((x, i) => `<span class="atl-thumb"><a href="${esc(imgSrc(x))}" target="_blank" rel="noopener"><img src="${esc(imgSrc(x))}" alt="Image ${i + 1}"></a>${removable ? `<button type="button" data-atl="dropimg" data-i="${i}" aria-label="Remove image ${i + 1}">${icon("x")}</button>` : ""}</span>`).join("");
   const readKey = `atelier-read:${page}`;
@@ -415,15 +419,15 @@ function boot() {
 
   // Each image goes to the host on its own (POST /.atelier/image) before the answer that names it. null: one was
   // refused or unreachable, so nothing posts. Only a Page with no server (file://) keeps them in this browser.
-  async function upload(images) {
+  async function upload(images, kept = "Your answer did not change.") {
     if (!online) return images;
     const names = [];
     for (const x of images) {
       let r;
       try { r = await fetch(`/.atelier/image${q}`, { method: "POST", body: Uint8Array.from(atob(x.slice(x.indexOf(",") + 1)), (c) => c.charCodeAt(0)) }); }
-      catch { flash("Could not upload the image. Your answer did not change."); return null; }
+      catch { flash(`Could not upload the image. ${kept}`); return null; }
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { flash(`${j.error ?? "Image refused."} Your answer did not change.`); return null; }
+      if (!r.ok) { flash(`${j.error ?? "Image refused."} ${kept}`); return null; }
       names.push(j.name);
     }
     return names;
@@ -557,7 +561,7 @@ function boot() {
   // inPop: the thread opened from its marker, which shows its messages even when closed and needs no Show.
   function threadHtml(t, st, inPop = false) {
     const unread = unreadIn(t);
-    const msg = (m) => `<div class="atl-msg ${m.origin === "agent" ? "atl-agent" : "atl-you"}"><div class="atl-who"><b>${m.origin === "agent" ? "Agent" : "You"}</b> <span class="atl-dim">#${m.seq}${m.origin === "human" ? ` · ${esc(statusText(st, m))}` : ""}</span></div><div>${esc(m.text)}</div></div>`;
+    const msg = (m) => `<div class="atl-msg ${m.origin === "agent" ? "atl-agent" : "atl-you"}"><div class="atl-who"><b>${m.origin === "agent" ? "Agent" : "You"}</b> <span class="atl-dim">#${m.seq}${m.origin === "human" ? ` · ${esc(statusText(st, m))}` : ""}</span></div><div class="atl-mt">${esc(m.text)}</div>${m.images?.length ? `<div class="atl-thumbs">${thumbs(m.images)}</div>` : ""}</div>`;
     const open = expanded.has(t.root.seq);
     const { head, folded, tail } = threadLayout(t.msgs, open, t.closed && !inPop);
     if (t.closed && !open && !inPop) { // a closed thread collapses to its head; its messages open on demand
@@ -1057,7 +1061,7 @@ function boot() {
   function openComposer(spec, { at, inside, from, pinKey } = {}) {
     closeComposer();
     if (!inside) closeThread(false);
-    const node = h(`<form atl-ui="composer" class="atl-composer${inside ? "" : " atl-pop"}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="5" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button></div></form>`);
+    const node = h(`<form atl-ui="composer" class="atl-composer${inside ? "" : " atl-pop"}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="5" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button>${spec.kind === "rework" ? "" : IMAGES}</div></form>`);
     composer = { spec, node, at, from, pinKey, inline: !!inside };
     if (inside) inside.append(node);
     else { document.documentElement.append(node); placePops(); }
@@ -1065,12 +1069,17 @@ function boot() {
     node.querySelector("textarea").focus({ preventScroll: true });
     node.addEventListener("submit", async (ev) => {
       ev.preventDefault();
-      const text = node.querySelector("textarea").value.trim();
-      if (!text) return;
-      closeComposer(true);
+      const text = node.querySelector("textarea").value.trim(), extra = node.querySelector(".atl-extra");
+      if (!text || node.dataset.busy) return;
+      // Images upload first; a refused one keeps the box open with the text and images as typed.
+      node.dataset.busy = "1";
+      const images = (extra && attached.get(extra)) ?? [], names = images.length ? await upload(images, "Your Comment was not saved.") : [];
+      delete node.dataset.busy;
+      if (!names) return;
+      if (composer?.node === node) closeComposer(true); else if (!node.isConnected) return; // cancelled during the upload
       // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
       const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
-      await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery });
+      await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery, images: names.length ? names : undefined });
     });
   }
   const mediaTime = (el) => { const m = el?.querySelector("video,audio"); return m ? Math.round(m.currentTime * 10) / 10 : undefined; };
@@ -1270,6 +1279,7 @@ function boot() {
     const ownRow = extra.querySelector(".atl-own");
     if (ownRow) ownRow.hidden = !own;
     const button = extra.previousElementSibling;
+    if (button?.dataset.atl !== "addnote") return; // a Comment box's images
     button.setAttribute("aria-expanded", String(open));
     button.classList.toggle("atl-has", !open && !!(extra.querySelector(".atl-note").value.trim() || attached.get(extra)?.length)); // closed, still attached
   }
@@ -1285,7 +1295,7 @@ function boot() {
     }
     openExtra(extra); renderAttached(extra);
   }
-  const extraAt = (t) => t?.closest?.(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra");
+  const extraAt = (t) => t?.closest?.(".atl-composer")?.querySelector(".atl-extra") ?? t?.closest?.(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra");
   const imageFiles = (dt) => [...(dt?.files ?? [])];
   document.addEventListener("change", (ev) => { if (ev.target.matches?.("[atl-ui] .atl-file")) { addImages(ev.target.closest(".atl-extra"), [...ev.target.files]); ev.target.value = ""; } });
   document.addEventListener("paste", (ev) => { const extra = extraAt(ev.target), files = imageFiles(ev.clipboardData); if (extra && files.length) { ev.preventDefault(); addImages(extra, files); } });
@@ -1358,7 +1368,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-dextra{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
 [atl-ui] button.atl-addnote{min-height:24px;padding:0 5px;border-color:transparent;background:none;color:var(--atl-muted)}
 [atl-ui] button.atl-addnote[aria-expanded=true],[atl-ui] button.atl-addnote.atl-has{color:var(--atl-accent)}
-.atl-extra{display:flex;flex:1 1 100%;flex-wrap:wrap;gap:4px;align-items:center}.atl-extra .atl-note{width:auto;flex:1 1 14em}
+.atl-extra{display:flex;flex:1 1 100%;flex-wrap:wrap;gap:4px;align-items:center}.atl-extra .atl-note{width:auto;flex:1 1 14em}.atl-composer .atl-extra{flex:1 1 auto}
 .atl-thumbs,.atl-attached{display:flex;flex-wrap:wrap;gap:6px}.atl-attached:empty{display:none}
 .atl-thumb{position:relative;display:inline-block}.atl-thumb img{display:block;height:48px;max-width:96px;object-fit:cover;border:1px solid var(--atl-line);border-radius:4px}
 [atl-ui] .atl-thumb button{position:absolute;top:-6px;right:-6px;min-height:0;width:18px;height:18px;padding:0;justify-content:center;border-radius:50%}
@@ -1382,7 +1392,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-warn,.atl-tag.atl-warn{color:var(--atl-warn)}.atl-tag.atl-new{background:var(--atl-accent);border-color:var(--atl-accent);color:#fff}
 .atl-dim,.atl-label{color:var(--atl-muted);font-size:12px}
 .atl-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-.atl-msg{border:1px solid var(--atl-line);border-radius:6px;padding:5px 8px;background:var(--atl-bg)}.atl-msg>div:last-child{white-space:pre-wrap;overflow-wrap:anywhere}
+.atl-msg{border:1px solid var(--atl-line);border-radius:6px;padding:5px 8px;background:var(--atl-bg)}.atl-msg>.atl-mt{white-space:pre-wrap;overflow-wrap:anywhere}.atl-msg>.atl-thumbs{margin-top:4px}
 .atl-agent{background:color-mix(in srgb,var(--atl-accent) 7%,var(--atl-bg));border-color:color-mix(in srgb,var(--atl-accent) 28%,var(--atl-line))}.atl-agent .atl-who b{color:var(--atl-accent)}.atl-who{font-size:12px}
 [atl-ui] button.atl-earlier{justify-self:start;min-height:22px;font-size:12px;color:var(--atl-muted);border-style:dashed}
 .atl-quote{font-style:italic;border-left:3px solid var(--atl-warn);padding-left:6px}
