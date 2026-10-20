@@ -89,7 +89,14 @@ try {
   const look = await js(`(()=>{const s=(q)=>getComputedStyle(document.querySelector(q));const t=s('[atl-ui=composer] textarea'),v=s('[atl-ui=composer] [type=submit]'),c=s('[atl-ui=composer] [data-atl=dismiss]'),l=s('[atl-ui=composer] .atl-label');return [t.backgroundColor,t.borderTopWidth,t.borderTopColor,t.borderTopLeftRadius,t.resize,parseFloat(t.minHeight)>=60,v.backgroundColor,v.color,c.backgroundColor,c.borderTopLeftRadius===v.borderTopLeftRadius&&c.height===v.height,l.color]})()`);
   assert.deepEqual(look, ["rgb(255, 255, 255)", "1px", "rgb(9, 105, 218)", "8px", "vertical", true, "rgb(9, 105, 218)", "rgb(255, 255, 255)", "rgb(255, 255, 255)", true, "rgb(89, 99, 110)"], "composer: page background, accent focus border, 8px radius, accent Save, quiet Cancel, muted label");
   await b("keyboard", "type", "Needs a source.");
+  // 2.7.0: a Comment takes images like a Decision's answer: picked here, stored beside the Page, named in the event.
+  const ONE_PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  const commentShot = path.join(dir, "comment-shot.png"); await writeFile(commentShot, Buffer.from(ONE_PX, "base64"));
+  await b("upload", "[atl-ui=composer] .atl-file", commentShot);
+  await until("document.querySelectorAll('[atl-ui=composer] .atl-attached img').length===1");
   await click("[atl-ui=composer] [type=submit]");
+  await until("document.querySelector('[atl-ui=composer]')===null");
+  assert.match(readLog(page).find((e) => e.type === "comment")?.images?.[0] ?? "", /^page\.html\.images\/[0-9a-f]{16}\.png$/, "the Comment names its stored image");
   // The thread shows as a marker on its Key: a chip titled with the first words of its first message. Nothing is
   // added to the Page's flow.
   const chip = '[atl-ui=pin][data-key=plain] [data-atl=thread]';
@@ -111,6 +118,10 @@ try {
   await sleep(200);
   const msgs = "[...document.querySelectorAll('[atl-ui=thread] .atl-msg')].map(m=>[m.className,m.querySelector('b').textContent])";
   assert.deepEqual(await js(msgs), [["atl-msg atl-you", "You"], ["atl-msg atl-agent", "Agent"]], "whole thread in order, You and Agent distinct");
+  assert.equal(await js("document.querySelectorAll('[atl-ui=thread] .atl-msg .atl-thumbs img').length"), 1, "the thread shows the Comment's image");
+  // 2.7.0: the parts of a thread keep a 6px gap (2.6.0 stacked them at 0px), and the box is as even below as above.
+  const gaps = await js("(()=>{const p=document.querySelector('[atl-ui=thread]'),r=p.getBoundingClientRect(),k=[...p.querySelectorAll('.atl-c>*')].map((n)=>n.getBoundingClientRect()).filter((b)=>b.height),t=p.querySelector('.atl-tbar').getBoundingClientRect();return {between:k.slice(1).map((b,i)=>Math.round(b.top-k[i].bottom)),top:Math.round(t.top-r.top),bottom:Math.round(r.bottom-k.at(-1).bottom)}})()");
+  assert(gaps.between.length >= 2 && gaps.between.every((g) => g === 6) && Math.abs(gaps.top - gaps.bottom) <= 1, `thread parts 6px apart, even top and bottom: ${JSON.stringify(gaps)}`);
   const tp = await js("(()=>{const p=document.querySelector('[atl-ui=thread]'),r=p.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,outside:p.parentElement===document.documentElement,role:p.getAttribute('role'),vh:innerHeight,y:scrollY}})()");
   assert(tp.outside && tp.role === "dialog" && tp.y === yThread && tp.top >= 0 && tp.bottom <= tp.vh && (Math.abs(tp.top - chipBox.y - chipBox.h) <= 12 || Math.abs(chipBox.y - tp.bottom) <= 12) && tp.left <= chipBox.right && tp.right >= chipBox.x, `the thread floats beside its marker: ${JSON.stringify({ tp, chipBox, yThread })}`);
   // Esc closes it, focus returns to the marker, and the reply now counts as read.
@@ -196,11 +207,12 @@ try {
   await choose("4"); await choose("5");
   assert.deepEqual(decides().map((e) => [e.decision, e.option, e.previous, e.options, e.ver]), [["run/turn-1", "3", undefined, "1|2|3|4|5", "v1"], ["run/turn-1", "4", "3", "1|2|3|4|5", "v1"], ["run/turn-1", "5", "3", "1|2|3|4|5", "v1"]]);
   assert.deepEqual(readLog(page).filter((e) => e.type === "undo" && decides().some((d) => d.seq === e.target)).map((e) => e.target), [decides()[1].seq], "the unsent 4 is undone");
-  assert.match(await js("document.querySelector('[atl-ui=decide] .atl-dstate').textContent"), /Your answer: 5 · changed from 3/);
+  assert.equal(await js("document.querySelector('[atl-ui=decide] .atl-dstate .atl-receipt .atl-ans').textContent"), "Your answer: 5");
+  assert.match(await js("document.querySelector('[atl-ui=decide] .atl-dstate .atl-receipt .atl-dim').textContent"), /^changed from 3 · /, "the answer box: answer, then its status line");
   assert.match(await js("document.querySelector('.atl-bar').textContent"), /2 to answer/);
   // k-state-hook: Pages read Kernel state through window.atelier and the atelier:state event, not Kernel markup.
   const turn1 = "(s)=>s.decisions.find((d)=>d.id==='run/turn-1')";
-  assert.deepEqual(await js(`(${turn1})(atelier.state())`), { id: "run/turn-1", key: "run/turn-1", declared: true, options: ["1", "2", "3", "4", "5"], recommended: null, answer: "5", previous: "3", note: null, images: [], status: "pending", stale: false, opened: false });
+  assert.deepEqual(await js(`(${turn1})(atelier.state())`), { id: "run/turn-1", key: "run/turn-1", declared: true, options: ["1", "2", "3", "4", "5"], recommended: null, answer: "5", custom: false, previous: "3", note: null, images: [], status: "pending", stale: false, opened: false });
   assert.equal(await js(`states.at(-1).loaded && (${turn1})(states.at(-1)).answer`), "5", "the event carries the new state");
   assert.deepEqual(await js("[states[0].loaded, states.some((s)=>s.toAnswer.length===3), atelier.state().toAnswer]"), [false, true, ["run/turn-2", "row-a"]]);
 
@@ -347,6 +359,29 @@ try {
   await click(`${card} [data-atl=decide][data-label=No]`);
   await until("atelier.state().decisions.find((d)=>d.id==='ask-1').answer==='No'");
   assert.equal(decides().at(-1).note, "only the intro");
+
+  // 2.7.0: every Decision offers "Other…", the human's own answer, by keyboard too; it posts with custom: true, shows in
+  // the answer box below the options, and edits like any answer.
+  await js(`document.querySelector('${card} [data-atl=other]').focus(); true`);
+  await b("press", "Enter");
+  await until(`document.activeElement===document.querySelector('${card} .atl-ownans')`);
+  await b("keyboard", "type", "Only the second paragraph");
+  await b("press", "Enter");
+  await until("atelier.state().decisions.find((d)=>d.id==='ask-1').custom===true");
+  assert.deepEqual((({ option, custom, previous, note }) => ({ option, custom, previous, note }))(decides().at(-1)), { option: "Only the second paragraph", custom: true, previous: undefined, note: "only the intro" }, "an own answer replacing the unsent No replaces it and keeps its note");
+  assert.deepEqual(await js(`[document.querySelector('${card} .atl-receipt .atl-ans').textContent, document.querySelector('${card} .atl-receipt .atl-rnote').textContent, document.querySelector('${card} [data-atl=other]').classList.contains('atl-chosen')]`), ["Your own answer: Only the second paragraph", "only the intro", true]);
+  const rowOther = '[aria-label="Decision on row-a"]';
+  await js(`document.querySelector('${rowOther}').scrollIntoView({block:'center'}); true`);
+  await click(`${rowOther} [data-atl=other]`);
+  await until(`document.activeElement===document.querySelector('${rowOther} .atl-ownans')`);
+  await b("keyboard", "type", "Merge with row B");
+  await click(`${rowOther} [data-atl=decideown]`);
+  await until("atelier.state().decisions.find((d)=>d.id==='row-a').answer==='Merge with row B'");
+  assert.deepEqual((({ option, custom, options }) => ({ option, custom, options }))(decides().at(-1)), { option: "Merge with row B", custom: true, options: "Keep|Drop" });
+  const below = await js(`(()=>{const o=[...document.querySelectorAll('${rowOther} .atl-dopts button')].map((b)=>b.getBoundingClientRect().bottom),r=document.querySelector('${rowOther} .atl-receipt').getBoundingClientRect(),s=getComputedStyle(document.querySelector('${rowOther} .atl-receipt'));return r.top>=Math.max(...o)&&s.borderTopStyle==='solid'})()`);
+  assert.equal(below, true, "the answer box sits below the options");
+  await sleep(3200); host.deliverDue(page);
+  assert.match(sent.join("\n"), /Decision row-a: own answer: "Merge with row B"/, "delivered as the human's own answer");
 
   if (process.argv[2]) await b("screenshot", process.argv[2]);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
@@ -587,7 +622,119 @@ try {
   await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true");
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform.");
+  // 2.7.0 review blockers (Sol, PR #10): Other… after an abandoned required note posts the own answer on Enter; an image
+  // still being read when an option or Save is clicked goes along; a Comment box is locked while it saves, so what posts
+  // is what it shows.
+  const races = path.join(dir, "races.html");
+  await writeFile(races, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Races</title>
+<style>body{margin:16px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:24px 0}</style>
+<body><div atl-key="redo" id="redo" atl-decide="Keep|Redo" atl-note="Redo">Redo needs a note.</div><div atl-key="pic" id="pic" atl-decide="Ship|Hold">A picture.</div><div atl-key="lock" id="lock" atl-decide="Ship|Hold">Locked while saving.</div><p atl-key="c" id="c">Comment here.</p>
+<script type="module" src="atelier.js"></script></body></html>`);
+  await b("set", "viewport", "1440", "900");
+  await b("open", (await host.open(races)).url);
+  await until("document.querySelector('.atl-conn')?.textContent==='live'");
+  const rlog = (type) => readLog(races).filter((e) => e.type === type);
+  const racePng = path.join(dir, "race.png"); await writeFile(racePng, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64"));
+  { // blocker1-other-after-required-note
+    const redo = '[atl-ui=decide][aria-label="Decision on redo"]';
+    await click("[data-atl=decide][data-id=redo][data-label=Redo]");
+    await until(`document.activeElement===document.querySelector('${redo} .atl-note')`);
+    await click(`${redo} [data-atl=other]`);
+    await until(`document.activeElement===document.querySelector('${redo} .atl-ownans')`);
+    await b("keyboard", "type", "Split it");
+    await click(`${redo} .atl-note`);
+    await b("keyboard", "type", "two scenes"); await b("press", "Enter");
+    await until("atelier.state().decisions.find((d)=>d.id==='redo').answer!==null");
+    assert.deepEqual((({ option, custom, note }) => ({ option, custom, note }))(rlog("decide").at(-1)), { option: "Split it", custom: true, note: "two scenes" }, "Enter in the note after Other… posts the own answer, not the abandoned Redo");
+  }
+  await js("(()=>{const read=FileReader.prototype.readAsDataURL;window.__read=read;FileReader.prototype.readAsDataURL=function(f){setTimeout(()=>read.call(this,f),800)};return true})()");
+  { // blocker3-decision-waits-for-image-read
+    await b("upload", '[atl-ui=decide][aria-label="Decision on pic"] .atl-file', racePng);
+    await click("[data-atl=decide][data-id=pic][data-label=Ship]");
+    await until("atelier.state().decisions.find((d)=>d.id==='pic').answer==='Ship'");
+    await sleep(1200);
+    assert.equal(rlog("decide").at(-1).images?.length, 1, "an image still being read when the option is clicked goes with the answer");
+  }
+  { // blocker3-comment-waits-for-image-read
+    await b("hover", "#c"); await sleep(300);
+    await click('[atl-ui=pin][data-key="c"] .atl-add');
+    await until("document.activeElement?.matches('[atl-ui=composer] textarea')");
+    await b("keyboard", "type", "With a picture");
+    await b("upload", "[atl-ui=composer] .atl-file", racePng);
+    await click("[atl-ui=composer] [type=submit]");
+    await until("document.querySelector('[atl-ui=composer]')===null");
+    await sleep(1200);
+    assert.equal(rlog("comment").at(-1)?.images?.length, 1, "an image still being read when Save is clicked goes with the Comment");
+  }
+  await js("(()=>{FileReader.prototype.readAsDataURL=window.__read;return true})()");
+  { // blocker2-comment-locked-while-saving
+    await b("hover", "#c"); await sleep(300);
+    await click('[atl-ui=pin][data-key="c"] .atl-add');
+    await until("document.activeElement?.matches('[atl-ui=composer] textarea')");
+    await b("keyboard", "type", "Old text");
+    await b("upload", "[atl-ui=composer] .atl-file", racePng);
+    await until("document.querySelectorAll('[atl-ui=composer] .atl-attached img').length===1");
+    await js("(()=>{let release;window.__gate=new Promise((r)=>release=r);window.__release=release;window.__fetch=window.fetch;window.fetch=async(u,o)=>{if(String(u).includes('/.atelier/image'))await window.__gate;return window.__fetch(u,o)};return true})()");
+    const before = rlog("comment").length;
+    await click("[atl-ui=composer] [type=submit]"); await sleep(200);
+    await click("[atl-ui=composer] textarea"); await b("keyboard", "type", " edited");
+    await click("[atl-ui=composer] [data-atl=dropimg]"); await sleep(200);
+    const shown = await js("({text:document.querySelector('[atl-ui=composer] textarea').value.trim(),images:document.querySelectorAll('[atl-ui=composer] .atl-attached img').length,cancel:!document.querySelector('[atl-ui=composer] [data-atl=dismiss]').disabled})");
+    await js("(()=>{window.__release();return true})()");
+    await until("document.querySelector('[atl-ui=composer]')===null");
+    await sleep(300);
+    await js("(()=>{window.fetch=window.__fetch;return true})()");
+    const posted = rlog("comment").slice(before).at(-1);
+    assert.deepEqual({ text: posted?.text, images: posted?.images?.length ?? 0, cancel: true }, shown, "what posts is what the box showed while it saved");
+  }
+  // Second review round (Sol, PR #10): a Decision is locked while its images upload; a failed image read posts nothing.
+  const lk = '[atl-ui=decide][aria-label="Decision on lock"]';
+  { // review2-blocker1-decision-locked-while-uploading
+    await click(`${lk} [data-atl=addnote]`);
+    await b("upload", `${lk} .atl-file`, racePng);
+    await until(`document.querySelectorAll('${lk} .atl-attached img').length===1`);
+    await click(`${lk} .atl-note`); await b("keyboard", "type", "Before");
+    await js("(()=>{let release;window.__gate=new Promise((r)=>release=r);window.__release=release;window.__fetch=window.fetch;window.fetch=async(u,o)=>{if(String(u).includes('/.atelier/image'))await window.__gate;return window.__fetch(u,o)};return true})()");
+    const before = rlog("decide").length;
+    await click("[data-atl=decide][data-id=lock][data-label=Ship]"); await sleep(200);
+    await click(`${lk} .atl-note`); await b("keyboard", "type", " after"); await sleep(200);
+    const shown = await js(`document.querySelector('${lk} .atl-note').value.trim()`);
+    await js("(()=>{window.__release();return true})()");
+    await until("atelier.state().decisions.find((d)=>d.id==='lock').answer==='Ship'");
+    await sleep(300);
+    await js("(()=>{window.fetch=window.__fetch;return true})()");
+    const posted = rlog("decide").slice(before).at(-1);
+    assert.deepEqual({ note: posted?.note, images: posted?.images?.length }, { note: shown, images: 1 }, "a Decision's note is locked while its image uploads: what posts is what it showed");
+  }
+  // A read that fails (the file was deleted after it was picked) posts nothing, says so, and keeps the draft.
+  const failReads = () => js("(()=>{let release;window.__rgate=new Promise((r)=>release=r);window.__rrelease=release;FileReader.prototype.readAsDataURL=function(){window.__rgate.then(()=>this.onerror?.(new ProgressEvent('error')))};return true})()");
+  const toldUnread = "[...document.querySelectorAll('.atl-toast')].some((t)=>/could not be read/.test(t.textContent))";
+  { // review2-blocker2-comment-failed-read-posts-nothing
+    await failReads();
+    await b("hover", "#c"); await sleep(300);
+    await click('[atl-ui=pin][data-key="c"] .atl-add');
+    await until("document.activeElement?.matches('[atl-ui=composer] textarea')");
+    await b("keyboard", "type", "Lost picture");
+    await b("upload", "[atl-ui=composer] .atl-file", racePng);
+    const before = rlog("comment").length;
+    await click("[atl-ui=composer] [type=submit]"); await sleep(200);
+    await js("(()=>{window.__rrelease();return true})()"); await sleep(500);
+    const after = await js(`({text:document.querySelector('[atl-ui=composer] textarea')?.value,told:${toldUnread},focus:document.activeElement?.matches('[atl-ui=composer] textarea')??false})`);
+    assert.deepEqual({ posted: rlog("comment").length - before, text: after.text, told: after.told, focus: after.focus }, { posted: 0, text: "Lost picture", told: true, focus: true }, "a failed image read posts no Comment, says so, keeps the draft and its focus");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true");
+  }
+  { // review2-blocker2-decision-failed-read-posts-nothing
+    await failReads();
+    await b("upload", `${lk} .atl-file`, racePng);
+    const before = rlog("decide").length;
+    await click("[data-atl=decide][data-id=lock][data-label=Hold]"); await sleep(200);
+    await js("(()=>{window.__rrelease();return true})()"); await sleep(500);
+    assert.deepEqual({ posted: rlog("decide").length - before, answer: await js("atelier.state().decisions.find((d)=>d.id==='lock').answer"), told: await js(toldUnread) }, { posted: 0, answer: "Ship", told: true }, "a failed image read posts no answer and says so");
+  }
+  await js("(()=>{FileReader.prototype.readAsDataURL=window.__read;return true})()");
+  assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors after the race checks");
+
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }
