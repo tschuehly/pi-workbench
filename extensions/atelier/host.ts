@@ -162,8 +162,9 @@ const seqNo = (v: unknown) => Number.isInteger(v);
 const ANCHOR = { key: opt(str), ver: opt(str), t: opt(Number.isFinite), quote: opt((q) => str(q.exact) && str(q.prefix) && str(q.suffix)), selector: opt((s) => str(s.sel) && str(s.snap)) };
 const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   comment: { ...ANCHOR, text: str, thread: opt(seqNo) },
-  // previous: the answer this one changes (155); options and rec: a Page-declared Decision's atl-decide and atl-rec.
-  decide: { decision: str, option: str, previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str),
+  // previous: the answer this one changes (155); options and rec: a Page-declared Decision's atl-decide and atl-rec;
+  // custom: the human wrote his own answer ("Other…") instead of picking an option.
+  decide: { decision: str, option: str, custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str),
     images: opt((v) => Array.isArray(v) && v.length <= IMAGES_MAX && v.every(str)) },
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
@@ -315,6 +316,7 @@ export function createHost(options: {
       if (bad !== undefined) return { status: 400, json: { error: `No stored image ${bad}; upload it first.` } };
       if (!(event.images as string[]).length) delete event.images;
     }
+    if (body.type === "decide" && body.custom && !body.option.trim()) return { status: 400, json: { error: "An own answer needs its text." } };
     const asked = body.delivery;
     if (body.type === "comment" && body.thread !== undefined && !readLog(page).some((e) => e.seq === body.thread && e.type === "comment")) return { status: 400, json: { error: `No Comment #${body.thread} to reply to.` } };
     if (body.type === "undo") {

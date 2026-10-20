@@ -10,7 +10,8 @@
 //     atl-rec="A"              the recommended option
 //     atl-note="Redo"          options that need a note before they post. Any answer may carry a note and images
 //                              (paste, pick or drop; PNG, JPEG, WebP or GIF up to 10 MB each, at most four); each uploads
-//                              to the host, which stores it in <page>.images/, before the decide event names them in `images`
+//                              to the host, which stores it in <page>.images/, before the decide event names them in `images`.
+//                              Every Decision also offers "Other…": the human's own answer, posted with `custom: true`.
 //     atl-delivery="record|send|immediate" (default immediate); atl-material="key" counts as opened (135)
 //   atl-slot                   inside a Decision: where its options render, e.g. one table cell; else at the end
 //   atl-request="job"          a button or form that asks the agent for a typed job; form fields become its input (130)
@@ -139,7 +140,7 @@ export function publicState(st, { conn = "no session", loaded = false, wip = [] 
     conn, loaded, wip, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
     decisions: st.decisions.map((d) => ({
       id: d.id, key: d.key ?? null, declared: !!d.declared, options: d.options.map((o) => o.label), recommended: d.options.find((o) => o.recommended)?.label ?? null,
-      answer: d.answer?.option ?? null, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, opened: !!d.opened,
+      answer: d.answer?.option ?? null, custom: !!d.answer?.custom, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, opened: !!d.opened,
     })),
     threads: st.threads.map((t) => ({ seq: t.root.seq, key: t.root.key ?? null, closed: t.closed, stale: !!t.stale, messages: t.msgs.length, status: status(t.root) })),
     requests: st.requests.map((r) => ({ seq: r.req.seq, job: r.req.job, key: r.req.key ?? null, state: r.state, revision: r.revision, accepted: r.accepted, cancel: r.cancel })),
@@ -210,7 +211,9 @@ export function describe(e, entries, excerpt, file) {
       const receipt = rec === undefined ? "" : e.option === rec ? "kept the recommendation" : `changed from the recommendation ${quote(rec)}`;
       const opened = d?.material || typeof e.opened === "boolean" ? (e.opened ? "material opened" : "material NOT opened; do not read this as agreement") : "";
       // A changed answer names the one it replaces (155): "Revise → Promote".
-      const choice = e.previous != null ? `${e.previous} → ${e.option}` : e.option;
+      // "Other…": none of the options; the human wrote his own answer.
+      const option = e.custom ? `own answer: ${quote(e.option)}` : e.option;
+      const choice = e.previous != null ? `${e.previous} → ${option}` : option;
       // Images name the files the host stored, so the agent can read them; one only a browser holds says so.
       const images = e.images?.length ? `image${e.images.length > 1 ? "s" : ""} ${e.images.map((x) => x.startsWith("data:") ? "(kept in the browser only)" : quote(file ? file(x) : x)).join(", ")}` : "";
       return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", images].filter(Boolean).join("; ")}`;
@@ -295,7 +298,9 @@ function boot() {
   // Every Decision takes an optional note and images (owner rule 2026-10-13), behind one quiet button; atl-note options
   // still require the note. The host checks the bytes again and stores the images beside the Page.
   const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"], IMAGE_MAX = 10 * 1024 * 1024, IMAGES_MAX = 4;
-  const EXTRA = `<button type="button" data-atl="addnote" class="atl-addnote" aria-expanded="false" aria-label="Add a note or image" title="Add a note or image">${icon("paperclip")}</button><span class="atl-extra" hidden><input class="atl-note" aria-label="Note" placeholder="Optional note"><button type="button" data-atl="pickimg" aria-label="Attach an image" title="Attach an image; paste or drop one too">${icon("image")}</button><input type="file" class="atl-file" accept="${IMAGE_TYPES.join(",")}" multiple hidden><span class="atl-attached"></span></span>`;
+  const EXTRA = `<button type="button" data-atl="addnote" class="atl-addnote" aria-expanded="false" aria-label="Add a note or image" title="Add a note or image">${icon("paperclip")}</button><span class="atl-extra" hidden><span class="atl-own" hidden><input class="atl-ownans" aria-label="Your own answer" placeholder="Your own answer"><button type="button" data-atl="decideown" class="atl-primary">${icon("check")} Answer</button></span><input class="atl-note" aria-label="Note" placeholder="Optional note"><button type="button" data-atl="pickimg" aria-label="Attach an image" title="Attach an image; paste or drop one too">${icon("image")}</button><input type="file" class="atl-file" accept="${IMAGE_TYPES.join(",")}" multiple hidden><span class="atl-attached"></span></span>`;
+  // "Other…": the human's own answer beside the options, on every Decision (2.7.0).
+  const otherHtml = (d, lock) => `<button type="button" data-atl="other" data-id="${esc(d.id)}" class="atl-other${d.answer?.custom ? " atl-chosen" : ""}" aria-pressed="${!!d.answer?.custom}"${locked(lock)}>Other…</button>`;
   const attached = new WeakMap(); // .atl-extra -> data: URLs of the images waiting for an answer
   const imgSrc = (x) => x.startsWith("data:") ? x : x.split("/").map(encodeURIComponent).join("/"); // stored beside the Page
   const thumbs = (list, removable) => list.map((x, i) => `<span class="atl-thumb"><a href="${esc(imgSrc(x))}" target="_blank" rel="noopener"><img src="${esc(imgSrc(x))}" alt="Image ${i + 1}"></a>${removable ? `<button type="button" data-atl="dropimg" data-i="${i}" aria-label="Remove image ${i + 1}">${icon("x")}</button>` : ""}</span>`).join("");
@@ -572,22 +577,24 @@ function boot() {
     const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}"${locked(lock)} class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
     return `<div class="atl-head"><span class="atl-tag">${a && !d.stale ? "answered" : "to answer"}</span>${d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : ""}</div>
       <div class="atl-q">${esc(d.question)}</div>${d.detail ? `<div class="atl-dim">${esc(d.detail)}</div>` : ""}
-      ${materialHtml(d)}<div class="atl-opts">${opts}</div>${receiptHtml(d, st)}`;
+      ${materialHtml(d)}<div class="atl-opts">${opts}${otherHtml(d, lock)}</div>${receiptHtml(d, st)}`;
   }
   const materialHtml = (d) => d.material ? `<button data-atl="material" data-id="${esc(d.id)}">${d.opened ? `${icon("check")} Material opened` : `${icon("eye")} Open the material`}</button>` : "";
-  // The current answer, what it changed from, and the recommendation receipt; always editable (155).
+  // The current answer, what it changed from, and the recommendation receipt; always editable (155). A small box below
+  // the options (2.7.0): the answer, its note and images, then the status line.
   function receiptHtml(d, st) {
     const a = d.answer;
     if (!a) return "";
     const rec = d.options.find((o) => o.recommended)?.label;
-    return `<div class="atl-dim">${[`Your answer: ${esc(a.option)}`, a.previous != null ? `changed from ${esc(a.previous)}` : "", rec === undefined ? "" : a.option === rec ? "kept the recommendation" : "not the recommendation", d.material ? `material ${a.opened ? "opened" : "not opened"}` : "", a.note ? `note: ${esc(a.note)}` : "", esc(statusText(st, a))].filter(Boolean).join(" · ")}</div>${a.images?.length ? `<span class="atl-thumbs">${thumbs(a.images)}</span>` : ""}`;
+    const meta = [a.previous != null ? `changed from ${esc(a.previous)}` : "", rec === undefined ? "" : a.option === rec ? "kept the recommendation" : "not the recommendation", d.material ? `material ${a.opened ? "opened" : "not opened"}` : "", esc(statusText(st, a))].filter(Boolean).join(" · ");
+    return `<div class="atl-receipt"><div class="atl-ans">${a.custom ? "Your own answer" : "Your answer"}: <b>${esc(a.option)}</b></div>${a.note ? `<p class="atl-rnote">${esc(a.note)}</p>` : ""}${a.images?.length ? `<div class="atl-thumbs">${thumbs(a.images)}</div>` : ""}${meta ? `<div class="atl-dim">${meta}</div>` : ""}</div>`;
   }
 
   // A Page-declared Decision renders as a row of options in its atl-slot, or at the end of its element (155).
   function declaredHtml(d, st, lock = null) {
     const a = d.answer;
     return d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}" aria-pressed="${a?.option === o.label}" class="${o.recommended ? "atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"${lock != null ? locked(lock) : o.recommended ? ` title="Recommended"` : ""}>${esc(o.label)}${o.recommended ? `<span class="atl-sr"> (recommended)</span>` : ""}</button>`).join("")
-      + materialHtml(d) + (d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : "");
+      + otherHtml(d, lock) + materialHtml(d) + (d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : "");
   }
 
   function requestHtml(r, st) {
@@ -825,7 +832,7 @@ function boot() {
   function renderUndo(list) {
     // Decision 151: every interaction can be undone for 10 seconds, with a visible countdown. One row for all of them,
     // so a batch of answers never stacks rows over the Page (k-buttons).
-    const label = (e) => ({ comment: "Comment saved", decide: e.previous != null ? `Changed ${e.previous} → ${e.option}` : `Chose ${e.option}`, request: `Requested ${e.job}`, send: "Comments sent", close: "Closed", still: "Marked still applies", opened: "Material opened", cancel: "Cancel requested", accept: "Accepted", rework: "Rework requested" })[e.type] ?? e.type;
+    const label = (e) => ({ comment: "Comment saved", decide: e.previous != null ? `Changed ${e.previous} → ${clip(e.option, 40)}` : `${e.custom ? "Answered" : "Chose"} ${clip(e.option, 40)}`, request: `Requested ${e.job}`, send: "Comments sent", close: "Closed", still: "Marked still applies", opened: "Material opened", cancel: "Cancel requested", accept: "Accepted", rework: "Rework requested" })[e.type] ?? e.type;
     const e = list.at(-1), more = list.length - 1;
     set(panel.querySelector(".atl-undo"), e ? `<div class="atl-toast">${esc(label(e))}${more ? ` and ${more} more` : ""} <button data-atl="undo" data-seq="${e.seq}">${icon("undo")} Undo (${left(e)} s)</button>${more ? `<button data-atl="undoall">Undo all ${list.length}</button>` : ""}</div>` : "");
   }
@@ -1082,7 +1089,10 @@ function boot() {
   async function decide(b) {
     let st = state(), d = st.decisions.find((x) => x.id === b.dataset.id);
     if (!d || b.disabled) return; // locked by atl-wip, also against Enter in a required note
-    const label = b.dataset.label, extra = b.closest(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra"), note = extra?.querySelector(".atl-note");
+    const extra = b.closest(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra"), note = extra?.querySelector(".atl-note"), own = extra?.querySelector(".atl-ownans");
+    // "Other…": the human's own text is the answer; one that equals an option is that option.
+    const label = b.dataset.atl === "decideown" ? own?.value.trim() : b.dataset.label, custom = b.dataset.atl === "decideown" && !d.options.some((o) => o.label === label);
+    if (!label) { own?.focus(); flash("Write your own answer first."); return; }
     const text = note?.value.trim(), images = (extra && attached.get(extra)) ?? [];
     if (d.answer?.option === label && !d.stale && !text && !images.length) return; // already the answer
     // atl-note: these options need a reason; the Kernel asks for it and posts nothing without it.
@@ -1110,8 +1120,8 @@ function boot() {
     }
     const page = d.declared ? { options: d.options.map((o) => o.label).join("|"), rec: d.options.find((o) => o.recommended)?.label, delivery: d.delivery } : {};
     // The replaced answer was never delivered, so its note and images stay with the Decision unless new ones replace them.
-    const posted = await post({ type: "decide", decision: d.id, option: label, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, key: d.key, ver: d.key ? currentVer(d.key) : undefined, ...page });
-    if (posted && extra) { note.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
+    const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, key: d.key, ver: d.key ? currentVer(d.key) : undefined, ...page });
+    if (posted && extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
   }
 
   const actions = {
@@ -1134,6 +1144,23 @@ function boot() {
       try { await decide(b); } finally { deciding.delete(b.dataset.id); }
     },
     addnote: (b) => { const extra = b.nextElementSibling, open = extra.hidden; openExtra(extra, open); if (open) extra.querySelector(".atl-note").focus(); },
+    // "Other…": opens the own-answer field with the note and images; the current own answer comes back to edit.
+    other: (b) => {
+      const extra = extraAt(b), own = extra?.querySelector(".atl-own");
+      if (!own) return;
+      const open = own.hidden || extra.hidden;
+      openExtra(extra, open, open);
+      if (!open) return;
+      const d = state().decisions.find((x) => x.id === b.dataset.id), input = own.querySelector(".atl-ownans");
+      if (!input.value && d?.answer?.custom) input.value = d.answer.option;
+      input.focus();
+    },
+    decideown: (b) => {
+      const other = b.closest(".atl-card,[atl-ui=decide]")?.querySelector("[data-atl=other]");
+      if (!other || other.disabled) return; // locked by atl-wip since the field opened
+      b.dataset.id = other.dataset.id;
+      actions.decide(b);
+    },
     pickimg: (b) => b.nextElementSibling.click(),
     dropimg: (b) => { const extra = b.closest(".atl-extra"); attached.get(extra)?.splice(+b.dataset.i, 1); renderAttached(extra); },
     material: (b) => { const d = state().decisions.find((x) => x.id === b.dataset.id); jumpTo(findKey(d?.material)); if (d && !d.opened) markOpened(d); },
@@ -1230,9 +1257,18 @@ function boot() {
     const b = [...note.closest(".atl-card,[atl-ui=decide]").querySelectorAll("[data-atl=decide]")].find((x) => x.dataset.label === note.dataset.pending);
     if (b) actions.decide(b);
   });
+  // Enter in the own-answer field of "Other…" posts it.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" || !ev.target.matches?.("[atl-ui] .atl-ownans")) return;
+    ev.preventDefault();
+    ev.target.nextElementSibling.click();
+  });
   // ---- a Decision's note and images: picked, pasted or dropped onto the Decision, posted with its next answer
-  function openExtra(extra, open = true) {
+  // own: the own-answer field of "Other…" shows too; opening the paperclip alone hides it.
+  function openExtra(extra, open = true, own = open && !extra.querySelector(".atl-own")?.hidden) {
     extra.hidden = !open;
+    const ownRow = extra.querySelector(".atl-own");
+    if (ownRow) ownRow.hidden = !own;
     const button = extra.previousElementSibling;
     button.setAttribute("aria-expanded", String(open));
     button.classList.toggle("atl-has", !open && !!(extra.querySelector(".atl-note").value.trim() || attached.get(extra)?.length)); // closed, still attached
@@ -1314,7 +1350,11 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui] button.atl-rec{border-color:var(--atl-accent);border-style:dashed}
 [atl-ui] button.atl-chosen{background:var(--atl-accent);border-color:var(--atl-accent);border-style:solid;color:#fff}
 [atl-ui] button.atl-chosen .atl-dim{color:inherit}
-.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate:empty{display:none}
+.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate{flex-basis:100%}.atl-dstate:empty{display:none}
+[atl-ui] button.atl-other{color:var(--atl-muted);border-style:dashed}[atl-ui] .atl-opts>button.atl-other{justify-self:start}[atl-ui] button.atl-other.atl-chosen{color:#fff}
+.atl-own{display:flex;flex:1 1 100%;gap:4px;align-items:center}.atl-own .atl-ownans{flex:1 1 14em;width:auto}
+.atl-receipt{display:grid;gap:3px;justify-self:start;box-sizing:border-box;width:fit-content;max-width:min(100%,64ch);border:1px solid var(--atl-line);border-radius:6px;padding:5px 8px;background:var(--atl-bg)}
+.atl-receipt .atl-rnote{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .atl-dextra{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
 [atl-ui] button.atl-addnote{min-height:24px;padding:0 5px;border-color:transparent;background:none;color:var(--atl-muted)}
 [atl-ui] button.atl-addnote[aria-expanded=true],[atl-ui] button.atl-addnote.atl-has{color:var(--atl-accent)}

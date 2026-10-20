@@ -558,3 +558,29 @@ test("a Decision's answer carries a note and images: uploaded one by one, stored
     assert.match(compose("p", "", [{ seq: 1, type: "decide", decision: "d", option: "A", images: [`data:image/png;base64,${png.toString("base64")}`] }], []), /Decision d: A; image \(kept in the browser only\)$/);
   } finally { host.stop(); p.done(); }
 });
+
+test("Other…: an own answer posts as a custom decide event, is delivered as own answer, and changes like any answer (2.7.0)", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const own = human({ type: "decide", decision: "flow/verdict", key: "flow/verdict", options: "Clear|Unclear", option: "A diagram, step by step", custom: true, note: "like a flowchart" });
+    assert.equal(own.status, 200);
+    assert.equal(own.json.entry.custom, true);
+    assert.equal(human({ type: "decide", decision: "d", option: "x", custom: "yes" }).status, 400, "custom is a boolean");
+    assert.equal(human({ type: "decide", decision: "d", option: "  ", custom: true }).status, 400, "an own answer needs text");
+    const st = derive(readLog(page));
+    assert.deepEqual([st.decisions[0].answer.option, st.decisions[0].answer.custom, st.toAnswer.length], ["A diagram, step by step", true, 0], "an own answer answers the Decision");
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent.at(-1).message.content, /- #1 Decision flow\/verdict: own answer: "A diagram, step by step"; note "like a flowchart"$/);
+    // Changed back to an option: delivered as X → Y, like any change.
+    human({ type: "decide", decision: "flow/verdict", key: "flow/verdict", options: "Clear|Unclear", option: "Clear", previous: "A diagram, step by step" });
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent.at(-1).message.content, /Decision flow\/verdict: A diagram, step by step → Clear$/);
+    const again = human({ type: "decide", decision: "flow/verdict", key: "flow/verdict", options: "Clear|Unclear", option: "Both", previous: "Clear", custom: true }).json.entry;
+    assert.match(compose("p", "", [again], readLog(page)), /Clear → own answer: "Both"$/);
+    human({ type: "undo", target: again.seq });
+    assert.equal(derive(readLog(page)).decisions[0].answer.option, "Clear", "undo restores the earlier answer");
+  } finally { host.stop(); p.done(); }
+});
