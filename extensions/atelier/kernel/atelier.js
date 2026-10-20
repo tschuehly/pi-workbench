@@ -1069,12 +1069,15 @@ function boot() {
     node.querySelector("textarea").focus({ preventScroll: true });
     node.addEventListener("submit", async (ev) => {
       ev.preventDefault();
-      const text = node.querySelector("textarea").value.trim(), extra = node.querySelector(".atl-extra");
-      if (!text || node.dataset.busy) return;
-      // Images upload first; a refused one keeps the box open with the text and images as typed.
-      node.dataset.busy = "1";
-      const images = (extra && attached.get(extra)) ?? [], names = images.length ? await upload(images, "Your Comment was not saved.") : [];
-      delete node.dataset.busy;
+      const ta = node.querySelector("textarea"), extra = node.querySelector(".atl-extra");
+      if (!ta.value.trim() || node.dataset.busy) return;
+      // Locked while it saves (Cancel stays), so what posts is what the box shows: images still being read, then the
+      // upload. A refused image unlocks the box with the text and images as typed.
+      const lock = (on) => { ta.readOnly = on; node.querySelector("[type=submit]").disabled = on; if (on) node.dataset.busy = "1"; else delete node.dataset.busy; };
+      lock(true);
+      await reads(extra);
+      const text = ta.value.trim(), images = (extra && attached.get(extra)) ?? [], names = images.length ? await upload(images, "Your Comment was not saved.") : [];
+      lock(false);
       if (!names) return;
       if (composer?.node === node) closeComposer(true); else if (!node.isConnected) return; // cancelled during the upload
       // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
@@ -1102,11 +1105,12 @@ function boot() {
     // "Other…": the human's own text is the answer; one that equals an option is that option.
     const label = b.dataset.atl === "decideown" ? own?.value.trim() : b.dataset.label, custom = b.dataset.atl === "decideown" && !d.options.some((o) => o.label === label);
     if (!label) { own?.focus(); flash("Write your own answer first."); return; }
+    await reads(extra); // an image picked just before the click goes with this answer
     const text = note?.value.trim(), images = (extra && attached.get(extra)) ?? [];
     if (d.answer?.option === label && !d.stale && !text && !images.length) return; // already the answer
     // atl-note: these options need a reason; the Kernel asks for it and posts nothing without it.
     if (d.note?.includes(label) && !text) {
-      openExtra(extra);
+      openExtra(extra, true, false);
       note.placeholder = `Why ${label}? (required)`;
       note.dataset.pending = label; note.setAttribute("aria-invalid", "true"); note.focus();
       flash(`${label} needs a note.`);
@@ -1160,6 +1164,8 @@ function boot() {
       const open = own.hidden || extra.hidden;
       openExtra(extra, open, open);
       if (!open) return;
+      const note = extra.querySelector(".atl-note"); // an option that asked for a note is abandoned
+      note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending;
       const d = state().decisions.find((x) => x.id === b.dataset.id), input = own.querySelector(".atl-ownans");
       if (!input.value && d?.answer?.custom) input.value = d.answer.option;
       input.focus();
@@ -1226,7 +1232,7 @@ function boot() {
 
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest?.("[data-atl]");
-    if (b && isUi(b)) { ev.preventDefault(); actions[b.dataset.atl]?.(b); return; }
+    if (b && isUi(b)) { ev.preventDefault(); if (b.dataset.atl !== "dismiss" && b.closest("[data-busy]")) return; actions[b.dataset.atl]?.(b); return; } // a saving box keeps Cancel only
     const req = ev.target.closest?.("[atl-request]:not(form)");
     if (req && !isUi(req)) { ev.preventDefault(); post({ type: "request", job: req.getAttribute("atl-request"), key: keyOf(req), ver: verOf(req), input: {} }); return; }
     // A Page button with atl-comment opens a Comment on its Key, floating beside that button (e.g. in a sticky bar).
@@ -1258,11 +1264,12 @@ function boot() {
     post({ type: "request", job: form.getAttribute("atl-request"), key: keyOf(form), ver: verOf(form), input: Object.fromEntries(new FormData(form)) });
   });
   document.addEventListener("input", (ev) => { if (!isUi(ev.target)) touched.add(ev.target); }, true);
-  // Enter in a required note posts the option that asked for it.
+  // Enter in a Decision's note posts: the own answer while "Other…" is open, else the option that asked for the note.
   document.addEventListener("keydown", (ev) => {
-    const note = ev.target.closest?.("[atl-ui] .atl-note[data-pending]");
-    if (!note || ev.key !== "Enter") return;
+    const note = ev.target.closest?.("[atl-ui] .atl-note"), own = note?.parentElement.querySelector(".atl-own:not([hidden]) [data-atl=decideown]");
+    if (!note || ev.key !== "Enter" || !(own || note.dataset.pending)) return;
     ev.preventDefault();
+    if (own) { own.click(); return; }
     const b = [...note.closest(".atl-card,[atl-ui=decide]").querySelectorAll("[data-atl=decide]")].find((x) => x.dataset.label === note.dataset.pending);
     if (b) actions.decide(b);
   });
@@ -1284,7 +1291,15 @@ function boot() {
     button.classList.toggle("atl-has", !open && !!(extra.querySelector(".atl-note").value.trim() || attached.get(extra)?.length)); // closed, still attached
   }
   const renderAttached = (extra) => set(extra.querySelector(".atl-attached"), thumbs(attached.get(extra) ?? [], true));
-  async function addImages(extra, files) {
+  // Reads still running per .atl-extra: Save and an answer wait for them, so an image picked just before is not lost.
+  const reading = new WeakMap();
+  const reads = async (extra) => { while (extra && reading.get(extra)?.size) await Promise.allSettled(reading.get(extra)); };
+  function addImages(extra, files) {
+    if (extra.closest("[data-busy]")) return; // a Comment box that is saving takes no more images
+    const set = reading.get(extra) ?? new Set(), p = readImages(extra, files), done = () => set.delete(p);
+    reading.set(extra, set.add(p)); p.then(done, done);
+  }
+  async function readImages(extra, files) {
     const list = attached.get(extra) ?? [];
     attached.set(extra, list);
     for (const f of files) {
@@ -1397,7 +1412,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui] button.atl-earlier{justify-self:start;min-height:22px;font-size:12px;color:var(--atl-muted);border-style:dashed}
 .atl-quote{font-style:italic;border-left:3px solid var(--atl-warn);padding-left:6px}
 .atl-toast{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:2px 0}
-.atl-composer{display:grid;gap:6px;margin:6px 0}
+.atl-composer{display:grid;gap:6px;margin:6px 0}.atl-composer[data-busy] .atl-extra{opacity:.5;pointer-events:none}
 .atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(560px,calc(100vw - 8px));max-height:calc(100vh - 8px);overflow:auto;margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
 .atl-tpop{display:grid;gap:4px}.atl-tbar{display:flex;align-items:center;justify-content:space-between;gap:6px}
 [atl-ui] .atl-tbar button{min-height:24px;padding:0 5px;border-color:transparent;background:none;color:var(--atl-muted)}
