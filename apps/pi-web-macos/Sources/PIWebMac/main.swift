@@ -84,9 +84,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         DispatchQueue.main.async { [weak self] in
             activateFromNotificationClick(
                 activateApplication: { NSApp.activate(ignoringOtherApps: true) },
-                routeChat: {
+                routeChat: { done in
                     let userInfo = response.notification.request.content.userInfo
-                    self?.browser.openNotificationChat(machineId: userInfo["machineId"] as? String, sessionId: userInfo["sessionId"] as? String, message: userInfo["message"] as? String)
+                    guard let self else { done(); return }
+                    self.browser.openNotificationChat(machineId: userInfo["machineId"] as? String, sessionId: userInfo["sessionId"] as? String, message: userInfo["message"] as? String, done: done)
                 },
                 complete: completionHandler
             )
@@ -404,24 +405,35 @@ private final class BrowserCoordinator {
     func goBackInKeyWindow() { keyController?.goBack() }
     func goForwardInKeyWindow() { keyController?.goForward() }
 
-    /// Bring forward the window already showing the Chat, so macOS switches to its Space instead of loading it elsewhere.
-    func openNotificationChat(machineId: String?, sessionId: String?, message: String?) {
+    /// Bring forward the window holding the Chat, switching to its Space, and open the Chat there without reloading.
+    /// Every live page is asked first; `done` runs once the chosen window is key.
+    func openNotificationChat(machineId: String?, sessionId: String?, message: String?, done: @escaping () -> Void) {
         let url = serverURL.flatMap { server in machineId.flatMap { machine in sessionId.flatMap { notificationChatURL(serverURL: server, machineId: machine, sessionId: $0, message: message) } } }
         let ordered = NSApp.orderedWindows.compactMap { window in controllers.values.first { $0.window === window } }
             + controllers.values.filter { controller in !NSApp.orderedWindows.contains { $0 === controller.window } }
-        let candidates = ordered.map { NotificationWindowCandidate(url: $0.shownURL, isOnActiveSpace: $0.window?.isVisible == true && $0.window?.isOnActiveSpace == true) }
-        guard let index = notificationWindowIndex(candidates, sessionId: url == nil ? nil : sessionId) else {
-            openWindow(url: url)
-            return
+        var holders = Set<ObjectIdentifier>()
+        let asked = DispatchGroup()
+        if url != nil, let machineId, let sessionId {
+            for controller in ordered where controller.showsApplication {
+                asked.enter()
+                controller.holdsChat(machineId: machineId, sessionId: sessionId) { held in
+                    if held { holders.insert(ObjectIdentifier(controller)) }
+                    asked.leave()
+                }
+            }
         }
-        let controller = ordered[index]
-        switch notificationWindowAction(shown: controller.shownURL, chatURL: url, sessionId: sessionId, message: message) {
-        case .load(let url): controller.load(url)
-        case .reveal: if let machineId, let sessionId, let message { controller.revealNotificationMessage(machineId: machineId, sessionId: sessionId, message: message) }
-        case .none: break
+        asked.notify(queue: .main) { [weak self] in
+            guard let self else { done(); return }
+            let candidates = ordered.map { NotificationWindowCandidate(url: $0.shownURL, isOnActiveSpace: $0.window?.isVisible == true && $0.window?.isOnActiveSpace == true, holdsChat: holders.contains(ObjectIdentifier($0)), showsApplication: $0.showsApplication) }
+            switch notificationRoute(candidates, sessionId: sessionId, chatURL: url) {
+            case .newWindow(let url): self.openWindow(url: url); done()
+            case .open(let index):
+                if let machineId, let sessionId { ordered[index].openNotificationChat(machineId: machineId, sessionId: sessionId, message: message) }
+                ordered[index].bringForward(then: done)
+            case .load(let index, let url): ordered[index].load(url); ordered[index].bringForward(then: done)
+            case .focus(let index): ordered[index].bringForward(then: done)
+            }
         }
-        if controller.window?.isMiniaturized == true { controller.window?.deminiaturize(nil) }
-        controller.window?.makeKeyAndOrderFront(nil)
     }
 
     func showReport(title: String, text: String) {
@@ -641,8 +653,26 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         if let current = webView.url { remember(current) }
         load(route.restorable ?? fallback)
     }
-    func revealNotificationMessage(machineId: String, sessionId: String, message: String) {
-        webView.callAsyncJavaScript(notificationRevealScript, arguments: ["machineId": machineId, "sessionId": sessionId, "message": message], in: nil, in: .page, completionHandler: nil)
+    var showsApplication: Bool { webView.url.map(isAllowed) == true }
+    func holdsChat(machineId: String, sessionId: String, reply: @escaping (Bool) -> Void) {
+        webView.callAsyncJavaScript(notificationHoldsScript, arguments: ["machineId": machineId, "sessionId": sessionId], in: nil, in: .page) { result in
+            reply((try? result.get()) as? Bool == true)
+        }
+    }
+    func openNotificationChat(machineId: String, sessionId: String, message: String?) {
+        webView.callAsyncJavaScript(notificationRevealScript, arguments: ["machineId": machineId, "sessionId": sessionId, "message": message ?? NSNull()], in: nil, in: .page, completionHandler: nil)
+    }
+    /// `.moveToActiveSpace` would pull this window onto the Space the owner is looking at, leaving its own Space empty;
+    /// without it, making the window key switches to its Space. `then` activates the app.
+    func bringForward(then activate: () -> Void) {
+        guard let window else { activate(); return }
+        let behavior = window.collectionBehavior
+        window.collectionBehavior.remove(.moveToActiveSpace)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+        activate()
+        // ponytail: fixed delay for the Space switch to settle; restore on a Space-change notification if 1 s proves short.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak window] in window?.collectionBehavior = behavior }
     }
     func reload() { webView.reload() }
     func goBack() { if webView.canGoBack { webView.goBack() } }
