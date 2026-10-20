@@ -61,7 +61,7 @@ check_idle() { # Everything a session starts (subagents, workers, foreground com
       if (cmd ~ /sessiond[.]js/) daemon[$1] = 1 }
     END { for (i = 1; i <= NR; i++) {
       if (index(self, " " pid[i] " ")) continue
-      if (command[i] ~ / --mode[ ]rpc( |$)/ || (daemon[parent[i]] && command[i] !~ /ping-a-human|<defunct>|background-bash\/runner[.]mjs/)) print line[i] } }')
+      if (command[i] ~ / --mode[ ]rpc( |$)/ || (daemon[parent[i]] && command[i] !~ /ping-a-human|<defunct>|^\(.*\)$|background-bash\/runner[.]mjs/)) print line[i] } }')
   [[ -z $busy ]] && return 0
   echo "refusing: a restart would kill these subagents, workers, and commands:" >&2
   echo "$busy" | cut -c1-160 >&2

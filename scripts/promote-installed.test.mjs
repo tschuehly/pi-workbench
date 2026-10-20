@@ -35,6 +35,11 @@ test("check-idle sees a retitled `pi` child of the session daemon", () => {
   assert.match(result.stderr, /3087 50696 pi/);
 });
 
+test("check-idle ignores an exiting process shown as (name)", () => {
+  assert.equal(run([...quiet, "96428 50696 (git)"], "check-idle").status, 0);
+  assert.equal(run([...quiet, "3087 50696 pi"], "check-idle").status, 3);
+});
+
 test("check-idle lists a session's command but not the phone helper or a surviving background bash runner", () => {
   const job = "5100 50696 /bin/bash -c ./scripts/ci/gate.sh";
   const runner = "5400 50696 /opt/homebrew/bin/node /x/extensions/background-bash/runner.mjs /Users/me/.pi-workbench/background-bash/jobs/abc";
