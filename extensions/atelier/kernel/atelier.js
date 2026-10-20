@@ -1075,10 +1075,11 @@ function boot() {
       // upload. A refused image unlocks the box with the text and images as typed.
       const lock = (on) => { ta.readOnly = on; node.querySelector("[type=submit]").disabled = on; if (on) node.dataset.busy = "1"; else delete node.dataset.busy; };
       lock(true);
-      await reads(extra);
-      const text = ta.value.trim(), images = (extra && attached.get(extra)) ?? [], names = images.length ? await upload(images, "Your Comment was not saved.") : [];
+      const read = await reads(extra);
+      if (!read) flash("Your Comment was not saved.");
+      const text = ta.value.trim(), images = (extra && attached.get(extra)) ?? [], names = !read ? null : images.length ? await upload(images, "Your Comment was not saved.") : [];
       lock(false);
-      if (!names) return;
+      if (!names) { ta.focus(); return; }
       if (composer?.node === node) closeComposer(true); else if (!node.isConnected) return; // cancelled during the upload
       // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
       const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
@@ -1105,7 +1106,7 @@ function boot() {
     // "Other…": the human's own text is the answer; one that equals an option is that option.
     const label = b.dataset.atl === "decideown" ? own?.value.trim() : b.dataset.label, custom = b.dataset.atl === "decideown" && !d.options.some((o) => o.label === label);
     if (!label) { own?.focus(); flash("Write your own answer first."); return; }
-    await reads(extra); // an image picked just before the click goes with this answer
+    if (!await reads(extra)) { flash("Your answer did not change."); return false; } // an image picked just before the click goes with this answer
     const text = note?.value.trim(), images = (extra && attached.get(extra)) ?? [];
     if (d.answer?.option === label && !d.stale && !text && !images.length) return; // already the answer
     // atl-note: these options need a reason; the Kernel asks for it and posts nothing without it.
@@ -1118,7 +1119,7 @@ function boot() {
     }
     // Images upload first: a refused one leaves the current answer and the Event Log as they are.
     const names = images.length ? await upload(images) : [];
-    if (!names) return;
+    if (!names) return false;
     st = state(); d = st.decisions.find((x) => x.id === b.dataset.id); // the log may have moved during the upload
     if (!d) return;
     // Always editable (155): a change is a new answer that names the one it replaces.
@@ -1150,11 +1151,17 @@ function boot() {
     still: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "still", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : null }); },
     jump: (b) => { const t = state().threads.find((x) => x.root.seq === +b.dataset.seq); const p = t && placeThread(t, textIndex()); markRead(+b.dataset.seq); if (p?.range) { p.range.startContainer.parentElement.scrollIntoView({ block: "center", behavior: "smooth" }); } else jumpTo(p?.el); },
     // One submission per Decision at a time: a click while an earlier one uploads or posts is ignored, so a slow
-    // upload can never land after, and overwrite, a later choice.
+    // upload can never land after, and overwrite, a later choice. Locked like a saving Comment box, so what posts is
+    // what it shows; a refused image unlocks it with the note, own answer and images as typed, focus back in them.
     decide: async (b) => {
       if (deciding.has(b.dataset.id)) return;
       deciding.add(b.dataset.id);
-      try { await decide(b); } finally { deciding.delete(b.dataset.id); }
+      const box = b.closest(".atl-card,[atl-ui=decide]"), fields = [...(box?.querySelectorAll(".atl-note,.atl-ownans") ?? [])];
+      const lock = (on) => { for (const f of fields) f.readOnly = on; if (!box) return; if (on) box.dataset.busy = "1"; else delete box.dataset.busy; };
+      lock(true);
+      let refused;
+      try { refused = await decide(b) === false; } finally { lock(false); deciding.delete(b.dataset.id); }
+      if (refused) box.querySelector(b.dataset.atl === "decideown" ? ".atl-ownans" : ".atl-note")?.focus();
     },
     addnote: (b) => { const extra = b.nextElementSibling, open = extra.hidden; openExtra(extra, open); if (open) extra.querySelector(".atl-note").focus(); },
     // "Other…": opens the own-answer field with the note and images; the current own answer comes back to edit.
@@ -1292,8 +1299,9 @@ function boot() {
   }
   const renderAttached = (extra) => set(extra.querySelector(".atl-attached"), thumbs(attached.get(extra) ?? [], true));
   // Reads still running per .atl-extra: Save and an answer wait for them, so an image picked just before is not lost.
+  // false: one of them failed, so nothing posts (the image it could not read is not attached).
   const reading = new WeakMap();
-  const reads = async (extra) => { while (extra && reading.get(extra)?.size) await Promise.allSettled(reading.get(extra)); };
+  const reads = async (extra) => { let ok = true; while (extra && reading.get(extra)?.size) for (const r of await Promise.allSettled(reading.get(extra))) ok &&= r.status === "fulfilled"; return ok; };
   function addImages(extra, files) {
     if (extra.closest("[data-busy]")) return; // a Comment box that is saving takes no more images
     const set = reading.get(extra) ?? new Set(), p = readImages(extra, files), done = () => set.delete(p);
@@ -1302,13 +1310,16 @@ function boot() {
   async function readImages(extra, files) {
     const list = attached.get(extra) ?? [];
     attached.set(extra, list);
+    let failed;
     for (const f of files) {
       if (!IMAGE_TYPES.includes(f.type)) { flash(`${f.name || "That file"} is not a PNG, JPEG, WebP or GIF image.`); continue; }
       if (f.size > IMAGE_MAX) { flash(`${f.name || "That image"} is over 10 MB.`); continue; }
       if (list.length >= IMAGES_MAX) { flash(`At most ${IMAGES_MAX} images per answer.`); break; }
-      list.push(await new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = fail; r.readAsDataURL(f); }));
+      try { list.push(await new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = fail; r.readAsDataURL(f); })); }
+      catch { failed = true; flash(`${f.name || "That image"} could not be read and is not attached. Pick it again.`); }
     }
     openExtra(extra); renderAttached(extra);
+    if (failed) throw new Error("image read failed");
   }
   const extraAt = (t) => t?.closest?.(".atl-composer")?.querySelector(".atl-extra") ?? t?.closest?.(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra");
   const imageFiles = (dt) => [...(dt?.files ?? [])];
@@ -1412,7 +1423,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui] button.atl-earlier{justify-self:start;min-height:22px;font-size:12px;color:var(--atl-muted);border-style:dashed}
 .atl-quote{font-style:italic;border-left:3px solid var(--atl-warn);padding-left:6px}
 .atl-toast{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:2px 0}
-.atl-composer{display:grid;gap:6px;margin:6px 0}.atl-composer[data-busy] .atl-extra{opacity:.5;pointer-events:none}
+.atl-composer{display:grid;gap:6px;margin:6px 0}[data-busy] .atl-extra,[data-busy] [data-atl=decide]{opacity:.5;pointer-events:none}
 .atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(560px,calc(100vw - 8px));max-height:calc(100vh - 8px);overflow:auto;margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
 .atl-tpop{display:grid;gap:4px}.atl-tbar{display:flex;align-items:center;justify-content:space-between;gap:6px}
 [atl-ui] .atl-tbar button{min-height:24px;padding:0 5px;border-color:transparent;background:none;color:var(--atl-muted)}
