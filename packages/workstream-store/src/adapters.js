@@ -1,8 +1,12 @@
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { constants } from "node:fs";
+import { lstat, open, rename, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { TRUSTED_READ, clone } from "./model.js";
 import { fail } from "./errors.js";
+import { acquireLock, annotateCleanup, COORDINATOR_TEST } from "./lock-coordinator.js";
+
+export const TRANSACTION_TEST = Symbol("workstream-store.transactionTest");
 
 const FORMAT_VERSION = 1;
 
@@ -50,14 +54,21 @@ export class InMemoryWorkstreamAdapter {
 }
 
 export class FileWorkstreamAdapter {
-  constructor({ directory, eventRetention = 1_000, lockTimeoutMs = 5_000 } = {}) {
+  constructor({ directory, eventRetention = 1_000, lockTimeoutMs = 5_000, lockRetryIntervalMs = 20,
+    [COORDINATOR_TEST]: coordinatorTest, [TRANSACTION_TEST]: testHooks } = {}) {
     if (typeof directory !== "string" || directory.length === 0) throw new TypeError("directory is required");
     validateRetention(eventRetention);
-    this.directory = directory;
-    this.file = join(directory, "workstreams.json");
-    this.lockDirectory = join(directory, ".workstreams.lock");
+    if (typeof lockTimeoutMs !== "number" || !Number.isFinite(lockTimeoutMs) || lockTimeoutMs < 0) throw new TypeError("lockTimeoutMs must be finite and nonnegative");
+    if (typeof lockRetryIntervalMs !== "number" || !Number.isFinite(lockRetryIntervalMs) || lockRetryIntervalMs <= 0) throw new TypeError("lockRetryIntervalMs must be finite and positive");
+    // Freeze relative paths before any queued work or caller chdir; acquisition canonicalizes aliases.
+    this.directory = resolve(directory);
+    this.file = join(this.directory, "workstreams.json");
+    this.lockDirectory = join(this.directory, ".workstreams.lock");
     this.eventRetention = eventRetention;
     this.lockTimeoutMs = lockTimeoutMs;
+    this.lockRetryIntervalMs = lockRetryIntervalMs;
+    this.coordinatorTest = coordinatorTest;
+    this.testHooks = testHooks;
     this.queue = Promise.resolve();
     // Last validated file generation, lent only to TRUSTED_READ callbacks and revalidated under the lock.
     this.generation = null;
@@ -67,22 +78,28 @@ export class FileWorkstreamAdapter {
     const { readOnly = false } = options;
     const trusted = readOnly && options[TRUSTED_READ] === true;
     const operation = this.queue.then(async () => {
-      await mkdir(this.directory, { recursive: true, mode: 0o700 });
-      await this.acquireLock();
+      let lease, result, primary, failed = false, jsonCommitted = false;
       try {
+        lease = await this.acquireLock();
+        this.directory = lease.directory;
+        this.file = join(this.directory, "workstreams.json");
+        this.lockDirectory = join(this.directory, ".workstreams.lock");
+        await this.testHooks?.hook?.("acquired");
         if (!readOnly) this.generation = null;
         const database = trusted ? await this.readTrustedDatabase() : await this.readDatabase();
-        const result = await callback(database);
-        if (!readOnly) await this.writeDatabase(database);
+        await this.testHooks?.hook?.("json-read");
+        result = await callback(database);
+        if (!readOnly) await this.writeDatabase(database, () => { jsonCommitted = true; });
         // Trusted Store callbacks already detach their results from the generation.
-        return trusted ? result : clone(result);
-      } catch (error) {
-        this.generation = null;
-        throw error;
-      } finally {
-        await rm(this.lockDirectory, { recursive: true, force: true });
-      }
+        result = trusted ? result : clone(result);
+      } catch (error) { failed = true; primary = error; }
+      try {
+        if (lease) await lease.release({ failed, jsonCommitted, ...(failed ? { primary } : {}) });
+        else if (failed) throw primary;
+      } catch (error) { this.generation = null; throw error; }
+      return result;
     });
+    // ponytail: queue/callback latency is unbounded; add a separately approved end-to-end budget if needed.
     this.queue = operation.catch(() => undefined);
     return operation;
   }
@@ -90,9 +107,9 @@ export class FileWorkstreamAdapter {
   // Caller must hold the lock. Reuses the cached generation only while the open file keeps the same
   // identity, size, mtime, and ctime; any change, deletion, or read error drops it.
   async readTrustedDatabase() {
-    let handle;
+    let handle, primary, failed = false;
     try {
-      handle = await open(this.file, "r");
+      handle = await this.openDatabase();
       const before = await handle.stat({ bigint: true });
       if (this.generation && sameGeneration(this.generation.stat, before)) return this.generation.database;
       this.generation = null;
@@ -102,50 +119,91 @@ export class FileWorkstreamAdapter {
     } catch (error) {
       this.generation = null;
       if (error?.code === "ENOENT") return emptyDatabase(this.eventRetention);
-      if (error?.code === "CORRUPT_STORE") throw error;
-      fail("CORRUPT_STORE", `cannot read workstream store: ${error.message}`);
+      failed = true;
+      primary = error;
+      throw error;
     } finally {
-      await handle?.close();
+      try { await handle?.close(); } catch (error) {
+        if (!failed) throw error;
+        annotateCleanup(primary, [{ operation: "json-close" }]);
+      }
     }
   }
 
-  async readDatabase(source = this.file) {
+  async openDatabase() {
+    const before = await lstat(this.file);
+    if (!before.isFile() || before.isSymbolicLink()) fail("CORRUPT_STORE", "Unsafe workstream store file");
+    const handle = await open(this.file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
-      const database = JSON.parse(await readFile(source, "utf8"));
+      const descriptor = await handle.stat();
+      if (!descriptor.isFile() || before.dev !== descriptor.dev || before.ino !== descriptor.ino) fail("CORRUPT_STORE", "Workstream store file identity changed");
+      return handle;
+    } catch (error) {
+      try { await handle.close(); } catch { annotateCleanup(error, [{ operation: "json-close" }]); }
+      throw error;
+    }
+  }
+
+  async readDatabase(source) {
+    let handle, primary, failed = false;
+    try {
+      handle = source ?? await this.openDatabase();
+      let database;
+      try { database = JSON.parse(await handle.readFile("utf8")); } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        fail("CORRUPT_STORE", "workstream store file contains invalid JSON");
+      }
       validateDatabase(database);
       return database;
     } catch (error) {
       if (error?.code === "ENOENT") return emptyDatabase(this.eventRetention);
-      if (error?.code === "CORRUPT_STORE") throw error;
-      fail("CORRUPT_STORE", `cannot read workstream store: ${error.message}`);
+      failed = true;
+      primary = error;
+      throw error;
+    } finally {
+      if (!source) try { await handle?.close(); } catch (error) {
+        if (!failed) throw error;
+        annotateCleanup(primary, [{ operation: "json-close" }]);
+      }
     }
   }
 
-  async writeDatabase(database) {
+  async writeDatabase(database, committed = () => {}) {
     validateDatabase(database);
     const temporary = join(this.directory, `.workstreams-${process.pid}-${randomUUID()}.tmp`);
     const handle = await open(temporary, "wx", 0o600);
+    let primary, failed = false, renamed = false;
+    const hook = (phase) => this.testHooks?.hook?.(phase);
     try {
-      await handle.writeFile(`${JSON.stringify(database)}\n`, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
+      try {
+        await hook("temp-write");
+        await handle.writeFile(`${JSON.stringify(database)}\n`, "utf8");
+        await hook("temp-sync");
+        await handle.sync();
+        await hook("temp-synced");
+      } catch (error) { failed = true; primary = error; }
+      try { await handle.close(); await hook("temp-close"); } catch (error) {
+        if (!failed) { failed = true; primary = error; }
+        else annotateCleanup(primary, [{ operation: "temp-close" }]);
+      }
+      if (failed) throw primary;
+      await hook("before-rename");
+      await rename(temporary, this.file);
+      renamed = true;
+      committed(); // JSON rename, not SQLite COMMIT, is the data commit point.
+      await hook("after-rename");
+    } catch (error) {
+      if (!renamed) try { await hook("temp-remove"); await rm(temporary, { force: true }); }
+      catch { annotateCleanup(error, [{ operation: "temp-remove" }]); }
+      throw error;
     }
-    await rename(temporary, this.file);
   }
 
   async acquireLock() {
-    const deadline = Date.now() + this.lockTimeoutMs;
-    for (;;) {
-      try {
-        await mkdir(this.lockDirectory, { mode: 0o700 });
-        return;
-      } catch (error) {
-        if (error?.code !== "EEXIST") throw error;
-        if (Date.now() >= deadline) fail("STORE_BUSY", "timed out waiting for the workstream store lock");
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-    }
+    return acquireLock(this.directory, {
+      lockTimeoutMs: this.lockTimeoutMs, lockRetryIntervalMs: this.lockRetryIntervalMs,
+      [COORDINATOR_TEST]: this.coordinatorTest,
+    });
   }
 }
 

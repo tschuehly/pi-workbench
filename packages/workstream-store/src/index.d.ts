@@ -239,11 +239,19 @@ export class InMemoryWorkstreamAdapter implements WorkstreamAdapter {
 }
 
 export class FileWorkstreamAdapter implements WorkstreamAdapter {
-  constructor(options: { directory: string; eventRetention?: number; lockTimeoutMs?: number });
+  constructor(options: { directory: string; eventRetention?: number; lockTimeoutMs?: number; lockRetryIntervalMs?: number });
   transaction<T>(callback: (database: any) => T | Promise<T>, options?: { readOnly?: boolean }): Promise<T>;
 }
 
+/** Sanitized details for LOCK_COORDINATOR_UNAVAILABLE; no native error, path or token. */
+export interface LockCoordinatorDiagnostic {
+  operation: string;
+  /** Present for lease cleanup; true only after a completed JSON rename. */
+  jsonCommitted?: boolean;
+}
+
 export class WorkstreamStoreError extends Error {
+  constructor(code: string, message: string, details?: unknown);
   code: string;
   details?: unknown;
 }
@@ -252,6 +260,7 @@ export function createUserLocalWorkstreamStore(options?: {
   directory?: string;
   eventRetention?: number;
   lockTimeoutMs?: number;
+  lockRetryIntervalMs?: number;
   clock?: () => Date | string | number;
   limits?: Record<string, number>;
 }): WorkstreamStore;
