@@ -945,7 +945,7 @@ test("child web tools stay behind web_enable even when a later tool registration
   assert.deepEqual(eager.active(), ["read", "web_search"], "eager pi-web-access (no web_enable) is left alone");
 });
 
-test("a reloaded runtime reports retained outcomes and interrupted children for the same IDs", async () => {
+test("a resumed runtime reports retained outcomes and interrupted children for the same IDs", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "subagent-reload-"));
   const resolverPath = join(temporary, "resolver.mjs");
   await writeFile(resolverPath, `
@@ -999,11 +999,12 @@ test("a reloaded runtime reports retained outcomes and interrupted children for 
     children.get("child-1").settle({ outcome: "success", text: "Found the bug in a.ts.", sessionId: "child-session-1", provider: "anthropic", model: "claude-test", effort: "low" });
     await children.get("child-1").result;
     await new Promise((resolve) => setImmediate(resolve));
-    await first.fire("session_shutdown", { reason: "reload" });
+    // Quitting cancels live children; a reload instead hands them over (reload-handoff.test.mjs).
+    await first.fire("session_shutdown", { reason: "quit" });
 
     const unknown = () => { throw new Error("Unknown execution"); };
     const second = runtime({ dispatch: unknown, result: unknown, status: unknown, async *observe() {}, list: () => [], cancelAll: async () => [] });
-    await second.fire("session_start", { reason: "reload" });
+    await second.fire("session_start", { reason: "resume" });
 
     const roster = await second.run("subagent_status", {});
     assert.match(roster.content[0].text, /0 running, 2 terminal and uncollected, 2 launched this session/);
@@ -1018,9 +1019,9 @@ test("a reloaded runtime reports retained outcomes and interrupted children for 
     assert.match(rest.content[0].text, /not resumed or relaunched/);
     assert.equal(next, 2, "reload never relaunches a child");
 
-    // Collection itself is retained across a further reload.
+    // Collection itself is retained across a further restart.
     const third = runtime({ list: () => [], cancelAll: async () => [] });
-    await third.fire("session_start", { reason: "reload" });
+    await third.fire("session_start", { reason: "resume" });
     assert.match((await third.run("subagent_status", {})).content[0].text, /0 running, 0 terminal and uncollected, 2 launched this session\. Nothing needs reconciliation/);
   } finally {
     await rm(temporary, { recursive: true, force: true });

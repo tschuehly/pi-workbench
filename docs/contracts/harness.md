@@ -8,7 +8,7 @@ This document is authoritative for this contract. [The system overview](../found
 
 V1 supports attended human–Pi pairing. One human pairs with one interactive lead Pi under continuous Human Attention. The session may remain a standalone Chat or have exactly one home Workstream.
 
-The lead may launch bounded ephemeral child Pi processes as attended tool activity and remains accountable for their assignments and results. A child may run non-blocking only inside the attended lead session and is cancelled when the session shuts down. The harness launches no unattended execution that survives the session and no managed Runs.
+The lead may launch bounded ephemeral child Pi processes as attended tool activity and remains accountable for their assignments and results. A child may run non-blocking only inside the attended lead session and is cancelled when the session shuts down. A `/reload` of the session is not a shutdown: running children carry over to the reloaded extension. The harness launches no unattended execution that survives the session and no managed Runs.
 
 A Workstream preserves cross-session attention but grants no workspace lease, enforced path scope, durable Run identity, managed authority, or recovery guarantee. Attended-session hosts coordinate Workstream association through the shared host-neutral session-coordination module rather than embedding lifecycle logic in a skill or interface adapter.
 
@@ -55,7 +55,8 @@ A pi-workbench change that leaves the PI WEB server plugin untouched can go live
 restart: `scripts/promote-installed switch-workbench <workbench-rev>` builds the revision and
 atomically repoints only `pi-workbench.installed`. Open sessions keep the code they loaded; new
 sessions and `/reload` load the new revision, so reload a session before relying on changed tools
-or roles in it. It prints the command that switches back.
+or roles in it. Its running Subagents and Workers survive the reload and finish on the code that
+launched them. It prints the command that switches back.
 
 A PI WEB change that leaves the session daemon's code and dependencies untouched (browser client or
 web/API server only) goes live with `scripts/promote-installed switch-web <pi-web-rev>`. It restarts
