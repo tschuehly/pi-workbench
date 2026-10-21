@@ -55,3 +55,19 @@ The lead then retired the Worker. The machine-local worker and session identifie
 ## Deterministic coverage
 
 Extension tests additionally cover coalescing a 23-completion fan-out into one signal with 22 suppressed returns, re-arming only on the delivered normal marker or `agent_settled`, checkpoint deferral releasing one signal under a stable key, per-execution `outcome_unknown` receipt-failure attention staying outside coalescing, detached-collection re-arming, and cancellation and shutdown suppression.
+
+## Children survive `/reload` (2026-10-21)
+
+An SDK lead (Pi 1.0.4, `anthropic/claude-haiku-4-5` at low effort) loaded this checkout's `subagent`, `activity`, and `telemetry` extensions plus `pi-claude-code-use`, launched one background `scout` · `routine` Subagent and one background Worker dispatch (both routed to `openai-codex/gpt-6-luna:medium`) that each ran `sleep 60`, then called `session.reload()` about 15 s later. The children were real nested `pi --mode rpc` processes.
+
+| Observation | Before this change | After |
+| --- | --- | --- |
+| child PIDs 2 s after reload | both gone; the reload's `session_shutdown` cancelled them | the same two PIDs alive |
+| `subagent_status` after reload | `0 running, 2 terminal and uncollected` — both `interrupted` | `2 running, 0 terminal and uncollected`, both `[running]` |
+| roster | rows went `stopping` → `cancelled` | rows replayed on re-attach, then kept updating (`running bash` → `success`) |
+| Worker lock after reload | released with `Last dispatch: cancelled` | `Locked by pid <lead pid>` with live heartbeats and `Live dispatch …` |
+| collection | each child collected as `interrupted` | the reloaded lead's own `subagent_collect` reconciled both `success` results (`RELOAD_SMOKE_CHILD_OK`) once; a final collect found nothing |
+
+The two children ended 1.7 s apart, so the lead received two coalesced completion signals, one per attention cycle as without a reload; the second turn's collect reported `Nothing terminal to reconcile`. No child process remained after the lead was disposed.
+
+Deterministic coverage lives in `reload-handoff.test.mjs`: no cancel on reload, re-attached roster and tools, steer routed to the launching adapter, new launches on the reloaded adapter, one completion for a child that finishes mid-reload, Worker lock kept and receipt settled once, cancel for every other shutdown reason, for a session that ends mid-reload, for an unclaimed handoff, and for a handoff from an incompatible revision.

@@ -8,7 +8,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { PiRpcExecutionAdapter, taskLabel } from "../../packages/pi-execution-adapter/src/index.js";
 import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
-import { removeActivity, upsertActivity } from "../activity/activity.mjs";
+import { ACTIVITY_CHANNEL, removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { createCompletionWakeup, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
@@ -151,29 +151,33 @@ type ChildRecord = {
   diagnostic?: string; childSessionId?: string; collected?: boolean;
 };
 
-export default function subagentExtension(pi: ExtensionAPI, options: { adapter?: PiRpcExecutionAdapter; resolverPath?: string } = {}) {
-  const adapter = options.adapter ?? new PiRpcExecutionAdapter();
-  const launched = new Map<string, LaunchMeta>();
-  const collected = new Set<string>();
-  const foreground = new Map<string, ForegroundDispatch>();
+export default function subagentExtension(pi: ExtensionAPI, options: { adapter?: PiRpcExecutionAdapter; resolverPath?: string; reloadClaimMs?: number } = {}) {
+  // New launches use this revision's adapter; children adopted across a reload keep the adapter that launched them.
+  const ownAdapter = options.adapter ?? new PiRpcExecutionAdapter();
   const registry = createUserLocalWorkerRegistry();
-  const workerExecutions = new Map<string, string>();
-  const workerReceipts = new Map<string, WorkerReceipt>();
-  const reconciling = new Set<string>();
-  const dismissedActivity = new Set<string>();
-  const pendingWorkerCompletions = new Set<Promise<unknown>>();
-  const pendingSubagentCompletions = new Set<Promise<unknown>>();
   // session_start and every launch record the session, so a wake reaches its own session's barrier.
   let sessionId: string | undefined;
-  const completionWakeup = createCheckpointAwareWakeup(pi, () => sessionId === undefined ? undefined : checkpointBarrier(sessionId));
+  // Everything a running child's callbacks touch. A reload hands it to the next instance, which adopts it.
+  let live = createSessionState(pi, ownAdapter, () => sessionId === undefined ? undefined : checkpointBarrier(sessionId));
+  let { host, launched, collected, foreground, workerExecutions, workerReceipts, reconciling, dismissedActivity, pendingWorkerCompletions, pendingSubagentCompletions, nudged, completionWakeup } = live;
+  const adapter = combinedAdapter(ownAdapter, () => live.adapters);
+  const adopt = (next: SessionState) => {
+    next.adapters.push(...live.adapters);
+    live = next;
+    ({ host, launched, collected, foreground, workerExecutions, workerReceipts, reconciling, dismissedActivity, pendingWorkerCompletions, pendingSubagentCompletions, nudged, completionWakeup } = next);
+    next.host.attach(pi);
+  };
+  const claimHandoff = () => {
+    const handoff = sessionId === undefined ? undefined : claimReloadHandoff(sessionId);
+    if (handoff !== undefined) adopt(handoff.state);
+  };
   if (process.env.PI_WORKBENCH_EXECUTION_KIND !== undefined) keepChildWebToolsLazy(pi);
   // Children an earlier runtime of this session launched; the live adapter no longer knows them.
   let retained = new Map<string, ChildRecord>();
-  let shuttingDown = false;
-  const record = (data: ChildRecord) => { try { pi.appendEntry?.(CHILD_RECORD, data); } catch {} };
+  const record = (data: ChildRecord) => { try { host.appendEntry(CHILD_RECORD, data); } catch {} };
   // A child cancelled by session shutdown stays `running` in the record, so the next runtime reports it interrupted.
   const recordSettled = (executionId: string, final: { outcome: string; text?: string; truncated?: boolean; diagnostic?: string; sessionId?: string }) => {
-    if (shuttingDown) return;
+    if (host.closed) return;
     const text = final.text ?? "";
     record({ executionId, status: final.outcome, text: bounded(text, RETAINED_TEXT_MAX), truncated: final.truncated === true || text.length > RETAINED_TEXT_MAX, diagnostic: final.diagnostic, childSessionId: final.sessionId });
   };
@@ -183,8 +187,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   };
   const retainedOnly = (executionId: string) => launched.has(executionId) ? undefined : retained.get(executionId);
   pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
-    shuttingDown = false;
     sessionId = ctx.sessionManager.getSessionId?.() ?? sessionId;
+    claimHandoff();
     retained = restoreChildRecords(ctx.sessionManager.getBranch?.() ?? []);
     for (const child of retained.values()) if (child.collected === true) collected.add(child.executionId);
   });
@@ -206,17 +210,23 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
 
   // A Worker's dispatch ends when it settles, so a leaf still writing would outlive the result the
   // lead reconciles. Hold settlement until background leaves finish, then continue once to collect.
-  const nudged = new Set<string>();
   if (INSIDE_WORKER) {
     pi.on("agent_before_settle", () => holdForLeaves({ pending: pendingSubagentCompletions, list: () => adapter.list(), collected, nudged }));
   }
 
-  pi.on("session_shutdown", async () => {
-    shuttingDown = true;
-    foreground.clear();
-    completionWakeup.shutdown();
-    await adapter.cancelAll("Attended parent session ended.");
-    await Promise.allSettled([...pendingWorkerCompletions, ...pendingSubagentCompletions]);
+  // A reload re-instantiates this extension in the same process, so running children stay with the
+  // session and the next instance re-attaches to them. Quit, new, resume, and fork end them.
+  pi.on("session_shutdown", async (event?: { reason?: string }, ctx?: ExtensionContext) => {
+    sessionId = sessionId ?? ctx?.sessionManager?.getSessionId?.();
+    // A reload that ended before session_start still owns what the previous instance handed over.
+    claimHandoff();
+    if (event?.reason === "reload" && sessionId !== undefined) {
+      const state = live;
+      state.host.detach();
+      stashForReload(sessionId, { version: RELOAD_HANDOFF_VERSION, state, cancel: () => endSession(state) }, options.reloadClaimMs);
+      return;
+    }
+    await endSession(live);
   });
 
   pi.registerTool({
@@ -288,7 +298,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
       }
-      emitExecutionEvent(pi, {
+      emitExecutionEvent(host, {
         type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
         executionId: receipt.executionId, kind: "subagent", task: childTask,
         profile: params.profile, cognitiveRole: params.cognitiveRole, concept: telemetryConcept ?? null,
@@ -315,9 +325,9 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         activity: "starting",
         startedAt: receipt.acceptedAt,
       };
-      upsertActivity(pi, activity);
+      upsertActivity(host, activity);
       let backgrounded = params.background === true;
-      void watchActivity(pi, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
+      void watchActivity(host, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
 
       const detachController = new AbortController();
       if (!backgrounded) {
@@ -329,7 +339,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       // Register terminal cleanup before waiting so it wins a same-tick detach race.
       const completion = adapter.result(receipt.executionId).then((final) => {
         foreground.delete(receipt.executionId);
-        emitExecutionEvent(pi, {
+        emitExecutionEvent(host, {
           type: "execution.settled", at: new Date().toISOString(), sessionId: parentSessionId,
           executionId: receipt.executionId, kind: "subagent", childSessionId: final.sessionId ?? null,
           outcome: final.outcome,
@@ -391,7 +401,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         const reconciled = await receiptSafeResult({ result, executionId, terminal, receipt: workerReceipts.get(executionId) });
         if (terminal) {
           dismissedActivity.add(executionId);
-          removeActivity(pi, `delegate:${executionId}`);
+          removeActivity(host, `delegate:${executionId}`);
         }
         return reconciled;
       };
@@ -507,7 +517,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       } catch (error) {
         return failure("outcome_unknown", errorMessage(error));
       } finally {
-        removeActivity(pi, `delegate:${params.executionId}`);
+        removeActivity(host, `delegate:${params.executionId}`);
       }
     },
   });
@@ -528,8 +538,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       if (params.requestUpdate === true) {
         void awaitReportedUpdate(adapter, params.executionId, receipt.sequence).then((status) => {
-          if (status === undefined || shuttingDown) return;
-          const send = () => pi.sendMessage(
+          if (status === undefined || host.closed) return;
+          const send = () => host.sendMessage(
             { customType: CHILD_UPDATE, content: `Child ${params.executionId} reported: ${status}\nThis update grants no new authority; continue the run that launched it.`, display: true, details: { executionId: params.executionId, status } },
             { deliverAs: "steer", triggerTurn: true },
           );
@@ -644,7 +654,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         await abandon(errorMessage(error));
         return failure("preflight_failed", errorMessage(error));
       }
-      emitExecutionEvent(pi, {
+      emitExecutionEvent(host, {
         type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
         executionId: receipt.executionId, kind: "worker", workerId: params.workerId, task: childTask,
         profile: begin.profile, cognitiveRole: params.cognitiveRole, concept: params.telemetryConcept ?? null,
@@ -673,9 +683,9 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         activity: "starting",
         startedAt: receipt.acceptedAt,
       };
-      upsertActivity(pi, activity);
+      upsertActivity(host, activity);
       let backgrounded = params.background === true;
-      void watchActivity(pi, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
+      void watchActivity(host, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
       const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
       heartbeat.unref();
       const detachController = new AbortController();
@@ -692,7 +702,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
         const final = await adapter.result(receipt.executionId);
         foreground.delete(receipt.executionId);
-        emitExecutionEvent(pi, {
+        emitExecutionEvent(host, {
           type: "execution.settled", at: new Date().toISOString(), sessionId: parentSessionId,
           executionId: receipt.executionId, kind: "worker", workerId: params.workerId,
           childSessionId: final.sessionId ?? null, outcome: final.outcome,
@@ -833,6 +843,122 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
     },
   });
+}
+
+function createSessionState(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, barrierFor: () => { defer(send: () => void, key?: string): boolean } | undefined) {
+  const host = createSessionHost(pi);
+  return {
+    host,
+    adapters: [adapter],
+    launched: new Map<string, LaunchMeta>(),
+    collected: new Set<string>(),
+    foreground: new Map<string, ForegroundDispatch>(),
+    workerExecutions: new Map<string, string>(),
+    workerReceipts: new Map<string, WorkerReceipt>(),
+    reconciling: new Set<string>(),
+    dismissedActivity: new Set<string>(),
+    pendingWorkerCompletions: new Set<Promise<unknown>>(),
+    pendingSubagentCompletions: new Set<Promise<unknown>>(),
+    nudged: new Set<string>(),
+    completionWakeup: createCheckpointAwareWakeup(host, barrierFor),
+  };
+}
+type SessionState = ReturnType<typeof createSessionState>;
+
+async function endSession(state: SessionState) {
+  state.host.close();
+  state.foreground.clear();
+  state.completionWakeup.shutdown();
+  await Promise.all(state.adapters.map((adapter) => adapter.cancelAll("Attended parent session ended.")));
+  await Promise.allSettled([...state.pendingWorkerCompletions, ...state.pendingSubagentCompletions]);
+}
+
+/**
+ * The extension API as running children's callbacks see it. Between a reload's shutdown and the next
+ * instance's session_start no API is live: entries, messages, and telemetry wait for the next one, and
+ * the delegate roster is replayed to it, because the reloaded activity surface starts empty.
+ */
+export function createSessionHost(pi: any) {
+  let api: any = pi;
+  let closed = false;
+  const waiting: ((api: any) => void)[] = [];
+  const roster = new Map<string, unknown>();
+  const call = (send: (api: any) => void) => {
+    if (api !== undefined) send(api);
+    else if (!closed) waiting.push(send);
+  };
+  return {
+    events: {
+      emit(channel: string, data: any) {
+        if (channel === ACTIVITY_CHANNEL) {
+          if (data?.type === "remove") roster.delete(data.id);
+          else if (typeof data?.item?.id === "string") roster.set(data.item.id, data);
+          if (api === undefined) return;
+        }
+        call((live) => live.events.emit(channel, data));
+      },
+    },
+    appendEntry: (customType: string, data: unknown) => call((live) => live.appendEntry?.(customType, data)),
+    sendMessage: (message: unknown, options: unknown) => call((live) => live.sendMessage(message, options)),
+    get closed() { return closed; },
+    detach() { api = undefined; },
+    attach(next: any) {
+      api = next;
+      for (const event of roster.values()) next.events.emit(ACTIVITY_CHANNEL, event);
+      for (const send of waiting.splice(0)) send(next);
+    },
+    close() { closed = true; waiting.length = 0; },
+  } as unknown as Pick<ExtensionAPI, "events" | "appendEntry" | "sendMessage"> & { readonly closed: boolean; detach(): void; attach(next: ExtensionAPI): void; close(): void };
+}
+
+/** Routes each execution to the adapter that launched it; new launches use this instance's own adapter. */
+export function combinedAdapter(own: PiRpcExecutionAdapter, adapters: () => PiRpcExecutionAdapter[]): PiRpcExecutionAdapter {
+  const owner = (executionId: string) => {
+    const all = adapters();
+    return all.length < 2 ? own : all.find((candidate) => candidate.list().some((child) => child.executionId === executionId)) ?? own;
+  };
+  return {
+    dispatch: (spec) => own.dispatch(spec),
+    observe: (executionId) => owner(executionId).observe(executionId),
+    result: (executionId) => owner(executionId).result(executionId),
+    status: (executionId) => owner(executionId).status(executionId),
+    cancel: (executionId, reason) => owner(executionId).cancel(executionId, reason),
+    steer: (executionId, message, mode) => owner(executionId).steer(executionId, message, mode),
+    list: () => adapters().flatMap((candidate) => candidate.list()),
+    cancelAll: async (reason) => (await Promise.all(adapters().map((candidate) => candidate.cancelAll(reason)))).flat(),
+  } as PiRpcExecutionAdapter;
+}
+
+// Bump whenever SessionState changes shape: a reload may hand state from an older revision to a newer
+// one, which then cancels it through the handoff's own `cancel` instead of adopting it.
+export const RELOAD_HANDOFF_VERSION = 1;
+// Unclaimed after this long (the next instance failed to load or the session never restarted), the
+// handed-over children are cancelled so none outlives the session unattended.
+const RELOAD_CLAIM_MS = 60_000;
+type ReloadHandoff = { version: number; state: SessionState; cancel: () => Promise<unknown> };
+// Process-global: Pi loads extensions with jiti's module cache off, so a reload re-evaluates this module.
+// ponytail: one adapter per reload stays in the adopted state for the session's life; prune if reloads get frequent.
+const reloadHandoffs: Map<string, ReloadHandoff & { timer: ReturnType<typeof setTimeout> }> =
+  (globalThis as any)[Symbol.for("pi-workbench.subagent.reload-handoffs")] ??= new Map();
+
+export function stashForReload(sessionKey: string, handoff: ReloadHandoff, claimMs = RELOAD_CLAIM_MS) {
+  void claimReloadHandoff(sessionKey)?.cancel();
+  const timer = setTimeout(() => {
+    if (reloadHandoffs.get(sessionKey)?.timer !== timer) return;
+    reloadHandoffs.delete(sessionKey);
+    void handoff.cancel();
+  }, claimMs);
+  reloadHandoffs.set(sessionKey, { ...handoff, timer });
+}
+
+export function claimReloadHandoff(sessionKey: string): ReloadHandoff | undefined {
+  const handoff = reloadHandoffs.get(sessionKey);
+  if (handoff === undefined) return undefined;
+  reloadHandoffs.delete(sessionKey);
+  clearTimeout(handoff.timer);
+  if (handoff.version === RELOAD_HANDOFF_VERSION) return handoff;
+  void handoff.cancel();
+  return undefined;
 }
 
 /**
@@ -1009,8 +1135,9 @@ export async function streamToResult(
 
 /**
  * Folds this extension's custom entries on the active branch into one record per child. A child
- * with no terminal record was live when its runtime ended (reload, session switch, quit, or crash):
- * that runtime cancelled it, so it is reported as interrupted and never resumed or relaunched.
+ * with no terminal record was live when its runtime ended (session switch, quit, crash, or a reload
+ * that could not hand it over): that runtime cancelled it, so it is reported as interrupted and never
+ * resumed or relaunched. A child handed over by a reload is live in the next runtime and shadows this record.
  */
 export function restoreChildRecords(entries: any[]): Map<string, ChildRecord> {
   const records = new Map<string, ChildRecord>();
@@ -1035,7 +1162,7 @@ export function retainedResult(child: ChildRecord) {
   const outcome = child.status ?? "interrupted";
   const locator = child.childSessionId ? ` \u00b7 child session ${child.childSessionId}` : "";
   const summary = outcome === "interrupted"
-    ? `interrupted: ${child.executionId} was still running when an earlier runtime of this session ended (extension reload or session shutdown). That runtime cancelled it; it is not resumed or relaunched. Launch a new child if the work is still needed.`
+    ? `interrupted: ${child.executionId} was still running when an earlier runtime of this session ended (session shutdown, or a reload that could not hand it over). That runtime cancelled it; it is not resumed or relaunched. Launch a new child if the work is still needed.`
     : outcome === "success"
       ? child.text || "Child completed without a text result."
       : `${outcome}: ${child.diagnostic ?? child.text ?? "No diagnostic was reported."}`;
