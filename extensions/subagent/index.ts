@@ -313,6 +313,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         effort: binding.effort,
         objective: taskGoal(params.task),
         activity: "starting",
+        startedAt: receipt.acceptedAt,
       };
       upsertActivity(pi, activity);
       let backgrounded = params.background === true;
@@ -670,6 +671,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         effort: binding.effort,
         objective: taskGoal(params.task),
         activity: "starting",
+        startedAt: receipt.acceptedAt,
       };
       upsertActivity(pi, activity);
       let backgrounded = params.background === true;
@@ -872,18 +874,23 @@ export async function watchActivity(
   // A self-report is sticky across unrelated tool calls: once the child reports, its status
   // survives until the next report, while the inferred `activity` keeps changing per tool call.
   let reportedStatus: string | undefined;
+  let reportedAt: string | undefined;
+  let endedAt: string | undefined;
   let currentActivity = activity.activity;
   try {
     for await (const observation of adapter.observe(executionId)) {
       const text = activityText(observation);
       const reported = reportedStatusText(observation);
-      if (reported !== undefined) reportedStatus = reported;
+      if (reported !== undefined) { reportedStatus = reported; reportedAt = observation.at; }
+      if (observation.type === "terminal") endedAt = observation.at;
       if (text === undefined && reported === undefined) continue;
       if (text !== undefined) currentActivity = text;
       upsertActivity(pi, {
         ...activity,
         activity: currentActivity,
         ...(reportedStatus === undefined ? {} : { reportedStatus }),
+        ...(reportedAt === undefined ? {} : { reportedAt }),
+        ...(endedAt === undefined ? {} : { endedAt }),
       });
     }
     completed = true;

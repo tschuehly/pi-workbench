@@ -135,14 +135,16 @@ test("activity progress retains terminal background children but removes foregro
   const adapter = {
     async *observe() {
       yield { type: "tool_progress", detail: { toolName: "bash", action: "running focused tests" } };
-      yield { type: "terminal", detail: { outcome: "success" } };
+      yield { type: "terminal", at: "2026-10-21T10:05:00.000Z", detail: { outcome: "success" } };
     },
   };
   const activity = { id: "delegate:child-1", kind: "subagent", role: "implementation", model: "openai/gpt", effort: "medium", objective: "Fix the roster", activity: "starting" };
 
   await watchActivity(pi, adapter, "child-1", activity, () => true);
   assert.equal(events.at(-2)[1].item.activity, "running focused tests");
+  assert.equal(events.at(-2)[1].item.endedAt, undefined);
   assert.equal(events.at(-1)[1].item.activity, "success");
+  assert.equal(events.at(-1)[1].item.endedAt, "2026-10-21T10:05:00.000Z", "a finished child keeps its end time so elapsed stops counting");
   assert.equal(events.some(([, event]) => event.type === "remove"), false);
 
   events.length = 0;
@@ -156,9 +158,9 @@ test("watchActivity keeps the last self-reported status while inferred activity 
   const adapter = {
     async *observe() {
       yield { type: "tool_progress", detail: { toolName: "read", action: "reading roster.ts" } };
-      yield { type: "tool_start", detail: { toolName: "report_status", action: "Investigating the roster bug" } };
-      yield { type: "tool_progress", detail: { toolName: "edit", action: "editing roster.ts" } };
-      yield { type: "tool_start", detail: { toolName: "report_status", action: "Fixing the roster bug" } };
+      yield { type: "tool_start", at: "2026-10-21T10:01:00.000Z", detail: { toolName: "report_status", action: "Investigating the roster bug" } };
+      yield { type: "tool_progress", at: "2026-10-21T10:02:00.000Z", detail: { toolName: "edit", action: "editing roster.ts" } };
+      yield { type: "tool_start", at: "2026-10-21T10:03:00.000Z", detail: { toolName: "report_status", action: "Fixing the roster bug" } };
       yield { type: "tool_progress", detail: { toolName: "bash", action: "running focused tests" } };
     },
   };
@@ -168,6 +170,7 @@ test("watchActivity keeps the last self-reported status while inferred activity 
   const items = events.filter(([channel]) => channel === "pi-workbench:activity").map(([, event]) => event.item);
   assert.deepEqual(items.map((item) => item.activity), ["reading roster.ts", "reading roster.ts", "editing roster.ts", "editing roster.ts", "running focused tests"]);
   assert.deepEqual(items.map((item) => item.reportedStatus), [undefined, "Investigating the roster bug", "Investigating the roster bug", "Fixing the roster bug", "Fixing the roster bug"]);
+  assert.deepEqual(items.map((item) => item.reportedAt), [undefined, "2026-10-21T10:01:00.000Z", "2026-10-21T10:01:00.000Z", "2026-10-21T10:03:00.000Z", "2026-10-21T10:03:00.000Z"], "freshness follows the report, not inferred activity");
 });
 
 test("collection and explicit cancellation remove retained activity", async () => {
