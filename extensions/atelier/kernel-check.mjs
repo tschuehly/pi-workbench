@@ -893,18 +893,26 @@ try {
   // Key with no free spot hid its whole chip row at rest (2.8.1), an unread agent reply included.
   await fixCheck("2.9.1-attention-threads-visible-at-rest", async () => {
     const tight = path.join(dir, "tight.html");
-    const img = (id) => `<div atl-key="${id}" id="${id}"><svg viewBox="0 0 10 10" preserveAspectRatio="none" style="display:block;width:100%;height:80px"><rect width="10" height="10" fill="#9ab"/></svg></div>`;
+    const img = (id, style = "") => `<div atl-key="${id}" id="${id}" style="${style}"><svg viewBox="0 0 10 10" preserveAspectRatio="none" style="display:block;width:100%;height:80px"><rect width="10" height="10" fill="#9ab"/></svg></div>`;
     await writeFile(tight, `<!doctype html><html lang="de"><meta charset="utf-8"><title>Tight</title>
 <style>body{margin:16px;font:15px/1.4 system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:12px 0}</style>
 <body><p atl-key="intro">Ein Absatz über den Bildern, damit über ihnen kein Platz frei ist.</p>${img("need")}<p>Text dazwischen, der den Platz über dem zweiten Bild belegt.</p>${img("done")}
+${img("clip", "position:relative;overflow:hidden;margin-top:40px")}
+<div atl-key="outer" id="outer" style="border:0;padding:0">${img("inner", "border:0;padding:0;margin:0")}</div>
 <script type="module" src="atelier.js"></script></body></html>`);
     appendLog(tight, { origin: "human", type: "comment", key: "need", text: "Zu dunkel", delivery: "immediate" }, Date.now() - 60_000); // seq 1
     appendLog(tight, { origin: "agent", type: "answer", target: 1, text: "Aufgehellt." }, Date.now() - 30_000);
     appendLog(tight, { origin: "human", type: "comment", key: "done", text: "Passt", delivery: "immediate" }, Date.now() - 60_000); // seq 3
     appendLog(tight, { origin: "human", type: "close", target: 3, delivery: "record" }, Date.now() - 50_000);
+    // Review of 2.9.1: a Key that clips its overflow hid a badge placed above it, and nested Keys with one box stacked
+    // their corner badges, one covering the other.
+    for (const key of ["clip", "outer", "outer/inner"]) {
+      const { seq } = appendLog(tight, { origin: "human", type: "comment", key, text: `Zu hell: ${key}`, delivery: "immediate" }, Date.now() - 40_000);
+      appendLog(tight, { origin: "agent", type: "answer", target: seq, text: "Abgedunkelt." }, Date.now() - 20_000);
+    }
     await b("set", "viewport", "390", "844");
     await b("open", (await host.open(tight)).url);
-    await until("document.querySelector('.atl-conn')?.textContent==='live' && document.querySelectorAll('.atl-prow .atl-chip').length===2");
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && document.querySelectorAll('.atl-prow .atl-chip').length===5");
     await b("mouse", "move", "1", "1"); await sleep(300);
     // What marks each Key's threads at rest, and whether its chip row found a spot.
     const rest = (key) => js(`(()=>{const p=document.querySelector('[atl-ui=pin][data-key=${key}]'),v=(e)=>e.checkVisibility({visibilityProperty:true,opacityProperty:true});return {tuck:p.querySelector('.atl-prow').classList.contains('atl-tuck'),shown:[...p.querySelectorAll('.atl-chip')].filter(v).map((c)=>c.dataset.atl+':'+(c.querySelector('.atl-cn')?.textContent??'')+(c.querySelector('.atl-nd')?'*':'')),sw:document.documentElement.scrollWidth,vw:document.documentElement.clientWidth}})()`);
@@ -912,6 +920,9 @@ try {
     assert(need.tuck && need.shown.length === 1 && need.shown[0] === "tuck:1*", `with no free spot, an unread thread keeps a visible badge (count and new dot) at rest: ${JSON.stringify(need)}`);
     assert(done.tuck && done.shown.length === 0, `a closed, read thread may still wait for hover: ${JSON.stringify(done)}`);
     assert(need.sw <= need.vw, `the badge never widens the Page: ${JSON.stringify(need)}`);
+    // Every Key with a thread that needs the human shows a chip or badge at rest that a tap at its centre reaches.
+    const reach = await js(`["need","clip","outer","outer/inner"].map((key)=>{const p=document.querySelector('[atl-ui=pin][data-key="'+key+'"]');return key+':'+[...p.querySelectorAll('.atl-badge,.atl-prow .atl-unread')].some((c)=>{if(!c.checkVisibility({visibilityProperty:true,opacityProperty:true}))return false;const r=c.getBoundingClientRect();return document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.closest('.atl-badge,.atl-chip')===c})})`);
+    assert.deepEqual(reach, ["need:true", "clip:true", "outer:true", "outer/inner:true"], `each attention marker is visible and on top, not clipped or covered: ${JSON.stringify(reach)}`);
     const badge = "[atl-ui=pin][data-key=need] .atl-badge", chip = "[atl-ui=pin][data-key=need] .atl-prow .atl-chip";
     const k = await box("#need"), bb = await box(badge);
     assert(bb.x >= k.x && bb.right <= k.right && bb.y >= k.y && bb.y + bb.h <= k.y + k.h, `the badge sits on its Key: ${JSON.stringify({ k, bb })}`);

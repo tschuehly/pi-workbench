@@ -812,10 +812,11 @@ function boot() {
     }
     return { out, beside };
   }
-  // The part of the viewport's width and the Key's scroll containers a pin may use.
-  function clipOf(el) {
+  // The part of the viewport's width and the Key's scroll containers a pin may use; from: the pin's parent, so a Key that
+  // clips its own overflow keeps its pin's chips and badge inside it (2.9.1).
+  function clipOf(el, from = el.parentElement) {
     const c = { left: 0, top: -scrollY, right: document.documentElement.clientWidth, bottom: Infinity }; // never above the document
-    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    for (let p = from; p && p !== document.body; p = p.parentElement) {
       const s = getComputedStyle(p);
       if (s.overflowX === "visible" && s.overflowY === "visible") continue;
       const r = p.getBoundingClientRect();
@@ -833,7 +834,7 @@ function boot() {
     const el = findKey(pin.dataset.key), b = pin.querySelector(".atl-add"), row = pin.querySelector(".atl-prow");
     if (!el || !b) return;
     pin.style.translate = ""; pin.style.display = "";
-    const k = el.getBoundingClientRect(), c = clipOf(el);
+    const k = el.getBoundingClientRect(), c = clipOf(el, pin.parentElement);
     const r = { left: Math.max(k.left, c.left), right: Math.min(k.right, c.right), top: Math.max(k.top, c.top), bottom: Math.min(k.bottom, c.bottom) };
     if (r.right - r.left < b.offsetWidth + 8 || r.bottom <= r.top) { pin.style.display = "none"; return; }
     const p = pin.getBoundingClientRect(), x0 = r.right - b.offsetWidth - 4, top = r.top + 4;
@@ -844,7 +845,7 @@ function boot() {
     const area = { left: c.left, right: c.right, top: Math.max(c.top, k.top - row.offsetHeight - 12), bottom: Math.min(r.bottom, top + SEARCH) }; // the full row is the tallest
     const others = [...pins.values()].filter((o) => o !== pin && o.style.display !== "none").flatMap((o) => [...o.querySelectorAll(".atl-prow,.atl-badge")].map((x) => x.getBoundingClientRect())).filter((x) => x.width);
     const { out, beside } = contentIn(area, el), obs = [...out, ...others, { left: x0, right: x0 + b.offsetWidth, top, bottom: top + b.offsetHeight }], margin = [...obs, ...beside], lo = r.left + 4;
-    const slot = (it = row) => {
+    const slot = (it = row, avoid = null) => {
       const w = it.offsetWidth, h = it.offsetHeight;
       // A row keeps GX px from content beside it and GY px above and below, so it never touches a line.
       const hits = (x, y, list = obs, ww = w) => list.filter((o) => o.left < x + ww + GX && o.right > x - GX && o.top < y + h + GY && o.bottom > y - GY);
@@ -853,6 +854,7 @@ function boot() {
       const ys = [...new Set(obs.flatMap((o) => [Math.ceil(o.top), Math.ceil(o.bottom) + GY + 1]))].filter((y) => y > top && y + h <= area.bottom).sort((a, b) => a - b);
       // Outside the Key only on free margin, where no other element's box is (right of the Key not in a narrow gap
       // before a neighbour), so a row never reads as a neighbour's.
+      if (avoid) return scan(top, r.right - 4, avoid);
       return scan(top, r.right - 4) ?? (r.right + 8 + w + MARGIN <= c.right && !hits(r.right + 8, top, margin, w + MARGIN).length ? [r.right + 8, top] : null)
         ?? ys.reduce((got, y) => got ?? scan(y, r.right - 4), null) ?? (k.top - h - 4 >= c.top ? scan(k.top - h - 4, r.right - 4, margin) : null);
     };
@@ -862,7 +864,9 @@ function boot() {
     row.style.left = `${Math.round(at[0] - x0)}px`; row.style.top = `${Math.round(at[1] - top)}px`;
     const badge = row.classList.contains("atl-tuck") && pin.querySelector(".atl-badge");
     if (!badge) return;
-    const bat = slot(badge) ?? [r.right - 4 - badge.offsetWidth, top]; // ponytail: the corner may cover a little content; hiding is worse
+    // No free slot: the top band from the corner leftwards, over Page content but clear of other pins' chips and badges
+    // (nested Keys with one box), else the corner itself. ponytail: covering a little content beats hiding the thread.
+    const bat = slot(badge) ?? slot(badge, others) ?? [r.right - 4 - badge.offsetWidth, top];
     badge.style.left = `${Math.round(bat[0] - x0)}px`; badge.style.top = `${Math.round(bat[1] - top)}px`;
   }
   function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); for (const s of spots.values()) spotAt(s); positionMarks(); placePops(); positionWip(); }
