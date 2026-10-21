@@ -34,6 +34,8 @@ const js = async (code) => (await b("eval", code)).result;
 const until = (code) => b("wait", "--fn", code);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decides = () => readLog(page).filter((e) => e.type === "decide");
+// Makes the host refuse every event POST from the tab (409), as when the Page's input moved elsewhere; restore with window.__fetch.
+const REFUSE = `(()=>{window.__fetch??=window.fetch;window.fetch=(u,o)=>o?.method==="POST"&&String(u).startsWith("/.atelier/events")?Promise.resolve(new Response(JSON.stringify({error:"Refused for the check."}),{status:409,headers:{"content-type":"application/json"}})):window.__fetch(u,o);return true})()`;
 const box = async (sel) => js(`(()=>{const r=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right}})()`);
 const opacity = (key) => js(`getComputedStyle(document.querySelector('[atl-ui=pin][data-key="${key}"] .atl-add')).opacity`);
 const buttons = () => js("[...document.querySelectorAll('[data-atl=comment]')].map((b)=>b.dataset.key)");
@@ -103,6 +105,14 @@ try {
   const commentShot = path.join(dir, "comment-shot.png"); await writeFile(commentShot, Buffer.from(ONE_PX, "base64"));
   await b("upload", "[atl-ui=composer] .atl-file", commentShot);
   await until("document.querySelectorAll('[atl-ui=composer] .atl-attached img').length===1");
+  // Draft safety (review 2): a Comment the host refuses keeps its box, text and images for another try.
+  await js(REFUSE);
+  await click("[atl-ui=composer] [type=submit]");
+  await until("[...document.querySelectorAll('.atl-toast')].some((t)=>/Refused for the check/.test(t.textContent))");
+  assert.deepEqual(await js("(()=>{const f=document.querySelector('[atl-ui=composer]'),t=f?.querySelector('textarea');return [t?.value??null,t?.readOnly,f?.querySelector('[type=submit]').disabled,f?.querySelectorAll('.atl-attached img').length]})()"), ["Needs a source.", false, false, 1], "the refused Comment stays in its open box");
+  assert.equal(readLog(page).some((e) => e.type === "comment"), false);
+  assert.equal(await js("document.querySelector('.atl-recv')?.textContent+' '+document.querySelector('.atl-conn').textContent"), "\u2192 Chat A live", "the bar still names the real receiver and connection");
+  await js("(()=>{window.fetch=window.__fetch;return true})()");
   await click("[atl-ui=composer] [type=submit]");
   await until("document.querySelector('[atl-ui=composer]')===null");
   assert.match(readLog(page).find((e) => e.type === "comment")?.images?.[0] ?? "", /^page\.html\.images\/[0-9a-f]{16}\.png$/, "the Comment names its stored image");
@@ -356,6 +366,24 @@ try {
   await sleep(300);
   assert.deepEqual(readLog(page).filter((e) => e.seq > hold.seq && e.type === "decide").map((e) => e.option), ["Ship"], "only the first click posts");
   await js("(()=>{window.fetch=window.__fetch;return true})()");
+  // Draft safety (review 2): a Decision the host refuses keeps its note and images; the answer stays.
+  await sleep(3200); // past the undo window, so the change posts no undo first
+  await click(`${shot} [data-atl=addnote]`);
+  await until(`document.activeElement===document.querySelector('${shot} .atl-note')`);
+  await b("keyboard", "type", "kept on refusal");
+  await b("upload", `${shot} .atl-file`, picked);
+  await until(`document.querySelectorAll('${shot} .atl-attached img').length===1`);
+  const before = readLog(page).length;
+  await js(REFUSE);
+  await click(`[data-atl=decide][data-id=shot][data-label=Hold]`);
+  await until("[...document.querySelectorAll('.atl-toast')].filter((t)=>/Refused for the check/.test(t.textContent)).length>=1");
+  await sleep(200);
+  assert.deepEqual(await js(`[document.querySelector('${shot} .atl-note').value, document.querySelectorAll('${shot} .atl-attached img').length, document.querySelector('${shot} .atl-extra').hidden, atelier.state().decisions.find((d)=>d.id==='shot').answer]`), ["kept on refusal", 1, false, "Ship"], "the refused answer keeps its note and image");
+  assert.equal(readLog(page).length, before, "nothing posted");
+  await js("(()=>{window.fetch=window.__fetch;return true})()");
+  await click(`[data-atl=decide][data-id=shot][data-label=Hold]`);
+  await until("atelier.state().decisions.find((d)=>d.id==='shot').answer==='Hold'");
+  assert.equal(decides().at(-1).note, "kept on refusal", "the retry posts what was kept");
 
   // A Decision the agent asks takes the same quiet note-or-image button instead of a permanent note field.
   host.agent(page, { type: "ask", decision: { id: "ask-1", key: "plain", question: "Keep it?", options: [{ label: "Yes", consequence: "kept" }, { label: "No", consequence: "dropped" }] } });

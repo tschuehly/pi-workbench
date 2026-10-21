@@ -1173,19 +1173,21 @@ function boot() {
       ev.preventDefault();
       const ta = node.querySelector("textarea"), extra = node.querySelector(".atl-extra");
       if (!ta.value.trim() || node.dataset.busy) return;
-      // Locked while it saves (Cancel stays), so what posts is what the box shows: images still being read, then the
-      // upload. A refused image unlocks the box with the text and images as typed.
+      // Locked while it saves (Cancel stays), so what posts is what the box shows: images still being read, the upload,
+      // then the event. It closes only once the event is saved (or kept in this tab with no host); a refused image or
+      // event unlocks the box with the text and images as typed.
       const lock = (on) => { ta.readOnly = on; node.querySelector("[type=submit]").disabled = on; if (on) node.dataset.busy = "1"; else delete node.dataset.busy; };
       lock(true);
       const read = await reads(extra);
       if (!read) flash("Your Comment was not saved.");
       const text = ta.value.trim(), images = (extra && attached.get(extra)) ?? [], names = !read ? null : images.length ? await upload(images, "Your Comment was not saved.") : [];
-      lock(false);
-      if (!names) { ta.focus(); return; }
-      if (composer?.node === node) closeComposer(true); else if (!node.isConnected) return; // cancelled during the upload
+      if (!node.isConnected) return; // cancelled while saving
       // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
       const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
-      await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery, images: names.length ? names : undefined });
+      const saved = names && await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery, images: names.length ? names : undefined });
+      lock(false);
+      if (!saved) { if (node.isConnected) ta.focus(); return; }
+      if (composer?.node === node) closeComposer(true);
     });
   }
   const mediaTime = (el) => { const m = el?.querySelector("video,audio"); return m ? Math.round(m.currentTime * 10) / 10 : undefined; };
@@ -1237,7 +1239,8 @@ function boot() {
     const page = d.declared ? { options: d.options.map((o) => o.label).join("|"), rec: d.options.find((o) => o.recommended)?.label, delivery: d.delivery } : {};
     // The replaced answer was never delivered, so its note and images stay with the Decision unless new ones replace them.
     const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, key: d.key, ver: d.key ? currentVer(d.key) : undefined, ...page });
-    if (posted && extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
+    if (!posted) return false; // refused: the note and images stay for another try
+    if (extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
   }
 
   const actions = {
