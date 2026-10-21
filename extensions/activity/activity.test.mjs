@@ -112,5 +112,11 @@ test("normalizes a child's self-reported status like its siblings", () => {
   surface.update({ type: "upsert", item: { ...items[0], reportedStatus: undefined } });
   assert.equal(JSON.parse(statuses.at(-1)[1]).items[0].reportedStatus, undefined, "an inferred-only update still normalizes without a self-report");
 
+  surface.update({ type: "upsert", item: { ...items[0], startedAt: "2026-10-21T10:00:00Z", reportedAt: "2026-10-21T10:02:30.5Z", endedAt: "yesterday" } });
+  const timed = JSON.parse(statuses.at(-1)[1]).items[0];
+  assert.equal(timed.startedAt, "2026-10-21T10:00:00.000Z");
+  assert.equal(timed.reportedAt, "2026-10-21T10:02:30.500Z");
+  assert.equal(timed.endedAt, undefined, "an unparseable time is dropped, not published");
+
   surface.dispose();
 });

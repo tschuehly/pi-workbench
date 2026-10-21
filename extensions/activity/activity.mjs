@@ -159,12 +159,21 @@ function normalizeActivityEvent(value) {
       ...optionalText("objective", value.item.objective, 240),
       ...optionalText("activity", value.item.activity, 120),
       ...optionalText("reportedStatus", value.item.reportedStatus, 120),
+      ...optionalTime("startedAt", value.item.startedAt),
+      ...optionalTime("reportedAt", value.item.reportedAt),
+      ...optionalTime("endedAt", value.item.endedAt),
     },
   };
 }
 
 function optionalText(key, value, max) {
   return typeof value === "string" && value.trim() !== "" ? { [key]: bounded(clean(value), max) } : {};
+}
+
+// Lets a client show elapsed time and how fresh the self-report is; anything but a parseable ISO time is dropped.
+function optionalTime(key, value) {
+  const time = typeof value === "string" && value.length <= 64 ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(time) ? { [key]: new Date(time).toISOString() } : {};
 }
 
 function requiredText(value, max) {
