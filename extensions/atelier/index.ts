@@ -123,7 +123,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
         if (!d) throw new Error("ask needs decision.");
         if (d.options.filter((o: any) => o.recommended === true).length > 1) throw new Error("A Decision recommends at most one option (decision 155).");
         const entry = host.agent(page, { type: "ask", decision: d });
-        return text(`Decision ${d.id} posted (#${entry.seq}). End your turn; the answer arrives as a message after its 10-second undo window.`, { seq: entry.seq });
+        return text(`Decision ${d.id} posted (#${entry.seq}). End your turn; the answer arrives as a message after its 3-second undo window.`, { seq: entry.seq });
       }
       if (params.action === "answer") {
         const target = entries.find((e) => e.seq === params.comment && e.type === "comment" && e.origin === "human");

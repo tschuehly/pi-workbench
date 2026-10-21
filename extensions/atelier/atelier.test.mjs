@@ -9,7 +9,7 @@ import test from "node:test";
 import atelierExtension, { appendLog, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
 import { compose, derive, diffPreview, keyTexts, palette, threadLayout, wordDiff } from "./kernel/atelier.js";
 
-const UNDO = 10_000;
+const UNDO = 3_000; // decision 151 (owner 2026-10-21)
 
 function project() {
   const root = mkdtempSync(path.join(tmpdir(), "atelier-"));
@@ -59,15 +59,20 @@ test("undo inside the window cancels delivery; after the window it is refused", 
   const { host, page, sent, tick, human } = await hostOn(p);
   try {
     const { entry } = human({ type: "request", job: "rerun", key: "a", input: {} }).json;
-    tick(9_000);
+    tick(2_999);
     assert.equal(human({ type: "undo", target: entry.seq }).status, 200);
     assert.equal(human({ type: "undo", target: entry.seq }).status, 409, "undone once");
     tick(5_000);
     assert.equal(host.deliverDue(page), 0);
     assert.equal(sent.length, 0);
     const late = human({ type: "decide", decision: "a", options: "1|2|3", option: "2", key: "a" }).json.entry;
-    tick(UNDO);
-    assert.equal(human({ type: "undo", target: late.seq }).status, 409, "window closed");
+    tick(2_999);
+    assert.equal(host.deliverDue(page), 0, "still inside the window at 2.999 s");
+    tick(1);
+    const refused = human({ type: "undo", target: late.seq });
+    assert.equal(refused.status, 409, "window closed at 3 s (decision 151, owner 2026-10-21)");
+    assert.equal(refused.json.error, "The 3-second undo window has closed.");
+    assert.equal(host.deliverDue(page), 1, "the answer is delivered 3 s after it was given");
   } finally { host.stop(); p.done(); }
 });
 
@@ -211,7 +216,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.8\.1 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.9\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;

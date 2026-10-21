@@ -12,7 +12,7 @@ import { CLASSES, UNDO_MS, compose, inGroup, keyTexts } from "./kernel/atelier.j
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-const KERNEL_VERSION = "2.8.1";
+const KERNEL_VERSION = "2.9.0";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
@@ -92,7 +92,7 @@ function releasePage(page: string, session: string) {
 }
 
 /**
- * Which human events are due for Delivery (150, 151): Immediate events and Sends whose 10-second undo
+ * Which human events are due for Delivery (150, 151): Immediate events and Sends whose 3-second undo
  * window has closed, never undone and not yet received. A Send carries the drafts its group covers
  * (Review Studio's one "flush" boundary per "Offene senden"). Record events are never delivered.
  */
@@ -324,7 +324,7 @@ export function createHost(options: {
       const target = log.find((e) => e.seq === body.target && e.origin === "human" && e.type !== "undo");
       if (!target) return { status: 400, json: { error: "Nothing to undo." } };
       if (log.some((e) => e.type === "undo" && e.target === target.seq)) return { status: 409, json: { error: "Already undone." } };
-      if (now() - target.at >= undoMs) return { status: 409, json: { error: "The 10-second undo window has closed." } };
+      if (now() - target.at >= undoMs) return { status: 409, json: { error: `The ${undoMs / 1000}-second undo window has closed.` } };
     }
     // Decision 155: a Page-declared Decision is Immediate by default; atl-delivery may declare another class.
     const delivery = body.type === "decide" && ["record", "send", "immediate"].includes(asked) ? asked

@@ -1,4 +1,4 @@
-// Atelier Kernel 2.8.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.9.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -42,7 +42,7 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 import { Idiomorph } from "./idiomorph.js";
 
-export const UNDO_MS = 10_000; // decision 151
+export const UNDO_MS = 3_000; // decision 151 (owner 2026-10-21: 10 s → 3 s)
 // Delivery class per human event type (150). `boundary` is the Send that releases drafts; `control` is undo.
 // A Comment goes out when saved, after its undo window (156); a Page opts into batching with atl-delivery="send".
 export const CLASSES = {
@@ -924,7 +924,7 @@ function boot() {
 
   const undoable = () => all().filter((e) => e.origin === "human" && e.type !== "undo" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
   function renderUndo(list) {
-    // Decision 151: every interaction can be undone for 10 seconds, with a visible countdown. One row for all of them,
+    // Decision 151: every interaction can be undone for 3 seconds, with a visible countdown. One row for all of them,
     // so a batch of answers never stacks rows over the Page (k-buttons).
     const label = (e) => ({ comment: "Comment saved", decide: e.previous != null ? `Changed ${e.previous} → ${clip(e.option, 40)}` : `${e.custom ? "Answered" : "Chose"} ${clip(e.option, 40)}`, request: `Requested ${e.job}`, send: "Comments sent", close: "Closed", still: "Marked still applies", opened: "Material opened", cancel: "Cancel requested", accept: "Accepted", rework: "Rework requested" })[e.type] ?? e.type;
     const e = list.at(-1), more = list.length - 1;
