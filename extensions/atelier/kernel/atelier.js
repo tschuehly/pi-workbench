@@ -822,13 +822,14 @@ function boot() {
     for (let p = pin.parentElement; p && el.contains(p) && !cb; p = p.parentElement) {
       const s = getComputedStyle(p);
       if (s.position !== "static" || [s.transform, s.translate, s.rotate, s.scale, s.filter, s.backdropFilter, s.perspective].some((v) => v && v !== "none")
-        || /paint|layout|strict|content/.test(s.contain) || (s.containerType && s.containerType !== "normal") || /transform|translate|rotate|scale|filter|perspective|contain/.test(s.willChange)) cb = p;
+        || /paint|layout|strict|content/.test(s.contain) || s.contentVisibility === "auto" || /transform|translate|rotate|scale|filter|perspective|contain/.test(s.willChange)) cb = p;
     }
     for (let p = pin.parentElement; p && p !== document.body; p = p.parentElement) {
       if (el.contains(p) && !p.contains(cb)) continue;
-      const s = getComputedStyle(p);
-      if (s.overflowX === "visible" && s.overflowY === "visible") continue;
+      const s = getComputedStyle(p), paint = /paint|strict|content/.test(s.contain) || s.contentVisibility === "auto"; // paint containment clips like overflow
+      if (s.overflowX === "visible" && s.overflowY === "visible" && !paint) continue;
       const r = p.getBoundingClientRect();
+      if (paint) { c.left = Math.max(c.left, r.left); c.right = Math.min(c.right, r.right); c.top = Math.max(c.top, r.top); c.bottom = Math.min(c.bottom, r.bottom); }
       if (s.overflowX !== "visible") { c.left = Math.max(c.left, r.left); c.right = Math.min(c.right, r.right); }
       if (s.overflowY !== "visible") { c.top = Math.max(c.top, r.top); c.bottom = Math.min(c.bottom, r.bottom); }
     }
@@ -864,7 +865,7 @@ function boot() {
       const ys = [...new Set(obs.flatMap((o) => [Math.ceil(o.top), Math.ceil(o.bottom) + GY + 1]))].filter((y) => y > top && y + h <= area.bottom).sort((a, b) => a - b);
       // Outside the Key only on free margin, where no other element's box is (right of the Key not in a narrow gap
       // before a neighbour), so a row never reads as a neighbour's.
-      if (avoid) return scan(top, r.right - 4, avoid);
+      if (avoid) { for (let y = top; y + h <= r.bottom; y += h + GY) { const got = scan(y, r.right - 4, avoid); if (got) return got; } return null; } // down the Key, line by line
       return scan(top, r.right - 4) ?? (r.right + 8 + w + MARGIN <= c.right && !hits(r.right + 8, top, margin, w + MARGIN).length ? [r.right + 8, top] : null)
         ?? ys.reduce((got, y) => got ?? scan(y, r.right - 4), null) ?? (k.top - h - 4 >= c.top ? scan(k.top - h - 4, r.right - 4, margin) : null);
     };
@@ -874,7 +875,7 @@ function boot() {
     row.style.left = `${Math.round(at[0] - x0)}px`; row.style.top = `${Math.round(at[1] - top)}px`;
     const badge = row.classList.contains("atl-tuck") && pin.querySelector(".atl-badge");
     if (!badge) return;
-    // No free slot: the top band from the corner leftwards, over Page content but clear of other pins' shown chips and
+    // No free slot: from the Key's top-right corner leftwards, then line by line down the Key, over Page content but clear of other pins' shown chips and
     // badges (nested Keys with one box; a hidden tucked row does not count), else the corner itself. ponytail: covering a little content beats hiding the thread.
     const bat = slot(badge) ?? slot(badge, boxes(near.filter((x) => x.checkVisibility({ visibilityProperty: true })))) ?? [r.right - 4 - badge.offsetWidth, top];
     badge.style.left = `${Math.round(bat[0] - x0)}px`; badge.style.top = `${Math.round(bat[1] - top)}px`;
