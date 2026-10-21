@@ -58,9 +58,20 @@ The append-only, numbered record of every human and agent event on one Page, kep
 _Avoid_: store, inbox, queue
 
 **Delivery**:
-Handing a human event to an agent's Pi session as a message, after its 3-second undo window. An
-event not yet delivered goes to the next session that opens the Page.
+Handing a human event to the Receiver as a message, after its 3-second undo window. An event not yet
+delivered goes to the next Receiver; one sent to an earlier Receiver but never confirmed goes again, flagged as
+possibly handled already.
 _Avoid_: poll, wake, notify
+
+**Receiver**:
+The one Pi session that gets a Page's human events and may act on the Page, named on the Kernel bar.
+Opening a Page never takes it from a live Receiver; a Takeover does.
+_Avoid_: owner, holder
+
+**Takeover**:
+Moving the Receiver to another session, checked against the receiver generation the caller was shown. The
+Page's URL, open tabs and undo windows stay; the earlier Receiver is fenced off and told what it leaves unfinished.
+_Avoid_: steal, claim, reassign
 
 ## Registry
 

@@ -28,7 +28,7 @@ const write = ({ plain = "A plain keyed paragraph.", dock = "", phrase = "Pick t
 <script type="module" src="atelier.js"></script></body></html>`);
 await write();
 const sent = [];
-const host = createHost({ root: dir, undoMs: 3000, watchdogMs: 600_000, send: (m, done) => { sent.push(m.content); done(true); } });
+const host = createHost({ root: dir, sessionId: `kernel-a-${process.pid}`, label: "Chat A", undoMs: 3000, watchdogMs: 600_000, send: (m, done) => { sent.push(m.content); done(true); } });
 const b = async (...args) => { const { stdout } = await run("agent-browser", ["--session", session, "--json", ...args], { timeout: 60_000 }); const r = JSON.parse(stdout); assert(r.success, JSON.stringify(r)); return r.data; };
 const js = async (code) => (await b("eval", code)).result;
 const until = (code) => b("wait", "--fn", code);
@@ -47,6 +47,15 @@ try {
   await until("document.querySelector('.atl-conn')?.textContent==='live'");
 
   assert.equal(await js("document.querySelector('.atl-test')"), null, "a Pi session's host shows no test mark");
+  assert.equal(await js("document.querySelector('.atl-recv')?.textContent"), "→ Chat A", "the bar names the receiving session");
+  // 2.10.0: a takeover in the same process keeps the tab and its URL; the bar follows the receiver live.
+  const other = createHost({ root: dir, sessionId: `kernel-b-${process.pid}`, label: "Chat B", send: (m, done) => done(true) });
+  try {
+    assert.equal((await other.takeover(page, 1)).url, url, "same URL after takeover");
+    await until("document.querySelector('.atl-recv')?.textContent==='→ Chat B'");
+    await host.takeover(page, 2);
+    await until("document.querySelector('.atl-recv')?.textContent==='→ Chat A'");
+  } finally { other.stop(); }
   // Palette follows the Page, not the OS.
   assert.equal(await js("getComputedStyle(document.querySelector('[atl-ui=panel]')).backgroundColor"), "rgb(255, 255, 255)", "light panel on a light Page under a dark OS");
   // Comment button: no layout space, hidden until hover, innermost Key only, at the top-right corner.
@@ -891,7 +900,7 @@ try {
   });
   assert.deepEqual(fails, [], "every 2.7.1, 2.8.0 and 2.8.1 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

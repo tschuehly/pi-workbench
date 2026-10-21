@@ -1,4 +1,4 @@
-// Atelier Kernel 2.9.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.10.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -231,9 +231,10 @@ export function describe(e, entries, excerpt, file) {
  * The session message for a batch of human events: one header line, then one line per event. The rules for
  * acting on them (data not instruction, answer in place, only the human closes) live in the tool description.
  */
-export function compose(page, url, events, entries, { replay = false, group, excerpt, file } = {}) {
+export function compose(page, url, events, entries, { replay = false, doubt, group, excerpt, file } = {}) {
   return [
-    ["Atelier", `${String(page).split("/").pop()}${url ? ` (${url})` : ""}`, group ? `Comments on ${group}` : "", replay ? "replayed from an earlier session" : ""].filter(Boolean).join(" · "),
+    // doubt: events an earlier receiver was sent but never confirmed, so a replay may repeat them.
+    ["Atelier", `${String(page).split("/").pop()}${url ? ` (${url})` : ""}`, group ? `Comments on ${group}` : "", replay ? "replayed from an earlier session" : "", doubt ?? ""].filter(Boolean).join(" · "),
     // A legacy line the Kernel cannot describe is named, not fatal, so Delivery and Copy still carry the rest.
     ...events.map((e) => { try { return `- ${describe(e, entries, excerpt, file)}`; } catch { return `- #${e.seq} ${e.type} could not be rendered; read it in the Event Log`; } }),
   ].join("\n");
@@ -312,6 +313,8 @@ function boot() {
   const readKey = `atelier-read:${page}`;
   const read = JSON.parse(localStorage.getItem(readKey) || "{}");
   let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0, testHost = false;
+  // The session that receives this Page's input, from the host: { label, generation }, null for none, undefined from an older host.
+  let receiver;
   const expanded = new Set(); // threads whose folded middle the human opened
   const unfolded = new Set(); // answered asked Decisions the human opened from their one-line fold (2.8.0)
   const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
@@ -442,7 +445,8 @@ function boot() {
   function connect() {
     if (!online || es) return;
     es = new EventSource(`/.atelier/stream${q}`);
-    es.addEventListener("hello", (m) => { const d = JSON.parse(m.data); if (mtime !== null && d.mtime !== mtime) morph(); mtime = d.mtime; testHost = !!d.test; conn = "live"; render(); pull(); });
+    es.addEventListener("hello", (m) => { const d = JSON.parse(m.data); if (mtime !== null && d.mtime !== mtime) morph(); mtime = d.mtime; testHost = !!d.test; receiver = d.receiver; conn = "live"; render(); pull(); });
+    es.addEventListener("receiver", (m) => { receiver = JSON.parse(m.data).receiver; flash(receiver ? `Your input now goes to ${receiver.label}.` : "No Pi session receives your input now; it is kept until one opens this Page."); render(); });
     es.addEventListener("log", pull);
     es.addEventListener("update", (m) => { const d = JSON.parse(m.data); mtime = d.mtime; pendingNote = d.note ?? null; morph(); });
     es.onerror = () => { conn = "reconnecting"; render(); };
@@ -714,7 +718,7 @@ function boot() {
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
     const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
     const open = st.openThreads.length + st.toAnswer.length;
-    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")} Test host, no Pi session</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
+    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")} Test host, no Pi session</span>` : receiver ? `<span class="atl-dim atl-recv" title="Your input goes to this Pi session">→ ${esc(receiver.label)}</span>` : receiver === null ? `<span class="atl-tag atl-warn atl-recv" title="No Pi session receives your input now; it is kept until one opens this Page">no receiver</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
     renderUndo(undoable());
     const section = (title, items) => items.length ? `<h4>${title}</h4>` : "";
     const list = panel.querySelector(".atl-list");

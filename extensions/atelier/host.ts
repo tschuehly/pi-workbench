@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CLASSES, UNDO_MS, compose, inGroup, keyTexts } from "./kernel/atelier.js";
+import { CLASSES, UNDO_MS, compose, derive, inGroup, keyTexts } from "./kernel/atelier.js";
 
 // Atelier host (decisions 129-156): the page server and Delivery of human events from a Page's Event Log.
 // No Pi dependency, so the `atelier` tool (index.ts) and the builder CLI (serve.mjs) run the same code.
@@ -12,7 +12,7 @@ import { CLASSES, UNDO_MS, compose, inGroup, keyTexts } from "./kernel/atelier.j
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-const KERNEL_VERSION = "2.9.0";
+const KERNEL_VERSION = "2.10.0";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
@@ -25,7 +25,7 @@ const UPLOADS_MAX = 4; // ponytail: images receiving at once per host (4 x 10 MB
 const BODY_MAX = 64 * 1024;
 
 type Entry = { seq: number; at: number; origin: string; type: string; [field: string]: any };
-export type Message = { customType: string; content: string; display: true; details: { page: string; seqs: number[]; replay: boolean } };
+export type Message = { customType: string; content: string; display: true; details: { page: string; seqs: number[]; replay: boolean; generation?: number; uncertain?: number[] } };
 
 export const logPath = (page: string) => `${page}.events.jsonl`;
 /** Images the human attaches to a Decision's answer or a Comment live beside the Event Log; the log names them relative to the Page's directory. */
@@ -46,7 +46,7 @@ export function readLog(page: string): Entry[] {
 // A symlinked Event Log or Kernel copy would write outside the Page's directory.
 const isLink = (file: string) => { try { return lstatSync(file).isSymbolicLink(); } catch { return false; } };
 
-// Only the Page's owning session appends (claimPage), so reading the log for the next seq is safe.
+// Only the endpoint serving the Page for its receiver appends (claimPage), so reading the log for the next seq is safe.
 export function appendLog(page: string, entry: Record<string, unknown>, now = Date.now()): Entry {
   const file = logPath(page);
   if (isLink(file)) throw new Error(`${file} is a symlink; Atelier writes its Event Log only beside the Page.`);
@@ -62,33 +62,73 @@ const lockPath = (page: string) => `${logPath(page)}.lock`;
 const alive = (pid: unknown) => { try { process.kill(Number(pid), 0); return true; } catch (error: any) { return error.code === "EPERM"; } };
 
 /**
- * One live session owns a Page: it alone appends to the Event Log and delivers its events (131, 143). The
- * first session to open the Page takes `<page>.events.jsonl.lock`; a lock whose recorded process is gone is stale.
- * The lock is linked from a fully written temp file, so no contender ever sees it empty.
+ * The receiver lock `<page>.events.jsonl.lock`: which session receives the Page's human events, and its generation.
+ * Released, it keeps only the generation, so a takeover checked against an earlier generation stays stale.
  */
-export function claimPage(page: string, session: string) {
-  const lock = lockPath(page);
-  const tmp = `${lock}.${process.pid}.${randomUUID()}`;
-  writeFileSync(tmp, JSON.stringify({ pid: process.pid, session }));
-  try {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try { linkSync(tmp, lock); return; } catch (error: any) { if (error.code !== "EEXIST") throw error; }
-      let owner: { pid?: number; session?: string };
-      try { owner = JSON.parse(readFileSync(lock, "utf8")); } catch { throw new Error(`Cannot read ${lock}; delete it if no Pi session has this Page open.`); }
-      if (owner.pid === process.pid && owner.session === session) return;
-      if (!Number.isInteger(owner.pid) || alive(owner.pid)) throw new Error(`This Page is open in another live Pi session (${owner.session}, pid ${owner.pid}); its human events go there. End that session first, or delete ${lock} if it is gone.`);
-      // ponytail: two sessions breaking one stale lock can race; fine for a lock that only a crash leaves behind.
-      unlinkSync(lock);
-    }
-    throw new Error(`Could not take ${lock}.`);
-  } finally { unlinkSync(tmp); }
+type Lock = { pid?: number; session?: string; generation?: number; label?: string };
+function readLock(page: string): Lock {
+  try { return JSON.parse(readFileSync(lockPath(page), "utf8")); } catch (error: any) {
+    if (error.code === "ENOENT") return {};
+    throw new Error(`Cannot read ${lockPath(page)}; delete it if no Pi session has this Page open.`);
+  }
+}
+// Written whole and renamed into place, so no contender ever reads it half written.
+function writeLock(page: string, lock: Lock) {
+  const tmp = `${lockPath(page)}.${process.pid}.${randomUUID()}`;
+  writeFileSync(tmp, JSON.stringify(lock));
+  renameSync(tmp, lockPath(page));
+}
+const owns = (page: string, session: string, generation: number) => {
+  try { const lock = readLock(page); return lock.session === session && lock.generation === generation; } catch { return false; }
+};
+const named = (lock: Lock) => lock.label ?? lock.session ?? "no session";
+
+// Process-wide, so sessions sharing one process (PI WEB's sessiond) see each other: the Pages served here and the
+// sessions whose Atelier is running. Versioned key: another Atelier version in the process keeps its own.
+const REG: { served: Map<string, Served>; live: Set<string> } = ((globalThis as any)[Symbol.for("pi-workbench.atelier.receivers.v1")] ??= { served: new Map(), live: new Set() });
+
+/** Live: a running session of this process. Unknown: another process's session, or an older Atelier's lock (no generation). */
+function holder(lock: Lock) {
+  if (!lock.session) return "free";
+  if (Number.isInteger(lock.pid) && !alive(lock.pid)) return "stale";
+  if (lock.pid !== process.pid || lock.generation === undefined) return "unknown";
+  return REG.live.has(lock.session) ? "live" : "stale";
 }
 
-function releasePage(page: string, session: string) {
-  try {
-    const owner = JSON.parse(readFileSync(lockPath(page), "utf8"));
-    if (owner.pid === process.pid && owner.session === session) unlinkSync(lockPath(page));
-  } catch { /* not ours or gone */ }
+/** Claims and transfers of one Page run one at a time, across processes, under an exclusive `<lock>.claim` file. */
+function serialized<T>(page: string, fn: () => T): T {
+  const mutex = `${lockPath(page)}.claim`;
+  for (let attempt = 0; ; attempt += 1) {
+    try { closeSync(openSync(mutex, "wx")); break; } catch (error: any) { if (error.code !== "EEXIST") throw error; }
+    // ponytail: a claim file older than 5 s is a crashed claimer's; two breakers can race, fine for a crash leftover.
+    try { if (Date.now() - statSync(mutex).mtimeMs > 5_000) { unlinkSync(mutex); continue; } } catch { continue; }
+    if (attempt > 300) throw new Error(`${mutex} is held: another session is claiming this Page. Try again.`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  try { return fn(); } finally { rmSync(mutex, { force: true }); }
+}
+
+/**
+ * One session receives a Page's human events (131, 143). `open` (no `takeover`) claims a free or stale lock and never
+ * steals; `takeover` moves the lock from whoever holds it, but only from the generation the caller was shown.
+ * Returns the receiver generation. A lock is stale when its process is gone, or when it is this process and its
+ * session's Atelier no longer runs; another process's session cannot be judged from here, so it needs takeover.
+ */
+export function claimPage(page: string, session: string, label = session, takeover?: number): number {
+  return serialized(page, () => {
+    const lock = readLock(page), generation = lock.generation ?? 0, hint = `To move its input here, call atelier with action takeover and generation ${generation}.`;
+    if (lock.session === session && lock.pid === process.pid) return generation;
+    if (takeover !== undefined && takeover !== generation) throw new Error(`The receiver changed since generation ${takeover}: this Page's input now goes to ${named(lock)} (generation ${generation}). Ask the human before taking it over again.`);
+    const state = holder(lock);
+    if (takeover === undefined && state === "live") throw new Error(`This Page's input goes to another live Pi session (${named(lock)}). ${hint}`);
+    if (takeover === undefined && state === "unknown") throw new Error(`This Page's input goes to another live Pi session (${named(lock)}, pid ${lock.pid}), and Atelier cannot tell whether that session is still running. If it is gone, or the human wants its input here: ${hint}`);
+    writeLock(page, { pid: process.pid, session, generation: generation + 1, label });
+    return generation + 1;
+  });
+}
+
+function releasePage(page: string, session: string, generation: number) {
+  try { serialized(page, () => { if (owns(page, session, generation)) writeLock(page, { generation }); }); } catch { /* gone */ }
 }
 
 /**
@@ -216,16 +256,35 @@ function storedImage(page: string, name: string) {
 }
 
 export type Host = ReturnType<typeof createHost>;
+type Send = (message: Message, done: (idle: boolean) => void, failed: () => void) => void;
+type Receiver = { session: string; label: string; generation: number; send: Send; handoff?: (message: Message) => void };
+/**
+ * A served Page: its serving endpoint (the page server that gave the tab its URL, its connected tabs, its undo
+ * timers) and its current receiver session. A takeover inside the process swaps only the receiver.
+ */
+type Served = { page: string; ep: Endpoint; clients: Set<ServerResponse>; receiver?: Receiver; inFlight: Set<number>; seen: Set<number>; awaiting: number[][] };
+type Endpoint = {
+  url: (page: string) => string; rel: (page: string) => string; now: () => number; undoMs: number;
+  deliver: (rec: Served, replay?: boolean) => number; postHuman: (rec: Served, body: any) => { status: number; json: unknown };
+  append: (page: string, entry: Record<string, unknown>) => Entry; broadcast: (page: string, event: string, data?: unknown) => void;
+  arm: (rec: Served, r: Receiver, seqs: number[]) => void; later: (ms: number, fn: () => void) => void; closeIfIdle: () => void;
+};
+const receiverInfo = (r?: Receiver) => r ? { label: r.label, generation: r.generation } : null;
 
 /**
- * One page server per session runtime (154: 127.0.0.1 only), serving project files read-only (152) and
- * taking human events for the Pages this session opened. Every event is appended to the Event Log first
- * (131, 147); Delivery goes through `send` after the undo window.
+ * One page server per session runtime (154: 127.0.0.1 only), serving project files read-only (152) and taking human
+ * events for the Pages it serves. Every event is appended to the Event Log first (131, 147); Delivery goes through the
+ * current receiver's `send` after the undo window. The server outlives its session while another session in the
+ * process receives one of its Pages, so a takeover keeps the tab's URL and Undo.
  */
 export function createHost(options: {
   root: string;
-  send: (message: Message, done: (idle: boolean) => void, failed: () => void) => void;
+  send: Send;
   sessionId?: string;
+  /** The receiver's name on the Kernel bar and in handover messages: the session title, else a short id. */
+  label?: string;
+  /** Tells this session a Page's input moved to another session. */
+  handoff?: (message: Message) => void;
   now?: () => number;
   undoMs?: number;
   watchdogMs?: number;
@@ -234,13 +293,13 @@ export function createHost(options: {
 }) {
   const root = realpathSync(options.root);
   const sessionId = options.sessionId ?? randomUUID();
+  const label = options.label || sessionId.slice(0, 8);
   const now = options.now ?? Date.now;
   const undoMs = options.undoMs ?? UNDO_MS;
   const watchdogMs = options.watchdogMs ?? WATCHDOG_MS;
-  const pages = new Map<string, Set<ServerResponse>>();
-  const inFlight = new Map<string, Set<number>>();
-  const awaitingSettle: { page: string; seqs: number[] }[] = [];
-  const seen = new Map<string, Set<number>>(); // started in the session, receipt written at agent_settled
+  const opened = new Set<string>(); // Pages this session opened or took over, received here or handed on since
+  let running = true; // this session's Atelier; its endpoint serves while it runs or while one of its Pages has a receiver
+  REG.live.add(sessionId);
   const mounts = new Map<string, string>(); // "~<hash>" -> directory of a Page outside the project
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let server: Server | undefined;
@@ -261,32 +320,40 @@ export function createHost(options: {
     const [head, ...rest] = urlPath.split("/");
     return mounts.has(head) ? inside(mounts.get(head)!, rest.join("/")) : inside(root, urlPath);
   };
+  const served = (page: string) => { const rec = REG.served.get(page); return rec?.ep === ep ? rec : undefined; };
   const broadcast = (page: string, event: string, data: unknown = {}) => {
-    for (const res of pages.get(page) ?? []) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    for (const res of served(page)?.clients ?? []) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
   const append = (page: string, entry: Record<string, unknown>) => {
     const full = appendLog(page, entry, now());
     broadcast(page, "log", { seq: full.seq });
     return full;
   };
-  const flying = (page: string) => inFlight.get(page) ?? inFlight.set(page, new Set()).get(page)!;
 
-  function deliverDue(page: string, replay = false) {
-    if (!pages.has(page)) return 0;
+  // Delivers to the Page's current receiver, and only while the lock still names it: another process may have taken
+  // the Page over. Every callback checks the receiver it was made for, so a handed-over session's late send, receipt
+  // or watchdog changes nothing. A replay flags events an earlier receiver was sent but never confirmed.
+  function deliver(rec: Served, replay = false) {
+    const r = rec.receiver, page = rec.page;
+    if (!r || !owns(page, r.session, r.generation)) return 0;
     const entries = readLog(page);
+    const sentTo = new Map<number, string>(entries.filter((e) => e.type === "delivered").flatMap((e) => e.of.map((s: number) => [s, e.label ?? e.session])));
     let texts: Map<string, string> | undefined;
     const excerpts = () => texts ??= (() => { try { return keyTexts(readFileSync(page, "utf8")); } catch { return new Map(); } })();
     let sent = 0;
-    for (const due of dueMessages(entries, now(), undoMs, flying(page))) {
+    for (const due of dueMessages(entries, now(), undoMs, rec.inFlight)) {
       // Plannotator: nothing to send means no turn.
       if (due.events.length === 0) { append(page, { origin: "kernel", type: "received", of: due.seqs, note: "nothing to send" }); continue; }
-      due.seqs.forEach((s) => flying(page).add(s));
-      const failed = () => due.seqs.forEach((s) => flying(page).delete(s));
-      const content = compose(rel(page), url(page), due.events, entries, { replay, group: due.group, excerpt: (key: string) => excerpts().get(key), file: (name: string) => path.join(path.dirname(page), name) });
+      due.seqs.forEach((s) => rec.inFlight.add(s));
+      const failed = () => { if (rec.receiver === r) due.seqs.forEach((s) => rec.inFlight.delete(s)); };
+      const uncertain = replay ? due.seqs.filter((s) => sentTo.has(s)) : [];
+      const doubt = uncertain.length ? `${uncertain.map((s) => `#${s}`).join(", ")} may already have reached ${[...new Set(uncertain.map((s) => sentTo.get(s)))].join(", ")}; check before repeating ${uncertain.length > 1 ? "their" : "its"} effects` : undefined;
+      const content = compose(rel(page), url(page), due.events, entries, { replay, doubt, group: due.group, excerpt: (key: string) => excerpts().get(key), file: (name: string) => path.join(path.dirname(page), name) });
       try {
-        options.send({ customType: due.customType, content, display: true, details: { page, seqs: due.seqs, replay } }, (idle) => {
-          append(page, { origin: "kernel", type: "delivered", of: due.seqs, session: sessionId });
-          if (idle) arm(page, due.seqs); else awaitingSettle.push({ page, seqs: due.seqs });
+        r.send({ customType: due.customType, content, display: true, details: { page, seqs: due.seqs, replay, generation: r.generation, ...(uncertain.length ? { uncertain } : {}) } }, (idle) => {
+          if (rec.receiver !== r) return;
+          append(page, { origin: "kernel", type: "delivered", of: due.seqs, session: r.session, label: r.label });
+          if (idle) arm(rec, r, due.seqs); else rec.awaiting.push(due.seqs);
         }, failed);
         sent += 1;
       } catch { failed(); }
@@ -294,15 +361,21 @@ export function createHost(options: {
     return sent;
   }
 
-  function arm(page: string, seqs: number[]) {
+  function arm(rec: Served, r: Receiver, seqs: number[]) {
     later(watchdogMs, () => {
-      const received = new Set(readLog(page).filter((e) => e.type === "received").flatMap((e) => e.of));
-      const missing = seqs.filter((s) => !received.has(s) && !seen.get(page)?.has(s));
-      if (missing.length) append(page, { origin: "kernel", type: "unconfirmed", of: missing });
+      if (rec.receiver !== r) return;
+      const received = new Set(readLog(rec.page).filter((e) => e.type === "received").flatMap((e) => e.of));
+      const missing = seqs.filter((s) => !received.has(s) && !rec.seen.has(s));
+      if (missing.length) append(rec.page, { origin: "kernel", type: "unconfirmed", of: missing });
     });
   }
 
-  function postHuman(page: string, body: any): { status: number; json: unknown } {
+  function postHuman(rec: Served, body: any): { status: number; json: unknown } {
+    const page = rec.page, r = rec.receiver;
+    // Another process took the Page over: its endpoint writes the Event Log now, never two at once.
+    let elsewhere: Lock | undefined;
+    try { const lock = readLock(page); if (r ? !owns(page, r.session, r.generation) : lock.session) elsewhere = lock; } catch { elsewhere = {}; }
+    if (elsewhere) return { status: 409, json: { error: `This Page's input now goes to ${named(elsewhere)} in another Pi process. Ask the agent there for its link.` } };
     const fields = Object.hasOwn(FIELDS, body?.type) ? FIELDS[body.type] : undefined;
     if (!fields) return { status: 400, json: { error: `Unknown event type ${String(body?.type)}` } };
     const cls = CLASSES[body.type as keyof typeof CLASSES];
@@ -330,7 +403,7 @@ export function createHost(options: {
     const delivery = body.type === "decide" && ["record", "send", "immediate"].includes(asked) ? asked
       : body.type === "comment" && asked === "send" ? "send" : cls; // a Page may batch Comments (156)
     const entry = append(page, { ...event, origin: "human", delivery });
-    if (delivery === "immediate" || delivery === "boundary") later(undoMs + 50, () => deliverDue(page));
+    if (delivery === "immediate" || delivery === "boundary") later(undoMs + 50, () => deliver(rec));
     return { status: 200, json: { entry, undoMs } };
   }
 
@@ -387,8 +460,8 @@ export function createHost(options: {
     let u: URL;
     try { u = new URL(req.url ?? "/", `http://127.0.0.1:${port}`); } catch { return json(res, 400, { error: "Bad request target" }); }
     if (u.pathname.startsWith("/.atelier/")) {
-      const page = resolve(u.searchParams.get("page") ?? "");
-      if (!page || !pages.has(page)) return json(res, 404, { error: "No Pi session has this Page open. Ask the agent to open it." });
+      const page = resolve(u.searchParams.get("page") ?? ""), rec = page ? served(page) : undefined;
+      if (!page || !rec) return json(res, 404, { error: "No Pi session has this Page open. Ask the agent to open it." });
       if (u.pathname === "/.atelier/events" && req.method === "GET") {
         const since = Number(u.searchParams.get("since") ?? 0);
         return json(res, 200, { entries: readLog(page).filter((e) => e.seq > since) });
@@ -401,16 +474,16 @@ export function createHost(options: {
           if (size > BODY_MAX) return json(res, 413, { error: "Event too large" });
           let body: unknown;
           try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return json(res, 400, { error: "Body must be JSON" }); }
-          try { const r = postHuman(page, body); json(res, r.status, r.json); } catch (error) { json(res, 500, { error: String(error) }); }
+          try { const r = postHuman(rec, body); json(res, r.status, r.json); } catch (error) { json(res, 500, { error: String(error) }); }
         });
         return;
       }
       if (u.pathname === "/.atelier/image" && req.method === "POST") return upload(page, req, res);
       if (u.pathname === "/.atelier/stream") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
-        pages.get(page)!.add(res);
-        res.write(`event: hello\ndata: ${JSON.stringify({ mtime: statSync(page).mtimeMs, test: options.test || undefined })}\n\n`);
-        req.on("close", () => pages.get(page)?.delete(res));
+        rec.clients.add(res);
+        res.write(`event: hello\ndata: ${JSON.stringify({ mtime: statSync(page).mtimeMs, test: options.test || undefined, receiver: receiverInfo(rec.receiver) })}\n\n`);
+        req.on("close", () => rec.clients.delete(res));
         return;
       }
       return json(res, 404, { error: "Unknown Atelier route" });
@@ -418,7 +491,7 @@ export function createHost(options: {
     if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "Read-only" });
     if (u.pathname === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      return res.end(`<!doctype html><title>Atelier</title><ul>${[...pages.keys()].map((p) => `<li><a href="${url(p)}">${rel(p).replace(/[<&]/g, "")}</a></li>`).join("")}</ul>`);
+      return res.end(`<!doctype html><title>Atelier</title><ul>${[...REG.served.values()].filter((r) => r.ep === ep).map((r) => r.page).map((p) => `<li><a href="${url(p)}">${rel(p).replace(/[<&]/g, "")}</a></li>`).join("")}</ul>`);
     }
     return serveFile(req, res, u.pathname);
   }
@@ -432,54 +505,121 @@ export function createHost(options: {
     return ready;
   }
 
+  // The server closes once its session has ended and no Page it serves has a receiver.
+  function closeIfIdle() {
+    const mine = [...REG.served.values()].filter((r) => r.ep === ep);
+    if (running || mine.some((r) => r.receiver)) return;
+    for (const r of mine) { for (const res of r.clients) res.end(); REG.served.delete(r.page); }
+    for (const t of timers) clearTimeout(t);
+    timers.clear();
+    server?.close();
+    server?.closeAllConnections?.();
+  }
+
+  const ep: Endpoint = { url, rel, now, undoMs, deliver, postHuman, append, broadcast, arm, later, closeIfIdle };
+
+  /** The Page's record while this session is its receiver; otherwise why not, for the agent. */
+  function receiving(page: string) {
+    const rec = REG.served.get(page);
+    if (rec?.receiver?.session === sessionId && owns(page, sessionId, rec.receiver.generation)) return rec;
+    let lock: Lock = {};
+    try { lock = readLock(page); } catch { /* unreadable: named below as no session */ }
+    throw new Error(`This Page was handed over to ${named(lock)} (generation ${lock.generation ?? 0}): its human input and Atelier actions belong to that session now. Stop working on it here.`);
+  }
+  // The receiver's record for a message's details, if this session still receives that generation.
+  const mineFor = (details: { page?: string; seqs?: number[]; generation?: number } | undefined) => {
+    const rec = details?.page && Array.isArray(details.seqs) ? REG.served.get(details.page) : undefined;
+    const r = rec?.receiver;
+    return r?.session === sessionId && (details!.generation === undefined || details!.generation === r.generation) ? rec : undefined;
+  };
+
+  /** Makes this session the Page's receiver at `generation`, on the endpoint already serving it in this process, else on this one. */
+  async function bind(page: string, generation: number) {
+    if (!REG.served.has(page)) await listen();
+    if (!owns(page, sessionId, generation)) receiving(page); // taken over while the server started: throws why
+    const rec = REG.served.get(page) ?? { page, ep, clients: new Set(), inFlight: new Set(), seen: new Set(), awaiting: [] };
+    if (rec.ep === ep && !inProject(page)) mounts.set(mount(page), path.dirname(page));
+    REG.served.set(page, rec);
+    const previous = rec.receiver;
+    if (previous?.session !== sessionId || previous.generation !== generation) {
+      // Sends the previous receiver queued but never confirmed are replayed here, flagged; the rest it held are dropped.
+      rec.receiver = { session: sessionId, label, generation, send: options.send, handoff: options.handoff };
+      rec.inFlight.clear(); rec.seen.clear(); rec.awaiting.length = 0;
+      rec.ep.broadcast(page, "receiver", { receiver: receiverInfo(rec.receiver) });
+      if (previous && previous.session !== sessionId) previous.handoff?.(handoffMessage(rec, previous));
+    }
+    opened.add(page);
+    const kernel = copyKernel(path.dirname(page));
+    const replayed = rec.ep.deliver(rec, true);
+    if (readLog(page).some((e) => e.origin === "human" && rec.ep.now() - e.at < rec.ep.undoMs)) rec.ep.later(rec.ep.undoMs + 50, () => rec.ep.deliver(rec));
+    return { url: rec.ep.url(page), kernel, replayed, generation };
+  }
+
+  function handoffMessage(rec: Served, previous: Receiver): Message {
+    const unfinished = derive(readLog(rec.page)).requests.filter((r: any) => !r.accepted && !r.cancel && !["done", "failed", "cancelled"].includes(r.state));
+    return {
+      customType: "atelier:handoff", display: true, details: { page: rec.page, seqs: [], replay: false },
+      content: [`Atelier · ${path.basename(rec.page)} · handed over: its human input now goes to ${label} (generation ${rec.receiver!.generation}). Stop working on this Page here; your atelier actions on it now fail.`,
+        ...unfinished.map((r: any) => `- unfinished: Request #${r.req.seq} "${r.req.job}" (${r.state ?? "not started"}, revision ${r.revision})`)].join("\n"),
+    };
+  }
+
+  const deliverDue = (page: string, replay = false) => { const rec = REG.served.get(page); return rec?.receiver?.session === sessionId ? rec.ep.deliver(rec, replay) : 0; };
   return {
     root,
-    url,
+    url: (page: string) => REG.served.get(page)?.ep.url(page) ?? url(page),
     rel,
     deliverDue,
-    postHuman,
-    isOpen: (page: string) => pages.has(page),
-    clients: (page: string) => pages.get(page)?.size ?? 0,
-    /** Starts serving the Page, copies the Kernel, and hands undelivered events to this session (131). */
-    async open(page: string) {
-      claimPage(page, sessionId);
-      await listen();
-      if (!inProject(page)) mounts.set(mount(page), path.dirname(page));
-      if (!pages.has(page)) pages.set(page, new Set());
-      const kernel = copyKernel(path.dirname(page));
-      const replayed = deliverDue(page, true);
-      if (readLog(page).some((e) => e.origin === "human" && now() - e.at < undoMs)) later(undoMs + 50, () => deliverDue(page));
-      return { url: url(page), kernel, replayed };
-    },
-    agent(page: string, entry: Record<string, unknown>) { return append(page, { ...entry, origin: "agent" }); },
+    /** A human event from the Page's tab, through whichever endpoint serves it. */
+    postHuman: (page: string, body: any) => { const rec = REG.served.get(page); return rec ? rec.ep.postHuman(rec, body) : { status: 404, json: { error: "Not open" } }; },
+    isOpen: (page: string) => opened.has(page),
+    clients: (page: string) => REG.served.get(page)?.clients.size ?? 0,
+    /** False once the Page was handed over: a send this session still holds must not go out. */
+    current: (details: { page?: string; seqs?: number[]; generation?: number }) => { const rec = mineFor(details); return !!rec && owns(rec.page, sessionId, rec.receiver!.generation); },
+    /** Serves the Page, copies the Kernel, and hands undelivered events to this session (131). Never takes the Page from another live receiver. */
+    async open(page: string) { return bind(page, claimPage(page, sessionId, label)); },
+    /** Moves the Page's receiver here from the generation the caller was shown; the URL and open tabs stay. */
+    async takeover(page: string, generation: number) { return bind(page, claimPage(page, sessionId, label, generation)); },
+    agent(page: string, entry: Record<string, unknown>) { return receiving(page).ep.append(page, { ...entry, origin: "agent" }); },
     /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */
     update(page: string, note?: string) {
-      if (note) append(page, { origin: "agent", type: "update", note });
-      broadcast(page, "update", { mtime: statSync(page).mtimeMs, note });
-      return pages.get(page)?.size ?? 0;
+      const rec = receiving(page);
+      if (note) rec.ep.append(page, { origin: "agent", type: "update", note });
+      rec.ep.broadcast(page, "update", { mtime: statSync(page).mtimeMs, note });
+      return rec.clients.size;
     },
-    receipt(details: { page?: string; seqs?: number[] } | undefined) {
-      if (!details?.page || !Array.isArray(details.seqs) || !pages.has(details.page)) return;
-      append(details.page, { origin: "kernel", type: "received", of: details.seqs });
+    receipt(details: { page?: string; seqs?: number[]; generation?: number } | undefined) {
+      const rec = mineFor(details);
+      if (rec) rec.ep.append(rec.page, { origin: "kernel", type: "received", of: details!.seqs });
     },
     /** A message reached the session (message_end); its receipt waits for agent_settled, when the session file holds it (131). */
-    seen(details: { page?: string; seqs?: number[] } | undefined) {
-      if (!details?.page || !Array.isArray(details.seqs) || !pages.has(details.page)) return;
-      for (const s of details.seqs) (seen.get(details.page) ?? seen.set(details.page, new Set()).get(details.page)!).add(s);
+    seen(details: { page?: string; seqs?: number[]; generation?: number } | undefined) {
+      const rec = mineFor(details);
+      for (const s of rec ? details!.seqs! : []) rec!.seen.add(s);
     },
     settled() {
-      for (const [page, seqs] of seen) if (seqs.size) this.receipt({ page, seqs: [...seqs] });
-      seen.clear();
-      for (const pending of awaitingSettle.splice(0)) arm(pending.page, pending.seqs);
+      for (const rec of REG.served.values()) {
+        const r = rec.receiver;
+        if (r?.session !== sessionId) continue;
+        if (rec.seen.size) rec.ep.append(rec.page, { origin: "kernel", type: "received", of: [...rec.seen] });
+        rec.seen.clear();
+        for (const seqs of rec.awaiting.splice(0)) rec.ep.arm(rec, r, seqs);
+      }
     },
     stop() {
-      for (const page of pages.keys()) releasePage(page, sessionId);
-      for (const t of timers) clearTimeout(t);
-      timers.clear();
-      for (const clients of pages.values()) for (const res of clients) res.end();
-      pages.clear();
-      server?.close();
-      server?.closeAllConnections?.();
+      if (!running) return;
+      running = false;
+      REG.live.delete(sessionId);
+      const endpoints = new Set<Endpoint>([ep]);
+      for (const rec of [...REG.served.values()]) {
+        if (rec.receiver?.session !== sessionId) continue;
+        releasePage(rec.page, sessionId, rec.receiver.generation);
+        rec.receiver = undefined;
+        rec.inFlight.clear(); rec.seen.clear(); rec.awaiting.length = 0;
+        rec.ep.broadcast(rec.page, "receiver", { receiver: null });
+        endpoints.add(rec.ep);
+      }
+      for (const e of endpoints) e.closeIfIdle();
     },
   };
 }
