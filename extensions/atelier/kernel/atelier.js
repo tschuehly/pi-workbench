@@ -583,12 +583,14 @@ function boot() {
   // `lock`: the atl-wip text of a region holding the Decision; its options are disabled with that text as their title.
   const locked = (lock) => lock == null ? "" : ` disabled title="${esc(lock)}"`;
   // An answered asked Decision folds to one line, its question and the answer, once its undo window has closed (2.8.0);
-  // the line opens and closes the full Decision. A stale answer stays open: it needs answering again.
+  // the line opens and closes the full Decision. A stale answer stays open: it needs answering again; so does one whose
+  // note box is open, so a note being typed is never hidden under the human.
   const foldable = (d) => !!d.answer && !d.stale && !(d.answer.origin === "human" && left(d.answer) > 0);
-  const folded = (d) => foldable(d) && !unfolded.has(d.id);
+  const noting = (d) => cards.get(`d:${d.id}`)?.querySelector(".atl-extra")?.hidden === false;
+  const folded = (d) => foldable(d) && !unfolded.has(d.id) && !noting(d);
   function decisionHtml(d, st, lock = null) {
     const a = d.answer;
-    const line = foldable(d) ? `<button type="button" data-atl="fold" data-id="${esc(d.id)}" class="atl-fold" aria-expanded="${unfolded.has(d.id)}" title="${esc(d.question)}">${icon("chevron")}<span class="atl-tag">answered</span><span class="atl-fq">${esc(d.question)}</span><b>${esc(clip(a.option, 60))}</b></button>` : "";
+    const line = foldable(d) ? `<button type="button" data-atl="fold" data-id="${esc(d.id)}" class="atl-fold" aria-expanded="${!folded(d)}" title="${esc(d.question)}">${icon("chevron")}<span class="atl-tag">answered</span><span class="atl-fq">${esc(d.question)}</span><b>${esc(clip(a.option, 60))}</b></button>` : "";
     if (line && folded(d)) return line;
     const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}"${locked(lock)} class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
     return `<div class="atl-head">${line || `<span class="atl-tag">${a && !d.stale ? "answered" : "to answer"}</span>`}${d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : ""}</div>
@@ -1211,7 +1213,11 @@ function boot() {
     accept: (b) => post({ type: "accept", target: +b.dataset.seq }),
     rework: (b) => openComposer({ label: `What should change in Request #${b.dataset.seq}?`, kind: "rework", target: +b.dataset.seq }, { at: () => cards.get(`r:${b.dataset.seq}`), from: b }),
     expand: (b) => { expanded.add(+b.dataset.seq); render(); },
-    fold: (b) => { const id = b.dataset.id; if (!unfolded.delete(id)) unfolded.add(id); render(); },
+    fold: (b) => {
+      const id = b.dataset.id, extra = b.closest(".atl-card")?.querySelector(".atl-extra");
+      if (b.getAttribute("aria-expanded") === "true") { unfolded.delete(id); if (extra) openExtra(extra, false); } else unfolded.add(id);
+      render();
+    },
     collapse: (b) => { expanded.delete(+b.dataset.seq); render(); },
     chmark: (b) => toggleDiff(b.dataset.addr),
     chseen: (b) => clearTrace(b.dataset.addr),

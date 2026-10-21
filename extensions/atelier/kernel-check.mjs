@@ -830,7 +830,16 @@ try {
     await until("atelier.state().decisions.find((d)=>d.id==='todo').answer==='Cut it'");
     const fresh = await look("todo");
     assert(!fresh.folded && fresh.options === 2 && fresh.chosen === "Cut it", `inside its undo window an answer stays open: ${JSON.stringify(fresh)}`);
-    await until("document.querySelector('[data-id=\"d:todo\"]').classList.contains('atl-folded')");
+    // A note being typed is never folded away under the human; folding by the line closes the note box.
+    await click('[data-id="d:todo"] [data-atl=addnote]');
+    await until("document.activeElement===document.querySelector('[data-id=\"d:todo\"] .atl-note')");
+    await b("keyboard", "type", "half typed");
+    await sleep(11_000);
+    const typing = await look("todo");
+    assert(!typing.folded && typing.expanded === "true" && typing.extra && await js("document.activeElement===document.querySelector('[data-id=\"d:todo\"] .atl-note')"), `an open note box keeps its Decision open after the undo window: ${JSON.stringify(typing)}`);
+    await click('[data-id="d:todo"] [data-atl=fold]');
+    const shutTodo = await look("todo");
+    assert(shutTodo.folded && shutTodo.expanded === "false" && await js("document.querySelector('[data-id=\"d:todo\"] .atl-note').value") === "half typed", `the line folds it and keeps the typed note: ${JSON.stringify(shutTodo)}`);
   });
   assert.deepEqual(fails, [], "every 2.7.1 and 2.8.0 fix holds");
 
