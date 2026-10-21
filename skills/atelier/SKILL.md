@@ -1,12 +1,16 @@
 ---
 name: atelier
-description: "Page contract and Registry index for the atelier tool. Use before writing an Atelier Page: an HTML file through which the human comments, decides, rates and asks for work."
+description: "Page contract and Registry index for the atelier tool. Use before writing or linking an Atelier Page: an HTML file through which the human comments, decides, rates and asks for work."
 ---
 
 # Atelier
 
 A Page is one HTML file, in the project or at any absolute path. Write it, then call `atelier` with `open` and link the
 returned URL in the Chat; if the tool is missing, call `tools_enable` with group `atelier` first. Terms: `extensions/atelier/GLOSSARY.md` in pi-workbench.
+
+Only that URL works. A file path or Markdown file link opens the Page without its Kernel: no Decisions, no
+Comments, nothing reaches Pi. When `open` refuses because another session holds the Page, link the URL that
+session's `open` returned (in its transcript) and say which session receives the input.
 
 Building without the `atelier` tool, e.g. as a subagent? Prove the Page on the real host before handing it
 over: from the project directory run `node ../../extensions/atelier/serve.mjs <page.html>` (path relative to
