@@ -482,7 +482,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "report_status",
     label: "Report status",
-    description: "Report your own current one-line status for the delegate roster the lead and owner see; a new report replaces your previous one. Call this once when you start real work on your assignment, and again whenever your phase changes materially (for example moving from investigation to implementation, or hitting a blocker). Do not call it on every tool call or minor step.",
+    description: "Report your own current one-line status for the delegate roster the lead and owner see; a new report replaces your previous one. Call it when you start, then each time the answer to 'what are you doing now?' changes: reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, hitting a blocker. Keep it current: a line older than a few minutes of work is stale, so report again. Do not call it on every tool call.",
     promptSnippet: "Report your current one-line status to the delegate roster",
     parameters: ReportStatusParams,
     async execute(_toolCallId, params) {

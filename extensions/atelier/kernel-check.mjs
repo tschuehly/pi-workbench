@@ -889,9 +889,68 @@ try {
     assert(b5 !== null && b5 <= after.vw && after.over === 0 && after.sw <= after.vw, `a beat scrolled into view shows its chip in the viewport: ${JSON.stringify({ b5, after })}`);
     await b("set", "viewport", "1440", "900");
   });
-  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0 and 2.8.1 fix holds");
+  // 2.9.1 (owner 2026-10-21): "Die Kommentar-Threads, die Attention brauchen, sind versteckt, bis ich drüber hovere." A
+  // Key with no free spot hid its whole chip row at rest (2.8.1), an unread agent reply included.
+  await fixCheck("2.9.1-attention-threads-visible-at-rest", async () => {
+    const tight = path.join(dir, "tight.html");
+    const img = (id, style = "") => `<div atl-key="${id}" id="${id}" style="${style}"><svg viewBox="0 0 10 10" preserveAspectRatio="none" style="display:block;width:100%;height:80px"><rect width="10" height="10" fill="#9ab"/></svg></div>`;
+    await writeFile(tight, `<!doctype html><html lang="de"><meta charset="utf-8"><title>Tight</title>
+<style>body{margin:16px;font:15px/1.4 system-ui}[atl-key]{border:1px solid #ccc;padding:6px;margin:12px 0}</style>
+<body><p atl-key="intro">Ein Absatz über den Bildern, damit über ihnen kein Platz frei ist.</p>${img("need")}<p>Text dazwischen, der den Platz über dem zweiten Bild belegt.</p>${img("done")}
+${img("clip", "position:relative;overflow:hidden;margin-top:40px")}
+<div atl-key="outer" id="outer" style="border:0;padding:0">${img("inner", "border:0;padding:0;margin:0")}</div>
+<div atl-key="o2" id="o2" style="position:relative;overflow:hidden;border:0;padding:0">${img("i2", "position:relative;overflow:hidden;border:0;padding:0;margin:0")}</div>
+${img("tr", "overflow:hidden;translate:0 0;margin-top:40px")}${img("fl", "overflow:hidden;filter:saturate(1);margin-top:40px")}${img("wc", "overflow:hidden;will-change:transform;margin-top:40px")}
+<table style="width:100%"><tr atl-key="row" id="row"><td>Eine Zeile mit Text</td><td style="width:24px;max-width:24px;overflow:hidden">x</td></tr></table>
+<table style="width:100%"><tr atl-key="cq" id="cq"><td>Eine Zeile mit Text</td><td style="width:24px;max-width:24px;overflow:hidden;container-type:inline-size">x</td></tr></table>
+${img("cp", "contain:paint;margin-top:40px")}${img("cv", "content-visibility:auto;margin-top:40px")}
+<div atl-key="n8" id="n8" style="position:relative;overflow:hidden;width:80px;height:80px;border:0;padding:0">${img("m8", "position:relative;overflow:hidden;width:80px;height:80px;border:0;padding:0;margin:0")}</div><div style="height:60vh"></div>
+<script type="module" src="atelier.js"></script></body></html>`);
+    appendLog(tight, { origin: "human", type: "comment", key: "need", text: "Zu dunkel", delivery: "immediate" }, Date.now() - 60_000); // seq 1
+    appendLog(tight, { origin: "agent", type: "answer", target: 1, text: "Aufgehellt." }, Date.now() - 30_000);
+    appendLog(tight, { origin: "human", type: "comment", key: "done", text: "Passt", delivery: "immediate" }, Date.now() - 60_000); // seq 3
+    appendLog(tight, { origin: "human", type: "close", target: 3, delivery: "record" }, Date.now() - 50_000);
+    // Review of 2.9.1: a Key that clips its overflow hid a badge placed above it, and nested Keys with one box stacked
+    // their corner badges, one covering the other.
+    // Round 2: a hidden tucked row kept nested clipping Keys' badges on one spot, and a row Key whose pin sits in a
+    // narrow unpositioned overflow:hidden cell lost its pin, though the absolute pin escapes that cell. Round 3: a Key
+    // made a containing block by translate, filter or will-change clipped chips placed above it. Round 4: container-type
+    // makes no containing block, paint containment clips like overflow, and same-box 80 px Keys stack badges down the Key.
+    for (const key of ["clip", "outer", "outer/inner", ...Array(6).fill("o2"), ...Array(6).fill("o2/i2"), "row", "tr", "fl", "wc", "cq", "cp", "cv", "n8", "n8/m8"]) {
+      const { seq } = appendLog(tight, { origin: "human", type: "comment", key, text: `Zu hell: ${key}`, delivery: "immediate" }, Date.now() - 40_000);
+      appendLog(tight, { origin: "agent", type: "answer", target: seq, text: "Abgedunkelt." }, Date.now() - 20_000);
+    }
+    await b("set", "viewport", "390", "844");
+    await b("open", (await host.open(tight)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && document.querySelectorAll('.atl-prow .atl-chip').length===26");
+    await b("mouse", "move", "1", "1"); await sleep(300);
+    // What marks each Key's threads at rest, and whether its chip row found a spot.
+    const rest = (key) => js(`(()=>{const p=document.querySelector('[atl-ui=pin][data-key=${key}]'),v=(e)=>e.checkVisibility({visibilityProperty:true,opacityProperty:true});return {tuck:p.querySelector('.atl-prow').classList.contains('atl-tuck'),shown:[...p.querySelectorAll('.atl-chip')].filter(v).map((c)=>c.dataset.atl+':'+(c.querySelector('.atl-cn')?.textContent??'')+(c.querySelector('.atl-nd')?'*':'')),sw:document.documentElement.scrollWidth,vw:document.documentElement.clientWidth}})()`);
+    const need = await rest("need"), done = await rest("done");
+    assert(need.tuck && need.shown.length === 1 && need.shown[0] === "tuck:1*", `with no free spot, an unread thread keeps a visible badge (count and new dot) at rest: ${JSON.stringify(need)}`);
+    assert(done.tuck && done.shown.length === 0, `a closed, read thread may still wait for hover: ${JSON.stringify(done)}`);
+    assert(need.sw <= need.vw, `the badge never widens the Page: ${JSON.stringify(need)}`);
+    // Every Key with a thread that needs the human shows a chip or badge at rest that a tap at its centre reaches.
+    const reach = await js(`["need","clip","outer","outer/inner","o2","o2/i2","row","tr","fl","wc","cq","cp","cv","n8","n8/m8"].map((key)=>{const p=document.querySelector('[atl-ui=pin][data-key="'+key+'"]');return key+':'+[...p.querySelectorAll('.atl-badge,.atl-prow .atl-unread')].some((c)=>{if(!c.checkVisibility({visibilityProperty:true,opacityProperty:true}))return false;c.scrollIntoView({block:'center'});const r=c.getBoundingClientRect();return document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.closest('.atl-badge,.atl-chip')===c})})`);
+    assert.deepEqual(reach, ["need:true", "clip:true", "outer:true", "outer/inner:true", "o2:true", "o2/i2:true", "row:true", "tr:true", "fl:true", "wc:true", "cq:true", "cp:true", "cv:true", "n8:true", "n8/m8:true"], `each attention marker is visible and on top, not clipped or covered: ${JSON.stringify(reach)}`);
+    const badge = "[atl-ui=pin][data-key=need] .atl-badge", chip = "[atl-ui=pin][data-key=need] .atl-prow .atl-chip";
+    const k = await box("#need"), bb = await box(badge);
+    assert(bb.x >= k.x && bb.right <= k.right && bb.y >= k.y && bb.y + bb.h <= k.y + k.h, `the badge sits on its Key: ${JSON.stringify({ k, bb })}`);
+    await js("scrollTo(0,0); true"); await sleep(200);
+    // Clicking (tapping) the badge shows the row and focuses the unread thread's chip; Enter opens it.
+    await click(badge); await sleep(200);
+    assert.equal(await js(`document.activeElement===document.querySelector('${chip}') && document.querySelector('${chip}').checkVisibility({visibilityProperty:true})`), true, "the badge shows the row and focuses the thread that needs the human");
+    await b("press", "Enter");
+    await until("document.querySelector('[atl-ui=thread]')?.isConnected");
+    await b("press", "Escape"); await sleep(200);
+    await js("document.activeElement.blur(); true"); await b("mouse", "move", "1", "1"); await b("hover", "#done"); await b("mouse", "move", "1", "1"); await sleep(300);
+    const read = await rest("need");
+    assert(read.shown.length === 1 && read.shown[0] === "tuck:1", `read but still open, the thread keeps its badge, now without the new dot: ${JSON.stringify(read)}`);
+    await b("set", "viewport", "1440", "900");
+  });
+  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1 and 2.9.1 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.9.1: a thread that needs the human keeps a badge at rest where its chip row has no spot.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }
