@@ -906,9 +906,18 @@ function boot() {
   let popQueued = false, pinsQueued = false; const scrolled = new Set();
   addEventListener("scroll", (ev) => {
     if (!selBtn.hidden) placeSel();
-    if (ev.target !== document && !isUi(ev.target) && pins.size) {
+    if (ev.target !== document && !isUi(ev.target) && (pins.size || spots.size)) {
       scrolled.add(ev.target);
-      if (!pinsQueued) { pinsQueued = true; requestAnimationFrame(() => { pinsQueued = false; for (const pin of pins.values()) if ([...scrolled].some((t) => t.contains(pin))) pinAt(pin); scrolled.clear(); }); }
+      if (!pinsQueued) {
+        pinsQueued = true;
+        requestAnimationFrame(() => {
+          pinsQueued = false;
+          const near = (n) => [...scrolled].some((t) => t.contains(n) || n.contains(t)); // in the scroller, or a Key around it
+          for (const pin of pins.values()) { const key = findKey(pin.dataset.key); if (key && near(key)) pinAt(pin); }
+          for (const s of spots.values()) if (near(s)) spotAt(s);
+          scrolled.clear();
+        });
+      }
     }
     if ((composer || thread || wipLabels.size) && !popQueued) { popQueued = true; requestAnimationFrame(() => { popQueued = false; placePops(); positionWip(); }); }
   }, { capture: true, passive: true });
