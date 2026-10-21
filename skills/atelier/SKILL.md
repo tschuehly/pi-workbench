@@ -17,6 +17,13 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
 
 ## Page contract
 
+- `open` and `update` run the Page check and append its result; `check` runs it alone, and without the tool run
+  `node ../../extensions/atelier/check-page.mjs <page.html>`. On a test copy at 1512×900 it clicks every
+  `aria-controls` element and measures, per view, errors, horizontal overflow and text drawn over text; once, unbalanced
+  tags, the Kernel version, Kernel elements moving Page content (lay out a wrapper, never `<body>`), and Page CSS or
+  `onclick` reaching Kernel controls (scope selectors such as `aside button` or `nav button` to Page markup). Read the
+  result and fix every FAIL; "unchecked" measured nothing. Have its screenshots inspected visually before handing the
+  Page to the owner.
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`
   and `idiomorph.js` beside the Page; let it, rather than copying them by hand.
 - `atl-key="name"` on every element the human judges. Nested Keys form an address such as

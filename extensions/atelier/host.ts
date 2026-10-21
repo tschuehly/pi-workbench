@@ -12,7 +12,7 @@ import { CLASSES, UNDO_MS, compose, inGroup, keyTexts } from "./kernel/atelier.j
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-const KERNEL_VERSION = "2.9.0";
+export const KERNEL_VERSION = "2.9.0";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
