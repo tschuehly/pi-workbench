@@ -1,0 +1,49 @@
+import org.gradle.api.Action
+import org.gradle.api.Task
+import org.gradle.api.GradleException
+import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.testing.junitplatform.JUnitPlatformOptions
+
+// Generic, opt-in round guard. Neither the token alone nor an unrelated path enables it.
+class PiEvalFocused implements Action<Task>, Serializable {
+    static boolean narrow(String s) {
+        if (s in ['*', '*Test', '*Tests', '*IT', '*Spec']) return false
+        def cls = '[A-Z_$][A-Za-z0-9_$]*'
+        def method = '(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)?'
+        return s ==~ ('\\*' + cls + method) ||
+            s ==~ ('(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)*' + cls + method) ||
+            s ==~ ('(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)*[A-Z_$][A-Za-z0-9_$]+\\*[A-Za-z0-9_$]*' + method)
+    }
+    static void validate(Task task) {
+        if (task.name.toLowerCase().contains('pitest')) throw new GradleException('pi-eval: pitest refused')
+        if (task instanceof Test) {
+            def filters = task.filter.includePatterns + task.filter.commandLineIncludePatterns
+            if (!filters || !filters.every { narrow(it) }) throw new GradleException('pi-eval: focused class/method filters required for ' + task.path)
+            if (!(task.options instanceof JUnitPlatformOptions) || !task.options.excludeTags.contains('e2e')) throw new GradleException('pi-eval: e2e exclusion required')
+        }
+    }
+    void execute(Task task) { validate(task) }
+}
+def owned = new File('__OWNED_ROOT__').canonicalFile.toPath()
+def current = gradle.startParameter.currentDir.canonicalFile.toPath()
+if (System.getenv('PI_EVAL_ROUND_TOKEN') == '__ROUND_TOKEN__' && current.startsWith(owned)) {
+  gradle.settingsEvaluated { settings ->
+    if (settings.settingsDir.canonicalFile.toPath().startsWith(owned)) {
+    gradle.projectsEvaluated {
+        gradle.rootProject.allprojects { p ->
+            p.tasks.configureEach { task ->
+                if (task instanceof Test) {
+                    task.useJUnitPlatform { excludeTags('e2e') }
+                    // This serializable Action survives configuration-cache reuse.
+                    task.doFirst(new PiEvalFocused())
+                } else if (task.name.toLowerCase().contains('pitest')) {
+                    task.doFirst(new PiEvalFocused())
+                }
+            }
+        }
+    }
+    // Refuse mixed/broad graphs before compilation. Execution actions above also validate cache hits.
+    gradle.taskGraph.whenReady { graph -> graph.allTasks.each { PiEvalFocused.validate(it) } }
+    }
+  }
+}

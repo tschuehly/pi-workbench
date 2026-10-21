@@ -3,11 +3,13 @@
 // Usage:
 //   node scripts/pi-eval.mjs run <campaign.json> [--dry-run] [--only <caseId>] [--keep]
 //   node scripts/pi-eval.mjs report <results.jsonl>
-import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { shell as sh, requireDisk, runProcess, sandboxProfile, copyToolGuard, createGradleGuard, removeGradleGuard, canonical, inside, hash, remainingTimeout, cleanupDeadline } from './pi-eval/safety.mjs';
+import { judgePasses } from './pi-eval/quality.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RESOLVER = path.join(ROOT, "skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
@@ -18,7 +20,7 @@ const TOOLS = "read,bash,edit,write,grep,find,ls";
 // reviewed bytes, so review cases resolve admission under a non-independent role.
 const ADMISSION_ROLE = { routine: "routine", implementation: "implementation", frontier: "frontier", review: "implementation", "independent-review": "implementation", judge: "implementation" };
 
-const sh = (cmd, opts = {}) => spawnSync("bash", ["-c", cmd], { encoding: "utf8", maxBuffer: 1 << 28, ...opts });
+let activeGradleGuard;
 // Gradle reuses daemons across invocations. A daemon started inside one trial's sandbox can read only that
 // trial, so reuse by a later trial or by the unsandboxed check breaks builds and could leak state. Give the
 // candidate and the check separate per-trial registries with a short idle timeout.
@@ -28,21 +30,36 @@ const MAX_FORKS = process.env.PI_EVAL_MAX_FORKS ?? "2";
 const gradleEnv = (dir) => ({ PI_EVAL_MAX_FORKS: MAX_FORKS, GRADLE_OPTS: `${process.env.GRADLE_OPTS ?? ""} -Dorg.gradle.daemon.registry.base=${dir} -Dorg.gradle.daemon.idletimeout=120000`.trim() });
 // Stop every daemon a trial registered, with or without its workspace: `gradlew --stop` first, then SIGTERM
 // any daemon that is still alive, identified by the daemon-<pid>.out.log files in the trial's own registry.
-function stopGradle(trialDir, workspaces) {
-  for (const d of ["gradle-agent", "gradle-check"].map((n) => path.join(trialDir, n)).filter(existsSync)) {
-    const ws = workspaces.find((w) => existsSync(path.join(w, "gradlew")));
-    if (ws) sh("./gradlew --stop -q", { cwd: ws, env: { ...process.env, ...gradleEnv(d) }, timeout: 120_000 });
-    const pids = sh(`find ${JSON.stringify(d)} -name 'daemon-*.out.log'`).stdout.split("\n").map((f) => f.match(/daemon-(\d+)\.out\.log$/)?.[1]).filter(Boolean);
-    for (const pid of pids) if (/GradleDaemon/.test(sh(`ps -o command= -p ${pid}`).stdout)) try { process.kill(Number(pid), "SIGTERM"); } catch {}
-  }
+export async function stopGradle(trialDir, workspaces) {
+  const deadlineAt = cleanupDeadline();
+  const cleanup = (command, opts = {}) => sh(command, { ...opts, deadlineAt });
+  try {
+    for (const d of [...["gradle-agent", "gradle-check"].map(n => path.join(trialDir, n)), ...workspaces.map(ws => path.join(ws, '.eval-gradle'))].filter(existsSync)) {
+      const ws = workspaces.find((w) => existsSync(path.join(w, "gradlew")));
+      if (ws) cleanup("./gradlew --max-workers=1 --stop -q", { cwd: ws, env: { ...process.env, ...gradleEnv(d) }, timeout: 120_000, preflight: false });
+      const pids = readdirSync(d, {recursive: true}).map(String).map(f => f.match(/daemon-(\d+)\.out\.log$/)?.[1]).filter(Boolean);
+      for (const pid of pids) {
+        const daemon = () => /GradleDaemon/.test(cleanup(`ps -o command= -p ${pid}`, {timeout: 5000, preflight: false}).stdout);
+        if (!daemon()) continue;
+        try { process.kill(Number(pid), 'SIGTERM'); } catch {}
+        for (let i=0; i<20 && daemon(); i++) await new Promise(r => setTimeout(r,100));
+        if (daemon()) { try { process.kill(Number(pid), 'SIGKILL'); } catch {} }
+        for (let i=0; i<20 && daemon(); i++) await new Promise(r => setTimeout(r,100));
+        if (daemon()) return false;
+      }
+    }
+    return true;
+  } catch (error) { console.error(`Owned Gradle cleanup incomplete: ${error.message}`); return false; }
 }
 // Long campaigns yield to CI gates run by other sessions.
 async function waitForGates() {
   let announced = false;
   while (sh("pgrep -f 'gate\\.sh'").stdout.trim()) {
     if (!announced) { process.stdout.write("(waiting for gate.sh to finish) "); announced = true; }
-    await new Promise((r) => setTimeout(r, 60_000));
+    await new Promise((r) => setTimeout(r, remainingTimeout(60_000)));
+    requireDisk();
   }
+  requireDisk();
 }
 const stamp = () => new Date().toISOString().replace(/[:.]/g, "-");
 
@@ -59,8 +76,8 @@ function repoPath(name) {
 }
 
 function quota() {
-  const r = sh("quota-axi --json", { timeout: 30_000 });
   try {
+    const r = sh("quota-axi --json", { timeout: 30_000, preflight: false });
     return JSON.parse(r.stdout).providers
       .filter((p) => ["claude", "codex", "copilot"].includes(p.provider))
       .map((p) => ({ provider: p.provider, state: p.state?.status, windows: (p.windows ?? []).map((w) => ({ id: w.id, percentRemaining: w.percentRemaining, resetsAt: w.resetsAt })) }))
@@ -73,7 +90,7 @@ function claudeUsageFromPi() {
   try {
     const token = JSON.parse(readFileSync(path.join(homedir(), ".pi/agent/auth.json"), "utf8")).anthropic?.access;
     if (!token) return null;
-    const r = spawnSync("curl", ["-sf", "--max-time", "20", "-H", `Authorization: Bearer ${token}`, "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"], { encoding: "utf8" });
+    const r = spawnSync("curl", ["-sf", "--max-time", "20", "-H", `Authorization: Bearer ${token}`, "-H", "anthropic-beta: oauth-2025-04-20", "https://api.anthropic.com/api/oauth/usage"], { encoding: "utf8", timeout: remainingTimeout(20_000) });
     const d = JSON.parse(r.stdout);
     const w = (id) => d[id] && { id, percentRemaining: Math.round(100 - d[id].utilization), resetsAt: d[id].resets_at };
     return { provider: "claude", state: "fresh", source: "pi-oauth-usage", windows: [w("five_hour"), w("seven_day")].filter(Boolean) };
@@ -94,70 +111,66 @@ function quotaStop(threshold) {
 // Built once per campaign: extension discovery can push \`pi --list-models\` past the resolver's deadline.
 let catalogFile;
 function admit(role, model, effort) {
-  const r = spawnSync("node", [RESOLVER, ADMISSION_ROLE[role] ?? role, "--model", model, "--effort", effort, "--catalog", catalogFile], { encoding: "utf8", timeout: 60_000 });
+  requireDisk();
+  const r = spawnSync("node", [RESOLVER, ADMISSION_ROLE[role] ?? role, "--model", model, "--effort", effort, "--catalog", catalogFile], { encoding: "utf8", timeout: remainingTimeout(60_000) });
   try { return { ok: true, binding: JSON.parse(r.stdout).modelBinding }; } catch { return { ok: false, reason: (r.stdout + r.stderr).match(/REASON=(.*)/)?.[1] ?? r.stdout.slice(0, 300) }; }
 }
 
 // Fresh snapshot without history, so the future fix is never discoverable through git.
-function prepareWorkspace(c, dir) {
+export function prepareWorkspace(c, dir) {
   mkdirSync(dir, { recursive: true });
   if (c.workspace !== "empty") {
     const paths = (c.paths ?? []).map((p) => JSON.stringify(p)).join(" ");
     const r = sh(`git -C ${JSON.stringify(repoPath(c.repo))} archive ${c.commit} ${paths} | tar -x -C ${JSON.stringify(dir)}`);
     if (r.status !== 0) throw new Error(`snapshot failed: ${r.stderr}`);
   }
-  const env = { ...process.env, CASE_DIR: c.dir, SOURCE_REPO: c.repo ? repoPath(c.repo) : "" };
+  const env = { ...process.env, ...gradleEnv(path.join(path.dirname(dir), 'gradle-check')), CASE_DIR: c.dir, SOURCE_REPO: c.repo ? repoPath(c.repo) : "" };
   if (c.setup) {
     const r = sh(`bash ${JSON.stringify(path.join(c.dir, c.setup))}`, { cwd: dir, env });
     if (r.status !== 0) throw new Error(`setup failed: ${r.stdout}${r.stderr}`);
   }
   // Setup may build its own history (a review case commits the change under review).
-  if (!existsSync(path.join(dir, ".git"))) sh(`git init -q && git add -A && git -c user.name=eval -c user.email=eval@local commit -qm snapshot --allow-empty`, { cwd: dir });
+  if (!existsSync(path.join(dir, ".git"))) {
+    const r = sh(`git init -q && git add -A && git -c user.name=eval -c user.email=eval@local commit -qm snapshot --allow-empty`, { cwd: dir });
+    if (r.status !== 0) throw new Error(`snapshot git init failed: ${r.stderr}`);
+  }
 }
 
-// A candidate has shell access, so it could read the source repository, the case checks, earlier trials,
-// or session logs that discuss the answers. macOS sandbox-exec denies those reads; later rules win, so
-// the trial directory and the installed harness checkouts stay readable.
-function sandboxProfile(trialDir) {
-  const real = (p) => (existsSync(p) ? realpathSync(p) : p);
-  const home = homedir();
-  const projects = real(path.resolve(ROOT, ".."));
-  const deny = [projects, real(EVAL_HOME), real(path.join(home, ".pi/agent/sessions")), real(path.join(home, ".pi-web"))];
-  // pi-extensions holds Pi startup packages (settings.json), not case sources; Pi exits with EPERM without it.
-  const allow = [...readdirSync(projects).filter((d) => d.endsWith(".installed") || d === "pi-extensions").map((d) => path.join(projects, d)), real(trialDir)];
-  const rule = (verb, p) => `(${verb} file-read-data (subpath ${JSON.stringify(p)}))`;
-  return `(version 1)(allow default)${deny.map((p) => rule("deny", p)).join("")}${allow.map((p) => rule("allow", p)).join("")}`;
-}
-
-function runPi({ model, effort, prompt, cwd, sessionDir, timeoutMs, trialDir, tools = TOOLS }) {
-  return new Promise((resolve) => {
-    const started = Date.now();
-    const args = ["-p", "--mode", "json", "--model", model, "--thinking", effort, "--session-dir", sessionDir, tools ? "--tools" : "--no-tools", ...(tools ? [tools] : []), prompt];
-    const env = { ...process.env, ...gradleEnv(path.join(trialDir, "gradle-agent")) };
+export async function runPi({ model, effort, prompt, cwd, sessionDir, timeoutMs, trialDir = cwd, tools = TOOLS, neutral = false, systemPrompt, commandPolicy, candidate = false, gradleGuard = activeGradleGuard, wait = waitForGates, deadlineAt }) {
+    const guard = copyToolGuard(trialDir);
+    if (neutral) {
+      mkdirSync(path.join(cwd, '.pi'), {recursive: true});
+      writeFileSync(path.join(cwd, '.pi/settings.json'), JSON.stringify({ retry: { enabled: false, provider: {maxRetries: 0} }, compaction: {enabled: false} }));
+    }
+    const args = ["-p", "--mode", "json", "--model", model, "--thinking", effort, "--session-dir", sessionDir,
+      '-e', guard.file, ...(neutral ? ['--approve', '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-mcp', '--system-prompt', systemPrompt] : []),
+      tools ? "--tools" : "--no-tools", ...(tools ? [tools] : []), prompt];
+    const ownedRoot = path.join(canonical(trialDir), 'ownedroot');
+    if (!inside(canonical(trialDir), canonical(ownedRoot)) || !inside(canonical(ownedRoot), canonical(path.join(ownedRoot,'session')))) throw new Error('Owned scratch escapes canonical trial');
+    mkdirSync(path.join(ownedRoot, 'session'), {recursive:true});
+    const env = { ...process.env, PI_TMP_ROOT: ownedRoot, PI_TMP: path.join(ownedRoot, 'session'), ...gradleEnv(path.join(trialDir, "gradle-agent")) };
+    delete env.PI_EVAL_ROUND_TOKEN;
+    if (candidate && gradleGuard) Object.assign(env, gradleGuard.env);
     delete env.PI_WORKBENCH_ROUTING_OVERLAY;
-    const child = spawn("sandbox-exec", ["-p", sandboxProfile(trialDir), "pi", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
-    let out = "", err = "", timedOut = false;
-    child.stdout.on("data", (d) => (out += d));
-    child.stderr.on("data", (d) => (err += d));
-    const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, "SIGTERM"); } catch {} }, timeoutMs);
-    child.on("close", (code) => {
-      clearTimeout(timer);
+    delete env.PI_EVAL_COMMAND_POLICY;
+    if (commandPolicy) env.PI_EVAL_COMMAND_POLICY = JSON.stringify(commandPolicy);
+    const { stdout: out, stderr: err, status: code, timedOut, error: launchError, elapsedMs } = await runProcess('sandbox-exec', ['-p', sandboxProfile(trialDir, { neutral }), 'pi', ...args],
+      // Give Pi's native SIGTERM handler time to kill its separately detached bash groups.
+      { cwd, env, timeoutMs, termGraceMs: 1000, maxTimeoutMs: tools ? 45 * 60000 : 900000, wait, deadlineAt });
       const events = out.split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
       const turns = events.filter((e) => e.type === "turn_end").length;
       const messages = events.findLast((e) => e.type === "agent_end")?.messages
         ?? events.filter((e) => e.type === "message_end").map((e) => e.message);
-      const assistant = messages.filter((m) => m.role === "assistant");
-      const sum = (k) => assistant.reduce((a, m) => a + (m.usage?.[k] ?? 0), 0);
+      const assistant = (messages ?? []).filter((m) => m.role === "assistant");
+      const sum = k => assistant.length && assistant.every(m => typeof m.usage?.[k] === 'number') ? assistant.reduce((a, m) => a + m.usage[k], 0) : null;
       const last = assistant.at(-1);
-      resolve({
-        exitCode: code, timedOut, elapsedMs: Date.now() - started, turns,
+      return {
+        exitCode: code, timedOut, elapsedMs, turns,
         toolCalls: assistant.reduce((a, m) => a + (m.content ?? []).filter((c) => c.type === "toolCall").length, 0),
-        usage: { input: sum("input"), output: sum("output"), cacheRead: sum("cacheRead"), cacheWrite: sum("cacheWrite"), reasoning: sum("reasoning"), cost: assistant.reduce((a, m) => a + (m.usage?.cost?.total ?? 0), 0) },
-        stopReason: last?.stopReason, error: last?.errorMessage ?? (code !== 0 ? err.slice(-500) : undefined),
+        usage: { input: sum("input"), output: sum("output"), cacheRead: sum("cacheRead"), cacheWrite: sum("cacheWrite"), reasoning: sum("reasoning"), cost: assistant.length && assistant.every(m => typeof m.usage?.cost?.total === 'number') ? assistant.reduce((a, m) => a + m.usage.cost.total, 0) : null },
+        stopReason: last?.stopReason, error: launchError ?? last?.errorMessage ?? (code !== 0 ? err.slice(-500) : undefined),
         finalText: (last?.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("\n"),
-      });
-    });
-  });
+      };
 }
 
 function buildPrompt(c, extra = "") {
@@ -165,13 +178,15 @@ function buildPrompt(c, extra = "") {
 }
 
 async function runArm(c, arm, trialDir) {
-  const timeoutMs = (c.timeoutMinutes ?? 30) * 60_000;
+  const timeoutMs = Math.min(c.timeoutMinutes ?? 30, 45) * 60_000;
+  const deadline = Date.now() + timeoutMs;
+  const remaining = () => { const ms = deadline - Date.now(); if (ms <= 0) throw new Error('Trial deadline exceeded'); return ms; };
   const members = arm.panel ?? [arm];
   const runs = [];
   for (const [i, m] of members.entries()) {
     const ws = path.join(trialDir, arm.panel ? `ws-member-${i}` : "ws");
     prepareWorkspace(c, ws);
-    runs.push({ model: m.model, effort: m.effort, ws, ...(await runPi({ model: m.model, effort: m.effort, prompt: buildPrompt(c), cwd: ws, sessionDir: path.join(trialDir, `session-${i}`), timeoutMs, trialDir })) });
+    runs.push({ model: m.model, effort: m.effort, ws, ...(await runPi({ model: m.model, effort: m.effort, prompt: buildPrompt(c), cwd: ws, sessionDir: path.join(trialDir, `session-${i}`), timeoutMs: remaining(), trialDir, commandPolicy: c.commandPolicy, candidate: true })) });
   }
   if (!arm.panel) return { ws: runs[0].ws, runs };
   const ws = path.join(trialDir, "ws");
@@ -185,15 +200,16 @@ async function runArm(c, arm, trialDir) {
   const combine = code
     ? `Independent colleagues each worked on the task below in their own copy of this workspace. Their changes may disagree or be wrong. Your workspace is unchanged. Verify disputed points against the code, then make the single best change here yourself, and report as the task asks.\n\n${answers}`
     : `Independent colleagues answered the task below. Their answers may disagree or be wrong. Verify disputed points against the workspace, then produce the single best final answer yourself, in the required output format.\n\n${answers}`;
-  runs.push({ model: arm.combiner.model, effort: arm.combiner.effort, combiner: true, ws, ...(await runPi({ model: arm.combiner.model, effort: arm.combiner.effort, prompt: buildPrompt(c, combine), cwd: ws, sessionDir: path.join(trialDir, "session-combiner"), timeoutMs, trialDir })) });
+  runs.push({ model: arm.combiner.model, effort: arm.combiner.effort, combiner: true, ws, ...(await runPi({ model: arm.combiner.model, effort: arm.combiner.effort, prompt: buildPrompt(c, combine), cwd: ws, sessionDir: path.join(trialDir, "session-combiner"), timeoutMs: remaining(), trialDir, commandPolicy: c.commandPolicy, candidate: true })) });
   return { ws, runs };
 }
 
 const bounded = (text, max) => (text.length <= max ? text : `${text.slice(0, max)}\n[... ${text.length - max} more characters truncated]`);
 // Everything the candidate changed since the snapshot root, including anything it committed.
-function workspaceDiff(ws) {
-  const out = sh("git add -A && git diff --cached $(git rev-list --max-parents=0 HEAD | tail -1)", { cwd: ws }).stdout;
-  sh("git reset -q", { cwd: ws });
+export function workspaceDiff(ws) {
+  const deadlineAt = cleanupDeadline();
+  const out = sh("git add -A && git diff --cached $(git rev-list --max-parents=0 HEAD | tail -1)", { cwd: ws, preflight: false, deadlineAt }).stdout;
+  sh("git reset -q", { cwd: ws, preflight: false, deadlineAt });
   return out;
 }
 // Review findings the scorer did not credit to a known defect (all findings on a clean control) are
@@ -224,8 +240,16 @@ ${findings.map((f, i) => `${i}. ${f.file}:${f.line} — ${f.problem}`).join("\n"
   return { unmatched: findings.length, valid, invalid: verdicts.filter((v) => v.valid === false).length, judge: j.model, verdicts, usage: r.usage };
 }
 
-function scanSessions(trialDir, patterns) {
+export function scanSessions(trialDir, patterns) {
   const hits = [];
+  const root = canonical(trialDir);
+  const strings = value => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.entries(value).flatMap(([k,v]) => [k,...strings(v)]) : [];
+  const withoutOwnedPaths = text => text.replace(/(?:[^\s\x22'<>;|&]|\x22[^\x22]*\x22|'[^']*')+/g, raw => {
+    const token = /^(\x22[^\x22]*\x22|'[^']*')$/.test(raw) ? raw.slice(1,-1) : raw;
+    // Only literal absolute tokens. Never expand shell syntax or erase an entire trial prefix.
+    if (!token.startsWith('/') || /[$`\\()\x22']/.test(token)) return raw;
+    try { return inside(root, canonical(token)) ? ' '.repeat(raw.length) : raw; } catch { return raw; }
+  });
   for (const d of readdirSync(trialDir).filter((n) => n.startsWith("session-"))) {
     for (const f of readdirSync(path.join(trialDir, d), { recursive: true }).filter((n) => String(n).endsWith(".jsonl"))) {
       for (const line of readFileSync(path.join(trialDir, d, String(f)), "utf8").split("\n")) {
@@ -233,7 +257,8 @@ function scanSessions(trialDir, patterns) {
         for (const part of entry?.message?.content ?? []) {
           if (part.type !== "toolCall") continue;
           const args = JSON.stringify(part.arguments ?? {});
-          for (const p of patterns) if (args.includes(p)) hits.push({ session: d, pattern: p, args: args.slice(0, 200) });
+          const scanned = strings(part.arguments ?? {}).map(withoutOwnedPaths).join('\n');
+          for (const p of patterns) if ((p.includes('/') ? scanned : args).includes(p)) hits.push({ session: d, pattern: p, args: args.slice(0, 200) });
         }
       }
     }
@@ -282,7 +307,7 @@ ${checkLog}`;
   return { mergeability: mean("mergeability"), contradictedClaims: valid.length ? Math.max(...valid.map((x) => (x.contradictedClaims ?? []).length)) : null, judges: scores };
 }
 
-async function check(c, ws, finalText, trialDir, judges) {
+export async function check(c, ws, finalText, trialDir, judges = []) {
   writeFileSync(path.join(trialDir, "final.txt"), finalText ?? "");
   if (c.check.type === "script") {
     const r = sh(`bash ${JSON.stringify(path.join(c.dir, c.check.script))}`, { cwd: ws, timeout: (c.check.timeoutMinutes ?? 20) * 60_000, env: { ...process.env, ...gradleEnv(path.join(trialDir, "gradle-check")), CASE_DIR: c.dir, FINAL_TEXT: path.join(trialDir, "final.txt"), SOURCE_REPO: c.repo ? repoPath(c.repo) : "" } });
@@ -312,17 +337,28 @@ async function check(c, ws, finalText, trialDir, judges) {
   return { pass: mean != null && mean >= (c.check.passScore ?? 6), score: mean, judges: scores, disagreement: valid.length > 1 && Math.max(...valid) - Math.min(...valid) >= 3 };
 }
 
-async function run(campaignPath, flags) {
+export function validateCommandPolicy(entry, c, caseFile) {
+  if (Array.isArray(c.commandPolicy)) return {status:'policy', commandPolicy:c.commandPolicy};
+  if (c.repo === 'PhotoQuest') return {status:'gradle-guard'};
+  const waiver = entry.commandPolicyWaiver;
+  const caseHash = hash(readFileSync(caseFile));
+  if (!waiver || waiver.reason !== 'Existing 15-minute command cap plus focused trusted checks' || waiver.caseHash !== caseHash) throw new Error(`Explicit matching commandPolicy waiver required: ${c.id}`);
+  return {status:'waived', reason:waiver.reason, caseHash};
+}
+export async function run(campaignPath, flags) {
   const campaign = JSON.parse(readFileSync(campaignPath, "utf8"));
+  if (campaign.id.startsWith('next-round-') && campaign.codeJudges) throw new Error('Next-round manifests must omit legacy codeJudges');
   const casesRoot = path.resolve(path.dirname(campaignPath), "..", "cases");
   const runId = `${campaign.id}-${stamp()}`;
   const outDir = path.join(EVAL_HOME, "results", runId);
   const results = path.join(outDir, "results.jsonl");
-  const harness = sh("git rev-parse HEAD", { cwd: ROOT }).stdout.trim();
   const plan = [];
   const entries = campaign.cases.filter((e) => !flags.only || e.case === flags.only).map((entry) => {
     const dir = path.join(casesRoot, entry.case);
-    return { entry, c: { ...JSON.parse(readFileSync(path.join(dir, "case.json"), "utf8")), dir } };
+    const caseFile = path.join(dir, 'case.json');
+    const c = { ...JSON.parse(readFileSync(caseFile, 'utf8')), dir };
+    if (campaign.id.startsWith('next-round-')) c.commandPolicyValidation = validateCommandPolicy(entry, c, caseFile);
+    return { entry, c };
   });
   // Alternate which arm goes first per case and repetition, so no arm always runs on a fresher
   // machine, cache, or quota window. "rep-major" runs every case once before any case twice, so a
@@ -341,28 +377,33 @@ async function run(campaignPath, flags) {
     for (const armId of order) plan.push({ c, arm: { id: armId, ...campaign.arms[armId] }, rep });
   }
   console.log(`${plan.length} trials → ${results}`);
-  if (flags.dryRun) { for (const t of plan) console.log(`  ${t.c.id} × ${t.arm.id} #${t.rep}`); return; }
+  if (flags.dryRun) { for (const t of plan) console.log(`  ${t.c.id} × ${t.arm.id} #${t.rep} ${JSON.stringify(t.arm)} deadline<=45m command<=900s ${JSON.stringify(t.c.commandPolicyValidation ?? null)}`); return; }
+  const harness = sh('git rev-parse HEAD', {cwd:ROOT}).stdout.trim();
   mkdirSync(outDir, { recursive: true });
+  activeGradleGuard = createGradleGuard(outDir);
+  let guardCleanupSafe = true;
+  writeFileSync(path.join(outDir, 'gradle-guard.json'), JSON.stringify(activeGradleGuard, null, 2));
+  try {
   catalogFile = path.join(outDir, "catalog.txt");
-  writeFileSync(catalogFile, sh("pi --no-extensions --list-models", { timeout: 120_000 }).stdout);
-  writeFileSync(path.join(outDir, "campaign.json"), JSON.stringify({ ...campaign, harness }, null, 2));
+  writeFileSync(catalogFile, sh("pi --list-models", { timeout: 120_000 }).stdout);
+  writeFileSync(path.join(outDir, "campaign.json"), JSON.stringify({ ...campaign, harness, commandPolicyValidations:entries.map(({c})=>({case:c.id,...c.commandPolicyValidation})) }, null, 2));
   let stopped = null;
   // Difficulty ladder: cases are listed easy → hard; an arm stops after N consecutive failed checks.
   const fails = new Map();
   for (const [i, { c, arm, rep }] of plan.entries()) {
     if (campaign.stopAfterFails && (fails.get(arm.id) ?? 0) >= campaign.stopAfterFails) {
-      appendFileSync(results, JSON.stringify({ runId, trial: i, case: c.id, role: c.role, arm: arm.id, rep, harness, status: "not-run", reason: `ladder: ${campaign.stopAfterFails} consecutive fails`, endedAt: new Date().toISOString() }) + "\n");
+      appendFileSync(results, JSON.stringify({ runId, trial: i, case: c.id, role: c.role, arm: arm.id, rep, harness, commandPolicyValidation:c.commandPolicyValidation, status: "not-run", reason: `ladder: ${campaign.stopAfterFails} consecutive fails`, endedAt: new Date().toISOString() }) + "\n");
       continue;
     }
     if (!stopped && campaign.stopBelowPercent !== undefined) stopped = quotaStop(campaign.stopBelowPercent);
     if (stopped) {
-      appendFileSync(results, JSON.stringify({ runId, trial: i, case: c.id, role: c.role, arm: arm.id, rep, harness, status: "not-run", reason: stopped, endedAt: new Date().toISOString() }) + "\n");
+      appendFileSync(results, JSON.stringify({ runId, trial: i, case: c.id, role: c.role, arm: arm.id, rep, harness, commandPolicyValidation:c.commandPolicyValidation, status: "not-run", reason: stopped, endedAt: new Date().toISOString() }) + "\n");
       continue;
     }
     // The trial path is the model's working directory, so it must not name the case or arm.
     const trialDir = path.join(outDir, `t${String(i).padStart(3, "0")}`);
     mkdirSync(trialDir, { recursive: true });
-    const record = { runId, trial: i, trialDir: path.basename(trialDir), case: c.id, role: c.role, arm: arm.id, rep, harness, caseCommit: c.commit ?? null, startedAt: new Date().toISOString() };
+    const record = { runId, trial: i, trialDir: path.basename(trialDir), case: c.id, role: c.role, arm: arm.id, rep, harness, commandPolicyValidation:c.commandPolicyValidation, caseCommit: c.commit ?? null, startedAt: new Date().toISOString() };
     const members = [...(arm.panel ?? [arm]), ...(arm.combiner ? [arm.combiner] : [])];
     // Panel members run the case's role; the combiner is the lead model and is admitted as implementation.
     const admissions = members.map((m) => admit(m === arm.combiner ? "implementation" : campaign.admitAs ?? c.role, m.model, m.effort)  /* admitAs: smoke screens test frontier cases below the frontier effort floor */);
@@ -386,7 +427,7 @@ async function run(campaignPath, flags) {
         const last = runs.at(-1);
         record.runs = runs.map(({ ws: _w, finalText: _f, ...r }) => r);
         record.elapsedMs = runs.reduce((a, r) => a + r.elapsedMs, 0);
-        record.cost = runs.reduce((a, r) => a + r.usage.cost, 0);
+        record.cost = runs.every(r => typeof r.usage.cost === 'number') ? runs.reduce((a, r) => a + r.usage.cost, 0) : null;
         // Diff against the snapshot root commit, so work the model committed is captured too.
         writeFileSync(path.join(trialDir, "diff.patch"), workspaceDiff(ws));
         record.check = await check(c, ws, last.finalText, trialDir, campaign.judges ?? []);
@@ -399,8 +440,16 @@ async function run(campaignPath, flags) {
       } catch (error) {
         Object.assign(record, { status: "harness-error", reason: String(error?.message ?? error).slice(0, 1000) });
       } finally {
-        stopGradle(trialDir, workspaces);
-        if (!flags.keep) for (const r of new Set(workspaces)) rmSync(r, { recursive: true, force: true });
+        workspaces.push(...readdirSync(trialDir).filter(n => /^ws(?:-|$)/.test(n)).map(n => path.join(trialDir, n)));
+        const stopped = await stopGradle(trialDir, workspaces);
+        guardCleanupSafe = stopped && guardCleanupSafe;
+        if (!flags.keep && stopped) {
+          const deadlineAt = cleanupDeadline();
+          for (const r of new Set(workspaces)) {
+            try { const removed = sh(`rm -rf -- ${JSON.stringify(r)}`, {preflight:false,deadlineAt}); if (removed.status !== 0) guardCleanupSafe = false; }
+            catch (error) { guardCleanupSafe = false; console.error(`Owned workspace cleanup incomplete: ${error.message}`); break; }
+          }
+        }
       }
       record.quotaAfter = quota();
     }
@@ -411,6 +460,10 @@ async function run(campaignPath, flags) {
   }
   if (stopped) console.log(`stopped new trials: ${stopped}`);
   report(results);
+  } finally {
+    if (!guardCleanupSafe || !removeGradleGuard(activeGradleGuard)) console.error(`Guard changed or missing; left for inspection: ${activeGradleGuard.file}`);
+    activeGradleGuard = null;
+  }
 }
 
 function report(file) {
@@ -424,8 +477,19 @@ function report(file) {
   }
 }
 
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const [cmd, target, ...rest] = process.argv.slice(2);
 const flags = { dryRun: rest.includes("--dry-run"), keep: rest.includes("--keep"), only: rest.includes("--only") ? rest[rest.indexOf("--only") + 1] : null };
 if (cmd === "run" && target) await run(path.resolve(target), flags);
+else if (cmd === 'judge-passes' && target) {
+  const manifest = JSON.parse(readFileSync(target, 'utf8'));
+  if (!flags.dryRun) {
+    requireDisk();
+    if (!manifest.catalogFile || !existsSync(manifest.catalogFile)) throw new Error('Retained current catalogFile required');
+    catalogFile = manifest.catalogFile;
+  }
+  console.log(JSON.stringify(await judgePasses(manifest, flags, { admit: j => admit('judge', j.model, j.effort), run: runPi }), null, 2));
+}
 else if (cmd === "report" && target) report(target);
-else { console.error("usage: pi-eval.mjs run <campaign.json> [--dry-run] [--only <case>] [--keep] | report <results.jsonl>"); process.exit(2); }
+else { console.error("usage: pi-eval.mjs run <campaign.json> [--dry-run] [--only <case>] [--keep] | judge-passes <manifest.json> [--dry-run] | report <results.jsonl>"); process.exit(2); }
+}
