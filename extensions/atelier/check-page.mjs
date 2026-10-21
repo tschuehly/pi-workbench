@@ -1,67 +1,102 @@
 #!/usr/bin/env node
-// Page check: catches a broken Page before the owner sees it. `open` and `update` run it; from a shell:
+// Page check: catches a broken Page before the owner sees it. `open` and `update` run it; from a shell, in the project directory:
 //   node extensions/atelier/check-page.mjs <page.html>     (exit 1 on a failed check, 0 when passed or unchecked)
-// It serves a test copy beside the Page (<name>.atelier-check.html, its own Event Log, like serve.mjs; a distinct name
-// so a running serve.mjs keeps its copy) through the real host, loads it in agent-browser at 1512×900 and clicks every
-// [aria-controls] element in turn. The Page's real Event Log is never read or touched. Measured, generic checks:
+// It serves a test copy beside the Page (<name>.atelier-check-<id>.html, created exclusively for this run, with its own
+// Event Log; only those files are ever deleted) through the real host with the real project root, loads it in
+// agent-browser at 1512×900 and opens every view an [aria-controls] element shows, nested ones by their click path.
+// The Page's real Event Log is never read or touched. Measured, generic checks:
 // - HTML balance: unclosed or stray end tags in the source (hidden views leak below the visible one).
 // - Kernel version in the page equals the host's; the Event Log loaded.
 // - Kernel layout: hiding the Kernel's own <body> children must not move the Page's first-level elements (a <body> grid
 //   gives them grid cells).
-// - Kernel controls: disabling the Page's stylesheets must not change a Kernel control's box styles (Page CSS such as
-//   `aside button` also hits the Kernel panel, itself an <aside>), and no Page onclick sits on a Kernel control.
+// - Kernel controls, per view: Page CSS rules that reach Kernel elements (`aside button` also hits the Kernel panel,
+//   itself an <aside>) must not change a Kernel control's box, sizing or visibility; no Page onclick on a Kernel control.
 // - Per view: console and page errors, horizontal overflow (and the element reaching furthest right), text drawn over
-//   other text, and one full-page screenshot in $PI_TMP.
-// A missing or failing agent-browser leaves the browser checks "unchecked"; it never fails open or update.
+//   visible other text (hit-tested, so transforms and opaque sticky headers count), one full-page screenshot in $PI_TMP.
+// Output is bounded; the full report lands beside the screenshots. A missing or failing agent-browser, a cancel or the
+// deadline leaves the browser checks "unchecked"; it never fails open or update.
 import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { KERNEL_VERSION, createHost, imagesDir, logPath } from "./host.ts";
 
 const run = promisify(execFile);
 const WIDTH = 1512, HEIGHT = 900;
+const DEADLINE_MS = 120_000;
+const MAX_VIEWS = 40;
+const TEXT_MAX = 6_000; // characters of formatCheck output
 const KERNEL_SOURCE = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel", "atelier.js"), "utf8");
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sha = (b) => createHash("sha256").update(b).digest("hex");
+const clip = (s, n = 200) => { s = String(s); return s.length > n ? `${s.slice(0, n)}… (${s.length} chars)` : s; };
 
 const VOID = new Set("area base br col embed hr img input link meta param source track wbr".split(" "));
 // End tags HTML lets an author omit; not counting them avoids flagging valid Pages.
 const OPTIONAL = new Set("html head body p li dt dd option optgroup tr td th thead tbody tfoot colgroup caption rb rt rp rtc".split(" "));
+// Raw text and RCDATA elements: their content is text up to the matching end tag.
+const RAW = new Set("script style textarea title xmp iframe noembed noframes noscript plaintext".split(" "));
+// Inside <svg> or <math>, these hold HTML again.
+const INTEGRATION = new Set("foreignobject desc title mi mo mn ms mtext annotation-xml".split(" "));
+const TAG = /<(\/?)([a-zA-Z][^\s/>]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/y;
 
-/** Unclosed and stray end tags in Page source; script, style, textarea, title and comment bodies are skipped. */
+/**
+ * Unclosed and stray end tags in Page source, tokenized the way the HTML parser reads it: comments only in markup,
+ * raw text (script, style, textarea, title, …) up to its end tag, `/>` and CDATA only in SVG and MathML.
+ */
 export function tagBalance(html) {
-  const blank = (m) => m.replace(/[^\n]/g, " ");
-  const src = html.replace(/<!--[\s\S]*?-->/g, blank)
-    .replace(/(<(script|style|textarea|title)\b[^>]*>)([\s\S]*?)(<\/\2\s*>)/gi, (_m, open, _n, body, close) => open + blank(body) + close);
-  const lineAt = (i) => src.slice(0, i).split("\n").length;
   const stack = [], unclosed = [], stray = [];
-  for (const m of src.matchAll(/<(\/?)([a-zA-Z][\w:-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g)) {
-    const name = m[2].toLowerCase();
-    if (VOID.has(name) || OPTIONAL.has(name)) continue;
-    if (!m[1]) { if (!m[3].trimEnd().endsWith("/")) stack.push({ name, line: lineAt(m.index) }); continue; }
-    const at = stack.findLastIndex((o) => o.name === name);
-    if (at < 0) { stray.push({ name, line: lineAt(m.index) }); continue; }
-    unclosed.push(...stack.splice(at).slice(1));
+  let line = 1, counted = 0;
+  const lineAt = (i) => { for (; counted < i; counted += 1) if (html.charCodeAt(counted) === 10) line += 1; return line; };
+  const foreign = () => {
+    for (let k = stack.length - 1; k >= 0; k -= 1) { const n = stack[k].name; if (n === "svg" || n === "math") return true; if (INTEGRATION.has(n)) return false; }
+    return false;
+  };
+  const skipTo = (from, re) => { re.lastIndex = from; const m = re.exec(html); return m ? m.index + m[0].length : html.length; };
+  for (let i = html.indexOf("<"); i >= 0 && i < html.length; i = html.indexOf("<", i)) {
+    if (html.startsWith("<!--", i)) { const abrupt = /^-?>/.exec(html.slice(i + 4, i + 6)); i = abrupt ? i + 4 + abrupt[0].length : skipTo(i + 4, /--!?>/g); continue; }
+    if (html.startsWith("<![CDATA[", i) && foreign()) { i = skipTo(i + 9, /]]>/g); continue; }
+    if (html[i + 1] === "!" || html[i + 1] === "?" || (html[i + 1] === "/" && !/[a-zA-Z]/.test(html[i + 2] ?? ""))) { i = skipTo(i + 1, />/g); continue; } // doctype, bogus comment
+    TAG.lastIndex = i;
+    const m = TAG.exec(html);
+    if (!m) { i += 1; continue; }
+    const name = m[2].toLowerCase(), at = lineAt(i);
+    i = TAG.lastIndex;
+    if (m[1]) {
+      if (VOID.has(name) || OPTIONAL.has(name)) continue;
+      const k = stack.findLastIndex((o) => o.name === name);
+      if (k < 0) stray.push({ name, line: at }); else unclosed.push(...stack.splice(k).slice(1));
+      continue;
+    }
+    const inForeign = foreign();
+    if ((inForeign || name === "svg" || name === "math") && m[3].trimEnd().endsWith("/")) continue; // self-closed
+    if (!inForeign && (VOID.has(name) || OPTIONAL.has(name))) continue;
+    stack.push({ name, line: at });
+    if (!inForeign && RAW.has(name)) {
+      const end = new RegExp(`</${name}[\\s/>]`, "ig");
+      end.lastIndex = i;
+      const e = name === "plaintext" ? null : end.exec(html);
+      if (!e) break;
+      i = e.index; // the end tag closes it on the next turn
+    }
   }
   unclosed.push(...stack);
   return { unclosed: unclosed.sort((a, b) => a.line - b.line), stray };
 }
 
-// --- Browser side: these functions run in the Page via eval. ---
+// --- Browser side: these functions run in the Page via eval; each gets `d`, which names an element briefly. ---
 
-function describeFn() {
-  window.__atlDescribe = (el) => {
-    if (!el) return "?";
-    const cls = typeof el.className === "string" ? el.className.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((c) => `.${c}`).join("") : "";
-    const key = el.getAttribute("atl-key") ? `[atl-key=${el.getAttribute("atl-key")}]` : "";
-    return `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${cls}${key}`;
-  };
-  return true;
+function describe(el) {
+  if (!el) return "?";
+  const cut = (s) => (s.length > 40 ? `${s.slice(0, 40)}…` : s);
+  const cls = typeof el.className === "string" ? el.className.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((c) => `.${cut(c)}`).join("") : "";
+  const key = el.getAttribute("atl-key") ? `[atl-key=${cut(el.getAttribute("atl-key"))}]` : "";
+  return `${el.tagName.toLowerCase()}${el.id ? `#${cut(el.id)}` : ""}${cls}${key}`;
 }
 
-function pageOnce() {
-  const d = window.__atlDescribe, kernel = (el) => el.closest("[atl-ui]");
+function kernelOnce(d) {
   const s = window.atelier?.state() ?? { loaded: false, decisions: [] };
   // Kernel layout: Page's first-level elements with and without the Kernel's <body> children taking part in layout.
   const own = [...document.body.children].filter((el) => el.hasAttribute("atl-ui"));
@@ -74,43 +109,79 @@ function pageOnce() {
   own.forEach((el, i) => saved[i] ? el.style.setProperty("display", saved[i]) : el.style.removeProperty("display"));
   const moved = pageKids.flatMap((el, i) => withKernel[i].some((v, j) => Math.abs(v - without[i][j]) > 1)
     ? [`${d(el)} ${without[i].slice(0, 2).join(",")} ${without[i][2]}×${without[i][3]} → ${withKernel[i].slice(0, 2).join(",")} ${withKernel[i][2]}×${withKernel[i][3]}`] : []);
-  // Kernel controls: box styles with the Page's stylesheets on and off.
-  const PROPS = ["display", "position", "float", "text-align", "justify-content", "flex-direction", "margin-top", "margin-right", "margin-bottom", "margin-left",
-    "padding-top", "padding-right", "padding-bottom", "padding-left", "border-top-width", "border-bottom-width",
-    "visibility", "opacity", "transform", "min-width", "max-width"];
-  const controls = [...document.querySelectorAll("[atl-ui] button, [atl-ui] input, [atl-ui] select, [atl-ui] textarea, [atl-ui] a, button[atl-ui]")];
-  const read = () => controls.map((el) => { const c = getComputedStyle(el); return PROPS.map((p) => c.getPropertyValue(p)); });
-  const pageSheets = [...document.styleSheets].filter((sh) => !sh.ownerNode?.closest?.("[atl-ui]") && !sh.disabled);
-  const styled = read();
-  pageSheets.forEach((sh) => { sh.disabled = true; });
-  const plain = read();
-  pageSheets.forEach((sh) => { sh.disabled = false; });
-  const changed = new Map(); // prop -> count
-  const hit = [];
-  controls.forEach((el, i) => PROPS.forEach((p, j) => {
-    if (styled[i][j] === plain[i][j]) return;
-    changed.set(p, (changed.get(p) ?? 0) + 1);
-    if (!hit.includes(el)) hit.push(el);
-  }));
-  const selectors = new Set();
-  const walk = (rules) => { for (const r of rules) { if (r.cssRules && !r.selectorText) walk(r.cssRules); else if (r.selectorText && !/atl/.test(r.selectorText)) { try { if (hit.some((el) => el.matches(r.selectorText))) selectors.add(r.selectorText); } catch { /* selector the engine rejects */ } } } };
-  for (const sh of pageSheets) { try { walk(sh.cssRules); } catch { /* cross-origin sheet */ } }
-  const handlers = controls.filter((el) => el.onclick || el.hasAttribute("onclick")).map(d);
-  // View controls: [aria-controls] outside the Kernel, visible at load.
-  window.__atlViews = [...document.querySelectorAll("[aria-controls]")].filter((el) => !kernel(el) && el.getClientRects().length);
   return {
     loaded: s.loaded, decisions: s.decisions.length,
     kernelSrc: [...document.scripts].find((sc) => /(^|\/)atelier\.js(\?|#|$)/.test(sc.src))?.src ?? null,
-    moved, kernelElements: own.map(d),
-    restyled: { controls: hit.length, of: controls.length, props: Object.fromEntries(changed), selectors: [...selectors].slice(0, 5), examples: hit.slice(0, 3).map(d) },
-    handlers,
-    views: window.__atlViews.map((el) => ({ label: (el.textContent || el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim().slice(0, 50), controls: el.getAttribute("aria-controls") })),
+    moved: moved.slice(0, 3), kernelElements: own.slice(0, 5).map(d),
   };
 }
 
-function viewMeasure() {
-  const d = window.__atlDescribe, kernel = (el) => el.closest("[atl-ui]");
-  const root = document.documentElement, vw = innerWidth;
+// Kernel controls: scope every Page rule that matches a Kernel element away from the Kernel, and see which control
+// properties change that such a rule declares on the control or on its Kernel ancestors (panel, Decision group).
+// Page rules on Page ancestors stay, so a hidden Page panel or a Page layout never counts.
+function kernelControls(d) {
+  const PROPS = ["display", "position", "float", "text-align", "justify-content", "flex-direction", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "padding-top", "padding-right", "padding-bottom", "padding-left", "border-top-width", "border-bottom-width",
+    "visibility", "opacity", "transform", "width", "height", "min-width", "max-width", "min-height", "max-height"];
+  const controls = [...document.querySelectorAll("[atl-ui] button, [atl-ui] input, [atl-ui] select, [atl-ui] textarea, [atl-ui] a, button[atl-ui]")];
+  const rules = []; // [rule, Kernel elements it matches]
+  const walk = (list) => {
+    for (const r of list) {
+      if (r.selectorText) {
+        try { const hit = [...document.querySelectorAll(r.selectorText)].filter((el) => el.closest("[atl-ui]")); if (hit.length) rules.push([r, new Set(hit)]); } catch { /* selector the engine rejects */ }
+      }
+      if (r.cssRules?.length) walk(r.cssRules);
+    }
+  };
+  for (const sh of document.styleSheets) { if (sh.disabled || sh.ownerNode?.closest?.("[atl-ui]")) continue; try { walk(sh.cssRules); } catch { /* cross-origin sheet */ } }
+  const read = () => controls.map((el) => { const c = getComputedStyle(el); return PROPS.map((p) => c.getPropertyValue(p)); });
+  const styled = read();
+  const saved = rules.map(([r]) => r.selectorText);
+  let plain;
+  try {
+    rules.forEach(([r]) => { r.selectorText = `:is(${r.selectorText}):not([atl-ui], [atl-ui] *)`; });
+    plain = read();
+  } finally { rules.forEach(([r], i) => { r.selectorText = saved[i]; }); }
+  const hits = [];
+  controls.forEach((el, i) => {
+    const chain = [];
+    for (let e = el; e?.closest("[atl-ui]"); e = e.parentElement) chain.push(e);
+    const mine = rules.filter(([, set]) => chain.some((e) => set.has(e)));
+    const props = PROPS.filter((p, j) => styled[i][j] !== plain[i][j] && mine.some(([r]) => r.style.getPropertyValue(p) !== ""));
+    if (props.length) hits.push({ el: d(el), props, selectors: mine.filter(([r]) => props.some((p) => r.style.getPropertyValue(p) !== "")).map(([r]) => r.selectorText) });
+  });
+  return {
+    of: controls.length,
+    hits: hits.slice(0, 20).map((h) => ({ ...h, selectors: h.selectors.slice(0, 5).map((s) => (s.length > 120 ? `${s.slice(0, 120)}…` : s)) })),
+    count: hits.length,
+    handlers: controls.filter((el) => el.onclick || el.hasAttribute("onclick")).slice(0, 5).map(d),
+  };
+}
+
+// The [aria-controls] elements outside the Kernel that show now, and whether what each controls shows.
+function viewControls() {
+  const all = [...document.querySelectorAll("[aria-controls]")].filter((el) => !el.closest("[atl-ui]"));
+  return all.flatMap((el) => {
+    if (!el.checkVisibility({ visibilityProperty: true })) return [];
+    const controls = el.getAttribute("aria-controls"), ids = controls.split(/\s+/).filter(Boolean);
+    return [{
+      controls, nth: all.filter((x) => x.getAttribute("aria-controls") === controls).indexOf(el),
+      label: (el.textContent || el.getAttribute("aria-label") || "").slice(0, 200).replace(/\s+/g, " ").trim().slice(0, 50),
+      open: ids.length > 0 && ids.every((id) => document.getElementById(id)?.checkVisibility({ visibilityProperty: true })),
+    }];
+  });
+}
+
+function clickControl(_d, controls, nth) {
+  const el = [...document.querySelectorAll("[aria-controls]")].filter((x) => !x.closest("[atl-ui]") && x.getAttribute("aria-controls") === controls)[nth];
+  if (!el?.checkVisibility({ visibilityProperty: true })) return false;
+  el.click();
+  return true;
+}
+
+function viewMeasure(d) {
+  const kernel = (el) => el.closest("[atl-ui]");
+  const root = document.documentElement, vw = innerWidth, vh = innerHeight;
   let widest = null;
   if (root.scrollWidth > vw) {
     let best = vw + 1;
@@ -123,7 +194,7 @@ function viewMeasure() {
       best = r.right + scrollX; widest = `${d(el)} (right edge ${Math.round(best)}px)`;
     }
   }
-  // Text over text: rects of each element's own text nodes; pairs from different, unrelated elements that intersect.
+  // Text over text: the rects of every visible text node, in page coordinates.
   const boxes = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, { acceptNode: (n) => n.data.trim() && n.parentElement && !kernel(n.parentElement) && !["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(n.parentElement.tagName) ? 1 : 2 });
   const range = document.createRange();
@@ -134,8 +205,7 @@ function viewMeasure() {
     if (clips.has(el)) return clips.get(el);
     const up = clipOf(el.parentElement), cs = getComputedStyle(el);
     let c = up;
-    if (!up) c = null;
-    else if (el !== document.body && (cs.overflowX !== "visible" || cs.overflowY !== "visible")) {
+    if (el !== document.body && (cs.overflowX !== "visible" || cs.overflowY !== "visible")) {
       const r = el.getBoundingClientRect();
       c = { left: Math.max(up.left, r.left), top: Math.max(up.top, r.top), right: Math.min(up.right, r.right), bottom: Math.min(up.bottom, r.bottom) };
     }
@@ -145,25 +215,92 @@ function viewMeasure() {
   for (let n; (n = walker.nextNode());) {
     const el = n.parentElement, c = clipOf(el);
     // checkVisibility: false inside a closed <details>, display:none, visibility:hidden or opacity 0.
-    if (!c || !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) continue;
+    if (!el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) continue;
     range.selectNodeContents(n);
     for (const r of range.getClientRects()) {
       const left = Math.max(r.left, c.left), right = Math.min(r.right, c.right), top = Math.max(r.top, c.top), bottom = Math.min(r.bottom, c.bottom);
-      if (right - left > 1 && bottom - top > 1) boxes.push({ el, top: top + scrollY, bottom: bottom + scrollY, left: left + scrollX, right: right + scrollX });
+      if (right - left > 1 && bottom - top > 1) boxes.push({ n, el, top: top + scrollY, bottom: bottom + scrollY, left: left + scrollX, right: right + scrollX });
     }
   }
   boxes.sort((a, b) => a.top - b.top);
-  const pairs = new Map();
   const PAD = 2; // ignore touching boxes and line-height overlap
+  const ids = new Map(), id = (el) => ids.get(el) ?? ids.set(el, ids.size).get(el);
+  const candidates = [];
   for (let i = 0; i < boxes.length; i += 1) {
     const a = boxes[i];
     for (let j = i + 1; j < boxes.length && boxes[j].top < a.bottom - PAD; j += 1) {
       const b = boxes[j];
-      if (a.el === b.el || a.el.contains(b.el) || b.el.contains(a.el)) continue;
-      if (Math.min(a.right, b.right) - Math.max(a.left, b.left) <= PAD || Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) <= PAD) continue;
-      const key = `${d(a.el)} × ${d(b.el)}`;
-      if (!pairs.has(key)) pairs.set(key, `${key} at ${Math.round(Math.max(a.left, b.left))},${Math.round(Math.max(a.top, b.top))}`);
+      if (a.n === b.n) continue;
+      const w = Math.min(a.right, b.right) - Math.max(a.left, b.left), h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      if (w <= PAD || h <= PAD) continue;
+      // Text of one element and its descendants shares lines; only a real overlap, not the next line's ascent, counts.
+      const related = a.el === b.el || a.el.contains(b.el) || b.el.contains(a.el);
+      if (related && h <= Math.min(a.bottom - a.top, b.bottom - b.top) / 2) continue;
+      candidates.push([a, b]);
     }
+  }
+  // Each candidate is hit-tested where its boxes meet (scrolled into view). Rotated or skewed text has only a bounding
+  // box, so its element must be hit there (a rotated label's box corner is not its text); other text boxes are exact
+  // (and text overflowing its element's box is never hit, so it is not asked). The lower text must not sit under an
+  // opaque fixed or sticky layer the other is not in (content scrolled under a header).
+  const hitEl = (el) => { while (el && getComputedStyle(el).display === "contents") el = el.parentElement; return el; };
+  const turns = new Map();
+  const turned = (el) => {
+    if (!el || el === document.documentElement) return false;
+    if (!turns.has(el)) {
+      const c = getComputedStyle(el), m = /^matrix(3d)?\(([^)]*)\)/.exec(c.transform), v = m?.[2].split(",").map(Number) ?? [];
+      const ctm = el instanceof SVGGraphicsElement ? el.getScreenCTM() : null;
+      turns.set(el, Math.abs(v[1] ?? 0) > 1e-6 || Math.abs(m?.[1] ? v[4] : v[2] ?? 0) > 1e-6 || (c.rotate !== "none" && parseFloat(c.rotate.split(" ").at(-1)) % 360 !== 0)
+        || (!!ctm && (Math.abs(ctm.b) > 1e-6 || Math.abs(ctm.c) > 1e-6)) || turned(el.parentElement));
+    }
+    return turns.get(el);
+  };
+  // Paint order: the stack index of the element, or of its nearest ancestor there; not there at all is lowest.
+  const order = (stack, el) => { const i = stack.findIndex((e) => e === el || e.contains(el)); return i < 0 ? stack.length : i; };
+  const layers = new Map();
+  const layer = (el) => {
+    if (!el || el === document.documentElement) return null;
+    if (!layers.has(el)) { const p = getComputedStyle(el).position; layers.set(el, p === "fixed" || p === "sticky" ? el : layer(el.parentElement)); }
+    return layers.get(el);
+  };
+  const opaque = (el) => {
+    const c = getComputedStyle(el), bg = c.backgroundColor;
+    const alpha = /^rgba?\(/.test(bg) ? Number(bg.match(/[\d.]+/g)[3] ?? 1) : Number(/\/\s*([\d.]+)/.exec(bg)?.[1] ?? 1);
+    return c.backgroundImage !== "none" || alpha >= 1;
+  };
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync("*{pointer-events:visible!important}"); // hit-test text in pointer-events:none elements too
+  const adopted = document.adoptedStyleSheets;
+  document.adoptedStyleSheets = [...adopted, sheet];
+  const x0 = scrollX, y0 = scrollY;
+  const collides = (a, b) => {
+    const cx = (Math.max(a.left, b.left) + Math.min(a.right, b.right)) / 2, cy = (Math.max(a.top, b.top) + Math.min(a.bottom, b.bottom)) / 2;
+    if (cx < scrollX || cx > scrollX + vw || cy < scrollY || cy > scrollY + vh) scrollTo({ left: cx - vw / 2, top: cy - vh / 2, behavior: "instant" });
+    const ea = hitEl(a.el), eb = hitEl(b.el), ta = turned(ea), tb = turned(eb);
+    const rects = (n) => { range.selectNodeContents(n); return [...range.getClientRects()]; };
+    for (const ra of rects(a.n)) for (const rb of rects(b.n)) {
+      const l = Math.max(ra.left, rb.left, 0), r = Math.min(ra.right, rb.right, vw), t = Math.max(ra.top, rb.top, 0), btm = Math.min(ra.bottom, rb.bottom, vh);
+      if (r - l <= PAD || btm - t <= PAD) continue;
+      for (let i = 1; i <= 5; i += 1) for (let k = 1; k <= 3; k += 1) {
+        const stack = document.elementsFromPoint(l + ((r - l) * i) / 6, t + ((btm - t) * k) / 4);
+        if ((ta && !stack.includes(ea)) || (tb && !stack.includes(eb))) continue;
+        const ia = order(stack, ea), ib = order(stack, eb), lower = ia > ib ? ea : eb;
+        if (!stack.slice(0, Math.max(ia, ib)).some((e) => { const L = layer(e); return L && !L.contains(lower) && opaque(e); })) return true;
+      }
+    }
+    return false;
+  };
+  const pairs = new Map();
+  try {
+    for (const [a, b] of candidates) {
+      const key = `${id(a.el)}-${id(b.el)}`;
+      if (pairs.has(key)) continue;
+      if (collides(a, b)) pairs.set(key, `${d(a.el)} × ${d(b.el)} at ${Math.round(Math.max(a.left, b.left))},${Math.round(Math.max(a.top, b.top))}`);
+      if (pairs.size >= 100) break; // ponytail: a Page this broken needs no exact count
+    }
+  } finally {
+    document.adoptedStyleSheets = adopted;
+    scrollTo({ left: x0, top: y0, behavior: "instant" });
   }
   if (root.scrollWidth > vw && !widest) { // text running out of its element's box
     const far = boxes.reduce((m, x) => (x.right > (m?.right ?? vw + 1) ? x : m), null);
@@ -172,114 +309,176 @@ function viewMeasure() {
   return { scrollWidth: root.scrollWidth, innerWidth: vw, widest, overlaps: pairs.size, overlapExamples: [...pairs.values()].slice(0, 3) };
 }
 
-const evalFn = (fn, ...args) => `(${fn.toString()})(${args.map((a) => JSON.stringify(a)).join(",")})`;
+const evalFn = (fn, ...args) => `(${fn.toString()})(${[describe.toString(), ...args.map((a) => JSON.stringify(a))].join(",")})`;
+const MEASURE = `({ view: ${evalFn(viewMeasure)}, kernel: ${evalFn(kernelControls)}, controls: ${evalFn(viewControls)} })`;
 
-/** Checks one Page through a test copy. Never throws: a failure to measure is reported as unchecked. */
-export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "agent-browser" } = {}) {
-  const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT}`, checks: [], views: [], unchecked: [] };
+/**
+ * Checks one Page through a test copy. Never throws: a failure to measure is reported as unchecked.
+ * root: the host's project root (relative URLs resolve as on the live host). source: the exact revision to check
+ * (update passes what it just showed). signal: cancels the check; deadlineMs bounds it.
+ */
+export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "agent-browser", root, source, signal, deadlineMs = DEADLINE_MS } = {}) {
+  const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT}`, revision: null, checks: [], views: [], unchecked: [], report: null };
   const add = (name, ok, detail) => { result.checks.push({ name, ok, detail }); if (!ok) result.status = "fail"; };
-  let page;
-  try { page = realpathSync(path.resolve(pageArg)); } catch { return { ...result, status: "unchecked", unchecked: [`no Page file at ${pageArg}`] }; }
-  const source = readFileSync(page, "utf8");
-  const bal = tagBalance(source);
+  let page, bytes;
+  try { page = realpathSync(path.resolve(pageArg)); bytes = source === undefined ? readFileSync(page) : Buffer.from(source); }
+  catch { return { ...result, status: "unchecked", unchecked: [`no Page file at ${clip(pageArg)}`] }; }
+  const revision = sha(bytes);
+  result.revision = revision.slice(0, 12);
+  const bal = tagBalance(bytes.toString("utf8"));
   add("HTML balance", !bal.unclosed.length && !bal.stray.length, `${bal.unclosed.length} unclosed, ${bal.stray.length} stray end tag(s)`
-    + [...bal.unclosed.slice(0, 3).map((t) => `; <${t.name}> line ${t.line} never closed`), ...bal.stray.slice(0, 3).map((t) => `; </${t.name}> line ${t.line} closes nothing`)].join(""));
+    + [...bal.unclosed.slice(0, 3).map((t) => `; <${clip(t.name, 40)}> line ${t.line} never closed`), ...bal.stray.slice(0, 3).map((t) => `; </${clip(t.name, 40)}> line ${t.line} closes nothing`)].join(""));
 
-  const copy = page.replace(/(\.html?)?$/i, ".atelier-check$1");
-  const clean = () => { for (const f of [copy, logPath(copy), `${logPath(copy)}.lock`, imagesDir(copy)]) rmSync(f, { force: true, recursive: true }); };
-  const session = `atelier-check-${process.pid}-${Date.now()}`;
+  const stop = AbortSignal.any([AbortSignal.timeout(deadlineMs), ...(signal ? [signal] : [])]);
+  const id = randomUUID().slice(0, 8);
+  const copy = page.replace(/(\.html?)?$/i, `.atelier-check-${id}$1`);
+  let made = false, started = false, host, shots;
+  // Only this run's exclusively created copy and the files the test host made for it.
+  const clean = () => { if (made) for (const f of [copy, logPath(copy), `${logPath(copy)}.lock`, imagesDir(copy)]) rmSync(f, { force: true, recursive: true }); };
+  const session = `atelier-check-${process.pid}-${id}`;
   const b = async (...args) => {
-    const { stdout } = await run(browser, ["--session", session, "--json", ...args], { timeout: 45_000, maxBuffer: 16 * 1024 * 1024 });
+    const { stdout } = await run(browser, ["--session", session, "--json", ...args], { timeout: 45_000, maxBuffer: 16 * 1024 * 1024, signal: stop });
     const r = JSON.parse(stdout);
     if (!r.success) throw new Error(`agent-browser ${args[0]}: ${r.error ?? "failed"}`);
     return r.data;
   };
   const js = async (code) => (await b("eval", code)).result;
-  let host, shots;
+  const full = []; // every view's unclipped errors, for the report
+  const kc = { of: 0, count: 0, props: new Set(), selectors: new Set(), examples: new Set(), handlers: new Set() };
   try {
-    await run(browser, ["--version"], { timeout: 10_000 }).catch(() => { throw new Error(`${browser} is not installed or not on PATH`); });
-    if (tmp) { shots = path.join(tmp, `atelier-check-${path.basename(page).replace(/\W+/g, "-")}-${Date.now()}`); mkdirSync(shots, { recursive: true }); }
-    else result.unchecked.push("screenshots: PI_TMP is not set");
-    clean();
-    writeFileSync(copy, source);
-    host = createHost({ root: path.dirname(copy), sessionId: session, test: true, send: (_m, done) => done(true) });
+    await run(browser, ["--version"], { timeout: 10_000, signal: stop }).catch((error) => { throw stop.aborted ? error : new Error(`${browser} is not installed or not on PATH`); });
+    if (tmp) { shots = path.join(tmp, `atelier-check-${path.basename(page).replace(/\W+/g, "-")}-${id}`); mkdirSync(shots, { recursive: true }); }
+    else result.unchecked.push("screenshots and full report: PI_TMP is not set");
+    writeFileSync(copy, bytes, { flag: "wx" });
+    made = true;
+    process.once("exit", clean);
+    host = createHost({ root: root ?? path.dirname(page), sessionId: session, test: true, send: (_m, done) => done(true) });
     const { url } = await host.open(copy);
+    started = true;
+    const load = async () => {
+      await b("open", url);
+      try { await b("wait", "--fn", "window.atelier?.state().loaded === true", "--timeout", "15000"); return true; }
+      catch (error) { if (stop.aborted) throw error; return false; }
+      finally { await sleep(300, undefined, { signal: stop }); }
+    };
     await b("set", "viewport", String(WIDTH), String(HEIGHT));
-    await b("open", url);
-    try { await b("wait", "--fn", "window.atelier?.state().loaded === true", "--timeout", "15000"); }
-    catch { add("Kernel", false, "the Kernel did not load or did not read its Event Log within 15 s"); }
-    await sleep(300);
-    await js(evalFn(describeFn));
-    const once = await js(evalFn(pageOnce));
-    if (once) {
-      let loaded = "unknown", note = "";
-      if (!once.kernelSrc) note = "; the Page loads no atelier.js";
-      else {
-        const text = await (await fetch(once.kernelSrc)).text();
-        const stamp = /^\/\/ atelier-copy (\S+) /.exec(text);
-        const body = stamp ? text.slice(text.indexOf("\n") + 1) : text;
-        // The same version with other bytes is a changed copy, not a match.
-        loaded = body === KERNEL_SOURCE ? KERNEL_VERSION : stamp ? `${stamp[1]} (changed copy)` : "unknown (unstamped copy)";
+    if (!(await load())) add("Kernel", false, "the Kernel did not load or did not read its Event Log within 15 s");
+    const once = await js(evalFn(kernelOnce));
+    let loaded = "unknown", note = "";
+    if (!once.kernelSrc) note = "; the Page loads no atelier.js";
+    else {
+      const text = await (await fetch(once.kernelSrc, { signal: AbortSignal.any([stop, AbortSignal.timeout(10_000)]) })).text();
+      const stamp = /^\/\/ atelier-copy (\S+) /.exec(text);
+      const body = stamp ? text.slice(text.indexOf("\n") + 1) : text;
+      // The same version with other bytes is a changed copy, not a match.
+      loaded = body === KERNEL_SOURCE ? KERNEL_VERSION : stamp ? `${clip(stamp[1], 40)} (changed copy)` : "unknown (unstamped copy)";
+    }
+    add("Kernel version", loaded === KERNEL_VERSION, `page ${loaded}, host ${KERNEL_VERSION}${note}; Event Log ${once.loaded ? "loaded" : "not loaded"}, ${once.decisions} Decision(s)`);
+    add("Kernel layout", !once.moved.length, once.moved.length
+      ? `Kernel elements in <body> (${once.kernelElements.join(", ")}) move Page content: ${once.moved.join("; ")}. Wrap the Page in one container instead of laying out <body> itself.`
+      : "Kernel elements in <body> take no layout space");
+
+    // Views: the initial one, then every [aria-controls] target not yet seen, depth first; a control that no longer
+    // shows is reached again by reloading and replaying its path.
+    const covered = new Set(), queued = new Set(), todo = [];
+    const measure = async (label, item) => {
+      const m = await js(MEASURE);
+      const errors = [
+        ...((await b("console")).messages ?? []).filter((x) => x.type === "error").map((x) => `console: ${x.text}`),
+        ...((await b("errors")).errors ?? []).map((x) => `page: ${String(x.text).split("\n")[0]}`),
+      ];
+      let screenshot;
+      if (shots) { screenshot = path.join(shots, `view-${String(result.views.length).padStart(2, "0")}.png`); await b("screenshot", "--full", screenshot); }
+      const v = m.view, overflow = v.scrollWidth > v.innerWidth;
+      result.views.push({ label, controls: item?.controls ?? null, ok: !errors.length && !overflow && !v.overlaps, errorCount: errors.length, errors: errors.slice(0, 3).map((e) => clip(e)),
+        overflow: overflow ? { scrollWidth: v.scrollWidth, innerWidth: v.innerWidth, widest: v.widest } : null, overlaps: v.overlaps, overlapExamples: v.overlapExamples, screenshot });
+      full.push(errors);
+      if (errors.length || overflow || v.overlaps) result.status = "fail";
+      kc.of = Math.max(kc.of, m.kernel.of); kc.count = Math.max(kc.count, m.kernel.count);
+      for (const h of m.kernel.hits) { h.props.forEach((p) => kc.props.add(p)); h.selectors.forEach((s) => kc.selectors.add(s)); kc.examples.add(h.el); }
+      m.kernel.handlers.forEach((h) => kc.handlers.add(h));
+      for (const c of m.controls) if (c.open) covered.add(c.controls);
+      const via = item ? [...item.path, item] : [];
+      todo.unshift(...m.controls.filter((c) => !c.open && !covered.has(c.controls) && !queued.has(c.controls)).map((c) => { queued.add(c.controls); return { ...c, path: via }; }));
+    };
+    const click = (c) => js(evalFn(clickControl, c.controls, c.nth));
+    const shown = async (c) => (await js(evalFn(viewControls))).find((x) => x.controls === c.controls)?.open
+      ?? (await js(`${JSON.stringify(c.controls)}.split(/\\s+/).every((id) => document.getElementById(id)?.checkVisibility({ visibilityProperty: true }))`));
+    const trail = (c) => [...c.path, c].map((s) => s.label || `#${s.controls}`).join(" › ");
+    await measure("initial view");
+    while (todo.length) {
+      const item = todo.shift();
+      if (covered.has(item.controls)) continue;
+      if (result.views.length >= MAX_VIEWS) { result.unchecked.push(`views: ${todo.length + 1} more not opened (limit ${MAX_VIEWS})`); break; }
+      await b("console", "--clear"); await b("errors", "--clear");
+      let reached = await click(item);
+      if (!reached) { // reload and replay its path
+        await load();
+        reached = true;
+        for (const step of item.path) { if (!(await click(step))) { reached = false; break; } await sleep(400, undefined, { signal: stop }); if (!(await shown(step))) { reached = false; break; } }
+        reached &&= await click(item);
       }
-      add("Kernel version", loaded === KERNEL_VERSION, `page ${loaded}, host ${KERNEL_VERSION}${note}; Event Log ${once.loaded ? "loaded" : "not loaded"}, ${once.decisions} Decision(s)`);
-      add("Kernel layout", !once.moved.length, once.moved.length
-        ? `Kernel elements in <body> (${once.kernelElements.join(", ")}) move Page content: ${once.moved.slice(0, 3).join("; ")}. Wrap the Page in one container instead of laying out <body> itself.`
-        : "Kernel elements in <body> take no layout space");
-      const rs = once.restyled;
-      add("Kernel controls", !rs.controls && !once.handlers.length, [
-        rs.controls ? `Page CSS changes ${rs.controls} of ${rs.of} Kernel controls (${Object.keys(rs.props).join(", ")}) e.g. ${rs.examples.join(", ")}${rs.selectors.length ? `, via ${rs.selectors.map((s) => `\`${s}\``).join(", ")}` : ""}. Scope Page selectors to Page markup.` : "",
-        once.handlers.length ? `Page onclick on ${once.handlers.length} Kernel control(s): ${once.handlers.slice(0, 3).join(", ")}.` : "",
-      ].filter(Boolean).join(" ") || `${rs.of} Kernel controls keep their own styles and handlers`);
-      const views = [{ label: "initial view", controls: null }, ...once.views];
-      for (let i = 0; i < views.length; i += 1) {
-        const v = views[i];
-        if (i > 0) { await b("console", "--clear"); await b("errors", "--clear"); await js(`window.__atlViews[${i - 1}].click(); true`); await sleep(400); }
-        const m = await js(evalFn(viewMeasure));
-        const errors = [
-          ...((await b("console")).messages ?? []).filter((x) => x.type === "error").map((x) => `console: ${x.text}`),
-          ...((await b("errors")).errors ?? []).map((x) => `page: ${String(x.text).split("\n")[0]}`),
-        ];
-        let screenshot;
-        if (shots) { screenshot = path.join(shots, `view-${String(i).padStart(2, "0")}.png`); await b("screenshot", "--full", screenshot); }
-        const overflow = m.scrollWidth > m.innerWidth;
-        result.views.push({ ...v, ok: !errors.length && !overflow && !m.overlaps, errors, overflow: overflow ? { scrollWidth: m.scrollWidth, innerWidth: m.innerWidth, widest: m.widest } : null, overlaps: m.overlaps, overlapExamples: m.overlapExamples, screenshot });
-        if (errors.length || overflow || m.overlaps) result.status = "fail";
-      }
+      if (!reached) { result.unchecked.push(`view ${clip(trail(item), 120)}: its control could not be reached again`); continue; }
+      await sleep(400, undefined, { signal: stop });
+      if (!(await shown(item))) { result.unchecked.push(`view ${clip(trail(item), 120)}: clicking it did not show #${clip(item.controls, 60)}`); continue; }
+      await measure(trail(item), item);
     }
   } catch (error) {
-    result.unchecked.push(`browser checks: ${String(error.message ?? error).split("\n")[0]}`);
+    result.unchecked.push(`browser checks: ${stop.aborted ? (signal?.aborted ? "cancelled" : `stopped at the ${deadlineMs / 1000} s deadline`) : clip(String(error.message ?? error).split("\n")[0], 300)}`);
   } finally {
-    await run(browser, ["--session", session, "close"], { timeout: 15_000 }).catch(() => {});
+    if (started) await run(browser, ["--session", session, "close"], { timeout: 15_000 }).catch(() => {});
     host?.stop();
     clean();
+    process.off("exit", clean);
   }
+  if (result.views.length) {
+    add("Kernel controls", !kc.count && !kc.handlers.size, [
+      kc.count ? `Page CSS changes ${kc.count} of ${kc.of} Kernel controls (${[...kc.props].join(", ")}) e.g. ${[...kc.examples].slice(0, 3).join(", ")}${kc.selectors.size ? `, via ${[...kc.selectors].slice(0, 5).map((s) => `\`${s}\``).join(", ")}` : ""}. Scope Page selectors to Page markup.` : "",
+      kc.handlers.size ? `Page onclick on Kernel control(s): ${[...kc.handlers].join(", ")}.` : "",
+    ].filter(Boolean).join(" ") || `${kc.of} Kernel controls keep their own styles and handlers`);
+  }
+  try { if (sha(readFileSync(page)) !== revision) result.unchecked.push(`revision: the Page file changed during the check; this result is for revision ${result.revision}`); } catch { /* gone */ }
   if (result.status === "pass" && result.unchecked.some((u) => u.startsWith("browser"))) result.status = "unchecked";
+  if (shots) {
+    result.report = path.join(shots, "report.json");
+    writeFileSync(result.report, JSON.stringify({ ...result, views: result.views.map((v, i) => ({ ...v, errors: full[i] })) }, null, 2));
+  }
   return result;
 }
 
-/** The short text block `open`, `update` and the CLI print. */
+/** The short text block `open`, `update` and the CLI print; bounded, the rest is in the full report. */
 export function formatCheck(r) {
   const mark = (ok) => (ok ? "pass" : "FAIL");
-  const lines = [`Page check (test copy, ${r.viewport}): ${r.status === "unchecked" ? "unchecked" : mark(r.status === "pass")}`];
-  for (const c of r.checks) lines.push(`- ${mark(c.ok)}  ${c.name}: ${c.detail}`);
+  const gaps = r.unchecked.filter((u) => u.startsWith("view")).length;
+  const lines = [`Page check (revision ${r.revision ?? "none"}, test copy at ${r.viewport}): ${r.status === "unchecked" ? "unchecked" : mark(r.status === "pass")}${gaps ? `, ${gaps} view(s) not reached` : ""}`];
+  for (const c of r.checks) lines.push(`- ${mark(c.ok)}  ${c.name}: ${clip(c.detail, 600)}`);
   if (r.views.length) lines.push(`Views (${r.views.length}):`);
   for (const v of r.views) {
     const what = [
-      v.errors.length ? `${v.errors.length} error(s): ${v.errors.slice(0, 2).join(" | ")}` : "no errors",
+      v.errorCount ? `${v.errorCount} error(s): ${v.errors.slice(0, 2).join(" | ")}` : "no errors",
       v.overflow ? `overflow ${v.overflow.scrollWidth}px > ${v.overflow.innerWidth}px, widest ${v.overflow.widest ?? "unknown"}` : "no overflow",
       v.overlaps ? `${v.overlaps} text overlap(s): ${v.overlapExamples.join("; ")}` : "no text overlap",
     ].join("; ");
-    lines.push(`- ${mark(v.ok)}  ${v.label}${v.controls ? ` (#${v.controls})` : ""}: ${what}${v.screenshot ? ` — ${v.screenshot}` : ""}`);
+    lines.push(`- ${mark(v.ok)}  ${v.label}${v.controls ? ` (#${clip(v.controls, 60)})` : ""}: ${what}${v.screenshot ? ` — ${v.screenshot}` : ""}`);
   }
-  for (const u of r.unchecked) lines.push(`- unchecked: ${u}`);
+  for (const u of r.unchecked) lines.push(`- unchecked: ${clip(u, 300)}`);
   if (r.views.some((v) => v.screenshot)) lines.push("Have the screenshots inspected visually before handing the Page to the owner.");
-  return lines.join("\n");
+  if (r.report) lines.push(`Full report: ${r.report}`);
+  let text = "";
+  for (const [i, line] of lines.entries()) {
+    if (text.length + line.length > TEXT_MAX) return `${text}… ${lines.length - i} more line(s)${r.report ? ` in ${r.report}` : ""}`;
+    text += `${line}\n`;
+  }
+  return text.trimEnd();
 }
 
 // No top-level await: index.ts imports this module.
 const main = (() => { try { return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); } catch { return false; } })();
 if (main) {
   const arg = process.argv[2];
-  if (!arg || arg.startsWith("-")) { console.error("Usage: node check-page.mjs <page.html>"); process.exit(2); }
-  checkPage(arg).then((r) => { console.log(formatCheck(r)); process.exit(r.status === "fail" ? 1 : 0); });
+  if (!arg || arg.startsWith("-")) { console.error("Usage: node check-page.mjs <page.html>  (run from the project directory)"); process.exit(2); }
+  const cancel = new AbortController();
+  let code = 0;
+  for (const [sig, n] of [["SIGINT", 130], ["SIGTERM", 143]]) process.once(sig, () => { code = n; cancel.abort(); });
+  checkPage(arg, { root: process.cwd(), signal: cancel.signal }).then((r) => { console.log(formatCheck(r)); process.exit(code || (r.status === "fail" ? 1 : 0)); });
 }
