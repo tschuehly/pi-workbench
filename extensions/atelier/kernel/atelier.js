@@ -1,4 +1,4 @@
-// Atelier Kernel 2.9.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.9.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -676,7 +676,10 @@ function boot() {
       if (!el.hasAttribute("atl-slot")) {
         // A Key with nothing focusable in itself takes a tab stop, so Tab reaches it and then its Comment button.
         if (!el.hasAttribute("tabindex") && el.tabIndex < 0) { el.tabIndex = 0; tabbed.add(el); }
-        chipsAt.set(addr, onKey.map((t) => chipHtml(t, st)).join(""));
+        // The threads that need the human (open, or with unread replies) keep a badge at rest when the row has no spot (2.9.1).
+        const need = onKey.filter((t) => unreadIn(t) || (!t.closed && st.status(t.root) !== "draft")), news = need.some(unreadIn);
+        const label = `${need.length} thread${need.length === 1 ? "" : "s"} need${need.length === 1 ? "s" : ""} you on ${addr}${news ? ", new replies" : ""}: show`;
+        chipsAt.set(addr, { chips: onKey.map((t) => chipHtml(t, st)).join(""), badge: need.length ? `<button type="button" data-atl="tuck" class="atl-chip atl-compact atl-badge${news ? " atl-unread" : ""}" aria-label="${esc(label)}" title="${esc(label)}">${icon("comment")}<span class="atl-cn">${need.length}</span>${news ? `<span class="atl-nd"></span>` : ""}</button>` : "" });
         if (onKey.length || addr === hot || composer?.pinKey === addr || pins.get(addr)?.contains(document.activeElement)) kept.add(pinFor(addr, el));
       }
       const groupDrafts = el.hasAttribute("atl-group") ? st.drafts.filter((x) => inGroup(x.key, addr)).length : 0;
@@ -760,9 +763,9 @@ function boot() {
     if (!el) return null;
     let pin = pins.get(addr);
     if (!pin) { pin = h(`<span atl-ui="pin" class="atl-pin" data-key="${esc(addr)}"></span>`); pins.set(addr, pin); }
-    const chips = chipsAt.get(addr) ?? "";
+    const { chips = "", badge = "" } = chipsAt.get(addr) ?? {};
     place(pin, el);
-    set(pin, `${chips ? `<span class="atl-prow">${chips}</span>` : ""}<button type="button" data-atl="comment" data-key="${esc(addr)}" class="atl-add" aria-label="Comment on ${esc(addr)}" title="Comment on ${esc(addr)}">${icon("comment-plus")}</button>`);
+    set(pin, `${chips ? `<span class="atl-prow">${chips}</span>` : ""}<button type="button" data-atl="comment" data-key="${esc(addr)}" class="atl-add" aria-label="Comment on ${esc(addr)}" title="Comment on ${esc(addr)}">${icon("comment-plus")}</button>${badge}`);
     pin.classList.toggle("atl-has", !!chips);
     return pin;
   }
@@ -780,7 +783,9 @@ function boot() {
   // button in the top band, in the margin right of the Key, beside a shorter line further down, or above the Key; then
   // the same slots with compact chips (icon and count). Obstacles are the visible Page content there (text, media,
   // controls, the Kernel's in-flow Decisions) and other chip rows. With no free slot the compact row shows only while
-  // its Key is hovered or focused, like the Comment button. A pin keeps inside its Key's scroll containers and the
+  // its Key is hovered or focused, like the Comment button; threads that need the human never wait for hover (2.9.1, owner
+  // 2026-10-21): a badge with their count stays at rest, in a free slot or else at the Key's top-right corner, and opens
+  // the row. A pin keeps inside its Key's scroll containers and the
   // viewport; a Key scrolled out of its container (a sideways storyboard) shows none, so a pin never widens the Page.
   const SOLID = "img,video,canvas,svg,iframe,object,embed,input,select,textarea,button,a[href],hr,progress,meter"; // a summary counts by its text and icons
   const FLOAT = "[atl-ui=pin],[atl-ui=spot],[atl-ui=mark],[atl-ui=sel],[atl-ui=panel],[atl-ui=rail],[atl-ui=composer],[atl-ui=thread],[atl-ui=wip],script,style,template";
@@ -807,13 +812,24 @@ function boot() {
     }
     return { out, beside };
   }
-  // The part of the viewport's width and the Key's scroll containers a pin may use.
-  function clipOf(el) {
+  // The part of the viewport's width and the Key's scroll containers a pin may use. Inside the Key (2.9.1) only an element
+  // that holds the pin's containing block clips it, as a positioned Key with overflow:hidden does; the absolute pin
+  // escapes the others (an unpositioned narrow cell). ponytail: the CSS properties that make a containing block for an
+  // absolute box, as of 2026; a new one would let chips sit outside a clipping Key until it is added here.
+  function clipOf(el, pin) {
     const c = { left: 0, top: -scrollY, right: document.documentElement.clientWidth, bottom: Infinity }; // never above the document
-    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    let cb = null;
+    for (let p = pin.parentElement; p && el.contains(p) && !cb; p = p.parentElement) {
       const s = getComputedStyle(p);
-      if (s.overflowX === "visible" && s.overflowY === "visible") continue;
+      if (s.position !== "static" || [s.transform, s.translate, s.rotate, s.scale, s.filter, s.backdropFilter, s.perspective].some((v) => v && v !== "none")
+        || /paint|layout|strict|content/.test(s.contain) || s.contentVisibility === "auto" || /transform|translate|rotate|scale|filter|perspective|contain/.test(s.willChange)) cb = p;
+    }
+    for (let p = pin.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (el.contains(p) && !p.contains(cb)) continue;
+      const s = getComputedStyle(p), paint = /paint|strict|content/.test(s.contain) || s.contentVisibility === "auto"; // paint containment clips like overflow
+      if (s.overflowX === "visible" && s.overflowY === "visible" && !paint) continue;
       const r = p.getBoundingClientRect();
+      if (paint) { c.left = Math.max(c.left, r.left); c.right = Math.min(c.right, r.right); c.top = Math.max(c.top, r.top); c.bottom = Math.min(c.bottom, r.bottom); }
       if (s.overflowX !== "visible") { c.left = Math.max(c.left, r.left); c.right = Math.min(c.right, r.right); }
       if (s.overflowY !== "visible") { c.top = Math.max(c.top, r.top); c.bottom = Math.min(c.bottom, r.bottom); }
     }
@@ -828,7 +844,7 @@ function boot() {
     const el = findKey(pin.dataset.key), b = pin.querySelector(".atl-add"), row = pin.querySelector(".atl-prow");
     if (!el || !b) return;
     pin.style.translate = ""; pin.style.display = "";
-    const k = el.getBoundingClientRect(), c = clipOf(el);
+    const k = el.getBoundingClientRect(), c = clipOf(el, pin);
     const r = { left: Math.max(k.left, c.left), right: Math.min(k.right, c.right), top: Math.max(k.top, c.top), bottom: Math.min(k.bottom, c.bottom) };
     if (r.right - r.left < b.offsetWidth + 8 || r.bottom <= r.top) { pin.style.display = "none"; return; }
     const p = pin.getBoundingClientRect(), x0 = r.right - b.offsetWidth - 4, top = r.top + 4;
@@ -837,10 +853,11 @@ function boot() {
     row.classList.remove("atl-tight", "atl-tuck");
     row.style.maxWidth = `${Math.round(c.right - c.left - 8)}px`;
     const area = { left: c.left, right: c.right, top: Math.max(c.top, k.top - row.offsetHeight - 12), bottom: Math.min(r.bottom, top + SEARCH) }; // the full row is the tallest
-    const others = [...pins.values()].filter((o) => o !== pin && o.style.display !== "none").map((o) => o.querySelector(".atl-prow")?.getBoundingClientRect()).filter(Boolean);
+    const near = [...pins.values()].filter((o) => o !== pin && o.style.display !== "none").flatMap((o) => [...o.querySelectorAll(".atl-prow,.atl-badge")]);
+    const boxes = (list) => list.map((x) => x.getBoundingClientRect()).filter((x) => x.width), others = boxes(near);
     const { out, beside } = contentIn(area, el), obs = [...out, ...others, { left: x0, right: x0 + b.offsetWidth, top, bottom: top + b.offsetHeight }], margin = [...obs, ...beside], lo = r.left + 4;
-    const slot = () => {
-      const w = row.offsetWidth, h = row.offsetHeight;
+    const slot = (it = row, avoid = null) => {
+      const w = it.offsetWidth, h = it.offsetHeight;
       // A row keeps GX px from content beside it and GY px above and below, so it never touches a line.
       const hits = (x, y, list = obs, ww = w) => list.filter((o) => o.left < x + ww + GX && o.right > x - GX && o.top < y + h + GY && o.bottom > y - GY);
       // The rightmost free x on line y between left and right, stepping left past each obstacle.
@@ -848,6 +865,7 @@ function boot() {
       const ys = [...new Set(obs.flatMap((o) => [Math.ceil(o.top), Math.ceil(o.bottom) + GY + 1]))].filter((y) => y > top && y + h <= area.bottom).sort((a, b) => a - b);
       // Outside the Key only on free margin, where no other element's box is (right of the Key not in a narrow gap
       // before a neighbour), so a row never reads as a neighbour's.
+      if (avoid) { for (let y = top; y + h <= r.bottom; y += h + GY) { const got = scan(y, r.right - 4, avoid); if (got) return got; } return null; } // down the Key, line by line
       return scan(top, r.right - 4) ?? (r.right + 8 + w + MARGIN <= c.right && !hits(r.right + 8, top, margin, w + MARGIN).length ? [r.right + 8, top] : null)
         ?? ys.reduce((got, y) => got ?? scan(y, r.right - 4), null) ?? (k.top - h - 4 >= c.top ? scan(k.top - h - 4, r.right - 4, margin) : null);
     };
@@ -855,6 +873,12 @@ function boot() {
     if (!at) { row.classList.add("atl-tight"); at = slot(); }
     if (!at) { row.classList.add("atl-tuck"); at = [Math.max(c.left + 4, x0 - 4 - row.offsetWidth), top]; }
     row.style.left = `${Math.round(at[0] - x0)}px`; row.style.top = `${Math.round(at[1] - top)}px`;
+    const badge = row.classList.contains("atl-tuck") && pin.querySelector(".atl-badge");
+    if (!badge) return;
+    // No free slot: from the Key's top-right corner leftwards, then line by line down the Key, over Page content but clear of other pins' shown chips and
+    // badges (nested Keys with one box; a hidden tucked row does not count), else the corner itself. ponytail: covering a little content beats hiding the thread.
+    const bat = slot(badge) ?? slot(badge, boxes(near.filter((x) => x.checkVisibility({ visibilityProperty: true })))) ?? [r.right - 4 - badge.offsetWidth, top];
+    badge.style.left = `${Math.round(bat[0] - x0)}px`; badge.style.top = `${Math.round(bat[1] - top)}px`;
   }
   function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); for (const s of spots.values()) spotAt(s); positionMarks(); placePops(); positionWip(); }
   // At the region's top-left corner, kept inside the right edge so a long label never scrolls the Page sideways.
@@ -1314,6 +1338,11 @@ function boot() {
       requestAnimationFrame(() => jumpTo(el));
     },
     dismiss: () => closeComposer(true),
+    tuck: (b) => { // a tucked row's badge: the Key's hover state shows the row, focus goes to the first thread that needs the human
+      const pin = b.closest("[atl-ui=pin]");
+      setHot(findKey(pin.dataset.key));
+      pin.querySelector(".atl-prow .atl-unread,.atl-prow .atl-open-item")?.focus({ preventScroll: true });
+    },
     next: () => {
       const items = [...document.querySelectorAll(".atl-open-item")];
       if (!items.length) return;
@@ -1508,7 +1537,8 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-pin{position:absolute;width:0;height:0;z-index:2147482000}
 .atl-pin .atl-add,.atl-spot>button{position:absolute;left:0;top:0}.atl-prow{position:absolute;display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:max-content}
 .atl-prow.atl-tight{gap:4px}.atl-prow.atl-tight .atl-ct{display:none}.atl-prow.atl-tight .atl-chip{padding:0 6px}
-.atl-prow.atl-tuck{visibility:hidden}.atl-pin.atl-hot .atl-prow.atl-tuck,.atl-pin:focus-within .atl-prow.atl-tuck,.atl-prow.atl-tuck:has([aria-expanded=true]){visibility:visible}
+.atl-prow.atl-tuck{visibility:hidden}.atl-pin.atl-hot .atl-prow.atl-tuck,.atl-pin:focus-within:not(:has(.atl-badge:focus)) .atl-prow.atl-tuck,.atl-prow.atl-tuck:has([aria-expanded=true]){visibility:visible}
+.atl-pin .atl-badge{position:absolute;display:none}.atl-prow.atl-tuck~.atl-badge{display:inline-flex}.atl-pin.atl-hot .atl-badge,.atl-pin:has(.atl-prow:focus-within,.atl-prow [aria-expanded=true]) .atl-badge{visibility:hidden}
 .atl-pin .atl-add{min-height:0;height:24px;padding:0 5px;gap:3px;color:var(--atl-muted);box-shadow:0 1px 3px #0002;opacity:0;pointer-events:none;transition:opacity .12s}
 .atl-pin.atl-hot .atl-add,.atl-pin .atl-add:focus-visible{opacity:1!important;pointer-events:auto!important}
 .atl-pin .atl-add:hover{color:var(--atl-accent)}
