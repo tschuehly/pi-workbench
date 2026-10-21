@@ -312,7 +312,7 @@ try {
   assert.deepEqual([held.option, held.note, held.images.map((x) => path.extname(x))], ["Hold", "see the shots", [".png", ".gif"]]);
   assert.equal(await js(`[...document.querySelectorAll('${shot} .atl-dstate img')].every((i)=>i.complete&&i.naturalWidth===1)`), true, "thumbnails load from the stored files");
   assert.equal(await js(`document.querySelector('${shot} .atl-extra').hidden && document.querySelectorAll('${shot} .atl-attached img').length===0`), true, "the field closes and empties once posted");
-  await click(`[data-atl=decide][data-id=shot][data-label=Ship]`); // a change inside the undo window keeps the note and images
+  await js("document.querySelector('[data-atl=decide][data-id=shot][data-label=Ship]').click(); true"); // a change inside the 3 s undo window keeps the note and images
   await until("atelier.state().decisions.find((d)=>d.id==='shot').answer==='Ship'");
   assert.deepEqual(await js("(({answer,note,images})=>[answer,note,images])(atelier.state().decisions.find((d)=>d.id==='shot'))"), ["Ship", "see the shots", held.images]);
   await sleep(3200); host.deliverDue(page);

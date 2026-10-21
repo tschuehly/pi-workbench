@@ -471,7 +471,7 @@ test("wordDiff marks inserted and deleted words; diffPreview names the first cha
   const parts = wordDiff("Comments wait for Send and go out together", "Comments go out when saved");
   assert.equal(parts.filter(([op]) => op !== "+").map(([, w]) => w).join(" "), "Comments wait for Send and go out together");
   assert.equal(parts.filter(([op]) => op !== "-").map(([, w]) => w).join(" "), "Comments go out when saved");
-  assert.equal(diffPreview(wordDiff("undo lasts 30 s", "undo lasts 10 s")), "…undo lasts 30 → 10…");
+  assert.equal(diffPreview(wordDiff("undo lasts 30 s", "undo lasts 3 s")), "…undo lasts 30 → 3…");
   assert.deepEqual(wordDiff("same", "same"), [["=", "same"]]);
   assert.equal(diffPreview(wordDiff("same", "same")), "");
 });
