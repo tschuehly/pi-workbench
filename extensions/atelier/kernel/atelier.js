@@ -1,4 +1,4 @@
-// Atelier Kernel 2.7.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.8.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -260,6 +260,7 @@ const ICONS = {
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  chevron: '<path d="m9 18 6-6-6-6"/>',
   pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
   eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
   paperclip: '<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>',
@@ -312,6 +313,7 @@ function boot() {
   const read = JSON.parse(localStorage.getItem(readKey) || "{}");
   let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0, testHost = false;
   const expanded = new Set(); // threads whose folded middle the human opened
+  const unfolded = new Set(); // answered asked Decisions the human opened from their one-line fold (2.8.0)
   const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
   const held = new WeakSet(); // <details> the human opened or closed: his state wins over every later source
   const tabbed = new WeakSet(); // Keys the Kernel made focusable, so the keyboard reaches their Comment button
@@ -373,8 +375,12 @@ function boot() {
     items.forEach((item, i) => {
       let node = cards.get(item.id);
       if (!node) { node = h(`<div class="atl-card" tabindex="-1" data-id="${esc(item.id)}"><div class="atl-c"></div>${item.extra ?? ""}</div>`); cards.set(item.id, node); }
+      const had = node.contains(document.activeElement);
       set(node.firstElementChild, item.html);
+      // A Decision that folds or unfolds under focus hands it to its fold line, so the keyboard keeps its place.
+      if (had && !node.contains(document.activeElement)) node.querySelector("[data-atl=fold]")?.focus({ preventScroll: true });
       node.classList.toggle("atl-open-item", !!item.open);
+      node.classList.toggle("atl-folded", !!item.folded);
       if (container.children[i] !== node) container.insertBefore(node, container.children[i] ?? null);
     });
   }
@@ -576,10 +582,16 @@ function boot() {
 
   // `lock`: the atl-wip text of a region holding the Decision; its options are disabled with that text as their title.
   const locked = (lock) => lock == null ? "" : ` disabled title="${esc(lock)}"`;
+  // An answered asked Decision folds to one line, its question and the answer, once its undo window has closed (2.8.0);
+  // the line opens and closes the full Decision. A stale answer stays open: it needs answering again.
+  const foldable = (d) => !!d.answer && !d.stale && !(d.answer.origin === "human" && left(d.answer) > 0);
+  const folded = (d) => foldable(d) && !unfolded.has(d.id);
   function decisionHtml(d, st, lock = null) {
     const a = d.answer;
+    const line = foldable(d) ? `<button type="button" data-atl="fold" data-id="${esc(d.id)}" class="atl-fold" aria-expanded="${unfolded.has(d.id)}" title="${esc(d.question)}">${icon("chevron")}<span class="atl-tag">answered</span><span class="atl-fq">${esc(d.question)}</span><b>${esc(clip(a.option, 60))}</b></button>` : "";
+    if (line && folded(d)) return line;
     const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}"${locked(lock)} class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
-    return `<div class="atl-head"><span class="atl-tag">${a && !d.stale ? "answered" : "to answer"}</span>${d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : ""}</div>
+    return `<div class="atl-head">${line || `<span class="atl-tag">${a && !d.stale ? "answered" : "to answer"}</span>`}${d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : ""}</div>
       <div class="atl-q">${esc(d.question)}</div>${d.detail ? `<div class="atl-dim">${esc(d.detail)}</div>` : ""}
       ${materialHtml(d)}<div class="atl-opts">${opts}${otherHtml(d, lock)}</div>${receiptHtml(d, st)}`;
   }
@@ -667,7 +679,7 @@ function boot() {
       }
       const groupDrafts = el.hasAttribute("atl-group") ? st.drafts.filter((x) => inGroup(x.key, addr)).length : 0;
       set(ui.firstElementChild, groupDrafts ? `<button data-atl="send" data-key="${esc(addr)}" class="atl-primary">${icon("send")} Send (${groupDrafts})</button>` : "");
-      reconcile(ui.children[1], st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st, lockOf(el)), open: !x.answer || x.stale, extra: `<div class="atl-dextra">${EXTRA}</div>` })));
+      reconcile(ui.children[1], st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st, lockOf(el)), open: !x.answer || x.stale, folded: folded(x), extra: `<div class="atl-dextra">${EXTRA}</div>` })));
     }
     for (const map of [pins, decUis]) for (const [addr, node] of map) if (!kept.has(node)) { node.remove(); map.delete(addr); }
     for (const [addr, ui] of keyUis) if (!seen.has(addr)) { ui.remove(); keyUis.delete(addr); }
@@ -694,7 +706,7 @@ function boot() {
     }
 
     // Decisions with no Key on the Page sit in the reading path, capped at 50vh (Review Studio a41040901).
-    reconcile(orphans, st.decisions.filter((d) => !d.declared && !findKey(d.key)).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st, lockOf(orphans)), open: !d.answer || d.stale, extra: `<div class="atl-dextra">${EXTRA}</div>` })));
+    reconcile(orphans, st.decisions.filter((d) => !d.declared && !findKey(d.key)).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st, lockOf(orphans)), open: !d.answer || d.stale, folded: folded(d), extra: `<div class="atl-dextra">${EXTRA}</div>` })));
 
     const onText = st.threads.filter((t) => placed.get(t.root.seq).where === "text");
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
@@ -1199,6 +1211,7 @@ function boot() {
     accept: (b) => post({ type: "accept", target: +b.dataset.seq }),
     rework: (b) => openComposer({ label: `What should change in Request #${b.dataset.seq}?`, kind: "rework", target: +b.dataset.seq }, { at: () => cards.get(`r:${b.dataset.seq}`), from: b }),
     expand: (b) => { expanded.add(+b.dataset.seq); render(); },
+    fold: (b) => { const id = b.dataset.id; if (!unfolded.delete(id)) unfolded.add(id); render(); },
     collapse: (b) => { expanded.delete(+b.dataset.seq); render(); },
     chmark: (b) => toggleDiff(b.dataset.addr),
     chseen: (b) => clearTrace(b.dataset.addr),
@@ -1388,6 +1401,10 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-card{border:1px solid var(--atl-line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--atl-bg);display:grid;gap:6px}
 .atl-c{display:grid;gap:6px}.atl-head:empty{display:none}[atl-ui] .atl-c>button{justify-self:start}
 .atl-card.atl-open-item{border-left:3px solid var(--atl-accent)}
+.atl-card.atl-folded{padding:2px 6px}.atl-card.atl-folded>.atl-dextra{display:none}
+[atl-ui] button.atl-fold{display:flex;width:100%;min-width:0;min-height:24px;padding:0 4px;border-color:transparent;background:none;text-align:left}
+.atl-fold .atl-fq{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--atl-muted)}.atl-fold>b{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.atl-fold .atl-i{flex:none;transition:transform .15s}.atl-fold[aria-expanded=true] .atl-i{transform:rotate(90deg)}
 .atl-opts{display:grid;gap:4px}[atl-ui] button.atl-opt{display:grid;justify-items:start;text-align:left;padding:4px 10px}
 [atl-ui] button.atl-rec{border-color:var(--atl-accent);border-style:dashed}
 [atl-ui] button.atl-chosen{background:var(--atl-accent);border-color:var(--atl-accent);border-style:solid;color:#fff}
