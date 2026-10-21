@@ -10,8 +10,10 @@ returned URL in the Chat; if the tool is missing, call `tools_enable` with group
 
 Only that URL works. A file path or Markdown file link opens the Page without its Kernel: no Decisions, no
 Comments, nothing reaches Pi. When `open` refuses because another session receives the Page, ask the human
-whether its input should come here; only on his yes call `takeover` with the generation `open` named. His tabs
-and link keep working, and the Kernel bar names the receiving session.
+whether its input should come here; only on his yes call `takeover` with the generation `open` named. It works only
+between sessions of one process (PI WEB) and waits for the other session to be idle; then his tabs and link keep
+working and the Kernel bar names the receiving session. When it refuses, tell him what it says (close or /reload
+the other session, or try again).
 
 Building without the `atelier` tool, e.g. as a subagent? Prove the Page on the real host before handing it
 over: from the project directory run `node ../../extensions/atelier/serve.mjs <page.html>` (path relative to

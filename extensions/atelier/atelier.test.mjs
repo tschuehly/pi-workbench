@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -617,10 +617,11 @@ test("a Comment and a reply carry images: only stored ones, delivered by absolut
 function sessions(p) {
   let clock = 1_000_000;
   const page = path.join(realpathSync(p.root), "page.html");
-  const make = (id, { hold = false } = {}) => {
+  // idle: whether the session is between runs (default: always); quiesceMs: how long its takeover waits for that.
+  const make = (id, { hold = false, idle, quiesceMs } = {}) => {
     const s = { id, sent: [], held: [], handoffs: [] };
     s.host = createHost({
-      root: p.root, sessionId: id, label: `Chat ${id}`, now: () => clock, watchdogMs: 60_000,
+      root: p.root, sessionId: id, label: `Chat ${id}`, now: () => clock, watchdogMs: 60_000, idle, quiesceMs,
       // hold: the session keeps the send (a checkpoint barrier or a run still starting), so it is never queued to Pi.
       send: (m, done, failed) => { if (hold) s.held.push({ m, done, failed }); else { s.sent.push(m); done(true); } },
       handoff: (m) => s.handoffs.push(m),
@@ -669,19 +670,99 @@ test("receiver (a): a second session in the same process is refused with a takeo
   } finally { a.host.stop(); b.host.stop(); p.done(); }
 });
 
-test("receiver: a lock from an ended session of this process is stale; another live process's needs takeover", async () => {
+test("receiver: a lock from an ended session of this process is stale; another process's live session is never taken over (review 3, 4)", async () => {
   const p = project();
-  const { page, make, lock } = sessions(p);
-  const a = make("a"), b = make("b");
+  const { page, make } = sessions(p);
+  const file = `${page}.events.jsonl.lock`;
+  const a = make("a"), b = make("b"), c = make("c");
   try {
-    writeFileSync(`${page}.events.jsonl.lock`, JSON.stringify({ pid: process.pid, session: "ended", generation: 3 }));
+    writeFileSync(file, JSON.stringify({ pid: process.pid, session: "ended", generation: 3 }));
     assert.equal((await a.host.open(page)).generation, 4, "same process, no live runtime: stale");
     a.host.stop();
-    assert.equal(lock().session, undefined, "released, the generation kept");
-    writeFileSync(`${page}.events.jsonl.lock`, JSON.stringify({ pid: process.ppid, session: "elsewhere", generation: 5 }));
-    await assert.rejects(b.host.open(page), /cannot tell whether[\s\S]*takeover[\s\S]*generation 5/, "liveness unknown: refuse");
-    assert.equal((await b.host.takeover(page, 5)).generation, 6);
-    assert.equal(lock().session, "b");
+    assert.equal(existsSync(file), false, "released");
+    assert.equal((await b.host.open(page)).generation, 5, "the process keeps counting generations");
+    b.host.stop();
+    const far = JSON.stringify({ pid: process.ppid, session: "far", label: "Chat far", generation: 5 });
+    writeFileSync(file, far);
+    await assert.rejects(c.host.open(page), /held by session Chat far in another process[\s\S]*close or \/reload it first/);
+    await assert.rejects(c.host.takeover(page, 5), /held by session Chat far in another process[\s\S]*close or \/reload it first/, "cross-process takeover is refused");
+    assert.equal(readFileSync(file, "utf8"), far, "its lock is untouched");
+    assert.deepEqual(readdirSync(p.root).filter((f) => f.endsWith(".claim")), [], "no claim file");
+  } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
+});
+
+test("receiver: a live receiver of an older Atelier (lock without generation) is never fenced; close or /reload it first (review 1)", async () => {
+  const p = project();
+  const { page, make } = sessions(p);
+  const file = `${page}.events.jsonl.lock`;
+  const a = make("a");
+  try {
+    for (const pid of [process.ppid, process.pid]) {
+      const old = JSON.stringify({ pid, session: "old" });
+      writeFileSync(file, old);
+      await assert.rejects(a.host.open(page), /session old, which runs an older Atelier[\s\S]*close or \/reload it first/);
+      await assert.rejects(a.host.takeover(page, 0), /session old, which runs an older Atelier[\s\S]*close or \/reload it first/);
+      assert.equal(readFileSync(file, "utf8"), old, "its lock is untouched");
+    }
+    writeFileSync(file, JSON.stringify({ pid: spawnSync(process.execPath, ["-e", "0"]).pid, session: "old" }));
+    assert.equal((await a.host.open(page)).generation, 1, "its process is gone: stale");
+  } finally { a.host.stop(); p.done(); }
+});
+
+test("receiver: two takeovers of one generation in this process: exactly one wins (review 4)", async () => {
+  const p = project();
+  const { page, make, lock } = sessions(p);
+  const a = make("a"), b = make("b"), c = make("c");
+  try {
+    await a.host.open(page);
+    const results = await Promise.allSettled([b.host.takeover(page, 1), c.host.takeover(page, 1)]);
+    assert.deepEqual(results.map((r) => r.status).sort(), ["fulfilled", "rejected"]);
+    assert.match(results.find((r) => r.status === "rejected").reason.message, /changed since generation 1/);
+    assert.equal(lock().generation, 2);
+    assert.ok(["b", "c"].includes(lock().session));
+  } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
+});
+
+test("receiver: takeover waits until the old receiver is idle, refuses while it stays busy, and gives the successor the unfinished Requests (review 5)", async () => {
+  const p = project();
+  const { page, make, lock } = sessions(p);
+  let idle = false;
+  const a = make("a", { idle: () => idle }), b = make("b", { quiesceMs: 200 }), c = make("c", { quiesceMs: 5_000 });
+  try {
+    await a.host.open(page);
+    a.host.postHuman(page, { type: "request", job: "rerun", key: "a" });
+    a.host.agent(page, { type: "status", target: 1, state: "running" });
+    await assert.rejects(b.host.takeover(page, 1), /Chat a is busy[\s\S]*Try again/);
+    assert.equal(lock().session, "a", "not forced");
+    const moving = c.host.takeover(page, 1);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(lock().session, "a", "still waiting");
+    idle = true;
+    const moved = await moving;
+    assert.equal(moved.generation, 2);
+    assert.match(moved.unfinished.join("\n"), /Request #1 "rerun" \(running/, "the successor gets the snapshot");
+    assert.match(a.handoffs[0].content, /Request #1 "rerun" \(running/, "the old receiver still gets its handoff note");
+  } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
+});
+
+test("receiver (h): a receipt or seen from an earlier generation, or without one, changes nothing", async () => {
+  const p = project();
+  const { page, make, tick } = sessions(p);
+  const a = make("a"), b = make("b");
+  const received = () => readLog(page).filter((e) => e.type === "received");
+  try {
+    await a.host.open(page);
+    a.host.postHuman(page, { type: "decide", decision: "d1", option: "A" });
+    tick(UNDO);
+    a.host.deliverDue(page);
+    const old = a.sent[0].details;
+    await b.host.takeover(page, 1);
+    a.host.seen(old); a.host.receipt(old); a.host.settled();
+    b.host.seen(old); b.host.receipt(old); b.host.settled();
+    b.host.receipt({ page, seqs: old.seqs });
+    assert.deepEqual(received(), [], "generation 1 and no generation are not B's");
+    b.host.receipt(b.sent[0].details);
+    assert.deepEqual(received().map((e) => e.of), [[1]]);
   } finally { a.host.stop(); b.host.stop(); p.done(); }
 });
 
@@ -712,7 +793,7 @@ test("receiver (b): takeover moves Delivery; the old receiver's held send, deliv
   } finally { a.host.stop(); b.host.stop(); p.done(); }
 });
 
-test("receiver (b): a send the old session still holds while its run starts is dropped after takeover", async () => {
+test("receiver (b): takeover waits while the old session's run starts; the successor gets the unfinished Requests (review 5)", async () => {
   const p = project();
   const root = realpathSync(p.root), page = path.join(root, "page.html"), old = Date.now() - 60_000;
   appendLog(page, { origin: "human", type: "request", job: "a", delivery: "immediate" }, old);
@@ -721,9 +802,9 @@ test("receiver (b): a send the old session still holds while its run starts is d
   const fake = (id) => {
     const tools = new Map(), handlers = {}, messages = [];
     atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: (m, o) => messages.push({ ...m, o }), getSessionName: () => `Chat ${id}` });
-    const ctx = { cwd: p.root, isIdle: () => messages.length === 0, sessionManager: { getSessionId: () => `${id}-${process.pid}` } };
+    const ctx = { cwd: p.root, idle: true, isIdle: () => ctx.idle, sessionManager: { getSessionId: () => `${id}-${process.pid}` } };
     handlers.session_start({}, ctx);
-    return { handlers, messages, run: (params) => tools.get("atelier").execute("id", { page: "page.html", ...params }, undefined, undefined, ctx) };
+    return { ctx, handlers, messages, run: (params) => tools.get("atelier").execute("id", { page: "page.html", ...params }, undefined, undefined, ctx) };
   };
   const a = fake("ha"), b = fake("hb");
   try {
@@ -731,14 +812,23 @@ test("receiver (b): a send the old session still holds while its run starts is d
     assert.equal(opened.details.generation, 1);
     assert.deepEqual(a.messages.map((m) => m.customType), ["atelier:immediate"], "the send is held while A's run starts");
     await assert.rejects(b.run({ action: "open" }), /takeover/);
-    const moved = await b.run({ action: "takeover", generation: 1 });
-    assert.match(moved.content[0].text, /now goes to this session/);
+    let done = false;
+    const moving = b.run({ action: "takeover", generation: 1 }).finally(() => { done = true; });
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(done, false, "a run that is still starting is not idle: takeover waits");
+    a.ctx.idle = false;
     a.handlers.agent_start();
+    assert.deepEqual(a.messages.map((m) => m.customType), ["atelier:immediate", "atelier:send"], "A still receives while takeover waits");
+    a.ctx.idle = true;
+    a.handlers.agent_settled();
+    const moved = await moving;
+    assert.match(moved.content[0].text, /now goes to this session/);
+    assert.match(moved.content[0].text, /Unfinished[\s\S]*Request #1 "a" \(not started/, "the successor gets the unfinished Requests");
     b.handlers.agent_start();
-    assert.deepEqual(a.messages.map((m) => m.customType), ["atelier:immediate", "atelier:handoff"], "A's held send is dropped; A is told");
-    assert.equal(a.messages[1].o.deliverAs, "steer");
+    assert.deepEqual(a.messages.map((m) => m.customType), ["atelier:immediate", "atelier:send", "atelier:handoff"], "A is told");
+    assert.equal(a.messages[2].o.deliverAs, "steer");
     assert.deepEqual(b.messages.map((m) => m.customType).sort(), ["atelier:immediate", "atelier:send"]);
-    assert.match(b.messages.find((m) => m.customType === "atelier:immediate").content, /may already have reached Chat ha/, "queued to A: flagged, not silently repeated");
+    assert.match(b.messages.find((m) => m.customType === "atelier:immediate").content, /may already have reached Chat ha/, "queued to A, never confirmed: flagged, not silently repeated");
     await assert.rejects(a.run({ action: "update" }), /handed over to Chat hb/);
   } finally { a.handlers.session_shutdown(); b.handlers.session_shutdown(); p.done(); }
 });

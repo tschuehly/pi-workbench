@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
@@ -17,6 +17,8 @@ const KERNEL_VERSION = "2.10.0";
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
 export const WATCHDOG_MS = 15_000;
+// How long a takeover waits for the receiving session to finish its run before it refuses.
+export const QUIESCE_MS = 10_000;
 // A Decision's answer, a Comment or a reply may name up to four images, each uploaded on its own (POST /.atelier/image) before the answer
 // posts, so an event body stays small.
 export const IMAGE_MAX = 10 * 1024 * 1024;
@@ -62,8 +64,9 @@ const lockPath = (page: string) => `${logPath(page)}.lock`;
 const alive = (pid: unknown) => { try { process.kill(Number(pid), 0); return true; } catch (error: any) { return error.code === "EPERM"; } };
 
 /**
- * The receiver lock `<page>.events.jsonl.lock`: which session receives the Page's human events, and its generation.
- * Released, it keeps only the generation, so a takeover checked against an earlier generation stays stale.
+ * The receiver lock `<page>.events.jsonl.lock`, present while a session receives the Page: its process, session and
+ * receiver generation. It keeps other processes out; moving the receiver between sessions happens only inside one
+ * process (PI WEB's sessiond), through REG.
  */
 type Lock = { pid?: number; session?: string; generation?: number; label?: string };
 function readLock(page: string): Lock {
@@ -72,63 +75,59 @@ function readLock(page: string): Lock {
     throw new Error(`Cannot read ${lockPath(page)}; delete it if no Pi session has this Page open.`);
   }
 }
-// Written whole and renamed into place, so no contender ever reads it half written.
-function writeLock(page: string, lock: Lock) {
-  const tmp = `${lockPath(page)}.${process.pid}.${randomUUID()}`;
-  writeFileSync(tmp, JSON.stringify(lock));
-  renameSync(tmp, lockPath(page));
-}
-const owns = (page: string, session: string, generation: number) => {
-  try { const lock = readLock(page); return lock.session === session && lock.generation === generation; } catch { return false; }
-};
 const named = (lock: Lock) => lock.label ?? lock.session ?? "no session";
 
-// Process-wide, so sessions sharing one process (PI WEB's sessiond) see each other: the Pages served here and the
-// sessions whose Atelier is running. Versioned key: another Atelier version in the process keeps its own.
-const REG: { served: Map<string, Served>; live: Set<string> } = ((globalThis as any)[Symbol.for("pi-workbench.atelier.receivers.v1")] ??= { served: new Map(), live: new Set() });
+// Process-wide, so sessions sharing one process see each other: the Pages served here, the sessions whose Atelier
+// runs, each Page's last receiver generation, and each Page's queue of takeovers. Versioned key: another Atelier
+// version in the process keeps its own.
+const REG: { served: Map<string, Served>; live: Set<string>; generation: Map<string, number>; queue: Map<string, Promise<unknown>> } =
+  ((globalThis as any)[Symbol.for("pi-workbench.atelier.receivers.v2")] ??= { served: new Map(), live: new Set(), generation: new Map(), queue: new Map() });
 
-/** Live: a running session of this process. Unknown: another process's session, or an older Atelier's lock (no generation). */
+/**
+ * Live: a running session of this process. Elsewhere: a live session of another process. Legacy: an older Atelier's
+ * lock (no generation), whose running code no lock change can fence. Stale: its process is gone, or it is this
+ * process and its session's Atelier no longer runs.
+ */
 function holder(lock: Lock) {
   if (!lock.session) return "free";
   if (Number.isInteger(lock.pid) && !alive(lock.pid)) return "stale";
-  if (lock.pid !== process.pid || lock.generation === undefined) return "unknown";
+  if (lock.generation === undefined) return "legacy";
+  if (lock.pid !== process.pid) return "elsewhere";
   return REG.live.has(lock.session) ? "live" : "stale";
-}
-
-/** Claims and transfers of one Page run one at a time, across processes, under an exclusive `<lock>.claim` file. */
-function serialized<T>(page: string, fn: () => T): T {
-  const mutex = `${lockPath(page)}.claim`;
-  for (let attempt = 0; ; attempt += 1) {
-    try { closeSync(openSync(mutex, "wx")); break; } catch (error: any) { if (error.code !== "EEXIST") throw error; }
-    // ponytail: a claim file older than 5 s is a crashed claimer's; two breakers can race, fine for a crash leftover.
-    try { if (Date.now() - statSync(mutex).mtimeMs > 5_000) { unlinkSync(mutex); continue; } } catch { continue; }
-    if (attempt > 300) throw new Error(`${mutex} is held: another session is claiming this Page. Try again.`);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-  }
-  try { return fn(); } finally { rmSync(mutex, { force: true }); }
 }
 
 /**
  * One session receives a Page's human events (131, 143). `open` (no `takeover`) claims a free or stale lock and never
- * steals; `takeover` moves the lock from whoever holds it, but only from the generation the caller was shown.
- * Returns the receiver generation. A lock is stale when its process is gone, or when it is this process and its
- * session's Atelier no longer runs; another process's session cannot be judged from here, so it needs takeover.
+ * steals; `takeover` moves it from a live session of this process, only from the generation the caller was shown.
+ * Returns the receiver generation; `check` only validates. Synchronous, so nothing in this process runs between the
+ * check and the write.
  */
-export function claimPage(page: string, session: string, label = session, takeover?: number): number {
-  return serialized(page, () => {
-    const lock = readLock(page), generation = lock.generation ?? 0, hint = `To move its input here, call atelier with action takeover and generation ${generation}.`;
-    if (lock.session === session && lock.pid === process.pid) return generation;
-    if (takeover !== undefined && takeover !== generation) throw new Error(`The receiver changed since generation ${takeover}: this Page's input now goes to ${named(lock)} (generation ${generation}). Ask the human before taking it over again.`);
-    const state = holder(lock);
-    if (takeover === undefined && state === "live") throw new Error(`This Page's input goes to another live Pi session (${named(lock)}). ${hint}`);
-    if (takeover === undefined && state === "unknown") throw new Error(`This Page's input goes to another live Pi session (${named(lock)}, pid ${lock.pid}), and Atelier cannot tell whether that session is still running. If it is gone, or the human wants its input here: ${hint}`);
-    writeLock(page, { pid: process.pid, session, generation: generation + 1, label });
-    return generation + 1;
-  });
+export function claimPage(page: string, session: string, label = session, takeover?: number, check = false): number {
+  const file = lockPath(page), lock = readLock(page), state = holder(lock);
+  const generation = Math.max(lock.generation ?? 0, REG.generation.get(page) ?? 0);
+  if (lock.session === session && lock.pid === process.pid && state !== "legacy") return lock.generation!;
+  const reload = "close or /reload it first";
+  if (state === "legacy") throw new Error(`This Page is held by session ${named(lock)}, which runs an older Atelier that cannot hand it over; ${reload}. If it is gone, delete ${file}.`);
+  if (state === "elsewhere") throw new Error(`This Page is held by session ${named(lock)} in another process (pid ${lock.pid}); ${reload}. Atelier moves a Page's input only between sessions of one process.`);
+  if (takeover !== undefined && (state !== "live" || takeover !== generation)) throw new Error(`The receiver changed since generation ${takeover}: this Page's input now goes to ${state === "live" ? named(lock) : "no session"} (generation ${generation}). ${state === "live" ? "Ask the human before taking it over again." : "Open it instead."}`);
+  if (takeover === undefined && state === "live") throw new Error(`This Page's input goes to another live Pi session (${named(lock)}). To move its input here, call atelier with action takeover and generation ${generation}.`);
+  if (check) return generation;
+  const next = { pid: process.pid, session, generation: generation + 1, label };
+  const tmp = `${file}.${process.pid}.${randomUUID()}`;
+  writeFileSync(tmp, JSON.stringify(next));
+  try {
+    if (state === "free") linkSync(tmp, file); // exclusive: another process claiming at once gets EEXIST
+    else renameSync(tmp, file); // ponytail: two processes breaking one dead process's lock can race; only a crash leaves one
+  } catch (error: any) {
+    if (error.code === "EEXIST") throw new Error(`Another Pi session claimed this Page just now (${file}). Try again.`);
+    throw error;
+  } finally { rmSync(tmp, { force: true }); }
+  REG.generation.set(page, next.generation);
+  return next.generation;
 }
 
 function releasePage(page: string, session: string, generation: number) {
-  try { serialized(page, () => { if (owns(page, session, generation)) writeLock(page, { generation }); }); } catch { /* gone */ }
+  try { const lock = readLock(page); if (lock.pid === process.pid && lock.session === session && lock.generation === generation) unlinkSync(lockPath(page)); } catch { /* gone */ }
 }
 
 /**
@@ -257,7 +256,7 @@ function storedImage(page: string, name: string) {
 
 export type Host = ReturnType<typeof createHost>;
 type Send = (message: Message, done: (idle: boolean) => void, failed: () => void) => void;
-type Receiver = { session: string; label: string; generation: number; send: Send; handoff?: (message: Message) => void };
+type Receiver = { session: string; label: string; generation: number; send: Send; handoff?: (message: Message) => void; idle?: () => boolean };
 /**
  * A served Page: its serving endpoint (the page server that gave the tab its URL, its connected tabs, its undo
  * timers) and its current receiver session. A takeover inside the process swaps only the receiver.
@@ -285,6 +284,9 @@ export function createHost(options: {
   label?: string;
   /** Tells this session a Page's input moved to another session. */
   handoff?: (message: Message) => void;
+  /** Whether this session is between runs; a takeover from it waits for that. */
+  idle?: () => boolean;
+  quiesceMs?: number;
   now?: () => number;
   undoMs?: number;
   watchdogMs?: number;
@@ -330,12 +332,13 @@ export function createHost(options: {
     return full;
   };
 
-  // Delivers to the Page's current receiver, and only while the lock still names it: another process may have taken
-  // the Page over. Every callback checks the receiver it was made for, so a handed-over session's late send, receipt
-  // or watchdog changes nothing. A replay flags events an earlier receiver was sent but never confirmed.
+  // Delivers to the Page's current receiver. The receiver changes only in one synchronous step (bind), so
+  // checking it and handing the message to its send happen with nothing in between. Every callback checks the
+  // receiver it was made for, so a handed-over session's late send, receipt or watchdog changes nothing. A replay
+  // flags events an earlier receiver was sent but never confirmed.
   function deliver(rec: Served, replay = false) {
     const r = rec.receiver, page = rec.page;
-    if (!r || !owns(page, r.session, r.generation)) return 0;
+    if (!r) return 0;
     const entries = readLog(page);
     const sentTo = new Map<number, string>(entries.filter((e) => e.type === "delivered").flatMap((e) => e.of.map((s: number) => [s, e.label ?? e.session])));
     let texts: Map<string, string> | undefined;
@@ -371,10 +374,10 @@ export function createHost(options: {
   }
 
   function postHuman(rec: Served, body: any): { status: number; json: unknown } {
-    const page = rec.page, r = rec.receiver;
-    // Another process took the Page over: its endpoint writes the Event Log now, never two at once.
+    const page = rec.page;
+    // With no receiver here, another process may have opened the Page since: its endpoint writes the Event Log then.
     let elsewhere: Lock | undefined;
-    try { const lock = readLock(page); if (r ? !owns(page, r.session, r.generation) : lock.session) elsewhere = lock; } catch { elsewhere = {}; }
+    if (!rec.receiver) try { const lock = readLock(page); if (lock.session) elsewhere = lock; } catch { elsewhere = {}; }
     if (elsewhere) return { status: 409, json: { error: `This Page's input now goes to ${named(elsewhere)} in another Pi process. Ask the agent there for its link.` } };
     const fields = Object.hasOwn(FIELDS, body?.type) ? FIELDS[body.type] : undefined;
     if (!fields) return { status: 400, json: { error: `Unknown event type ${String(body?.type)}` } };
@@ -521,7 +524,7 @@ export function createHost(options: {
   /** The Page's record while this session is its receiver; otherwise why not, for the agent. */
   function receiving(page: string) {
     const rec = REG.served.get(page);
-    if (rec?.receiver?.session === sessionId && owns(page, sessionId, rec.receiver.generation)) return rec;
+    if (rec?.receiver?.session === sessionId) return rec;
     let lock: Lock = {};
     try { lock = readLock(page); } catch { /* unreadable: named below as no session */ }
     throw new Error(`This Page was handed over to ${named(lock)} (generation ${lock.generation ?? 0}): its human input and Atelier actions belong to that session now. Stop working on it here.`);
@@ -530,39 +533,71 @@ export function createHost(options: {
   const mineFor = (details: { page?: string; seqs?: number[]; generation?: number } | undefined) => {
     const rec = details?.page && Array.isArray(details.seqs) ? REG.served.get(details.page) : undefined;
     const r = rec?.receiver;
-    return r?.session === sessionId && (details!.generation === undefined || details!.generation === r.generation) ? rec : undefined;
+    return r?.session === sessionId && details!.generation === r.generation ? rec : undefined;
   };
 
-  /** Makes this session the Page's receiver at `generation`, on the endpoint already serving it in this process, else on this one. */
-  async function bind(page: string, generation: number) {
-    if (!REG.served.has(page)) await listen();
-    if (!owns(page, sessionId, generation)) receiving(page); // taken over while the server started: throws why
+  /**
+   * Makes this session the Page's receiver at the generation `claim` returns, on the endpoint already serving it in
+   * this process, else on this one. From the claim to the receiver switch nothing awaits, so no delivery, receipt or
+   * takeover in this process runs in between.
+   */
+  async function bind(page: string, claim: (check?: boolean) => number) {
+    if (!REG.served.has(page)) { claim(true); await listen(); } // a refused claim starts no server
+    const generation = claim();
     const rec = REG.served.get(page) ?? { page, ep, clients: new Set(), inFlight: new Set(), seen: new Set(), awaiting: [] };
     if (rec.ep === ep && !inProject(page)) mounts.set(mount(page), path.dirname(page));
     REG.served.set(page, rec);
     const previous = rec.receiver;
     if (previous?.session !== sessionId || previous.generation !== generation) {
       // Sends the previous receiver queued but never confirmed are replayed here, flagged; the rest it held are dropped.
-      rec.receiver = { session: sessionId, label, generation, send: options.send, handoff: options.handoff };
+      rec.receiver = { session: sessionId, label, generation, send: options.send, handoff: options.handoff, idle: options.idle };
       rec.inFlight.clear(); rec.seen.clear(); rec.awaiting.length = 0;
       rec.ep.broadcast(page, "receiver", { receiver: receiverInfo(rec.receiver) });
-      if (previous && previous.session !== sessionId) previous.handoff?.(handoffMessage(rec, previous));
     }
+    // Both sides of a takeover get the unfinished Requests: the old receiver to stop, the new one to carry on.
+    const handedOver = !!previous && previous.session !== sessionId, unfinished = handedOver ? unfinishedRequests(page) : [];
+    if (handedOver) previous!.handoff?.(handoffMessage(rec, unfinished));
     opened.add(page);
     const kernel = copyKernel(path.dirname(page));
     const replayed = rec.ep.deliver(rec, true);
     if (readLog(page).some((e) => e.origin === "human" && rec.ep.now() - e.at < rec.ep.undoMs)) rec.ep.later(rec.ep.undoMs + 50, () => rec.ep.deliver(rec));
-    return { url: rec.ep.url(page), kernel, replayed, generation };
+    return { url: rec.ep.url(page), kernel, replayed, generation, unfinished };
   }
 
-  function handoffMessage(rec: Served, previous: Receiver): Message {
-    const unfinished = derive(readLog(rec.page)).requests.filter((r: any) => !r.accepted && !r.cancel && !["done", "failed", "cancelled"].includes(r.state));
+  const unfinishedRequests = (page: string): string[] => derive(readLog(page)).requests
+    .filter((r: any) => !r.accepted && !r.cancel && !["done", "failed", "cancelled"].includes(r.state))
+    .map((r: any) => `Request #${r.req.seq} "${r.req.job}" (${r.state ?? "not started"}, revision ${r.revision})`);
+
+  function handoffMessage(rec: Served, unfinished: string[]): Message {
     return {
       customType: "atelier:handoff", display: true, details: { page: rec.page, seqs: [], replay: false },
       content: [`Atelier · ${path.basename(rec.page)} · handed over: its human input now goes to ${label} (generation ${rec.receiver!.generation}). Stop working on this Page here; your atelier actions on it now fail.`,
-        ...unfinished.map((r: any) => `- unfinished: Request #${r.req.seq} "${r.req.job}" (${r.state ?? "not started"}, revision ${r.revision})`)].join("\n"),
+        ...unfinished.map((u) => `- unfinished: ${u}`)].join("\n"),
     };
   }
+
+  /**
+   * A takeover waits until the receiving session is between runs (its `idle`), checking every 50 ms up to quiesceMs,
+   * then claims and switches in one synchronous step; it never forces a busy session. Takeovers of one Page queue in REG.
+   */
+  function takeover(page: string, generation: number) {
+    const wait = options.quiesceMs ?? QUIESCE_MS;
+    const run = async () => {
+      const deadline = Date.now() + wait;
+      for (;;) {
+        const lock = readLock(page), r = REG.served.get(page)?.receiver;
+        const busy = r && r.session === lock.session && r.session !== sessionId && r.idle && !safe(r.idle);
+        if (!busy) return bind(page, (check) => claimPage(page, sessionId, label, generation, check));
+        claimPage(page, sessionId, label, generation, true); // still the generation the caller saw? else throws why
+        if (Date.now() >= deadline) throw new Error(`Session ${r!.label} is busy: its run did not end within ${wait / 1000} s. Try again when it is idle.`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+    const queued = (REG.queue.get(page) ?? Promise.resolve()).then(run, run);
+    REG.queue.set(page, queued.catch(() => {}));
+    return queued;
+  }
+  const safe = (idle: () => boolean) => { try { return idle(); } catch { return false; } };
 
   const deliverDue = (page: string, replay = false) => { const rec = REG.served.get(page); return rec?.receiver?.session === sessionId ? rec.ep.deliver(rec, replay) : 0; };
   return {
@@ -575,11 +610,11 @@ export function createHost(options: {
     isOpen: (page: string) => opened.has(page),
     clients: (page: string) => REG.served.get(page)?.clients.size ?? 0,
     /** False once the Page was handed over: a send this session still holds must not go out. */
-    current: (details: { page?: string; seqs?: number[]; generation?: number }) => { const rec = mineFor(details); return !!rec && owns(rec.page, sessionId, rec.receiver!.generation); },
+    current: (details: { page?: string; seqs?: number[]; generation?: number }) => !!mineFor(details),
     /** Serves the Page, copies the Kernel, and hands undelivered events to this session (131). Never takes the Page from another live receiver. */
-    async open(page: string) { return bind(page, claimPage(page, sessionId, label)); },
-    /** Moves the Page's receiver here from the generation the caller was shown; the URL and open tabs stay. */
-    async takeover(page: string, generation: number) { return bind(page, claimPage(page, sessionId, label, generation)); },
+    async open(page: string) { return bind(page, (check) => claimPage(page, sessionId, label, undefined, check)); },
+    /** Moves the Page's receiver here from a live session of this process, at the generation the caller was shown, once that session is idle; the URL and open tabs stay. */
+    takeover,
     agent(page: string, entry: Record<string, unknown>) { return receiving(page).ep.append(page, { ...entry, origin: "agent" }); },
     /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */
     update(page: string, note?: string) {
