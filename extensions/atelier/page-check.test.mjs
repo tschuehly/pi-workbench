@@ -1,5 +1,5 @@
-// The Page check (check-page.mjs) on small synthetic Pages, one per defect it must catch and per false alarm it must not
-// raise. The browser cases need agent-browser and skip without it; the rest run a stand-in agent-browser (a script that
+// The Page check (check-page.mjs) on small synthetic Pages, one per defect it must catch (FAIL when measured, WARN when
+// heuristic) and per false alarm it must not raise. The browser cases need agent-browser and skip without it; the rest run a stand-in agent-browser (a script that
 // records what it is asked) or none at all, so cleanup, cancel, root, revision and the missing browser are always tested.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -59,6 +59,10 @@ const FIXTURES = {
 <section id="inner" hidden>${absTwice}</section><section id="again" hidden><p>Again.</p></section></section><section id="away" hidden><p>Away.</p></section>`),
   // Finding 9: one 200,000-character console error.
   bloat: bare("<h1>Loud</h1>", "", 'console.error("x".repeat(200000))'),
+  // Second review, finding 4: two controls render different views into one target; only the second overflows.
+  "reuse-target": bare(`<button aria-controls="view" onclick="view.innerHTML='<p>Good</p>';view.hidden=false">Good</button><button aria-controls="view" onclick="view.innerHTML='<p style=width:2200px>Broken</p>';view.hidden=false">Broken</button><section id="view" hidden></section>`),
+  // Second review, finding 7: a 120,000-character aria-controls value.
+  "long-controls": bare(`<button aria-controls="${"x".repeat(120_000)}" onclick="this.nextElementSibling.hidden=false">Open</button><section id="${"x".repeat(120_000)}" hidden><p>Fine</p></section>`),
 };
 
 function project(fixtures = FIXTURES) {
@@ -66,7 +70,8 @@ function project(fixtures = FIXTURES) {
   for (const [name, html] of Object.entries(fixtures)) writeFileSync(path.join(root, `${name}.html`), html);
   return root;
 }
-const failing = (r) => [...r.checks.filter((c) => !c.ok).map((c) => c.name), ...r.views.filter((v) => !v.ok).map((v) => `view ${v.label}`)];
+const marked = (status) => (r) => [...r.checks.filter((c) => c.status === status).map((c) => c.name), ...r.views.filter((v) => v.status === status).map((v) => `view ${v.label}`)];
+const failing = marked("fail"), warned = marked("warn");
 const leftovers = (dir) => readdirSync(dir).filter((f) => /atelier-check-/.test(f));
 
 // A stand-in agent-browser: logs each call to $SHIM_LOG; on `open` it fetches the test copy and ../data.json through
@@ -131,11 +136,32 @@ test("tagBalance tokenizes like the HTML parser: comments only in markup, raw te
   assert.deepEqual(tagBalance("<main><script>never closed").unclosed.map((t) => t.name), ["main", "script"]);
 });
 
+test("second review, finding 6: a cancelled check returns before parsing; HTML balance stays linear and time-bounded", async () => {
+  const deep = "<div>".repeat(10_000) + "</span>".repeat(10_000); // 120 KB: 10,000 open tags, 10,000 stray end tags
+  const root = project({ large: deep });
+  try {
+    const cancel = new AbortController();
+    cancel.abort();
+    let t = Date.now();
+    const r = await checkPage(path.join(root, "large.html"), { signal: cancel.signal, deadlineMs: 1, browser: "agent-browser-missing" });
+    assert(Date.now() - t < 200, `aborted check took ${Date.now() - t} ms`);
+    assert.equal(r.status, "unchecked");
+    assert.deepEqual(r.checks, []);
+    t = Date.now();
+    const bal = tagBalance(deep);
+    assert(Date.now() - t < 300, `parse took ${Date.now() - t} ms`);
+    assert.deepEqual([bal.unclosed.length, bal.stray.length, bal.partial], [10_000, 10_000, undefined]);
+    t = Date.now(); // every `<` starts a quoted attribute that never ends: quadratic regex work, cut by the budget
+    assert.equal(tagBalance('<a "'.repeat(100_000)).partial, true);
+    assert(Date.now() - t < 1_500, `hostile parse took ${Date.now() - t} ms`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("formatCheck stays bounded however long the measured text is", () => {
   const long = "y".repeat(50_000);
   const r = { status: "fail", viewport: "1512×900", revision: "abc", report: "/x/report.json", unchecked: [long],
-    checks: [{ name: "Kernel controls", ok: false, detail: long }],
-    views: Array.from({ length: 40 }, (_, i) => ({ label: `${i} ${long.slice(0, 50)}`, controls: long, ok: false, errorCount: 9, errors: [long, long], overflow: null, overlaps: 0, overlapExamples: [] })) };
+    checks: [{ name: "Kernel controls", status: "warn", detail: long, screenshots: [long] }],
+    views: Array.from({ length: 40 }, (_, i) => ({ label: `${i} ${long.slice(0, 50)}`, controls: long, status: "fail", errorCount: 9, errors: [long, long], overflow: null, overlaps: 0, overlapExamples: [] })) };
   const text = formatCheck(r);
   assert(text.length < 7_000, `${text.length} chars`);
   assert.match(text, /more line\(s\) in \/x\/report\.json$/);
@@ -251,29 +277,42 @@ test("the Page check flags each real defect by its measured check and passes the
     assert.equal(results.good.status, "pass", why("good"));
     assert.deepEqual(results.good.views.map((v) => v.label), ["initial view", "Two"], "tab One shows at load");
     assert(results.good.views.every((v) => !v.screenshot || existsSync(v.screenshot)), "screenshots exist");
-    assert.match(results.good.checks.find((c) => c.name === "Kernel version").detail, /^page (\S+), host \1; Event Log loaded, 1 Decision/);
+    assert.match(results.good.checks.find((c) => c.name === "Kernel version").detail, /^page (\S+), host \1$/);
+    assert.match(results.good.checks.find((c) => c.name === "Page state").detail, /read its Event Log; 1 Decision/);
+    // Measured defects FAIL.
     assert.deepEqual(failing(results["broken-grid"]), ["Kernel layout"], why("broken-grid"));
     assert.match(results["broken-grid"].checks.find((c) => c.name === "Kernel layout").detail, /move Page content: aside/);
-    assert.deepEqual(failing(results["broken-tabs"]), ["Kernel controls"], why("broken-tabs"));
-    assert.match(results["broken-tabs"].checks.find((c) => c.name === "Kernel controls").detail, /via `aside button`.*Page onclick on Kernel control/);
-    assert.deepEqual(failing(results.unbalanced), ["HTML balance"], why("unbalanced"));
-    assert.deepEqual(failing(results.overlap), ["view Two"], why("overlap"));
-    assert.match(why("overlap"), /1 text overlap\(s\): span\.text × span\.badge/);
+    // Heuristic ones WARN, name what they saw and the screenshot to inspect, and never fail.
+    const tabs = results["broken-tabs"];
+    assert.deepEqual([tabs.status, failing(tabs), warned(tabs)], ["warn", [], ["Kernel controls"]], why("broken-tabs"));
+    assert.match(why("broken-tabs"), /- WARN {2}Kernel controls: .*via `aside button`.*Page onclick on Kernel control.* Inspect: \S+view-00\.png[\s\S]*WARN is a heuristic/);
+    assert.deepEqual([results.unbalanced.status, warned(results.unbalanced)], ["warn", ["HTML balance"]], why("unbalanced"));
+    assert.match(why("unbalanced"), /- WARN {2}HTML balance: 1 unclosed.* Inspect: \S+view-00\.png/);
+    assert.deepEqual([failing(results.overlap), warned(results.overlap)], [[], ["view Two"]], why("overlap"));
+    assert.match(why("overlap"), /- WARN {2}Two \(#p2\): .*WARN 1 possible text overlap\(s\): span\.text × span\.badge.* — \S+view-01\.png/);
     // Finding 4
     assert.equal(results["hidden-panel"].status, "pass", why("hidden-panel"));
     assert.equal(results["hidden-panel"].views.length, 2);
-    assert.deepEqual(failing(results.sized), ["Kernel controls"], why("sized"));
+    assert.deepEqual(warned(results.sized), ["Kernel controls"], why("sized"));
     assert.match(results.sized.checks.find((c) => c.name === "Kernel controls").detail, /\(width\).*via `button`/);
     // Finding 5
     assert.equal(results.rotated.status, "pass", why("rotated"));
     assert.equal(results["sticky-opaque"].status, "pass", why("sticky-opaque"));
-    assert.deepEqual(failing(results.crossing), ["view initial view"], why("crossing"));
-    assert.match(why("sticky-clear"), /1 text overlap\(s\): header × h2/);
-    assert.match(why("inline"), /1 text overlap\(s\): p × span/);
+    assert.deepEqual(warned(results.crossing), ["view initial view"], why("crossing"));
+    assert.match(why("sticky-clear"), /1 possible text overlap\(s\): header × h2/);
+    assert.match(why("inline"), /1 possible text overlap\(s\): p × span/);
     // Finding 7
-    assert.deepEqual(results.nested.views.map((v) => `${v.label}:${v.ok}`), ["initial view:true", "Outer:true", "Outer › Inner:false", "Outer › Away:true", "Outer › Again:true"], why("nested"));
+    assert.deepEqual(results.nested.views.map((v) => `${v.label}:${v.status}`), ["initial view:pass", "Outer:pass", "Outer › Inner:warn", "Outer › Away:pass", "Outer › Again:pass"], why("nested"));
     assert.deepEqual(results.nested.unchecked, ["view Dead: clicking it did not show #nowhere"]);
-    assert.match(why("nested"), /: FAIL, 1 view\(s\) not reached\n/);
+    assert.match(why("nested"), /: WARN, 1 view\(s\) not reached\n[\s\S]*\nCoverage: 5 view\(s\): the initial one, then each \[aria-controls\] control's view once/);
+    // Second review, finding 4: a view is its control, not its target id.
+    assert.deepEqual(results["reuse-target"].views.map((v) => `${v.label}:${v.status}`), ["initial view:pass", "Good:pass", "Broken:fail"], why("reuse-target"));
+    assert.match(why("reuse-target"), /- FAIL {2}Broken \(#view\): no errors; overflow 2\d{3}px > 1512px/);
+    // Second review, finding 7: the returned result is capped; report.json keeps the full value.
+    const long = results["long-controls"];
+    assert.equal(long.views.length, 2, why("long-controls"));
+    assert(JSON.stringify(long).length < 6_000, `${JSON.stringify(long).length} chars`);
+    if (long.report) assert.equal(JSON.parse(readFileSync(long.report, "utf8")).views[1].controls.length, 120_000);
     // Finding 9
     const bloat = results.bloat;
     assert.equal(bloat.views[0].errorCount, 1);
@@ -282,6 +321,13 @@ test("the Page check flags each real defect by its measured check and passes the
     // Finding 1: concurrent checks of one Page do not disturb each other.
     const both = await Promise.all([checkPage(path.join(root, "good.html")), checkPage(path.join(root, "good.html"))]);
     assert.deepEqual(both.map((r) => r.status), ["pass", "pass"], both.map(formatCheck).join("\n"));
+    // Exit codes: FAIL 1; WARN only 0, warnings printed.
+    const cli = (name) => spawnSync(process.execPath, ["--no-warnings", CHECK, `${name}.html`], { cwd: root, encoding: "utf8" });
+    const fail = cli("broken-grid"), warn = cli("unbalanced");
+    assert.equal(fail.status, 1, fail.stdout);
+    assert.match(fail.stdout, /: FAIL\n/);
+    assert.equal(warn.status, 0, warn.stdout);
+    assert.match(warn.stdout, /: WARN\n[\s\S]*- WARN {2}HTML balance/);
     assert.deepEqual(leftovers(root), [], "test copies and their logs are gone");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

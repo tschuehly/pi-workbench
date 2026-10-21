@@ -19,13 +19,16 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
 
 - `open` and `update` run the Page check and append its result; `update` shows the owner the new version first, so
   fix a FAIL with another `update`. `check` runs it alone; without the tool, run
-  `node ../../extensions/atelier/check-page.mjs <page.html>` from the project directory. On a test copy at 1512×900 it
-  opens every view an `aria-controls` element shows, nested views by their click path, and measures, per view, errors,
-  horizontal overflow, text drawn over visible text, and Page CSS or `onclick` reaching Kernel controls (scope selectors
-  such as `aside button` or `nav button` to Page markup); once, unbalanced tags, the Kernel version and Kernel elements
-  moving Page content (lay out a wrapper, never `<body>`). Read the result and fix every FAIL; "unchecked" measured
-  nothing, and a view "not reached" was not measured. The full report and screenshots sit in `$PI_TMP`; have the
-  screenshots inspected visually before handing the Page to the owner.
+  `node ../../extensions/atelier/check-page.mjs <page.html>` from the project directory (exit 1 only on a FAIL). On a
+  test copy at 1512×900 it opens the view of each `aria-controls` control once, nested views by their click path.
+  - FAIL is measured; fix every one: console or page errors and horizontal overflow in a view, a Kernel version other
+    than the host's, Page state not loaded, Kernel elements moving Page content (lay out a wrapper, never `<body>`).
+  - WARN is a heuristic and never fails the check: possible text overlap in a view, Page CSS or `onclick` reaching
+    Kernel controls (scope selectors such as `aside button` or `nav button` to Page markup), unbalanced tags. Each
+    names what it saw and the screenshots to look at; look at them and fix what is really broken.
+  - "unchecked" measured nothing; a view "not reached" was not measured; Coverage says what was not exercised.
+  The full report and screenshots sit in `$PI_TMP`; have the screenshots inspected visually before handing the Page
+  to the owner.
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`
   and `idiomorph.js` beside the Page; let it, rather than copying them by hand.
 - `atl-key="name"` on every element the human judges. Nested Keys form an address such as

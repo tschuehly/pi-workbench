@@ -1,20 +1,23 @@
 #!/usr/bin/env node
-// Page check: catches a broken Page before the owner sees it. `open` and `update` run it; from a shell, in the project directory:
-//   node extensions/atelier/check-page.mjs <page.html>     (exit 1 on a failed check, 0 when passed or unchecked)
+// Page check: catches a broken Page. `open` and `update` run it; from a shell, in the project directory:
+//   node extensions/atelier/check-page.mjs <page.html>     (exit 1 on a FAIL; 0 on pass, WARN only, or unchecked)
 // It serves a test copy beside the Page (<name>.atelier-check-<id>.html, created exclusively for this run, with its own
 // Event Log; only those files are ever deleted) through the real host with the real project root, loads it in
-// agent-browser at 1512×900 and opens every view an [aria-controls] element shows, nested ones by their click path.
-// The Page's real Event Log is never read or touched. Measured, generic checks:
-// - HTML balance: unclosed or stray end tags in the source (hidden views leak below the visible one).
-// - Kernel version in the page equals the host's; the Event Log loaded.
+// agent-browser at 1512×900 and opens the view of every [aria-controls] control once, nested ones by their click path.
+// The Page's real Event Log is never read or touched.
+// FAIL (measured; must be fixed):
+// - Kernel version in the page equals the host's; Page state: the Kernel read its Event Log.
 // - Kernel layout: hiding the Kernel's own <body> children must not move the Page's first-level elements (a <body> grid
 //   gives them grid cells).
-// - Kernel controls, per view: Page CSS rules that reach Kernel elements (`aside button` also hits the Kernel panel,
-//   itself an <aside>) must not change a Kernel control's box, sizing or visibility; no Page onclick on a Kernel control.
-// - Per view: console and page errors, horizontal overflow (and the element reaching furthest right), text drawn over
-//   visible other text (hit-tested, so transforms and opaque sticky headers count), one full-page screenshot in $PI_TMP.
-// Output is bounded; the full report lands beside the screenshots. A missing or failing agent-browser, a cancel or the
-// deadline leaves the browser checks "unchecked"; it never fails open or update.
+// - Per view: console and page errors; horizontal overflow (and the element reaching furthest right).
+// WARN (heuristic; never changes the exit code; names the screenshots to inspect):
+// - HTML balance: unclosed or stray end tags in the source (hidden views leak below the visible one).
+// - Kernel controls: Page CSS that changes a Kernel control's box, sizing or visibility (`aside button` also hits the
+//   Kernel panel, itself an <aside>); a Page onclick on a Kernel control.
+// - Per view: text drawn over visible other text.
+// One full-page screenshot per view in $PI_TMP. The returned result is capped; full values are only in report.json
+// beside the screenshots. A missing or failing agent-browser, a cancel or the deadline leaves the browser checks
+// "unchecked"; it never fails open or update.
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +32,8 @@ const WIDTH = 1512, HEIGHT = 900;
 const DEADLINE_MS = 120_000;
 const MAX_VIEWS = 40;
 const TEXT_MAX = 6_000; // characters of formatCheck output
+const PAYLOAD_MAX = 24_000; // characters of the returned result as JSON
+const BALANCE_MS = 500; // ponytail: a time budget instead of a streaming parser; a source too large for it gets a partial WARN
 const KERNEL_SOURCE = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel", "atelier.js"), "utf8");
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const clip = (s, n = 200) => { s = String(s); return s.length > n ? `${s.slice(0, n)}… (${s.length} chars)` : s; };
@@ -43,19 +48,24 @@ const INTEGRATION = new Set("foreignobject desc title mi mo mn ms mtext annotati
 const TAG = /<(\/?)([a-zA-Z][^\s/>]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/y;
 
 /**
- * Unclosed and stray end tags in Page source, tokenized the way the HTML parser reads it: comments only in markup,
- * raw text (script, style, textarea, title, …) up to its end tag, `/>` and CDATA only in SVG and MathML.
+ * Unclosed and stray end tags in Page source, a heuristic (no script escape states): comments only in markup, raw text
+ * (script, style, textarea, title, …) up to its end tag, `/>` and CDATA only in SVG and MathML. Linear in the open-tag
+ * stack; stops after budgetMs with `partial: true`.
  */
-export function tagBalance(html) {
-  const stack = [], unclosed = [], stray = [];
-  let line = 1, counted = 0;
+export function tagBalance(html, budgetMs = BALANCE_MS) {
+  const stack = [], inside = [], unclosed = [], stray = [], open = new Map(); // inside[k]: stack[k]'s children are SVG/MathML
+  const until = Date.now() + budgetMs;
+  let line = 1, counted = 0, partial = false;
   const lineAt = (i) => { for (; counted < i; counted += 1) if (html.charCodeAt(counted) === 10) line += 1; return line; };
-  const foreign = () => {
-    for (let k = stack.length - 1; k >= 0; k -= 1) { const n = stack[k].name; if (n === "svg" || n === "math") return true; if (INTEGRATION.has(n)) return false; }
-    return false;
+  const foreign = () => inside.at(-1) ?? false;
+  const push = (name, at) => {
+    inside.push(name === "svg" || name === "math" || (!INTEGRATION.has(name) && foreign()));
+    stack.push({ name, line: at });
+    open.set(name, (open.get(name) ?? 0) + 1);
   };
   const skipTo = (from, re) => { re.lastIndex = from; const m = re.exec(html); return m ? m.index + m[0].length : html.length; };
   for (let i = html.indexOf("<"); i >= 0 && i < html.length; i = html.indexOf("<", i)) {
+    if (Date.now() > until) { partial = true; break; }
     if (html.startsWith("<!--", i)) { const abrupt = /^-?>/.exec(html.slice(i + 4, i + 6)); i = abrupt ? i + 4 + abrupt[0].length : skipTo(i + 4, /--!?>/g); continue; }
     if (html.startsWith("<![CDATA[", i) && foreign()) { i = skipTo(i + 9, /]]>/g); continue; }
     if (html[i + 1] === "!" || html[i + 1] === "?" || (html[i + 1] === "/" && !/[a-zA-Z]/.test(html[i + 2] ?? ""))) { i = skipTo(i + 1, />/g); continue; } // doctype, bogus comment
@@ -66,14 +76,17 @@ export function tagBalance(html) {
     i = TAG.lastIndex;
     if (m[1]) {
       if (VOID.has(name) || OPTIONAL.has(name)) continue;
-      const k = stack.findLastIndex((o) => o.name === name);
-      if (k < 0) stray.push({ name, line: at }); else unclosed.push(...stack.splice(k).slice(1));
+      if (!open.get(name)) { stray.push({ name, line: at }); continue; }
+      const k = stack.findLastIndex((o) => o.name === name); // scans only what it then pops
+      const gone = stack.splice(k);
+      inside.length = k;
+      gone.forEach((o, j) => { open.set(o.name, open.get(o.name) - 1); if (j) unclosed.push(o); });
       continue;
     }
     const inForeign = foreign();
     if ((inForeign || name === "svg" || name === "math") && m[3].trimEnd().endsWith("/")) continue; // self-closed
     if (!inForeign && (VOID.has(name) || OPTIONAL.has(name))) continue;
-    stack.push({ name, line: at });
+    push(name, at);
     if (!inForeign && RAW.has(name)) {
       const end = new RegExp(`</${name}[\\s/>]`, "ig");
       end.lastIndex = i;
@@ -82,8 +95,7 @@ export function tagBalance(html) {
       i = e.index; // the end tag closes it on the next turn
     }
   }
-  unclosed.push(...stack);
-  return { unclosed: unclosed.sort((a, b) => a.line - b.line), stray };
+  return { unclosed: unclosed.concat(stack).sort((a, b) => a.line - b.line), stray, ...(partial && { partial }) };
 }
 
 // --- Browser side: these functions run in the Page via eval; each gets `d`, which names an element briefly. ---
@@ -158,17 +170,19 @@ function kernelControls(d) {
   };
 }
 
-// The [aria-controls] elements outside the Kernel that show now, and whether what each controls shows.
+// The [aria-controls] elements outside the Kernel that show now, whether what each controls shows, and whether another
+// shown control has the same target (then an open target does not tell which control's view it holds).
 function viewControls() {
   const all = [...document.querySelectorAll("[aria-controls]")].filter((el) => !el.closest("[atl-ui]"));
-  return all.flatMap((el) => {
-    if (!el.checkVisibility({ visibilityProperty: true })) return [];
+  const shown = all.filter((el) => el.checkVisibility({ visibilityProperty: true }));
+  return shown.map((el) => {
     const controls = el.getAttribute("aria-controls"), ids = controls.split(/\s+/).filter(Boolean);
-    return [{
+    return {
       controls, nth: all.filter((x) => x.getAttribute("aria-controls") === controls).indexOf(el),
       label: (el.textContent || el.getAttribute("aria-label") || "").slice(0, 200).replace(/\s+/g, " ").trim().slice(0, 50),
+      shared: shown.some((x) => x !== el && x.getAttribute("aria-controls") === controls),
       open: ids.length > 0 && ids.every((id) => document.getElementById(id)?.checkVisibility({ visibilityProperty: true })),
-    }];
+    };
   });
 }
 
@@ -316,20 +330,24 @@ const MEASURE = `({ view: ${evalFn(viewMeasure)}, kernel: ${evalFn(kernelControl
  * Checks one Page through a test copy. Never throws: a failure to measure is reported as unchecked.
  * root: the host's project root (relative URLs resolve as on the live host). source: the exact revision to check
  * (update passes what it just showed). signal: cancels the check; deadlineMs bounds it.
+ * Returns a capped summary; report.json beside the screenshots holds the full values.
  */
 export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "agent-browser", root, source, signal, deadlineMs = DEADLINE_MS } = {}) {
-  const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT}`, revision: null, checks: [], views: [], unchecked: [], report: null };
-  const add = (name, ok, detail) => { result.checks.push({ name, ok, detail }); if (!ok) result.status = "fail"; };
+  const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT}`, revision: null, checks: [], views: [], coverage: null, unchecked: [], report: null };
+  const hard = (name, ok, detail) => result.checks.push({ name, status: ok ? "pass" : "fail", detail });
   let page, bytes;
   try { page = realpathSync(path.resolve(pageArg)); bytes = source === undefined ? readFileSync(page) : Buffer.from(source); }
   catch { return { ...result, status: "unchecked", unchecked: [`no Page file at ${clip(pageArg)}`] }; }
   const revision = sha(bytes);
   result.revision = revision.slice(0, 12);
-  const bal = tagBalance(bytes.toString("utf8"));
-  add("HTML balance", !bal.unclosed.length && !bal.stray.length, `${bal.unclosed.length} unclosed, ${bal.stray.length} stray end tag(s)`
-    + [...bal.unclosed.slice(0, 3).map((t) => `; <${clip(t.name, 40)}> line ${t.line} never closed`), ...bal.stray.slice(0, 3).map((t) => `; </${clip(t.name, 40)}> line ${t.line} closes nothing`)].join(""));
-
   const stop = AbortSignal.any([AbortSignal.timeout(deadlineMs), ...(signal ? [signal] : [])]);
+  if (stop.aborted) return { ...result, status: "unchecked", unchecked: ["browser checks: cancelled"] };
+  const bal = tagBalance(bytes.toString("utf8"));
+  const balance = { name: "HTML balance", status: bal.unclosed.length || bal.stray.length || bal.partial ? "warn" : "pass",
+    detail: `${bal.unclosed.length} unclosed, ${bal.stray.length} stray end tag(s)${bal.partial ? ` in the part read within ${BALANCE_MS} ms` : ""}`
+      + [...bal.unclosed.slice(0, 3).map((t) => `; <${clip(t.name, 40)}> line ${t.line} never closed`), ...bal.stray.slice(0, 3).map((t) => `; </${clip(t.name, 40)}> line ${t.line} closes nothing`)].join("") };
+  result.checks.push(balance);
+
   const id = randomUUID().slice(0, 8);
   const copy = page.replace(/(\.html?)?$/i, `.atelier-check-${id}$1`);
   let made = false, started = false, host, shots;
@@ -343,11 +361,10 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
     return r.data;
   };
   const js = async (code) => (await b("eval", code)).result;
-  const full = []; // every view's unclipped errors, for the report
-  const kc = { of: 0, count: 0, props: new Set(), selectors: new Set(), examples: new Set(), handlers: new Set() };
+  const kc = { of: 0, count: 0, props: new Set(), selectors: new Set(), examples: new Set(), handlers: new Set(), shots: new Set() };
   try {
     await run(browser, ["--version"], { timeout: 10_000, signal: stop }).catch((error) => { throw stop.aborted ? error : new Error(`${browser} is not installed or not on PATH`); });
-    if (tmp) { shots = path.join(tmp, `atelier-check-${path.basename(page).replace(/\W+/g, "-")}-${id}`); mkdirSync(shots, { recursive: true }); }
+    if (tmp) { shots = path.join(tmp, `atelier-check-${path.basename(page).replace(/\W+/g, "-").slice(0, 60)}-${id}`); mkdirSync(shots, { recursive: true }); }
     else result.unchecked.push("screenshots and full report: PI_TMP is not set");
     writeFileSync(copy, bytes, { flag: "wx" });
     made = true;
@@ -362,7 +379,7 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
       finally { await sleep(300, undefined, { signal: stop }); }
     };
     await b("set", "viewport", String(WIDTH), String(HEIGHT));
-    if (!(await load())) add("Kernel", false, "the Kernel did not load or did not read its Event Log within 15 s");
+    const ready = await load();
     const once = await js(evalFn(kernelOnce));
     let loaded = "unknown", note = "";
     if (!once.kernelSrc) note = "; the Page loads no atelier.js";
@@ -373,13 +390,16 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
       // The same version with other bytes is a changed copy, not a match.
       loaded = body === KERNEL_SOURCE ? KERNEL_VERSION : stamp ? `${clip(stamp[1], 40)} (changed copy)` : "unknown (unstamped copy)";
     }
-    add("Kernel version", loaded === KERNEL_VERSION, `page ${loaded}, host ${KERNEL_VERSION}${note}; Event Log ${once.loaded ? "loaded" : "not loaded"}, ${once.decisions} Decision(s)`);
-    add("Kernel layout", !once.moved.length, once.moved.length
+    hard("Kernel version", loaded === KERNEL_VERSION, `page ${loaded}, host ${KERNEL_VERSION}${note}`);
+    hard("Page state", once.loaded, once.loaded ? `the Kernel read its Event Log; ${once.decisions} Decision(s)` : `the Kernel did not read its Event Log${ready ? "" : " within 15 s"}`);
+    hard("Kernel layout", !once.moved.length, once.moved.length
       ? `Kernel elements in <body> (${once.kernelElements.join(", ")}) move Page content: ${once.moved.join("; ")}. Wrap the Page in one container instead of laying out <body> itself.`
       : "Kernel elements in <body> take no layout space");
 
-    // Views: the initial one, then every [aria-controls] target not yet seen, depth first; a control that no longer
-    // shows is reached again by reloading and replaying its path.
+    // Views: the initial one, then one per [aria-controls] control (its target, its index among that target's
+    // controls, its label), depth first. An open target counts as that control's view only when no other shown control
+    // shares the target. A control that no longer shows is reached again by reloading and replaying its path.
+    const key = (c) => JSON.stringify([c.controls, c.nth, c.label]);
     const covered = new Set(), queued = new Set(), todo = [];
     const measure = async (label, item) => {
       const m = await js(MEASURE);
@@ -390,25 +410,25 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
       let screenshot;
       if (shots) { screenshot = path.join(shots, `view-${String(result.views.length).padStart(2, "0")}.png`); await b("screenshot", "--full", screenshot); }
       const v = m.view, overflow = v.scrollWidth > v.innerWidth;
-      result.views.push({ label, controls: item?.controls ?? null, ok: !errors.length && !overflow && !v.overlaps, errorCount: errors.length, errors: errors.slice(0, 3).map((e) => clip(e)),
+      result.views.push({ label, controls: item?.controls ?? null, status: errors.length || overflow ? "fail" : v.overlaps ? "warn" : "pass", errorCount: errors.length, errors,
         overflow: overflow ? { scrollWidth: v.scrollWidth, innerWidth: v.innerWidth, widest: v.widest } : null, overlaps: v.overlaps, overlapExamples: v.overlapExamples, screenshot });
-      full.push(errors);
-      if (errors.length || overflow || v.overlaps) result.status = "fail";
       kc.of = Math.max(kc.of, m.kernel.of); kc.count = Math.max(kc.count, m.kernel.count);
       for (const h of m.kernel.hits) { h.props.forEach((p) => kc.props.add(p)); h.selectors.forEach((s) => kc.selectors.add(s)); kc.examples.add(h.el); }
       m.kernel.handlers.forEach((h) => kc.handlers.add(h));
-      for (const c of m.controls) if (c.open) covered.add(c.controls);
+      if ((m.kernel.count || m.kernel.handlers.length) && screenshot) kc.shots.add(screenshot);
+      if (item) covered.add(key(item));
+      for (const c of m.controls) if (c.open && !c.shared) covered.add(key(c));
       const via = item ? [...item.path, item] : [];
-      todo.unshift(...m.controls.filter((c) => !c.open && !covered.has(c.controls) && !queued.has(c.controls)).map((c) => { queued.add(c.controls); return { ...c, path: via }; }));
+      todo.unshift(...m.controls.filter((c) => !covered.has(key(c)) && !queued.has(key(c))).map((c) => { queued.add(key(c)); return { ...c, path: via }; }));
     };
     const click = (c) => js(evalFn(clickControl, c.controls, c.nth));
     const shown = async (c) => (await js(evalFn(viewControls))).find((x) => x.controls === c.controls)?.open
       ?? (await js(`${JSON.stringify(c.controls)}.split(/\\s+/).every((id) => document.getElementById(id)?.checkVisibility({ visibilityProperty: true }))`));
-    const trail = (c) => [...c.path, c].map((s) => s.label || `#${s.controls}`).join(" › ");
+    const trail = (c) => [...c.path, c].map((s) => s.label || `#${clip(s.controls, 40)}`).join(" › ");
     await measure("initial view");
     while (todo.length) {
       const item = todo.shift();
-      if (covered.has(item.controls)) continue;
+      if (covered.has(key(item))) continue;
       if (result.views.length >= MAX_VIEWS) { result.unchecked.push(`views: ${todo.length + 1} more not opened (limit ${MAX_VIEWS})`); break; }
       await b("console", "--clear"); await b("errors", "--clear");
       let reached = await click(item);
@@ -418,9 +438,9 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
         for (const step of item.path) { if (!(await click(step))) { reached = false; break; } await sleep(400, undefined, { signal: stop }); if (!(await shown(step))) { reached = false; break; } }
         reached &&= await click(item);
       }
-      if (!reached) { result.unchecked.push(`view ${clip(trail(item), 120)}: its control could not be reached again`); continue; }
+      if (!reached) { result.unchecked.push(`view ${trail(item)}: its control could not be reached again`); continue; }
       await sleep(400, undefined, { signal: stop });
-      if (!(await shown(item))) { result.unchecked.push(`view ${clip(trail(item), 120)}: clicking it did not show #${clip(item.controls, 60)}`); continue; }
+      if (!(await shown(item))) { result.unchecked.push(`view ${trail(item)}: clicking it did not show #${clip(item.controls, 60)}`); continue; }
       await measure(trail(item), item);
     }
   } catch (error) {
@@ -432,36 +452,56 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
     process.off("exit", clean);
   }
   if (result.views.length) {
-    add("Kernel controls", !kc.count && !kc.handlers.size, [
+    result.coverage = `${result.views.length} view(s): the initial one, then each [aria-controls] control's view once, by the first click path that reached it; other interactions and states are not exercised`;
+    const restyled = kc.count || kc.handlers.size;
+    result.checks.push({ name: "Kernel controls", status: restyled ? "warn" : "pass", detail: [
       kc.count ? `Page CSS changes ${kc.count} of ${kc.of} Kernel controls (${[...kc.props].join(", ")}) e.g. ${[...kc.examples].slice(0, 3).join(", ")}${kc.selectors.size ? `, via ${[...kc.selectors].slice(0, 5).map((s) => `\`${s}\``).join(", ")}` : ""}. Scope Page selectors to Page markup.` : "",
       kc.handlers.size ? `Page onclick on Kernel control(s): ${[...kc.handlers].join(", ")}.` : "",
-    ].filter(Boolean).join(" ") || `${kc.of} Kernel controls keep their own styles and handlers`);
+    ].filter(Boolean).join(" ") || `${kc.of} Kernel controls keep their own styles and handlers`, ...(restyled && { screenshots: [...kc.shots] }) });
+    if (balance.status === "warn") balance.screenshots = result.views.flatMap((v) => v.screenshot ?? []);
   }
   try { if (sha(readFileSync(page)) !== revision) result.unchecked.push(`revision: the Page file changed during the check; this result is for revision ${result.revision}`); } catch { /* gone */ }
-  if (result.status === "pass" && result.unchecked.some((u) => u.startsWith("browser"))) result.status = "unchecked";
-  if (shots) {
-    result.report = path.join(shots, "report.json");
-    writeFileSync(result.report, JSON.stringify({ ...result, views: result.views.map((v, i) => ({ ...v, errors: full[i] })) }, null, 2));
-  }
-  return result;
+  const statuses = [...result.checks, ...result.views].map((x) => x.status);
+  result.status = statuses.includes("fail") ? "fail" : result.unchecked.some((u) => u.startsWith("browser")) ? "unchecked" : statuses.includes("warn") ? "warn" : "pass";
+  if (shots) { result.report = path.join(shots, "report.json"); writeFileSync(result.report, JSON.stringify(result, null, 2)); }
+  return summarize(result);
 }
+
+// What open, update and check return: every Page-controlled string clipped, lists shortened, and views dropped from
+// the end while the whole is over PAYLOAD_MAX.
+function summarize(r) {
+  const s = {
+    ...r,
+    checks: r.checks.map((c) => ({ ...c, detail: clip(c.detail, 600), ...(c.screenshots && { screenshots: c.screenshots.slice(0, 3) }) })),
+    views: r.views.map((v) => ({ ...v, label: clip(v.label, 160), controls: v.controls && clip(v.controls, 80), errors: v.errors.slice(0, 3).map((e) => clip(e)),
+      overflow: v.overflow && { ...v.overflow, widest: v.overflow.widest && clip(v.overflow.widest, 160) }, overlapExamples: v.overlapExamples.slice(0, 3).map((e) => clip(e, 160)) })),
+    unchecked: r.unchecked.slice(0, 20).map((u) => clip(u, 300)),
+  };
+  while (s.views.length && JSON.stringify(s).length > PAYLOAD_MAX) { s.views.pop(); s.viewsOmitted = r.views.length - s.views.length; }
+  return s;
+}
+
+const MARK = { pass: "pass", warn: "WARN", fail: "FAIL", unchecked: "unchecked" };
 
 /** The short text block `open`, `update` and the CLI print; bounded, the rest is in the full report. */
 export function formatCheck(r) {
-  const mark = (ok) => (ok ? "pass" : "FAIL");
   const gaps = r.unchecked.filter((u) => u.startsWith("view")).length;
-  const lines = [`Page check (revision ${r.revision ?? "none"}, test copy at ${r.viewport}): ${r.status === "unchecked" ? "unchecked" : mark(r.status === "pass")}${gaps ? `, ${gaps} view(s) not reached` : ""}`];
-  for (const c of r.checks) lines.push(`- ${mark(c.ok)}  ${c.name}: ${clip(c.detail, 600)}`);
-  if (r.views.length) lines.push(`Views (${r.views.length}):`);
+  const lines = [`Page check (revision ${r.revision ?? "none"}, test copy at ${r.viewport}): ${MARK[r.status]}${gaps ? `, ${gaps} view(s) not reached` : ""}`];
+  for (const c of r.checks) lines.push(`- ${MARK[c.status]}  ${c.name}: ${clip(c.detail, 600)}${c.status === "warn" && c.screenshots?.length ? ` Inspect: ${c.screenshots.join(", ")}` : ""}`);
+  if (r.views.length) lines.push(`Views (${r.views.length}${r.viewsOmitted ? `, ${r.viewsOmitted} more in the full report` : ""}):`);
   for (const v of r.views) {
     const what = [
       v.errorCount ? `${v.errorCount} error(s): ${v.errors.slice(0, 2).join(" | ")}` : "no errors",
       v.overflow ? `overflow ${v.overflow.scrollWidth}px > ${v.overflow.innerWidth}px, widest ${v.overflow.widest ?? "unknown"}` : "no overflow",
-      v.overlaps ? `${v.overlaps} text overlap(s): ${v.overlapExamples.join("; ")}` : "no text overlap",
+      v.overlaps ? `WARN ${v.overlaps} possible text overlap(s): ${v.overlapExamples.join("; ")}` : "no text overlap",
     ].join("; ");
-    lines.push(`- ${mark(v.ok)}  ${v.label}${v.controls ? ` (#${clip(v.controls, 60)})` : ""}: ${what}${v.screenshot ? ` — ${v.screenshot}` : ""}`);
+    lines.push(`- ${MARK[v.status]}  ${v.label}${v.controls ? ` (#${clip(v.controls, 60)})` : ""}: ${what}${v.screenshot ? ` — ${v.screenshot}` : ""}`);
   }
+  if (r.coverage) lines.push(`Coverage: ${r.coverage}`);
   for (const u of r.unchecked) lines.push(`- unchecked: ${clip(u, 300)}`);
+  const all = [...r.checks, ...r.views].map((x) => x.status);
+  if (all.includes("fail")) lines.push("Fix every FAIL: it is measured.");
+  if (all.includes("warn")) lines.push("WARN is a heuristic and never fails the check: open the screenshot(s) it names and fix what is really broken.");
   if (r.views.some((v) => v.screenshot)) lines.push("Have the screenshots inspected visually before handing the Page to the owner.");
   if (r.report) lines.push(`Full report: ${r.report}`);
   let text = "";
