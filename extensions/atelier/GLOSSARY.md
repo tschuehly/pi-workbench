@@ -33,7 +33,8 @@ A choice the human answers among declared options, or with his own answer ("Othe
 Key, such as a 1–5 score or Confirm/Redo. It may recommend one option, and may require a note for
 some options. Any answer may carry a note and images, which the Event Log keeps beside the Page.
 The human can change the answer at any time; the answer records what it replaced and whether the
-human opened the material first.
+human opened the material first. An answered Decision the agent asked folds to one line, its question and
+answer, which opens the full Decision.
 _Avoid_: grade, score, proposal, approval
 
 **Request**:

@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { createHost, readLog } from "./index.ts";
+import { appendLog, createHost, readLog } from "./index.ts";
 
 const run = promisify(execFile), session = `atelier-kernel-${process.pid}`;
 assert(process.env.PI_TMP, "Set PI_TMP to a disposable directory.");
@@ -800,9 +800,50 @@ try {
     console.log(`2.7.1 Mark all seen on 64 marks ${JSON.stringify(got)}`);
     assert(got.sync <= 64 && got.total <= 128 && got.left === 0, `Mark all seen renders the marks once, not once per mark: ${JSON.stringify(got)}`);
   });
-  assert.deepEqual(fails, [], "every 2.7.1 fix holds");
+  // 2.8.0 (owner 2026-10-21): an answered asked Decision folds to one line, question and answer, so it stops filling the
+  // beat it sits under; the line opens and closes the full Decision by keyboard too. An open Decision is unchanged.
+  await fixCheck("2.8.0-answered-decision-folds-to-one-line", async () => {
+    const fold = path.join(dir, "fold.html");
+    await writeFile(fold, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Fold</title><style>body{margin:16px;font:15px system-ui;max-width:700px}</style>
+<body><div atl-key="beat" id="beat">A storyboard beat.</div><div atl-key="todo" id="todo">A beat still to decide.</div><script type="module" src="atelier.js"></script></body></html>`);
+    const opts = [{ label: "Keep the gift shot", consequence: "the beat stays as cut" }, { label: "Cut it", consequence: "the beat loses two seconds" }];
+    const q = "Should the gift shot stay in this beat, given that the hook already shows the gift once?";
+    appendLog(fold, { origin: "agent", type: "ask", decision: { id: "gift", key: "beat", question: q, options: opts } }, Date.now() - 120_000);
+    appendLog(fold, { origin: "human", type: "decide", decision: "gift", option: "Keep the gift shot", key: "beat", delivery: "immediate" }, Date.now() - 60_000);
+    appendLog(fold, { origin: "agent", type: "ask", decision: { id: "todo", key: "todo", question: "Which ending?", options: opts } });
+    await b("open", (await host.open(fold)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && document.querySelector('[data-id=\"d:todo\"] [data-atl=decide]')");
+    const look = (id) => js(`(()=>{const c=document.querySelector('[data-id="d:${id}"]'),f=c.querySelector('[data-atl=fold]');return {folded:c.classList.contains('atl-folded'),h:Math.round(c.getBoundingClientRect().height),line:f?.textContent??null,expanded:f?.getAttribute('aria-expanded')??null,options:c.querySelectorAll('[data-atl=decide]').length,chosen:c.querySelector('.atl-chosen')?.dataset.label??null,consequences:c.querySelectorAll('.atl-opt .atl-dim').length,extra:!!c.querySelector('.atl-dextra')?.offsetParent,focus:document.activeElement===f}})()`);
+    const shut = await look("gift");
+    assert(shut.folded && shut.line?.includes("answered") && shut.line.includes("Should the gift shot stay") && shut.line.endsWith("Keep the gift shot") && shut.expanded === "false" && shut.options === 0 && !shut.extra && shut.h <= 36, `an answered Decision is one line with its question and answer: ${JSON.stringify(shut)}`);
+    const todo = await look("todo");
+    assert(!todo.folded && todo.line === null && todo.options === 2 && todo.extra, `an open Decision is unchanged: ${JSON.stringify(todo)}`);
+    await js("document.querySelector('[data-id=\"d:gift\"] [data-atl=fold]').focus(); true");
+    await b("press", "Enter");
+    const open = await look("gift");
+    assert(!open.folded && open.expanded === "true" && open.options === 2 && open.consequences === 2 && open.chosen === "Keep the gift shot" && open.extra && open.focus && open.h > shut.h, `activating the line opens the full Decision, focus kept: ${JSON.stringify(open)}`);
+    await b("press", "Enter");
+    const again = await look("gift");
+    assert(again.folded && again.expanded === "false" && again.options === 0 && again.focus, `a second activation folds it again: ${JSON.stringify(again)}`);
+    // A fresh answer stays open through its undo window, so it can still be changed or undone there, then folds.
+    await click('[data-id="d:todo"] [data-atl=decide][data-label="Cut it"]');
+    await until("atelier.state().decisions.find((d)=>d.id==='todo').answer==='Cut it'");
+    const fresh = await look("todo");
+    assert(!fresh.folded && fresh.options === 2 && fresh.chosen === "Cut it", `inside its undo window an answer stays open: ${JSON.stringify(fresh)}`);
+    // A note being typed is never folded away under the human; folding by the line closes the note box.
+    await click('[data-id="d:todo"] [data-atl=addnote]');
+    await until("document.activeElement===document.querySelector('[data-id=\"d:todo\"] .atl-note')");
+    await b("keyboard", "type", "half typed");
+    await sleep(11_000);
+    const typing = await look("todo");
+    assert(!typing.folded && typing.expanded === "true" && typing.extra && await js("document.activeElement===document.querySelector('[data-id=\"d:todo\"] .atl-note')"), `an open note box keeps its Decision open after the undo window: ${JSON.stringify(typing)}`);
+    await click('[data-id="d:todo"] [data-atl=fold]');
+    const shutTodo = await look("todo");
+    assert(shutTodo.folded && shutTodo.expanded === "false" && await js("document.querySelector('[data-id=\"d:todo\"] .atl-note').value") === "half typed", `the line folds it and keeps the typed note: ${JSON.stringify(shutTodo)}`);
+  });
+  assert.deepEqual(fails, [], "every 2.7.1 and 2.8.0 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

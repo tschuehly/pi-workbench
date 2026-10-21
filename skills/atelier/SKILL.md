@@ -34,7 +34,8 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   basis; none for ratings or gates without evidence. Once a Page is open, ask every question there, not in the
   Chat: a reply that offers choices, or free text you need settled, becomes an `ask` at its Key ("Other…" covers
   answers that fit no option), never numbered options in a reply. The human may change any answer later; a
-  change arrives as "X → Y".
+  change arrives as "X → Y". Once its undo window closes, an answered `ask` folds to one line (question and
+  answer) that opens the full Decision, so answered questions take little room under their Key.
 - `atl-wip="Reworking scene 3"` on a Key or any element containing Keys marks it under construction
   while you rework it: the Kernel dims it, labels it with the text and locks its Decisions (answers stay
   shown; Comments stay open). Remove it in the Update that delivers the rework; `atelier.state().wip`
@@ -120,7 +121,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.7.1 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.8.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of
