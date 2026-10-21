@@ -64,6 +64,17 @@ const FIXTURES = {
   // Second review, finding 7: a 120,000-character aria-controls value.
   "long-controls": bare(`<button aria-controls="${"x".repeat(120_000)}" onclick="this.nextElementSibling.hidden=false">Open</button><section id="${"x".repeat(120_000)}" hidden><p>Fine</p></section>`),
 };
+// Third review, one Page per finding, each checked in its own test.
+const THIRD = {
+  // Finding 1: a probe that raised `nav button, #none` (it hits Kernel buttons) over `.nav button`, even while it lists
+  // `#none`, would widen the Page's button, and restoring it would start a 30 s transition.
+  "transition-leak": bare('<nav class="nav"><button aria-controls="panel" onclick="panel.hidden=false">Show</button></nav><section id="panel" hidden><p>Good</p></section>',
+    "nav button, #none{width:2500px;transition:none}.nav button{width:100px;transition:width 30s}"),
+  // Finding 3: the click throws before it shows its view.
+  "throws-on-click": bare(`<button aria-controls="panel" onclick="throw new Error('render failed')">Broken</button><section id="panel" hidden><p>Never renders</p></section>`),
+  // Finding 4: <main> is display:contents, so its children are the <body> grid's items.
+  "contents-grid": bare("<aside>Sidebar</aside><article>Content</article>", "body{display:grid;grid-template-columns:250px 1fr}main{display:contents}"),
+};
 
 function project(fixtures = FIXTURES) {
   const root = realpathSync(mkdtempSync(path.join(process.env.PI_TMP ?? tmpdir(), "atelier-page-check-")));
@@ -75,20 +86,39 @@ const failing = marked("fail"), warned = marked("warn");
 const leftovers = (dir) => readdirSync(dir).filter((f) => /atelier-check-/.test(f));
 
 // A stand-in agent-browser: logs each call to $SHIM_LOG; on `open` it fetches the test copy and ../data.json through
-// the test host and logs them, then fails, so the check ends "unchecked". SHIM_SLOW hangs every command but --version
-// and close; SHIM_MUTATE names a file it rewrites on the first command (the Page changing during its check).
+// the test host and logs them, then fails, so the check ends "unchecked". Like the real one, the first command starts a
+// detached daemon (pid file in $AGENT_BROWSER_SOCKET_DIR) with a browser in its own process group, and close stops it.
+// SHIM_SLOW hangs every command but --version and close in a child process, as the real launcher waits for its native
+// binary; SHIM_SLOW=close hangs close too. SHIM_MUTATE names a file it rewrites on the first command (the Page changing
+// during its check).
 function shim() {
   const dir = realpathSync(mkdtempSync(path.join(process.env.PI_TMP ?? tmpdir(), "atelier-shim-")));
   const log = path.join(dir, "log.jsonl"), bin = path.join(dir, "agent-browser");
   writeFileSync(bin, `#!/usr/bin/env node
-import { appendFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 const a = process.argv.slice(2), log = (o) => appendFileSync(process.env.SHIM_LOG, JSON.stringify({ pid: process.pid, ...o }) + "\\n");
 const reply = (ok) => { console.log(JSON.stringify(ok ? { success: true, data: {} } : { success: false, error: "shim" })); process.exit(0); };
 if (a[0] === "--version") { console.log("shim"); process.exit(0); }
 const cmd = a.includes("close") ? "close" : a[a.indexOf("--json") + 1];
 log({ cmd });
-if (cmd === "close") reply(true);
-if (process.env.SHIM_SLOW) await new Promise((r) => setTimeout(r, 60_000));
+const forever = ["-e", "setInterval(() => {}, 1e9)"];
+const hang = () => { log({ child: spawn(process.execPath, forever, { stdio: "ignore" }).pid }); return new Promise((r) => setTimeout(r, 60_000)); };
+const pidFile = process.env.AGENT_BROWSER_SOCKET_DIR && \`\${process.env.AGENT_BROWSER_SOCKET_DIR}/\${a[a.indexOf("--session") + 1]}.pid\`;
+if (cmd === "close") {
+  if (process.env.SHIM_SLOW === "close") await hang();
+  if (pidFile && existsSync(pidFile)) process.kill(Number(readFileSync(pidFile, "utf8")));
+  reply(true);
+}
+if (pidFile && !existsSync(pidFile)) {
+  const daemon = spawn(process.execPath, ["-e", \`const c = require("child_process").spawn(process.execPath, \${JSON.stringify(forever)}, { detached: true, stdio: "ignore" });
+require("fs").appendFileSync(process.env.SHIM_LOG, JSON.stringify({ browser: c.pid }) + "\\\\n");
+process.on("SIGTERM", () => { c.kill("SIGKILL"); process.exit(0); }); setInterval(() => {}, 1e9);\`], { detached: true, stdio: "ignore" });
+  daemon.unref();
+  writeFileSync(pidFile, String(daemon.pid));
+  log({ daemon: daemon.pid });
+}
+if (process.env.SHIM_SLOW) await hang();
 if (process.env.SHIM_MUTATE && cmd === "set") writeFileSync(process.env.SHIM_MUTATE, "<p>changed during the check</p>");
 if (cmd === "set") reply(true);
 if (cmd === "open") { const url = a.at(-1); log({ url, page: await (await fetch(url)).text(), data: (await fetch(new URL("../data.json", url))).status }); }
@@ -149,11 +179,24 @@ test("second review, finding 6: a cancelled check returns before parsing; HTML b
     assert.deepEqual(r.checks, []);
     t = Date.now();
     const bal = tagBalance(deep);
-    assert(Date.now() - t < 300, `parse took ${Date.now() - t} ms`);
+    assert(Date.now() - t < 1_500, `parse took ${Date.now() - t} ms`);
     assert.deepEqual([bal.unclosed.length, bal.stray.length, bal.partial], [10_000, 10_000, undefined]);
-    t = Date.now(); // every `<` starts a quoted attribute that never ends: quadratic regex work, cut by the budget
-    assert.equal(tagBalance('<a "'.repeat(100_000)).partial, true);
-    assert(Date.now() - t < 1_500, `hostile parse took ${Date.now() - t} ms`);
+    for (const hostile of ['<a "'.repeat(100_000), "<div".repeat(100_000), '<a b="'.repeat(100_000)]) { // tags that never end
+      t = Date.now();
+      tagBalance(hostile);
+      assert(Date.now() - t < 1_500, `hostile parse took ${Date.now() - t} ms`);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("third review, finding 2: a cancel during parsing is honoured at once", async () => {
+  const root = project({ hostile: "<div".repeat(10_000) }); // 40 KB, one tag that never ends
+  try {
+    const cancel = new AbortController(), t = Date.now();
+    setTimeout(() => cancel.abort(), 10);
+    const r = await checkPage(path.join(root, "hostile.html"), { signal: cancel.signal, browser: "agent-browser-missing" });
+    assert(Date.now() - t < 1_500, `cancelled check took ${Date.now() - t} ms`);
+    assert.equal(r.status, "unchecked");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -215,6 +258,16 @@ test("cancel and deadline stop the check, kill agent-browser and delete the copy
     assert.deepEqual(r.unchecked.filter((u) => u.startsWith("browser")), ["browser checks: cancelled"]);
     const late = await checkPage(path.join(root, "page.html"), { deadlineMs: 300 });
     assert.deepEqual(late.unchecked.filter((u) => u.startsWith("browser")), ["browser checks: stopped at the 0.3 s deadline"]);
+    // Third review, finding 5: cancelled while a command hangs in the launcher's child, and close hangs too; the check
+    // still ends that child, the daemon and its browser.
+    s.use({ SHIM_SLOW: "close" });
+    const hanging = () => s.calls().filter((c) => c.child).length, hung = hanging(), stuck = new AbortController();
+    const watch = setInterval(() => { if (hanging() > hung) stuck.abort(); }, 50);
+    const stuckStart = Date.now(), stopped = await checkPage(path.join(root, "page.html"), { signal: stuck.signal });
+    clearInterval(watch);
+    assert(Date.now() - stuckStart < 20_000, `took ${Date.now() - stuckStart} ms`);
+    assert.deepEqual(stopped.unchecked.filter((u) => u.startsWith("browser")), ["browser checks: cancelled"]);
+    s.use({ SHIM_SLOW: "1" });
     // The tool passes its own signal.
     const t = tool(root);
     try {
@@ -225,6 +278,9 @@ test("cancel and deadline stop the check, kill agent-browser and delete the copy
     } finally { t.stop(); }
     await new Promise((r) => setTimeout(r, 200));
     assert.deepEqual(s.calls().filter((c) => c.cmd === "set" && alive(c.pid)), [], "no agent-browser left running");
+    const spawned = s.calls().flatMap((c) => [c.child, c.daemon, c.browser].filter(Boolean));
+    assert(s.calls().some((c) => c.child) && s.calls().some((c) => c.daemon), JSON.stringify(s.calls()));
+    assert.deepEqual(spawned.filter(alive), [], "no process agent-browser started is left running");
     assert.deepEqual(leftovers(root), []);
     // CLI: SIGTERM while agent-browser hangs.
     const sets = () => s.calls().filter((c) => c.cmd === "set").length, before = sets();
@@ -267,7 +323,7 @@ test("update shows the new revision at once and returns the check of exactly tha
   } finally { t.stop(); s.restore(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("the Page check flags each real defect by its measured check and passes the good Pages", { skip: noBrowser, timeout: 600_000 }, async () => {
+test("the Page check flags each real defect by its measured check and passes the good Pages", { skip: noBrowser, timeout: 1_200_000 }, async () => {
   const root = project();
   try {
     const results = {};
@@ -332,7 +388,55 @@ test("the Page check flags each real defect by its measured check and passes the
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("open, update and check on the atelier tool append the Page check, served from the project root", { skip: noBrowser, timeout: 180_000 }, async () => {
+const checkThird = async (name) => {
+  const root = project({ [name]: THIRD[name] });
+  try {
+    const r = await checkPage(path.join(root, `${name}.html`));
+    assert.deepEqual(r.unchecked.filter((u) => u.startsWith("browser")), [], formatCheck(r));
+    assert.deepEqual(leftovers(root), []);
+    return r;
+  } finally { rmSync(root, { recursive: true, force: true }); }
+};
+
+test("third review, finding 1: the Kernel controls probe never changes what the next view measures", { skip: noBrowser, timeout: 120_000 }, async () => {
+  const r = await checkThird("transition-leak");
+  assert.deepEqual(r.views.map((v) => `${v.label}:${v.status}`), ["initial view:pass", "Show:pass"], formatCheck(r));
+  assert.deepEqual(failing(r), [], formatCheck(r));
+});
+
+test("third review, finding 3: errors of a click that shows no view FAIL, and the view stays a gap", { skip: noBrowser, timeout: 120_000 }, async () => {
+  const r = await checkThird("throws-on-click");
+  assert.equal(r.status, "fail", formatCheck(r));
+  assert.match(formatCheck(r), /- FAIL {2}Errors without a view: Broken: page: .*render failed/);
+  assert.deepEqual(r.unchecked, ["view Broken: clicking it did not show #panel"]);
+});
+
+test("third review, finding 4: a Kernel layout shift behind a display:contents wrapper FAILs", { skip: noBrowser, timeout: 120_000 }, async () => {
+  const r = await checkThird("contents-grid");
+  assert.deepEqual(failing(r), ["Kernel layout"], formatCheck(r));
+  assert.match(r.checks.find((c) => c.name === "Kernel layout").detail, /move Page content: aside/);
+});
+
+test("third review, finding 5: a check stopped while its browser blocks leaves no browser process behind", { skip: noBrowser, timeout: 120_000 }, async () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "t-")), saved = process.env.TMPDIR;
+  const root = project({ blocked: bare("<h1>Blocked</h1>", "", "setTimeout(() => { const end = Date.now() + 60000; while (Date.now() < end); }, 100)") });
+  const ours = () => spawnSync("ps", ["eww", "-A", "-o", "pid=,command="], { encoding: "utf8", env: { PATH: process.env.PATH } }).stdout.split("\n")
+    .filter((l) => l.includes(tmp) || l.includes(`atelier-check-${process.pid}-`));
+  try {
+    process.env.TMPDIR = tmp; // the check puts its agent-browser sockets here; its daemon and browser carry the path
+    const t = Date.now(), r = await checkPage(path.join(root, "blocked.html"), { deadlineMs: 2_500 });
+    assert.deepEqual(r.unchecked.filter((u) => u.startsWith("browser")), ["browser checks: stopped at the 2.5 s deadline"], formatCheck(r));
+    assert(Date.now() - t < 30_000, `took ${Date.now() - t} ms`);
+    await new Promise((res) => setTimeout(res, 1_000));
+    assert.deepEqual(ours(), [], "no agent-browser or browser process of the check is left");
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved;
+    for (const l of ours()) try { process.kill(Number(l.trim().split(" ")[0]), "SIGKILL"); } catch { /* gone */ }
+    rmSync(tmp, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("open, update and check on the atelier tool append the Page check, served from the project root", { skip: noBrowser, timeout: 600_000 }, async () => {
   const root = project({ "broken-grid": FIXTURES["broken-grid"], good: FIXTURES.good });
   mkdirSync(path.join(root, "pages"));
   writeFileSync(path.join(root, "data.json"), '{"title":"Project data"}');

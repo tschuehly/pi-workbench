@@ -7,9 +7,12 @@
 // The Page's real Event Log is never read or touched.
 // FAIL (measured; must be fixed):
 // - Kernel version in the page equals the host's; Page state: the Kernel read its Event Log.
-// - Kernel layout: hiding the Kernel's own <body> children must not move the Page's first-level elements (a <body> grid
-//   gives them grid cells).
-// - Per view: console and page errors; horizontal overflow (and the element reaching furthest right).
+// - Kernel layout: hiding the Kernel's own <body> children must not move the Page's first-level boxes (a <body> grid
+//   gives them grid cells; display:contents wrappers count as their children).
+// - Per view: console and page errors; horizontal overflow (and the element reaching furthest right). Errors of a click
+//   that shows no view fail as well ("Errors without a view").
+// The Kernel controls probe below rewrites Page selectors; it runs after a view's measured checks and leaves the Page as
+// it found it (same specificity, no transitions), so it never changes what a FAIL measures.
 // WARN (heuristic; never changes the exit code; names the screenshots to inspect):
 // - HTML balance: unclosed or stray end tags in the source (hidden views leak below the visible one).
 // - Kernel controls: Page CSS that changes a Kernel control's box, sizing or visibility (`aside button` also hits the
@@ -17,17 +20,17 @@
 // - Per view: text drawn over visible other text.
 // One full-page screenshot per view in $PI_TMP. The returned result is capped; full values are only in report.json
 // beside the screenshots. A missing or failing agent-browser, a cancel or the deadline leaves the browser checks
-// "unchecked"; it never fails open or update.
-import { execFile } from "node:child_process";
+// "unchecked" (what was measured before stays); it never fails open or update. The check's agent-browser daemon and
+// browser are its own (own socket directory) and are stopped when it ends, by force if close does not finish.
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { KERNEL_VERSION, createHost, imagesDir, logPath } from "./host.ts";
 
-const run = promisify(execFile);
 const WIDTH = 1512, HEIGHT = 900;
 const DEADLINE_MS = 120_000;
 const MAX_VIEWS = 40;
@@ -36,7 +39,8 @@ const PAYLOAD_MAX = 24_000; // characters of the returned result as JSON
 const BALANCE_MS = 500; // ponytail: a time budget instead of a streaming parser; a source too large for it gets a partial WARN
 const KERNEL_SOURCE = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel", "atelier.js"), "utf8");
 const sha = (b) => createHash("sha256").update(b).digest("hex");
-const clip = (s, n = 200) => { s = String(s); return s.length > n ? `${s.slice(0, n)}… (${s.length} chars)` : s; };
+// Control characters and lone surrogates become spaces and U+FFFD, so JSON escaping at most doubles a clipped string.
+const clip = (s, n = 200) => { s = String(s).replace(/[\u0000-\u001f]/g, " ").toWellFormed(); return s.length > n ? `${s.slice(0, n)}… (${s.length} chars)` : s; };
 
 const VOID = new Set("area base br col embed hr img input link meta param source track wbr".split(" "));
 // End tags HTML lets an author omit; not counting them avoids flagging valid Pages.
@@ -45,12 +49,11 @@ const OPTIONAL = new Set("html head body p li dt dd option optgroup tr td th the
 const RAW = new Set("script style textarea title xmp iframe noembed noframes noscript plaintext".split(" "));
 // Inside <svg> or <math>, these hold HTML again.
 const INTEGRATION = new Set("foreignobject desc title mi mo mn ms mtext annotation-xml".split(" "));
-const TAG = /<(\/?)([a-zA-Z][^\s/>]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/y;
 
 /**
  * Unclosed and stray end tags in Page source, a heuristic (no script escape states): comments only in markup, raw text
- * (script, style, textarea, title, …) up to its end tag, `/>` and CDATA only in SVG and MathML. Linear in the open-tag
- * stack; stops after budgetMs with `partial: true`.
+ * (script, style, textarea, title, …) up to its end tag, `/>` and CDATA only in SVG and MathML. Reads each character a
+ * bounded number of times (no backtracking); stops after budgetMs with `partial: true`.
  */
 export function tagBalance(html, budgetMs = BALANCE_MS) {
   const stack = [], inside = [], unclosed = [], stray = [], open = new Map(); // inside[k]: stack[k]'s children are SVG/MathML
@@ -64,17 +67,26 @@ export function tagBalance(html, budgetMs = BALANCE_MS) {
     open.set(name, (open.get(name) ?? 0) + 1);
   };
   const skipTo = (from, re) => { re.lastIndex = from; const m = re.exec(html); return m ? m.index + m[0].length : html.length; };
+  const find = (re, from) => { re.lastIndex = from; return re.exec(html)?.index ?? html.length; }; // where re next matches
   for (let i = html.indexOf("<"); i >= 0 && i < html.length; i = html.indexOf("<", i)) {
     if (Date.now() > until) { partial = true; break; }
     if (html.startsWith("<!--", i)) { const abrupt = /^-?>/.exec(html.slice(i + 4, i + 6)); i = abrupt ? i + 4 + abrupt[0].length : skipTo(i + 4, /--!?>/g); continue; }
     if (html.startsWith("<![CDATA[", i) && foreign()) { i = skipTo(i + 9, /]]>/g); continue; }
     if (html[i + 1] === "!" || html[i + 1] === "?" || (html[i + 1] === "/" && !/[a-zA-Z]/.test(html[i + 2] ?? ""))) { i = skipTo(i + 1, />/g); continue; } // doctype, bogus comment
-    TAG.lastIndex = i;
-    const m = TAG.exec(html);
-    if (!m) { i += 1; continue; }
-    const name = m[2].toLowerCase(), at = lineAt(i);
-    i = TAG.lastIndex;
-    if (m[1]) {
+    // A tag as the HTML tokenizer reads it: the name runs to whitespace, `/` or `>`; a quote opens a value only after
+    // `=`. A tag the source ends inside is no tag, and nothing follows it.
+    const end = html[i + 1] === "/", from = i + (end ? 2 : 1);
+    if (!/[a-zA-Z]/.test(html[from] ?? "")) { i += 1; continue; }
+    let j = find(/[\s/>]/g, from);
+    const name = html.slice(from, j).toLowerCase(), attrsAt = j;
+    while ((j = find(/[>=]/g, j)) < html.length && html[j] === "=") {
+      j = find(/\S/g, j + 1);
+      if (html[j] === '"' || html[j] === "'") { const q = html.indexOf(html[j], j + 1); j = q < 0 ? html.length : q + 1; }
+    }
+    if (j >= html.length) break;
+    const attrs = html.slice(attrsAt, j), at = lineAt(i);
+    i = j + 1;
+    if (end) {
       if (VOID.has(name) || OPTIONAL.has(name)) continue;
       if (!open.get(name)) { stray.push({ name, line: at }); continue; }
       const k = stack.findLastIndex((o) => o.name === name); // scans only what it then pops
@@ -84,13 +96,13 @@ export function tagBalance(html, budgetMs = BALANCE_MS) {
       continue;
     }
     const inForeign = foreign();
-    if ((inForeign || name === "svg" || name === "math") && m[3].trimEnd().endsWith("/")) continue; // self-closed
+    if ((inForeign || name === "svg" || name === "math") && attrs.trimEnd().endsWith("/")) continue; // self-closed
     if (!inForeign && (VOID.has(name) || OPTIONAL.has(name))) continue;
     push(name, at);
     if (!inForeign && RAW.has(name)) {
-      const end = new RegExp(`</${name}[\\s/>]`, "ig");
-      end.lastIndex = i;
-      const e = name === "plaintext" ? null : end.exec(html);
+      const close = new RegExp(`</${name}[\\s/>]`, "ig");
+      close.lastIndex = i;
+      const e = name === "plaintext" ? null : close.exec(html);
       if (!e) break;
       i = e.index; // the end tag closes it on the next turn
     }
@@ -110,9 +122,11 @@ function describe(el) {
 
 function kernelOnce(d) {
   const s = window.atelier?.state() ?? { loaded: false, decisions: [] };
-  // Kernel layout: Page's first-level elements with and without the Kernel's <body> children taking part in layout.
+  // Kernel layout: the Page's first-level boxes with and without the Kernel's <body> children taking part in layout. A
+  // display:contents element has no box; its children are laid out in its place.
   const own = [...document.body.children].filter((el) => el.hasAttribute("atl-ui"));
-  const pageKids = [...document.body.children].filter((el) => !el.hasAttribute("atl-ui") && !["SCRIPT", "STYLE", "TEMPLATE", "LINK"].includes(el.tagName));
+  const boxed = (els) => els.flatMap((el) => (getComputedStyle(el).display === "contents" ? boxed([...el.children]) : [el]));
+  const pageKids = boxed([...document.body.children]).filter((el) => !el.hasAttribute("atl-ui") && !["SCRIPT", "STYLE", "TEMPLATE", "LINK"].includes(el.tagName));
   const boxes = () => pageKids.map((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.x + scrollX), Math.round(r.y + scrollY), Math.round(r.width), Math.round(r.height)]; });
   const withKernel = boxes();
   const saved = own.map((el) => el.style.getPropertyValue("display"));
@@ -147,13 +161,37 @@ function kernelControls(d) {
   };
   for (const sh of document.styleSheets) { if (sh.disabled || sh.ownerNode?.closest?.("[atl-ui]")) continue; try { walk(sh.cssRules); } catch { /* cross-origin sheet */ } }
   const read = () => controls.map((el) => { const c = getComputedStyle(el); return PROPS.map((p) => c.getPropertyValue(p)); });
-  const styled = read();
+  // The probe must leave the Page as it found it. Each item of a selector list gets `:where(:not(Kernel))`, which keeps
+  // its specificity, so the cascade for Page elements does not change; transitions are off while selectors change and
+  // until the restored styles are computed, so none starts.
+  const items = (sel) => { // top-level items of a selector list: commas outside (), [] and strings
+    const out = [];
+    let depth = 0, quote = "", from = 0;
+    for (let i = 0; i < sel.length; i += 1) {
+      const c = sel[i];
+      if (c === "\\") i += 1;
+      else if (quote) { if (c === quote) quote = ""; }
+      else if (c === '"' || c === "'") quote = c;
+      else if (c === "(" || c === "[") depth += 1;
+      else if (c === ")" || c === "]") depth -= 1;
+      else if (c === "," && !depth) { out.push(sel.slice(from, i)); from = i + 1; }
+    }
+    return [...out, sel.slice(from)];
+  };
+  const still = new CSSStyleSheet(), adopted = document.adoptedStyleSheets;
+  still.replaceSync("*,*::before,*::after{transition:none!important}");
+  document.adoptedStyleSheets = [...adopted, still];
   const saved = rules.map(([r]) => r.selectorText);
-  let plain;
+  let styled, plain;
   try {
-    rules.forEach(([r]) => { r.selectorText = `:is(${r.selectorText}):not([atl-ui], [atl-ui] *)`; });
+    styled = read();
+    rules.forEach(([r]) => { r.selectorText = items(r.selectorText).map((s) => `${s.trim()}:where(:not([atl-ui], [atl-ui] *))`).join(", "); });
     plain = read();
-  } finally { rules.forEach(([r], i) => { r.selectorText = saved[i]; }); }
+  } finally {
+    rules.forEach(([r], i) => { r.selectorText = saved[i]; });
+    read();
+    document.adoptedStyleSheets = adopted;
+  }
   const hits = [];
   controls.forEach((el, i) => {
     const chain = [];
@@ -324,7 +362,7 @@ function viewMeasure(d) {
 }
 
 const evalFn = (fn, ...args) => `(${fn.toString()})(${[describe.toString(), ...args.map((a) => JSON.stringify(a))].join(",")})`;
-const MEASURE = `({ view: ${evalFn(viewMeasure)}, kernel: ${evalFn(kernelControls)}, controls: ${evalFn(viewControls)} })`;
+const MEASURE = `({ view: ${evalFn(viewMeasure)}, controls: ${evalFn(viewControls)} })`;
 
 /**
  * Checks one Page through a test copy. Never throws: a failure to measure is reported as unchecked.
@@ -333,7 +371,7 @@ const MEASURE = `({ view: ${evalFn(viewMeasure)}, kernel: ${evalFn(kernelControl
  * Returns a capped summary; report.json beside the screenshots holds the full values.
  */
 export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "agent-browser", root, source, signal, deadlineMs = DEADLINE_MS } = {}) {
-  const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT}`, revision: null, checks: [], views: [], coverage: null, unchecked: [], report: null };
+  const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT}`, revision: null, checks: [], views: [], notReached: 0, coverage: null, unchecked: [], report: null };
   const hard = (name, ok, detail) => result.checks.push({ name, status: ok ? "pass" : "fail", detail });
   let page, bytes;
   try { page = realpathSync(path.resolve(pageArg)); bytes = source === undefined ? readFileSync(page) : Buffer.from(source); }
@@ -350,20 +388,53 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
 
   const id = randomUUID().slice(0, 8);
   const copy = page.replace(/(\.html?)?$/i, `.atelier-check-${id}$1`);
-  let made = false, started = false, host, shots;
+  let made = false, host, shots, sockets, launched = false;
   // Only this run's exclusively created copy and the files the test host made for it.
   const clean = () => { if (made) for (const f of [copy, logPath(copy), `${logPath(copy)}.lock`, imagesDir(copy)]) rmSync(f, { force: true, recursive: true }); };
-  const session = `atelier-check-${process.pid}-${id}`;
+  const session = `atl-${id}`; // short: a socket path has ~100 characters
+  // Each agent-browser command runs in its own process group: a cancel or timeout kills the launcher and the native
+  // binary it starts. Its own socket directory makes the daemon (and the browser it starts) this check's alone; the idle
+  // timeout ends them should even the teardown below never run.
+  const env = { ...process.env, AGENT_BROWSER_IDLE_TIMEOUT_MS: "180000" };
+  delete env.AGENT_BROWSER_NAMESPACE;
+  const ab = (args, { timeout = 45_000, signal = stop } = {}) => new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const child = spawn(browser, args, { detached: true, env: { ...env, AGENT_BROWSER_SOCKET_DIR: sockets }, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    const end = (error) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (!error) { resolve(out); return; }
+      try { process.kill(-child.pid, "SIGKILL"); } catch { /* exited */ }
+      reject(error);
+    };
+    const onAbort = () => end(signal.reason);
+    const timer = setTimeout(() => end(new Error(`agent-browser ${args.at(-1)}: no answer within ${timeout / 1000} s`)), timeout);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stdout.setEncoding("utf8").on("data", (s) => { out += s; });
+    child.on("error", end);
+    child.on("close", (code) => end(code === 0 ? null : new Error(`agent-browser ${args.find((a) => !a.startsWith("-") && a !== session)} exited with ${code}`)));
+  });
+  // Close the session, then kill what still runs with this check's socket directory in its environment: commands, the
+  // daemon (even one still starting), the browser and its helpers. ponytail: `ps e` (macOS, Linux); not Windows.
+  const teardown = async () => {
+    await ab(["--session", session, "close"], { timeout: 5_000, signal: null }).catch(() => {});
+    const left = () => execFileSync("ps", ["eww", "-A", "-o", "pid=,command="], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, env: { PATH: `${process.env.PATH}:/bin:/usr/bin` } }).split("\n")
+      .filter((l) => l.includes(`AGENT_BROWSER_SOCKET_DIR=${sockets}`)).map((l) => Number(l.trim().split(/\s/)[0]));
+    for (const until = Date.now() + 2_000; Date.now() < until && left().length;) await sleep(200);
+    for (const pid of left()) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+  };
   const b = async (...args) => {
-    const { stdout } = await run(browser, ["--session", session, "--json", ...args], { timeout: 45_000, maxBuffer: 16 * 1024 * 1024, signal: stop });
-    const r = JSON.parse(stdout);
+    const r = JSON.parse(await ab(["--session", session, "--json", ...args]));
     if (!r.success) throw new Error(`agent-browser ${args[0]}: ${r.error ?? "failed"}`);
     return r.data;
   };
   const js = async (code) => (await b("eval", code)).result;
   const kc = { of: 0, count: 0, props: new Set(), selectors: new Set(), examples: new Set(), handlers: new Set(), shots: new Set() };
   try {
-    await run(browser, ["--version"], { timeout: 10_000, signal: stop }).catch((error) => { throw stop.aborted ? error : new Error(`${browser} is not installed or not on PATH`); });
+    sockets = mkdtempSync(path.join(tmpdir(), "atl-"));
+    await ab(["--version"], { timeout: 10_000 }).catch((error) => { throw stop.aborted ? error : new Error(`${browser} is not installed or not on PATH`); });
+    launched = true;
     if (tmp) { shots = path.join(tmp, `atelier-check-${path.basename(page).replace(/\W+/g, "-").slice(0, 60)}-${id}`); mkdirSync(shots, { recursive: true }); }
     else result.unchecked.push("screenshots and full report: PI_TMP is not set");
     writeFileSync(copy, bytes, { flag: "wx" });
@@ -371,7 +442,6 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
     process.once("exit", clean);
     host = createHost({ root: root ?? path.dirname(page), sessionId: session, test: true, send: (_m, done) => done(true) });
     const { url } = await host.open(copy);
-    started = true;
     const load = async () => {
       await b("open", url);
       try { await b("wait", "--fn", "window.atelier?.state().loaded === true", "--timeout", "15000"); return true; }
@@ -400,22 +470,24 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
     // controls, its label), depth first. An open target counts as that control's view only when no other shown control
     // shares the target. A control that no longer shows is reached again by reloading and replaying its path.
     const key = (c) => JSON.stringify([c.controls, c.nth, c.label]);
-    const covered = new Set(), queued = new Set(), todo = [];
+    const covered = new Set(), queued = new Set(), todo = [], lost = [];
+    // Console and page errors since the last clear (agent-browser keeps them across loads).
+    const pageErrors = async () => [
+      ...((await b("console")).messages ?? []).filter((x) => x.type === "error").map((x) => `console: ${x.text}`),
+      ...((await b("errors")).errors ?? []).map((x) => `page: ${String(x.text).split("\n")[0]}`),
+    ];
     const measure = async (label, item) => {
-      const m = await js(MEASURE);
-      const errors = [
-        ...((await b("console")).messages ?? []).filter((x) => x.type === "error").map((x) => `console: ${x.text}`),
-        ...((await b("errors")).errors ?? []).map((x) => `page: ${String(x.text).split("\n")[0]}`),
-      ];
+      const m = await js(MEASURE), errors = await pageErrors();
       let screenshot;
       if (shots) { screenshot = path.join(shots, `view-${String(result.views.length).padStart(2, "0")}.png`); await b("screenshot", "--full", screenshot); }
       const v = m.view, overflow = v.scrollWidth > v.innerWidth;
       result.views.push({ label, controls: item?.controls ?? null, status: errors.length || overflow ? "fail" : v.overlaps ? "warn" : "pass", errorCount: errors.length, errors,
         overflow: overflow ? { scrollWidth: v.scrollWidth, innerWidth: v.innerWidth, widest: v.widest } : null, overlaps: v.overlaps, overlapExamples: v.overlapExamples, screenshot });
-      kc.of = Math.max(kc.of, m.kernel.of); kc.count = Math.max(kc.count, m.kernel.count);
-      for (const h of m.kernel.hits) { h.props.forEach((p) => kc.props.add(p)); h.selectors.forEach((s) => kc.selectors.add(s)); kc.examples.add(h.el); }
-      m.kernel.handlers.forEach((h) => kc.handlers.add(h));
-      if ((m.kernel.count || m.kernel.handlers.length) && screenshot) kc.shots.add(screenshot);
+      const k = await js(evalFn(kernelControls)); // last: it changes the Page
+      kc.of = Math.max(kc.of, k.of); kc.count = Math.max(kc.count, k.count);
+      for (const h of k.hits) { h.props.forEach((p) => kc.props.add(p)); h.selectors.forEach((s) => kc.selectors.add(s)); kc.examples.add(h.el); }
+      k.handlers.forEach((h) => kc.handlers.add(h));
+      if ((k.count || k.handlers.length) && screenshot) kc.shots.add(screenshot);
       if (item) covered.add(key(item));
       for (const c of m.controls) if (c.open && !c.shared) covered.add(key(c));
       const via = item ? [...item.path, item] : [];
@@ -424,29 +496,41 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
     const click = (c) => js(evalFn(clickControl, c.controls, c.nth));
     const shown = async (c) => (await js(evalFn(viewControls))).find((x) => x.controls === c.controls)?.open
       ?? (await js(`${JSON.stringify(c.controls)}.split(/\\s+/).every((id) => document.getElementById(id)?.checkVisibility({ visibilityProperty: true }))`));
+    const UNREACHED = "its control could not be reached again";
     const trail = (c) => [...c.path, c].map((s) => s.label || `#${clip(s.controls, 40)}`).join(" › ");
     await measure("initial view");
     while (todo.length) {
       const item = todo.shift();
       if (covered.has(key(item))) continue;
-      if (result.views.length >= MAX_VIEWS) { result.unchecked.push(`views: ${todo.length + 1} more not opened (limit ${MAX_VIEWS})`); break; }
-      await b("console", "--clear"); await b("errors", "--clear");
-      let reached = await click(item);
-      if (!reached) { // reload and replay its path
-        await load();
-        reached = true;
-        for (const step of item.path) { if (!(await click(step))) { reached = false; break; } await sleep(400, undefined, { signal: stop }); if (!(await shown(step))) { reached = false; break; } }
-        reached &&= await click(item);
+      if (result.views.length >= MAX_VIEWS) {
+        const more = todo.filter((c) => !covered.has(key(c))).length + 1;
+        result.notReached += more;
+        result.unchecked.push(`views: ${more} more not opened (limit ${MAX_VIEWS})`);
+        break;
       }
-      if (!reached) { result.unchecked.push(`view ${trail(item)}: its control could not be reached again`); continue; }
-      await sleep(400, undefined, { signal: stop });
-      if (!(await shown(item))) { result.unchecked.push(`view ${trail(item)}: clicking it did not show #${clip(item.controls, 60)}`); continue; }
-      await measure(trail(item), item);
+      await b("console", "--clear"); await b("errors", "--clear");
+      const reach = async (steps) => {
+        for (const step of steps) {
+          if (!(await click(step))) return UNREACHED;
+          await sleep(400, undefined, { signal: stop });
+          if (!(await shown(step))) return step === item ? `clicking it did not show #${clip(item.controls, 60)}` : UNREACHED;
+        }
+        return null;
+      };
+      let gap = await reach([item]);
+      if (gap === UNREACHED) { await load(); gap = await reach([...item.path, item]); }
+      if (!gap) { await measure(trail(item), item); continue; }
+      result.notReached += 1;
+      result.unchecked.push(`view ${trail(item)}: ${gap}`);
+      const errors = await pageErrors();
+      if (errors.length) lost.push(`${trail(item)}: ${errors.join(" | ")}`);
     }
+    if (lost.length) hard("Errors without a view", false, lost.join("; "));
   } catch (error) {
     result.unchecked.push(`browser checks: ${stop.aborted ? (signal?.aborted ? "cancelled" : `stopped at the ${deadlineMs / 1000} s deadline`) : clip(String(error.message ?? error).split("\n")[0], 300)}`);
   } finally {
-    if (started) await run(browser, ["--session", session, "close"], { timeout: 15_000 }).catch(() => {});
+    if (launched) await teardown().catch(() => {});
+    if (sockets) rmSync(sockets, { recursive: true, force: true });
     host?.stop();
     clean();
     process.off("exit", clean);
@@ -475,7 +559,7 @@ function summarize(r) {
     checks: r.checks.map((c) => ({ ...c, detail: clip(c.detail, 600), ...(c.screenshots && { screenshots: c.screenshots.slice(0, 3) }) })),
     views: r.views.map((v) => ({ ...v, label: clip(v.label, 160), controls: v.controls && clip(v.controls, 80), errors: v.errors.slice(0, 3).map((e) => clip(e)),
       overflow: v.overflow && { ...v.overflow, widest: v.overflow.widest && clip(v.overflow.widest, 160) }, overlapExamples: v.overlapExamples.slice(0, 3).map((e) => clip(e, 160)) })),
-    unchecked: r.unchecked.slice(0, 20).map((u) => clip(u, 300)),
+    unchecked: r.unchecked.slice(0, 10).map((u) => clip(u, 300)),
   };
   while (s.views.length && JSON.stringify(s).length > PAYLOAD_MAX) { s.views.pop(); s.viewsOmitted = r.views.length - s.views.length; }
   return s;
@@ -485,7 +569,7 @@ const MARK = { pass: "pass", warn: "WARN", fail: "FAIL", unchecked: "unchecked" 
 
 /** The short text block `open`, `update` and the CLI print; bounded, the rest is in the full report. */
 export function formatCheck(r) {
-  const gaps = r.unchecked.filter((u) => u.startsWith("view")).length;
+  const gaps = r.notReached;
   const lines = [`Page check (revision ${r.revision ?? "none"}, test copy at ${r.viewport}): ${MARK[r.status]}${gaps ? `, ${gaps} view(s) not reached` : ""}`];
   for (const c of r.checks) lines.push(`- ${MARK[c.status]}  ${c.name}: ${clip(c.detail, 600)}${c.status === "warn" && c.screenshots?.length ? ` Inspect: ${c.screenshots.join(", ")}` : ""}`);
   if (r.views.length) lines.push(`Views (${r.views.length}${r.viewsOmitted ? `, ${r.viewsOmitted} more in the full report` : ""}):`);

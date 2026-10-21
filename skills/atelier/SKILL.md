@@ -21,12 +21,14 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   fix a FAIL with another `update`. `check` runs it alone; without the tool, run
   `node ../../extensions/atelier/check-page.mjs <page.html>` from the project directory (exit 1 only on a FAIL). On a
   test copy at 1512×900 it opens the view of each `aria-controls` control once, nested views by their click path.
-  - FAIL is measured; fix every one: console or page errors and horizontal overflow in a view, a Kernel version other
+  - FAIL is measured; fix every one: console or page errors and horizontal overflow in a view (errors also after a
+    click that shows no view), a Kernel version other
     than the host's, Page state not loaded, Kernel elements moving Page content (lay out a wrapper, never `<body>`).
   - WARN is a heuristic and never fails the check: possible text overlap in a view, Page CSS or `onclick` reaching
     Kernel controls (scope selectors such as `aside button` or `nav button` to Page markup), unbalanced tags. Each
     names what it saw and the screenshots to look at; look at them and fix what is really broken.
-  - "unchecked" measured nothing; a view "not reached" was not measured; Coverage says what was not exercised.
+  - "unchecked": the browser checks stopped (no agent-browser, cancel, deadline); the checks and views listed were
+    measured, the rest were not. A view "not reached" was not measured; Coverage says what was not exercised.
   The full report and screenshots sit in `$PI_TMP`; have the screenshots inspected visually before handing the Page
   to the owner.
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`
