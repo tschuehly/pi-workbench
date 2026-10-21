@@ -849,22 +849,39 @@ try {
     await writeFile(busy, `<!doctype html><html lang="de"><meta charset="utf-8"><title>Busy</title>
 <style>body{margin:16px;font:15px/1.4 system-ui;max-width:900px}[atl-key]{border:1px solid #ccc;padding:6px;margin:12px 0}.st{color:#c00;font-weight:700}.sb{display:flex;gap:12px;overflow-x:auto}.sb>div{flex:none;width:300px;margin:0}</style>
 <body><div atl-key="gate" id="gate"><p style="margin:0"><span class="st">NICHT BESTANDEN</span> ${words}. ${words}.</p><p style="margin:0">Kurz.</p></div>
+<div atl-key="full" id="full"><svg viewBox="0 0 10 10" preserveAspectRatio="none" style="display:block;width:100%;height:80px"><rect width="10" height="10" fill="#9ab"/></svg></div>
 <div class="sb" id="sb">${[1, 2, 3, 4, 5, 6].map((i) => `<div atl-key="b${i}" id="b${i}">Beat ${i}: ${words}.</div>`).join("")}</div>
 <script type="module" src="atelier.js"></script></body></html>`);
-    for (const [key, text] of [["gate", "Was genau macht das?"], ["gate", "in welchem step ist das?"], ["b5", "Warum hier?"]]) appendLog(busy, { origin: "human", type: "comment", key, text, delivery: "send" }, Date.now() - 60_000);
+    for (const [key, text] of [["gate", "Was genau macht das?"], ["gate", "in welchem step ist das?"], ["b5", "Warum hier?"], ["full", "Zu dunkel"]]) appendLog(busy, { origin: "human", type: "comment", key, text, delivery: "send" }, Date.now() - 60_000);
     // Chips (visible ones) over the Page's visible text or controls, and how far the Page scrolls sideways.
     const look = () => js(`(()=>{const vis=(e)=>e.checkVisibility({visibilityProperty:true,opacityProperty:true}),rects=[],w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
       for(let n=w.nextNode();n;n=w.nextNode()){const p=n.parentElement;if(p.closest('[atl-ui],script,style')||!n.data.trim()||!vis(p))continue;const g=document.createRange();g.selectNodeContents(n);rects.push(...g.getClientRects())}
+      for(const e of document.body.querySelectorAll('svg,img,button,a[href],input')){if(!e.closest('[atl-ui]')&&vis(e))rects.push(e.getBoundingClientRect())}
       const chips=[...document.querySelectorAll('.atl-prow .atl-chip')].filter((c)=>vis(c)).map((c)=>c.getBoundingClientRect());
       return {chips:chips.length,over:chips.filter((c)=>rects.some((x)=>x.width&&x.left<c.right&&x.right>c.left&&x.top<c.bottom&&x.bottom>c.top)).length,sw:document.documentElement.scrollWidth,vw:document.documentElement.clientWidth,right:Math.max(0,...chips.map((c)=>c.right))}})()`);
     for (const [w, h] of [["1440", "900"], ["390", "844"]]) {
       await b("set", "viewport", w, h);
       await b("open", (await host.open(busy)).url);
-      await until("document.querySelector('.atl-conn')?.textContent==='live' && document.querySelectorAll('.atl-prow .atl-chip').length===3"); await sleep(300);
+      await until("document.querySelector('.atl-conn')?.textContent==='live' && document.querySelectorAll('.atl-prow .atl-chip').length===4"); await sleep(300);
       const got = await look();
       assert(got.over === 0 && got.chips >= 2, `at ${w} px no visible chip covers Page text, and the Key's chips stay visible: ${JSON.stringify(got)}`);
       assert(got.sw <= got.vw && got.right <= got.vw, `at ${w} px no chip widens the Page or leaves the viewport: ${JSON.stringify(got)}`);
     }
+    // At 390 px the full-bleed image Key has no free spot: its chip shows only while the Key is hovered or focused,
+    // and the keyboard reaches it, opens its thread and comes back to it with Esc.
+    const fullChip = "[atl-ui=pin][data-key=full] .atl-chip", seen = () => js(`document.querySelector('${fullChip}').checkVisibility({visibilityProperty:true})`);
+    assert.equal(await seen(), false, "with no free spot the chip waits for hover or focus");
+    await b("mouse", "move", "1", "1");
+    await js("document.getElementById('full').focus(); true"); await sleep(200);
+    assert.equal(await seen(), true, "focusing the Key shows its chip");
+    await b("press", "Tab");
+    assert.equal(await js(`document.activeElement===document.querySelector('${fullChip}')`), true, "Tab reaches the chip");
+    await b("press", "Enter");
+    await until("document.querySelector('[atl-ui=thread]')?.isConnected");
+    await b("press", "Escape"); await sleep(200);
+    assert.deepEqual([await js(`document.activeElement===document.querySelector('${fullChip}')`), await seen()], [true, true], "Esc puts focus back on the visible chip");
+    await js("document.activeElement.blur(); true"); await b("hover", "#gate"); await sleep(200);
+    assert.equal(await seen(), false, "at rest again the chip waits");
     // Scrolled into its container, the beat's chip shows beside it and still covers nothing.
     await js("document.getElementById('b5').scrollIntoView({inline:'start',block:'nearest'}); true"); await sleep(400);
     const b5 = await js("(()=>{const c=document.querySelector('[atl-ui=pin][data-key=b5] .atl-chip');return c&&c.checkVisibility({visibilityProperty:true})?c.getBoundingClientRect().right:null})()");
