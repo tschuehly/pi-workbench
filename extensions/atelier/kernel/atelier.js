@@ -814,14 +814,15 @@ function boot() {
   }
   // The part of the viewport's width and the Key's scroll containers a pin may use. Inside the Key (2.9.1) only an element
   // that holds the pin's containing block clips it, as a positioned Key with overflow:hidden does; the absolute pin
-  // escapes the others (an unpositioned narrow cell). ponytail: positioned or transformed or contained counts as
-  // holding it; filter and will-change do not.
+  // escapes the others (an unpositioned narrow cell). ponytail: the CSS properties that make a containing block for an
+  // absolute box, as of 2026; a new one would let chips sit outside a clipping Key until it is added here.
   function clipOf(el, pin) {
     const c = { left: 0, top: -scrollY, right: document.documentElement.clientWidth, bottom: Infinity }; // never above the document
     let cb = null;
     for (let p = pin.parentElement; p && el.contains(p) && !cb; p = p.parentElement) {
       const s = getComputedStyle(p);
-      if (s.position !== "static" || s.transform !== "none" || /paint|layout|strict|content/.test(s.contain)) cb = p;
+      if (s.position !== "static" || [s.transform, s.translate, s.rotate, s.scale, s.filter, s.backdropFilter, s.perspective].some((v) => v && v !== "none")
+        || /paint|layout|strict|content/.test(s.contain) || (s.containerType && s.containerType !== "normal") || /transform|translate|rotate|scale|filter|perspective|contain/.test(s.willChange)) cb = p;
     }
     for (let p = pin.parentElement; p && p !== document.body; p = p.parentElement) {
       if (el.contains(p) && !p.contains(cb)) continue;
