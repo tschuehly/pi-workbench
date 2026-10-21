@@ -81,7 +81,10 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   for new replies), or at the end of its quote for a Comment on selected text; the chip opens the
   thread floating beside it. Threads take no space in the Page's layout and never cover its text, media or
   controls: a Key's chips take the first free spot near its top, shrink to icon and count, or, with no free
-  spot, show only while the Key is hovered or focused. A Page button with `atl-comment`
+  spot, show only while the Key is hovered or focused. Threads that need the human (open, or with new
+  replies) never wait for hover: with no free spot a small badge (count, new-reply dot) stays at rest, at
+  the Key's top-right corner if nowhere else, the one Kernel mark that may cover a little Page content;
+  it opens the Key's chips. A Page button with `atl-comment`
   inside a Key opens that Key's Comment box beside the button (e.g. in a sticky decision bar). A Key with nothing
   focusable gets `tabindex="0"` so the keyboard reaches it; an authored `tabindex` stays.
 - For icons in Page content use Lucide (ISC), inlined as SVG like the Kernel's; no emoji as icons.

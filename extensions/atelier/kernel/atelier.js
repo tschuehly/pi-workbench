@@ -812,11 +812,19 @@ function boot() {
     }
     return { out, beside };
   }
-  // The part of the viewport's width and the Key's scroll containers a pin may use; from: the pin's parent, so a Key that
-  // clips its own overflow keeps its pin's chips and badge inside it (2.9.1).
-  function clipOf(el, from = el.parentElement) {
+  // The part of the viewport's width and the Key's scroll containers a pin may use. Inside the Key (2.9.1) only an element
+  // that holds the pin's containing block clips it, as a positioned Key with overflow:hidden does; the absolute pin
+  // escapes the others (an unpositioned narrow cell). ponytail: positioned or transformed or contained counts as
+  // holding it; filter and will-change do not.
+  function clipOf(el, pin) {
     const c = { left: 0, top: -scrollY, right: document.documentElement.clientWidth, bottom: Infinity }; // never above the document
-    for (let p = from; p && p !== document.body; p = p.parentElement) {
+    let cb = null;
+    for (let p = pin.parentElement; p && el.contains(p) && !cb; p = p.parentElement) {
+      const s = getComputedStyle(p);
+      if (s.position !== "static" || s.transform !== "none" || /paint|layout|strict|content/.test(s.contain)) cb = p;
+    }
+    for (let p = pin.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (el.contains(p) && !p.contains(cb)) continue;
       const s = getComputedStyle(p);
       if (s.overflowX === "visible" && s.overflowY === "visible") continue;
       const r = p.getBoundingClientRect();
@@ -834,7 +842,7 @@ function boot() {
     const el = findKey(pin.dataset.key), b = pin.querySelector(".atl-add"), row = pin.querySelector(".atl-prow");
     if (!el || !b) return;
     pin.style.translate = ""; pin.style.display = "";
-    const k = el.getBoundingClientRect(), c = clipOf(el, pin.parentElement);
+    const k = el.getBoundingClientRect(), c = clipOf(el, pin);
     const r = { left: Math.max(k.left, c.left), right: Math.min(k.right, c.right), top: Math.max(k.top, c.top), bottom: Math.min(k.bottom, c.bottom) };
     if (r.right - r.left < b.offsetWidth + 8 || r.bottom <= r.top) { pin.style.display = "none"; return; }
     const p = pin.getBoundingClientRect(), x0 = r.right - b.offsetWidth - 4, top = r.top + 4;
@@ -843,7 +851,8 @@ function boot() {
     row.classList.remove("atl-tight", "atl-tuck");
     row.style.maxWidth = `${Math.round(c.right - c.left - 8)}px`;
     const area = { left: c.left, right: c.right, top: Math.max(c.top, k.top - row.offsetHeight - 12), bottom: Math.min(r.bottom, top + SEARCH) }; // the full row is the tallest
-    const others = [...pins.values()].filter((o) => o !== pin && o.style.display !== "none").flatMap((o) => [...o.querySelectorAll(".atl-prow,.atl-badge")].map((x) => x.getBoundingClientRect())).filter((x) => x.width);
+    const near = [...pins.values()].filter((o) => o !== pin && o.style.display !== "none").flatMap((o) => [...o.querySelectorAll(".atl-prow,.atl-badge")]);
+    const boxes = (list) => list.map((x) => x.getBoundingClientRect()).filter((x) => x.width), others = boxes(near);
     const { out, beside } = contentIn(area, el), obs = [...out, ...others, { left: x0, right: x0 + b.offsetWidth, top, bottom: top + b.offsetHeight }], margin = [...obs, ...beside], lo = r.left + 4;
     const slot = (it = row, avoid = null) => {
       const w = it.offsetWidth, h = it.offsetHeight;
@@ -864,9 +873,9 @@ function boot() {
     row.style.left = `${Math.round(at[0] - x0)}px`; row.style.top = `${Math.round(at[1] - top)}px`;
     const badge = row.classList.contains("atl-tuck") && pin.querySelector(".atl-badge");
     if (!badge) return;
-    // No free slot: the top band from the corner leftwards, over Page content but clear of other pins' chips and badges
-    // (nested Keys with one box), else the corner itself. ponytail: covering a little content beats hiding the thread.
-    const bat = slot(badge) ?? slot(badge, others) ?? [r.right - 4 - badge.offsetWidth, top];
+    // No free slot: the top band from the corner leftwards, over Page content but clear of other pins' shown chips and
+    // badges (nested Keys with one box; a hidden tucked row does not count), else the corner itself. ponytail: covering a little content beats hiding the thread.
+    const bat = slot(badge) ?? slot(badge, boxes(near.filter((x) => x.checkVisibility({ visibilityProperty: true })))) ?? [r.right - 4 - badge.offsetWidth, top];
     badge.style.left = `${Math.round(bat[0] - x0)}px`; badge.style.top = `${Math.round(bat[1] - top)}px`;
   }
   function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); for (const s of spots.values()) spotAt(s); positionMarks(); placePops(); positionWip(); }
