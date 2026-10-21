@@ -272,10 +272,10 @@ try {
   assert.equal(await js("document.querySelector('#plain').getAttribute('tabindex')"), "0", "a Kernel tab stop survives Updates");
 
   // Undo all takes back every action still in its window.
-  await click('[data-atl=decide][data-id="row-a"][data-label=Keep]');
-  await click('[data-atl=decide][data-id="run/turn-2"][data-label=Confirm]');
-  await until("document.querySelector('[data-atl=undoall]')"); // the host's window here is 3 s
-  await click("[data-atl=undoall]");
+  // Both answers and Undo all in one go: browser round trips would outlast the 3 s window (151).
+  await js("document.querySelector('[data-atl=decide][data-id=\"row-a\"][data-label=Keep]').click(); document.querySelector('[data-atl=decide][data-id=\"run/turn-2\"][data-label=Confirm]').click(); true");
+  await until("document.querySelector('[data-atl=undoall]')");
+  await js("document.querySelector('[data-atl=undoall]').click(); true");
   await until("atelier.state().decisions.find((d)=>d.id==='row-a').answer===null");
   assert.equal(await js("atelier.state().decisions.find((d)=>d.id==='run/turn-2').answer"), "Redo");
   // The idle dock is only as wide as its bar; a Page places it in its own layout with atl-dock.
@@ -312,7 +312,7 @@ try {
   assert.deepEqual([held.option, held.note, held.images.map((x) => path.extname(x))], ["Hold", "see the shots", [".png", ".gif"]]);
   assert.equal(await js(`[...document.querySelectorAll('${shot} .atl-dstate img')].every((i)=>i.complete&&i.naturalWidth===1)`), true, "thumbnails load from the stored files");
   assert.equal(await js(`document.querySelector('${shot} .atl-extra').hidden && document.querySelectorAll('${shot} .atl-attached img').length===0`), true, "the field closes and empties once posted");
-  await click(`[data-atl=decide][data-id=shot][data-label=Ship]`); // a change inside the undo window keeps the note and images
+  await js("document.querySelector('[data-atl=decide][data-id=shot][data-label=Ship]').click(); true"); // a change inside the 3 s undo window keeps the note and images
   await until("atelier.state().decisions.find((d)=>d.id==='shot').answer==='Ship'");
   assert.deepEqual(await js("(({answer,note,images})=>[answer,note,images])(atelier.state().decisions.find((d)=>d.id==='shot'))"), ["Ship", "see the shots", held.images]);
   await sleep(3200); host.deliverDue(page);
@@ -834,7 +834,7 @@ try {
     await click('[data-id="d:todo"] [data-atl=addnote]');
     await until("document.activeElement===document.querySelector('[data-id=\"d:todo\"] .atl-note')");
     await b("keyboard", "type", "half typed");
-    await sleep(11_000);
+    await sleep(4_000); // past the Kernel's 3 s undo window (151)
     const typing = await look("todo");
     assert(!typing.folded && typing.expanded === "true" && typing.extra && await js("document.activeElement===document.querySelector('[data-id=\"d:todo\"] .atl-note')"), `an open note box keeps its Decision open after the undo window: ${JSON.stringify(typing)}`);
     await click('[data-id="d:todo"] [data-atl=fold]');

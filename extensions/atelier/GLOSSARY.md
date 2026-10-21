@@ -58,7 +58,7 @@ The append-only, numbered record of every human and agent event on one Page, kep
 _Avoid_: store, inbox, queue
 
 **Delivery**:
-Handing a human event to an agent's Pi session as a message, after its 10-second undo window. An
+Handing a human event to an agent's Pi session as a message, after its 3-second undo window. An
 event not yet delivered goes to the next session that opens the Page.
 _Avoid_: poll, wake, notify
 
