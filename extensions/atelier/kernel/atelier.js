@@ -1,4 +1,4 @@
-// Atelier Kernel 2.8.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.8.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -775,25 +775,86 @@ function boot() {
     const x = s.at instanceof Range ? r.right + 2 : r.right - b.offsetWidth - 4, y = s.at instanceof Range ? r.top - b.offsetHeight + 4 : r.top + 4;
     s.style.translate = `${Math.round(Math.min(x, document.documentElement.clientWidth - b.offsetWidth - 4) - p.left)}px ${Math.round(y - p.top)}px`;
   }
-  // The Comment button sits in the Key's top-right corner; its thread chips left of it, moved further left of the
-  // Page's own controls in that band (Decision options, buttons, links), or below them where the row has no room.
+  // The Comment button sits at the top-right corner of the Key's visible part. Its thread chips never cover the Page
+  // (2.8.1, owner 2026-10-21: chips over body text and a status label): they take the first free slot, left of the
+  // button in the top band, in the margin right of the Key, beside a shorter line further down, or above the Key; then
+  // the same slots with compact chips (icon and count). Obstacles are the visible Page content there (text, media,
+  // controls, the Kernel's in-flow Decisions) and other chip rows. With no free slot the compact row shows only while
+  // its Key is hovered or focused, like the Comment button. A pin keeps inside its Key's scroll containers and the
+  // viewport; a Key scrolled out of its container (a sideways storyboard) shows none, so a pin never widens the Page.
+  const SOLID = "img,video,canvas,svg,iframe,object,embed,input,select,textarea,button,a[href],hr,progress,meter"; // a summary counts by its text and icons
+  const FLOAT = "[atl-ui=pin],[atl-ui=spot],[atl-ui=mark],[atl-ui=sel],[atl-ui=panel],[atl-ui=rail],[atl-ui=composer],[atl-ui=thread],[atl-ui=wip],script,style,template";
+  const shown = (el) => el.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) ?? true;
+  const meets = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  // The visible content in the area, and the boxes of the elements there that neither hold nor sit in the Key.
+  // ponytail: an element is skipped when its box misses the area, so content overflowing its box there is missed.
+  function contentIn(area, key) {
+    const out = [], beside = [], range = document.createRange();
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, { acceptNode(n) {
+      if (n.nodeType === 3) return n.data.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      if (n.matches(FLOAT)) return NodeFilter.FILTER_REJECT;
+      const r = n.getBoundingClientRect();
+      if ((r.width || r.height) && !meets(r, area)) return NodeFilter.FILTER_REJECT;
+      if (r.width && r.height && !n.contains(key) && !key.contains(n)) beside.push(r);
+      if (!n.matches(SOLID)) return NodeFilter.FILTER_SKIP;
+      if (r.width && r.height && shown(n)) out.push(r);
+      return NodeFilter.FILTER_REJECT;
+    } });
+    for (let n; (n = walk.nextNode());) {
+      if (!shown(n.parentElement)) continue;
+      range.selectNodeContents(n);
+      for (const r of range.getClientRects()) if (r.width && meets(r, area)) out.push(r);
+    }
+    return { out, beside };
+  }
+  // The part of the viewport's width and the Key's scroll containers a pin may use.
+  function clipOf(el) {
+    const c = { left: 0, top: -scrollY, right: document.documentElement.clientWidth, bottom: Infinity }; // never above the document
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const s = getComputedStyle(p);
+      if (s.overflowX === "visible" && s.overflowY === "visible") continue;
+      const r = p.getBoundingClientRect();
+      if (s.overflowX !== "visible") { c.left = Math.max(c.left, r.left); c.right = Math.min(c.right, r.right); }
+      if (s.overflowY !== "visible") { c.top = Math.max(c.top, r.top); c.bottom = Math.min(c.bottom, r.bottom); }
+    }
+    return c;
+  }
   const CONTROLS = "button,a[href],input,select,textarea,summary";
   const controlsIn = (el) => [...el.querySelectorAll(CONTROLS)].filter((c) => !isUi(c) || c.closest("[atl-ui=decide]")).map((c) => c.getBoundingClientRect()).filter((c) => c.width); // the Page's, and its Decision options
-  // ponytail: measures the Key's controls on every placement; fine for a few hundred Keys with threads.
+  const SEARCH = 400; // px below the Key's top searched for a slot, so the chips stay near the Key's start
+  const GX = 10, GY = 3, MARGIN = 24; // clearance from content, and the free width a margin slot needs beyond the row
+  // ponytail: rescans the content near each pin with chips on every placement; fine for a few hundred pins.
   function pinAt(pin) {
     const el = findKey(pin.dataset.key), b = pin.querySelector(".atl-add"), row = pin.querySelector(".atl-prow");
     if (!el || !b) return;
-    pin.style.translate = "";
-    const p = pin.getBoundingClientRect(), r = el.getBoundingClientRect(), x0 = r.right - b.offsetWidth - 4, top = r.top + 4;
+    pin.style.translate = ""; pin.style.display = "";
+    const k = el.getBoundingClientRect(), c = clipOf(el);
+    const r = { left: Math.max(k.left, c.left), right: Math.min(k.right, c.right), top: Math.max(k.top, c.top), bottom: Math.min(k.bottom, c.bottom) };
+    if (r.right - r.left < b.offsetWidth + 8 || r.bottom <= r.top) { pin.style.display = "none"; return; }
+    const p = pin.getBoundingClientRect(), x0 = r.right - b.offsetWidth - 4, top = r.top + 4;
     pin.style.translate = `${Math.round(x0 - p.left)}px ${Math.round(top - p.top)}px`;
     if (!row) return;
-    const w = row.offsetWidth, ht = row.offsetHeight;
-    const band = controlsIn(el).filter((c) => c.bottom > top && c.top < top + ht);
-    let x = x0 - 4 - w, y = top;
-    for (let hit = band; (hit = band.filter((c) => c.left < x + w + 8 && c.right > x - 4)).length;) x = Math.min(...hit.map((c) => c.left)) - 10 - w;
-    if (x < r.left + 4) { x = x0 - 4 - w; if (band.length) y = Math.max(...band.map((c) => c.bottom)) + 4; }
-    x = Math.max(x, 4);
-    row.style.left = `${Math.round(x - x0)}px`; row.style.top = `${Math.round(y - top)}px`;
+    row.classList.remove("atl-tight", "atl-tuck");
+    row.style.maxWidth = `${Math.round(c.right - c.left - 8)}px`;
+    const area = { left: c.left, right: c.right, top: Math.max(c.top, k.top - row.offsetHeight - 12), bottom: Math.min(r.bottom, top + SEARCH) }; // the full row is the tallest
+    const others = [...pins.values()].filter((o) => o !== pin && o.style.display !== "none").map((o) => o.querySelector(".atl-prow")?.getBoundingClientRect()).filter(Boolean);
+    const { out, beside } = contentIn(area, el), obs = [...out, ...others, { left: x0, right: x0 + b.offsetWidth, top, bottom: top + b.offsetHeight }], margin = [...obs, ...beside], lo = r.left + 4;
+    const slot = () => {
+      const w = row.offsetWidth, h = row.offsetHeight;
+      // A row keeps GX px from content beside it and GY px above and below, so it never touches a line.
+      const hits = (x, y, list = obs, ww = w) => list.filter((o) => o.left < x + ww + GX && o.right > x - GX && o.top < y + h + GY && o.bottom > y - GY);
+      // The rightmost free x on line y between left and right, stepping left past each obstacle.
+      const scan = (y, right, list = obs) => { let x = right - w; for (let hit; x >= lo && (hit = hits(x, y, list)).length;) x = Math.min(...hit.map((o) => o.left)) - GX - w - 1; return x >= lo ? [x, y] : null; };
+      const ys = [...new Set(obs.flatMap((o) => [Math.ceil(o.top), Math.ceil(o.bottom) + GY + 1]))].filter((y) => y > top && y + h <= area.bottom).sort((a, b) => a - b);
+      // Outside the Key only on free margin, where no other element's box is (right of the Key not in a narrow gap
+      // before a neighbour), so a row never reads as a neighbour's.
+      return scan(top, r.right - 4) ?? (r.right + 8 + w + MARGIN <= c.right && !hits(r.right + 8, top, margin, w + MARGIN).length ? [r.right + 8, top] : null)
+        ?? ys.reduce((got, y) => got ?? scan(y, r.right - 4), null) ?? (k.top - h - 4 >= c.top ? scan(k.top - h - 4, r.right - 4, margin) : null);
+    };
+    let at = slot();
+    if (!at) { row.classList.add("atl-tight"); at = slot(); }
+    if (!at) { row.classList.add("atl-tuck"); at = [Math.max(c.left + 4, x0 - 4 - row.offsetWidth), top]; }
+    row.style.left = `${Math.round(at[0] - x0)}px`; row.style.top = `${Math.round(at[1] - top)}px`;
   }
   function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); for (const s of spots.values()) spotAt(s); positionMarks(); placePops(); positionWip(); }
   // At the region's top-left corner, kept inside the right edge so a long label never scrolls the Page sideways.
@@ -841,9 +902,23 @@ function boot() {
   let selQueued = false;
   document.addEventListener("selectionchange", () => { if (!selQueued) { selQueued = true; requestAnimationFrame(() => { selQueued = false; placeSel(); }); } });
   // A floating box or an atl-wip label follows its anchor through any scroll, the Page's or an inner container's.
-  let popQueued = false;
-  addEventListener("scroll", () => {
+  // A pin follows its Key through an inner container's scroll (2.8.1); the Page's own scroll moves it with the Key.
+  let popQueued = false, pinsQueued = false; const scrolled = new Set();
+  addEventListener("scroll", (ev) => {
     if (!selBtn.hidden) placeSel();
+    if (ev.target !== document && !isUi(ev.target) && (pins.size || spots.size)) {
+      scrolled.add(ev.target);
+      if (!pinsQueued) {
+        pinsQueued = true;
+        requestAnimationFrame(() => {
+          pinsQueued = false;
+          const near = (n) => [...scrolled].some((t) => t.contains(n) || n.contains(t)); // in the scroller, or a Key around it
+          for (const pin of pins.values()) { const key = findKey(pin.dataset.key); if (key && near(key)) pinAt(pin); }
+          for (const s of spots.values()) if (near(s)) spotAt(s);
+          scrolled.clear();
+        });
+      }
+    }
     if ((composer || thread || wipLabels.size) && !popQueued) { popQueued = true; requestAnimationFrame(() => { popQueued = false; placePops(); positionWip(); }); }
   }, { capture: true, passive: true });
 
@@ -1076,6 +1151,9 @@ function boot() {
     if (composer?.inline) closeComposer();
     tpop.remove(); markRead(seq);
     if (rerender) render();
+    // A marker in a row shown only on hover or focus (2.8.1) gets its Key's hover state back first, so it can take focus.
+    const pin = back && markerOf(seq)?.closest("[atl-ui=pin]");
+    if (pin) setHot(findKey(pin.dataset.key));
     if (back) markerOf(seq)?.focus({ preventScroll: true });
   }
   function openComposer(spec, { at, inside, from, pinKey } = {}) {
@@ -1428,7 +1506,9 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-thumb{position:relative;display:inline-block}.atl-thumb img{display:block;height:48px;max-width:96px;object-fit:cover;border:1px solid var(--atl-line);border-radius:4px}
 [atl-ui] .atl-thumb button{position:absolute;top:-6px;right:-6px;min-height:0;width:18px;height:18px;padding:0;justify-content:center;border-radius:50%}
 .atl-pin{position:absolute;width:0;height:0;z-index:2147482000}
-.atl-pin .atl-add,.atl-spot>button{position:absolute;left:0;top:0}.atl-prow{position:absolute;display:flex;gap:6px;align-items:center;width:max-content}
+.atl-pin .atl-add,.atl-spot>button{position:absolute;left:0;top:0}.atl-prow{position:absolute;display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:max-content}
+.atl-prow.atl-tight{gap:4px}.atl-prow.atl-tight .atl-ct{display:none}.atl-prow.atl-tight .atl-chip{padding:0 6px}
+.atl-prow.atl-tuck{visibility:hidden}.atl-pin.atl-hot .atl-prow.atl-tuck,.atl-pin:focus-within .atl-prow.atl-tuck,.atl-prow.atl-tuck:has([aria-expanded=true]){visibility:visible}
 .atl-pin .atl-add{min-height:0;height:24px;padding:0 5px;gap:3px;color:var(--atl-muted);box-shadow:0 1px 3px #0002;opacity:0;pointer-events:none;transition:opacity .12s}
 .atl-pin.atl-hot .atl-add,.atl-pin .atl-add:focus-visible{opacity:1!important;pointer-events:auto!important}
 .atl-pin .atl-add:hover{color:var(--atl-accent)}

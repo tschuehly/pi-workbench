@@ -75,7 +75,9 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   Every Key gets its Comment button on hover or focus; the Comment box floats beside the button and
   never scrolls the Page. Each thread shows as a chip on its Key (its first words, reply count, a dot
   for new replies), or at the end of its quote for a Comment on selected text; the chip opens the
-  thread floating beside it. Threads take no space in the Page's layout. A Page button with `atl-comment`
+  thread floating beside it. Threads take no space in the Page's layout and never cover its text, media or
+  controls: a Key's chips take the first free spot near its top, shrink to icon and count, or, with no free
+  spot, show only while the Key is hovered or focused. A Page button with `atl-comment`
   inside a Key opens that Key's Comment box beside the button (e.g. in a sticky decision bar). A Key with nothing
   focusable gets `tabindex="0"` so the keyboard reaches it; an authored `tabindex` stays.
 - For icons in Page content use Lucide (ISC), inlined as SVG like the Kernel's; no emoji as icons.
@@ -121,7 +123,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.8.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.8.1 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of
