@@ -75,7 +75,7 @@ test("2+3: one live session owns a Page's appends and Delivery; a dead owner's l
     await c.open(p.page);
     c.stop();
     writeFileSync(`${p.page}.events.jsonl.lock`, JSON.stringify({ pid: process.ppid, session: "other process" }));
-    await assert.rejects(make("d").open(p.page), /another live Pi session/);
+    await assert.rejects(make("d").open(p.page), /older Atelier[\s\S]*close or \/reload it first/, "a live older Atelier's lock is never taken");
   } finally { a.stop(); b.stop(); p.done(); }
 });
 

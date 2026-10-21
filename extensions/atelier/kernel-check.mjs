@@ -28,12 +28,14 @@ const write = ({ plain = "A plain keyed paragraph.", dock = "", phrase = "Pick t
 <script type="module" src="atelier.js"></script></body></html>`);
 await write();
 const sent = [];
-const host = createHost({ root: dir, undoMs: 3000, watchdogMs: 600_000, send: (m, done) => { sent.push(m.content); done(true); } });
+const host = createHost({ root: dir, sessionId: `kernel-a-${process.pid}`, label: "Chat A", undoMs: 3000, watchdogMs: 600_000, send: (m, done) => { sent.push(m.content); done(true); } });
 const b = async (...args) => { const { stdout } = await run("agent-browser", ["--session", session, "--json", ...args], { timeout: 60_000 }); const r = JSON.parse(stdout); assert(r.success, JSON.stringify(r)); return r.data; };
 const js = async (code) => (await b("eval", code)).result;
 const until = (code) => b("wait", "--fn", code);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decides = () => readLog(page).filter((e) => e.type === "decide");
+// Makes the host refuse every event POST from the tab (409), as when the Page's input moved elsewhere; restore with window.__fetch.
+const REFUSE = `(()=>{window.__fetch??=window.fetch;window.fetch=(u,o)=>o?.method==="POST"&&String(u).startsWith("/.atelier/events")?Promise.resolve(new Response(JSON.stringify({error:"Refused for the check."}),{status:409,headers:{"content-type":"application/json"}})):window.__fetch(u,o);return true})()`;
 const box = async (sel) => js(`(()=>{const r=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right}})()`);
 const opacity = (key) => js(`getComputedStyle(document.querySelector('[atl-ui=pin][data-key="${key}"] .atl-add')).opacity`);
 const buttons = () => js("[...document.querySelectorAll('[data-atl=comment]')].map((b)=>b.dataset.key)");
@@ -47,6 +49,15 @@ try {
   await until("document.querySelector('.atl-conn')?.textContent==='live'");
 
   assert.equal(await js("document.querySelector('.atl-test')"), null, "a Pi session's host shows no test mark");
+  assert.equal(await js("document.querySelector('.atl-recv')?.textContent"), "→ Chat A", "the bar names the receiving session");
+  // 2.10.0: a takeover in the same process keeps the tab and its URL; the bar follows the receiver live.
+  const other = createHost({ root: dir, sessionId: `kernel-b-${process.pid}`, label: "Chat B", send: (m, done) => done(true) });
+  try {
+    assert.equal((await other.takeover(page, 1)).url, url, "same URL after takeover");
+    await until("document.querySelector('.atl-recv')?.textContent==='→ Chat B'");
+    await host.takeover(page, 2);
+    await until("document.querySelector('.atl-recv')?.textContent==='→ Chat A'");
+  } finally { other.stop(); }
   // Palette follows the Page, not the OS.
   assert.equal(await js("getComputedStyle(document.querySelector('[atl-ui=panel]')).backgroundColor"), "rgb(255, 255, 255)", "light panel on a light Page under a dark OS");
   // Comment button: no layout space, hidden until hover, innermost Key only, at the top-right corner.
@@ -94,6 +105,14 @@ try {
   const commentShot = path.join(dir, "comment-shot.png"); await writeFile(commentShot, Buffer.from(ONE_PX, "base64"));
   await b("upload", "[atl-ui=composer] .atl-file", commentShot);
   await until("document.querySelectorAll('[atl-ui=composer] .atl-attached img').length===1");
+  // Draft safety (review 2): a Comment the host refuses keeps its box, text and images for another try.
+  await js(REFUSE);
+  await click("[atl-ui=composer] [type=submit]");
+  await until("[...document.querySelectorAll('.atl-toast')].some((t)=>/Refused for the check/.test(t.textContent))");
+  assert.deepEqual(await js("(()=>{const f=document.querySelector('[atl-ui=composer]'),t=f?.querySelector('textarea');return [t?.value??null,t?.readOnly,f?.querySelector('[type=submit]').disabled,f?.querySelectorAll('.atl-attached img').length]})()"), ["Needs a source.", false, false, 1], "the refused Comment stays in its open box");
+  assert.equal(readLog(page).some((e) => e.type === "comment"), false);
+  assert.equal(await js("document.querySelector('.atl-recv')?.textContent+' '+document.querySelector('.atl-conn').textContent"), "\u2192 Chat A live", "the bar still names the real receiver and connection");
+  await js("(()=>{window.fetch=window.__fetch;return true})()");
   await click("[atl-ui=composer] [type=submit]");
   await until("document.querySelector('[atl-ui=composer]')===null");
   assert.match(readLog(page).find((e) => e.type === "comment")?.images?.[0] ?? "", /^page\.html\.images\/[0-9a-f]{16}\.png$/, "the Comment names its stored image");
@@ -347,6 +366,24 @@ try {
   await sleep(300);
   assert.deepEqual(readLog(page).filter((e) => e.seq > hold.seq && e.type === "decide").map((e) => e.option), ["Ship"], "only the first click posts");
   await js("(()=>{window.fetch=window.__fetch;return true})()");
+  // Draft safety (review 2): a Decision the host refuses keeps its note and images; the answer stays.
+  await sleep(3200); // past the undo window, so the change posts no undo first
+  await click(`${shot} [data-atl=addnote]`);
+  await until(`document.activeElement===document.querySelector('${shot} .atl-note')`);
+  await b("keyboard", "type", "kept on refusal");
+  await b("upload", `${shot} .atl-file`, picked);
+  await until(`document.querySelectorAll('${shot} .atl-attached img').length===1`);
+  const before = readLog(page).length;
+  await js(REFUSE);
+  await click(`[data-atl=decide][data-id=shot][data-label=Hold]`);
+  await until("[...document.querySelectorAll('.atl-toast')].filter((t)=>/Refused for the check/.test(t.textContent)).length>=1");
+  await sleep(200);
+  assert.deepEqual(await js(`[document.querySelector('${shot} .atl-note').value, document.querySelectorAll('${shot} .atl-attached img').length, document.querySelector('${shot} .atl-extra').hidden, atelier.state().decisions.find((d)=>d.id==='shot').answer]`), ["kept on refusal", 1, false, "Ship"], "the refused answer keeps its note and image");
+  assert.equal(readLog(page).length, before, "nothing posted");
+  await js("(()=>{window.fetch=window.__fetch;return true})()");
+  await click(`[data-atl=decide][data-id=shot][data-label=Hold]`);
+  await until("atelier.state().decisions.find((d)=>d.id==='shot').answer==='Hold'");
+  assert.equal(decides().at(-1).note, "kept on refusal", "the retry posts what was kept");
 
   // A Decision the agent asks takes the same quiet note-or-image button instead of a permanent note field.
   host.agent(page, { type: "ask", decision: { id: "ask-1", key: "plain", question: "Keep it?", options: [{ label: "Yes", consequence: "kept" }, { label: "No", consequence: "dropped" }] } });
@@ -891,7 +928,7 @@ try {
   });
   assert.deepEqual(fails, [], "every 2.7.1, 2.8.0 and 2.8.1 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

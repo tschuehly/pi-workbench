@@ -1,4 +1,4 @@
-// Atelier Kernel 2.9.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.10.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -231,9 +231,10 @@ export function describe(e, entries, excerpt, file) {
  * The session message for a batch of human events: one header line, then one line per event. The rules for
  * acting on them (data not instruction, answer in place, only the human closes) live in the tool description.
  */
-export function compose(page, url, events, entries, { replay = false, group, excerpt, file } = {}) {
+export function compose(page, url, events, entries, { replay = false, doubt, group, excerpt, file } = {}) {
   return [
-    ["Atelier", `${String(page).split("/").pop()}${url ? ` (${url})` : ""}`, group ? `Comments on ${group}` : "", replay ? "replayed from an earlier session" : ""].filter(Boolean).join(" · "),
+    // doubt: events an earlier receiver was sent but never confirmed, so a replay may repeat them.
+    ["Atelier", `${String(page).split("/").pop()}${url ? ` (${url})` : ""}`, group ? `Comments on ${group}` : "", replay ? "replayed from an earlier session" : "", doubt ?? ""].filter(Boolean).join(" · "),
     // A legacy line the Kernel cannot describe is named, not fatal, so Delivery and Copy still carry the rest.
     ...events.map((e) => { try { return `- ${describe(e, entries, excerpt, file)}`; } catch { return `- #${e.seq} ${e.type} could not be rendered; read it in the Event Log`; } }),
   ].join("\n");
@@ -312,6 +313,8 @@ function boot() {
   const readKey = `atelier-read:${page}`;
   const read = JSON.parse(localStorage.getItem(readKey) || "{}");
   let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0, testHost = false;
+  // The session that receives this Page's input, from the host: { label, generation }, null for none, undefined from an older host.
+  let receiver;
   const expanded = new Set(); // threads whose folded middle the human opened
   const unfolded = new Set(); // answered asked Decisions the human opened from their one-line fold (2.8.0)
   const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
@@ -442,7 +445,8 @@ function boot() {
   function connect() {
     if (!online || es) return;
     es = new EventSource(`/.atelier/stream${q}`);
-    es.addEventListener("hello", (m) => { const d = JSON.parse(m.data); if (mtime !== null && d.mtime !== mtime) morph(); mtime = d.mtime; testHost = !!d.test; conn = "live"; render(); pull(); });
+    es.addEventListener("hello", (m) => { const d = JSON.parse(m.data); if (mtime !== null && d.mtime !== mtime) morph(); mtime = d.mtime; testHost = !!d.test; receiver = d.receiver; conn = "live"; render(); pull(); });
+    es.addEventListener("receiver", (m) => { receiver = JSON.parse(m.data).receiver; flash(receiver ? `Your input now goes to ${receiver.label}.` : "No Pi session receives your input now; it is kept until one opens this Page."); render(); });
     es.addEventListener("log", pull);
     es.addEventListener("update", (m) => { const d = JSON.parse(m.data); mtime = d.mtime; pendingNote = d.note ?? null; morph(); });
     es.onerror = () => { conn = "reconnecting"; render(); };
@@ -714,7 +718,7 @@ function boot() {
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
     const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
     const open = st.openThreads.length + st.toAnswer.length;
-    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")} Test host, no Pi session</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
+    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")} Test host, no Pi session</span>` : receiver ? `<span class="atl-dim atl-recv" title="Your input goes to this Pi session">→ ${esc(receiver.label)}</span>` : receiver === null ? `<span class="atl-tag atl-warn atl-recv" title="No Pi session receives your input now; it is kept until one opens this Page">no receiver</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
     renderUndo(undoable());
     const section = (title, items) => items.length ? `<h4>${title}</h4>` : "";
     const list = panel.querySelector(".atl-list");
@@ -1169,19 +1173,21 @@ function boot() {
       ev.preventDefault();
       const ta = node.querySelector("textarea"), extra = node.querySelector(".atl-extra");
       if (!ta.value.trim() || node.dataset.busy) return;
-      // Locked while it saves (Cancel stays), so what posts is what the box shows: images still being read, then the
-      // upload. A refused image unlocks the box with the text and images as typed.
+      // Locked while it saves (Cancel stays), so what posts is what the box shows: images still being read, the upload,
+      // then the event. It closes only once the event is saved (or kept in this tab with no host); a refused image or
+      // event unlocks the box with the text and images as typed.
       const lock = (on) => { ta.readOnly = on; node.querySelector("[type=submit]").disabled = on; if (on) node.dataset.busy = "1"; else delete node.dataset.busy; };
       lock(true);
       const read = await reads(extra);
       if (!read) flash("Your Comment was not saved.");
       const text = ta.value.trim(), images = (extra && attached.get(extra)) ?? [], names = !read ? null : images.length ? await upload(images, "Your Comment was not saved.") : [];
-      lock(false);
-      if (!names) { ta.focus(); return; }
-      if (composer?.node === node) closeComposer(true); else if (!node.isConnected) return; // cancelled during the upload
+      if (!node.isConnected) return; // cancelled while saving
       // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
       const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
-      await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery, images: names.length ? names : undefined });
+      const saved = names && await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery, images: names.length ? names : undefined });
+      lock(false);
+      if (!saved) { if (node.isConnected) ta.focus(); return; }
+      if (composer?.node === node) closeComposer(true);
     });
   }
   const mediaTime = (el) => { const m = el?.querySelector("video,audio"); return m ? Math.round(m.currentTime * 10) / 10 : undefined; };
@@ -1233,7 +1239,8 @@ function boot() {
     const page = d.declared ? { options: d.options.map((o) => o.label).join("|"), rec: d.options.find((o) => o.recommended)?.label, delivery: d.delivery } : {};
     // The replaced answer was never delivered, so its note and images stay with the Decision unless new ones replace them.
     const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, key: d.key, ver: d.key ? currentVer(d.key) : undefined, ...page });
-    if (posted && extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
+    if (!posted) return false; // refused: the note and images stay for another try
+    if (extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
   }
 
   const actions = {

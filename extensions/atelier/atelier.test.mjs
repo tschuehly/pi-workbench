@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -216,7 +216,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.9\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.10\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -610,4 +610,300 @@ test("a Comment and a reply carry images: only stored ones, delivered by absolut
     assert.equal(lines.find((l) => l.includes(`#${reply.seq} Reply`)).endsWith(`: "and here"; images ${file}, ${file}`), true);
     assert.match(compose("p", "", [{ seq: 9, type: "comment", text: "t", images: ["data:image/png;base64,AA"] }], []), /Comment on the Page: "t"; image \(kept in the browser only\)$/);
   } finally { host.stop(); p.done(); }
+});
+
+// ---- Receiver handover: one serving endpoint per Page (URL, tabs, Undo), one current receiver session.
+// Sessions in one process, as under PI WEB's sessiond; they share one fake clock.
+function sessions(p) {
+  let clock = 1_000_000;
+  const page = path.join(realpathSync(p.root), "page.html");
+  // idle: whether the session is between runs (default: always); quiesceMs: how long its takeover waits for that.
+  const make = (id, { hold = false, idle, quiesceMs } = {}) => {
+    const s = { id, sent: [], held: [], handoffs: [] };
+    s.host = createHost({
+      root: p.root, sessionId: id, label: `Chat ${id}`, now: () => clock, watchdogMs: 60_000, idle, quiesceMs,
+      // hold: the session keeps the send (a checkpoint barrier or a run still starting), so it is never queued to Pi.
+      send: (m, done, failed) => { if (hold) s.held.push({ m, done, failed }); else { s.sent.push(m); done(true); } },
+      handoff: (m) => s.handoffs.push(m),
+    });
+    return s;
+  };
+  return { page, make, tick: (ms) => { clock += ms; }, lock: () => JSON.parse(readFileSync(`${page}.events.jsonl.lock`, "utf8")) };
+}
+
+// Reads a Page's event stream: next(name) resolves the next event of that name.
+function stream(url) {
+  const got = [];
+  const u = new URL(url);
+  const req = http.get(`${u.origin}/.atelier/stream?page=${encodeURIComponent(decodeURIComponent(u.pathname.slice(1)))}`, (res) => {
+    let buf = "";
+    res.on("data", (c) => {
+      buf += c;
+      for (let i; (i = buf.indexOf("\n\n")) >= 0; buf = buf.slice(i + 2)) {
+        const block = buf.slice(0, i);
+        got.push({ name: /^event: (.*)$/m.exec(block)?.[1], data: JSON.parse(/^data: (.*)$/m.exec(block)?.[1] ?? "null") });
+      }
+    });
+  });
+  req.on("error", () => {});
+  return {
+    async next(name) {
+      for (let i = 0; i < 200; i += 1) {
+        const at = got.findIndex((g) => g.name === name);
+        if (at >= 0) return got.splice(at, 1)[0].data;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error(`no ${name} event`);
+    },
+    close: () => req.destroy(),
+  };
+}
+
+test("receiver (a): a second session in the same process is refused with a takeover hint", async () => {
+  const p = project();
+  const { page, make } = sessions(p);
+  const a = make("a"), b = make("b");
+  try {
+    assert.equal((await a.host.open(page)).generation, 1);
+    await assert.rejects(b.host.open(page), /another live Pi session \(Chat a\)[\s\S]*takeover[\s\S]*generation 1/);
+    assert.equal((await a.host.open(page)).generation, 1, "open stays idempotent for the receiver");
+  } finally { a.host.stop(); b.host.stop(); p.done(); }
+});
+
+test("receiver: a lock from an ended session of this process is stale; another process's live session is never taken over (review 3, 4)", async () => {
+  const p = project();
+  const { page, make } = sessions(p);
+  const file = `${page}.events.jsonl.lock`;
+  const a = make("a"), b = make("b"), c = make("c");
+  try {
+    writeFileSync(file, JSON.stringify({ pid: process.pid, session: "ended", generation: 3 }));
+    assert.equal((await a.host.open(page)).generation, 4, "same process, no live runtime: stale");
+    a.host.stop();
+    assert.equal(existsSync(file), false, "released");
+    assert.equal((await b.host.open(page)).generation, 5, "the process keeps counting generations");
+    b.host.stop();
+    const far = JSON.stringify({ pid: process.ppid, session: "far", label: "Chat far", generation: 5 });
+    writeFileSync(file, far);
+    await assert.rejects(c.host.open(page), /held by session Chat far in another process[\s\S]*close or \/reload it first/);
+    await assert.rejects(c.host.takeover(page, 5), /held by session Chat far in another process[\s\S]*close or \/reload it first/, "cross-process takeover is refused");
+    assert.equal(readFileSync(file, "utf8"), far, "its lock is untouched");
+    assert.deepEqual(readdirSync(p.root).filter((f) => f.endsWith(".claim")), [], "no claim file");
+  } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
+});
+
+test("receiver: a live receiver of an older Atelier (lock without generation) is never fenced; close or /reload it first (review 1)", async () => {
+  const p = project();
+  const { page, make } = sessions(p);
+  const file = `${page}.events.jsonl.lock`;
+  const a = make("a");
+  try {
+    for (const pid of [process.ppid, process.pid]) {
+      const old = JSON.stringify({ pid, session: "old" });
+      writeFileSync(file, old);
+      await assert.rejects(a.host.open(page), /session old, which runs an older Atelier[\s\S]*close or \/reload it first/);
+      await assert.rejects(a.host.takeover(page, 0), /session old, which runs an older Atelier[\s\S]*close or \/reload it first/);
+      assert.equal(readFileSync(file, "utf8"), old, "its lock is untouched");
+    }
+    writeFileSync(file, JSON.stringify({ pid: spawnSync(process.execPath, ["-e", "0"]).pid, session: "old" }));
+    assert.equal((await a.host.open(page)).generation, 1, "its process is gone: stale");
+  } finally { a.host.stop(); p.done(); }
+});
+
+test("receiver: two takeovers of one generation in this process: exactly one wins (review 4)", async () => {
+  const p = project();
+  const { page, make, lock } = sessions(p);
+  const a = make("a"), b = make("b"), c = make("c");
+  try {
+    await a.host.open(page);
+    const results = await Promise.allSettled([b.host.takeover(page, 1), c.host.takeover(page, 1)]);
+    assert.deepEqual(results.map((r) => r.status).sort(), ["fulfilled", "rejected"]);
+    assert.match(results.find((r) => r.status === "rejected").reason.message, /changed since generation 1/);
+    assert.equal(lock().generation, 2);
+    assert.ok(["b", "c"].includes(lock().session));
+  } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
+});
+
+test("receiver: takeover waits until the old receiver is idle, refuses while it stays busy, and gives the successor the unfinished Requests (review 5)", async () => {
+  const p = project();
+  const { page, make, lock } = sessions(p);
+  let idle = false;
+  const a = make("a", { idle: () => idle }), b = make("b", { quiesceMs: 200 }), c = make("c", { quiesceMs: 5_000 });
+  try {
+    await a.host.open(page);
+    a.host.postHuman(page, { type: "request", job: "rerun", key: "a" });
+    a.host.agent(page, { type: "status", target: 1, state: "running" });
+    await assert.rejects(b.host.takeover(page, 1), /Chat a is busy[\s\S]*Try again/);
+    assert.equal(lock().session, "a", "not forced");
+    const moving = c.host.takeover(page, 1);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(lock().session, "a", "still waiting");
+    idle = true;
+    const moved = await moving;
+    assert.equal(moved.generation, 2);
+    assert.match(moved.unfinished.join("\n"), /Request #1 "rerun" \(running/, "the successor gets the snapshot");
+    assert.match(a.handoffs[0].content, /Request #1 "rerun" \(running/, "the old receiver still gets its handoff note");
+  } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
+});
+
+test("receiver (h): a receipt or seen from an earlier generation, or without one, changes nothing", async () => {
+  const p = project();
+  const { page, make, tick } = sessions(p);
+  const a = make("a"), b = make("b");
+  const received = () => readLog(page).filter((e) => e.type === "received");
+  try {
+    await a.host.open(page);
+    a.host.postHuman(page, { type: "decide", decision: "d1", option: "A" });
+    tick(UNDO);
+    a.host.deliverDue(page);
+    const old = a.sent[0].details;
+    await b.host.takeover(page, 1);
+    a.host.seen(old); a.host.receipt(old); a.host.settled();
+    b.host.seen(old); b.host.receipt(old); b.host.settled();
+    b.host.receipt({ page, seqs: old.seqs });
+    assert.deepEqual(received(), [], "generation 1 and no generation are not B's");
+    b.host.receipt(b.sent[0].details);
+    assert.deepEqual(received().map((e) => e.of), [[1]]);
+  } finally { a.host.stop(); b.host.stop(); p.done(); }
+});
+
+test("receiver (b): takeover moves Delivery; the old receiver's held send, deliveries and mutations are fenced", async () => {
+  const p = project();
+  const { page, make, tick } = sessions(p);
+  const a = make("a", { hold: true }), b = make("b");
+  try {
+    await a.host.open(page);
+    a.host.postHuman(page, { type: "request", job: "rerun", key: "a" });
+    tick(UNDO);
+    assert.equal(a.host.deliverDue(page), 1, "handed to A's send, which holds it");
+    const moved = await b.host.takeover(page, 1);
+    assert.equal(moved.generation, 2);
+    assert.equal(a.host.current(a.held[0].m.details), false, "A's held send must not go out");
+    a.held[0].done(true);
+    assert.equal(readLog(page).filter((e) => e.type === "delivered" && e.session === "a").length, 0, "A's late callback is ignored");
+    assert.equal(b.sent.length, 1, "the never-queued event goes to B at takeover");
+    assert.match(b.sent[0].content, /Request "rerun"/);
+    assert.equal(b.sent[0].details.uncertain, undefined, "never queued, so not uncertain");
+    a.host.postHuman(page, { type: "comment", key: "a", text: "after" });
+    tick(UNDO);
+    assert.equal(a.host.deliverDue(page), 0, "A delivers nothing");
+    assert.throws(() => a.host.agent(page, { type: "answer", target: 1, text: "x" }), /handed over to Chat b/);
+    assert.throws(() => a.host.update(page), /handed over to Chat b/);
+    assert.equal(a.handoffs.length, 1);
+    assert.match(a.handoffs[0].content, /Chat b[\s\S]*Request #1 "rerun"/, "the old session learns what it leaves unfinished");
+  } finally { a.host.stop(); b.host.stop(); p.done(); }
+});
+
+test("receiver (b): takeover waits while the old session's run starts; the successor gets the unfinished Requests (review 5)", async () => {
+  const p = project();
+  const root = realpathSync(p.root), page = path.join(root, "page.html"), old = Date.now() - 60_000;
+  appendLog(page, { origin: "human", type: "request", job: "a", delivery: "immediate" }, old);
+  appendLog(page, { origin: "human", type: "comment", text: "c", delivery: "send" }, old);
+  appendLog(page, { origin: "human", type: "send", delivery: "boundary" }, old);
+  const fake = (id) => {
+    const tools = new Map(), handlers = {}, messages = [];
+    atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: (m, o) => messages.push({ ...m, o }), getSessionName: () => `Chat ${id}` });
+    const ctx = { cwd: p.root, idle: true, isIdle: () => ctx.idle, sessionManager: { getSessionId: () => `${id}-${process.pid}` } };
+    handlers.session_start({}, ctx);
+    return { ctx, handlers, messages, run: (params) => tools.get("atelier").execute("id", { page: "page.html", ...params }, undefined, undefined, ctx) };
+  };
+  const a = fake("ha"), b = fake("hb");
+  try {
+    const opened = await a.run({ action: "open" });
+    assert.equal(opened.details.generation, 1);
+    assert.deepEqual(a.messages.map((m) => m.customType), ["atelier:immediate"], "the send is held while A's run starts");
+    await assert.rejects(b.run({ action: "open" }), /takeover/);
+    let done = false;
+    const moving = b.run({ action: "takeover", generation: 1 }).finally(() => { done = true; });
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(done, false, "a run that is still starting is not idle: takeover waits");
+    a.ctx.idle = false;
+    a.handlers.agent_start();
+    assert.deepEqual(a.messages.map((m) => m.customType), ["atelier:immediate", "atelier:send"], "A still receives while takeover waits");
+    a.ctx.idle = true;
+    a.handlers.agent_settled();
+    const moved = await moving;
+    assert.match(moved.content[0].text, /now goes to this session/);
+    assert.match(moved.content[0].text, /Unfinished[\s\S]*Request #1 "a" \(not started/, "the successor gets the unfinished Requests");
+    b.handlers.agent_start();
+    assert.deepEqual(a.messages.map((m) => m.customType), ["atelier:immediate", "atelier:send", "atelier:handoff"], "A is told");
+    assert.equal(a.messages[2].o.deliverAs, "steer");
+    assert.deepEqual(b.messages.map((m) => m.customType).sort(), ["atelier:immediate", "atelier:send"]);
+    assert.match(b.messages.find((m) => m.customType === "atelier:immediate").content, /may already have reached Chat ha/, "queued to A, never confirmed: flagged, not silently repeated");
+    await assert.rejects(a.run({ action: "update" }), /handed over to Chat hb/);
+  } finally { a.handlers.session_shutdown(); b.handlers.session_shutdown(); p.done(); }
+});
+
+test("receiver (c): an event in its undo window at takeover is delivered once; a queued, unconfirmed one is flagged", async () => {
+  const p = project();
+  const { page, make, tick } = sessions(p);
+  const a = make("a"), b = make("b");
+  try {
+    await a.host.open(page);
+    a.host.postHuman(page, { type: "decide", decision: "d1", option: "A" });
+    tick(UNDO);
+    assert.equal(a.host.deliverDue(page), 1, "queued to A, not yet confirmed");
+    a.host.postHuman(page, { type: "comment", key: "a", text: "late" });
+    tick(1_000);
+    await b.host.takeover(page, 1);
+    assert.equal(b.sent.length, 1);
+    assert.deepEqual(b.sent[0].details.uncertain, [1]);
+    assert.match(b.sent[0].content, /#1 may already have reached Chat a/);
+    tick(UNDO);
+    assert.equal(a.host.deliverDue(page), 0);
+    assert.equal(b.host.deliverDue(page), 1);
+    assert.match(b.sent[1].content, /"late"/);
+    assert.equal(b.host.deliverDue(page), 0, "once");
+    assert.equal(a.sent.length, 1);
+  } finally { a.host.stop(); b.host.stop(); p.done(); }
+});
+
+test("receiver (d): the tab's URL and Undo keep working across takeover and after the opener ends", async () => {
+  const p = project();
+  const { page, make, tick } = sessions(p);
+  const a = make("a"), b = make("b");
+  try {
+    const { url } = await a.host.open(page);
+    const post = async (body) => { const r = await fetch(`${new URL(url).origin}/.atelier/events?page=page.html`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return { status: r.status, json: await r.json() }; };
+    const first = await post({ type: "decide", decision: "d", option: "A" });
+    tick(1_000);
+    assert.equal((await b.host.takeover(page, 1)).url, url, "same URL");
+    assert.equal((await post({ type: "undo", target: first.json.entry.seq })).status, 200, "Undo inside the window still works");
+    a.host.stop();
+    assert.equal((await fetch(url)).status, 200, "the endpoint outlives the session that opened it");
+    assert.equal((await post({ type: "comment", key: "a", text: "after" })).status, 200);
+    tick(UNDO);
+    assert.equal(b.host.deliverDue(page), 1);
+    assert.match(b.sent[0].content, /"after"/);
+    assert.doesNotMatch(b.sent[0].content, /Decision/, "the undone answer is not delivered");
+    b.host.stop();
+    await assert.rejects(fetch(url), "the endpoint closes with its last session");
+  } finally { a.host.stop(); b.host.stop(); p.done(); }
+});
+
+test("receiver (e, f): a stale-generation takeover is rejected; a plain re-open by the old receiver does not reclaim", async () => {
+  const p = project();
+  const { page, make, lock } = sessions(p);
+  const a = make("a"), b = make("b"), c = make("c");
+  try {
+    await a.host.open(page);
+    await b.host.takeover(page, 1);
+    await assert.rejects(c.host.takeover(page, 1), /changed[\s\S]*Chat b[\s\S]*generation 2/, "c saw generation 1, B holds 2");
+    await assert.rejects(a.host.open(page), /another live Pi session \(Chat b\)[\s\S]*takeover/);
+    assert.deepEqual([lock().session, lock().generation], ["b", 2]);
+  } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
+});
+
+test("receiver (g): a connected tab learns the receiver at hello and on every transfer", async () => {
+  const p = project();
+  const { page, make } = sessions(p);
+  const a = make("a"), b = make("b");
+  const { url } = await a.host.open(page);
+  const s = stream(url);
+  try {
+    assert.deepEqual((await s.next("hello")).receiver, { label: "Chat a", generation: 1 });
+    await b.host.takeover(page, 1);
+    assert.deepEqual(await s.next("receiver"), { receiver: { label: "Chat b", generation: 2 } });
+    b.host.stop();
+    assert.deepEqual(await s.next("receiver"), { receiver: null }, "no receiver while the endpoint still serves");
+  } finally { s.close(); a.host.stop(); b.host.stop(); p.done(); }
 });
