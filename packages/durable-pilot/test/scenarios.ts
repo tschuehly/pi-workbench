@@ -2,7 +2,7 @@
 // resumes explicitly and returns evidence. Assertions live in the *.test.ts files.
 import { join } from "node:path";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
-import { defineExtension, type HarnessSettings, LiveDoc, type SubmissionId } from "@earendil-works/pi-durable";
+import { defineDoc, defineExtension, defineTask, type HarnessSettings, LiveDoc, type SubmissionId } from "@earendil-works/pi-durable";
 import { fileDeferred, readLog, router } from "../src/faux.ts";
 import { admit, context, type Host, type HostOptions, openHost, Reconcile } from "../src/host.ts";
 import {
@@ -22,7 +22,7 @@ import {
 	StaleAnswer,
 	Subagents,
 } from "../src/pilot.ts";
-import type { Faults } from "../src/store.ts";
+import { type Faults, serveEndpoint } from "../src/store.ts";
 
 export type Io = {
 	readonly armed: Set<string>;
@@ -482,5 +482,165 @@ const attention: Scenario = {
 	},
 };
 
-export const scenarios: Record<string, Scenario> = { generation, tools, child, queue, question, attention };
+// ─── Ownership and storage ───────────────────────────────────────────────────
+
+/** crash: own the store and serve the endpoint. verify: try to own it; on success serve, report, wait for close. */
+const owner: Scenario = {
+	async crash(dir, _options, io) {
+		const host = await pilotHost(dir);
+		const endpoint = await serveEndpoint(join(dir, "session.sqlite"), host.store.owner);
+		await io.barrier("open", endpoint.owner);
+		return { ...host, close: async () => (await endpoint.close(), host.close()) };
+	},
+	async verify(dir, _options, io) {
+		let host: Host;
+		try {
+			host = await pilotHost(dir);
+		} catch (error) {
+			return { rejected: true, error: (error as Error).name };
+		}
+		const endpoint = await serveEndpoint(join(dir, "session.sqlite"), host.store.owner);
+		await io.barrier("open", endpoint.owner);
+		await io.closing;
+		await endpoint.close();
+		await host.close();
+		return { rejected: false, owner: endpoint.owner };
+	},
+};
+
+/** A real SQLITE_FULL: cap the database at its current size, then admit a large input. */
+const diskFull: Scenario = {
+	async crash(dir, _options, io) {
+		const host = await pilotHost(dir);
+		await admit(host.root, { operationId: "op-0", text: "warm up" });
+		await waitRequest(host, "op-0");
+		const { page_count } = (await host.store.database.get<{ page_count: number }>("PRAGMA page_count"))!;
+		await host.store.exec(`PRAGMA max_page_count = ${page_count}`);
+		let admitted: unknown = null;
+		let error: string | null = null;
+		try {
+			admitted = await admit(host.root, { operationId: "op-big", text: `big ${"x".repeat(400_000)}` });
+		} catch (failure) {
+			// The facade wraps SQLITE_FULL with a failed ROLLBACK (SQLite already rolled back) in an AggregateError.
+			const inner = (failure as { errors?: unknown[] }).errors ?? [];
+			error = [String((failure as Error).message ?? failure), ...inner.map((e) => String((e as Error).message ?? e))].join(" | ");
+		}
+		// A storage error ends the Harness; wait for that end only when the admission failed.
+		const end = error === null ? "open" : (await host.harness.closed).reason;
+		await io.barrier("rejected", { admitted, error, end, reports: host.reports.map((r) => r.type) });
+		return { ...host, close: async () => {} };
+	},
+	async verify(dir) {
+		const host = await pilotHost(dir);
+		const before = (await submissionByRequest(host, "op-big"))?.status ?? null;
+		host.resume();
+		await admit(host.root, { operationId: "op-big", text: `big ${"x".repeat(400_000)}` });
+		const settled = await waitRequest(host, "op-big");
+		const t = await transcript(host);
+		const evidence = { before, settled, bigInputs: t.users.filter((u) => u.startsWith("big ")).length, ...(await common(host, dir)) };
+		await host.close();
+		return evidence;
+	},
+};
+
+/** Each spawn opens; a crash-looping task kills the process until the restart limit parks it. */
+const parking: Scenario = {
+	async crash(dir, options, io) {
+		const host = await pilotHost(dir, { settings: { restartLimit: 3 } });
+		if (options.first === true) await admit(host.root, { operationId: "op-1", text: "call:crasher" });
+		const inspection = await host.harness.inspect(context);
+		const parked = inspection.tasks.filter((t) => t.state.kind === "blocked" && t.state.reason === "restart_limit");
+		host.resume();
+		if (parked.length > 0) {
+			await host.harness.inspect(context);
+			await io.barrier("parked", {
+				parked: parked.map((t) => ({ id: t.record.id, kind: t.record.kind })),
+				wake: host.harness.wake(),
+				reports: host.reports.map((r) => r.type),
+				runs: readLog(join(dir, "effects.log")).length,
+			});
+		}
+		return host;
+	},
+	async verify() {
+		return {};
+	},
+};
+
+// ─── Task and document versions ──────────────────────────────────────────────
+
+const Counter = (version: 1 | 2, migrate?: "ok" | "throw") =>
+	defineDoc<{ count: number; label?: string }>({
+		kind: "pilot.versioned-doc",
+		version,
+		scope: "conversation",
+		history: "latest",
+		fork: "initial",
+		initial: () => ({ count: 0 }),
+		checkpointWhen: () => false,
+		...(migrate === undefined ? {} : { migrate: (value) => ({ count: value.count as number, label: "migrated" }) }),
+	});
+
+const Versioned = (version: 1 | 2, migrate?: "ok" | "throw") =>
+	defineTask<{ n: number; label?: string }, { phase: "work" }, string>({
+		name: "pilot.versioned",
+		version,
+		initial: () => ({ phase: "work" }),
+		phases: {
+			work: async (task, runtime, c) => {
+				await holdIn(versionsIo!, "v1-running", runtime.signal);
+				await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: `v${version} ${task.input.label ?? "-"}` } }), c);
+			},
+		},
+		abort: (_t, runtime, c) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c),
+		...(migrate === undefined
+			? {}
+			: {
+					migrate: (input: unknown, checkpoint: unknown) => {
+						if (migrate === "throw") throw new Error("scripted migration failure");
+						return { input: { ...(input as { n: number }), label: "migrated" }, checkpoint: checkpoint as { phase: "work" } };
+					},
+				}),
+	});
+let versionsIo: Io | undefined;
+
+const versions: Scenario = {
+	async crash(dir, _options, io) {
+		versionsIo = io;
+		const host = await pilotHost(dir);
+		host.registry.install(defineExtension({ name: "pilot.versioned", tasks: [Versioned(1)] }));
+		await host.root.commit(async (tx) => {
+			(await tx.doc(Counter(1), host.root.id)).count = 7;
+			await tx.createTask(Versioned(1), { n: 1 }, { ownership: { kind: "conversation" } });
+		}, context);
+		host.resume();
+		return host;
+	},
+	async verify(dir, options, io) {
+		versionsIo = io;
+		const variant = options.variant as "upgrade" | "missing" | "failed";
+		const host = await pilotHost(dir);
+		const task = variant === "upgrade" ? Versioned(2, "ok") : variant === "failed" ? Versioned(2, "throw") : undefined;
+		if (task !== undefined) host.registry.install(defineExtension({ name: "pilot.versioned", tasks: [task] }));
+		host.resume();
+		const id = (await host.root.commit((tx) => tx.scanTasks({ conversationId: host.root.id }, 100), context)).items.find((t) => t.kind === "pilot.versioned")!.id;
+		const inspect = async () => (await host.harness.inspect(context)).tasks.find((t) => t.record.id === id)?.state ?? null;
+		const evidence: Record<string, unknown> = { doc: await host.harness.snapshot(Counter(2, "ok"), host.root.id, context) };
+		if (variant === "upgrade") {
+			evidence.outcome = (await host.harness.waitForTask(id, context)).state.outcome;
+		} else {
+			evidence.blocked = await inspect();
+			evidence.wake = host.harness.wake();
+			if (variant === "missing") {
+				host.registry.install(defineExtension({ name: "pilot.versioned", tasks: [Versioned(1)] }));
+				evidence.outcome = (await host.harness.waitForTask(id, context)).state.outcome;
+			}
+		}
+		Object.assign(evidence, { reports: host.reports.map((r) => r.type) });
+		await host.close();
+		return evidence;
+	},
+};
+
+export const scenarios: Record<string, Scenario> = { generation, tools, child, queue, question, attention, owner, diskFull, parking, versions };
 export type { SubmissionId };
