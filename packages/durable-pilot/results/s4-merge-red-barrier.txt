@@ -1,0 +1,43 @@
+# Red: no checkpoint barrier for host-side deliveries (src/chat-session.ts #deliverable without the CheckpointDoc wait)
+✖ checkpoint barrier: human input arriving during compact_and_continue is delivered only after the continuation is placed (5509.290917ms)
+✖ checkpoint barrier: a job finishing during compact_and_continue is delivered only after the continuation is placed (2596.417167ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8468.51675
+
+✖ failing tests:
+
+test at test/atelier.test.ts:130:1
+✖ checkpoint barrier: human input arriving during compact_and_continue is delivered only after the continuation is placed (5509.290917ms)
+  AssertionError [ERR_ASSERTION]: the continuation (14) is placed before the human input (11)
+      at TestContext.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/atelier.test.ts:150:9)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/background-bash.test.ts:218:1
+✖ checkpoint barrier: a job finishing during compact_and_continue is delivered only after the continuation is placed (2596.417167ms)
+  AssertionError [ERR_ASSERTION]: the continuation (12) is placed before the completion (9)
+      at TestContext.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/background-bash.test.ts:242:9)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

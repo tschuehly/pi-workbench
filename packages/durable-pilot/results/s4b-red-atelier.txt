@@ -1,0 +1,129 @@
+✖ P075/P076 open links a served Page; a human Comment reaches the Chat once after its undo window; ask, answer, status, update and check act on the Event Log (1128.049792ms)
+✖ P076 a Comment arriving while the Chat is busy is one follow-up after the run, never inside it (827.629542ms)
+✖ P076 human input is redacted before it is committed; the Event Log keeps what the human wrote (885.267167ms)
+✖ survival: a kill right after a human event's append delivers it once from the reopened host, on the same link (847.906875ms)
+✖ survival: a kill after admission, before the Event Log records it, admits nothing twice (871.637458ms)
+✖ survival: a kill after the receipt delivers nothing again (848.585334ms)
+✖ survival: a second Chat cannot open or take over a Page a live Chat receives; after that Chat dies it reclaims it at the next generation, and the old Chat stays out (970.620917ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 0
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6674.072583
+
+✖ failing tests:
+
+test at test/atelier.test.ts:67:1
+✖ P075/P076 open links a served Page; a human Comment reaches the Chat once after its undo window; ask, answer, status, update and check act on the Event Log (1128.049792ms)
+  AssertionError [ERR_ASSERTION]: <harness>
+  [error] Tool atelier is not available
+  </harness>
+  
+  true !== false
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/atelier.test.ts:114:1
+✖ P076 a Comment arriving while the Chat is busy is one follow-up after the run, never inside it (827.629542ms)
+  AssertionError [ERR_ASSERTION]: <harness>
+  [error] Tool atelier is not available
+  </harness>
+  
+  true !== false
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/atelier.test.ts:130:1
+✖ P076 human input is redacted before it is committed; the Event Log keeps what the human wrote (885.267167ms)
+  AssertionError [ERR_ASSERTION]: <harness>
+  [error] Tool atelier is not available
+  </harness>
+  
+  true !== false
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/atelier.test.ts:149:1
+✖ survival: a kill right after a human event's append delivers it once from the reopened host, on the same link (847.906875ms)
+  AssertionError [ERR_ASSERTION]: <harness>
+  [error] Tool atelier is not available
+  </harness>
+  
+  true !== false
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/atelier.test.ts:170:1
+✖ survival: a kill after admission, before the Event Log records it, admits nothing twice (871.637458ms)
+  AssertionError [ERR_ASSERTION]: <harness>
+  [error] Tool atelier is not available
+  </harness>
+  
+  true !== false
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/atelier.test.ts:190:1
+✖ survival: a kill after the receipt delivers nothing again (848.585334ms)
+  AssertionError [ERR_ASSERTION]: <harness>
+  [error] Tool atelier is not available
+  </harness>
+  
+  true !== false
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/atelier.test.ts:208:1
+✖ survival: a second Chat cannot open or take over a Page a live Chat receives; after that Chat dies it reclaims it at the next generation, and the old Chat stays out (970.620917ms)
+  AssertionError [ERR_ASSERTION]: <harness>
+  [error] Tool atelier is not available
+  </harness>
+  
+  true !== false
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

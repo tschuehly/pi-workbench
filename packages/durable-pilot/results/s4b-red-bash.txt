@@ -1,0 +1,112 @@
+✖ P078/P081 bash runs in the background by default: a job ID returns at once, one completion with the exit and output wakes the Chat (1258.352375ms)
+✖ P071 foreground waits for the output inline; a failing exit is an error result; no completion follows (621.499083ms)
+✖ P071/P078 a foreground wait over 30 seconds hands off the same job, launched once; its completion follows once (30001.28275ms)
+✖ P079/P080 bash_status lists only this Chat's jobs; bash_cancel stops only an owned job, which does not wake the Chat (30001.997708ms)
+✖ P078 a timeout stops the job and its completion reports it; output over the inline limit discloses truncation (30001.140375ms)
+✖ P081 output is redacted in the tool result, the completion and the store; the log keeps the raw output (559.602417ms)
+✖ survival: a kill after launch intent, before spawn, launches the command once when work resumes (30002.233792ms)
+✖ survival: a kill after spawn, before the result, reattaches to the live runner; launched once (30002.119291ms)
+✖ survival: a kill after completion admission delivers the completion once (30001.44125ms)
+✖ survival: a job that finishes while its host is gone delivers its completion once on reopen, without user input (1706.097375ms)
+✖ survival: a still-running job reattaches by its runner's identity; a runner lost with the machine reports an unknown exit and is never rerun (30000.838583ms)
+✖ survival: a host shutdown during a foreground wait leaves the job running; an explicit Stop cancels it (660.601917ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 0
+ℹ fail 5
+ℹ cancelled 7
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 387933.986792
+
+✖ failing tests:
+
+test at test/background-bash.test.ts:63:1
+✖ P078/P081 bash runs in the background by default: a job ID returns at once, one completion with the exit and output wakes the Chat (1258.352375ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /^Background bash [0-9a-f-]{36} started\. .*Output log: .*output\.log$/s. Input:
+  
+  'finished-output\n'
+  
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'finished-output\n',
+    expected: /^Background bash [0-9a-f-]{36} started\. .*Output log: .*output\.log$/s,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test/background-bash.test.ts:86:1
+✖ P071 foreground waits for the output inline; a failing exit is an error result; no completion follows (621.499083ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /out\nerr\n\n\nCommand exited with code 3$/. Input:
+  
+  'out\nerr\n\n<harness>\n[error] Command exited with code 3\n</harness>'
+  
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'out\nerr\n\n<harness>\n[error] Command exited with code 3\n</harness>',
+    expected: /out\nerr\n\n\nCommand exited with code 3$/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test/background-bash.test.ts:106:1
+✖ P071/P078 a foreground wait over 30 seconds hands off the same job, launched once; its completion follows once (30001.28275ms)
+  'test timed out after 30000ms'
+
+test at test/background-bash.test.ts:123:1
+✖ P079/P080 bash_status lists only this Chat's jobs; bash_cancel stops only an owned job, which does not wake the Chat (30001.997708ms)
+  'test timed out after 30000ms'
+
+test at test/background-bash.test.ts:176:1
+✖ P078 a timeout stops the job and its completion reports it; output over the inline limit discloses truncation (30001.140375ms)
+  'test timed out after 30000ms'
+
+test at test/background-bash.test.ts:195:1
+✖ P081 output is redacted in the tool result, the completion and the store; the log keeps the raw output (559.602417ms)
+  AssertionError [ERR_ASSERTION]: no job ID in token=[REDACTED:env:S4B_LEAK_TOKEN]
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test/background-bash.test.ts:217:1
+✖ survival: a kill after launch intent, before spawn, launches the command once when work resumes (30002.233792ms)
+  'test timed out after 30000ms'
+
+test at test/background-bash.test.ts:237:1
+✖ survival: a kill after spawn, before the result, reattaches to the live runner; launched once (30002.119291ms)
+  'test timed out after 30000ms'
+
+test at test/background-bash.test.ts:255:1
+✖ survival: a kill after completion admission delivers the completion once (30001.44125ms)
+  'test timed out after 30000ms'
+
+test at test/background-bash.test.ts:272:1
+✖ survival: a job that finishes while its host is gone delivers its completion once on reopen, without user input (1706.097375ms)
+  AssertionError [ERR_ASSERTION]: no job ID in survived
+  
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }
+
+test at test/background-bash.test.ts:298:1
+✖ survival: a still-running job reattaches by its runner's identity; a runner lost with the machine reports an unknown exit and is never rerun (30000.838583ms)
+  'test timed out after 30000ms'
+
+test at test/background-bash.test.ts:324:1
+✖ survival: a host shutdown during a foreground wait leaves the job running; an explicit Stop cancels it (660.601917ms)
+  Error: ENOENT: no such file or directory, scandir '/Users/tschuehly/.pi-workbench/tmp/pi-web/01a164f7-a016-7386-ab56-0ada38d22585/dp-s4b-bash-zR6YY0/jobs'
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'scandir',
+    path: '/Users/tschuehly/.pi-workbench/tmp/pi-web/01a164f7-a016-7386-ab56-0ada38d22585/dp-s4b-bash-zR6YY0/jobs'
+  }
+EXIT 1

@@ -1,0 +1,43 @@
+=== NEGATIVE CONTROL: Atelier: human input not redacted before admission
+✖ P076 human input is redacted before it is committed; the Event Log keeps what the human wrote (3950.061583ms)
+ℹ pass 0
+ℹ fail 1
+✖ failing tests:
+✖ P076 human input is redacted before it is committed; the Event Log keeps what the human wrote (3950.061583ms)
+=== NEGATIVE CONTROL: Atelier: delivery request ID not derived from Page+events
+✖ survival: a kill after admission, before the Event Log records it, admits nothing twice (60002.296417ms)
+ℹ pass 0
+ℹ fail 0
+✖ failing tests:
+✖ survival: a kill after admission, before the Event Log records it, admits nothing twice (60002.296417ms)
+=== NEGATIVE CONTROL: Atelier: acknowledge before durable admission
+✖ survival: a kill after admission, before the Event Log records it, admits nothing twice (3749.66275ms)
+ℹ pass 0
+ℹ fail 1
+✖ failing tests:
+✖ survival: a kill after admission, before the Event Log records it, admits nothing twice (3749.66275ms)
+=== NEGATIVE CONTROL: Bash: completion not redacted
+✖ P081 output is redacted in the tool result, the completion and the store; the log keeps the raw output (1316.249667ms)
+ℹ pass 0
+ℹ fail 1
+✖ failing tests:
+✖ P081 output is redacted in the tool result, the completion and the store; the log keeps the raw output (1316.249667ms)
+=== NEGATIVE CONTROL: Bash: completion request ID not derived from job
+✖ survival: a kill after completion admission delivers the completion once (3772.054ms)
+ℹ pass 0
+ℹ fail 1
+✖ failing tests:
+✖ survival: a kill after completion admission delivers the completion once (3772.054ms)
+=== NEGATIVE CONTROL: Bash: launch not gated by the runner claim
+✔ survival: a kill after spawn, before the result, reattaches to the live runner; launched once (2544.263125ms)
+ℹ pass 1
+ℹ fail 0
+=== NEGATIVE CONTROL: Bash: no claim (neither the host's check nor the runner's)
+✖ survival: a kill after spawn, before the result, reattaches to the live runner; launched once (2870.163459ms)
+ℹ pass 0
+ℹ fail 1
+✖ failing tests:
+✖ survival: a kill after spawn, before the result, reattaches to the live runner; launched once (2870.163459ms)
+  AssertionError [ERR_ASSERTION]: never launched twice
+    actual: 2,
+    expected: 1,

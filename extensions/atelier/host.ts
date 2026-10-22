@@ -292,6 +292,8 @@ export function createHost(options: {
   watchdogMs?: number;
   /** serve.mjs: the Kernel marks the Page as served by a test host, not a Pi session. */
   test?: boolean;
+  /** The port to serve on when free, else any. */
+  port?: number;
 }) {
   const root = realpathSync(options.root);
   const sessionId = options.sessionId ?? randomUUID();
@@ -502,8 +504,11 @@ export function createHost(options: {
   function listen() {
     ready ??= new Promise<void>((resolve, reject) => {
       server = createServer(handle);
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => { port = (server!.address() as { port: number }).port; resolve(); });
+      server.once("error", (error: NodeJS.ErrnoException) => { if (!options.port || error.code !== "EADDRINUSE") reject(error); });
+      const listening = () => { port = (server!.address() as { port: number }).port; resolve(); };
+      // A reopened host asks for its earlier port, so tabs the human still has open reconnect; taken, it takes any.
+      if (options.port) server.once("error", (error: NodeJS.ErrnoException) => { if (error.code === "EADDRINUSE") server!.listen(0, "127.0.0.1", listening); });
+      server.listen(options.port ?? 0, "127.0.0.1", listening);
     });
     return ready;
   }
@@ -602,6 +607,8 @@ export function createHost(options: {
   const deliverDue = (page: string, replay = false) => { const rec = REG.served.get(page); return rec?.receiver?.session === sessionId ? rec.ep.deliver(rec, replay) : 0; };
   return {
     root,
+    /** The port this session's page server listens on, once it does. */
+    port: () => port,
     url: (page: string) => REG.served.get(page)?.ep.url(page) ?? url(page),
     rel,
     deliverDue,
@@ -617,9 +624,9 @@ export function createHost(options: {
     takeover,
     agent(page: string, entry: Record<string, unknown>) { return receiving(page).ep.append(page, { ...entry, origin: "agent" }); },
     /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */
-    update(page: string, note?: string) {
+    update(page: string, note?: string, fields: Record<string, unknown> = {}) {
       const rec = receiving(page);
-      if (note) rec.ep.append(page, { origin: "agent", type: "update", note });
+      if (note) rec.ep.append(page, { ...fields, origin: "agent", type: "update", note });
       rec.ep.broadcast(page, "update", { mtime: statSync(page).mtimeMs, note });
       return rec.clients.size;
     },

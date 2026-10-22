@@ -3,7 +3,7 @@
 // slice 1 (generation, safe/unsafe tools, queued input, ownership) rerun against this host. Every barrier is an event
 // the host emitted after the relevant commit; no timing sleeps.
 import assert from "node:assert/strict";
-import { type ChildProcess, fork } from "node:child_process";
+import { type ChildProcess, execFileSync, fork } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -24,6 +24,17 @@ process.env.PI_STORAGE_GUARD_FREE_GB = "1000";
 process.env.PI_TMP_ROOT = scratch("chat-pi-tmp");
 // And a Pi agent dir with fake stored logins, so hosts never read or lock the owner's auth.json.
 process.env.PI_CODING_AGENT_DIR = fakeAgentDir("chat-agent");
+
+/**
+ * The reconciliation rows need a real unsafe call that a kill interrupts mid-effect: `write` into a FIFO, whose open
+ * blocks until a reader comes (a lead's bash is the replay-safe Workbench bash, which reattaches instead).
+ */
+function heldWrite(cwd: string): string {
+	execFileSync("mkfifo", [join(cwd, "effect.fifo")]);
+	return 'call:write {"path":"effect.fifo","content":"deploy\\n"}';
+}
+/** The held write is running: its tool task committed its intent (the live slot reads running). */
+const writing = (host: ChatHost) => host.until((e) => e.type === "tool.start" && e.toolName === "write", "the held write");
 
 class ChatHost {
 	readonly child: ChildProcess;
@@ -122,7 +133,7 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	const ready = await host.ready;
 	assert.equal(ready.protocol, 2);
 	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree"], "the gated PI WEB operations this host supports");
-	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt"}' });
+	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt","description":"Read and write","foreground":true}' });
 	await host.until((e) => e.type === "agent.end", "the run to end");
 	const types = host.events.map((e) => e.type);
 	for (const type of ["agent.start", "tool.start", "tool.end", "message.end", "assistant.start", "agent.end", "status.update"]) assert.ok(types.includes(type), `${type} in ${types.join(",")}`);
@@ -147,7 +158,7 @@ test("Stop withdraws the queued follow-up and ends the running bash call", async
 	const { store, cwd } = family("stop");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
-	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo running; sleep 20"}' });
+	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo running; sleep 20","description":"Run","foreground":true}' });
 	await host.until((e) => e.type === "tool.update" && String(e.text).includes("running"), "bash output");
 	await host.call("prompt", { operationId: "op-2", text: "the follow-up" });
 	const queued = await host.call<Transcript["status"]>("status");
@@ -193,21 +204,21 @@ test("crash row generation: a committed partial survives a kill, restore stays p
 	assert.equal(integrity(store), "ok");
 });
 
-test("crash row tools: an interrupted unsafe bash never reruns and blocks a new bash; safe read still runs", async () => {
+test("crash row tools: an interrupted unsafe write never reruns and blocks a new write; safe read still runs", async () => {
 	const { store, cwd } = family("tools");
 	const first = new ChatHost(store, cwd);
 	await first.ready;
-	await first.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo deploy >> effects.log; echo started; sleep 5"}' });
-	await first.until((e) => e.type === "tool.update" && String(e.text).includes("started"), "the effect");
+	await first.call("prompt", { operationId: "op-1", text: heldWrite(cwd) });
+	await writing(first);
 	await first.kill();
 	const second = new ChatHost(store, cwd);
 	await second.ready;
-	await second.call("prompt", { operationId: "op-2", text: 'call:bash {"command":"echo deploy >> effects.log"}' });
-	await second.until((e) => e.type === "message.end" && textOf((e.message as { content?: unknown }).content) === "done after bash" && e !== undefined && second.events.filter((x) => x.type === "tool.end").length >= 2, "both bash results");
+	await second.call("prompt", { operationId: "op-2", text: 'call:write {"path":"other.txt","content":"x"}' });
+	await second.until((e) => e.type === "message.end" && textOf((e.message as { content?: unknown }).content) === "done after write" && second.events.filter((x) => x.type === "tool.end").length >= 2, "both write results");
 	const ends = second.events.filter((e) => e.type === "tool.end");
 	assert.match(String(ends[0]?.text), /interrupted/i, "the interrupted call is not rerun");
-	assert.match(String(ends[1]?.text), /Needs reconciliation/, "a fresh bash call is blocked");
-	assert.deepEqual(readFileSync(join(cwd, "effects.log"), "utf8").trim().split("\n"), ["deploy"], "the effect ran once");
+	assert.match(String(ends[1]?.text), /Needs reconciliation/, "a fresh write call is blocked");
+	assert.equal(existsSync(join(cwd, "other.txt")), false, "the blocked write had no effect");
 	writeFileSync(join(cwd, "readme.txt"), "safe\n");
 	await second.call("prompt", { operationId: "op-3", text: 'call:read {"path":"readme.txt"}' });
 	const read = await second.until((e) => e.type === "tool.end" && e.toolName === "read", "the read");
@@ -421,27 +432,27 @@ test("OpenAI models: offered from the stored ChatGPT and Copilot logins; the cho
 	assert.equal(existsSync(join(store, "requests.log")), false, "no model request was sent");
 });
 
-test("resolve: the owner marks an interrupted bash retry; it is recorded, the model is told once, and bash runs again", async () => {
+test("resolve: the owner marks an interrupted write retry; it is recorded, the model is told once, and write runs again", async () => {
 	const { store, cwd } = family("resolve");
 	const first = new ChatHost(store, cwd);
 	await first.ready;
-	await first.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo deploy >> effects.log; echo started; sleep 5"}' });
-	await first.until((e) => e.type === "tool.update" && String(e.text).includes("started"), "the effect");
+	await first.call("prompt", { operationId: "op-1", text: heldWrite(cwd) });
+	await writing(first);
 	await first.kill();
 
 	const host = new ChatHost(store, cwd);
 	await host.ready;
 	const [effect] = (await host.call<Status>("status")).unresolvedEffects ?? [];
-	assert.equal(effect?.toolName, "bash");
-	assert.match(effect!.arguments, /echo deploy/);
+	assert.equal(effect?.toolName, "write");
+	assert.match(effect!.arguments, /effect\.fifo/);
 	await assert.rejects(host.call("resolveEffect", { taskId: "999", resolution: "done" }), /No interrupted call/);
 	await host.call("resolveEffect", { taskId: effect!.id, resolution: "retry" });
 	await host.call("resolveEffect", { taskId: effect!.id, resolution: "retry" }); // an HTTP retry
 	await assert.rejects(host.call("resolveEffect", { taskId: effect!.id, resolution: "done" }), /already marked retry/);
 	assert.equal((await host.call<Status>("status")).unresolvedEffects, undefined);
-	await host.until(() => logged(store).some((l) => l.label.startsWith("The user resolved the interrupted bash")), "the resolution reaching the model");
-	await host.call("prompt", { operationId: "op-2", text: 'call:bash {"command":"echo deploy >> effects.log"}' });
-	await host.until((e) => e.type === "tool.end" && e.toolName === "bash" && e.isError === false, "a bash call that is no longer blocked");
+	await host.until(() => logged(store).some((l) => l.label.startsWith("The user resolved the interrupted write")), "the resolution reaching the model");
+	await host.call("prompt", { operationId: "op-2", text: 'call:write {"path":"after.txt","content":"x"}' });
+	await host.until((e) => e.type === "tool.end" && e.toolName === "write" && e.isError === false, "a write call that is no longer blocked");
 	assert.equal(logged(store).filter((l) => l.label.startsWith("The user resolved")).length, 1, "the model was told once");
 	const transcript = await host.call<{ messages: { role: string; customType?: string }[] }>("transcript");
 	assert.equal(transcript.messages.filter((m) => m.customType === "workbench.reconciliation").length, 1);
@@ -468,14 +479,13 @@ test("an orderly SIGTERM closes the store gracefully: exit 0, the running unsafe
 	const { store, cwd } = family("sigterm");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
-	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo deploy >> effects.log; sleep 30"}' });
-	// Barrier: the effect itself (the command prints nothing, so no event would wake an event wait).
-	while (!existsSync(join(cwd, "effects.log"))) await new Promise((resolve) => setTimeout(resolve, 20));
+	await host.call("prompt", { operationId: "op-1", text: heldWrite(cwd) });
+	await writing(host);
 	host.child.kill("SIGTERM");
 	assert.equal(await host.exited, 0);
 	const reopened = new ChatHost(store, cwd);
 	await reopened.ready;
-	assert.equal((await reopened.call<Status>("status")).unresolvedEffects?.[0]?.toolName, "bash");
+	assert.equal((await reopened.call<Status>("status")).unresolvedEffects?.[0]?.toolName, "write");
 	await reopened.close();
 	assert.equal(integrity(store), "ok");
 	const events = readdirSync(TELEMETRY).flatMap((file) => readLog<{ type: string; sessionId: string }>(join(TELEMETRY, file))).filter((e) => e.sessionId === store);

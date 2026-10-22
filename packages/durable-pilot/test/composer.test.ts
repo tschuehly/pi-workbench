@@ -36,7 +36,7 @@ test("queued edit: toggle, promote, remove, recall and promote-all change the Du
 	const { store, cwd } = family("queue-edit");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
-	await host.call("prompt", { operationId: "op-run", text: 'call:bash {"command":"echo running; sleep 30"}' });
+	await host.call("prompt", { operationId: "op-run", text: 'call:bash {"command":"echo running; sleep 30","description":"Run","foreground":true}' });
 	await running(host);
 	for (const [op, text, mode] of [["op-f1", "f1"], ["op-f2", "f2"], ["op-s1", "s1", "steer"], ["op-f3", "f3"]] as const)
 		await host.call("prompt", { operationId: op, text, ...(mode === undefined ? {} : { mode }) });
@@ -72,7 +72,7 @@ test("crash row queue edit: queued messages survive a kill, stay editable while 
 	const { store, cwd } = family("queue-kill");
 	const first = new ChatHost(store, cwd);
 	await first.ready;
-	await first.call("prompt", { operationId: "op-run", text: 'call:bash {"command":"echo running; sleep 30"}' });
+	await first.call("prompt", { operationId: "op-run", text: 'call:bash {"command":"echo running; sleep 30","description":"Run","foreground":true}' });
 	await running(first);
 	await first.call("prompt", { operationId: "op-f1", text: "dropped" });
 	await first.call("prompt", { operationId: "op-f2", text: "kept" });
@@ -125,7 +125,7 @@ test("attachments: an image reaches the model, survives a kill and a restart, qu
 	assert.ok(storeHas(store, PNG.slice(0, 40)), "the image itself is stored");
 
 	// Queued with an image: the queue says so, as a legacy Chat's does.
-	await host.call("prompt", { operationId: "op-run", text: 'call:bash {"command":"echo running; sleep 30"}' });
+	await host.call("prompt", { operationId: "op-run", text: 'call:bash {"command":"echo running; sleep 30","description":"Run","foreground":true}' });
 	await running(host);
 	await host.call("prompt", { operationId: "op-queued", text: "queued pic", images: [image, image], attachments: [...attachments, { reference: "[PIC_2]", mimeType: "image/png" }] });
 	const [queued] = await queue(host);

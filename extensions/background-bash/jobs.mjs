@@ -10,14 +10,14 @@ import { redact, redactDeep } from "../secret-redaction/redact.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { writeOnce } from "./runner.mjs";
 
-const MAX_TAIL = 12_000;
+export const MAX_TAIL = 12_000;
 const MAX_ACTIVE = 8;
 const MAX_RETAINED = 64;
 const KEEP_MS = 7 * 24 * 3600_000;
 export const MAX_LIFETIME_SECONDS = 12 * 3600;
 const RUNNER = fileURLToPath(new URL("./runner.mjs", import.meta.url));
 export const defaultRoot = () => process.env.PI_BACKGROUND_BASH_ROOT ?? join(homedir(), ".pi-workbench", "background-bash", "jobs");
-const cleanOutput = (text) => stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+export const cleanOutput = (text) => stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 const readJson = (path) => { try { return JSON.parse(readFileSync(path, "utf8")); } catch { return undefined; } };
 const fileSize = (path) => { try { return statSync(path).size; } catch { return 0; } };
 function writeJson(path, value) {
@@ -29,17 +29,94 @@ function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
 }
 /** The registered group leader is still this job's runner, not a reused PID. */
-function ownsProcess(job) {
+export function ownsProcess(job) {
   if (!alive(job.pgid)) return false;
   try { return execFileSync("ps", ["-ww", "-o", "command=", "-p", String(job.pgid)], { encoding: "utf8" }).includes(job.id); }
   catch { return false; }
 }
-function readTail(path, size) {
+export function readTail(path, size) {
   const length = Math.min(size, MAX_TAIL);
   const buffer = Buffer.alloc(length);
   const fd = openSync(path, "r");
   try { readSync(fd, buffer, 0, length, size - length); } finally { closeSync(fd); }
   return buffer.toString("utf8").replace(/^\uFFFD+/u, "");
+}
+
+/** A job as tools, status and completions show it. */
+export function describeJob(job) {
+  return { id: job.id, command: job.command, ...(job.description === undefined ? {} : { description: job.description }), state: job.state, elapsedSeconds: Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000), bytes: job.bytes, logPath: job.logPath, ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }) };
+}
+
+/**
+ * A finished job's completion message (not yet redacted): state, exit, log path and recent output, the last 20 lines
+ * of a success and the whole retained tail otherwise, with truncation disclosed.
+ */
+export function completionContent(job) {
+  const tail = readTail(job.logPath, job.bytes);
+  const shown = job.exitCode === 0 ? tail.replace(/\n$/, "").split("\n").slice(-20).join("\n") : tail;
+  return `Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${cleanOutput(shown)}`;
+}
+
+/** Redacted, control-free command, description and recent output for the Activity drawer. */
+export function previewJob(job, chars) {
+  // Redact before cutting so a secret split at the edge is still recognized.
+  const full = redact(cleanOutput(readTail(job.logPath, job.bytes)));
+  let output = full.slice(-chars);
+  // Start at a line boundary when the cut fell mid-line.
+  if (output.length < full.length && full[full.length - output.length - 1] !== "\n" && output.includes("\n")) output = output.slice(output.indexOf("\n") + 1);
+  return { command: redact(cleanOutput(job.command)).slice(0, 240), ...(job.description === undefined ? {} : { description: redact(cleanOutput(job.description)).slice(0, 120) }), output, logPath: job.logPath };
+}
+
+const VANISHED = "The job runner ended without recording an exit status";
+
+/**
+ * Launch a job under a caller-chosen ID (a host that persisted its launch intent first), idempotently: a job whose
+ * runner already claimed it is never started again, and of two runners started for one job only the one that claims
+ * it runs the command (runner.mjs). Returns whether a runner was started.
+ */
+export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, lifetimeSeconds = MAX_LIFETIME_SECONDS }) {
+  if (!/^[\w-]+$/.test(id)) throw new Error(`Invalid job ID ${id}`);
+  const dir = join(root, id);
+  if (existsSync(join(dir, "claim")) || existsSync(join(dir, "exit"))) return false;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  closeSync(openSync(join(dir, "output.log"), "a", 0o600));
+  writeJson(join(dir, "job.json"), { id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000 });
+  const runner = spawn(process.execPath, [RUNNER, dir], { cwd: dir, detached: true, stdio: "ignore", env });
+  runner.once("error", () => {});
+  runner.unref();
+  return true;
+}
+
+/**
+ * One job's state from the registry: `pending` before a runner claimed it, `running`, or settled. A claimed job whose
+ * runner is gone without an exit record (a machine restart) settles as failed with unknown exit, never rerun.
+ */
+export function readJob(root, id) {
+  if (!/^[\w-]+$/.test(id)) return undefined;
+  const dir = join(root, id);
+  const record = readJson(join(dir, "job.json"));
+  if (record === undefined) return undefined;
+  const logPath = join(dir, "output.log");
+  const job = { id, command: record.command, ...(typeof record.description === "string" && record.description.trim() !== "" ? { description: record.description } : {}), startedAt: record.startedAt, logPath, dir, bytes: fileSize(logPath), state: "running" };
+  let result = readJson(join(dir, "exit"));
+  const claim = readJson(join(dir, "claim"));
+  if (result === undefined && claim === undefined) return { ...job, state: "pending" };
+  if (result === undefined && !ownsProcess({ id, pgid: claim?.pid })) {
+    writeOnce(join(dir, "exit"), JSON.stringify({ error: `${VANISHED} (interrupted, for example by a restart of this machine); it was not run again`, finishedAt: Date.now() }));
+    result = readJson(join(dir, "exit"));
+  }
+  if (result === undefined) return { ...job, pid: claim.pid };
+  const settled = result.cancelled ? { state: "cancelled" } : result.error !== undefined ? { state: "failed", error: result.error } : { state: result.exitCode === 0 ? "complete" : "failed", exitCode: result.exitCode };
+  return { ...job, ...settled, finishedAt: result.finishedAt, bytes: fileSize(logPath) };
+}
+
+/** Cancel a job: kill its runner's group only after verifying it is this job's runner; a pending job never starts. */
+export function cancelJob(root, id) {
+  const job = readJob(root, id);
+  if (job === undefined || (job.state !== "running" && job.state !== "pending")) return job;
+  if (job.pid !== undefined && ownsProcess({ id, pgid: job.pid })) { try { process.kill(-job.pid, "SIGKILL"); } catch { /* already gone */ } }
+  writeOnce(join(job.dir, "exit"), JSON.stringify({ cancelled: true, finishedAt: Date.now() }));
+  return readJob(root, id);
 }
 
 /**
@@ -65,9 +142,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     onChange();
   }
 
-  function describe(job) {
-    return { id: job.id, command: job.command, ...(job.description === undefined ? {} : { description: job.description }), state: job.state, elapsedSeconds: Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000), bytes: job.bytes, logPath: job.logPath, ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }) };
-  }
+  const describe = describeJob;
 
   function track(record, dir) {
     const job = { id: record.id, sessionId: record.sessionId, dir, command: record.command, description: typeof record.description === "string" && record.description.trim() !== "" ? record.description : undefined, startedAt: record.startedAt, pgid: record.pgid, logPath: join(dir, "output.log"), state: "running", bytes: 0, lastActivity: 0 };
@@ -91,8 +166,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
   function deliver(job, retry = false) {
     if (closed || (job.sent && !retry) || existsSync(join(job.dir, "delivered"))) return;
     job.sent = true;
-    const tail = readTail(job.logPath, job.bytes);
-    const shown = job.exitCode === 0 ? tail.replace(/\n$/, "").split("\n").slice(-20).join("\n") : tail;
+    const content = completionContent(job);
     const triggerTurn = job.state !== "cancelled";
     const send = () => {
       if (closed || existsSync(join(job.dir, "delivered"))) return;
@@ -100,7 +174,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
         pi.sendMessage({
           customType: "background-bash", display: true,
           // Idle, non-triggering completions persist before any extension hook runs, so redact here.
-          content: redact(`Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${cleanOutput(shown)}`),
+          content: redact(content),
           details: redactDeep(describe(job)),
         }, { triggerTurn, deliverAs: "followUp" });
       } catch (error) {
@@ -248,16 +322,9 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     jobs.clear();
   }
 
-  /** Redacted, control-free command, description and recent output for the Activity drawer. */
   function preview(id, chars) {
     const job = jobs.get(id);
-    if (job === undefined) return undefined;
-    // Redact before cutting so a secret split at the edge is still recognized.
-    const full = redact(cleanOutput(readTail(job.logPath, job.bytes)));
-    let output = full.slice(-chars);
-    // Start at a line boundary when the cut fell mid-line.
-    if (output.length < full.length && full[full.length - output.length - 1] !== "\n" && output.includes("\n")) output = output.slice(output.indexOf("\n") + 1);
-    return { command: redact(cleanOutput(job.command)).slice(0, 240), ...(job.description === undefined ? {} : { description: redact(cleanOutput(job.description)).slice(0, 120) }), output, logPath: job.logPath };
+    return job === undefined ? undefined : previewJob(job, chars);
   }
 
   return { start, wait, preview, attach, acknowledge, redeliver, cancel, shutdown, list: () => [...jobs.values()].map(describe) };

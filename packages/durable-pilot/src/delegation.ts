@@ -24,6 +24,7 @@ import {
 	defineExtension,
 	defineTask,
 	defineTool,
+	type Extension,
 	type Harness,
 	type JsonObject,
 	LiveDoc,
@@ -447,6 +448,8 @@ export type DelegationOptions = {
 	readonly dir: string;
 	/** Telemetry of launches, settlements and child usage. */
 	readonly record: (type: string, data: Record<string, unknown>) => void;
+	/** Extensions only the lead keeps (the Workbench bash): child conversations deselect them. */
+	readonly leadOnly?: readonly Extension[];
 };
 
 type Api = Parameters<ToolRegistration["execute"]>[1];
@@ -482,7 +485,7 @@ type Launch = {
 };
 
 /** In one commit: anchor, child conversation (fresh or forked from the Worker's last one), its agent, reporter, record. */
-async function admit(tx: Parameters<Parameters<Api["commit"]>[0]>[0], api: Api, launch: Launch, reporter: ReturnType<typeof reporterTask>): Promise<Execution> {
+async function admit(tx: Parameters<Parameters<Api["commit"]>[0]>[0], api: Api, launch: Launch, reporter: ReturnType<typeof reporterTask>, leadOnly: readonly Extension[] = []): Promise<Execution> {
 	const doc = await tx.doc(DelegationDoc, api.conversationId);
 	let at: number | undefined;
 	if (launch.worker?.forkFrom !== undefined) at = (await tx.scanEntries({ conversationId: launch.worker.forkFrom as ConversationId }, 1)).items[0]?.id;
@@ -496,6 +499,7 @@ async function admit(tx: Parameters<Parameters<Api["commit"]>[0]>[0], api: Api, 
 		model: { provider: launch.binding.provider, modelId: launch.binding.model },
 		thinkingLevel: launch.binding.effort,
 		cwd: launch.cwd,
+		extensions: { remove: leadOnly },
 		tools: launch.tools.tools,
 		modelTools: launch.tools.modelTools,
 	});
@@ -636,7 +640,7 @@ export function delegationExtension(options: DelegationOptions) {
 					return admit(tx, api, {
 						kind: "subagent", executionId, name: taskLabel(params.name ?? params.task), profile: params.profile, cognitiveRole: params.cognitiveRole,
 						binding, task: params.task, assignment, background: params.background === true, tools: childTools(api, profile.tools), cwd, depth: who.depth + 1,
-					}, Reporter);
+					}, Reporter, options.leadOnly);
 				}, c);
 				existing = undefined;
 				options.record("execution.launched", {
@@ -864,7 +868,7 @@ export function delegationExtension(options: DelegationOptions) {
 						kind: "worker", executionId, name: current!.name, profile: current!.profile, cognitiveRole: params.cognitiveRole, binding, task: params.task,
 						assignment: assignmentFor(current as Worker), background: params.background === true, tools: childTools(api, profile.tools), cwd: current!.repositoryRoot, depth: 1,
 						worker: { workerId: current!.workerId, name: current!.name, ...(current!.lineage.length > 0 ? { forkFrom: current!.lineage.at(-1)! } : {}) },
-					}, Reporter);
+					}, Reporter, options.leadOnly);
 					current!.lock = { executionId, acquiredAt: execution.launchedAt };
 					current!.lineage.push(execution.conversationId);
 					if (params.acknowledgeInspection === true) current!.requiresInspection = null;

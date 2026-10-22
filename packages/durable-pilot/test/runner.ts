@@ -8,6 +8,9 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 export const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Hermetic: every test file imports this module, and a Subagent or Worker environment running the tests (its execution
+// kind) must change nothing in the hosts they start.
+delete process.env.PI_WORKBENCH_EXECUTION_KIND;
 export const ITERATIONS = Number(process.env.PILOT_ITERATIONS ?? 20);
 const CONCURRENCY = Number(process.env.PILOT_CONCURRENCY ?? 6);
 const TIMEOUT_MS = Number(process.env.PILOT_TIMEOUT_MS ?? 60_000);

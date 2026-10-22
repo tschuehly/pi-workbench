@@ -24,6 +24,8 @@ import { type PackageEvent, PiPackages } from "./packages.ts";
 import { ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
+import { Atelier } from "./atelier.ts";
+import { BackgroundBash } from "./background-bash.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
 export const PREAMBLE = [
@@ -43,9 +45,10 @@ export function chatTools(resources: () => Resources, cwd: string) {
 			section("skills", () => resources().skills || undefined),
 			section("cwd", (input) => input.env?.cwd),
 		],
-		// read has no external effect, so a crash mid-read may rerun it; write, edit and bash stay unsafe (never rerun).
-		// grep/find/ls: Pi's own, offered only where an allowlist names them (children), as in legacy Chats.
-		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), createBashTool(), ...searchTools(cwd)].map((tool) => redactingTool(warningTool(tool))),
+		// read has no external effect, so a crash mid-read may rerun it; write and edit stay unsafe (never rerun). bash is
+		// the Workbench one (background-bash.ts). grep/find/ls: Pi's own, offered only where an allowlist names them
+		// (children), as in legacy Chats.
+		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), ...searchTools(cwd)].map((tool) => redactingTool(tool)),
 	});
 }
 
@@ -91,6 +94,10 @@ export type ChatHost = Host & {
 	listenPackages(listener: (event: PackageEvent) => void): void;
 	/** pi-openai-fast-mode for this Chat's workspace. */
 	readonly fast: FastMode;
+	/** The Workbench bash tools and their completion reporter (replace the core bash). */
+	readonly bash: BackgroundBash;
+	/** The atelier tool, its page server and the delivery of human input. */
+	readonly atelier: Atelier;
 };
 
 /**
@@ -131,13 +138,23 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	sweepPiTmp();
 	const chatId = options.chatId ?? options.dir;
 	let opened: Host | undefined;
-	// Tool groups defer the group tools of every extension before them.
+	// The lead is the active branch: history navigation may select another.
+	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id });
+	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id });
+	const workbenchBash = bash.extension();
+	// Tool groups defer the group tools of every extension before them. The Workbench bash, installed after the core
+	// tools, replaces their bash.
 	const extensions: Extension[] = [
 		chatTools(() => workbench.resources, options.cwd),
 		workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
 		workbenchExtensions(options.cwd),
 		checkpointExtension(() => opened!.harness),
-		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data) }),
+		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data), leadOnly: [workbenchBash] }),
+		// Subagents and Workers keep the native blocking bash, as the legacy extension leaves it to them: their
+		// conversations deselect the Workbench bash, so this one is theirs (decided per conversation, not per process).
+		defineExtension({ name: "workbench.native-bash", tools: [redactingTool(warningTool(createBashTool()))] }),
+		workbenchBash,
+		atelier.extension(),
 	];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
 	const aliases = claudeAliases("pi");
@@ -200,6 +217,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	return Object.assign(host, {
 		workbench,
 		fast,
+		bash,
+		atelier,
 		...(packages === undefined ? {} : { packages }),
 		listenPackages: (listener: (event: PackageEvent) => void) => {
 			chat.onPackageEvent = listener;

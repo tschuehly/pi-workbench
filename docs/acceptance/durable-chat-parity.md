@@ -647,7 +647,7 @@ Compound rows deliberately remain one AC, with all named variants required.
 - **Legacy equivalence:** Durable-only safety requirement; no legacy equivalent. Parent plan unsafe-effect reconciliation governs this row.
 - **Survival:** Kill after the external effect but before result commit and reopen twice. The unresolved intent remains visible and blocks replay/new duplicate mutation until resolution; after recording done/not-done, reopening does not repeat the effect. Count any explicitly authorized retry separately.
 - **Negative control:** Allow a fresh call to bypass an unresolved intent.
-- **Spec:** TBD (e2e/durable/attention-catalog/...)
+- **Spec:** PI WEB `e2e/durableChat.spec.ts` "P051" (a `write` into a FIFO held mid-effect, host stopped, Retry in the card); host rows in `packages/durable-pilot/test/chat-host.test.ts` (crash row tools, resolve, orderly SIGTERM).
 
 ### AC-P052 — /session (stats)
 

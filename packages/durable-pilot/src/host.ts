@@ -98,7 +98,11 @@ export async function reconcileOnOpen(harness: Harness, registry: Registry): Pro
 				: undefined;
 			name = call?.name ?? "unknown";
 		}
-		const current = registry.snapshot().tools().find(({ tool }) => tool.name === name)?.tool;
+		// The conversation's own tool of that name: the lead's bash is the Workbench one, a child's the native one.
+		const agent = await (await harness.conversation(record.conversationId, context))?.agent(context);
+		const current = agent === undefined
+			? registry.snapshot().tools().find(({ tool }) => tool.name === name)?.tool
+			: [...agent.tools, ...agent.callable, ...agent.deferred].find((tool) => tool.name === name);
 		if (checkpoint.replay === "safe" && current?.replay === "safe") continue;
 		found[record.id] = { tool: name, conversationId: record.conversationId, arguments: JSON.stringify(checkpoint.arguments) };
 	}

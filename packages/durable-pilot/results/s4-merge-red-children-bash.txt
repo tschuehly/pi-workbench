@@ -1,0 +1,49 @@
+# Red: child conversations keep the lead's Workbench bash (src/delegation.ts admit without extensions.remove leadOnly)
+✖ P089 background Subagent: routed fresh child with its allowlist and own identity; one wake; collect returns the answer with a receipt naming the model (2170.460625ms)
+✖ bash per conversation: the lead has the Workbench bash, a Subagent the native blocking bash, in the same host (1390.942083ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3919.218791
+
+✖ failing tests:
+
+test at test/delegation.test.ts:91:1
+✖ P089 background Subagent: routed fresh child with its allowlist and own identity; one wake; collect returns the answer with a receipt naming the model (2170.460625ms)
+  Error: ENOENT: no such file or directory, open '/Users/tschuehly/.pi-workbench/tmp/pi-web/01a1658f-6780-7534-97fa-8d9ee8a7eca1/dp-chat-subagent-bg-jc0TKG/workspace/child-id.txt'
+      at readFileSync (node:fs:539:20)
+      at file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/delegation.test.ts:116:16
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async inspect (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/delegation.test.ts:71:10)
+      at async TestContext.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/delegation.test.ts:113:2)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: '/Users/tschuehly/.pi-workbench/tmp/pi-web/01a1658f-6780-7534-97fa-8d9ee8a7eca1/dp-chat-subagent-bg-jc0TKG/workspace/child-id.txt'
+  }
+
+test at test/delegation.test.ts:146:1
+✖ bash per conversation: the lead has the Workbench bash, a Subagent the native blocking bash, in the same host (1390.942083ms)
+  AssertionError [ERR_ASSERTION]: the child's bash is the native one
+  
+  true !== false
+  
+      at file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/delegation.test.ts:161:10
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async inspect (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/delegation.test.ts:71:10)
+      at async TestContext.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/delegation.test.ts:154:2)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -143,6 +143,29 @@ test("P089 foreground Subagent: the tool returns the result and receipt itself, 
 	await host.close();
 });
 
+test("bash per conversation: the lead has the Workbench bash, a Subagent the native blocking bash, in the same host", async () => {
+	const { store, cwd } = family("bash-per-conversation");
+	const host = open(store, cwd);
+	await host.ready;
+	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 0.3; echo native-child"}', { background: false })));
+	await toolResult(host, "subagent");
+	await quiet(host);
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const bashOf = async (conversation: ConversationId) =>
+			(await (await h.harness.conversation(conversation, context))!.agent(context)).tools.find((tool) => tool.name === "bash")!;
+		const [e] = await executions(h);
+		const lead = await bashOf(h.root.id);
+		const child = await bashOf(e!.conversationId as ConversationId);
+		assert.ok("foreground" in (lead.parameters as { properties: object }).properties, "the lead's bash is the Workbench one");
+		assert.equal("foreground" in (child.parameters as { properties: object }).properties, false, "the child's bash is the native one");
+		const result = (await entries(h, e!.conversationId)).map((entry) => entry.model?.[0] as Message & { toolName?: string } | undefined).find((m) => m?.toolName === "bash");
+		assert.equal(textOf(result!.content).trim(), "native-child", "the child waited for its command, as native bash does");
+		assert.equal(result!.isError, false);
+	});
+	assert.equal(integrity(store), "ok");
+});
+
 test("P089 independent review: routed to another model family, the receipt names it; exclusions and misuse fail preflight", async () => {
 	const { store, cwd } = family("subagent-review");
 	const host = open(store, cwd);
@@ -182,7 +205,7 @@ test("P090/P091 collect and status: running inspection returns at once; a long r
 	await prompt(host, calls(
 		{ name: "subagent", arguments: scout("long:9000", { name: "Long" }) },
 		{ name: "subagent", arguments: scout("fail", { name: "Failing" }) },
-		{ name: "bash", arguments: { command: "sleep 1.5" } },
+		{ name: "bash", arguments: { command: "sleep 1.5", description: "Keep the lead busy", foreground: true } },
 	));
 	await toolResult(host, "subagent", 3);
 	const bulk = await toolResult(host, "subagent_collect", 3);
@@ -422,7 +445,7 @@ test("P099 two children finishing together wake the lead once; one collect reads
 	await prompt(host, calls(
 		{ name: "subagent", arguments: scout("a") },
 		{ name: "subagent", arguments: scout("b") },
-		{ name: "bash", arguments: { command: "sleep 1.5" } },
+		{ name: "bash", arguments: { command: "sleep 1.5", description: "Keep the lead busy", foreground: true } },
 	));
 	const collected = await toolResult(host, "subagent_collect");
 	assert.match(collected, /^Reconciled 2 of 2 terminal children\./);

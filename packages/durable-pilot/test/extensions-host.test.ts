@@ -50,7 +50,7 @@ test("P034 tools see the Chat's runtime identity, and the Workstreams CLI on PAT
 	const host = new ChatHost(store, cwd, { args: ["--session-id", "chat-s5a-1"], env: { PI_CODING_AGENT_DIR: agentDir, PI_SESSION_ID: "stale-daemon-id", PI_SESSION_FILE: "/stale.jsonl", PI_TMP: "/stale" } });
 	await host.ready;
 	const command = 'echo "id=$PI_SESSION_ID tmp=$PI_TMP model=$PI_PROVIDER/$PI_MODEL file=${PI_SESSION_FILE:-none} tmpdir=${TMPDIR:-unset}"; workstreams associate ws-durable >/dev/null && workstreams | grep "this session"';
-	await host.call("prompt", { operationId: "op-1", text: `call:bash ${JSON.stringify({ command })}` });
+	await host.call("prompt", { operationId: "op-1", text: `call:bash ${JSON.stringify({ command, description: "Identity", foreground: true })}` });
 	const end = await toolEnd(host);
 	assert.equal(end.isError, false, String(end.text));
 	const tmp = join(TMP_ROOT, "workspace", "chat-s5a-1");
@@ -95,7 +95,7 @@ test("P085 pi-tmp: writes into an OS temp folder are blocked, bash /tmp use is w
 	assert.match(String(blocked.text), /Blocked: \/tmp\/s5a-blocked\.txt is under an OS temp folder\. Use \$PI_TMP/);
 	assert.equal(existsSync("/tmp/s5a-blocked.txt"), false);
 	await runs(host, 1);
-	await host.call("prompt", { operationId: "op-2", text: 'call:bash {"command":"true || cd /tmp; true || git worktree add ../x"}' });
+	await host.call("prompt", { operationId: "op-2", text: 'call:bash {"command":"true || cd /tmp; true || git worktree add ../x","description":"Warn","foreground":true}' });
 	const warned = await toolEnd(host, 2);
 	assert.equal(warned.isError, false);
 	assert.match(String(warned.text), /Warning: this command uses \/tmp\. Use \$PI_TMP/);
@@ -166,7 +166,7 @@ test("P073 activity: a running bash call shows in the Chat's shell activity and 
 	const { store, cwd } = family("activity");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
-	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo running; sleep 30"}' });
+	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo running; sleep 30","description":"Run","foreground":true}' });
 	await host.until((e) => e.type === "tool.update" && String(e.text).includes("running"), "bash output");
 	const running = await host.call<Status>("status");
 	assert.equal(running.activeToolExecutions?.length, 1);

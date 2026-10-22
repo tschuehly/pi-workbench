@@ -1,0 +1,26 @@
+# Red: deliveries stay with the branch active at start and nothing moves on navigation (src/tree.ts commitNavigation without the carry-over; ChatSession passes the start-time root)
+✖ tree: a running background bash job and an Atelier Page move with the active branch, as legacy keeps them with the session (21649.759ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 22038.653
+
+✖ failing tests:
+
+test at test/tree.test.ts:130:1
+✖ tree: a running background bash job and an Atelier Page move with the active branch, as legacy keeps them with the session (21649.759ms)
+  AssertionError [ERR_ASSERTION]: the completion reached the active branch
+      at TestContext.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-host-slice1-20261022/packages/durable-pilot/test/tree.test.ts:160:9)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '',
+    expected: /carried-output/,
+    operator: 'match',
+    diff: 'simple'
+  }

@@ -3,6 +3,8 @@
 // the same family store; later history is never erased, the branch map survives a kill, navigation is quiescent and
 // revision-checked, and Working Mode, questions and tool groups are those of the branch point.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fastMode } from "../src/providers.ts";
@@ -17,6 +19,7 @@ import { ChatHost, family, idle, integrity, live, logged, type Message, type Sta
 import { cleanup, scratch } from "./runner.ts";
 
 process.env.PI_TELEMETRY_DIR = scratch("tree-telemetry");
+process.env.ATELIER_PAGE_CHECK = "off";
 
 after(() => {
 	for (const child of live) child.kill("SIGKILL");
@@ -110,8 +113,10 @@ test("tree: navigation is refused visibly while a turn, queued input or interrup
 	await host.call("prompt", { operationId: "op-1", text: "first" });
 	await idle(host, 1);
 	const t = await tree(host);
-	await host.call("prompt", { operationId: "op-run", text: 'call:bash {"command":"echo running; sleep 30"}' });
-	await host.until((e) => e.type === "tool.update" && String(e.text).includes("running"), "bash output");
+	// A real unsafe call held mid-effect: write into a FIFO blocks until a reader comes.
+	execFileSync("mkfifo", [join(cwd, "effect.fifo")]);
+	await host.call("prompt", { operationId: "op-run", text: 'call:write {"path":"effect.fifo","content":"x"}' });
+	await host.until((e) => e.type === "tool.start" && e.toolName === "write", "the held write");
 	await host.call("prompt", { operationId: "op-q", text: "queued" });
 	assert.deepEqual(await host.call("tree"), { type: "unsupported", message: "Cannot open the session tree while the session is active. Stop current activity and try /tree again." });
 	await assert.rejects(navigate(host, t, node(t, "user", "first").id), /Stop current session activity before navigating the session tree/);
@@ -123,6 +128,45 @@ test("tree: navigation is refused visibly while a turn, queued input or interrup
 	await assert.rejects(navigate(host, t, node(t, "user", "first").id), /Stop current session activity|Resolve the interrupted/);
 	assert.deepEqual((await transcript(host)).slice(0, 2), ["user:first", "assistant:ok: first"], "nothing moved");
 	await host.close();
+});
+
+test("tree: a running background bash job and an Atelier Page move with the active branch, as legacy keeps them with the session", async () => {
+	const { store, cwd } = family("tree-carry");
+	writeFileSync(join(cwd, "page.html"), "<!doctype html><title>t</title><div atl-key='a' atl-ver='1'>A</div>");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: "first" });
+	await idle(host, 1);
+	await host.call("prompt", { operationId: "op-groups", text: 'call:tools_enable {"group":"atelier"}' });
+	await idle(host, 2);
+	await host.call("prompt", { operationId: "op-open", text: 'call:atelier {"action":"open","page":"page.html"}' });
+	const opened = await host.until((e) => e.type === "tool.end" && e.toolName === "atelier", "the Page");
+	const url = /Page open: (http:\/\/127\.0\.0\.1:\d+)\//.exec(String(opened.text))?.[1] ?? assert.fail(String(opened.text));
+	await idle(host, 3);
+	await host.call("prompt", { operationId: "op-job", text: `call:bash ${JSON.stringify({ description: "Wait for the flag", command: "while [ ! -e flag ]; do sleep 0.1; done; echo carried-output" })}` });
+	await idle(host, 4);
+	// Human input still inside its undo window: undelivered when navigation starts.
+	const comment = await fetch(`${url}/.atelier/events?page=page.html`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "comment", key: "a", text: "carried comment" }) });
+	assert.equal(comment.status, 200);
+	const t = await tree(host);
+	assert.deepEqual(await navigate(host, t, node(t, "assistant", "ok: first").id), {}, "neither blocks navigation (legacy)");
+	writeFileSync(join(cwd, "flag"), "");
+	// Both deliveries and their answers on the active branch: read for a bounded time (red when lost, not a hang).
+	let messages: Message[] = [];
+	for (let tries = 0; tries < 200; tries += 1) {
+		messages = (await host.call<Transcript>("transcript")).messages;
+		if (messages.filter((m) => m.role === "assistant").length >= 3) break;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	assert.deepEqual(shown(messages).slice(0, 2), ["user:first", "assistant:ok: first"], "the new branch");
+	assert.equal(messages.some((m) => m.role === "toolResult"), false, "the new branch starts after the first answer");
+	assert.match(textOf(messages.find((m) => m.customType === "background-bash")?.content), /carried-output/, "the completion reached the active branch");
+	assert.match(textOf(messages.find((m) => m.customType === "atelier:immediate")?.content), /carried comment/, "the human input reached the active branch");
+	await host.call("prompt", { operationId: "op-status", text: 'call:bash_status {}' });
+	const status = await host.until((e) => e.type === "tool.end" && e.toolName === "bash_status", "bash_status");
+	assert.match(String(status.text), /"state":"complete"/, "the branch owns the carried job");
+	await host.close();
+	assert.equal(integrity(store), "ok");
 });
 
 const ASK = {

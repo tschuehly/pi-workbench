@@ -4,6 +4,8 @@
 // The tree goes to PI WEB as Pi-shaped session entries, which PI WEB projects with its legacy `projectSessionTree`.
 import { AgentDoc, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Harness, type Tx } from "@earendil-works/pi-durable";
 import { browserMessages } from "./chat-session.ts";
+import { AtelierDoc } from "./atelier.ts";
+import { BashJobsDoc } from "./background-bash.ts";
 import { WorkersDoc } from "./delegation.ts";
 import { BranchesDoc, context } from "./host.ts";
 import { redact, sanitizeDeep, sealed } from "./redact.ts";
@@ -121,6 +123,19 @@ export async function commitNavigation(harness: Harness, active: Conversation, p
 		if (plan.fork !== undefined) doc.branches.push(id);
 		// Workers belong to the Chat, as legacy to its session: control moves with the active branch (quiescent, so unlocked).
 		for (const worker of Object.values((await tx.doc(WorkersDoc)).workers)) if (worker.ownerConversationId === active.id) worker.ownerConversationId = id;
+		// Background bash jobs and Atelier Pages too, as legacy keeps them with the session: a job not yet delivered moves
+		// to the new branch (its completion arrives there), and the Pages keep delivering human input to it.
+		const jobs = await tx.doc(BashJobsDoc, active.id);
+		const carried = await tx.doc(BashJobsDoc, id);
+		for (const [job, ref] of Object.entries(jobs.jobs)) {
+			if (ref.admitted === true || ref.delivery !== undefined) continue;
+			carried.jobs[job] = { ...ref };
+			delete jobs.jobs[job];
+		}
+		const pages = await tx.doc(AtelierDoc, active.id);
+		const target = await tx.doc(AtelierDoc, id);
+		for (const page of pages.pages) if (!target.pages.includes(page)) target.pages.push(page);
+		if (pages.port !== undefined) target.port = pages.port;
 	};
 	if (plan.select !== undefined) {
 		await harness.commit((tx) => record(tx, plan.select!), context);

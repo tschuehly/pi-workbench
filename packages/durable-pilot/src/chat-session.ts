@@ -13,12 +13,13 @@ import {
 	LiveDoc,
 	type SnapshotEvent,
 	type SubmissionId,
+	type TaskId,
 	UsageDoc,
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
 import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
-import { CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData } from "./checkpoint.ts";
+import { CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData, CheckpointDoc } from "./checkpoint.ts";
 import { syncWorkersGroup } from "./tool-groups.ts";
 import { ACTIVITY_STATUS_KEY, COMPLETION_CUSTOM_TYPE, COMPLETION_ENTRY, DelegationDoc, finishCancellations, roster, UPDATE_CUSTOM_TYPE, UPDATE_ENTRY } from "./delegation.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -28,6 +29,7 @@ import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePrefligh
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
+import { BashJobsDoc } from "./background-bash.ts";
 
 type WorkingModeDetailsLike = Record<string, unknown>;
 import {
@@ -253,6 +255,9 @@ export class ChatSession {
 	/** Tree navigation in progress, and operations in flight that it must not overlap (legacy tree-exclusive gate). */
 	#navigating = false;
 	#inFlight = 0;
+	/** Deliveries (bash completions, Atelier input) waiting for a paused restore to be resumed, or for navigation to end. */
+	#deliveries: (() => void)[] = [];
+	#afterNavigation: (() => void)[] = [];
 
 	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder } = {}) {
 		this.#host = host;
@@ -281,6 +286,10 @@ export class ChatSession {
 		});
 		this.#chat?.listenPackages((event) => this.#emit(event));
 		await this.#watch();
+		const lead = () => this.#host.root;
+		const deliver = <T>(work: () => Promise<T>) => this.#deliver(work);
+		this.#chat?.bash?.start(lead, this.#host.harness, { deliver, changed: () => void this.#publishStatus().catch(() => {}) });
+		await this.#chat?.atelier?.start(lead, this.#host.harness, { deliver });
 		const agent = await this.#host.root.agent(context);
 		this.#record("session.start", {
 			sessionFile: null, cwd: agent.cwd ?? null, mode: "durable", reason: "open",
@@ -307,6 +316,8 @@ export class ChatSession {
 	}
 
 	async close(): Promise<void> {
+		this.#chat?.bash?.close();
+		this.#chat?.atelier?.close();
 		await this.#chat?.packages?.close();
 		this.#unsubscribe?.();
 		await this.#stop?.();
@@ -551,6 +562,7 @@ export class ChatSession {
 				[WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode),
 				...(delegates === undefined ? {} : { [ACTIVITY_STATUS_KEY]: delegates }),
 				...(this.#chat?.fast.active(agent.model && { provider: agent.model.provider, id: agent.model.modelId }) ? { [FAST_STATUS]: "fast" } : {}),
+				...(await this.#chat?.bash?.status()),
 			},
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
@@ -602,6 +614,44 @@ export class ChatSession {
 		this.#resumed = true;
 		// Cancellations a restart interrupted stay cancelled: finish them now that work runs again.
 		void finishCancellations(this.#host.harness, this.#host.root.id).then(() => this.#publishStatus(), () => {});
+		for (const deliver of this.#deliveries.splice(0)) deliver();
+	}
+
+	/**
+	 * Resolves once a host-side delivery (a bash completion, Atelier input) may submit input: at once in a running or
+	 * idle Chat; a restore with interrupted work stays paused until the user resumes it, so a delivery never resumes
+	 * that work by itself. Checkpoint barrier, as for child completions: during `compact_and_continue` it waits until
+	 * the continuation is admitted, so the delivery's follow-up queues behind it (legacy checkpoint-barrier).
+	 */
+	async #deliverable(): Promise<void> {
+		if (!this.#resumed) {
+			if (this.#host.harness.wake().active) await new Promise<void>((resolve) => this.#deliveries.push(resolve));
+			else await this.#resume();
+		}
+		const { harness } = this.#host;
+		for (;;) {
+			const active = (await harness.snapshot(CheckpointDoc, this.#host.root.id, context))?.active;
+			if (active === null || active === undefined) return;
+			await harness.waitForTask(active.task as TaskId, context);
+		}
+	}
+
+	/**
+	 * Run one host-side delivery once it may submit (`#deliverable`), never during history navigation (which carries an
+	 * undelivered one to the new branch), and counted, so navigation refuses to start while it runs.
+	 */
+	async #deliver<T>(work: () => Promise<T>): Promise<T> {
+		for (;;) {
+			await this.#deliverable();
+			if (!this.#navigating) break;
+			await new Promise<void>((resolve) => this.#afterNavigation.push(resolve));
+		}
+		this.#inFlight += 1;
+		try {
+			return await work();
+		} finally {
+			this.#inFlight -= 1;
+		}
 	}
 
 	/**
@@ -960,6 +1010,9 @@ export class ChatSession {
 		// A branch starts without the source's children (`fork: initial`): their results must not be left behind.
 		const delegation = await this.#host.harness.snapshot(DelegationDoc, this.#host.root.id, context);
 		if (Object.values(delegation?.executions ?? {}).some((e) => e.outcome === "running" || (e.background && !e.collected))) return "Collect the finished Subagents and Workers before navigating the session tree";
+		// A completion admitted before a kill but not yet receipted is finished by the reporter on this branch first.
+		const jobs = await this.#host.harness.snapshot(BashJobsDoc, this.#host.root.id, context);
+		if (Object.values(jobs?.jobs ?? {}).some((ref) => ref.delivery === "completion" && ref.admitted !== true)) return busy;
 		const reconcile = await this.#host.harness.snapshot(Reconcile, context);
 		if (Object.values(reconcile?.uncertain ?? {}).some((item) => item.resolved === undefined)) return "Resolve the interrupted tool call before navigating the session tree";
 		return undefined;
@@ -979,6 +1032,8 @@ export class ChatSession {
 	async navigate(request: { targetId: string; expectedLeafId: string | null; retainCheckpoint?: boolean }): Promise<{ editorText?: string }> {
 		const busy = await this.#activity();
 		if (busy !== undefined) throw new Error(busy);
+		// A delivery that began during the check is activity too; none can begin from here on.
+		if (this.#inFlight > 0) throw new Error("Stop current session activity before navigating the session tree");
 		this.#navigating = true;
 		try {
 			const { harness } = this.#host;
@@ -1001,6 +1056,7 @@ export class ChatSession {
 			return result;
 		} finally {
 			this.#navigating = false;
+			for (const resume of this.#afterNavigation.splice(0)) resume();
 		}
 	}
 
