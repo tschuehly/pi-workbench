@@ -1,7 +1,7 @@
 // Matrix rows: "Child launch/report", "Queued input", "Unanswered question" (with the attention race).
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { type Mode, runWindow, type Window } from "./runner.ts";
+import { after, describe, it } from "node:test";
+import { type Mode, cleanup, runWindow, type Window } from "./runner.ts";
 
 type E = Record<string, any>;
 const modes: Mode[] = ["kill", "close"];
@@ -218,3 +218,5 @@ describe("queued input", () => {
 describe("unanswered question", () => {
 	for (const window of questionWindows) for (const mode of modes) it(`${window.id} / ${mode}`, () => runWindow(window, mode));
 });
+
+after(cleanup);

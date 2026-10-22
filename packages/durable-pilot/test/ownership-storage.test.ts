@@ -5,9 +5,9 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, writeFileSync } fr
 import { fork } from "node:child_process";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { probeEndpoint, type OwnerRecord } from "../src/store.ts";
-import { HostProcess, integrity, ITERATIONS, type Mode, PACKAGE, runWindow, scratch, type Window } from "./runner.ts";
+import { HostProcess, integrity, ITERATIONS, type Mode, PACKAGE, cleanup, runWindow, scratch, type Window } from "./runner.ts";
 
 type E = Record<string, any>;
 
@@ -202,3 +202,5 @@ describe("schema upgrade and rollback", () => {
 	];
 	for (const window of windows) for (const mode of ["kill", "close"] as Mode[]) it(`${window.id} / ${mode}`, () => runWindow(window, mode));
 });
+
+after(cleanup);

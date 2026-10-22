@@ -1,7 +1,7 @@
 // Matrix rows: "Generation before/after partial commit" and "Safe tool, unsafe tool".
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { type Mode, runWindow, type Window } from "./runner.ts";
+import { after, describe, it } from "node:test";
+import { type Mode, cleanup, runWindow, type Window } from "./runner.ts";
 
 type E = Record<string, any>;
 const modes: Mode[] = ["kill", "close"];
@@ -110,3 +110,5 @@ describe("generation recovery", () => {
 describe("tool recovery", () => {
 	for (const window of toolWindows) for (const mode of modes) it(`${window.id} / ${mode}`, () => runWindow(window, mode));
 });
+
+after(cleanup);

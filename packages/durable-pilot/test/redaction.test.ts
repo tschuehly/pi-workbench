@@ -11,7 +11,7 @@ import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { textOfMessage } from "../src/faux.ts";
 import { admit, context, type Host, openHost } from "../src/host.ts";
 import { redact, redactingTool, type Sanitize, wrapProvider } from "../src/redact.ts";
-import { PACKAGE, scratch } from "./runner.ts";
+import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 const BODY = "Q7xVb2mNp4Lk9Rt3Wy6Hs8Jd1Fg5Zc0Ae";
 const KEY = `sk-ant-api03-${BODY}`;
@@ -26,6 +26,7 @@ before(() => {
 	process.env.PILOT_SPLIT_B = BODY.slice(12);
 });
 after(() => {
+	cleanup();
 	writeFileSync(join(PACKAGE, "results", "redaction.json"), `${JSON.stringify(results, null, 2)}\n`);
 });
 

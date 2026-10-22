@@ -16,9 +16,20 @@ const RUNS = process.env.PILOT_TMP ?? process.env.PI_TMP ?? join(PACKAGE, ".runs
 export type Mode = "kill" | "close";
 type Message = { type: string; name?: string; data?: unknown; evidence?: Record<string, unknown>; message?: string };
 
+const made = new Set<string>();
+
+/** A fresh scratch directory, removed by cleanup() unless an iteration failed in it. */
 export function scratch(label: string): string {
 	mkdirSync(RUNS, { recursive: true });
-	return mkdtempSync(join(RUNS, `dp-${label.replace(/[^a-z0-9]+/gi, "-")}-`));
+	const dir = mkdtempSync(join(RUNS, `dp-${label.replace(/[^a-z0-9]+/gi, "-")}-`));
+	made.add(dir);
+	return dir;
+}
+
+/** Remove scratch directories of passing work; call from each test file's after(). */
+export function cleanup(): void {
+	for (const dir of made) rmSync(dir, { recursive: true, force: true });
+	made.clear();
 }
 
 export class HostProcess {
@@ -116,6 +127,7 @@ export async function runOnce(window: Window, mode: Mode, iteration: number): Pr
 	} catch (error) {
 		crash.child.kill("SIGKILL");
 		verify?.child.kill("SIGKILL");
+		made.delete(dir); // keep the failing store for diagnosis
 		appendFileSync(evidenceFile(window.id, mode), `${JSON.stringify({ iteration, mode, pass: false, failure: String(error), dir })}\n`);
 		throw error;
 	}
@@ -137,7 +149,10 @@ export async function runOnce(window: Window, mode: Mode, iteration: number): Pr
 		failure = error;
 	}
 	appendFileSync(evidenceFile(window.id, mode), `${JSON.stringify({ ...evidence, pass: failure === undefined, ...(failure === undefined ? {} : { failure: String(failure), dir }) })}\n`);
-	if (failure !== undefined) throw failure;
+	if (failure !== undefined) {
+		made.delete(dir);
+		throw failure;
+	}
 	rmSync(dir, { recursive: true, force: true });
 	return evidence;
 }

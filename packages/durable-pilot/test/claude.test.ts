@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { createModels, fauxAssistantMessage, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { createRegistry, defineExtension, defineTool, Harness } from "@earendil-works/pi-durable";
@@ -12,7 +12,7 @@ import { textOfMessage } from "../src/faux.ts";
 import { admit, context, openHost } from "../src/host.ts";
 import { wrapProvider } from "../src/redact.ts";
 import { openStore } from "../src/store.ts";
-import { scratch } from "./runner.ts";
+import { cleanup, scratch } from "./runner.ts";
 
 const echo = defineTool({
 	name: "pilot_echo",
@@ -81,3 +81,5 @@ describe("claude subscription adapter (offline)", () => {
 		assert.equal(JSON.parse(readFileSync(auth, "utf8")).anthropic.access, "sk-ant-oat01-fake", "credential file untouched");
 	});
 });
+
+after(cleanup);

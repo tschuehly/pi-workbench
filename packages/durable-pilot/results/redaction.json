@@ -7,7 +7,7 @@
     ]
   },
   "model": {
-    "partialsObserved": 7,
+    "partialsObserved": 8,
     "observedLeaks": 0,
     "midStream": [],
     "final": [],
@@ -34,7 +34,7 @@
     ],
     "found": [],
     "settled": "done",
-    "partialsObserved": 7
+    "partialsObserved": 10
   },
   "sanitizerErrors": {
     "model": {
