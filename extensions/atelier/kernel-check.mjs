@@ -231,7 +231,7 @@ try {
   assert.match(await js("document.querySelector('.atl-bar').textContent"), /2 to answer/);
   // k-state-hook: Pages read Kernel state through window.atelier and the atelier:state event, not Kernel markup.
   const turn1 = "(s)=>s.decisions.find((d)=>d.id==='run/turn-1')";
-  assert.deepEqual(await js(`(${turn1})(atelier.state())`), { id: "run/turn-1", key: "run/turn-1", declared: true, options: ["1", "2", "3", "4", "5"], recommended: null, answer: "5", custom: false, previous: "3", note: null, images: [], status: "pending", stale: false, opened: false });
+  assert.deepEqual(await js(`(${turn1})(atelier.state())`), { id: "run/turn-1", key: "run/turn-1", declared: true, options: ["1", "2", "3", "4", "5"], recommended: null, answer: "5", custom: false, previous: "3", note: null, images: [], status: "pending", stale: false, state: "done", round: 1, history: [], opened: false });
   assert.equal(await js(`states.at(-1).loaded && (${turn1})(states.at(-1)).answer`), "5", "the event carries the new state");
   assert.deepEqual(await js("[states[0].loaded, states.some((s)=>s.toAnswer.length===3), atelier.state().toAnswer]"), [false, true, ["run/turn-2", "row-a"]]);
 
@@ -985,9 +985,52 @@ ${img("cp", "contain:paint;margin-top:40px")}${img("cv", "content-visibility:aut
     assert(read.shown.length === 1 && read.shown[0] === "tuck:1", `read but still open, the thread keeps its badge, now without the new dot: ${JSON.stringify(read)}`);
     await b("set", "viewport", "1440", "900");
   });
-  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1 and 2.10.1 fix holds");
+  // 2.11.0 (owner review of the Worlds Console Page, 2026-10-22): "next ↓" scrolled to open items inside hidden tab
+  // panels and nothing showed; a question asked on a Key went stale with it; each Page recomputed new / changed / done.
+  await fixCheck("2.11.0-next-reveals-hidden-tabs-and-states", async () => {
+    const tabs = path.join(dir, "tabs.html");
+    await writeFile(tabs, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Tabs</title>
+<style>body{margin:16px;font:15px/1.5 system-ui;max-width:900px}.gap{height:120vh}</style>
+<body><nav><button id="tA" aria-controls="pA">A</button><button id="tB" aria-controls="pB">B</button></nav>
+<section class="panel" id="pA" atl-key="a"><p>Panel A.</p></section>
+<section class="panel" id="pB" atl-key="b" hidden><nav><button id="tB1" aria-controls="pB1">B1</button><button id="tB2" aria-controls="pB2">B2</button></nav>
+<div class="panel" id="pB1" atl-key="b1" atl-ver="v1"><div class="gap"></div><p>Panel B1.</p></div>
+<div class="panel" id="pB2" atl-key="b2" hidden><div class="gap"></div><div atl-key="pick" id="pick" atl-ver="v2" atl-decide="Keep|Drop">Pick one.</div></div></section>
+<script>window.reveals=[];document.addEventListener("atelier:reveal",(e)=>reveals.push(e.detail.key));
+document.addEventListener("click",(e)=>{const t=e.target.closest("[aria-controls]");if(!t||t.closest("[atl-ui]"))return;const p=document.getElementById(t.getAttribute("aria-controls"));for(const s of p.parentElement.children)if(s.classList.contains("panel"))s.hidden=s!==p});</script>
+<script type="module" src="atelier.js"></script></body></html>`);
+    const opts = [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }];
+    appendLog(tabs, { origin: "agent", type: "ask", decision: { id: "follow", key: "b/b1", question: "Answered follow-up?", options: opts } }, Date.now() - 120_000);
+    appendLog(tabs, { origin: "human", type: "decide", decision: "follow", option: "Yes", key: "b/b1", ver: "v0", delivery: "immediate" }, Date.now() - 110_000);
+    appendLog(tabs, { origin: "agent", type: "ask", decision: { id: "open", key: "b/b1", question: "Still open?", options: opts } }, Date.now() - 100_000);
+    appendLog(tabs, { origin: "human", type: "decide", decision: "b/b2/pick", options: "Keep|Drop", option: "Keep", key: "b/b2/pick", ver: "v1", delivery: "immediate" }, Date.now() - 90_000);
+    await b("set", "viewport", "1512", "900");
+    await b("open", (await host.open(tabs)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded");
+    const st = await js("(()=>{const s=atelier.state();return {toAnswer:s.toAnswer,states:s.decisions.map((d)=>[d.id,d.state,d.answer]),b:s.keys.b}})()");
+    assert.deepEqual(st, { toAnswer: ["b/b2/pick", "open"], states: [["b/b2/pick", "changed", "Keep"], ["follow", "done", "Yes"], ["open", "new", null]], b: { new: 1, changed: 1, done: 1, threads: 0 } }, "an answered ask on a changed Key stays done; the Page's own Decision on a changed Key is changed");
+    // Owner 2026-10-22: "the decision should reset or show version 2": options unselected, Version 2, the earlier answer beneath.
+    const pick = await js(`(()=>{const u=document.querySelector('[aria-label="Decision on b/b2/pick"]'),d=atelier.state().decisions.find((x)=>x.id==='b/b2/pick');return {chosen:u.querySelectorAll('.atl-chosen,[aria-pressed=true]').length,tag:u.querySelector('.atl-round')?.textContent??null,hist:u.querySelector('.atl-hist')?.textContent??null,receipt:!!u.querySelector('.atl-receipt'),round:d.round,history:d.history.map((h)=>[h.round,h.answer])}})()`);
+    assert.deepEqual(pick, { chosen: 0, tag: "Version 2", hist: "Version 1: Keep", receipt: false, round: 2, history: [[1, "Keep"]] }, "a Decision on a changed Key starts round 2 with no option chosen and its earlier answer beneath");
+    // Each next ↓ opens the tab (nested too) that hides the item, scrolls it into view and announces the Key.
+    const shown = (sel) => js(`(()=>{const e=document.querySelector('${sel}'),r=e.getBoundingClientRect();return e.checkVisibility()&&r.top>=0&&r.bottom<=innerHeight})()`);
+    await click("[data-atl=next]");
+    await until("!document.getElementById('pB').hidden"); await sleep(900);
+    assert.deepEqual([await shown('[data-id="d:open"]'), await js("reveals")], [true, ["b/b1"]], "the first next opens tab B and shows the open question");
+    await click("[data-atl=next]");
+    await until("!document.getElementById('pB2').hidden"); await sleep(900);
+    assert.deepEqual([await shown('[aria-label="Decision on b/b2/pick"]'), await js("document.getElementById('pB1').hidden"), await js("reveals")], [true, true, ["b/b1", "b/b2/pick"]], "the second next opens the nested tab B2 and shows the changed Decision");
+    // Answering round 2 is a fresh answer on v2, not a change of the v1 answer.
+    await click('[data-atl=decide][data-id="b/b2/pick"][data-label="Drop"]');
+    await until("atelier.state().decisions.find((d)=>d.id==='b/b2/pick').state==='done'");
+    const last = readLog(tabs).filter((e) => e.type === "decide").at(-1);
+    assert.deepEqual([last.option, last.previous, last.ver], ["Drop", undefined, "v2"], "round 2's answer names no previous answer");
+    assert.deepEqual(await js(`(()=>{const u=document.querySelector('[aria-label="Decision on b/b2/pick"]');return [u.querySelector('.atl-chosen')?.dataset.label,u.querySelector('.atl-round')?.textContent,u.querySelector('.atl-hist')?.textContent]})()`), ["Drop", "Version 2", "Version 1: Keep"]);
+    await b("set", "viewport", "1440", "900");
+  });
+  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1 and 2.11.0 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }
