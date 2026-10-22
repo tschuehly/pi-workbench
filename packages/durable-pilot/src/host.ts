@@ -26,6 +26,8 @@ import {
 	Harness as HarnessFactory,
 	type HarnessSettings,
 	hook,
+	type InputEntry,
+	type UserInput,
 	InboxDoc,
 	type Registry,
 	type ReportInfo,
@@ -134,7 +136,15 @@ export const Admissions = defineDoc<{ ops: Record<string, { hash: string }> }>({
 	checkpointWhen: () => false,
 });
 
-export type Admit = { readonly operationId: string; readonly text: string; readonly mode?: "steer" | "followUp" };
+export type Admit = {
+	readonly operationId: string;
+	readonly text: string;
+	readonly mode?: "steer" | "followUp";
+	/** What the model receives instead of `text` (e.g. a Working Mode block before it); the receipt hashes `text`. */
+	readonly content?: UserInput;
+	/** The entry the input is placed as, instead of `pi.user`. */
+	readonly entry?: InputEntry;
+};
 
 /**
  * Commit the operation's payload hash, then submit under the same ID; the caller acknowledges only after this
@@ -154,7 +164,13 @@ export async function admit(
 	}, context);
 	await hooks.afterReceipt?.();
 	const submission = await conversation.submit(
-		{ type: "input", content: request.text, requestId: request.operationId, whenBusy: request.mode ?? "followUp" },
+		{
+			type: "input",
+			content: request.content ?? request.text,
+			requestId: request.operationId,
+			whenBusy: request.mode ?? "followUp",
+			...(request.entry === undefined ? {} : { entry: request.entry }),
+		},
 		context,
 	);
 	return submission.id;
@@ -307,6 +323,8 @@ export type Host = {
 	readonly harness: Harness;
 	readonly root: Conversation;
 	readonly registry: Registry;
+	/** The model collection: providers, catalog and credentials. */
+	readonly models: ReturnType<typeof createModels>;
 	readonly faux: FauxProviderHandle;
 	readonly reports: { readonly type: string; readonly message: string; readonly task?: TaskId }[];
 	/** Task IDs recorded as uncertain at open. */
@@ -364,6 +382,7 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 		harness,
 		root,
 		registry,
+		models,
 		faux,
 		reports,
 		uncertain,

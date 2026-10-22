@@ -7,7 +7,7 @@
     ]
   },
   "model": {
-    "partialsObserved": 8,
+    "partialsObserved": 7,
     "observedLeaks": 0,
     "midStream": [],
     "final": [],
@@ -23,7 +23,7 @@
       "[REDACTED:anthropic-key] tail\n",
       "{\"sofar\":\"start\\nkey: [REDACTED:anthropic-key] tail\\n\"}",
       "env ",
-      "{\"sofar\":\"start\\nkey: [REDACTED:anthropic-key] tail\\nenv pilotEnvS\"}",
+      "{\"sofar\":\"start\\nkey: [REDACTED:anthropic-key] tail\\nenv [REDACTED:partial]\"}",
       "[REDACTED:env:PILOT_FAKE_API_TOKEN]\n",
       "{\"sofar\":\"start\\nkey: [REDACTED:anthropic-key] tail\\nenv [REDACTED:env:PILOT_FAKE_API_TOKEN]\\n\"}",
       "saw [REDACTED:partial]"

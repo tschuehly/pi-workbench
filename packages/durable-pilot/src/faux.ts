@@ -11,6 +11,7 @@ import {
 	fauxAssistantMessage,
 	fauxText,
 	fauxToolCall,
+	getSystemMessageText,
 	type Message,
 	type Model,
 	type Provider,
@@ -52,10 +53,15 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
 export function router(dir: string, options: { readonly hold?: Hold; readonly holdOn?: string; readonly repropose?: boolean } = {}): FauxResponseStep {
 	return async (context, streamOptions) => {
 		const messages = context.messages.filter((message) => message.role !== "system");
+		const system = context.messages.flatMap((message) => (message.role === "system" ? [getSystemMessageText(message)] : [])).join("\n");
 		const last = messages.at(-1);
-		const text = textOfMessage(last);
+		// A Working Mode block delivered with a prompt comes first; the script reads the user's text after it.
+		const raw = textOfMessage(last);
+		const text = raw.replace(/^<working-mode seq="\d+">[\s\S]*?<\/working-mode>/, "");
+		const block = text !== raw ? /^<working-mode seq="(\d+)">/.exec(raw)![1] : undefined;
 		const label = last?.role === "toolResult" ? `result:${last.toolName}` : text.slice(0, 40);
-		logLine(join(dir, "requests.log"), { label });
+		const sections = [...system.matchAll(/<(addendum|project_context|skills)>/g)].map((match) => match[1]);
+		logLine(join(dir, "requests.log"), { label, ...(block === undefined ? {} : { workingMode: Number(block) }), ...(sections.length === 0 ? {} : { sections }) });
 		if (options.hold !== undefined && options.holdOn !== undefined && text.startsWith(options.holdOn))
 			await options.hold(`request:${options.holdOn}`, streamOptions?.signal);
 		if (last?.role === "toolResult") {
