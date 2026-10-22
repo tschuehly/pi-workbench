@@ -14,6 +14,7 @@ import {
 import type { ChatHost } from "./chat.ts";
 import { parseModel } from "./chat.ts";
 import { admit, context, type Host, Reconcile, resolveUncertain } from "./host.ts";
+import { redact } from "./redact.ts";
 import {
 	ANSWERS_ENTRY,
 	ASK_ANSWERS_CUSTOM_TYPE,
@@ -23,6 +24,7 @@ import {
 	countTurn,
 	entryWorkingMode,
 	MODE_ENTRY,
+	openAsksReminder,
 	PROMPT_ENTRY,
 	pendingBlock,
 	questionsState,
@@ -64,6 +66,7 @@ export type ChatStatus = {
 	pendingAsks?: unknown[];
 	pendingAsk?: unknown;
 	attentionRequest?: { id: string; reason: string };
+	contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
 	/** Interrupted unsafe tool calls that block their tool until the owner resolves them. */
 	unresolvedEffects?: UnresolvedEffect[];
 };
@@ -101,10 +104,13 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	const custom = (customType: string, content: string, details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message.timestamp, entryId: id });
 	const parts = Array.isArray(message.content) ? (message.content as { type: string; text?: string }[]) : [];
 	const mode = entryWorkingMode(entry);
+	// A plain prompt's open-questions reminder is its last block, hidden as in a legacy Chat.
+	const userParts = entry.kind === PROMPT_ENTRY && (entry.data as { askReminder?: boolean } | undefined)?.askReminder === true ? parts.slice(0, -1) : parts;
 	if (mode !== undefined && message.role === "user") {
 		const block = custom(WORKING_MODE_CUSTOM_TYPE, parts[0]?.text ?? "", mode, entry.kind === MODE_ENTRY ? entryId : `${entryId}:working-mode`);
-		return entry.kind === MODE_ENTRY ? [block] : [block, { ...message, content: parts.slice(1), entryId }];
+		return entry.kind === MODE_ENTRY ? [block] : [block, { ...message, content: userParts.slice(1), entryId }];
 	}
+	if (userParts !== parts) return [{ ...message, content: userParts, entryId }];
 	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
 	const content = message.role === "toolResult" ? { content: browserToolContent(message.content) } : {};
@@ -359,6 +365,8 @@ export class ChatSession {
 			cost += bucket.cost.total;
 		}
 		const paused = harness.wake().active && !this.#resumed;
+		const contextWindow = agent.model === undefined ? undefined : this.#host.models.getModel(agent.model.provider, agent.model.modelId)?.contextWindow;
+		const contextTokens = this.#contextTokens();
 		const [mode, questions, reconcile] = await Promise.all([workingModeSnapshot(harness, root), questionsState(harness, root), harness.snapshot(Reconcile, context)]);
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
@@ -381,7 +389,36 @@ export class ChatSession {
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
 			...(unresolvedEffects.length === 0 ? {} : { unresolvedEffects }),
+			...(contextWindow === undefined || contextWindow <= 0
+				? {}
+				: { contextUsage: { tokens: contextTokens, contextWindow, percent: contextTokens === null ? null : (contextTokens / contextWindow) * 100 } }),
 		};
+	}
+
+	/**
+	 * Context size as Pi's `getContextUsage` reads it: the last answer's usage (not aborted, failed or empty).
+	 * ponytail: ignores the estimate of messages after that answer and compaction; add both with Durable compaction.
+	 */
+	#contextTokens(): number | null {
+		for (const entry of this.#entries.toReversed()) {
+			const message = entry.model?.[0] as Message | undefined;
+			if (message?.role !== "assistant" || message.stopReason === "aborted" || message.stopReason === "error") continue;
+			const { usage } = message;
+			const tokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+			if (tokens > 0) return tokens;
+		}
+		return null;
+	}
+
+	/**
+	 * Whether the host may close (archive): no turn, no waiting input, no runnable task. A paused restore runs nothing,
+	 * so it is idle; closing keeps its pending work for the next resume.
+	 */
+	async idle(): Promise<{ idle: boolean }> {
+		if (!this.#resumed) return { idle: true };
+		const { harness, root } = this.#host;
+		const inbox = await harness.snapshot(InboxDoc, root.id, context);
+		return { idle: !this.#running && (inbox?.items.length ?? 0) === 0 && !harness.wake().active };
 	}
 
 	async #resume(): Promise<void> {
@@ -398,13 +435,19 @@ export class ChatSession {
 		await this.#resume();
 		const { root } = this.#host;
 		const existing = await root.commit((tx) => tx.submissionByRequest(root.id, params.operationId), context);
-		// A retry keeps whatever the first attempt admitted; only a new operation picks up a pending block.
-		const block = existing === undefined && this.#chat !== undefined ? await pendingBlock(this.#host.harness, root, false) : undefined;
+		// A retry keeps whatever the first attempt admitted; only a new operation picks up a pending block or reminder.
+		const fresh = existing === undefined && this.#chat !== undefined;
+		const block = fresh ? await pendingBlock(this.#host.harness, root, false) : undefined;
+		// A plain prompt reminds the model of the open question sets in the store, as a legacy Chat does (hidden).
+		// It repeats question text from tool-call arguments (stored verbatim): sanitized before this new copy commits.
+		const reminder = fresh && params.mode === undefined ? redact(openAsksReminder((await questionsState(this.#host.harness, root)).open)) : "";
+		const content = [...(block === undefined ? [] : [block.text]), params.text, ...(reminder === "" ? [] : [reminder])].map((text) => ({ type: "text" as const, text }));
+		const data = { ...(block === undefined ? {} : { workingMode: block.details }), ...(reminder === "" ? {} : { askReminder: true }) };
 		const submissionId = await admit(root, {
 			operationId: params.operationId,
 			text: params.text,
 			...(params.mode === undefined ? {} : { mode: params.mode }),
-			...(block === undefined ? {} : { content: [{ type: "text", text: block.text }, { type: "text", text: params.text }], entry: { kind: PROMPT_ENTRY, data: { workingMode: block.details } } }),
+			...(content.length === 1 ? {} : { content, entry: { kind: PROMPT_ENTRY, data } }),
 		});
 		if (existing === undefined) this.#record("prompt", { entryId: null, prompt: null, submissionId: String(submissionId) });
 		if (this.#chat !== undefined && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();

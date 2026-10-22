@@ -1,0 +1,26 @@
+✖ redaction: the open-questions reminder a prompt commits is sanitized, though the question it repeats came verbatim from tool-call arguments (628.533667ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1030.340709
+
+✖ failing tests:
+
+test at test/chat-host.test.ts:540:1
+✖ redaction: the open-questions reminder a prompt commits is sanitized, though the question it repeats came verbatim from tool-call arguments (628.533667ms)
+  AssertionError [ERR_ASSERTION]: the model sees the reminder redacted
+      at TestContext.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-s3c-attention/packages/durable-pilot/test/chat-host.test.ts:551:9)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'Question sets still open for the user (answers arrive as a follow-up message):\n- 6f880ab3-2044-6570-69b8-4c2ba1ca8c25 (6f8.target; updated 2026-10-22T16:57:48.765Z, 0 turns ago): Rotate ghp_R3m1nd3rS3cr3tT0k3nR3m1nd3rS3cr3tT0k3n?\nIf one no longer matches the situation and ask_user is available, update or withdraw it; otherwise leave it.',
+    expected: /Rotate \[REDACTED:github-token\]\?/,
+    operator: 'match',
+    diff: 'simple'
+  }

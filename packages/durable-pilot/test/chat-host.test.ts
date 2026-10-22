@@ -12,7 +12,7 @@ import { readLog } from "../src/faux.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 type UiEvent = { type: string; [key: string]: unknown };
-type Reply = { id?: number; result?: unknown; error?: { name: string; message: string }; event?: UiEvent; ready?: { protocol: number; ownerEpoch: number } };
+type Reply = { id?: number; result?: unknown; error?: { name: string; message: string }; event?: UiEvent; ready?: { protocol: number; ownerEpoch: number; capabilities?: string[] } };
 
 const live = new Set<ChildProcess>();
 // Host processes inherit this: telemetry goes to scratch, never to the owner's ~/.pi/agent/telemetry.
@@ -113,7 +113,9 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	const { store, cwd } = family("turn");
 	writeFileSync(join(cwd, "notes.txt"), "seeded\n");
 	const host = new ChatHost(store, cwd);
-	assert.equal((await host.ready).protocol, 2);
+	const ready = await host.ready;
+	assert.equal(ready.protocol, 2);
+	assert.deepEqual(ready.capabilities, [], "the gated PI WEB operations this host supports: none yet");
 	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt"}' });
 	await host.until((e) => e.type === "agent.end", "the run to end");
 	const types = host.events.map((e) => e.type);
@@ -449,4 +451,113 @@ test("an orderly SIGTERM closes the store gracefully: exit 0, the running unsafe
 	assert.equal(integrity(store), "ok");
 	const events = readdirSync(TELEMETRY).flatMap((file) => readLog<{ type: string; sessionId: string }>(join(TELEMETRY, file))).filter((e) => e.sessionId === store);
 	assert.equal(events.filter((e) => e.type === "session.shutdown").length, 2, "both host lifetimes ended with session.shutdown");
+});
+
+// ─── Slice 3 group C: attention and catalog ─────────────────────────────────
+
+type Reminded = Logged & { reminder?: string };
+
+test("open-questions reminder: a plain prompt carries PI WEB's reminder of the persisted open sets once, hidden from the transcript, across a kill", async () => {
+	const { store, cwd } = family("reminder");
+	let host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-none", text: "nothing open" });
+	await idle(host, 1);
+	await host.call("prompt", { operationId: "op-ask", text: `call:ask_user ${JSON.stringify(ASK)}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string } };
+	await idle(host, 2);
+	await host.kill();
+
+	// The open set is read from the store after the kill, not from memory.
+	host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-r1", text: "hello" });
+	await host.until((e) => e.type === "message.end" && textOf((e.message as { content?: unknown }).content) === "ok: hello", "the answer to hello");
+	await host.kill();
+
+	host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-r1", text: "hello" }); // the HTTP retry of the same send
+	const status = await host.call<Status>("status");
+	assert.equal(status.isStreaming, false, "the retry admitted nothing new");
+	const log = readLog<Reminded>(join(store, "requests.log"));
+	assert.equal(log.find((l) => l.label === "nothing open")?.reminder, undefined, "no reminder without open sets");
+	const reminded = log.filter((l) => l.reminder !== undefined);
+	assert.equal(reminded.length, 1, "one reminder, not one per attempt");
+	assert.equal(reminded[0]!.label, "hello", "the script still reads the user's own text");
+	assert.match(reminded[0]!.reminder!, /^Question sets still open for the user \(answers arrive as a follow-up message\):\n- /);
+	assert.ok(reminded[0]!.reminder!.includes(`- ${opened.ask.askId} (${opened.ask.askId.slice(0, 3)}.target; updated `), String(reminded[0]!.reminder));
+	assert.match(reminded[0]!.reminder!, /0 turns ago\): Which target\?\nIf one no longer matches the situation and ask_user is available, update or withdraw it; otherwise leave it\.$/);
+	const transcript = await host.call<Transcript>("transcript");
+	assert.deepEqual(transcript.messages.filter((m) => m.role === "user").map((m) => textOf(m.content)), ["nothing open", `call:ask_user ${JSON.stringify(ASK)}`, "hello"], "the reminder stays out of the browser transcript");
+
+	// A queued follow-up carries none (legacy reminds only on a plain prompt).
+	await host.call("prompt", { operationId: "op-gen", text: "gen" });
+	await host.until((e) => e.type === "assistant.delta", "the running answer");
+	await host.call("prompt", { operationId: "op-follow", text: "queued", mode: "followUp" });
+	await host.until((e) => e.type === "message.end" && textOf((e.message as { content?: unknown }).content) === "ok: queued", "the follow-up answer");
+	const after = readLog<Reminded>(join(store, "requests.log"));
+	assert.equal(after.find((l) => l.label === "queued")?.reminder, undefined);
+	assert.ok(after.find((l) => l.label === "gen")?.reminder?.includes("1 turns ago"), "turns since the set was posted are counted");
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+test("idle says when the Chat's host may close for archiving: not while a turn runs or input waits; a paused restore is idle and reading it sends nothing", async () => {
+	const { store, cwd } = family("idle");
+	let host = new ChatHost(store, cwd, 40);
+	await host.ready;
+	assert.deepEqual(await host.call("idle"), { idle: true });
+	await host.call("prompt", { operationId: "op-gen", text: "gen" });
+	await host.until((e) => e.type === "assistant.delta", "a committed partial");
+	assert.deepEqual(await host.call("idle"), { idle: false });
+	await host.kill();
+
+	host = new ChatHost(store, cwd);
+	await host.ready;
+	assert.deepEqual(await host.call("idle"), { idle: true }, "restored work stays paused, so nothing needs the host");
+	await host.call("status");
+	await host.call("transcript");
+	assert.deepEqual(requests(store), ["gen"], "reads schedule nothing");
+	await host.close();
+});
+
+test("status reports context usage from the last answer and the Chat's model window, as a legacy Chat shows it", async () => {
+	const { store, cwd } = family("usage");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	assert.deepEqual((await host.call<Status & { contextUsage?: unknown }>("status")).contextUsage, { tokens: null, contextWindow: 128000, percent: null });
+	await host.call("prompt", { operationId: "op-1", text: "hello" });
+	await idle(host, 1);
+	const status = await host.call<Status & { contextUsage?: { tokens: number; contextWindow: number; percent: number } }>("status");
+	assert.equal(status.contextUsage?.contextWindow, 128000);
+	assert.ok((status.contextUsage?.tokens ?? 0) > 0);
+	assert.equal(status.contextUsage?.percent, (status.contextUsage!.tokens / 128000) * 100);
+	assert.ok((status as Status & { tokens: { total: number } }).tokens.total > 0, "usage totals are reported too");
+	await host.close();
+});
+
+test("redaction: the open-questions reminder a prompt commits is sanitized, though the question it repeats came verbatim from tool-call arguments", async () => {
+	const { store, cwd } = family("reminder-secret");
+	const secret = `ghp_${"R3m1nd3rS3cr3tT0k3n".repeat(2)}`;
+	const ask = { ...ASK, questions: [{ ...ASK.questions[0]!, question: `Rotate ${secret}?` }] };
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-ask", text: `call:ask_user ${JSON.stringify(ask)}` });
+	await idle(host, 1);
+	await host.call("prompt", { operationId: "op-r", text: "hello" });
+	await idle(host, 2);
+	const reminder = readLog<Reminded>(join(store, "requests.log")).find((l) => l.label === "hello")?.reminder ?? "";
+	assert.match(reminder, /Rotate \[REDACTED:github-token\]\?/, "the model sees the reminder redacted");
+	await host.close(); // the host holds the store exclusively
+	// Every stored row, as text: the rows that carry the reminder must not carry the secret.
+	const db = new DatabaseSync(join(store, "session.sqlite"));
+	const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name);
+	const rows = tables.flatMap((table) => (db.prepare(`SELECT * FROM "${table}"`).all() as Record<string, unknown>[]).map((row) =>
+		Object.values(row).map((value) => (value instanceof Uint8Array ? Buffer.from(value).toString("utf8") : String(value))).join("\t")));
+	assert.ok(rows.some((row) => row.includes(secret)), "positive control: the verbatim tool-call arguments hold the secret");
+	const carriers = rows.filter((row) => row.includes("Question sets still open for the user"));
+	assert.ok(carriers.length > 0, "the reminder is stored with the prompt");
+	assert.deepEqual(carriers.filter((row) => row.includes(secret)), [], "no stored reminder holds the plaintext");
+	db.close();
 });
