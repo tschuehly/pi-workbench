@@ -28,6 +28,7 @@ import {
 	countTurn,
 	entryWorkingMode,
 	MODE_ENTRY,
+	openAsksReminder,
 	PROMPT_ENTRY,
 	pendingBlock,
 	questionsState,
@@ -44,10 +45,11 @@ import {
 export const PROTOCOL = 2;
 
 /**
- * Optional operations this host supports, reported in its ready message so PI WEB enables only those controls.
- * Protocol 2 hosts without the list support none of them.
+ * PI WEB's gated Chat operations (`CHAT_CAPABILITY_LABELS` in its `shared/apiTypes.ts`) this host supports, reported
+ * in its ready message. PI WEB shows a control only once its name is here; add a name with the operation that
+ * implements it. Protocol 2 hosts without the list support none of them.
  */
-export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments.images", "thinking", "shell"] as const;
+export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell"] as const;
 
 /** A `!`/`!!` command's record: PI WEB's `bashExecution` message without role and timestamp. */
 export const BASH_ENTRY = "workbench.bash";
@@ -99,6 +101,7 @@ export type ChatStatus = {
 	pendingAsks?: unknown[];
 	pendingAsk?: unknown;
 	attentionRequest?: { id: string; reason: string };
+	contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
 	/** Interrupted unsafe tool calls that block their tool until the owner resolves them. */
 	unresolvedEffects?: UnresolvedEffect[];
 	/** Running shell tool calls, as PI WEB's Activity shows them (`ActiveToolExecution`). */
@@ -141,10 +144,13 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	const custom = (customType: string, content: string, details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message.timestamp, entryId: id });
 	const parts = Array.isArray(message.content) ? (message.content as { type: string; text?: string }[]) : [];
 	const mode = entryWorkingMode(entry);
+	// A plain prompt's open-questions reminder is its last block, hidden as in a legacy Chat.
+	const userParts = entry.kind === PROMPT_ENTRY && (entry.data as { askReminder?: boolean } | undefined)?.askReminder === true ? parts.slice(0, -1) : parts;
 	if (mode !== undefined && message.role === "user") {
 		const block = custom(WORKING_MODE_CUSTOM_TYPE, parts[0]?.text ?? "", mode, entry.kind === MODE_ENTRY ? entryId : `${entryId}:working-mode`);
-		return entry.kind === MODE_ENTRY ? [block] : [block, { ...message, content: parts.slice(1), entryId }];
+		return entry.kind === MODE_ENTRY ? [block] : [block, { ...message, content: userParts.slice(1), entryId }];
 	}
+	if (userParts !== parts) return [{ ...message, content: userParts, entryId }];
 	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
 	const notice = NOTICE_TYPES[entry.kind];
@@ -435,6 +441,8 @@ export class ChatSession {
 			cost += bucket.cost.total;
 		}
 		const paused = harness.wake().active && !this.#resumed;
+		const contextWindow = agent.model === undefined ? undefined : this.#host.models.getModel(agent.model.provider, agent.model.modelId)?.contextWindow;
+		const contextTokens = this.#contextTokens();
 		const [mode, questions, reconcile] = await Promise.all([workingModeSnapshot(harness, root), questionsState(harness, root), harness.snapshot(Reconcile, context)]);
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
@@ -458,12 +466,30 @@ export class ChatSession {
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
 			...(unresolvedEffects.length === 0 ? {} : { unresolvedEffects }),
 			...(this.#shells.size === 0 ? {} : { activeToolExecutions: [...this.#shells].map(([callId, startedAt]) => ({ id: `tool:${callId}`, kind: "shell" as const, toolName: "bash", label: "Shell command", startedAt })) }),
+			...(contextWindow === undefined || contextWindow <= 0
+				? {}
+				: { contextUsage: { tokens: contextTokens, contextWindow, percent: contextTokens === null ? null : (contextTokens / contextWindow) * 100 } }),
 		};
 	}
 
 	/** A host command (`/quota-check`). It runs outside the store: nothing is committed or resumed. */
 	command(name: string, args: string): Promise<CommandResult> {
 		return runCommand(name, args);
+	}
+
+	/**
+	 * Context size as Pi's `getContextUsage` reads it: the last answer's usage (not aborted, failed or empty).
+	 * ponytail: ignores the estimate of messages after that answer and compaction; add both with Durable compaction.
+	 */
+	#contextTokens(): number | null {
+		for (const entry of this.#entries.toReversed()) {
+			const message = entry.model?.[0] as Message | undefined;
+			if (message?.role !== "assistant" || message.stopReason === "aborted" || message.stopReason === "error") continue;
+			const { usage } = message;
+			const tokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+			if (tokens > 0) return tokens;
+		}
+		return null;
 	}
 
 	async #resume(): Promise<void> {
@@ -482,24 +508,31 @@ export class ChatSession {
 		const existing = await root.commit((tx) => tx.submissionByRequest(root.id, params.operationId), context);
 		// storage-guard: a new input that starts a lead run gets the low-disk notice first.
 		if (existing === undefined && this.#chat !== undefined && !this.#running) await storagePreflight(root);
-		// A retry keeps whatever the first attempt admitted; only a new operation picks up a pending block.
-		const block = existing === undefined && this.#chat !== undefined ? await pendingBlock(this.#host.harness, root, false) : undefined;
+		// A retry keeps whatever the first attempt admitted; only a new operation picks up a pending block or reminder.
+		const fresh = existing === undefined && this.#chat !== undefined;
+		const block = fresh ? await pendingBlock(this.#host.harness, root, false) : undefined;
+		// A plain prompt reminds the model of the open question sets in the store, as a legacy Chat does (hidden).
+		// It repeats question text from tool-call arguments (stored verbatim): sanitized before this new copy commits.
+		const reminder = fresh && params.mode === undefined ? redact(openAsksReminder((await questionsState(this.#host.harness, root)).open)) : "";
 		const images = params.images ?? [];
 		// As a legacy Chat sends it: the text (when any), then the images; their metadata is redacted before commit.
+		// The reminder rides last, so the transcript hides it as the prompt's last block.
 		const content = [
 			...(block === undefined ? [] : [{ type: "text" as const, text: block.text }]),
 			...(params.text === "" && images.length > 0 ? [] : [{ type: "text" as const, text: params.text }]),
 			...images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
+			...(reminder === "" ? [] : [{ type: "text" as const, text: reminder }]),
 		];
 		const data = {
 			...(block === undefined ? {} : { workingMode: block.details }),
 			...(images.length === 0 ? {} : { attachments: sanitizeDeep((params.attachments ?? []).map((a) => ({ ...a })), sealed(redact)) }),
+			...(reminder === "" ? {} : { askReminder: true }),
 		};
 		const submissionId = await admit(root, {
 			operationId: params.operationId,
 			text: params.text,
 			...(params.mode === undefined ? {} : { mode: params.mode }),
-			...(block === undefined && images.length === 0 ? {} : { content, entry: { kind: PROMPT_ENTRY, data } }),
+			...(block === undefined && images.length === 0 && reminder === "" ? {} : { content, entry: { kind: PROMPT_ENTRY, data } }),
 		});
 		if (existing === undefined) this.#record("prompt", { entryId: null, prompt: null, submissionId: String(submissionId) });
 		if (this.#chat !== undefined && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();

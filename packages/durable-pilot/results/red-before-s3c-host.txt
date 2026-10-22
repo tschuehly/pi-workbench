@@ -1,0 +1,63 @@
+✖ open-questions reminder: a plain prompt carries PI WEB's reminder of the persisted open sets once, hidden from the transcript, across a kill (995.222125ms)
+✖ idle says when the Chat's host may close for archiving: not while a turn runs or input waits; a paused restore is idle and reading it sends nothing (229.00725ms)
+✖ status reports context usage from the last answer and the Chat's model window, as a legacy Chat shows it (229.156125ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1632.667417
+
+✖ failing tests:
+
+test at test/chat-host.test.ts:458:1
+✖ open-questions reminder: a plain prompt carries PI WEB's reminder of the persisted open sets once, hidden from the transcript, across a kill (995.222125ms)
+  AssertionError [ERR_ASSERTION]: one reminder, not one per attempt
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-s3c-attention/packages/durable-pilot/test/chat-host.test.ts:484:9)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/chat-host.test.ts:504:1
+✖ idle says when the Chat's host may close for archiving: not while a turn runs or input waits; a paused restore is idle and reading it sends nothing (229.00725ms)
+  Error: Unknown method idle
+      at ChildProcess.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-s3c-attention/packages/durable-pilot/test/chat-host.test.ts:49:67)
+      at ChildProcess.emit (node:events:514:20)
+      at emit (node:internal/child_process:973:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:91:21)
+
+test at test/chat-host.test.ts:523:1
+✖ status reports context usage from the last answer and the Chat's model window, as a legacy Chat shows it (229.156125ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + undefined
+  - {
+  -   contextWindow: 128000,
+  -   percent: null,
+  -   tokens: null
+  - }
+  
+      at TestContext.<anonymous> (file:///Users/tschuehly/IdeaProjects/pi-workbench.feat-durable-s3c-attention/packages/durable-pilot/test/chat-host.test.ts:527:9)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: { tokens: null, contextWindow: 128000, percent: null },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

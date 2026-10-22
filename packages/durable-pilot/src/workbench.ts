@@ -29,7 +29,10 @@ import { context } from "./host.ts";
 
 // ─── Entry kinds the browser projection recognises ───────────────────────────
 
-/** A user prompt that carries a Working Mode block before the user's own text (`data.workingMode`). */
+/**
+ * A user prompt with blocks around the user's own text: a Working Mode block before it (`data.workingMode`) and/or the
+ * open-questions reminder as its last block (`data.askReminder`).
+ */
 export const PROMPT_ENTRY = "workbench.prompt";
 /** A Working Mode block alone, sent with `/mode send`. */
 export const MODE_ENTRY = "workbench.working-mode";
@@ -459,6 +462,20 @@ export async function closeAsk(conversation: Conversation, request: CloseAsk): P
 
 export async function questionsState(harness: Harness, conversation: Conversation): Promise<QuestionsState> {
 	return (await harness.snapshot(QuestionsDoc, conversation.id, context)) ?? QuestionsDoc.definition.initial();
+}
+
+/**
+ * PI WEB `pendingAskStore.ts` `renderOpenAsksReminder`: one line per open set, so the model keeps them current. Empty
+ * when nothing is open. A legacy Chat sends it hidden with every plain prompt; a Durable Chat commits it with the prompt.
+ */
+export function openAsksReminder(open: Record<string, PendingAsk>): string {
+	const asks = Object.values(open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
+	if (asks.length === 0) return "";
+	return [
+		"Question sets still open for the user (answers arrive as a follow-up message):",
+		...asks.map((ask) => `- ${ask.askId} (${refs(ask)}; updated ${ask.updatedAt}, ${String(ask.turnsSinceUpdate)} turns ago): ${ask.questions[0]?.question ?? ""}`),
+		"If one no longer matches the situation and ask_user is available, update or withdraw it; otherwise leave it.",
+	].join("\n");
 }
 
 /** Count one started run against every open set ("may be stale" after several). */

@@ -57,8 +57,11 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const last = messages.at(-1);
 		// A Working Mode block delivered with a prompt comes first; the script reads the user's text after it.
 		const raw = textOfMessage(last);
-		const text = raw.replace(/^<working-mode seq="\d+">[\s\S]*?<\/working-mode>/, "");
-		const block = text !== raw ? /^<working-mode seq="(\d+)">/.exec(raw)![1] : undefined;
+		const withReminder = raw.replace(/^<working-mode seq="\d+">[\s\S]*?<\/working-mode>/, "");
+		const block = withReminder !== raw ? /^<working-mode seq="(\d+)">/.exec(raw)![1] : undefined;
+		// An open-questions reminder rides last in a plain prompt; the script reads the user's text before it.
+		const reminder = last?.role === "user" ? /Question sets still open for the user[\s\S]*$/.exec(withReminder)?.[0] : undefined;
+		const text = reminder === undefined ? withReminder : withReminder.slice(0, -reminder.length);
 		const label = last?.role === "toolResult" ? `result:${last.toolName}` : text.slice(0, 40);
 		const sections = [...system.matchAll(/<(addendum|project_context|skills)>/g)].map((match) => match[1]);
 		// What the composer adds to a request: images in context, the thinking level, `!` commands the model sees.
@@ -69,6 +72,7 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			label,
 			messages: messages.length,
 			...(block === undefined ? {} : { workingMode: Number(block) }),
+			...(reminder === undefined ? {} : { reminder }),
 			...(sections.length === 0 ? {} : { sections }),
 			...(images === 0 ? {} : { images }),
 			...(ran.length === 0 ? {} : { ran }),

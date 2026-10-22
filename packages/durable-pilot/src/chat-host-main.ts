@@ -3,7 +3,7 @@
 //   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model anthropic/<id>|faux
 //                              [--session-id <PI WEB Chat ID>] [--scripted]
 // Messages in:  { id, method, params? }
-// Messages out: { ready: { protocol, durable, ownerEpoch } } once open, { id, result } | { id, error }, { event }.
+// Messages out: { ready: { protocol, durable, ownerEpoch, capabilities } } once open, { id, result } | { id, error }, { event }.
 // The host exits after `close`, when PI WEB goes away (IPC disconnect), or on SIGTERM/SIGINT, closing the store
 // gracefully first.
 // ponytail: the IPC channel ties the host's life to its session daemon; Phase C moves hosts to their own service owner.
