@@ -46,13 +46,13 @@ in the conversation, so the selected value alone chooses the channel.
 | Value | Interaction behavior |
 | --- | --- |
 | `Default` | Add no Attention-specific behavior; existing instructions apply. |
-| `Focused` | Thomas is watching: work in short, reported steps and ask one question at a time as soon as it arises. |
-| `Switching` | Thomas reads occasionally: keep working on unblocked parts and post each open decision with `ask_user` (short context, options with consequences, one recommended), updating or withdrawing it when it changes; write in the conversation only when blocked or finished, as one status line. |
+| `Focused` | Thomas is watching: work in short, reported steps and post each decision with `ask_user` as soon as it arises. |
+| `Switching` | Thomas reads occasionally: keep working on unblocked parts and post each open decision with `ask_user` (short context, options with consequences, one recommended), updating or withdrawing it when it changes; write in the conversation only when blocked or finished, as one short message readable without the earlier conversation (write-for-humans), and call `request_attention` when Thomas must act. |
 | `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools and never in the conversation, even if Thomas also replies there. Send one update when a milestone finishes or work stops to wait. |
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
-Only Phone uses `ask_human` and `notify_human`. PI WEB's `ask_user` stays available in every value; Switching is the one that directs decisions to it. Focused and Switching ask in the session
-conversation. Thomas switches to Focused when he returns to the conversation.
+Only Phone uses `ask_human` and `notify_human`. Every other value posts decisions with PI WEB's `ask_user` (its own guidance covers Default); AFK lists
+them for Thomas's return instead. Thomas switches to Focused when he returns to the conversation.
 
 ### AFK adaptation and fallback
 
