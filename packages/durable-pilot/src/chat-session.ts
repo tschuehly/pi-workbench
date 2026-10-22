@@ -1,7 +1,7 @@
 // PI WEB session-host protocol v2 for one Durable Chat: committed Durable state (watchEvents) projected into PI WEB's
 // browser session events, and the operations PI WEB routes to a Durable Chat. Durable IDs, Chord operations and task
 // internals stay here; PI WEB sees only its own event and message shapes.
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import { type AssistantMessage, clampThinkingLevel, type Message } from "@earendil-works/pi-ai";
 import {
 	type AgentEvent,
 	type EntryRecord,
@@ -14,6 +14,7 @@ import {
 import type { ChatHost } from "./chat.ts";
 import { parseModel } from "./chat.ts";
 import { admit, context, type Host, Reconcile, resolveUncertain } from "./host.ts";
+import { FAST_STATUS } from "./providers.ts";
 import {
 	ANSWERS_ENTRY,
 	ASK_ANSWERS_CUSTOM_TYPE,
@@ -377,7 +378,10 @@ export class ChatSession {
 			tokens,
 			cost,
 			...(paused ? { warnings: [{ severity: "info" as const, message: "Restored paused: unfinished work waits until you send a message." }] } : {}),
-			extensionStatuses: { [WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode) },
+			extensionStatuses: {
+				[WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode),
+				...(this.#chat?.fast.active(agent.model && { provider: agent.model.provider, id: agent.model.modelId }) ? { [FAST_STATUS]: "fast" } : {}),
+			},
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
 			...(unresolvedEffects.length === 0 ? {} : { unresolvedEffects }),
@@ -449,18 +453,33 @@ export class ChatSession {
 		return cleared;
 	}
 
-	/** Models this Chat can switch to: the Claude models, and the scripted one when offered. */
-	models(): { provider: string; id: string; name: string; contextWindow?: number; reasoning?: unknown }[] {
-		return this.#host.models.getModels().map((model) => ({ provider: model.provider, id: model.id, name: model.name, contextWindow: model.contextWindow, reasoning: model.reasoning }));
+	/** Models this Chat can switch to: those of every provider with a stored login (Pi's `getAvailable`), and faux when offered. */
+	async models(): Promise<{ provider: string; id: string; name: string; contextWindow?: number; reasoning?: unknown }[]> {
+		return (await this.#host.models.getAvailable()).map((model) => ({ provider: model.provider, id: model.id, name: model.name, contextWindow: model.contextWindow, reasoning: model.reasoning }));
 	}
 
-	/** Store the Chat's model; the next model request uses it. */
+	/**
+	 * Store the Chat's model; the next model request uses it. As Pi's `setModel`: a provider without a stored login is
+	 * refused, and the Chat's thinking level is clamped to what the new model supports.
+	 */
 	async setModel(provider: string, modelId: string): Promise<void> {
-		if (this.#host.models.getModel(provider, modelId) === undefined) throw new Error(`Unknown model ${provider}/${modelId}`);
+		const found = this.#host.models.getModel(provider, modelId);
+		if (found === undefined) throw new Error(`Unknown model ${provider}/${modelId}`);
+		if ((await this.#host.models.checkAuth(provider)) === undefined) throw new Error(`No stored login for ${provider}: log in with Pi (/login) first`);
 		const model = parseModel(`${provider}/${modelId}`);
-		await this.#host.root.configure({ model }, context);
-		this.#record("model.select", { provider, model: modelId, effort: null, source: "set" });
+		const current = (await this.#host.root.agent(context)).thinkingLevel;
+		const thinkingLevel = current === undefined ? undefined : clampThinkingLevel(found, current);
+		await this.#host.root.configure({ model, ...(thinkingLevel === current ? {} : { thinkingLevel }) }, context);
+		this.#record("model.select", { provider, model: modelId, effort: thinkingLevel ?? null, source: "set" });
 		await this.#publishStatus();
+	}
+
+	/** `/fast [on|off|toggle]` (pi-openai-fast-mode). */
+	async fast(args: string): Promise<{ type: "done"; message: string } | { type: "unsupported"; message: string }> {
+		if (this.#chat === undefined) return { type: "unsupported", message: "/fast is not available on this host" };
+		const result = this.#chat.fast.command(args);
+		await this.#publishStatus();
+		return result;
 	}
 
 	/**

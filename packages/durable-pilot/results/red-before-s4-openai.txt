@@ -1,0 +1,27 @@
+# Red before slice 4 group OpenAI (P016, P137), 2026-10-22
+
+## test/providers.test.ts before any implementation (9 of 10 fail)
+  ✖ offers Claude, openai-codex and github-copilot models when their logins are stored (32.36575ms)
+  ✖ a provider without a stored login is unavailable: not listed, and selecting it fails visibly (21.4695ms)
+  ✔ an environment Copilot token is no second credential path: only the stored login counts (18.286209ms)
+  ✖ switches providers mid-Chat: each request goes to its provider with its stored login and the whole conversation (86.012459ms)
+  ✖ a switch clamps the Chat's level to what the new model supports, as Pi does (20.482042ms)
+  ✖ the level reaches each provider in its own form (19.242458ms)
+  ✖ /fast toggles the package's own config file; priority goes only to its target models (19.597042ms)
+  ✖ a workspace config file wins over the user one, as in the package; a legacy toggle applies to the next request (73.849208ms)
+  ✖ openai-codex: a secret in the model's answer never reaches the store or PI WEB (61.71925ms)
+  ✖ github-copilot: a secret in the model's answer never reaches the store or PI WEB (75.361875ms)
+
+## Redaction positive control: providers registered without the redacting wrapper (secret committed verbatim)
+  ✖ openai-codex: a secret in the model's answer never reaches the store or PI WEB (104.903583ms)
+  ✖ github-copilot: a secret in the model's answer never reaches the store or PI WEB (135.907417ms)
+  actual: 'the token is ghp_<fake-secret> done'
+
+## Env credential guard removed (COPILOT_GITHUB_TOKEN would make Copilot available)
+  ✖ an environment Copilot token is no second credential path: only the stored login counts (60.356166ms)
+
+## models-store.json merge missing
+  ✖ adds Pi's refreshed catalog (models-store.json) as Pi does: stored models extend the built-in list, Copilot's login filters it (96.009042ms)
+
+## test/chat-host.test.ts against the pre-slice host
+✖ OpenAI models: offered from the stored ChatGPT and Copilot logins; the choice survives a hard kill; /fast over IPC (381.154625ms)

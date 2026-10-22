@@ -1,6 +1,6 @@
 // Durable Chat host process for PI WEB (session-host protocol v2). PI WEB's session daemon spawns one per Chat family
 // with an IPC channel; requests and replies are JSON messages on it, and the host pushes PI WEB session events.
-//   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model anthropic/<id>|faux
+//   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model <provider>/<id>|faux
 //                              [--session-id <PI WEB Chat ID>] [--scripted]
 // Messages in:  { id, method, params? }
 // Messages out: { ready: { protocol, durable, ownerEpoch } } once open, { id, result } | { id, error }, { event }.
@@ -66,6 +66,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		return session.prompt({ operationId, text: body, ...(mode === undefined ? {} : { mode }) });
 	},
 	mode: (params) => session.mode(typeof params.args === "string" ? params.args : ""),
+	fast: (params) => session.fast(typeof params.args === "string" ? params.args : ""),
 	closeAsk: (params) => {
 		const outcome = params.outcome as CloseAsk["outcome"] | undefined;
 		if (outcome === undefined || typeof outcome !== "object" || typeof params.content !== "string") throw new Error("closeAsk needs outcome and content");

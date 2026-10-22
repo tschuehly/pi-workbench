@@ -23,7 +23,7 @@
     "setup": "npm ci --ignore-scripts && npm ci --ignore-scripts --prefix legacy-1.3",
     "typecheck": "tsc -p .",
     "test:matrix": "node --test --test-concurrency=1 --test-timeout=1800000 test/generation-tools.test.ts test/children-queue-questions.test.ts test/ownership-storage.test.ts test/credentials.test.ts",
-    "test:spikes": "node --test --test-concurrency=1 test/redaction.test.ts test/redaction-boundaries.test.ts test/claude.test.ts",
+    "test:spikes": "node --test --test-concurrency=1 test/redaction.test.ts test/redaction-boundaries.test.ts test/claude.test.ts test/providers.test.ts",
     "test": "npm run typecheck && npm run test:matrix && npm run test:spikes && npm run test:chat && npm run summary",
     "summary": "node scripts/summary.ts",
     "latency": "node scripts/commit-latency.ts",

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
+import { codexToken } from "./refresh-race.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 type UiEvent = { type: string; [key: string]: unknown };
@@ -18,6 +19,15 @@ const live = new Set<ChildProcess>();
 // Host processes inherit this: telemetry goes to scratch, never to the owner's ~/.pi/agent/telemetry.
 const TELEMETRY = scratch("chat-telemetry");
 process.env.PI_TELEMETRY_DIR = TELEMETRY;
+// And a Pi agent dir with fake stored logins, so hosts never read or lock the owner's auth.json.
+const AGENT = join(scratch("chat-agent"), "agent");
+mkdirSync(AGENT, { recursive: true });
+writeFileSync(join(AGENT, "auth.json"), JSON.stringify({
+	anthropic: { type: "oauth", access: "fake-oat", refresh: "fake-ort", expires: Date.now() + 3_600_000 },
+	"openai-codex": { type: "oauth", access: codexToken("chat"), refresh: "fake-codex", expires: Date.now() + 3_600_000, accountId: "acct-chat" },
+	"github-copilot": { type: "oauth", access: "tid=fake;proxy-ep=proxy.individual.githubcopilot.com", refresh: "fake-gh", expires: Date.now() + 3_600_000 },
+}), { mode: 0o600 });
+process.env.PI_CODING_AGENT_DIR = AGENT;
 
 class ChatHost {
 	readonly child: ChildProcess;
@@ -388,6 +398,29 @@ test("model switching is per Chat, persisted, and applies to the next request", 
 	await host.until((e) => e.type === "message.end" && textOf((e.message as { content?: unknown }).content) === "ok: on faux", "the scripted answer");
 	assert.deepEqual(logged(store).map((l) => l.label), ["on faux"], "only the scripted model was asked; no Claude request");
 	await host.close();
+});
+
+test("OpenAI models: offered from the stored ChatGPT and Copilot logins; the choice survives a hard kill; /fast over IPC", async () => {
+	const { store, cwd } = family("openai");
+	let host = new ChatHost(store, cwd);
+	await host.ready;
+	const ids = (await host.call<{ provider: string; id: string }[]>("models")).map((m) => `${m.provider}/${m.id}`);
+	for (const id of ["openai-codex/gpt-6-astra", "openai-codex/gpt-6.1-sol", "openai-codex/gpt-6-luna", "github-copilot/grok-4.7", "anthropic/claude-opus-5-5"]) assert.ok(ids.includes(id), `${id} offered`);
+	await host.call("setModel", { provider: "openai-codex", modelId: "gpt-6-astra" });
+	assert.deepEqual(await host.call("fast", { args: "on" }), { type: "done", message: "Fast Mode on" });
+	assert.equal((await host.call<Status>("status")).extensionStatuses?.["pi-openai-fast-mode"], "fast");
+	await host.kill();
+
+	host = new ChatHost(store, cwd);
+	await host.ready;
+	const status = await host.call<Status>("status");
+	assert.deepEqual(status.model, { provider: "openai-codex", id: "gpt-6-astra" }, "the model survives a hard kill");
+	assert.equal(status.extensionStatuses?.["pi-openai-fast-mode"], "fast", "Fast Mode is the package's file, not Chat state");
+	await host.call("fast", { args: "off" });
+	await host.call("setModel", { provider: "github-copilot", modelId: "grok-4.7" });
+	assert.deepEqual((await host.call<Status>("status")).model, { provider: "github-copilot", id: "grok-4.7" });
+	await host.close();
+	assert.equal(existsSync(join(store, "requests.log")), false, "no model request was sent");
 });
 
 test("resolve: the owner marks an interrupted bash retry; it is recorded, the model is told once, and bash runs again", async () => {
