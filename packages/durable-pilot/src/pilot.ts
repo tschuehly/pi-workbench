@@ -184,7 +184,7 @@ const leafTool: ToolRegistration = defineTool({
 			const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 			if (existing !== undefined) return existing.id;
 			const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
-			await configure(tx, created.id, { extensions: { remove: [ChildTools] } });
+			await configure(tx, created.id, { extensions: { remove: [ChildTools, LeafTools] } });
 			return created.id;
 		}, callContext);
 		await api.details({ conversationId: child }, callContext);
@@ -196,7 +196,9 @@ const leafTool: ToolRegistration = defineTool({
 	},
 });
 
-export const ChildTools = defineExtension({ name: "pilot.children", tasks: [Anchor, Reporter], tools: [subagentTool, leafTool] });
+export const ChildTools = defineExtension({ name: "pilot.children", tasks: [Anchor, Reporter], tools: [subagentTool] });
+/** Separate so a worker keeps leaves while losing subagents (lead → worker → leaf depth). */
+export const LeafTools = defineExtension({ name: "pilot.leaves", tools: [leafTool] });
 
 /** Mark uncollected results read; returns what was collected now. */
 export async function collect(conversation: Conversation, name: string): Promise<string[]> {

@@ -5,7 +5,23 @@ import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-wor
 import { defineExtension, type HarnessSettings, LiveDoc, type SubmissionId } from "@earendil-works/pi-durable";
 import { fileDeferred, readLog, router } from "../src/faux.ts";
 import { admit, context, type Host, type HostOptions, openHost, Reconcile } from "../src/host.ts";
-import { ChildTools, crasherTool, effectTool, entriesOf, QuestionTools } from "../src/pilot.ts";
+import {
+	acknowledgeAttention,
+	Attention,
+	answerQuestion,
+	ChildTools,
+	collect,
+	crasherTool,
+	effectTool,
+	entriesOf,
+	LeafTools,
+	notifyAttention,
+	QuestionTools,
+	Questions,
+	requestAttention,
+	StaleAnswer,
+	Subagents,
+} from "../src/pilot.ts";
 import type { Faults } from "../src/store.ts";
 
 export type Io = {
@@ -38,7 +54,7 @@ export async function pilotHost(dir: string, setup: Setup = {}): Promise<Host> {
 		tools: [effectTool(dir, "work", setup.replay ?? "unsafe"), effectTool(dir, "deploy", "unsafe"), effectTool(dir, "wait_tool", "safe"), crasherTool(dir)],
 	});
 	const host = await openHost(dir, {
-		extensions: [tools, ChildTools, QuestionTools],
+		extensions: [tools, ChildTools, LeafTools, QuestionTools],
 		...(setup.faux === undefined ? {} : { faux: setup.faux }),
 		...(setup.settings === undefined ? {} : { settings: setup.settings }),
 		...(setup.now === undefined ? {} : { now: setup.now }),
@@ -202,5 +218,269 @@ const tools: Scenario = {
 	},
 };
 
-export const scenarios: Record<string, Scenario> = { generation, tools };
+// ─── Children: launch/report kill points, cancellation, worker/leaf settlement ──
+
+/** A hold that also tells the crash flow it was reached, then waits for cancellation like proc.ts's. */
+function localHold(io: Io) {
+	let reach!: (name: string) => void;
+	const reached = new Promise<string>((resolve) => (reach = resolve));
+	const hold = async (name: string, signal: AbortSignal | undefined) => {
+		if (!io.armed.delete(name)) return;
+		reach(name);
+		await new Promise<never>((_, reject) => {
+			if (signal === undefined) return;
+			if (signal.aborted) reject(signal.reason);
+			signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+		});
+	};
+	return { hold, reached };
+}
+
+async function childState(host: Host) {
+	const doc = await host.harness.snapshot(Subagents, host.root.id, context);
+	const agents = Object.entries(doc?.agents ?? {});
+	const children = [];
+	for (const [name, agent] of agents) {
+		const t = await transcript(host, agent.conversationId);
+		const leaves = (await host.root.commit((tx) => tx.scanConversations({}, 100), context)).items.filter(
+			(c) => c.owner !== undefined && c.id !== agent.conversationId && c.id !== host.root.id,
+		);
+		const leafTranscripts = [];
+		for (const leaf of leaves) leafTranscripts.push(await transcript(host, leaf.id));
+		const live = await host.harness.snapshot(LiveDoc, agent.conversationId, context);
+		children.push({ name, users: t.users, assistants: t.assistants, results: t.results, running: live?.run !== undefined, leaves: leafTranscripts });
+	}
+	const reporters = [];
+	for (const id of Object.values(doc?.reporters ?? {})) {
+		const record = await host.harness.getTask(id, context);
+		reporters.push({ id, status: record?.state.status, outcome: record?.state.status === "terminal" ? record.state.outcome.status : null });
+	}
+	return { children, reporters, results: Object.values(doc?.results ?? {}) };
+}
+
+const child: Scenario = {
+	async crash(dir, options, io) {
+		const window = options.window as string;
+		if (window === "kill-point") {
+			const host = await pilotHost(dir);
+			await admit(host.root, { operationId: "op-1", text: "spawn:reader child task" });
+			return host;
+		}
+		const local = localHold(io);
+		const blockOn = window === "cancel-parent" ? "child-block" : "leaf-task";
+		const host = await pilotHost(dir, { holdOn: blockOn, hold: local.hold });
+		io.armed.add(`request:${blockOn}`);
+		await admit(host.root, { operationId: "op-1", text: window === "cancel-parent" ? "spawn:reader child-block" : "spawn:worker leaf:leaf-task" });
+		await local.reached;
+		const doc = (await host.harness.snapshot(Subagents, host.root.id, context))!;
+		const agent = Object.values(doc.agents)[0]!;
+		const data: Record<string, unknown> = {};
+		if (window === "cancel-parent") {
+			// Esc on the parent stops at the background boundary; ending the Chat reaches the child.
+			await host.root.abort(context);
+			data.childRunningAfterEsc = (await host.harness.snapshot(LiveDoc, agent.conversationId, context))?.run !== undefined;
+			await host.root.abort(context, { background: true });
+			data.childRunningAfterEnd = (await host.harness.snapshot(LiveDoc, agent.conversationId, context))?.run !== undefined;
+		} else if (window === "cancel-worker") {
+			await (await host.harness.conversation(agent.conversationId, context))!.abort(context);
+		} else if (window === "cancel-leaf") {
+			const leafCall = (await host.harness.snapshot(LiveDoc, agent.conversationId, context))!.tools![0]!.taskId!;
+			await host.harness.abortTask(leafCall, context);
+			await host.harness.waitForTask(leafCall, context);
+		}
+		await io.barrier(window, data);
+		return host;
+	},
+	async verify(dir) {
+		const host = await pilotHost(dir);
+		host.resume();
+		const settled = await waitRequest(host, "op-1");
+		const doc = await host.harness.snapshot(Subagents, host.root.id, context);
+		for (const id of Object.values(doc?.reporters ?? {})) await host.harness.waitForTask(id, context);
+		await host.root.waitForIdle(context);
+		const state = await childState(host);
+		const t = await transcript(host);
+		const name = state.children[0]?.name ?? "none";
+		const firstCollect = await collect(host.root, name);
+		const secondCollect = await collect(host.root, name);
+		const evidence = {
+			settled,
+			...state,
+			childReports: t.users.filter((u) => u.startsWith("[child")),
+			mainUsers: t.users,
+			collected: { first: firstCollect.length, second: secondCollect.length },
+			requestLabels: readLog<{ label: string; pid: number }>(join(dir, "requests.log")).map((r) => r.label),
+			...(await common(host, dir)),
+		};
+		await host.close();
+		return evidence;
+	},
+};
+
+// ─── Queued input and admission ──────────────────────────────────────────────
+
+const queue: Scenario = {
+	async crash(dir, options, io) {
+		const window = options.window as string;
+		let holdCommit = false;
+		const localFail = localHold(io);
+		const host = await pilotHost(dir, {
+			faults: {
+				beforeCommit: async (tables) => {
+					if (!holdCommit || !tables.has("submissions")) return;
+					holdCommit = false;
+					await io.barrier("mid-commit");
+					await io.closing;
+					throw new Error("injected: commit abandoned at close");
+				},
+			},
+			...(window === "failed-run" ? { holdOn: "fail", hold: localFail.hold } : {}),
+		});
+		if (window === "mid-commit") {
+			holdCommit = true;
+			void admit(host.root, { operationId: "op-1", text: "hello" }).catch(() => {});
+		} else if (window === "after-commit") {
+			const id = await admit(host.root, { operationId: "op-1", text: "hello" });
+			await io.barrier("committed-unacked", { id });
+		} else if (window === "receipt") {
+			void admit(host.root, { operationId: "op-1", text: "hello" }, { afterReceipt: () => io.barrier("receipt").then(() => new Promise(() => {})) });
+		} else if (window === "order") {
+			await admit(host.root, { operationId: "op-0", text: "call:wait_tool" });
+			await until(host, async () => (await host.harness.snapshot(LiveDoc, host.root.id, context))?.tools?.[0]?.status === "running");
+			await admit(host.root, { operationId: "op-s1", text: "steer-1", mode: "steer" });
+			await admit(host.root, { operationId: "op-f1", text: "follow-1" });
+			await admit(host.root, { operationId: "op-s2", text: "steer-2", mode: "steer" });
+			await admit(host.root, { operationId: "op-f2", text: "follow-2" });
+			const withdrawn = await admit(host.root, { operationId: "op-f3", text: "follow-3" });
+			const outcome = await host.harness.abortSubmission(withdrawn, context);
+			await io.barrier("queued", { withdrawn: outcome });
+		} else if (window === "failed-run") {
+			io.armed.add("request:fail");
+			await admit(host.root, { operationId: "op-0", text: "fail" });
+			await localFail.reached;
+			await admit(host.root, { operationId: "op-f1", text: "follow-1" });
+			await io.barrier("queued");
+		}
+		return host;
+	},
+	async verify(dir, options) {
+		const window = options.window as string;
+		const host = await pilotHost(dir);
+		host.resume();
+		const evidence: Record<string, unknown> = {};
+		if (window === "order") {
+			for (const op of ["op-0", "op-s1", "op-f1", "op-s2", "op-f2", "op-f3"]) evidence[op] = await waitRequest(host, op);
+			await host.root.waitForIdle(context);
+		} else if (window === "failed-run") {
+			evidence.p0 = await waitRequest(host, "op-0");
+			await host.root.waitForIdle(context);
+			const inspection = await host.harness.inspect(context);
+			evidence.queuedAfterFailure = inspection.submissions.map((s) => ({ requestId: s.requestId, status: s.status }));
+			evidence.requestsBeforeNext = readLog<{ label: string }>(join(dir, "requests.log")).map((r) => r.label);
+			await admit(host.root, { operationId: "op-next", text: "next" });
+			evidence.f1 = await waitRequest(host, "op-f1");
+			evidence.next = await waitRequest(host, "op-next");
+		} else {
+			if (window === "receipt") {
+				try {
+					await admit(host.root, { operationId: "op-1", text: "changed" });
+					evidence.changedPayload = "accepted";
+				} catch (error) {
+					evidence.changedPayload = (error as Error).name;
+				}
+			}
+			evidence.retryId = await admit(host.root, { operationId: "op-1", text: "hello" });
+			evidence.again = await admit(host.root, { operationId: "op-1", text: "hello" });
+			evidence.settled = await waitRequest(host, "op-1");
+		}
+		Object.assign(evidence, { transcript: await transcript(host), ...(await common(host, dir)) });
+		await host.close();
+		return evidence;
+	},
+};
+
+/** Wait on committed state through a document watch, not a timer. */
+async function until(host: Host, check: () => Promise<boolean>): Promise<void> {
+	if (await check()) return;
+	const watch = (await host.harness.watchDoc(LiveDoc, host.root.id, context))!;
+	await new Promise<void>((resolve) => {
+		watch.start(async () => {
+			if (await check()) resolve();
+		});
+	});
+	await watch.stop();
+}
+
+// ─── Unanswered questions and attention ──────────────────────────────────────
+
+const question: Scenario = {
+	async crash(dir, options, io) {
+		const window = options.window as string;
+		const host = await pilotHost(dir);
+		await admit(host.root, { operationId: "op-1", text: "ask:Which database?" });
+		if (window === "answer-undelivered" || window === "delivered-unacked") {
+			await waitRequest(host, "op-1");
+			const [id] = Object.keys((await host.harness.snapshot(Questions, host.root.id, context))!.questions);
+			await answerQuestion(host.root, id!, 1, "postgres");
+		}
+		return host;
+	},
+	async verify(dir) {
+		const host = await pilotHost(dir);
+		host.resume();
+		const asked = await waitRequest(host, "op-1");
+		let questions = (await host.harness.snapshot(Questions, host.root.id, context))?.questions ?? {};
+		const ids = Object.keys(questions);
+		const evidence: Record<string, unknown> = { asked, questionCount: ids.length };
+		if (questions[ids[0]!]?.status === "open") await answerQuestion(host.root, ids[0]!, 1, "postgres");
+		const delivery = (await host.root.commit((tx) => tx.scanTasks({ conversationId: host.root.id }, 100), context)).items.filter(
+			(t) => t.kind === "pilot.answer-delivery",
+		);
+		for (const task of delivery) await host.harness.waitForTask(task.id, context);
+		await host.root.waitForIdle(context);
+		try {
+			await answerQuestion(host.root, ids[0]!, 1, "mysql");
+			evidence.staleAnswer = "accepted";
+		} catch (error) {
+			evidence.staleAnswer = error instanceof StaleAnswer ? "rejected" : String(error);
+		}
+		questions = (await host.harness.snapshot(Questions, host.root.id, context))?.questions ?? {};
+		const t = await transcript(host);
+		Object.assign(evidence, {
+			questions: Object.values(questions),
+			deliveryTasks: delivery.length,
+			answers: t.users.filter((u) => u.startsWith("[answer")),
+			transcript: t,
+			...(await common(host, dir)),
+		});
+		await host.close();
+		return evidence;
+	},
+};
+
+const attention: Scenario = {
+	async crash(dir, _options, io) {
+		const host = await pilotHost(dir);
+		const first = await requestAttention(host.root, "first");
+		const viewed = (await host.harness.snapshot(Attention, host.root.id, context))!.latest!.id; // the viewer sees "first"
+		const second = await requestAttention(host.root, "second");
+		const notified = await notifyAttention(host.root);
+		await io.barrier("requested", { first, second, viewed, notified });
+		return host;
+	},
+	async verify(dir) {
+		const host = await pilotHost(dir);
+		const before = (await host.harness.snapshot(Attention, host.root.id, context))!;
+		const staleAck = await acknowledgeAttention(host.root, "att-1");
+		const afterStale = (await host.harness.snapshot(Attention, host.root.id, context))!.latest;
+		const renotify = await notifyAttention(host.root);
+		const ack = await acknowledgeAttention(host.root, "att-2");
+		const after = (await host.harness.snapshot(Attention, host.root.id, context))!.latest;
+		const evidence = { before, staleAck, afterStale, renotify: renotify ?? null, ack, after, ...(await common(host, dir)) };
+		await host.close();
+		return evidence;
+	},
+};
+
+export const scenarios: Record<string, Scenario> = { generation, tools, child, queue, question, attention };
 export type { SubmissionId };

@@ -103,12 +103,22 @@ export async function runOnce(window: Window, mode: Mode, iteration: number): Pr
 	const dir = scratch(`${window.id}-${mode}`);
 	const started = Date.now();
 	const crash = new HostProcess(window.scenario, "crash", dir, window.crash);
-	const barrier = await crash.waitFor((m) => m.type === "barrier" && m.name === window.barrier, `barrier ${window.barrier}`);
-	if (mode === "kill") await crash.kill();
-	else await crash.close();
-	const verify = new HostProcess(window.scenario, "verify", dir, window.verify);
-	const result = await verify.waitFor((m) => m.type === "result", "verify result");
-	await verify.exited;
+	let verify: HostProcess | undefined;
+	let barrier: Awaited<ReturnType<HostProcess["waitFor"]>>;
+	let result: Awaited<ReturnType<HostProcess["waitFor"]>>;
+	try {
+		barrier = await crash.waitFor((m) => m.type === "barrier" && m.name === window.barrier, `barrier ${window.barrier}`);
+		if (mode === "kill") await crash.kill();
+		else await crash.close();
+		verify = new HostProcess(window.scenario, "verify", dir, window.verify);
+		result = await verify.waitFor((m) => m.type === "result", "verify result");
+		await verify.exited;
+	} catch (error) {
+		crash.child.kill("SIGKILL");
+		verify?.child.kill("SIGKILL");
+		appendFileSync(evidenceFile(window.id, mode), `${JSON.stringify({ iteration, mode, pass: false, failure: String(error), dir })}\n`);
+		throw error;
+	}
 	const evidence = {
 		iteration,
 		mode,
