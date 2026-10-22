@@ -9,10 +9,10 @@ import { createBashTool, createEditTool, createReadTool, createWriteTool } from 
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { checkpointExtension } from "./checkpoint.ts";
 import { router } from "./faux.ts";
-import type { McpConnection } from "./mcp.ts";
 import { toolGroupsExtension } from "./tool-groups.ts";
 import { type Host, MODEL, openHost } from "./host.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
+import { searchTools } from "./search-tools.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
 export const PREAMBLE = [
@@ -22,7 +22,7 @@ export const PREAMBLE = [
 ].join("\n");
 
 /** Prompt sections in Pi's order (preamble, addendum, project context, skills, cwd); resources come from PI WEB. */
-export function chatTools(resources: () => Resources) {
+export function chatTools(resources: () => Resources, cwd: string) {
 	return defineExtension({
 		name: "workbench.chat",
 		sections: [
@@ -33,7 +33,8 @@ export function chatTools(resources: () => Resources) {
 			section("cwd", (input) => input.env?.cwd),
 		],
 		// read has no external effect, so a crash mid-read may rerun it; write, edit and bash stay unsafe (never rerun).
-		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), createBashTool()].map((tool) => redactingTool(tool)),
+		// grep/find/ls: Pi's own, offered only where an allowlist names them (children), as in legacy Chats.
+		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), createBashTool(), ...searchTools(cwd)].map((tool) => redactingTool(tool)),
 	});
 }
 
@@ -54,7 +55,7 @@ export type ChatHostOptions = {
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
 export type ChatHost = Host & {
-	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings; extensions: readonly Extension[]; mcp?: McpConnection };
+	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings; extensions: readonly Extension[] };
 };
 
 /**
@@ -77,7 +78,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	let opened: Host | undefined;
 	// Tool groups defer the group tools of every extension before them.
 	const extensions: Extension[] = [
-		chatTools(() => workbench.resources),
+		chatTools(() => workbench.resources, options.cwd),
 		workbenchExtension({ chatId: options.chatId ?? options.dir, signal: (signal) => workbench.onSignal(signal) }),
 		checkpointExtension(() => opened!.harness),
 	];

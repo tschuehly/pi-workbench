@@ -1,0 +1,6 @@
+[no grep/find/ls] ✖ grep/find/ls: not in the lead's default tools; a child's allowlist gets them, answering exactly as Pi's own tools do (162.64275ms)
+[no grep/find/ls] ✖ failing tests:
+[no grep/find/ls] ✖ grep/find/ls: not in the lead's default tools; a child's allowlist gets them, answering exactly as Pi's own tools do (162.64275ms)
+[grep unwrapped] ✖ grep output is redacted before it is committed (279.872209ms)
+[grep unwrapped] ✖ failing tests:
+[grep unwrapped] ✖ grep output is redacted before it is committed (279.872209ms)

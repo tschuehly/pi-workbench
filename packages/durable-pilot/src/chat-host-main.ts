@@ -91,7 +91,6 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	// Pi's compaction settings ({ enabled, reserveTokens, keepRecentTokens }, or Durable's full shape in tests).
 	configure: (params) => session.configure((params.resources ?? {}) as Resources, {
 		...(isObject(params.compaction) ? { compaction: params.compaction as CompactionSettings } : {}),
-		...(isObject(params.mcp) ? { mcp: { projectTrusted: params.mcp.projectTrusted === true } } : {}),
 	}),
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
 	abort: () => session.abort(),
