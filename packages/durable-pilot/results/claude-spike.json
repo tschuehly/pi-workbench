@@ -1,0 +1,81 @@
+{
+  "measuredAt": "2026-10-22T12:33:21.975Z",
+  "versions": {
+    "pi-durable": "1.4.0",
+    "pi-ai": "1.4.0",
+    "model": "claude-sonnet-5-5",
+    "piClaudeCodeUseRulesFrom": "2.2.1"
+  },
+  "credential": {
+    "source": "Pi auth.json (read-only)",
+    "type": "oauth",
+    "subscriptionTokenShape": true,
+    "minutesLeftAtStart": 223,
+    "refreshAttempts": 0,
+    "anthropicEnvVarsRemoved": 0
+  },
+  "wire": {
+    "requests": 1,
+    "toolNames": [
+      "mcp__pilot__pilot_echo",
+      "mcp__pilot____pi_deferred_placeholder__"
+    ],
+    "claudeCodeIdentity": true
+  },
+  "response": {
+    "unifiedHeaders": [
+      "anthropic-ratelimit-unified-5h-reset",
+      "anthropic-ratelimit-unified-5h-status",
+      "anthropic-ratelimit-unified-5h-utilization",
+      "anthropic-ratelimit-unified-7d-reset",
+      "anthropic-ratelimit-unified-7d-status",
+      "anthropic-ratelimit-unified-7d-utilization",
+      "anthropic-ratelimit-unified-fallback-percentage",
+      "anthropic-ratelimit-unified-overage-disabled-reason",
+      "anthropic-ratelimit-unified-overage-status",
+      "anthropic-ratelimit-unified-representative-claim",
+      "anthropic-ratelimit-unified-reset",
+      "anthropic-ratelimit-unified-status"
+    ],
+    "status": 200,
+    "unifiedStatus": "allowed"
+  },
+  "run": {
+    "status": "done",
+    "ms": 1728,
+    "stopReason": "toolUse",
+    "storedToolCallNames": [
+      "pilot_echo"
+    ],
+    "toolExecutions": 1,
+    "toolResult": "echo: durable-pilot",
+    "entryKinds": [
+      "pi.user",
+      "pi.system",
+      "pi.assistant",
+      "pi.tool-result"
+    ]
+  },
+  "usage": {
+    "anthropic/claude-sonnet-5-5": {
+      "input": 4,
+      "output": 63,
+      "cacheRead": 0,
+      "cacheWrite": 546,
+      "totalTokens": 613,
+      "cost": {
+        "input": 0.000008,
+        "output": 0.00063,
+        "cacheRead": 0,
+        "cacheWrite": 0.002184,
+        "total": 0.0028220000000000003
+      },
+      "cacheWrite1h": 546,
+      "reasoning": 0
+    }
+  },
+  "store": {
+    "accessTokenInStore": false,
+    "aliasInStore": false
+  }
+}

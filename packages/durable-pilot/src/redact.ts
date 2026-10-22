@@ -60,11 +60,15 @@ export function sanitizeDeep<T>(value: T, sanitize: Sanitize): T {
 }
 
 /** Sanitize the text blocks of an assistant message; `partial` withholds what may still become a secret. */
-function sanitizeMessage(message: AssistantMessage, sanitize: Sanitize, partial: boolean): AssistantMessage {
+function sanitizeMessage(message: AssistantMessage, sanitize: Sanitize, partial: boolean, rename?: (name: string) => string): AssistantMessage {
 	return {
 		...message,
 		content: message.content.map((block) =>
-			block.type === "text" ? { ...block, text: sanitize(partial ? completePrefix(block.text) : block.text) } : block,
+			block.type === "text"
+				? { ...block, text: sanitize(partial ? completePrefix(block.text) : block.text) }
+				: block.type === "toolCall" && rename !== undefined
+					? { ...block, name: rename(block.name) }
+					: block,
 		),
 		...(message.errorMessage === undefined ? {} : { errorMessage: sanitize(message.errorMessage) }),
 	};
@@ -90,6 +94,7 @@ function sanitizeEvents(
 	upstream: AbortSignal | undefined,
 	model: { api: string; provider: string; id: string },
 	sanitize: Sanitize,
+	rename?: (name: string) => string,
 ): AssistantMessageEventStream {
 	const controller = new AbortController();
 	if (upstream !== undefined) {
@@ -102,10 +107,10 @@ function sanitizeEvents(
 		try {
 			for await (const event of source) {
 				let next: AssistantMessageEvent;
-				if (event.type === "done") next = { ...event, message: sanitizeMessage(event.message, sanitize, false) };
-				else if (event.type === "error") next = { ...event, error: sanitizeMessage(event.error, sanitize, false) };
+				if (event.type === "done") next = { ...event, message: sanitizeMessage(event.message, sanitize, false, rename) };
+				else if (event.type === "error") next = { ...event, error: sanitizeMessage(event.error, sanitize, false, rename) };
 				else {
-					const partial = sanitizeMessage(event.partial, sanitize, true);
+					const partial = sanitizeMessage(event.partial, sanitize, true, rename);
 					// Deltas would carry raw text; consumers read the sanitized partial instead.
 					next = { ...event, partial, ...("delta" in event ? { delta: "" } : {}), ...("content" in event ? { content: "" } : {}) } as AssistantMessageEvent;
 				}
@@ -124,19 +129,32 @@ function sanitizeEvents(
 /** A provider whose model output reaches its caller only sanitized, optionally rewriting the outbound payload. */
 export function wrapProvider(
 	inner: Provider,
-	options: { readonly sanitize?: Sanitize; readonly onPayload?: (payload: unknown) => unknown } = {},
+	options: {
+		readonly sanitize?: Sanitize;
+		/** Outbound payload rewrite (pi-ai `onPayload`), e.g. the Claude subscription rules. */
+		readonly onPayload?: (payload: unknown) => unknown;
+		/** Observe response status and headers (pi-ai `onResponse`). */
+		readonly onResponse?: (response: { status: number; headers: Record<string, string> }) => void;
+		/** Canonical tool name for a name the provider returned (alias → flat), applied before Durable sees the call. */
+		readonly canonicalToolName?: (name: string) => string;
+	} = {},
 ): Provider {
 	const sanitize = options.sanitize ?? redact;
-	type Options = { signal?: AbortSignal; onPayload?: (payload: unknown, model: never) => unknown } | undefined;
+	const rename = options.canonicalToolName;
+	type Options = { signal?: AbortSignal; onPayload?: (payload: unknown, model: never) => unknown; onResponse?: (r: never, m: never) => unknown } | undefined;
 	const withPayload = (o: Options, signal: AbortSignal): Options => {
 		const previous = o?.onPayload;
 		const transform = options.onPayload;
+		const observe = options.onResponse;
 		return {
 			...o,
 			signal,
 			...(transform === undefined
 				? {}
 				: { onPayload: async (payload: unknown, model: never) => transform((await previous?.(payload, model)) ?? payload) }),
+			...(observe === undefined
+				? {}
+				: { onResponse: async (response: never, model: never) => (observe(response), o?.onResponse?.(response, model)) }),
 		};
 	};
 	return {
@@ -147,9 +165,9 @@ export function wrapProvider(
 		auth: inner.auth,
 		getModels: () => inner.getModels(),
 		stream: (model, context, o) =>
-			sanitizeEvents((signal) => inner.stream(model, context, withPayload(o, signal) as never), o?.signal, model, sanitize),
+			sanitizeEvents((signal) => inner.stream(model, context, withPayload(o, signal) as never), o?.signal, model, sanitize, rename),
 		streamSimple: (model, context, o) =>
-			sanitizeEvents((signal) => inner.streamSimple(model, context, withPayload(o, signal) as never), o?.signal, model, sanitize),
+			sanitizeEvents((signal) => inner.streamSimple(model, context, withPayload(o, signal) as never), o?.signal, model, sanitize, rename),
 		...(inner.getAllModels === undefined ? {} : { getAllModels: () => inner.getAllModels!() }),
 		...(inner.refreshModels === undefined ? {} : { refreshModels: (c) => inner.refreshModels!(c) }),
 		...(inner.filterModels === undefined ? {} : { filterModels: (m, c) => inner.filterModels!(m, c) }),
@@ -158,7 +176,7 @@ export function wrapProvider(
 			? {}
 			: {
 					fetchDeferred: (model, handle, o) =>
-						sanitizeEvents((signal) => inner.fetchDeferred!(model, handle, { ...o, signal }), o?.signal, model, sanitize),
+						sanitizeEvents((signal) => inner.fetchDeferred!(model, handle, { ...o, signal }), o?.signal, model, sanitize, rename),
 				}),
 		...(inner.cancelDeferred === undefined ? {} : { cancelDeferred: (m, h, o) => inner.cancelDeferred!(m, h, o) }),
 	};
