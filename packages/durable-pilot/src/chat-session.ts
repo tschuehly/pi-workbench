@@ -20,6 +20,7 @@ import type { ChatHost } from "./chat.ts";
 import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
 import { CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData } from "./checkpoint.ts";
 import { syncWorkersGroup } from "./tool-groups.ts";
+import { ACTIVITY_STATUS_KEY, COMPLETION_CUSTOM_TYPE, COMPLETION_ENTRY, DelegationDoc, finishCancellations, roster, UPDATE_CUSTOM_TYPE, UPDATE_ENTRY } from "./delegation.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Admissions, admit, changeQueued, context, Edits, type EditPlan, type Host, type QueuedInput, Reconcile, resolveUncertain } from "./host.ts";
 import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./redact.ts";
@@ -176,6 +177,9 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	if (userParts !== parts) return [{ ...message, content: userParts, entryId }];
 	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
+	// Delegation: the coalesced completion wake and a requested child update, as the legacy extension's custom messages.
+	if (entry.kind === COMPLETION_ENTRY) return [custom(COMPLETION_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
+	if (entry.kind === UPDATE_ENTRY) return [custom(UPDATE_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	const notice = NOTICE_TYPES[entry.kind];
 	if (notice !== undefined) return [custom(notice, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === PACKAGE_MESSAGE_ENTRY) {
@@ -239,6 +243,7 @@ export class ChatSession {
 	/** Running bash calls of the current round (activity), from committed tool events. */
 	#shells = new Map<string, string>();
 	#stop: (() => Promise<unknown>) | undefined;
+	#unsubscribe: (() => void) | undefined;
 	/** False until the first input after open: a reopened store stays paused until Thomas sends something. */
 	#resumed = false;
 	/** The running `!` command: one at a time, as in a legacy Chat. */
@@ -258,7 +263,22 @@ export class ChatSession {
 	}
 
 	async start(): Promise<void> {
-		if (this.#chat !== undefined) this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
+		if (this.#chat !== undefined) {
+			this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
+			this.#chat.workbench.record = (type, data) => this.#record(type, data);
+		}
+		// The delegate roster changes with this Chat's children (launch, status report, result, collection).
+		// Filtered on the active branch at commit time, so it follows navigation without resubscribing.
+		let rosterQueued = false;
+		this.#unsubscribe = this.#host.harness.subscribeCommits((publication) => {
+			const changed = publication.changes.some((change) => change.type === "document" && change.record.kind === DelegationDoc.definition.kind && change.conversationId === this.#host.root.id);
+			if (!changed || rosterQueued) return;
+			rosterQueued = true;
+			setTimeout(() => {
+				rosterQueued = false;
+				void this.#publishStatus().catch(() => {});
+			}, 0);
+		});
 		this.#chat?.listenPackages((event) => this.#emit(event));
 		await this.#watch();
 		const agent = await this.#host.root.agent(context);
@@ -288,6 +308,7 @@ export class ChatSession {
 
 	async close(): Promise<void> {
 		await this.#chat?.packages?.close();
+		this.#unsubscribe?.();
 		await this.#stop?.();
 		await this.#host.close();
 		this.#record("session.shutdown", { sessionFile: null, reason: "close" });
@@ -508,7 +529,7 @@ export class ChatSession {
 		const contextTokens = this.#contextTokens();
 		const live = await harness.snapshot(LiveDoc, root.id, context);
 		const warnings = paused ? [{ severity: "info" as const, message: "Restored paused: unfinished work waits until you send a message." }] : [];
-		const [mode, questions, reconcile] = await Promise.all([workingModeSnapshot(harness, root), questionsState(harness, root), harness.snapshot(Reconcile, context)]);
+		const [mode, questions, reconcile, delegates] = await Promise.all([workingModeSnapshot(harness, root), questionsState(harness, root), harness.snapshot(Reconcile, context), roster(harness, root.id, context)]);
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
 			.filter(([, item]) => item.resolved === undefined && item.conversationId === root.id)
@@ -528,6 +549,7 @@ export class ChatSession {
 			...(warnings.length === 0 ? {} : { warnings }),
 			extensionStatuses: {
 				[WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode),
+				...(delegates === undefined ? {} : { [ACTIVITY_STATUS_KEY]: delegates }),
 				...(this.#chat?.fast.active(agent.model && { provider: agent.model.provider, id: agent.model.modelId }) ? { [FAST_STATUS]: "fast" } : {}),
 			},
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
@@ -578,6 +600,8 @@ export class ChatSession {
 		if (this.#resumed) return;
 		await this.#host.resume();
 		this.#resumed = true;
+		// Cancellations a restart interrupted stay cancelled: finish them now that work runs again.
+		void finishCancellations(this.#host.harness, this.#host.root.id).then(() => this.#publishStatus(), () => {});
 	}
 
 	/**
@@ -927,12 +951,15 @@ export class ChatSession {
 		}
 	}
 
-	/** Why the Chat is not quiescent: a run, queued input, any live task (a child, compaction, delivery) or a `!` command. */
+	/** Why the Chat is not quiescent: a run, queued input, any live task (a child, compaction, delivery), an uncollected child result or a `!` command. */
 	async #activity(): Promise<string | undefined> {
 		const busy = "Stop current session activity before navigating the session tree";
 		if (this.#navigating || this.#inFlight > 0 || this.#running || this.#shell !== undefined || this.#heldShell.length > 0) return busy;
 		const inspection = await this.#host.harness.inspect(context);
 		if (inspection.tasks.length > 0 || inspection.submissions.length > 0) return busy;
+		// A branch starts without the source's children (`fork: initial`): their results must not be left behind.
+		const delegation = await this.#host.harness.snapshot(DelegationDoc, this.#host.root.id, context);
+		if (Object.values(delegation?.executions ?? {}).some((e) => e.outcome === "running" || (e.background && !e.collected))) return "Collect the finished Subagents and Workers before navigating the session tree";
 		const reconcile = await this.#host.harness.snapshot(Reconcile, context);
 		if (Object.values(reconcile?.uncertain ?? {}).some((item) => item.resolved === undefined)) return "Resolve the interrupted tool call before navigating the session tree";
 		return undefined;

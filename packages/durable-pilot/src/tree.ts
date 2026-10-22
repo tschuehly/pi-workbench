@@ -4,6 +4,7 @@
 // The tree goes to PI WEB as Pi-shaped session entries, which PI WEB projects with its legacy `projectSessionTree`.
 import { AgentDoc, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Harness, type Tx } from "@earendil-works/pi-durable";
 import { browserMessages } from "./chat-session.ts";
+import { WorkersDoc } from "./delegation.ts";
 import { BranchesDoc, context } from "./host.ts";
 import { redact, sanitizeDeep, sealed } from "./redact.ts";
 import { ToolGroupsDoc } from "./tool-groups.ts";
@@ -118,6 +119,8 @@ export async function commitNavigation(harness: Harness, active: Conversation, p
 		if ((doc.active ?? rootId) !== active.id) throw new Error(STALE);
 		doc.active = id;
 		if (plan.fork !== undefined) doc.branches.push(id);
+		// Workers belong to the Chat, as legacy to its session: control moves with the active branch (quiescent, so unlocked).
+		for (const worker of Object.values((await tx.doc(WorkersDoc)).workers)) if (worker.ownerConversationId === active.id) worker.ownerConversationId = id;
 	};
 	if (plan.select !== undefined) {
 		await harness.commit((tx) => record(tx, plan.select!), context);

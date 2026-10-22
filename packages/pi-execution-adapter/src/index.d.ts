@@ -27,3 +27,4 @@ export class PiRpcExecutionAdapter {
   cancelAll(reason: string): Promise<CancellationReceipt[]>;
   steer(executionId: string, message: string, mode?: "steer" | "followUp"): Promise<{ executionId: string; mode: "steer" | "followUp"; sequence: number }>;
 }
+export function taskLabel(task: string, maxLength?: number): string;

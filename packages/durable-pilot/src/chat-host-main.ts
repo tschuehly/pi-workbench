@@ -14,6 +14,7 @@ import type { CompactionSettings } from "@earendil-works/pi-durable";
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
 import { openChatHost } from "./chat.ts";
 import { COMMANDS } from "./extensions.ts";
+import { setDelegationHold } from "./delegation.ts";
 import { type Attachment, CAPABILITIES, ChatSession, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
 
@@ -34,6 +35,7 @@ const { values } = parseArgs({
 		"faux-tps": { type: "string" },
 		thinking: { type: "string" },
 		packages: { type: "boolean" },
+		"scripted-providers": { type: "boolean" },
 	},
 });
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
@@ -49,7 +51,17 @@ const host = await openChatHost({
 	...(tps === undefined ? {} : { fauxTokensPerSecond: tps }),
 	...(values.thinking === undefined ? {} : { thinkingLevel: values.thinking }),
 	...(values.packages === true ? { packages: {} } : {}),
+	// Tests and trials: also by environment, so PI WEB's isolated e2e daemon can ask for it without a new host argument.
+	...(values["scripted-providers"] === true || process.env.PI_DURABLE_SCRIPTED_PROVIDERS === "1" ? { scriptedProviders: true } : {}),
 });
+// Crash-matrix barriers (tests only): the named reporter fault windows announce themselves and stop until killed.
+const holds = (process.env.PI_DURABLE_HOLD ?? "").split(",").filter(Boolean);
+if (holds.length > 0)
+	setDelegationHold((name, signal) => {
+		if (!holds.includes(name)) return Promise.resolve();
+		send({ event: { type: "test.hold", name } });
+		return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new Error(`hold ${name} aborted`)), { once: true }));
+	});
 const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder });
 await session.start();
 

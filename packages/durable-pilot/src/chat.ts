@@ -4,12 +4,16 @@
 // 2.2.1 payload rules), the ChatGPT subscription (openai-codex, with pi-openai-fast-mode) and GitHub Copilot; plus, for
 // tests and trials, the scripted faux model. The Chat's model is stored per conversation and can be switched.
 import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { Provider } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
+import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { checkpointExtension } from "./checkpoint.ts";
+import { delegationExtension } from "./delegation.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { router } from "./faux.ts";
@@ -63,13 +67,25 @@ export type ChatHostOptions = {
 	 * model. A reopened Chat keeps its own.
 	 */
 	readonly thinkingLevel?: string;
+	/**
+	 * Tests and trials only: requests to the Claude, ChatGPT and Copilot models are answered by the scripted model, so
+	 * routed children run under the model names routing chose without leaving the machine.
+	 */
+	readonly scriptedProviders?: boolean;
 	/** Run the bound installed Pi packages (`packages.ts`) from this agent directory's settings. */
 	readonly packages?: { readonly agentDir?: string };
 };
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
 export type ChatHost = Host & {
-	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings; extensions: readonly Extension[] };
+	readonly workbench: {
+		resources: Resources;
+		onSignal: (signal: WorkbenchSignal) => void;
+		compaction: CompactionSettings;
+		extensions: readonly Extension[];
+		/** Telemetry of Subagents and Workers (launches, settlements, child usage). */
+		record: (type: string, data: Record<string, unknown>) => void;
+	};
 	/** The bound Pi packages, and where their events go (buffered until a session listens). */
 	readonly packages?: PiPackages;
 	listenPackages(listener: (event: PackageEvent) => void): void;
@@ -106,7 +122,7 @@ export async function applyModel(host: Host, model?: { provider: string; modelId
 }
 
 export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> {
-	const scripted = options.model === "faux" || options.scripted === true;
+	const scripted = options.model === "faux" || options.scripted === true || options.scriptedProviders === true;
 	// No paid API-key path may be taken silently: the subscription logins in Pi's auth.json are the only credentials.
 	for (const name of Object.keys(process.env)) if (name.startsWith("ANTHROPIC_") || ENV_CREDENTIALS.includes(name)) delete process.env[name];
 	const fast = fastMode(options.cwd);
@@ -121,8 +137,9 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
 		workbenchExtensions(options.cwd),
 		checkpointExtension(() => opened!.harness),
+		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data) }),
 	];
-	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions };
+	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
 	const aliases = claudeAliases("pi");
 	const early: PackageEvent[] = [];
 	const chat: { onPackageEvent?: (event: PackageEvent) => void } = {};
@@ -160,6 +177,10 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		host.models.setProvider(wrapProvider(host.faux.provider));
 		const step = router(options.dir);
 		host.faux.setResponses(Array.from({ length: 10_000 }, () => step));
+	}
+	if (options.scriptedProviders === true) {
+		const scriptedAs = (provider: Provider): Provider => ({ ...withStoredModels(provider), stream: host.faux.provider.stream, streamSimple: host.faux.provider.streamSimple });
+		for (const provider of [anthropicProvider(), openaiCodexProvider(), githubCopilotProvider()]) host.models.setProvider(wrapProvider(scriptedAs(provider)));
 	}
 	// As Pi does on load: a stored level the model does not support is clamped (before anything is scheduled).
 	await applyModel(host);
