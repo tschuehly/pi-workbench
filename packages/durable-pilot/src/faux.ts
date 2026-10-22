@@ -1,6 +1,6 @@
 // Scripted model shared by every pilot process: it answers by the last message, so a reopened process continues the
 // same script, and it appends every provider request to requests.log so counts survive a SIGKILL.
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	type Api,
@@ -60,11 +60,15 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
  * - a compaction summary request → `Summary of <n> earlier messages.`, logged as `summarize` with its focus; a focus
  *   containing `slow` streams a long summary, one containing `fail` is a non-retryable error;
  * - a tool result → `done`, unless `repropose` and the result says the tool was interrupted: then call it again;
+ * - a child's assignment (profile text, then `Assignment:\n<script>`) → the script after it; a completion wake or a
+ *   Worker's settle reminder → `subagent_collect`; `long:<n>` → an answer of n characters; a summary focus with
+ *   `gate:<file>` waits until that file exists;
+ * - a request to a routed (non-faux) model is logged with its `model`;
  * - anything else → `ok: <text>`.
  * `hold(label)` lets a process stop a request at a barrier until it is cancelled.
  */
 export function router(dir: string, options: { readonly hold?: Hold; readonly holdOn?: string; readonly repropose?: boolean } = {}): FauxResponseStep {
-	return async (context, streamOptions) => {
+	return async (context, streamOptions, _state, requestModel) => {
 		const messages = context.messages.filter((message) => message.role !== "system");
 		const system = context.messages.flatMap((message) => (message.role === "system" ? [getSystemMessageText(message)] : [])).join("\n");
 		const last = messages.at(-1);
@@ -74,12 +78,18 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const block = withReminder !== raw ? /^<working-mode seq="(\d+)">/.exec(raw)![1] : undefined;
 		// An open-questions reminder rides last in a plain prompt; the script reads the user's text before it.
 		const reminder = last?.role === "user" ? /Question sets still open for the user[\s\S]*$/.exec(withReminder)?.[0] : undefined;
-		const text = reminder === undefined ? withReminder : withReminder.slice(0, -reminder.length);
+		const prompt = reminder === undefined ? withReminder : withReminder.slice(0, -reminder.length);
+		const assignment = prompt.lastIndexOf("Assignment:\n");
+		// A steer that asks for an update carries the legacy request after the script.
+		const text = (assignment < 0 ? prompt : prompt.slice(assignment + "Assignment:\n".length)).split("\n\nThe lead asks for a progress update")[0]!;
+		const routed = requestModel !== undefined && requestModel.provider !== "faux" ? { model: `${requestModel.provider}/${requestModel.id}` } : {};
 		const label = last?.role === "toolResult" ? `result:${last.toolName}` : text.slice(0, 40);
 		if (system.includes("context summarization assistant")) {
 			const focus = /\n\nAdditional focus: ([\s\S]*)$/.exec(raw)?.[1];
 			const count = (raw.match(/^\[(?:User|Assistant|Tool result)\]/gm) ?? []).length;
 			logLine(join(dir, "requests.log"), { label: "summarize", ...(focus === undefined ? {} : { focus }) });
+			const gate = /gate:(\S+)/.exec(focus ?? "")?.[1];
+			while (gate !== undefined && !existsSync(gate)) await new Promise((resolve) => setTimeout(resolve, 20));
 			if (focus?.includes("fail") === true) return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 summarizer rejected (scripted)" });
 			return fauxAssistantMessage([fauxText(`Summary of ${count} earlier messages.${focus?.includes("slow") === true ? ` ${LONG}` : ""}`)]);
 		}
@@ -90,6 +100,7 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const reasoning = (streamOptions as { reasoning?: string } | undefined)?.reasoning;
 		logLine(join(dir, "requests.log"), {
 			label,
+			...routed,
 			messages: messages.length,
 			...(block === undefined ? {} : { workingMode: Number(block) }),
 			...(reminder === undefined ? {} : { reminder }),
@@ -113,6 +124,15 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			return fauxAssistantMessage([fauxText(`done after ${last.toolName}`)]);
 		}
 		if (text === "gen") return fauxAssistantMessage([fauxText(LONG)]);
+		if (text.startsWith("Background children finished") || text.startsWith("Your background Subagent"))
+			return fauxAssistantMessage([fauxToolCall("subagent_collect", {})], { stopReason: "toolUse" });
+		if (text === "cancel:last") {
+			// Cancel the newest child this conversation launched, by the ID its launch result named.
+			const launched = messages.flatMap((m) => (m.role === "toolResult" ? [/Launched subagent (\S+)/.exec(textOfMessage(m))?.[1]] : [])).filter((id) => id !== undefined).at(-1);
+			return fauxAssistantMessage([fauxToolCall("subagent_cancel", { executionId: launched ?? "none" })], { stopReason: "toolUse" });
+		}
+		const long = /^long:(\d+)$/.exec(text);
+		if (long !== null) return fauxAssistantMessage([fauxText("x".repeat(Number(long[1])))]);
 		if (text === "fail") return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 invalid request (scripted)" });
 		const batch = /^calls:(\[.*\])$/s.exec(text);
 		if (batch !== null)

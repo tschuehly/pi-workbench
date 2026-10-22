@@ -354,3 +354,17 @@ Durable Chats offer the model catalog of a legacy Chat: every provider with a st
 - **Concurrent refresh:** `test/refresh-race.ts` (shared with `credentials.test.ts`) races two hosts and the installed Pi on an expired ChatGPT login: one refresh request; the unlocked control sends more than one.
 - **Live:** one ChatGPT request (`gpt-6-astra`, Fast Mode on via the trial workspace's config), answered and stored with usage; no Claude request.
 - **Not here:** the enabled-model scope (P017) and the thinking-level setter (P019) are slice 3; the Durable catalog marks every model enabled.
+
+## Phase B slice 4 group A: Subagents and Workers (P089–P099)
+
+Native child conversations (`src/delegation.ts`), test-first in `test/delegation.test.ts` (part of `npm run test:chat`, 21 tests). Red evidence and negative controls are kept in Workstream scratch `s4a-evidence/`.
+
+- **Rules are the legacy extension's:** profiles, allowlists, Cognitive Roles, bounded collection (`extensions/subagent/core.mjs`, now shared by both runtimes) and routing (`resolve-runtime-binding.mjs`, with the host's own catalog: the models with a stored login). Independence, `excludeFamilies`, `modelOverride` and effort floors behave as in legacy; the receipt names the model, effort and selected family.
+- **One assignment = one child conversation** owned by a background anchor task; a background reporter admits the assignment (`assignment:<id>`), records the one result (bounded at 8,000 characters with the remainder disclosed), and wakes the lead (`wake:<n>`, coalesced while a wake is queued). Children get exactly their profile's tools (`tools` and `modelTools`), their own `PI_SESSION_ID`/`PI_TMP` (`<chat>:<conversation>`), telemetry (`execution.launched`/`settled`, child usage) and the provider adapters.
+- **Workers:** a session document owned by the lead conversation; each dispatch is a fresh binding in a child conversation forked from the previous one (continuity); lock, result and receipt commit together; a coordinator settles only after its leaves end and are collected; lead → Worker → leaf.
+- **Cancel:** a cancellation epoch commits before anything is aborted; Worker cancel reaches its leaves; a leaf cancel leaves the Worker running; termination not confirmed within 15 s is `outcome_unknown`. Cancellations a restart interrupted finish on resume.
+- **Checkpoint barrier:** a completion during `compact_and_continue` waits for the checkpoint and queues behind its continuation.
+- **Kill rows:** before admission, after the child's result, before and after delivery, after collection, after a cancellation's epoch: one assignment, one model request, one wake, one collection; status reads send nothing. After a SIGKILL a credential read of the dead host may hold Pi's `auth.json` lock for up to its 30 s stale period.
+- **Fork rule:** delegation records are `fork: initial`; Worker control is by owning conversation, so a fork controls none of the source's Workers.
+- **Tests and trials only:** `--scripted-providers` (or `PI_DURABLE_SCRIPTED_PROVIDERS=1`) answers the Claude, ChatGPT and Copilot models with the scripted model; `PI_DURABLE_HOLD` names reporter barriers.
+- **Deferred:** `spawn_session`/`spawn_subsession`, the background shortcut, and re-sending a wake a Stop withdrew (the roster keeps showing the result as "To collect").
