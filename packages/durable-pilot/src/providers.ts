@@ -13,12 +13,43 @@ import { wrapProvider } from "./redact.ts";
 /** Credential paths other than Pi's auth.json that these providers would read: removed, as ANTHROPIC_* for Claude. */
 export const ENV_CREDENTIALS = ["COPILOT_GITHUB_TOKEN"];
 
-/** Both providers behind the redacting wrapper; Codex requests carry Fast Mode's service tier. */
+/**
+ * Both providers behind the redacting wrapper; Codex at models.json's baseUrl when set (Copilot's endpoint comes from
+ * its login's proxy-ep, which pi-ai applies over any model baseUrl), and its requests carry Fast Mode's service tier.
+ */
 export function subscriptionProviders(fast: FastMode): Provider[] {
-	return [wrapProvider(withStoredModels(openaiCodexProvider()), { onPayload: fast.payload }), wrapProvider(withStoredModels(githubCopilotProvider()))];
+	const codex = withBaseUrl(withStoredModels(openaiCodexProvider()), modelsJsonBaseUrl("openai-codex"));
+	return [wrapProvider(codex, { onPayload: fast.payload }), wrapProvider(withStoredModels(githubCopilotProvider()))];
 }
 
 export const agentDir = () => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+
+/**
+ * `providers.<id>.baseUrl` from Pi's models.json in the agent dir, which legacy Pi applies to that provider's built-in
+ * models (a proxy, or the e2e mock in pi-web `e2e/mockModels/`). Unreadable or absent: the provider's own endpoint.
+ * ponytail: only baseUrl is honored; headers, models and modelOverrides stay legacy-only until a Durable Chat needs them.
+ */
+export function modelsJsonBaseUrl(providerId: string, dir = agentDir()): string | undefined {
+	try {
+		const config = JSON.parse(readFileSync(join(dir, "models.json"), "utf8")) as { providers?: Record<string, { baseUrl?: unknown }> };
+		const baseUrl = config.providers?.[providerId]?.baseUrl;
+		return typeof baseUrl === "string" && baseUrl !== "" ? baseUrl : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The provider with every model served from `baseUrl`; unchanged when it is undefined. */
+export function withBaseUrl<P extends Provider>(provider: P, baseUrl: string | undefined): P {
+	if (baseUrl === undefined) return provider;
+	return {
+		...provider,
+		baseUrl,
+		getModels: () => provider.getModels().map((model) => ({ ...model, baseUrl })),
+		...(provider.getAllModels === undefined ? {} : { getAllModels: () => provider.getAllModels!().map((model) => ({ ...model, baseUrl })) }),
+	};
+}
+
 
 /**
  * The provider's models as Pi's model runtime has them: the built-in list, with the models Pi last fetched for it

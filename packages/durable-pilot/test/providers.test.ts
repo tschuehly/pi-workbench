@@ -76,7 +76,7 @@ function fakeNetwork(answer: (sent: Sent) => string) {
 		if (request.headers.get("content-encoding") === "zstd") raw = zstdDecompressSync(raw);
 		const entry: Sent = { host: url.host, path: url.pathname, authorization: request.headers.get("authorization") ?? request.headers.get("x-api-key"), body: raw.length === 0 ? {} : JSON.parse(raw.toString("utf8")) };
 		sent.push(entry);
-		if (!["chatgpt.com", "api.individual.githubcopilot.com", "api.anthropic.com"].includes(url.host)) throw new Error(`network blocked by test: ${url.host}`);
+		if (!["chatgpt.com", "api.individual.githubcopilot.com", "api.anthropic.com", "mock.invalid"].includes(url.host)) throw new Error(`network blocked by test: ${url.host}`);
 		return new Response(answer(entry), { status: 200, headers: { "content-type": "text/event-stream" } });
 	}) as typeof fetch;
 	return {
@@ -214,6 +214,26 @@ describe("P016 models: the legacy provider set from Pi's auth.json", () => {
 			for (const [i, count] of [[0, 2], [1, 4], [2, 6]] as const)
 				for (const text of earlier.slice(0, count)) assert.ok(JSON.stringify(net.sent[i]!.body).includes(text), `request ${i} carries the earlier "${text}"`);
 			assert.deepEqual(assistantTexts(chat), ["ok: on faux", "codex answered", "copilot answered", "claude answered"]);
+		} finally {
+			net.restore();
+			await chat.close();
+		}
+	});
+
+	it("serves each provider from models.json's providers.<id>.baseUrl, as legacy Pi does (pi-web's e2e mock)", async () => {
+		const net = fakeNetwork((sent) => (sent.path.startsWith("/claude") ? messages("claude answered") : responses("mock answered")));
+		const agent = agentDir(LOGINS);
+		const base = (id: string) => `http://mock.invalid/${id}`;
+		// Copilot takes no override: pi-ai serves it from the login's proxy endpoint.
+		writeFileSync(join(agent, "models.json"), JSON.stringify({ providers: { anthropic: { baseUrl: base("claude") }, "openai-codex": { baseUrl: base("codex") } } }));
+		const chat = await openChat(agent);
+		try {
+			for (const [provider, model] of [["openai-codex", "gpt-6-luna"], ["anthropic", "claude-sonnet-5-5"]] as const) {
+				await chat.session.setModel(provider, model);
+				await turn(chat, `to ${provider}`);
+			}
+			assert.deepEqual(net.sent.map((s) => `${s.host}${s.path}`), ["mock.invalid/codex/responses", "mock.invalid/claude/v1/messages"]);
+			assert.deepEqual(assistantTexts(chat), ["mock answered", "claude answered"]);
 		} finally {
 			net.restore();
 			await chat.close();

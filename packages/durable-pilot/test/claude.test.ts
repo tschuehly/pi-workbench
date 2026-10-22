@@ -7,7 +7,7 @@ import { after, describe, it } from "node:test";
 import { createModels, fauxAssistantMessage, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { createRegistry, defineExtension, defineTool, Harness } from "@earendil-works/pi-durable";
-import { modelsJsonBaseUrl, withBaseUrl } from "../src/chat.ts";
+import { modelsJsonBaseUrl, withBaseUrl } from "../src/providers.ts";
 import { claudeAliases, claudePayload, PiAuthStore } from "../src/claude.ts";
 import { textOfMessage } from "../src/faux.ts";
 import { admit, context, openHost } from "../src/host.ts";
