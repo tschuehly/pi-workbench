@@ -83,6 +83,14 @@ describe("claude subscription adapter (offline)", () => {
 		assert.deepEqual([aliases.toCanonical(wire[0]), aliases.toCanonical(wire[1])], ["review-deploy", "review_deploy"], "each alias maps back to its own tool");
 	});
 
+	it("Claude Code tool names come back as the registered core tool: pi-ai's Bash → bash is never re-cased", () => {
+		const aliases = claudeAliases();
+		// pi-ai renames core tools to Claude Code casing for OAuth before onPayload, and back before the wrapper sees the call.
+		const wire = (claudePayload(aliases)({ tools: [{ name: "Bash" }, { name: "Read" }, { name: "custom-tool" }] }) as any).tools.map((t: any) => t.name);
+		assert.deepEqual(wire, ["Bash", "Read", "mcp__pilot__custom_tool"]);
+		assert.deepEqual(["bash", "read", "mcp__pilot__custom_tool"].map(aliases.toCanonical), ["bash", "read", "custom-tool"]);
+	});
+
 	it("a failed refresh of an expired login fails the turn visibly: no model request, auth.json untouched", async () => {
 		const dir = scratch("claude-expired");
 		const auth = join(dir, "auth.json");

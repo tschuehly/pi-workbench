@@ -25,7 +25,8 @@ export type Aliases = { readonly toWire: (name: string) => string; readonly toCa
  */
 export function claudeAliases(server = "pilot"): Aliases {
 	const wire = new Map<string, string>(); // flat name → alias
-	const back = new Map<string, string>(); // alias (lowercase) → flat name, or itself for pass-through names
+	const back = new Map<string, string>(); // alias (lowercase) → flat name
+	const taken = new Set<string>(); // every wire name handed out (lowercase), aliases and pass-through names
 	const toWire = (name: string) => {
 		const known = wire.get(name);
 		if (known !== undefined) return known;
@@ -33,15 +34,17 @@ export function claudeAliases(server = "pilot"): Aliases {
 		if (CORE.has(name.toLowerCase()) || name.startsWith("mcp__") || name === "__pi_deferred_placeholder__") {
 			const owner = back.get(name.toLowerCase());
 			// A tool registered under a name already handed out as an alias cannot be renamed: fail the request.
-			if (owner !== undefined && owner !== name) throw new Error(`Tool name ${name} collides with the alias of ${owner}`);
-			back.set(name.toLowerCase(), name);
+			if (owner !== undefined) throw new Error(`Tool name ${name} collides with the alias of ${owner}`);
+			// Pass-through names map back to themselves: pi-ai re-cases core tools (bash ⇄ Bash) on its own side.
+			taken.add(name.toLowerCase());
 			return name;
 		}
 		const base = `mcp__${server}__${name.replace(/[^A-Za-z0-9_]/g, "_")}`;
 		let alias = base.slice(0, MAX);
-		for (let n = 2; back.has(alias.toLowerCase()); n++) alias = `${base.slice(0, MAX - `_${n}`.length)}_${n}`;
+		for (let n = 2; taken.has(alias.toLowerCase()); n++) alias = `${base.slice(0, MAX - `_${n}`.length)}_${n}`;
 		wire.set(name, alias);
 		back.set(alias.toLowerCase(), name);
+		taken.add(alias.toLowerCase());
 		return alias;
 	};
 	return { toWire, toCanonical: (name) => back.get(name.toLowerCase()) ?? name };
