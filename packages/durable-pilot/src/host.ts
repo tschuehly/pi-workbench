@@ -38,7 +38,7 @@ import {
 	ToolTask,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { wrapProvider } from "./redact.ts";
+import { redactingRegistry, wrapProvider } from "./redact.ts";
 import { type Faults, type OpenedStore, openStore, type Synchronous } from "./store.ts";
 
 export const context: Context = BACKGROUND_CONTEXT;
@@ -391,7 +391,9 @@ export type HostOptions = {
 	readonly rootAgent?: AgentChange;
 	/** Execution environment per call; default a NodeExecutionEnv in the family's work directory. */
 	readonly env?: (target: EnvTarget, context: Context) => NodeExecutionEnv | Promise<NodeExecutionEnv>;
-	/** Extensions installed after the guard, in order. */
+	/** Redaction controls only: install tools without the redacting wrapper every other host puts them behind. */
+	readonly rawTools?: boolean;
+	/** Extensions installed after the guard, in order; their tools go behind the redacting wrapper. */
 	readonly extensions?: readonly ReturnType<typeof defineExtension>[];
 };
 
@@ -444,7 +446,8 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 	const faux = fauxProvider(options.faux ?? {});
 	const models = createModels(options.credentials === undefined ? undefined : { credentials: options.credentials });
 	models.setProvider(wrapProvider(options.provider === undefined ? faux.provider : options.provider(faux.provider), options.providerOptions));
-	const registry = createRegistry();
+	// Redaction controls only: `rawTools` installs tools as they are, to prove what the wrapper prevents.
+	const registry = options.rawTools === true ? createRegistry() : redactingRegistry(createRegistry());
 	registry.install(ReconcileGuard);
 	for (const extension of options.extensions ?? []) registry.install(extension);
 	const reports: { type: string; message: string; task?: TaskId }[] = [];

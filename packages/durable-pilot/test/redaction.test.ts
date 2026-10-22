@@ -51,7 +51,8 @@ function leaks(dir: string, extra: readonly string[] = []): string[] {
 /** Split the secret text into small streaming tokens. */
 const SECRET_TEXT = `Here is the key ${KEY} and the token ${ENV_SECRET} done.`;
 
-async function host(dir: string, options: { tools?: ToolRegistration[]; hooks?: boolean } = {}): Promise<Host> {
+/** `raw`: a control host that installs the tools without the redacting wrapper every host otherwise adds. */
+async function host(dir: string, options: { tools?: ToolRegistration[]; hooks?: boolean; raw?: boolean } = {}): Promise<Host> {
 	const extensions = [defineExtension({ name: "spike.tools", tools: options.tools ?? [] })];
 	if (options.hooks === true)
 		extensions.push(
@@ -70,6 +71,7 @@ async function host(dir: string, options: { tools?: ToolRegistration[]; hooks?: 
 	return openHost(dir, {
 		faux: { tokensPerSecond: 400, tokenSize: { min: 1, max: 3 } },
 		settings: { progress: { partialIntervalMs: 1, outputIntervalMs: 1 } },
+		rawTools: options.raw === true,
 		extensions,
 	});
 }
@@ -235,7 +237,7 @@ describe("pre-persistence redaction", () => {
 		};
 		const run = async (wrap: boolean) => {
 			const dir = scratch(`redact-split-${wrap}`);
-			const h = await host(dir, { tools: tools(wrap) });
+			const h = await host(dir, { tools: tools(wrap), raw: !wrap });
 			h.faux.setResponses([
 				fauxAssistantMessage([fauxToolCall("pem", {})], { stopReason: "toolUse" }),
 				fauxAssistantMessage([fauxToolCall("peek", {})], { stopReason: "toolUse" }),
@@ -323,7 +325,7 @@ describe("pre-persistence redaction", () => {
 	it("why not hooks: Durable skips a throwing afterTool hook and commits the raw result", async () => {
 		const dir = scratch("redact-hook");
 		const tool = defineTool({ name: "leaky", description: "leaks", parameters: Type.Object({}), execute: async () => ({ output: [{ type: "text", text: `secret ${KEY}` }] }) });
-		const h = await host(dir, { tools: [tool], hooks: true });
+		const h = await host(dir, { tools: [tool], hooks: true, raw: true });
 		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("leaky", {})], { stopReason: "toolUse" }), fauxAssistantMessage([fauxText("ok")])]);
 		await admit(h.root, { operationId: "op-1", text: "go" });
 		await (await h.harness.submission((await h.root.commit((tx) => tx.submissionByRequest(h.root.id, "op-1"), context))!.id, context))!.wait(context);

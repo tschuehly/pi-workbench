@@ -14,64 +14,27 @@ import {
 	createAssistantMessageEventStream,
 	type Provider,
 } from "@earendil-works/pi-ai";
-import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type { Extension, Registry, ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 // Reuse the Workbench redactor (patterns, auth.json and env values) rather than a second copy.
-import { knownValues, redact as workbenchRedact } from "../../../extensions/secret-redaction/redact.mjs";
+import { completePrefix, maskKnownFragment, redactGrowing, redact as workbenchRedact } from "../../../extensions/secret-redaction/redact.mjs";
 
 export type Sanitize = (text: string) => string;
 export const redact: Sanitize = (text) => workbenchRedact(text) as string;
 
-const UNTERMINATED_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/;
-// A PEM opening header still being written: it contains spaces, so the trailing-token rule alone would release it.
-const PARTIAL_HEADER = /-----BEGIN[A-Z ]*-{0,4}$/;
-
-/**
- * The part of a growing text that can be sanitized now. Secrets never contain whitespace, so a trailing
- * non-whitespace run may still be the start of one; an unterminated private-key block, or an opening header that may
- * become one, may still grow.
- */
-export function completePrefix(text: string): string {
-	const key = UNTERMINATED_KEY.exec(text) ?? PARTIAL_HEADER.exec(text);
-	const head = key === null ? text : text.slice(0, key.index);
-	const tail = /\S+$/.exec(head);
-	return tail === null ? head : head.slice(0, tail.index);
-}
+// The split-safe helpers live with the redactor, so the legacy extensions (background bash) share them.
+export { completePrefix, maskKnownFragment };
 
 /** For text that will not grow: mask a private-key block that never ended (the redactor only matches whole blocks). */
 export function sealed(sanitize: Sanitize): Sanitize {
 	return (text) => sanitize(text).replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/, "[REDACTED:private-key]");
 }
 
-const SECRET_START = /^(?:sk-|gh[opsur]_|github_pat_|eyJ|tid=|-----BEGIN)/;
-/** Shortest leading fragment of a known credential value that is masked; shorter ones are too common to tell apart. */
-const MIN_FRAGMENT = 6;
-
 /**
- * Mask the end of `text` when it is the leading fragment of a known credential value (auth.json or a secret-named env
- * variable): such a value has no recognisable shape, so only the known-value list can tell.
- */
-export function maskKnownFragment(text: string, values: readonly string[] = knownValues() as string[]): string {
-	let longest = 0;
-	for (const value of values)
-		for (let k = Math.min(value.length - 1, text.length); k >= MIN_FRAGMENT && k > longest; k--)
-			if (text.endsWith(value.slice(0, k))) {
-				longest = k;
-				break;
-			}
-	return longest === 0 ? text : `${text.slice(0, text.length - longest)}[REDACTED:partial]`;
-}
-
-/**
- * For whole values a tool may replace while it streams (details, diagnostics): sanitize the complete part and mask a
- * trailing fragment that starts like a secret or like a known credential value, since no pattern can recognise half a
- * secret.
+ * For whole values a tool may replace while it streams (details, diagnostics): the Workbench `redactGrowing`, which
+ * sanitizes the complete part and masks a trailing fragment that may be half a secret.
  */
 export function strict(sanitize: Sanitize): Sanitize {
-	return (text) => {
-		const complete = completePrefix(text);
-		const rest = text.slice(complete.length);
-		return sanitize(complete) + (SECRET_START.test(rest.trimStart()) || rest.includes("-----BEGIN") ? "[REDACTED:partial]" : maskKnownFragment(sanitize(rest)));
-	};
+	return (text) => redactGrowing(text, sanitize);
 }
 
 const SKIP = new Set(["image", "thinking", "redacted_thinking"]);
@@ -281,8 +244,17 @@ export function sanitizingEnv(env: Env, sanitize: Sanitize): Env {
 	});
 }
 
-/** Wrap one tool so nothing it streams or returns reaches Durable unsanitized. */
+/** Each `redactingTool` wrapper and the sanitizer it applies. */
+const wrapped = new WeakMap<object, Sanitize>();
+
+/** Whether `tool` is a `redactingTool` wrapper with the default sanitizer. */
+export function isRedacting(tool: object): boolean {
+	return wrapped.get(tool) === redact;
+}
+
+/** Wrap one tool so nothing it streams or returns reaches Durable unsanitized; a tool wrapped alike is returned as is. */
 export function redactingTool<T extends ToolRegistration>(tool: T, inner: Sanitize = redact): T {
+	if (wrapped.get(tool) === inner) return tool;
 	const sanitize = sealed(inner);
 	const execute: ToolRegistration["execute"] = async (args, api, context) => {
 		const decoder = new TextDecoder();
@@ -360,5 +332,18 @@ export function redactingTool<T extends ToolRegistration>(tool: T, inner: Saniti
 			throw new Error(FAILED);
 		}
 	};
-	return { ...tool, execute } as T;
+	const result = { ...tool, execute } as T;
+	wrapped.set(result, inner);
+	return result;
+}
+
+/**
+ * The one registration point of a host's tools: every extension installed in `registry`, at open or later (packages),
+ * has its tools behind `redactingTool`, so no tool's output, details, diagnostics or error reach Durable unsanitized.
+ */
+export function redactingRegistry<R extends Registry>(registry: R): R {
+	const install = registry.install.bind(registry);
+	registry.install = (extension: Extension) =>
+		install(extension.tools === undefined ? extension : { ...extension, tools: extension.tools.map((tool) => redactingTool(tool)) });
+	return registry;
 }

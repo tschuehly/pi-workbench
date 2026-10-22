@@ -37,8 +37,10 @@ function scan(paths: readonly string[], needles: readonly string[]): string[] {
 	return found;
 }
 
-async function run(dir: string, tools: ToolRegistration[], steps: ReturnType<typeof fauxAssistantMessage>[]): Promise<Host> {
+/** `raw`: a control host that installs `tools` without the redacting wrapper every host otherwise adds. */
+async function run(dir: string, tools: ToolRegistration[], steps: ReturnType<typeof fauxAssistantMessage>[], raw = false): Promise<Host> {
 	const h = await openHost(dir, {
+		rawTools: raw,
 		faux: { tokensPerSecond: 400 },
 		settings: { progress: { partialIntervalMs: 1, outputIntervalMs: 1 } },
 		extensions: [defineExtension({ name: "boundary.tools", tools })],
@@ -67,7 +69,7 @@ describe("redaction boundaries", () => {
 
 	it("control: an unwrapped bash tool spills the raw secret to its full-output file", async () => {
 		const dir = scratch("spill-control");
-		const h = await run(dir, [createBashTool()], steps());
+		const h = await run(dir, [createBashTool()], steps(), true);
 		const path = await spillPath(h);
 		await h.close();
 		assert.ok(scan([path], [ENV_SECRET]).length > 0, "the scan finds the plaintext in the spill file");
@@ -105,7 +107,7 @@ describe("redaction boundaries", () => {
 
 	it("control: an unwrapped tool commits the leading fragment of an env-only credential in its details", async () => {
 		const dir = scratch("fragment-control");
-		const h = await run(dir, [fragmentTool(false)], fragmentSteps());
+		const h = await run(dir, [fragmentTool(false)], fragmentSteps(), true);
 		await h.close();
 		assert.ok(scan([dir], [FRAGMENT]).length > 0, "the scan finds the fragment in the store");
 	});

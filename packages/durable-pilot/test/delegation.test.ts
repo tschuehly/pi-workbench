@@ -11,7 +11,7 @@ import type { ConversationId, EntryRecord } from "@earendil-works/pi-durable";
 import { openChatHost } from "../src/chat.ts";
 import { ChildDoc, DelegationDoc, type Execution, WorkersDoc } from "../src/delegation.ts";
 import { context } from "../src/host.ts";
-import { ChatHost, family, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
+import { ChatHost, eventCopies, family, hideIn, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
 const TELEMETRY = scratch("delegation-telemetry");
@@ -631,6 +631,68 @@ test("redaction: secrets in an assignment, a steer, a status report and a Worker
 		assert.ok(!child.includes(SECRET), "the child's assignment and steer are redacted");
 		assert.ok(!delivered.includes(SECRET), "wake and update messages are redacted");
 		assert.ok(records.includes("status ") && child.includes("steer "), "the surrounding text is kept");
+	});
+});
+
+const REDACTED = "[REDACTED:env:PILOT_DELEGATION_TOKEN]";
+/** Stored entries of a conversation as JSON, without the assistant's tool calls (their arguments are kept verbatim). */
+const nonCallEntries = (list: readonly EntryRecord[]) => JSON.stringify(list.filter((entry) => (entry.model?.[0] as { role?: string } | undefined)?.role !== "assistant"));
+
+test("redaction: a delegation tool's preflight and resolver failures mask a secret in their output, details, stored result and events", async () => {
+	const { store, cwd } = family("redaction-preflight");
+	const host = open(store, cwd);
+	await host.ready;
+	// The prompts name the secret only \u-escaped: the model's calls hold it, as a real model's would.
+	await prompt(host, hideIn(call("subagent", scout("review it", { cognitiveRole: "review", profile: "reviewer", background: false, independentOfModel: SECRET })), SECRET));
+	const invalid = await toolResult(host, "subagent");
+	await quiet(host);
+	await prompt(host, hideIn(call("subagent", scout("x", { background: false, modelOverride: `anthropic/${SECRET}` })), SECRET));
+	const resolver = await toolResult(host, "subagent", 2);
+	await quiet(host);
+	await host.close();
+	const prefix = SECRET.slice(0, 12);
+	assert.equal(invalid, `preflight_failed: independentOfModel must be '<provider>/<model>', got '${REDACTED}'.`);
+	assert.match(resolver, /^preflight_failed: Routing resolver failed[\s\S]*anthropic\/\[REDACTED:env:PILOT_DELEGATION_TOKEN\]/, "the resolver's diagnostic keeps its text around the mask");
+	assert.ok(!resolver.includes(prefix));
+	assert.ok(!eventCopies(host.events).includes(prefix), "no browser event other than the calls carries the secret or its prefix");
+	await inspect(store, cwd, async (h) => {
+		const all = await entries(h, h.root.id);
+		assert.ok(JSON.stringify(all).includes(SECRET), "positive control: the model's calls hold the complete secret");
+		const results = nonCallEntries(all);
+		assert.ok(results.includes("preflight_failed") && !results.includes(prefix), "the committed tool results and details hold neither the secret nor its prefix");
+	});
+});
+
+test("redaction: a secret across the task-preview and label cutoffs leaves no fragment in the execution, the roster or subagent_status", async () => {
+	const { store, cwd } = family("redaction-preview");
+	// Children answer, then hold before their result commits: they stay running, so the roster shows them.
+	const host = open(store, cwd, { PI_DURABLE_HOLD: "child:after-result" });
+	await host.ready;
+	// The 200-character preview cut and the 40-character label cut each fall inside the secret.
+	const preview = `${"p".repeat(190)} ${SECRET}`;
+	const label = `${"n".repeat(30)} ${SECRET}`;
+	await prompt(host, call("subagent", scout(preview, { name: label })));
+	await prompt(host, call("subagent", scout(label)));
+	// Positive control: a complete secret inside both bounds is masked whole.
+	await prompt(host, call("subagent", scout(`whole ${SECRET} task`, { name: `w ${SECRET}` })));
+	await host.until(() => host.events.filter((e) => e.type === "test.hold").length >= 3, "three children holding");
+	await quiet(host);
+	const roster = (await host.call<Status>("status")).extensionStatuses?.["pi-workbench:activity"] ?? "";
+	await prompt(host, call("subagent_status", {}));
+	const status = await toolResult(host, "subagent_status");
+	await host.kill();
+	// What each cut would leave: the secret's first 9 characters.
+	const fragment = SECRET.slice(0, 9);
+	assert.equal((JSON.parse(roster) as { items: unknown[] }).items.length, 3, "the roster shows the three children");
+	assert.ok(!roster.includes(fragment), `no fragment in the roster: ${roster}`);
+	assert.ok(!status.includes(fragment), `no fragment in subagent_status: ${status}`);
+	assert.ok(status.includes(`whole ${REDACTED} task`), "the complete secret is masked whole");
+	await inspect(store, cwd, async (h) => {
+		const list = await executions(h);
+		const shown = JSON.stringify(list.map((e) => [e.name, e.taskPreview]));
+		assert.ok(!shown.includes(fragment), `no fragment in a stored name or preview: ${shown}`);
+		assert.deepEqual(list.map((e) => e.name).sort(), [`${"n".repeat(30)} [REDACTED`, `${"n".repeat(30)} [REDACTED`, `w ${REDACTED}`].sort());
+		assert.ok(list.some((e) => e.taskPreview.startsWith(`${"p".repeat(190)} [REDACTED`)), "the preview is cut after masking");
 	});
 });
 

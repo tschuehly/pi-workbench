@@ -17,7 +17,7 @@ import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { type Conversation, type Cursor, defineExtension, type ToolRegistration } from "@earendil-works/pi-durable";
 import { context } from "./host.ts";
-import { redact, redactingTool, sanitizeDeep } from "./redact.ts";
+import { redact, sanitizeDeep } from "./redact.ts";
 
 /** Packages whose extension code runs in a Durable Chat; identified by their package.json name. */
 export const BOUND_PACKAGES = ["pi-web-access", "ping-a-human-pi", "pi-process-monitor"];
@@ -244,7 +244,7 @@ export class PiPackages {
 		};
 	}
 
-	/** Pi's tool definition as a Durable tool, behind redaction. */
+	/** Pi's tool definition as a Durable tool; the host registry puts it behind redaction. */
 	#tool(definition: PiTool): ToolRegistration {
 		const description = [definition.description, definition.promptSnippet === definition.description ? undefined : definition.promptSnippet, ...(definition.promptGuidelines ?? [])]
 			.filter((part): part is string => part !== undefined && part !== "")
@@ -272,7 +272,7 @@ export class PiPackages {
 				};
 			},
 		};
-		return redactingTool(tool);
+		return tool;
 	}
 
 	/** The Durable extension with every bound package tool. */

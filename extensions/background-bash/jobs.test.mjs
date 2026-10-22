@@ -271,6 +271,16 @@ test("wait claims a fast completion and leaves a slow one to normal delivery", a
   jobs.shutdown();
 });
 
+test("preview of a running job masks a credential that is still being written", async () => {
+  const { make } = fixture();
+  const jobs = make();
+  const job = jobs.start("printf 'key ghp_A1b2C3d4'; sleep 30", cwd, 60, undefined, { sessionId: "s1" });
+  await until(() => jobs.list()[0].bytes > 0);
+  assert.equal(jobs.preview(job.id, 200).output, "key [REDACTED:partial]", "no pattern matches half a token yet, so the fragment is masked");
+  jobs.cancel(job.id);
+  jobs.shutdown();
+});
+
 test("preview shows the redacted command and the redacted end of the output", async () => {
   const { make } = fixture();
   const jobs = make();
