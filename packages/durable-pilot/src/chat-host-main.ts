@@ -65,7 +65,6 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	transcript: () => session.transcript(),
 	status: () => session.status(),
 	info: () => session.info(),
-	idle: () => session.idle(),
 	prompt: (params) => {
 		const { operationId, text: body, mode } = params;
 		if (typeof operationId !== "string" || operationId === "" || typeof body !== "string") throw new Error("prompt needs operationId and text");

@@ -410,17 +410,6 @@ export class ChatSession {
 		return null;
 	}
 
-	/**
-	 * Whether the host may close (archive): no turn, no waiting input, no runnable task. A paused restore runs nothing,
-	 * so it is idle; closing keeps its pending work for the next resume.
-	 */
-	async idle(): Promise<{ idle: boolean }> {
-		if (!this.#resumed) return { idle: true };
-		const { harness, root } = this.#host;
-		const inbox = await harness.snapshot(InboxDoc, root.id, context);
-		return { idle: !this.#running && (inbox?.items.length ?? 0) === 0 && !harness.wake().active };
-	}
-
 	async #resume(): Promise<void> {
 		if (this.#resumed) return;
 		await this.#host.resume();

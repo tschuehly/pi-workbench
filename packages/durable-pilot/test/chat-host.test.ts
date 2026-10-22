@@ -503,25 +503,6 @@ test("open-questions reminder: a plain prompt carries PI WEB's reminder of the p
 	assert.equal(integrity(store), "ok");
 });
 
-test("idle says when the Chat's host may close for archiving: not while a turn runs or input waits; a paused restore is idle and reading it sends nothing", async () => {
-	const { store, cwd } = family("idle");
-	let host = new ChatHost(store, cwd, 40);
-	await host.ready;
-	assert.deepEqual(await host.call("idle"), { idle: true });
-	await host.call("prompt", { operationId: "op-gen", text: "gen" });
-	await host.until((e) => e.type === "assistant.delta", "a committed partial");
-	assert.deepEqual(await host.call("idle"), { idle: false });
-	await host.kill();
-
-	host = new ChatHost(store, cwd);
-	await host.ready;
-	assert.deepEqual(await host.call("idle"), { idle: true }, "restored work stays paused, so nothing needs the host");
-	await host.call("status");
-	await host.call("transcript");
-	assert.deepEqual(requests(store), ["gen"], "reads schedule nothing");
-	await host.close();
-});
-
 test("status reports context usage from the last answer and the Chat's model window, as a legacy Chat shows it", async () => {
 	const { store, cwd } = family("usage");
 	const host = new ChatHost(store, cwd);
