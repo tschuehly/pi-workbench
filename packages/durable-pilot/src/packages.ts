@@ -7,6 +7,8 @@
 //   `web_enable` activates them (`setActiveTools` during a call becomes `control.addTools`);
 // - `appendEntry` and `sendMessage` commit to the Chat (redacted first): entries as passive writes, messages as inputs
 //   (a turn when asked for one) or as context for the next turn, shown as PI WEB custom messages;
+// - `ctx.model` is the Chat's model as the host has it, flagged for mid-conversation tool additions; `ctx.modelRegistry`
+//   reads the host's models and Pi's stored logins through the host's credential store, and requests through its providers;
 // - commands run here; `ui.notify` reaches PI WEB as command output, dialogs are refused visibly;
 // - `session_start` (with the package's own entries as its branch), `session_tree` (with the new branch's),
 //   `before_agent_start`, `agent_settled` and `session_shutdown` reach the packages' handlers; their return values are not applied.
@@ -15,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
+import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { type Conversation, type Cursor, defineExtension, type ToolRegistration } from "@earendil-works/pi-durable";
 import { context } from "./host.ts";
 import { redact, redactingTool, sanitizeDeep } from "./redact.ts";
@@ -66,8 +69,56 @@ type PiExtension = { path: string; handlers: Map<string, ((event: unknown, ctx: 
 type PiMessage = { customType: string; content: string | Content; display?: boolean; details?: unknown };
 type Branch = { type: "custom"; id: string; parentId: string | null; timestamp: string; customType: string; data: unknown }[];
 
-/** The Chat a binding commits to and the model its packages see. */
-export type PackageHost = { readonly root: Conversation; readonly registry: { install(extension: ReturnType<typeof defineExtension>): void }; model(): Promise<Record<string, unknown> | undefined> };
+/** The Chat a binding commits to, the model its packages see, and the host's models with their stored logins. */
+export type PackageHost = {
+	readonly root: Conversation;
+	readonly registry: { install(extension: ReturnType<typeof defineExtension>): void };
+	model(): Promise<Record<string, unknown> | undefined>;
+	readonly models: Models;
+};
+
+/** What a sync `ModelRegistry` read needs: the models with a stored login, and each provider's login type. */
+type Logins = { available: Model<Api>[]; types: Map<string, string> };
+
+async function readLogins(models: Models): Promise<Logins> {
+	const types = new Map<string, string>();
+	for (const provider of models.getProviders()) {
+		const check = await models.checkAuth(provider.id).catch(() => undefined);
+		if (check !== undefined) types.set(provider.id, check.type);
+	}
+	return { available: [...(await models.getAvailable().catch(() => []))], types };
+}
+
+/**
+ * Pi's `ModelRegistry` as packages use it (pi-coding-agent `ModelRegistry`), backed by the host's models: its providers
+ * and Pi's auth.json through the host's credential store, under Pi's lock. Requests go through the host's providers
+ * (redaction, Claude payload rules), never a package's own client with a copied token. Availability and login types are
+ * read at session start and at each run start, as Pi's registry snapshots them.
+ */
+function modelRegistry(models: Models, logins: () => Logins) {
+	// The host's own model, not the packages' view of it (its compat flags describe Durable's tool handling).
+	const own = <M extends Model<Api>>(model: M): M => (models.getModel(model.provider, model.id) as M | undefined) ?? model;
+	return {
+		getAll: () => [...models.getModels()],
+		getAvailable: () => [...logins().available],
+		find: (provider: string, id: string) => models.getModel(provider, id),
+		hasConfiguredAuth: (model: Model<Api>) => logins().types.has(model.provider),
+		isUsingOAuth: (model: Model<Api>) => logins().types.get(model.provider) === "oauth",
+		getApiKeyAndHeaders: async (model: Model<Api>) => {
+			try {
+				const resolved = await models.getAuth(own(model));
+				if (resolved === undefined) return { ok: false as const, error: `No API key found for "${model.provider}"` };
+				const { apiKey, headers, baseUrl } = resolved.auth;
+				return { ok: true as const, apiKey, headers, ...(baseUrl === undefined ? {} : { baseUrl }), env: resolved.env };
+			} catch (error) {
+				return { ok: false as const, error: redact(error instanceof Error ? error.message : String(error)) };
+			}
+		},
+		stream: ((model, context, options) => models.stream(own(model), context, options)) as Models["stream"],
+		streamSimple: ((model, context, options) => models.streamSimple(own(model), context, options)) as Models["streamSimple"],
+		complete: ((model, context, options) => models.complete(own(model), context, options)) as Models["complete"],
+	};
+}
 
 const json = (value: unknown): JsonValue => (value === undefined ? null : (JSON.parse(JSON.stringify(value)) as JsonValue));
 const textOf = (content: string | Content): string => (typeof content === "string" ? content : content.map((part) => part.text ?? "").join("\n"));
@@ -94,6 +145,8 @@ export class PiPackages {
 	#branch: Branch = [];
 	#idle = true;
 	#model: Record<string, unknown> | undefined;
+	#logins: Logins = { available: [], types: new Map() };
+	#registry: ReturnType<typeof modelRegistry> | undefined;
 	/** Commits in call order; a failure is reported, never thrown into the package. */
 	#queue: Promise<void> = Promise.resolve();
 	readonly #calls = new AsyncLocalStorage<{ offered: Set<string>; added: string[] }>();
@@ -226,7 +279,7 @@ export class PiPackages {
 				getLeafId: () => this.#branch.at(-1)?.id ?? null,
 				getSessionName: () => undefined,
 			},
-			modelRegistry: undefined,
+			modelRegistry: this.#registry,
 			model: this.#model,
 			scopedModels: [],
 			signal,
@@ -286,7 +339,9 @@ export class PiPackages {
 	 */
 	async start(host: PackageHost): Promise<void> {
 		this.#host = host;
+		this.#registry = modelRegistry(host.models, () => this.#logins);
 		this.#model = await host.model();
+		this.#logins = await readLogins(host.models);
 		await this.#readBranch();
 		await this.emit("session_start", { type: "session_start", reason: "startup" });
 		host.registry.install(this.extension());
@@ -316,7 +371,10 @@ export class PiPackages {
 	/** Run boundaries from the Chat: `before_agent_start` when a run starts, `agent_settled` when it ends. */
 	async run(phase: "start" | "end"): Promise<void> {
 		this.#idle = phase === "end";
-		if (phase === "start") this.#model = (await this.#host?.model()) ?? this.#model;
+		if (phase === "start" && this.#host !== undefined) {
+			this.#model = (await this.#host.model()) ?? this.#model;
+			this.#logins = await readLogins(this.#host.models);
+		}
 		await this.emit(phase === "start" ? "before_agent_start" : "agent_settled", { type: phase === "start" ? "before_agent_start" : "agent_settled" });
 	}
 

@@ -100,6 +100,9 @@ export type ChatHost = Host & {
 	readonly atelier: Atelier;
 };
 
+/** pi-ai's per-API compat flags for adding tools mid-conversation without resending the transcript. */
+const DYNAMIC_TOOLS = { supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true, supportsMidConvoToolAdditions: true, supportsAdditionalTools: true };
+
 /**
  * Pi's compaction defaults (threshold above `contextWindow - reserveTokens`, keep ~20k recent tokens), without Durable's
  * extra background compaction, which Pi does not have; PI WEB replaces them with the user's Pi settings.
@@ -205,13 +208,15 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		// The active branch at each use: history navigation may select another.
 		get root() { return host.root; },
 		registry: host.registry,
-		// Durable adds tools mid-conversation natively for every model (deferred tools loaded with control.addTools), so
-		// packages see a model that supports it: pi-web-access then keeps its web tools behind web_enable, as legacy
-		// Claude Chats do.
+		models: host.models,
+		// The Chat's model as it is (api, provider, baseUrl: pi-web-access picks current-model hosted search by them). Durable
+		// adds tools mid-conversation natively for every model (deferred tools loaded with control.addTools); the compat
+		// flags say so in each API's terms, so pi-web-access keeps its web tools behind web_enable for Claude, ChatGPT and
+		// Copilot models alike. The scripted model's API is its own, unknown to packages.
 		model: async () => {
 			const ref = (await host.root.agent(context)).model;
 			const model = ref === undefined ? undefined : host.models.getModel(ref.provider, ref.modelId);
-			return { ...model, api: "anthropic-messages", compat: { ...model?.compat, supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true } };
+			return model === undefined ? undefined : { ...model, compat: { ...model.compat, ...DYNAMIC_TOOLS } };
 		},
 	});
 	return Object.assign(host, {
