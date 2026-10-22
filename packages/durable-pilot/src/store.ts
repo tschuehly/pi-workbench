@@ -42,7 +42,7 @@ export type OpenedStore = {
 	readonly database: NodeSqliteDatabase;
 	readonly raw: DatabaseSync;
 	readonly owner: OwnerRecord;
-	readonly pragmas: { readonly journal_mode: string; readonly synchronous: number; readonly locking_mode: string };
+	readonly pragmas: { readonly journal_mode: string; readonly synchronous: number; readonly locking_mode: string; readonly fullfsync: number };
 	/** Run a pragma or query on the owned connection (for diagnostics such as max_page_count). */
 	exec(sql: string): Promise<void>;
 };
@@ -102,7 +102,13 @@ function faulty(inner: NodeSqliteDatabase, faults: Faults): SqliteDatabase {
  */
 export async function openStore(
 	path: string,
-	options: { readonly synchronous?: Synchronous; readonly faults?: Faults; readonly busyTimeoutMs?: number } = {},
+	options: {
+		readonly synchronous?: Synchronous;
+		/** macOS: make every sync an F_FULLFSYNC (drive cache flush); plain fsync there does not reach the platter. */
+		readonly fullfsync?: boolean;
+		readonly faults?: Faults;
+		readonly busyTimeoutMs?: number;
+	} = {},
 ): Promise<OpenedStore> {
 	const synchronous = options.synchronous ?? "FULL";
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -118,13 +124,20 @@ export async function openStore(
 			throw new StoreOwnedElsewhere(path, error);
 		}
 		await database.exec(`PRAGMA synchronous = ${synchronous}`);
+		if (options.fullfsync === true) await database.exec("PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON");
 		await database.exec("PRAGMA wal_autocheckpoint = 1000");
 		const pragmas = {
 			journal_mode: (await database.get<{ journal_mode: string }>("PRAGMA journal_mode"))!.journal_mode,
 			synchronous: (await database.get<{ synchronous: number }>("PRAGMA synchronous"))!.synchronous,
 			locking_mode: (await database.get<{ locking_mode: string }>("PRAGMA locking_mode"))!.locking_mode,
+			fullfsync: (await database.get<{ fullfsync: number }>("PRAGMA fullfsync"))!.fullfsync,
 		};
-		if (pragmas.journal_mode !== "wal" || pragmas.synchronous !== SYNC_CODE[synchronous] || pragmas.locking_mode !== "exclusive")
+		if (
+			pragmas.journal_mode !== "wal" ||
+			pragmas.synchronous !== SYNC_CODE[synchronous] ||
+			pragmas.locking_mode !== "exclusive" ||
+			pragmas.fullfsync !== (options.fullfsync === true ? 1 : 0)
+		)
 			throw new Error(`Store ${path} refused: unexpected pragmas ${JSON.stringify(pragmas)}`);
 		chmodSync(path, 0o600);
 		const previous = readOwner(path);

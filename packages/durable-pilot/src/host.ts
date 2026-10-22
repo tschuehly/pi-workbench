@@ -154,6 +154,7 @@ export async function admit(
 
 export type HostOptions = {
 	readonly synchronous?: Synchronous;
+	readonly fullfsync?: boolean;
 	readonly faults?: Faults;
 	readonly faux?: RegisterFauxProviderOptions;
 	readonly settings?: HarnessSettings;
@@ -183,6 +184,7 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 	mkdirSync(work, { recursive: true });
 	const store = await openStore(join(dir, "session.sqlite"), {
 		...(options.synchronous === undefined ? {} : { synchronous: options.synchronous }),
+		...(options.fullfsync === undefined ? {} : { fullfsync: options.fullfsync }),
 		...(options.faults === undefined ? {} : { faults: options.faults }),
 	});
 	const faux = fauxProvider(options.faux ?? {});

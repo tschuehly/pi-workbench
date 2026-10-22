@@ -1,0 +1,79 @@
+{
+  "measuredAt": "2026-10-22T12:30:31.975Z",
+  "machine": {
+    "node": "v26.7.0",
+    "os": "26.5.2",
+    "cpu": "Apple M4 Pro",
+    "volume": "/dev/disk3s5",
+    "model": "Mac16,7"
+  },
+  "rounds": 3,
+  "configs": {
+    "NORMAL": {
+      "pragmas": {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "locking_mode": "exclusive",
+        "fullfsync": 0
+      },
+      "commitMs": {
+        "n": 900,
+        "mean": 0.044,
+        "p50": 0.035,
+        "p95": 0.059,
+        "p99": 0.149
+      },
+      "turnMs": {
+        "n": 180,
+        "mean": 0.912,
+        "p50": 0.73,
+        "p95": 1.696,
+        "p99": 2.183
+      }
+    },
+    "FULL": {
+      "pragmas": {
+        "journal_mode": "wal",
+        "synchronous": 2,
+        "locking_mode": "exclusive",
+        "fullfsync": 0
+      },
+      "commitMs": {
+        "n": 900,
+        "mean": 0.109,
+        "p50": 0.111,
+        "p95": 0.137,
+        "p99": 0.182
+      },
+      "turnMs": {
+        "n": 180,
+        "mean": 1.127,
+        "p50": 1.066,
+        "p95": 1.489,
+        "p99": 1.684
+      }
+    },
+    "FULL+fullfsync": {
+      "pragmas": {
+        "journal_mode": "wal",
+        "synchronous": 2,
+        "locking_mode": "exclusive",
+        "fullfsync": 1
+      },
+      "commitMs": {
+        "n": 900,
+        "mean": 3.93,
+        "p50": 3.988,
+        "p95": 4.93,
+        "p99": 6.295
+      },
+      "turnMs": {
+        "n": 180,
+        "mean": 23.078,
+        "p50": 22.954,
+        "p95": 28.077,
+        "p99": 31.943
+      }
+    }
+  }
+}
