@@ -59,7 +59,7 @@ Write `workstreams checkpoint <id>` when meaningful attention changes, without a
 After writing it, clean up storage without blocking your work: launch one background Subagent (profile `implementer`, Cognitive Role `routine`) and continue. Its brief: the Workstream id; what you still need (current working directory, worktrees, scratch, containers in use, unmerged work you will continue); and these rules:
 
 - Run `mac-storage-workspaces --workstream <id>`. It lists what the Workstream owns (paths it links to: worktrees, scratch, its sessions' PI_TMP, branch Docker containers and volumes) with sizes, and unlinked worktrees in the same repositories.
-- Delete what is no longer needed, including scratch, Docker volumes and unmerged work. Never touch what the lead still needs. Keep anything `pinned by` another open Workstream. Clean an unlinked worktree only without recent activity or a running process (another session is probably using it).
+- Delete what is no longer needed, including Docker volumes and unmerged work. Never delete the Workstream's own scratch folder `~/.pi-workbench/scratch/<id>/` as a whole: it holds the Workstream's evidence; remove only files inside it that you name one by one and that no checkpoint, link or plan references. Never touch what the lead still needs. Keep anything `pinned by` another open Workstream. Clean an unlinked worktree only without recent activity or a running process (another session is probably using it).
 - Before removing a worktree, move what is still needed from its `.scratch/` into `~/.pi-workbench/scratch/<id>/`.
 - If the command is missing or fails, delete nothing.
 - Done means: one sentence saying what was freed, what was kept, and why.
