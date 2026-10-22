@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 // The Workbench telemetry extension's recorder: same JSONL events, same PI_TELEMETRY_DIR.
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
 import { openChatHost } from "./chat.ts";
-import { ChatSession, PROTOCOL, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
+import { type Attachment, CAPABILITIES, ChatSession, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
 
 type Request = { id: number; method: string; params?: Record<string, unknown> };
@@ -29,6 +29,7 @@ const { values } = parseArgs({
 		"session-id": { type: "string" },
 		scripted: { type: "boolean" },
 		"faux-tps": { type: "string" },
+		thinking: { type: "string" },
 	},
 });
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
@@ -42,6 +43,7 @@ const host = await openChatHost({
 	chatId,
 	scripted: values.scripted === true,
 	...(tps === undefined ? {} : { fauxTokensPerSecond: tps }),
+	...(values.thinking === undefined ? {} : { thinkingLevel: values.thinking }),
 });
 const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder });
 await session.start();
@@ -63,7 +65,13 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		const { operationId, text: body, mode } = params;
 		if (typeof operationId !== "string" || operationId === "" || typeof body !== "string") throw new Error("prompt needs operationId and text");
 		if (mode !== undefined && mode !== "steer" && mode !== "followUp") throw new Error("mode must be steer or followUp");
-		return session.prompt({ operationId, text: body, ...(mode === undefined ? {} : { mode }) });
+		const { images, attachments } = params;
+		if (images !== undefined && (!Array.isArray(images) || !images.every((i) => typeof i?.data === "string" && typeof i?.mimeType === "string"))) throw new Error("images must be image blocks");
+		return session.prompt({
+			operationId, text: body, ...(mode === undefined ? {} : { mode }),
+			...(images === undefined ? {} : { images: images.map((i: { data: string; mimeType: string }) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType })) }),
+			...(Array.isArray(attachments) ? { attachments: attachments as Attachment[] } : {}),
+		});
 	},
 	mode: (params) => session.mode(typeof params.args === "string" ? params.args : ""),
 	closeAsk: (params) => {
@@ -87,6 +95,17 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	},
 	configure: (params) => session.configure((params.resources ?? {}) as Resources),
 	abort: () => session.abort(),
+	mutateQueue: (params) => {
+		const { action, index, expected } = params;
+		if (!["remove", "recall", "toggle", "promote", "promoteAll"].includes(String(action))) throw new Error("Unknown queue action");
+		if (typeof index !== "number" || !Number.isInteger(index) || index < 0) throw new Error("index must be a queue position");
+		if (!Array.isArray(expected) || !expected.every((id) => typeof id === "number")) throw new Error("expected must list queued IDs");
+		return session.mutateQueue({ editId: text(params, "editId"), action: action as QueueAction, index, expected: expected as number[] });
+	},
+	thinkingLevels: () => session.thinkingLevels(),
+	setThinkingLevel: (params) => session.setThinkingLevel(text(params, "level")),
+	cycleThinkingLevel: () => session.cycleThinkingLevel(),
+	shell: (params) => session.shell(text(params, "text")),
 	clearQueue: () => session.clearQueue(),
 	close: () => close(),
 };
@@ -108,4 +127,4 @@ process.on("disconnect", () => void close());
 // the intent of a running tool stay, and restore is paused on the next open.
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void close().finally(() => process.exit(0)));
 
-send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch } });
+send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch, capabilities: CAPABILITIES } });

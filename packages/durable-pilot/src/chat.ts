@@ -2,13 +2,14 @@
 // tool and the model behind the pre-persistence redaction wrappers, the Workbench behaviors (Working Mode, ask_user,
 // request_attention), and the Claude subscription (Pi's auth.json, pi-claude-code-use 2.2.1 payload rules) plus, for
 // tests and trials, the scripted faux model. The Chat's model is stored per conversation and can be switched.
+import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { defineExtension, section } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { router } from "./faux.ts";
-import { type Host, MODEL, openHost } from "./host.ts";
+import { context, type Host, MODEL, openHost } from "./host.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
@@ -47,6 +48,11 @@ export type ChatHostOptions = {
 	readonly scripted?: boolean;
 	/** Faux only: tokens per second of a streamed answer. */
 	readonly fauxTokensPerSecond?: number;
+	/**
+	 * Thinking level of a new Chat, as PI WEB resolved it from Pi's settings (legacy default `medium`); clamped to the
+	 * model. A reopened Chat keeps its own.
+	 */
+	readonly thinkingLevel?: string;
 };
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
@@ -68,11 +74,12 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {} };
 	const aliases = claudeAliases("pi");
 	const host = await openHost(options.dir, {
-		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200 },
+		// The scripted model reasons, so thinking levels apply to it as to Claude.
+		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200, models: [{ id: MODEL.modelId, reasoning: true }] },
 		provider: () => anthropicProvider(),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials: new PiAuthStore(),
-		rootAgent: { model: parseModel(options.model), cwd: options.cwd },
+		rootAgent: { model: parseModel(options.model), cwd: options.cwd, thinkingLevel: (options.thinkingLevel ?? "medium") as ModelThinkingLevel },
 		env: (target) => new NodeExecutionEnv({ cwd: target.cwd ?? options.cwd }),
 		extensions: [
 			chatTools(() => workbench.resources),
@@ -85,5 +92,10 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		const step = router(options.dir);
 		host.faux.setResponses(Array.from({ length: 10_000 }, () => step));
 	}
+	// As Pi does on load: a stored level the model does not support is clamped (before anything is scheduled).
+	const agent = await host.root.agent(context);
+	const model = agent.model === undefined ? undefined : host.models.getModel(agent.model.provider, agent.model.modelId);
+	const clamped = model === undefined ? agent.thinkingLevel : clampThinkingLevel(model, agent.thinkingLevel);
+	if (clamped !== agent.thinkingLevel) await host.root.configure({ thinkingLevel: clamped }, context);
 	return Object.assign(host, { workbench });
 }
