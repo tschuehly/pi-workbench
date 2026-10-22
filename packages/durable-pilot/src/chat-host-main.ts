@@ -1,7 +1,8 @@
 // Durable Chat host process for PI WEB (session-host protocol v2). PI WEB's session daemon spawns one per Chat family
 // with an IPC channel; requests and replies are JSON messages on it, and the host pushes PI WEB session events.
 //   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model anthropic/<id>|faux
-//                              [--session-id <PI WEB Chat ID>] [--scripted]
+//                              [--session-id <PI WEB Chat ID>] [--scripted] [--packages]
+// --packages runs the bound installed Pi packages from PI_CODING_AGENT_DIR's settings (src/packages.ts).
 // Messages in:  { id, method, params? }
 // Messages out: { ready: { protocol, durable, ownerEpoch, capabilities } } once open, { id, result } | { id, error }, { event }.
 // The host exits after `close`, when PI WEB goes away (IPC disconnect), or on SIGTERM/SIGINT, closing the store
@@ -32,6 +33,7 @@ const { values } = parseArgs({
 		scripted: { type: "boolean" },
 		"faux-tps": { type: "string" },
 		thinking: { type: "string" },
+		packages: { type: "boolean" },
 	},
 });
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
@@ -46,6 +48,7 @@ const host = await openChatHost({
 	scripted: values.scripted === true,
 	...(tps === undefined ? {} : { fauxTokensPerSecond: tps }),
 	...(values.thinking === undefined ? {} : { thinkingLevel: values.thinking }),
+	...(values.packages === true ? { packages: {} } : {}),
 });
 const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder });
 await session.start();
@@ -102,7 +105,8 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		...(isObject(params.compaction) ? { compaction: params.compaction as CompactionSettings } : {}),
 	}),
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
-	commands: () => COMMANDS,
+	// One command list and dispatcher: host commands (/quota-check) and the bound Pi packages' commands.
+	commands: () => session.commands(),
 	command: (params) => session.command(text(params, "name"), typeof params.args === "string" ? params.args : ""),
 	abort: () => session.abort(),
 	mutateQueue: (params) => {

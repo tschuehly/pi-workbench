@@ -381,7 +381,7 @@ test("tool groups never widen an allowlist: nested calls need the group enabled,
 test("Orchestration Workers shows the workers group, and leaving it hides the group again unless it was enabled", async () => {
 	const dir = scratch("groups-mode");
 	const h = await groupsHost(dir);
-	const chat = Object.assign(h, { workbench: { resources: {}, onSignal: () => {}, compaction: {}, extensions: groupExtensions } });
+	const chat = Object.assign(h, { workbench: { resources: {}, onSignal: () => {}, compaction: {}, extensions: groupExtensions }, listenPackages: () => {} });
 	const session = new ChatSession(chat, () => {});
 	await session.start();
 	await session.mode("orchestration workers");

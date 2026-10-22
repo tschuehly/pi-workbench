@@ -23,7 +23,8 @@ import { syncWorkersGroup } from "./tool-groups.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Admissions, admit, changeQueued, context, Edits, type EditPlan, type Host, type QueuedInput, Reconcile, resolveUncertain } from "./host.ts";
 import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./redact.ts";
-import { type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
+import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
+import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 
 type WorkingModeDetailsLike = Record<string, unknown>;
 import {
@@ -175,6 +176,11 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
 	const notice = NOTICE_TYPES[entry.kind];
 	if (notice !== undefined) return [custom(notice, textOfContent(message.content), entry.data ?? null)];
+	if (entry.kind === PACKAGE_MESSAGE_ENTRY) {
+		// A Pi package's sendMessage, shown as legacy Chats show a custom message: only when it asked to be displayed.
+		const data = entry.data as { customType: string; display: boolean; details?: unknown };
+		return data.display ? [custom(data.customType, textOfContent(message.content), data.details ?? null)] : [];
+	}
 	const content = message.role === "toolResult" ? { content: browserToolContent(message.content) } : {};
 	return [{ ...message, ...content, entryId, ...(streamId === undefined ? {} : { streamId }) }];
 }
@@ -248,6 +254,7 @@ export class ChatSession {
 
 	async start(): Promise<void> {
 		if (this.#chat !== undefined) this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
+		this.#chat?.listenPackages((event) => this.#emit(event));
 		const stream = await watchEvents(this.#host.harness, this.#host.root.id, context);
 		await this.#reset(stream.snapshot);
 		stream.start(async (events) => {
@@ -270,6 +277,7 @@ export class ChatSession {
 	}
 
 	async close(): Promise<void> {
+		await this.#chat?.packages?.close();
 		await this.#stop?.();
 		await this.#host.close();
 		this.#record("session.shutdown", { sessionFile: null, reason: "close" });
@@ -339,6 +347,7 @@ export class ChatSession {
 				this.#record("agent.start", { sessionFile: null });
 				// Agent turns since an open set was posted drive the browser's "may be stale" mark.
 				void countTurn(this.#host.root).catch(() => {});
+				void this.#chat?.packages?.run("start");
 				return;
 			case "run_end":
 				this.#running = false;
@@ -346,6 +355,7 @@ export class ChatSession {
 				void this.#flushShell();
 				this.#emit({ type: "agent.end" });
 				this.#record("agent.settled", { sessionFile: null });
+				void this.#chat?.packages?.run("end");
 				return;
 			case "message_start":
 				if (event.message.role !== "assistant") return;
@@ -517,9 +527,22 @@ export class ChatSession {
 		};
 	}
 
-	/** A host command (`/quota-check`). It runs outside the store: nothing is committed or resumed. */
-	command(name: string, args: string): Promise<CommandResult> {
-		return runCommand(name, args);
+	/** The Chat's slash commands: the host's own (`/quota-check`), then the bound Pi packages'. */
+	commands(): { name: string; description?: string }[] {
+		return [...COMMANDS, ...(this.#chat?.packages?.commands() ?? [])];
+	}
+
+	/**
+	 * Run one of the Chat's commands. A host command runs outside the store (nothing committed or resumed); a package
+	 * command is refused visibly when blocked, unknown or in need of a dialog; any other is not available.
+	 */
+	async command(name: string, args: string): Promise<CommandResult | { type: "unsupported"; message: string }> {
+		if (COMMANDS.some((command) => command.name === name)) return runCommand(name, args);
+		const packages = this.#chat?.packages;
+		if (packages === undefined) return { type: "unsupported", message: `/${name} is not available in Durable Chats yet` };
+		const result = await packages.command(args === "" ? `/${name}` : `/${name} ${args}`);
+		await this.#publishStatus();
+		return result;
 	}
 
 	/**
