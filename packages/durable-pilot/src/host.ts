@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Context } from "@earendil-works/chord";
+import type { Context, JsonRepresentation } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	createModels,
@@ -155,7 +155,9 @@ export async function admit(
 	request: Admit,
 	hooks: { readonly afterReceipt?: () => Promise<void> } = {},
 ): Promise<SubmissionId> {
-	const hash = createHash("sha256").update(JSON.stringify([request.mode ?? "followUp", request.text])).digest("hex");
+	// Attached images are part of the payload: a retry with other images is a different input.
+	const images = Array.isArray(request.content) ? request.content.flatMap((part) => (part.type === "image" ? [part.data] : [])) : [];
+	const hash = createHash("sha256").update(JSON.stringify([request.mode ?? "followUp", request.text, ...(images.length === 0 ? [] : [images])])).digest("hex");
 	await conversation.commit(async (tx) => {
 		const doc = await tx.doc(Admissions, conversation.id);
 		const existing = doc.ops[request.operationId];
@@ -185,8 +187,19 @@ export class EditTooLate extends Error {
 	}
 }
 
-type EditStep = { readonly from: string; readonly to: string; readonly text: string; readonly mode: "steer" | "followUp" };
-type EditReceipt = { conversationId: ConversationId; hash: string; steps: EditStep[]; status: "pending" | "done" | "too-late" };
+/** One queued input withdrawn by an edit: its operation, and what it was admitted with. */
+type EditStep = { readonly from: string; readonly text: string; readonly mode: "steer" | "followUp"; readonly content?: JsonRepresentation<UserInput>; readonly entry?: JsonRepresentation<InputEntry> };
+/** A withdrawn input admitted again under a new operation ID, possibly with a new mode or text. */
+type Readmit = { readonly step: number; readonly to: string; readonly mode: "steer" | "followUp"; readonly text?: string };
+type EditReceipt = {
+	conversationId: ConversationId;
+	hash: string;
+	/** Withdrawn in this order; the first is the edited input. */
+	steps: EditStep[];
+	/** Admitted again in this order. */
+	readmit: Readmit[];
+	status: "pending" | "done" | "too-late";
+};
 
 /** Durable intent of every edit, so a crash between its commits rolls forward on resume. */
 export const Edits = defineDoc<{ edits: Record<string, EditReceipt> }>({
@@ -199,6 +212,16 @@ export const Edits = defineDoc<{ edits: Record<string, EditReceipt> }>({
 
 export type Edit = { readonly editId: string; readonly operationId: string; readonly text: string };
 export type EditStepName = "receipt" | "withdrawn" | "readmitted";
+
+/** A queued input as an edit plan sees it, in inbox (ID) order. */
+export type QueuedInput = { readonly id: SubmissionId; readonly operationId: string; readonly mode: "steer" | "followUp"; readonly text: string; readonly content: JsonRepresentation<UserInput>; readonly entry?: JsonRepresentation<InputEntry> };
+/** What an edit does: withdraw these inputs (the edited one first), then admit some of them again. */
+export type EditPlan = { readonly withdraw: readonly QueuedInput[]; readonly readmit: readonly { readonly input: QueuedInput; readonly mode: "steer" | "followUp"; readonly text?: string }[] };
+
+function inputText(content: unknown): string {
+	if (typeof content === "string") return content;
+	return Array.isArray(content) ? content.map((part: { type?: string; text?: string }) => (part.type === "text" ? (part.text ?? "") : "")).join("\n") : "";
+}
 
 /**
  * Edit a queued input. Durable has no edit and places queued inputs in ID order, so an edit withdraws the item and
@@ -213,40 +236,72 @@ export async function editQueued(
 	edit: Edit,
 	hooks: { readonly at?: (step: EditStepName) => Promise<void> | undefined } = {},
 ): Promise<{ readonly moved: Record<string, string> }> {
-	const hash = createHash("sha256").update(JSON.stringify([edit.operationId, edit.text])).digest("hex");
+	return changeQueued(harness, conversation, { editId: edit.editId, operationId: edit.operationId, payload: edit.text }, (queue, at) => {
+		const tail = queue.slice(at);
+		return { withdraw: tail, readmit: tail.map((input, n) => ({ input, mode: input.mode, ...(n === 0 ? { text: edit.text } : {}) })) };
+	}, hooks);
+}
+
+/**
+ * Change the queue around one queued input (its `operationId`) by a plan over the inbox: withdraw, then re-admit. The
+ * plan and its outcome are durable as in `editQueued`; a retry under the same edit ID and payload returns the same
+ * result. Only inputs this host admitted can be moved; a queued write behind the edited input refuses the edit.
+ */
+export async function changeQueued(
+	harness: Harness,
+	conversation: Conversation,
+	request: { readonly editId: string; readonly operationId: string; readonly payload: unknown },
+	plan: (queue: QueuedInput[], at: number) => EditPlan,
+	hooks: { readonly at?: (step: EditStepName) => Promise<void> | undefined } = {},
+): Promise<{ readonly moved: Record<string, string> }> {
+	const hash = createHash("sha256").update(JSON.stringify([request.operationId, request.payload])).digest("hex");
 	const receipt = await conversation.commit(async (tx) => {
 		const doc = await tx.doc(Edits);
-		const existing = doc.edits[edit.editId];
+		const existing = doc.edits[request.editId];
 		if (existing !== undefined) {
-			if (existing.hash !== hash) throw new PayloadMismatch(edit.editId);
+			if (existing.hash !== hash) throw new PayloadMismatch(request.editId);
 			return JSON.parse(JSON.stringify(existing)) as EditReceipt;
 		}
 		const inbox = (await tx.doc(InboxDoc, conversation.id)).items;
-		const target = await tx.submissionByRequest(conversation.id, edit.operationId);
+		const target = await tx.submissionByRequest(conversation.id, request.operationId);
 		const at = inbox.findIndex((item) => item.id === target?.id);
-		if (at < 0) throw new EditTooLate(edit.operationId);
-		const tail = inbox.slice(at);
+		if (at < 0) throw new EditTooLate(request.operationId);
 		// ponytail: refuses an edit with a queued write behind it, since rebuilding would move the write ahead.
-		if (tail.some((item) => item.mode === "write")) throw new Error(`Cannot edit ${edit.operationId}: a queued write follows it`);
+		if (inbox.slice(at).some((item) => item.mode === "write")) throw new Error(`Cannot edit ${request.operationId}: a queued write follows it`);
 		// ponytail: maps inbox IDs back to operation IDs by scanning every admitted operation; index them if this grows.
 		const opOf = new Map<SubmissionId, string>();
 		for (const op of Object.keys((await tx.doc(Admissions, conversation.id)).ops)) {
 			const record = await tx.submissionByRequest(conversation.id, op);
 			if (record !== undefined) opOf.set(record.id, op);
 		}
-		const steps = tail.map((item, n): EditStep => {
-			const from = opOf.get(item.id);
-			if (from === undefined || item.mode === "write" || typeof item.content !== "string")
-				throw new Error(`Cannot edit ${edit.operationId}: queued item ${item.id} was not admitted as text by this host`);
-			return { from, to: `${edit.editId}#${n}`, text: n === 0 ? edit.text : item.content, mode: item.mode };
+		const queue = inbox.flatMap((item, n): QueuedInput[] => {
+			if (item.mode === "write") return [];
+			const operationId = opOf.get(item.id);
+			if (operationId === undefined && n >= at) throw new Error(`Cannot edit ${request.operationId}: queued item ${item.id} was not admitted by this host`);
+			if (operationId === undefined) return [];
+			const content = JSON.parse(JSON.stringify(item.content)) as JsonRepresentation<UserInput>;
+			return [{ id: item.id, operationId: operationId!, mode: item.mode, text: inputText(content), content, ...(item.entry === undefined ? {} : { entry: JSON.parse(JSON.stringify(item.entry)) as JsonRepresentation<InputEntry> }) }];
 		});
-		const created: EditReceipt = { conversationId: conversation.id, hash, steps, status: "pending" };
-		doc.edits[edit.editId] = created;
+		const { withdraw, readmit } = plan(queue, queue.findIndex((input) => input.id === target!.id));
+		if (withdraw[0]?.id !== target!.id) throw new Error("An edit withdraws the edited input first");
+		const steps = withdraw.map((input): EditStep => ({ from: input.operationId, text: input.text, mode: input.mode, content: input.content, ...(input.entry === undefined ? {} : { entry: input.entry }) }));
+		const created: EditReceipt = {
+			conversationId: conversation.id,
+			hash,
+			steps,
+			readmit: readmit.map((item, n) => {
+				const step = withdraw.indexOf(item.input);
+				if (step < 0) throw new Error("An edit re-admits only inputs it withdrew");
+				return { step, to: `${request.editId}#${n}`, mode: item.mode, ...(item.text === undefined ? {} : { text: item.text }) };
+			}),
+			status: "pending",
+		};
+		doc.edits[request.editId] = created;
 		return JSON.parse(JSON.stringify(created)) as EditReceipt;
 	}, context);
-	if (receipt.status === "too-late") throw new EditTooLate(edit.operationId);
-	if (receipt.status === "pending") await applyEdit(harness, conversation, edit.editId, receipt, hooks);
-	return { moved: Object.fromEntries(receipt.steps.map((step) => [step.from, step.to])) };
+	if (receipt.status === "too-late") throw new EditTooLate(request.operationId);
+	if (receipt.status === "pending") await applyEdit(harness, conversation, request.editId, receipt, hooks);
+	return { moved: Object.fromEntries(receipt.readmit.map((item) => [receipt.steps[item.step]!.from, item.to])) };
 }
 
 async function applyEdit(
@@ -259,24 +314,42 @@ async function applyEdit(
 	const finish = (status: EditReceipt["status"]) =>
 		harness.commit(async (tx) => void ((await tx.doc(Edits)).edits[editId]!.status = status), context);
 	await hooks.at?.("receipt");
-	// Withdraw in queue order, the edited item first: if it was already placed, nothing else is touched.
-	const readmit: EditStep[] = [];
+	// Withdraw in plan order, the edited item first: if it was already placed, nothing else is touched.
+	const withdrawn = new Set<number>();
 	for (const [n, step] of receipt.steps.entries()) {
 		const record = await conversation.commit((tx) => tx.submissionByRequest(conversation.id, step.from), context);
 		await harness.abortSubmission(record!.id, context, conversation.id);
 		const status = await (await harness.submission(record!.id, context))!.status(context);
-		const withdrawn = status.status === "unanswered" && status.reason === "aborted";
-		if (n === 0 && !withdrawn) {
+		const out = status.status === "unanswered" && status.reason === "aborted";
+		if (n === 0 && !out) {
 			await finish("too-late");
 			throw new EditTooLate(step.from);
 		}
 		// ponytail: a later item placed meanwhile stays where it landed (ahead of the edit); Durable has no reorder.
-		if (withdrawn) readmit.push(step);
+		if (out) withdrawn.add(n);
 	}
 	await hooks.at?.("withdrawn");
-	for (const step of readmit) await admit(conversation, { operationId: step.to, text: step.text, mode: step.mode });
+	for (const item of receipt.readmit) {
+		if (!withdrawn.has(item.step)) continue;
+		const step = receipt.steps[item.step]!;
+		const stored = (step.content ?? step.text) as UserInput;
+		const content = item.text === undefined ? stored : replaceText(stored, item.text);
+		await admit(conversation, {
+			operationId: item.to,
+			text: item.text ?? step.text,
+			mode: item.mode,
+			...(typeof content === "string" ? {} : { content }),
+			...(step.entry === undefined ? {} : { entry: step.entry as InputEntry }),
+		});
+	}
 	await hooks.at?.("readmitted");
 	await finish("done");
+}
+
+/** New text for an input: a text-only input becomes the text; otherwise its text blocks are replaced by one. */
+function replaceText(content: UserInput, text: string): UserInput {
+	if (typeof content === "string") return text;
+	return [{ type: "text", text }, ...content.filter((part) => part.type !== "text")];
 }
 
 /** Roll forward every edit a crash interrupted. Withdrawals run before scheduling resumes; re-admission resumes it. */

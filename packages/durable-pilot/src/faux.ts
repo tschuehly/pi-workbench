@@ -61,7 +61,18 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const block = text !== raw ? /^<working-mode seq="(\d+)">/.exec(raw)![1] : undefined;
 		const label = last?.role === "toolResult" ? `result:${last.toolName}` : text.slice(0, 40);
 		const sections = [...system.matchAll(/<(addendum|project_context|skills)>/g)].map((match) => match[1]);
-		logLine(join(dir, "requests.log"), { label, ...(block === undefined ? {} : { workingMode: Number(block) }), ...(sections.length === 0 ? {} : { sections }) });
+		// What the composer adds to a request: images in context, the thinking level, `!` commands the model sees.
+		const images = messages.flatMap((m) => (m.role === "user" && Array.isArray(m.content) ? m.content.filter((part) => part.type === "image") : [])).length;
+		const ran = messages.flatMap((m) => (m.role === "user" ? [/^Ran `([^`]*)`/.exec(textOfMessage(m))?.[1]] : [])).filter((c) => c !== undefined);
+		const reasoning = (streamOptions as { reasoning?: string } | undefined)?.reasoning;
+		logLine(join(dir, "requests.log"), {
+			label,
+			...(block === undefined ? {} : { workingMode: Number(block) }),
+			...(sections.length === 0 ? {} : { sections }),
+			...(images === 0 ? {} : { images }),
+			...(ran.length === 0 ? {} : { ran }),
+			...(reasoning === undefined ? {} : { reasoning }),
+		});
 		if (options.hold !== undefined && options.holdOn !== undefined && text.startsWith(options.holdOn))
 			await options.hold(`request:${options.holdOn}`, streamOptions?.signal);
 		if (last?.role === "toolResult") {

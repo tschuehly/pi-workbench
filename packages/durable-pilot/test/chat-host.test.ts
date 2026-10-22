@@ -143,7 +143,7 @@ test("Stop withdraws the queued follow-up and ends the running bash call", async
 	await host.until((e) => e.type === "tool.update" && String(e.text).includes("running"), "bash output");
 	await host.call("prompt", { operationId: "op-2", text: "the follow-up" });
 	const queued = await host.call<Transcript["status"]>("status");
-	assert.deepEqual(queued.queuedMessages, [{ kind: "followUp", text: "the follow-up" }]);
+	assert.deepEqual(queued.queuedMessages.map(({ kind, text }) => ({ kind, text })), [{ kind: "followUp", text: "the follow-up" }]);
 	await host.call("abort");
 	const status = await host.call<Transcript["status"]>("status");
 	assert.equal(status.isStreaming, false);

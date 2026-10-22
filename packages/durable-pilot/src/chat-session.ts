@@ -1,7 +1,9 @@
 // PI WEB session-host protocol v2 for one Durable Chat: committed Durable state (watchEvents) projected into PI WEB's
 // browser session events, and the operations PI WEB routes to a Durable Chat. Durable IDs, Chord operations and task
 // internals stay here; PI WEB sees only its own event and message shapes.
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import { OutputBuffer, sanitizeOutput } from "@earendil-works/chord/output";
+import { withCancel } from "@earendil-works/chord/context";
+import { type AssistantMessage, clampThinkingLevel, getSupportedThinkingLevels, type ImageContent, type Message, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	type AgentEvent,
 	type EntryRecord,
@@ -13,7 +15,9 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
 import { parseModel } from "./chat.ts";
-import { admit, context, type Host, Reconcile, resolveUncertain } from "./host.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { Admissions, admit, changeQueued, context, Edits, type EditPlan, type Host, type QueuedInput, Reconcile, resolveUncertain } from "./host.ts";
+import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./redact.ts";
 import {
 	ANSWERS_ENTRY,
 	ASK_ANSWERS_CUSTOM_TYPE,
@@ -38,6 +42,35 @@ import {
 /** v2 adds Working Mode, questions and attention, models, resources, effect resolution and client operation IDs. */
 export const PROTOCOL = 2;
 
+/**
+ * Optional operations this host supports, reported in its ready message so PI WEB enables only those controls.
+ * Protocol 2 hosts without the list support none of them.
+ */
+export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments.images", "thinking", "shell"] as const;
+
+/** A `!`/`!!` command's record: PI WEB's `bashExecution` message without role and timestamp. */
+export const BASH_ENTRY = "workbench.bash";
+type BashRecord = { command: string; timestamp: number; output: string; exitCode?: number; cancelled: boolean; truncated: boolean; fullOutputPath?: string; excludeFromContext: boolean };
+
+/** What the model reads for a `!` command (Pi's `bashExecutionToText`). */
+export function bashExecutionToText(record: BashRecord): string {
+	let text = `Ran \`${record.command}\`\n`;
+	text += record.output === "" ? "(no output)" : `\`\`\`\n${record.output}\n\`\`\``;
+	if (record.cancelled) text += "\n\n(command cancelled)";
+	else if (record.exitCode !== undefined && record.exitCode !== 0) text += `\n\nCommand exited with code ${record.exitCode}`;
+	if (record.truncated && record.fullOutputPath !== undefined) text += `\n\n[Output truncated. Full output: ${record.fullOutputPath}]`;
+	return text;
+}
+
+/** Pi's shell output limits (`DEFAULT_MAX_BYTES`, `DEFAULT_MAX_LINES`): the tail is kept, the rest spills to a file. */
+const SHELL_LIMITS = { maxBytes: 50 * 1024, maxLines: 2000 } as const;
+
+/** Inline image attachments of a prompt: the images, and their metadata (redacted before commit). */
+export type Attachment = { reference?: string; name?: string; mimeType: string };
+
+/** PI WEB's queue mutations (legacy `SessionQueueMessageMutation`, plus promotion). */
+export type QueueAction = "remove" | "recall" | "toggle" | "promote" | "promoteAll";
+
 /** Telemetry recorder of the Workbench telemetry extension (`extensions/telemetry/telemetry.mjs`). */
 export type Recorder = { record(type: string, data?: Record<string, unknown>): unknown; close(): void };
 
@@ -53,9 +86,10 @@ export type ChatStatus = {
 	thinkingLevel?: string;
 	isStreaming: boolean;
 	isCompacting: false;
-	isBashRunning: false;
+	isBashRunning: boolean;
 	pendingMessageCount: number;
-	queuedMessages: { kind: "steer" | "followUp"; text: string }[];
+	/** In run order (steers first); `id` lets PI WEB name the exact snapshot a queue mutation was made against. */
+	queuedMessages: QueuedMessage[];
 	messageCount: number;
 	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 	cost: number;
@@ -67,6 +101,8 @@ export type ChatStatus = {
 	/** Interrupted unsafe tool calls that block their tool until the owner resolves them. */
 	unresolvedEffects?: UnresolvedEffect[];
 };
+
+export type QueuedMessage = { id: number; kind: "steer" | "followUp"; text: string; hasAttachments?: true; attachmentCount?: number };
 
 export type UnresolvedEffect = { id: string; toolName: string; arguments: string };
 export type Resolution = "done" | "not-done" | "retry";
@@ -95,6 +131,7 @@ export function browserMessage(entry: EntryRecord, streamId?: string): Record<st
  * with its entry ID.
  */
 export function browserMessages(entry: EntryRecord, streamId?: string): Record<string, unknown>[] {
+	if (entry.kind === BASH_ENTRY) return [bashMessage(entry)];
 	const message = entry.model?.[0] as Message | undefined;
 	if (message === undefined || message.role === "system") return [];
 	const entryId = String(entry.id);
@@ -109,6 +146,25 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
 	const content = message.role === "toolResult" ? { content: browserToolContent(message.content) } : {};
 	return [{ ...message, ...content, entryId, ...(streamId === undefined ? {} : { streamId }) }];
+}
+
+function bashMessage(entry: EntryRecord): Record<string, unknown> {
+	return { role: "bashExecution", ...(entry.data as BashRecord), entryId: String(entry.id) };
+}
+
+/** A queued input as the composer's queue shows it: the user's text (after a Working Mode block), and its images. */
+function queuedMessage(item: { id: number; mode: "steer" | "followUp"; content: unknown; entry?: unknown }): QueuedMessage {
+	const parts = typeof item.content === "string" ? [{ type: "text", text: item.content }] : (item.content as { type: string; text?: string }[]);
+	const mode = (item.entry as { data?: { workingMode?: unknown } } | undefined)?.data?.workingMode !== undefined;
+	const texts = parts.filter((part) => part.type === "text").slice(mode ? 1 : 0);
+	const images = parts.filter((part) => part.type === "image").length;
+	return { id: item.id, kind: item.mode, text: texts.map((part) => part.text ?? "").join("\n"), ...(images === 0 ? {} : { hasAttachments: true as const, attachmentCount: images }) };
+}
+
+/** Queued inputs in the order they run: steers at the next tool boundary, follow-ups after the run. */
+function runOrder<T extends { mode: string } | { kind: string }>(items: T[]): T[] {
+	const steer = (item: T) => ("mode" in item ? item.mode : item.kind) === "steer";
+	return [...items.filter(steer), ...items.filter((item) => !steer(item))];
 }
 
 function textOfContent(content: unknown): string {
@@ -144,6 +200,10 @@ export class ChatSession {
 	#stop: (() => Promise<unknown>) | undefined;
 	/** False until the first input after open: a reopened store stays paused until Thomas sends something. */
 	#resumed = false;
+	/** The running `!` command: one at a time, as in a legacy Chat. */
+	#shell: { cancel: () => void } | undefined;
+	/** `!` records finished during a run: committed when it ends, so they never land between a tool call and its result. */
+	#heldShell: BashRecord[] = [];
 
 	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder } = {}) {
 		this.#host = host;
@@ -228,6 +288,7 @@ export class ChatSession {
 				return;
 			case "run_end":
 				this.#running = false;
+				void this.#flushShell();
 				this.#emit({ type: "agent.end" });
 				this.#record("agent.settled", { sessionFile: null });
 				return;
@@ -244,7 +305,9 @@ export class ChatSession {
 				const model = event.entry.model?.[0] as Message | undefined;
 				const streamed = model?.role === "assistant" && this.#partial !== undefined;
 				if (streamed) this.#partial = undefined;
-				for (const message of browserMessages(event.entry, streamed ? this.#streamId : undefined)) this.#emit({ type: "message.end", message });
+				// A `!` record was shown live by its shell events; PI WEB reads it from the transcript after a reload.
+				if (event.entry.kind !== BASH_ENTRY)
+					for (const message of browserMessages(event.entry, streamed ? this.#streamId : undefined)) this.#emit({ type: "message.end", message });
 				if (model?.role === "assistant" && model.usage !== undefined)
 					// One usage record per committed assistant entry: a replayed request is its own entry, counted separately.
 					this.#record("usage", {
@@ -345,9 +408,7 @@ export class ChatSession {
 			harness.snapshot(UsageDoc, root.id, context),
 			root.agent(context),
 		]);
-		const queuedMessages = (inbox?.items ?? []).flatMap((item) =>
-			item.mode === "write" ? [] : [{ kind: item.mode, text: typeof item.content === "string" ? item.content : textOfContent(item.content) }],
-		);
+		const queuedMessages = runOrder((inbox?.items ?? []).flatMap((item) => (item.mode === "write" ? [] : [queuedMessage(item)])));
 		const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 		let cost = 0;
 		for (const bucket of [...Object.values(usage?.models ?? {}), ...Object.values(usage?.tools ?? {})]) {
@@ -370,7 +431,7 @@ export class ChatSession {
 			...(agent.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }),
 			isStreaming: this.#running,
 			isCompacting: false,
-			isBashRunning: false,
+			isBashRunning: this.#shell !== undefined,
 			pendingMessageCount: queuedMessages.length,
 			queuedMessages,
 			messageCount: this.messages().length,
@@ -394,17 +455,28 @@ export class ChatSession {
 	 * Admit one input under its stable operation ID; resolves once committed. Sending resumes a paused restore, answers
 	 * an attention request, and carries a pending Working Mode block before the user's text (one input, one turn).
 	 */
-	async prompt(params: { operationId: string; text: string; mode?: "steer" | "followUp" }): Promise<{ submissionId: SubmissionId }> {
+	async prompt(params: { operationId: string; text: string; mode?: "steer" | "followUp"; images?: ImageContent[]; attachments?: Attachment[] }): Promise<{ submissionId: SubmissionId }> {
 		await this.#resume();
 		const { root } = this.#host;
 		const existing = await root.commit((tx) => tx.submissionByRequest(root.id, params.operationId), context);
 		// A retry keeps whatever the first attempt admitted; only a new operation picks up a pending block.
 		const block = existing === undefined && this.#chat !== undefined ? await pendingBlock(this.#host.harness, root, false) : undefined;
+		const images = params.images ?? [];
+		// As a legacy Chat sends it: the text (when any), then the images; their metadata is redacted before commit.
+		const content = [
+			...(block === undefined ? [] : [{ type: "text" as const, text: block.text }]),
+			...(params.text === "" && images.length > 0 ? [] : [{ type: "text" as const, text: params.text }]),
+			...images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
+		];
+		const data = {
+			...(block === undefined ? {} : { workingMode: block.details }),
+			...(images.length === 0 ? {} : { attachments: sanitizeDeep((params.attachments ?? []).map((a) => ({ ...a })), sealed(redact)) }),
+		};
 		const submissionId = await admit(root, {
 			operationId: params.operationId,
 			text: params.text,
 			...(params.mode === undefined ? {} : { mode: params.mode }),
-			...(block === undefined ? {} : { content: [{ type: "text", text: block.text }, { type: "text", text: params.text }], entry: { kind: PROMPT_ENTRY, data: { workingMode: block.details } } }),
+			...(block === undefined && images.length === 0 ? {} : { content, entry: { kind: PROMPT_ENTRY, data } }),
 		});
 		if (existing === undefined) this.#record("prompt", { entryId: null, prompt: null, submissionId: String(submissionId) });
 		if (this.#chat !== undefined && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();
@@ -458,7 +530,9 @@ export class ChatSession {
 	async setModel(provider: string, modelId: string): Promise<void> {
 		if (this.#host.models.getModel(provider, modelId) === undefined) throw new Error(`Unknown model ${provider}/${modelId}`);
 		const model = parseModel(`${provider}/${modelId}`);
-		await this.#host.root.configure({ model }, context);
+		// As a legacy Chat: the Chat's thinking level is clamped to what the new model supports.
+		const thinkingLevel = clampThinkingLevel(this.#host.models.getModel(provider, modelId)!, (await this.#host.root.agent(context)).thinkingLevel);
+		await this.#host.root.configure({ model, thinkingLevel }, context);
 		this.#record("model.select", { provider, model: modelId, effort: null, source: "set" });
 		await this.#publishStatus();
 	}
@@ -497,7 +571,162 @@ export class ChatSession {
 
 	/** Stop: withdraw queued inputs and abort the current run (background work excluded). */
 	async abort(): Promise<void> {
+		this.#shell?.cancel();
 		await this.#host.root.abort(context);
+	}
+
+	// ─── Queue ───────────────────────────────────────────────────────────────
+
+	/**
+	 * Change the queue as a legacy Chat's controls do, against the snapshot PI WEB showed (`expected`: queued IDs in run
+	 * order). remove: only that input; recall: it and every later one (PI WEB puts its text in the composer); toggle:
+	 * steer ↔ follow-up, to the end of the other queue; promote: a follow-up becomes a steer; promoteAll: every
+	 * follow-up, in order. Durable edits are durable: a crash rolls one forward, a retried `editId` returns its outcome.
+	 */
+	async mutateQueue(request: { editId: string; action: QueueAction; index: number; expected: number[] }): Promise<void> {
+		const { harness, root } = this.#host;
+		const inbox = await harness.snapshot(InboxDoc, root.id, context);
+		const before = runOrder((inbox?.items ?? []).flatMap((item) => (item.mode === "write" ? [] : [item])));
+		const target = await root.commit(async (tx) => {
+			// A retried edit names its first attempt's input, whatever the queue holds now.
+			const retried = (await tx.doc(Edits)).edits[request.editId];
+			if (retried !== undefined) return retried.steps[0]!.from;
+			for (const op of Object.keys((await tx.doc(Admissions, root.id)).ops)) {
+				const record = await tx.submissionByRequest(root.id, op);
+				if (record !== undefined && record.id === before[request.index]?.id) return op;
+			}
+			return undefined;
+		}, context);
+		const plan = (queue: QueuedInput[]): EditPlan => {
+			const order = runOrder(queue);
+			if (order.length !== request.expected.length || order.some((input, n) => input.id !== request.expected[n]))
+				throw new Error("Queued messages changed; refresh the queue and try again");
+			const input = order[request.index]!;
+			const flip = input.mode === "steer" ? "followUp" : "steer";
+			switch (request.action) {
+				case "remove":
+					return { withdraw: [input], readmit: [] };
+				case "recall":
+					return { withdraw: order.slice(request.index), readmit: [] };
+				case "toggle":
+					return { withdraw: [input], readmit: [{ input, mode: flip }] };
+				case "promote":
+					if (input.mode !== "followUp") throw new Error("Only a follow-up can be sent now");
+					return { withdraw: [input], readmit: [{ input, mode: "steer" }] };
+				case "promoteAll": {
+					const follow = order.filter((item) => item.mode === "followUp");
+					if (follow[0] !== input) throw new Error("Send all now names the first follow-up");
+					return { withdraw: follow, readmit: follow.map((item) => ({ input: item, mode: "steer" as const })) };
+				}
+			}
+		};
+		if (target === undefined) throw new Error("Queued messages changed; refresh the queue and try again");
+		await changeQueued(harness, root, { editId: request.editId, operationId: target, payload: request }, plan);
+		await this.#publishStatus();
+	}
+
+	// ─── Thinking level ──────────────────────────────────────────────────────
+
+	async #model() {
+		const agent = await this.#host.root.agent(context);
+		return agent.model === undefined ? undefined : this.#host.models.getModel(agent.model.provider, agent.model.modelId);
+	}
+
+	/** The levels the Chat's model supports (Pi's `getSupportedThinkingLevels`). */
+	async thinkingLevels(): Promise<ModelThinkingLevel[]> {
+		const model = await this.#model();
+		return model === undefined ? ["off"] : getSupportedThinkingLevels(model);
+	}
+
+	/** Store the Chat's thinking level; the next request uses it, also after a restart. */
+	async setThinkingLevel(level: string): Promise<void> {
+		const match = (await this.thinkingLevels()).find((candidate) => candidate === level);
+		if (match === undefined) throw new Error(`Invalid thinking level: ${level}`);
+		await this.#host.root.configure({ thinkingLevel: match }, context);
+		this.#record("model.select", { provider: null, model: null, effort: match, source: "set" });
+		await this.#publishStatus();
+	}
+
+	/** The next supported level, as a legacy Chat cycles. */
+	async cycleThinkingLevel(): Promise<ModelThinkingLevel> {
+		const model = await this.#model();
+		if (model?.reasoning !== true) throw new Error("Current model does not support thinking");
+		const levels = getSupportedThinkingLevels(model);
+		const next = levels[(levels.indexOf((await this.#host.root.agent(context)).thinkingLevel) + 1) % levels.length]!;
+		await this.setThinkingLevel(next);
+		return next;
+	}
+
+	// ─── `!` shell commands ──────────────────────────────────────────────────
+
+	/**
+	 * `!cmd` runs in the Chat's workspace and its output reaches the model with the next request; `!!cmd` is recorded but
+	 * excluded from the model's context (Pi's `executeBash`). Output streams to PI WEB as shell events and is redacted
+	 * before it is shown or committed, like a tool's. Resolves once the command started; its record commits when it
+	 * ends, or after the current run.
+	 */
+	async shell(text: string): Promise<void> {
+		const excludeFromContext = text.startsWith("!!");
+		const command = (excludeFromContext ? text.slice(2) : text.slice(1)).trim();
+		if (command === "") throw new Error("Usage: !<shell command>");
+		if (this.#shell !== undefined) throw new Error("A bash command is already running");
+		const { context: run, cancel } = withCancel(context);
+		let cancelled = false;
+		this.#shell = { cancel: () => ((cancelled = true), cancel()) };
+		const sanitize = sealed(redact);
+		const cwd = (await this.#host.root.agent(context)).cwd;
+		const env = sanitizingEnv(new NodeExecutionEnv({ cwd: cwd ?? process.cwd() }), sanitize);
+		this.#emit({ type: "shell.start", command, excludeFromContext });
+		await this.#publishStatus();
+		void (async () => {
+			const output = new OutputBuffer({ ...SHELL_LIMITS, retain: "tail" });
+			let pending = "";
+			const forward = (chunk: string) => {
+				if (chunk === "") return;
+				output.push(chunk);
+				this.#emit({ type: "shell.chunk", chunk });
+			};
+			let exitCode: number | undefined;
+			let fullOutputPath: string | undefined;
+			try {
+				const result = await env.exec(command, {
+					spill: { afterBytes: SHELL_LIMITS.maxBytes, afterLines: SHELL_LIMITS.maxLines },
+					onOutput: (chunk) => {
+						pending += sanitizeOutput(chunk);
+						const ready = completePrefix(pending);
+						pending = pending.slice(ready.length);
+						forward(sanitize(ready));
+					},
+				}, run);
+				if (result.ok) [exitCode, fullOutputPath] = [result.value.exitCode, result.value.spillPath];
+				else fullOutputPath = result.error.spillPath;
+				forward(sanitize(pending));
+				output.end();
+				const kept = output.snapshot();
+				const record: BashRecord = {
+					command, timestamp: Date.now(), output: kept.text.replace(/\n$/, ""), cancelled,
+					truncated: kept.droppedBytes > 0 || kept.droppedLines > 0, excludeFromContext,
+					...(exitCode === undefined || cancelled ? {} : { exitCode }),
+					...(fullOutputPath === undefined ? {} : { fullOutputPath }),
+				};
+				this.#heldShell.push(record);
+				if (!this.#running) await this.#flushShell();
+				this.#emit({ type: "shell.end", output: record.output, ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }), cancelled, truncated: record.truncated, ...(fullOutputPath === undefined ? {} : { fullOutputPath }) });
+			} catch (error) {
+				this.#emit({ type: "shell.end", output: sanitize(error instanceof Error ? error.message : String(error)), isError: true });
+			} finally {
+				this.#shell = undefined;
+				await this.#publishStatus();
+			}
+		})();
+	}
+
+	/** Commit held `!` records as display entries; an included one carries the user message the model reads. */
+	async #flushShell(): Promise<void> {
+		for (const record of this.#heldShell.splice(0)) {
+			const model = record.excludeFromContext ? {} : { model: [{ role: "user" as const, content: [{ type: "text" as const, text: bashExecutionToText(record) }], timestamp: record.timestamp }] };
+			await this.#host.root.submit({ type: "write", entry: { kind: BASH_ENTRY, data: record, ...model } }, context);
+		}
 	}
 
 	async clearQueue(): Promise<void> {
