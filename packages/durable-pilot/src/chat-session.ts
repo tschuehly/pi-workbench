@@ -1,6 +1,8 @@
 // PI WEB session-host protocol v2 for one Durable Chat: committed Durable state (watchEvents) projected into PI WEB's
 // browser session events, and the operations PI WEB routes to a Durable Chat. Durable IDs, Chord operations and task
 // internals stay here; PI WEB sees only its own event and message shapes.
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import {
 	type AgentEvent,
@@ -19,6 +21,7 @@ import { DEFAULT_COMPACTION, parseModel } from "./chat.ts";
 import { CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData } from "./checkpoint.ts";
 
 type WorkingModeDetailsLike = Record<string, unknown>;
+import { connectMcp, mcpWarnings } from "./mcp.ts";
 import { redact } from "./redact.ts";
 import { syncWorkersGroup } from "./tool-groups.ts";
 import { admit, context, type Host, Reconcile, resolveUncertain } from "./host.ts";
@@ -45,6 +48,13 @@ import {
 
 /** v2 adds Working Mode, questions and attention, models, resources, effect resolution and client operation IDs. */
 export const PROTOCOL = 2;
+
+/**
+ * Optional operations this host supports, reported in `ready` so PI WEB can enable the matching controls; a host
+ * without one keeps the control blocked. compact: `/compact` (method `compact`); compact-and-continue: the model tool;
+ * tool-groups: `tools_enable`; mcp: configured MCP servers (`configure` param `mcp`, direct exposure, no sign-in).
+ */
+export const CAPABILITIES = ["compact", "compact-and-continue", "tool-groups", "mcp"] as const;
 
 /** Telemetry recorder of the Workbench telemetry extension (`extensions/telemetry/telemetry.mjs`). */
 export type Recorder = { record(type: string, data?: Record<string, unknown>): unknown; close(): void };
@@ -198,6 +208,7 @@ export class ChatSession {
 
 	async close(): Promise<void> {
 		await this.#stop?.();
+		await this.#chat?.workbench.mcp?.close();
 		await this.#host.close();
 		this.#record("session.shutdown", { sessionFile: null, reason: "close" });
 		this.#telemetry?.close();
@@ -404,6 +415,11 @@ export class ChatSession {
 		}
 		const paused = harness.wake().active && !this.#resumed;
 		const live = await harness.snapshot(LiveDoc, root.id, context);
+		const mcp = this.#chat?.workbench.mcp;
+		const warnings = [
+			...(paused ? [{ severity: "info" as const, message: "Restored paused: unfinished work waits until you send a message." }] : []),
+			...(mcp === undefined ? [] : mcpWarnings(mcp.states, mcp.errors).map((message) => ({ severity: "warning" as const, message }))),
+		];
 		const [mode, questions, reconcile] = await Promise.all([workingModeSnapshot(harness, root), questionsState(harness, root), harness.snapshot(Reconcile, context)]);
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
@@ -421,7 +437,7 @@ export class ChatSession {
 			messageCount: this.messages().length,
 			tokens,
 			cost,
-			...(paused ? { warnings: [{ severity: "info" as const, message: "Restored paused: unfinished work waits until you send a message." }] } : {}),
+			...(warnings.length === 0 ? {} : { warnings }),
 			extensionStatuses: { [WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode) },
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
@@ -556,8 +572,17 @@ export class ChatSession {
 	}
 
 	/** Resources PI WEB resolved with Pi's loader; their sources are recorded when they change. Compaction: Pi's settings. */
-	async configure(resources: Resources, settings: { compaction?: CompactionSettings } = {}): Promise<void> {
+	async configure(resources: Resources, settings: { compaction?: CompactionSettings; mcp?: { projectTrusted: boolean } } = {}): Promise<void> {
 		if (this.#chat === undefined) return;
+		// MCP servers connect once per host process, with PI WEB's trust decision for the project's mcp.json.
+		if (settings.mcp !== undefined && this.#chat.workbench.mcp === undefined) {
+			const { harness, registry, root } = this.#host;
+			this.#chat.workbench.mcp = await connectMcp({
+				harness, registry, projectTrusted: settings.mcp.projectTrusted,
+				agentDir: process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+				cwd: (await root.agent(context)).cwd ?? process.cwd(),
+			});
+		}
 		this.#chat.workbench.resources = resources;
 		if (settings.compaction !== undefined) this.#chat.workbench.compaction = { ...DEFAULT_COMPACTION, ...settings.compaction };
 		const sources = [...(resources.sources ?? [])].map((s) => ({ path: s.path, sha256: s.sha256 }));

@@ -3,7 +3,7 @@
 //   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model anthropic/<id>|faux
 //                              [--session-id <PI WEB Chat ID>] [--scripted]
 // Messages in:  { id, method, params? }
-// Messages out: { ready: { protocol, durable, ownerEpoch } } once open, { id, result } | { id, error }, { event }.
+// Messages out: { ready: { protocol, durable, ownerEpoch, capabilities } } once open, { id, result } | { id, error }, { event }.
 // The host exits after `close`, when PI WEB goes away (IPC disconnect), or on SIGTERM/SIGINT, closing the store
 // gracefully first.
 // ponytail: the IPC channel ties the host's life to its session daemon; Phase C moves hosts to their own service owner.
@@ -12,7 +12,7 @@ import type { CompactionSettings } from "@earendil-works/pi-durable";
 // The Workbench telemetry extension's recorder: same JSONL events, same PI_TELEMETRY_DIR.
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
 import { openChatHost } from "./chat.ts";
-import { ChatSession, PROTOCOL, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
+import { CAPABILITIES, ChatSession, PROTOCOL, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
 
 type Request = { id: number; method: string; params?: Record<string, unknown> };
@@ -91,6 +91,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	// Pi's compaction settings ({ enabled, reserveTokens, keepRecentTokens }, or Durable's full shape in tests).
 	configure: (params) => session.configure((params.resources ?? {}) as Resources, {
 		...(isObject(params.compaction) ? { compaction: params.compaction as CompactionSettings } : {}),
+		...(isObject(params.mcp) ? { mcp: { projectTrusted: params.mcp.projectTrusted === true } } : {}),
 	}),
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
 	abort: () => session.abort(),
@@ -115,4 +116,4 @@ process.on("disconnect", () => void close());
 // the intent of a running tool stay, and restore is paused on the next open.
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void close().finally(() => process.exit(0)));
 
-send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch } });
+send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch, capabilities: CAPABILITIES } });

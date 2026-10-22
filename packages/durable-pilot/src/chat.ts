@@ -9,6 +9,7 @@ import { createBashTool, createEditTool, createReadTool, createWriteTool } from 
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { checkpointExtension } from "./checkpoint.ts";
 import { router } from "./faux.ts";
+import type { McpConnection } from "./mcp.ts";
 import { toolGroupsExtension } from "./tool-groups.ts";
 import { type Host, MODEL, openHost } from "./host.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
@@ -53,7 +54,7 @@ export type ChatHostOptions = {
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
 export type ChatHost = Host & {
-	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings; extensions: readonly Extension[] };
+	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings; extensions: readonly Extension[]; mcp?: McpConnection };
 };
 
 /**

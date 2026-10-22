@@ -1,0 +1,9 @@
+[redacting wrapper removed] ✖ MCP: configured servers connect with Pi's config and trust rules; tools are schema-checked, carry provenance, redacted results; unsupported servers are blocked visibly (856.206542ms)
+[redacting wrapper removed] ✖ failing tests:
+[redacting wrapper removed] ✖ MCP: configured servers connect with Pi's config and trust rules; tools are schema-checked, carry provenance, redacted results; unsupported servers are blocked visibly (856.206542ms)
+[redacting wrapper removed]   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+[redacting wrapper removed]     actual: 'the token is mcpFixtureSecret-7b3e1d9c5a2f4e60',
+[schema check removed] ✖ MCP: configured servers connect with Pi's config and trust rules; tools are schema-checked, carry provenance, redacted results; unsupported servers are blocked visibly (655.872375ms)
+[schema check removed] ✖ failing tests:
+[schema check removed] ✖ MCP: configured servers connect with Pi's config and trust rules; tools are schema-checked, carry provenance, redacted results; unsupported servers are blocked visibly (655.872375ms)
+[schema check removed]   AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:

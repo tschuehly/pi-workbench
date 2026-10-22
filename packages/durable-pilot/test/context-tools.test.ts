@@ -2,19 +2,22 @@
 // compaction (manual, automatic, kill during compaction, Working Mode re-attachment), `compact_and_continue`, tool
 // groups and MCP. Barriers are events or files the host wrote after the relevant commit.
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fauxAssistantMessage, fauxText, Type } from "@earendil-works/pi-ai";
 import { CompactionEntry, defineExtension, defineTool, type SubmissionId } from "@earendil-works/pi-durable";
 import { createReadTool } from "@earendil-works/pi-durable/tools";
-import { router } from "../src/faux.ts";
+import { readLog, router } from "../src/faux.ts";
+import { loadMcpConfig } from "../src/mcp.ts";
 import { ToolGroupsDoc, toolGroupsExtension } from "../src/tool-groups.ts";
 import { ChatSession } from "../src/chat-session.ts";
 import { admit, context, type Host, MODEL, openHost } from "../src/host.ts";
 import { entriesOf } from "../src/pilot.ts";
 import { ChatHost, family, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
-import { cleanup, scratch } from "./runner.ts";
+import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 process.env.PI_TELEMETRY_DIR = scratch("context-telemetry");
 // Hosts read Pi's agent directory (auth.json, mcp.json): an empty one here, never the owner's.
@@ -387,4 +390,122 @@ test("Orchestration Workers shows the workers group, and leaving it hides the gr
 	await settle(h, "op-2", "solo mode");
 	assert.deepEqual(offeredTo(dir, "solo mode").filter((t) => t.startsWith("worker_")), []);
 	await session.close();
+});
+
+// ─── MCP ─────────────────────────────────────────────────────────────────────
+
+const FIXTURE = join(PACKAGE, "test", "fixtures", "mcp-server.mjs");
+const MCP_SECRET = "mcpFixtureSecret-7b3e1d9c5a2f4e60";
+
+/** An agent directory whose mcp.json names the fixture (direct), the fixture again (Pi's default codemode exposure), an OAuth server, and a project file. */
+async function mcpFamily(label: string): Promise<{ store: string; cwd: string; agentDir: string; effects: string; calls: string; close: () => void }> {
+	const { store, cwd } = family(label);
+	const agentDir = join(store, "..", "agent");
+	const effects = join(store, "..", "effects.log");
+	const calls = join(store, "..", "calls.log");
+	mkdirSync(agentDir);
+	mkdirSync(join(cwd, ".pi"));
+	const oauth = createServer((_request, response) => response.writeHead(401, { "WWW-Authenticate": 'Bearer resource_metadata="http://127.0.0.1/.well-known"' }).end());
+	await new Promise<void>((resolve) => oauth.listen(0, "127.0.0.1", resolve));
+	oauth.unref(); // a failed assertion must not keep the test process alive
+	const fixture = { command: process.execPath, args: [FIXTURE], env: { MCP_FIXTURE_EFFECTS: effects, MCP_FIXTURE_LOG: calls, MCP_FIXTURE_TOKEN: "${PILOT_MCP_TOKEN}" } };
+	writeFileSync(join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {
+		fixture: { ...fixture, exposure: "direct" },
+		docs: fixture,
+		remote: { url: `http://127.0.0.1:${(oauth.address() as AddressInfo).port}/mcp`, exposure: "direct" },
+	} }));
+	writeFileSync(join(cwd, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { project: { ...fixture, exposure: "direct" } } }));
+	return { store, cwd, agentDir, effects, calls, close: () => oauth.close() };
+}
+const mcpEnv = (agentDir: string) => ({ PI_CODING_AGENT_DIR: agentDir, PILOT_MCP_TOKEN: MCP_SECRET });
+
+test("MCP: configured servers connect with Pi's config and trust rules; tools are schema-checked, carry provenance, redacted results; unsupported servers are blocked visibly", async () => {
+	const m = await mcpFamily("mcp");
+	const host = new ChatHost(m.store, m.cwd, { env: mcpEnv(m.agentDir) });
+	await host.ready;
+	await host.call("configure", { resources: {}, mcp: { projectTrusted: false } });
+	const warnings = ((await host.call<Status>("status")).warnings ?? []).map((w) => w.message);
+	assert.ok(warnings.some((w) => /MCP tool docs\/lookup is unavailable: exposure "codemode" needs codemode/.test(w)), warnings.join("\n"));
+	assert.ok(warnings.some((w) => /MCP tool fixture\/broken is unavailable: its input schema has type "string"/.test(w)));
+	assert.ok(warnings.some((w) => /MCP server "remote" is unavailable: it requires sign-in \(OAuth\)/.test(w)));
+	assert.ok(!warnings.some((w) => w.includes("project")), "an untrusted project's mcp.json is not read");
+
+	await host.call("prompt", { operationId: "op-1", text: 'call:mcp__fixture__lookup {"query":"tests"}' });
+	const found = await host.until((e) => e.type === "tool.end" && e.toolName === "mcp__fixture__lookup", "the MCP result");
+	assert.equal(found.text, "found tests");
+	assert.deepEqual(found.details, { mcp: { server: "fixture", tool: "lookup", source: join(m.agentDir, "mcp.json") } });
+	const offered = logged(m.store).find((l) => l.label.startsWith("call:mcp__fixture__lookup"))?.tools ?? [];
+	assert.deepEqual(offered.filter((t) => t.startsWith("mcp__")), ["mcp__fixture__deploy", "mcp__fixture__lookup"]);
+
+	await host.idle(1);
+	await host.call("prompt", { operationId: "op-2", text: "call:mcp__fixture__lookup {}" });
+	const invalid = await host.until((e) => e.type === "tool.end" && e.isError === true, "the invalid call");
+	assert.match(String(invalid.text), /query/);
+	await host.idle(2);
+	await host.call("prompt", { operationId: "op-3", text: 'call:mcp__fixture__lookup {"query":"secret"}' });
+	const secret = await host.until((e) => e.type === "tool.end" && String(e.text).startsWith("the token is"), "the secret-bearing result");
+	assert.equal(secret.text, "the token is [REDACTED:env:PILOT_MCP_TOKEN]");
+	await host.idle(3);
+	await host.close();
+	m.close();
+	assert.deepEqual(readLog<{ args: object }>(m.calls).map((line) => line.args), [{ query: "tests" }, { query: "secret" }], "the invalid call never reached the server");
+	assert.deepEqual(scan([m.store], [MCP_SECRET, MCP_SECRET.slice(0, 16)]), [], "neither the result nor the server config was committed in plaintext");
+	assert.equal(integrity(m.store), "ok");
+});
+
+test("MCP config: a trusted project's mcp.json adds servers and may only override enabled/exposure of global ones", () => {
+	const dir = scratch("mcp-config");
+	const agentDir = join(dir, "agent");
+	const cwd = join(dir, "repo");
+	mkdirSync(agentDir);
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	writeFileSync(join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { shared: { command: "a", exposure: "direct" } } }));
+	writeFileSync(join(cwd, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { shared: { enabled: false }, local: { command: "b" }, bad: { enabled: true }, sneaky: { url: "https://x.example/mcp", auth: { provider: "github" } } } }));
+	assert.deepEqual(loadMcpConfig({ agentDir, cwd, projectTrusted: false }).servers.map((s) => s.name), ["shared"]);
+	const trusted = loadMcpConfig({ agentDir, cwd, projectTrusted: true });
+	assert.deepEqual(trusted.servers.map((s) => [s.name, s.config.enabled ?? true]), [["shared", false], ["local", true]]);
+	assert.equal(trusted.errors.length, 2, trusted.errors.join("\n"));
+});
+
+test("crash row MCP: an interrupted unsafe MCP call is held for the owner, a fresh call is blocked, and the owner's recorded decision unblocks it", async () => {
+	const m = await mcpFamily("mcp-kill");
+	let host = new ChatHost(m.store, m.cwd, { env: mcpEnv(m.agentDir) });
+	await host.ready;
+	await host.call("configure", { resources: {}, mcp: { projectTrusted: false } });
+	await host.call("prompt", { operationId: "op-1", text: 'call:mcp__fixture__deploy {"target":"slow"}' });
+	await waitFor(() => existsSync(m.effects), "the external effect");
+	await host.kill();
+
+	host = new ChatHost(m.store, m.cwd, { env: mcpEnv(m.agentDir) });
+	await host.ready;
+	await host.call("configure", { resources: {}, mcp: { projectTrusted: false } });
+	const [effect] = (await host.call<Status>("status")).unresolvedEffects ?? [];
+	assert.equal(effect?.toolName, "mcp__fixture__deploy");
+	await host.call("prompt", { operationId: "op-2", text: 'call:mcp__fixture__deploy {"target":"slow"}' });
+	const blocked = await host.until((e) => e.type === "tool.end" && String(e.text).includes("Needs reconciliation"), "the blocked call");
+	assert.equal(blocked.isError, true);
+	await host.idle(1);
+	await host.close();
+
+	// The decision outlives the host that asked for it: a later host resolves it.
+	host = new ChatHost(m.store, m.cwd, { env: mcpEnv(m.agentDir) });
+	await host.ready;
+	await host.call("configure", { resources: {}, mcp: { projectTrusted: false } });
+	assert.equal((await host.call<Status>("status")).unresolvedEffects?.[0]?.id, effect!.id, "still waiting for the owner after a restart");
+	await host.call("resolveEffect", { taskId: effect!.id, resolution: "done" });
+	await host.call("prompt", { operationId: "op-3", text: 'call:mcp__fixture__deploy {"target":"staging"}' });
+	await host.until((e) => e.type === "tool.end" && e.text === "deployed staging", "the unblocked call");
+	await host.idle(2);
+	await host.close();
+	m.close();
+	assert.deepEqual(readFileSync(m.effects, "utf8").trim().split("\n"), ["deploy slow", "deploy staging"], "the interrupted effect never ran twice");
+	assert.equal(integrity(m.store), "ok");
+});
+
+test("the host reports the capabilities this group adds, so PI WEB can enable their controls", async () => {
+	const { store, cwd } = family("capabilities");
+	const host = new ChatHost(store, cwd);
+	const ready = (await host.ready) as { capabilities?: string[] };
+	assert.deepEqual(ready.capabilities, ["compact", "compact-and-continue", "tool-groups", "mcp"]);
+	await host.close();
 });
