@@ -140,7 +140,7 @@ test("P086 quota-check: a host command; check only by default; Keychain/sign-in 
 	const { store, cwd } = family("quota");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
-	assert.deepEqual((await host.call<{ name: string }[]>("commands")).map((c) => c.name), ["quota-check"]);
+	assert.deepEqual((await host.call<{ name: string }[]>("commands")).map((c) => c.name), ["quota-check", "fast"]);
 	assert.deepEqual(await host.call("command", { name: "quota-check", args: "bogus" }), { type: "done", message: "Usage: /quota-check [repair]" });
 	assert.deepEqual(await host.call("command", { name: "autonomous-grill", args: "" }), { type: "unsupported", message: "/autonomous-grill is not available in Durable Chats yet" });
 	await host.close();

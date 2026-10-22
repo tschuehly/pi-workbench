@@ -158,7 +158,7 @@ export function wrapProvider(
 	options: {
 		readonly sanitize?: Sanitize;
 		/** Outbound payload rewrite (pi-ai `onPayload`), e.g. the Claude subscription rules. */
-		readonly onPayload?: (payload: unknown) => unknown;
+		readonly onPayload?: (payload: unknown, model: { provider: string; id: string }) => unknown;
 		/** Observe response status and headers (pi-ai `onResponse`). */
 		readonly onResponse?: (response: { status: number; headers: Record<string, string> }) => void;
 		/** Canonical tool name for a name the provider returned (alias → flat), applied before Durable sees the call. */
@@ -177,7 +177,7 @@ export function wrapProvider(
 			signal,
 			...(transform === undefined
 				? {}
-				: { onPayload: async (payload: unknown, model: never) => transform((await previous?.(payload, model)) ?? payload) }),
+				: { onPayload: async (payload: unknown, model: never) => transform((await previous?.(payload, model)) ?? payload, model) }),
 			...(observe === undefined
 				? {}
 				: { onResponse: async (response: never, model: never) => (observe(response), o?.onResponse?.(response, model)) }),

@@ -10,6 +10,7 @@ import { CompactionEntry, type Conversation, defineExtension, defineTool, type S
 import { createReadTool } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition } from "@earendil-works/pi-coding-agent";
+import { fastMode } from "../src/providers.ts";
 import { chatTools } from "../src/chat.ts";
 import { searchTools } from "../src/search-tools.ts";
 import { readLog, router } from "../src/faux.ts";
@@ -381,7 +382,7 @@ test("tool groups never widen an allowlist: nested calls need the group enabled,
 test("Orchestration Workers shows the workers group, and leaving it hides the group again unless it was enabled", async () => {
 	const dir = scratch("groups-mode");
 	const h = await groupsHost(dir);
-	const chat = Object.assign(h, { workbench: { resources: {}, onSignal: () => {}, compaction: {}, extensions: groupExtensions }, listenPackages: () => {} });
+	const chat = Object.assign(h, { workbench: { resources: {}, onSignal: () => {}, compaction: {}, extensions: groupExtensions }, listenPackages: () => {}, fast: fastMode(dir) });
 	const session = new ChatSession(chat, () => {});
 	await session.start();
 	await session.mode("orchestration workers");
@@ -442,7 +443,9 @@ test("grep/find/ls: not in the lead's default tools; a child's allowlist gets th
 	const results = await resultText(h, child);
 	const legacy = { grep: createGrepToolDefinition(cwd), find: createFindToolDefinition(cwd), ls: createLsToolDefinition(cwd) } as unknown as Record<string, { execute: (...a: unknown[]) => Promise<{ content: unknown }> }>;
 	const expected = await Promise.all(Object.entries(calls).map(async ([name, args]) => textOf((await legacy[name]!.execute(`x-${name}`, args, undefined, undefined, { cwd })).content)));
-	assert.deepEqual(results, expected, "the same text a legacy Chat's tool returns");
+	// Pi's grep (ripgrep) lists matching files in no fixed order, run to run: compare lines as sets.
+	const lines = (texts: string[]) => texts.map((text) => text.split("\n").sort().join("\n"));
+	assert.deepEqual(lines(results), lines(expected), "the same text a legacy Chat's tool returns");
 	assert.match(results[0]!, /src\/app\.ts:2: \/\/ TODO: tidy/);
 	await h.close();
 });

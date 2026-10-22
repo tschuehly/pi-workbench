@@ -17,7 +17,7 @@ import {
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
-import { DEFAULT_COMPACTION, parseModel } from "./chat.ts";
+import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
 import { CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData } from "./checkpoint.ts";
 import { syncWorkersGroup } from "./tool-groups.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -25,6 +25,7 @@ import { Admissions, admit, changeQueued, context, Edits, type EditPlan, type Ho
 import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./redact.ts";
 import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
+import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 
 type WorkingModeDetailsLike = Record<string, unknown>;
 import {
@@ -516,7 +517,10 @@ export class ChatSession {
 			tokens,
 			cost,
 			...(warnings.length === 0 ? {} : { warnings }),
-			extensionStatuses: { [WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode) },
+			extensionStatuses: {
+				[WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode),
+				...(this.#chat?.fast.active(agent.model && { provider: agent.model.provider, id: agent.model.modelId }) ? { [FAST_STATUS]: "fast" } : {}),
+			},
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
 			...(unresolvedEffects.length === 0 ? {} : { unresolvedEffects }),
@@ -527,9 +531,9 @@ export class ChatSession {
 		};
 	}
 
-	/** The Chat's slash commands: the host's own (`/quota-check`), then the bound Pi packages'. */
+	/** The Chat's slash commands: the host's own (`/quota-check`, `/fast`), then the bound Pi packages'. */
 	commands(): { name: string; description?: string }[] {
-		return [...COMMANDS, ...(this.#chat?.packages?.commands() ?? [])];
+		return [...COMMANDS, ...(this.#chat === undefined ? [] : [FAST_COMMAND]), ...(this.#chat?.packages?.commands() ?? [])];
 	}
 
 	/**
@@ -538,6 +542,7 @@ export class ChatSession {
 	 */
 	async command(name: string, args: string): Promise<CommandResult | { type: "unsupported"; message: string }> {
 		if (COMMANDS.some((command) => command.name === name)) return runCommand(name, args);
+		if (name === FAST_COMMAND.name) return this.#fast(args);
 		const packages = this.#chat?.packages;
 		if (packages === undefined) return { type: "unsupported", message: `/${name} is not available in Durable Chats yet` };
 		const result = await packages.command(args === "" ? `/${name}` : `/${name} ${args}`);
@@ -646,20 +651,31 @@ export class ChatSession {
 		return cleared;
 	}
 
-	/** Models this Chat can switch to: the Claude models, and the scripted one when offered. */
-	models(): { provider: string; id: string; name: string; contextWindow?: number; reasoning?: unknown }[] {
-		return this.#host.models.getModels().map((model) => ({ provider: model.provider, id: model.id, name: model.name, contextWindow: model.contextWindow, reasoning: model.reasoning }));
+	/** Models this Chat can switch to: those of every provider with a stored login (Pi's `getAvailable`), and faux when offered. */
+	async models(): Promise<{ provider: string; id: string; name: string; contextWindow?: number; reasoning?: unknown }[]> {
+		return (await this.#host.models.getAvailable()).map((model) => ({ provider: model.provider, id: model.id, name: model.name, contextWindow: model.contextWindow, reasoning: model.reasoning }));
 	}
 
-	/** Store the Chat's model; the next model request uses it. */
+	/**
+	 * Store the Chat's model; the next model request uses it. As Pi's `setModel`: a provider without a stored login is
+	 * refused, and the Chat's thinking level is clamped to what the new model supports.
+	 */
 	async setModel(provider: string, modelId: string): Promise<void> {
-		if (this.#host.models.getModel(provider, modelId) === undefined) throw new Error(`Unknown model ${provider}/${modelId}`);
+		const found = this.#host.models.getModel(provider, modelId);
+		if (found === undefined) throw new Error(`Unknown model ${provider}/${modelId}`);
+		if ((await this.#host.models.checkAuth(provider)) === undefined) throw new Error(`No stored login for ${provider}: log in with Pi (/login) first`);
 		const model = parseModel(`${provider}/${modelId}`);
-		// As a legacy Chat: the Chat's thinking level is clamped to what the new model supports.
-		const thinkingLevel = clampThinkingLevel(this.#host.models.getModel(provider, modelId)!, (await this.#host.root.agent(context)).thinkingLevel);
-		await this.#host.root.configure({ model, thinkingLevel }, context);
-		this.#record("model.select", { provider, model: modelId, effort: null, source: "set" });
+		const thinkingLevel = await applyModel(this.#host, model);
+		this.#record("model.select", { provider, model: modelId, effort: thinkingLevel ?? null, source: "set" });
 		await this.#publishStatus();
+	}
+
+	/** `/fast [on|off|toggle]` (pi-openai-fast-mode), one of the Chat's commands. */
+	async #fast(args: string): Promise<{ type: "done"; message: string } | { type: "unsupported"; message: string }> {
+		if (this.#chat === undefined) return { type: "unsupported", message: "/fast is not available on this host" };
+		const result = this.#chat.fast.command(args);
+		await this.#publishStatus();
+		return result;
 	}
 
 	/**

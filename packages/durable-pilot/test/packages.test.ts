@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { claudeAliases, claudePayload } from "../src/claude.ts";
 import { readLog } from "../src/faux.ts";
-import { ChatHost as ProcHost, live, textOf, type UiEvent } from "./chat-proc.ts";
+import { ChatHost as ProcHost, live, textOf, type UiEvent, writeFakeLogins } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 type Message = { role: string; customType?: string; content?: unknown; details?: unknown; isError?: boolean; toolName?: string };
@@ -55,6 +55,7 @@ function family(label: string) {
 	const cwd = join(dir, "workspace");
 	const bin = join(dir, "bin");
 	for (const path of [agentDir, cwd, bin]) mkdirSync(path, { recursive: true });
+	writeFakeLogins(agentDir, label);
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["pi-web-access", "ping-a-human-pi", "pi-process-monitor"].map((name) => join(INSTALLED, name)) }));
 	writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({ provider: "searxng", searxngBaseUrl: `http://127.0.0.1:${port}`, ssrf: { allowRanges: ["127.0.0.0/8"] } }));
 	const pingLog = join(dir, "ping-calls.log");
@@ -83,8 +84,8 @@ type Family = ReturnType<typeof family>;
 
 /** The shared host driver, with this family's HOME and agent directory, its Chat ID and (by default) `--packages`. */
 class ChatHost extends ProcHost {
-	constructor(f: Family, packages = true) {
-		super(f.store, f.cwd, { env: f.env, args: ["--session-id", f.chatId, ...(packages ? ["--packages"] : [])] });
+	constructor(f: Family, packages = true, args: string[] = []) {
+		super(f.store, f.cwd, { env: f.env, args: ["--session-id", f.chatId, ...(packages ? ["--packages"] : []), ...args] });
 	}
 
 	/** Send `call:<tool> <args>` to the scripted model and wait for that tool's result event. */
@@ -253,11 +254,28 @@ test("P133 P135: a tail watcher pings the Chat, survives a kill and resumes; pin
 	assert.ok(!storeBytes(f.store).includes(SECRET), "neither the ping nor the watcher state holds the token");
 });
 
+test("P113 with a ChatGPT model: the packages see a model that adds tools mid-conversation, so web tools start deferred", async () => {
+	const f = family("codex");
+	// A new Chat on openai-codex (fake stored login): pi-web-access decides deferral at session_start from the model it
+	// sees (the host's view relabels it anthropic-messages; Codex models also qualify on their own compat flags). The
+	// scripted model then answers, so no request reaches ChatGPT.
+	const host = new ChatHost(f, true, ["--model", "openai-codex/gpt-6-astra", "--scripted"]);
+	await host.ready;
+	assert.deepEqual((await host.call<{ model?: unknown }>("status")).model, { provider: "openai-codex", id: "gpt-6-astra" });
+	await host.call("setModel", { provider: "faux", modelId: "faux-1" });
+	const early = await host.tool("get_search_content", { responseId: "none" }, "op-early");
+	assert.equal(early.isError, true, "deferred for a ChatGPT Chat too: not offered before web_enable");
+	const enabled = await host.tool("web_enable", {}, "op-enable");
+	assert.equal(enabled.isError, false, String(enabled.text));
+	assert.match(String(enabled.text), /Enabled: .*get_search_content/);
+	await host.close();
+});
+
 test("without --packages no package code runs: tools and commands stay unavailable", async () => {
 	const f = family("off");
 	const host = new ChatHost(f, false);
 	await host.ready;
-	assert.deepEqual((await host.call<{ name: string }[]>("commands")).map((command) => command.name), ["quota-check"], "only the host's own command");
+	assert.deepEqual((await host.call<{ name: string }[]>("commands")).map((command) => command.name), ["quota-check", "fast"], "only the host's own commands");
 	assert.equal((await host.call<{ type: string }>("command", { name: "ping" })).type, "unsupported");
 	const end = await host.tool("notify_human", { message: "x" }, "op-1");
 	assert.equal(end.isError, true);

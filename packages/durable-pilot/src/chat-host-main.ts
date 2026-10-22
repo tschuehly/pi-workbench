@@ -1,6 +1,6 @@
 // Durable Chat host process for PI WEB (session-host protocol v2). PI WEB's session daemon spawns one per Chat family
 // with an IPC channel; requests and replies are JSON messages on it, and the host pushes PI WEB session events.
-//   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model anthropic/<id>|faux
+//   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model <provider>/<id>|faux
 //                              [--session-id <PI WEB Chat ID>] [--scripted] [--packages]
 // --packages runs the bound installed Pi packages from PI_CODING_AGENT_DIR's settings (src/packages.ts).
 // Messages in:  { id, method, params? }

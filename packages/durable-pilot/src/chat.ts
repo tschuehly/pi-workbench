@@ -1,6 +1,7 @@
 // One Durable Chat on the pilot host: the core coding tools (read, write, edit, bash) in the Chat's workspace, every
 // tool and the model behind the pre-persistence redaction wrappers, the Workbench behaviors (Working Mode, ask_user,
-// request_attention), and the Claude subscription (Pi's auth.json, pi-claude-code-use 2.2.1 payload rules) plus, for
+// request_attention), and the legacy Chat's providers from Pi's auth.json: the Claude subscription (pi-claude-code-use
+// 2.2.1 payload rules), the ChatGPT subscription (openai-codex, with pi-openai-fast-mode) and GitHub Copilot; plus, for
 // tests and trials, the scripted faux model. The Chat's model is stored per conversation and can be switched.
 import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
@@ -17,6 +18,7 @@ import { clearInheritedIdentity, storedAgent, sweepPiTmp, toolEnv, warningTool, 
 import { context, type Host, MODEL, openHost } from "./host.ts";
 import { toolGroupsExtension } from "./tool-groups.ts";
 import { type PackageEvent, PiPackages } from "./packages.ts";
+import { ENV_CREDENTIALS, type FastMode, fastMode, subscriptionProviders, withStoredModels } from "./providers.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
@@ -51,7 +53,7 @@ export type ChatHostOptions = {
 	readonly cwd: string;
 	/** PI WEB's Chat ID: stable ask/attention IDs and telemetry lineage. */
 	readonly chatId?: string;
-	/** Model of a new Chat: `anthropic/<model>` via the Claude subscription, or `faux` (scripted by `faux.ts` `router`). */
+	/** Model of a new Chat: `<provider>/<model>` with a stored login in Pi's auth.json, or `faux` (scripted by `faux.ts` `router`). */
 	readonly model: string;
 	/** Offer the scripted model next to the Claude models (tests and trials); implied by `model: "faux"`. */
 	readonly scripted?: boolean;
@@ -72,6 +74,8 @@ export type ChatHost = Host & {
 	/** The bound Pi packages, and where their events go (buffered until a session listens). */
 	readonly packages?: PiPackages;
 	listenPackages(listener: (event: PackageEvent) => void): void;
+	/** pi-openai-fast-mode for this Chat's workspace. */
+	readonly fast: FastMode;
 };
 
 /**
@@ -87,10 +91,26 @@ export function parseModel(model: string): { provider: string; modelId: string }
 	return { provider, modelId };
 }
 
+/**
+ * As Pi's `setModel` and session load: store `model` (when given) and clamp the Chat's thinking level to what the
+ * Chat's model supports. Returns the resulting thinking level.
+ */
+export async function applyModel(host: Host, model?: { provider: string; modelId: string }): Promise<ModelThinkingLevel | undefined> {
+	const agent = await host.root.agent(context);
+	const target = model ?? agent.model;
+	const found = target === undefined ? undefined : host.models.getModel(target.provider, target.modelId);
+	const current = agent.thinkingLevel;
+	const thinkingLevel = found === undefined || current === undefined ? current : clampThinkingLevel(found, current);
+	if (model !== undefined || thinkingLevel !== current)
+		await host.root.configure({ ...(model === undefined ? {} : { model }), ...(thinkingLevel === current ? {} : { thinkingLevel }) }, context);
+	return thinkingLevel;
+}
+
 export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> {
 	const scripted = options.model === "faux" || options.scripted === true;
-	// No paid API-key path may be taken silently: the subscription login in Pi's auth.json is the only credential.
-	for (const name of Object.keys(process.env)) if (name.startsWith("ANTHROPIC_")) delete process.env[name];
+	// No paid API-key path may be taken silently: the subscription logins in Pi's auth.json are the only credentials.
+	for (const name of Object.keys(process.env)) if (name.startsWith("ANTHROPIC_") || ENV_CREDENTIALS.includes(name)) delete process.env[name];
+	const fast = fastMode(options.cwd);
 	// Each tool call gets this Chat's identity (toolEnv), never one the host inherited.
 	clearInheritedIdentity();
 	sweepPiTmp();
@@ -120,7 +140,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const host = await openHost(options.dir, {
 		// The scripted model reasons, so thinking levels apply to it as to Claude.
 		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200, models: [{ id: MODEL.modelId, reasoning: true }] },
-		provider: () => anthropicProvider(),
+		provider: () => withStoredModels(anthropicProvider()),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials: new PiAuthStore(),
 		settings: { get compaction() { return workbench.compaction; } },
@@ -136,6 +156,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	});
 	opened = host;
 	rootId = host.root.id;
+	for (const provider of subscriptionProviders(fast)) host.models.setProvider(provider);
 	if (scripted) {
 		// The scripted model takes no Claude payload rules: it is answered locally by the router.
 		host.models.setProvider(wrapProvider(host.faux.provider));
@@ -143,10 +164,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		host.faux.setResponses(Array.from({ length: 10_000 }, () => step));
 	}
 	// As Pi does on load: a stored level the model does not support is clamped (before anything is scheduled).
-	const agent = await host.root.agent(context);
-	const model = agent.model === undefined ? undefined : host.models.getModel(agent.model.provider, agent.model.modelId);
-	const clamped = model === undefined ? agent.thinkingLevel : clampThinkingLevel(model, agent.thinkingLevel);
-	if (clamped !== agent.thinkingLevel) await host.root.configure({ thinkingLevel: clamped }, context);
+	await applyModel(host);
 	await packages?.start({
 		root: host.root,
 		registry: host.registry,
@@ -161,6 +179,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	});
 	return Object.assign(host, {
 		workbench,
+		fast,
 		...(packages === undefined ? {} : { packages }),
 		listenPackages: (listener: (event: PackageEvent) => void) => {
 			chat.onPackageEvent = listener;

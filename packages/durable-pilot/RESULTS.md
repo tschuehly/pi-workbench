@@ -342,3 +342,15 @@ Test-first in `test/context-tools.test.ts` (part of `npm run test:chat`); red ru
 - **grep/find/ls** (`search-tools.ts`): Pi's own tool definitions (`@earendil-works/pi-coding-agent@1.4.0`), bound to Durable. They are deferred for the lead, as in legacy, and available to allowlisted children. Output is identical to Pi's and redacted before commit.
 - **Capabilities:** `ready.capabilities` = `compact`, `compact-and-continue`, `tool-groups`.
 - **MCP:** dropped by the owner's scope trim. PI WEB refuses MCP sign-in for Durable Chats visibly.
+
+## Phase B slice 4: OpenAI and Copilot providers (P016, P137)
+
+Durable Chats offer the model catalog of a legacy Chat: every provider with a stored login in Pi's `auth.json` (Claude, ChatGPT via `openai-codex`, GitHub Copilot), with Pi's refreshed catalog (`models-store.json`, read-only) merged as pi-ai merges it. On the s4o trial against the real agent profile, the Durable catalog equals the legacy catalog (49 models: anthropic 17, openai-codex 9, github-copilot 23) plus the trial-only `faux/faux-1`.
+
+- **Credentials:** the same `PiAuthStore` (Pi's lock on `auth.json`, `realpath: false`); no login flow, no second format. `COPILOT_GITHUB_TOKEN` is removed like `ANTHROPIC_*`, so only stored logins count. A provider without one is not listed, and `setModel` refuses it visibly.
+- **Switching:** across providers mid-Chat, with the whole conversation; the Chat's thinking level is clamped to the new model (pi-ai `clampThinkingLevel`, as Pi's `setModel`), and each provider maps it on the wire (Codex `minimal` → `low`).
+- **pi-openai-fast-mode 0.5.0:** ported (`src/providers.ts`): `/fast [on|off|toggle]` writes the package's own config file (workspace file first, else the user file); `service_tier: "priority"` only for the package's targets; status `pi-openai-fast-mode: fast`. The `--fast` CLI flag has no PI WEB equivalent.
+- **Redaction:** both providers sit behind `wrapProvider`; positive control red before wiring (`results/red-before-s4-openai.txt`).
+- **Concurrent refresh:** `test/refresh-race.ts` (shared with `credentials.test.ts`) races two hosts and the installed Pi on an expired ChatGPT login: one refresh request; the unlocked control sends more than one.
+- **Live:** one ChatGPT request (`gpt-6-astra`, Fast Mode on via the trial workspace's config), answered and stored with usage; no Claude request.
+- **Not here:** the enabled-model scope (P017) and the thinking-level setter (P019) are slice 3; the Durable catalog marks every model enabled.

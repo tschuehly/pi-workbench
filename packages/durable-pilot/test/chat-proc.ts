@@ -1,12 +1,34 @@
 // Drives the Durable Chat host process PI WEB spawns (src/chat-host-main.ts) over its real IPC protocol, with the
-// scripted faux model. Shared by the composer, context-tools and extensions tests; every barrier is an event the host
+// scripted faux model. Shared by the composer, context-tools, extensions and packages tests; every barrier is an event the host
 // emitted after a commit.
 import { type ChildProcess, fork } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
+import { codexToken } from "./refresh-race.ts";
 import { PACKAGE, scratch } from "./runner.ts";
+
+/** Fake stored logins for Claude, ChatGPT and Copilot in a Pi agent dir, so hosts never read or lock the owner's auth.json. */
+export function writeFakeLogins(agentDir: string, tag = "chat"): void {
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(join(agentDir, "auth.json"), JSON.stringify({
+		anthropic: { type: "oauth", access: "fake-oat", refresh: "fake-ort", expires: Date.now() + 3_600_000 },
+		"openai-codex": { type: "oauth", access: codexToken(tag), refresh: "fake-codex", expires: Date.now() + 3_600_000, accountId: `acct-${tag}` },
+		"github-copilot": { type: "oauth", access: "tid=fake;proxy-ep=proxy.individual.githubcopilot.com", refresh: "fake-gh", expires: Date.now() + 3_600_000 },
+	}), { mode: 0o600 });
+}
+
+/** A scratch Pi agent dir with fake logins. */
+export function fakeAgentDir(label: string): string {
+	const dir = join(scratch(label), "agent");
+	writeFakeLogins(dir);
+	return dir;
+}
+
+// Hermetic: every host this driver starts (and any in-process store in its tests) reads a scratch agent dir with fake
+// logins; a test passes its own PI_CODING_AGENT_DIR in `env` when it needs one.
+process.env.PI_CODING_AGENT_DIR = fakeAgentDir("chat-proc-agent");
 
 export type UiEvent = { type: string; [key: string]: unknown };
 type Reply = { id?: number; result?: unknown; error?: { name: string; message: string }; event?: UiEvent; ready?: { protocol: number; ownerEpoch: number } };
