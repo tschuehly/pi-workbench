@@ -249,7 +249,8 @@ test("a Page's Decision on a changed Key starts a new round: Version N, earlier 
   assert.deepEqual(round(v2, "v2"), ["done", 2, [{ round: 1, ver: "v1", answer: "Approve", custom: false, note: "fine now" }]]);
   assert.deepEqual(round(v2, "v3").slice(0, 2), ["changed", 3]);
   assert.deepEqual(round(v2, "v3")[2].map((h) => [h.round, h.answer]), [[1, "Approve"], [2, "Rework"]]);
-  assert.deepEqual(round([...v2, decide(5, "Approve", "v1")], "v1").slice(0, 2), ["done", 3], "content back on v1 is a later round, not round 1");
+  // Versions are numbered in the order the Event Log first saw them; back on v1, an answer given on v1 holds again.
+  assert.deepEqual(round([...v2, decide(5, "Approve", "v1")], "v1"), ["done", 1, [{ round: 2, ver: "v2", answer: "Rework", custom: false, note: null }]], "content back on v1 is Version 1 again");
   // Before any answer, and in Event Logs whose answers carry no version, there is one round.
   assert.deepEqual(round([{ seq: 1, at: 0, origin: "human", type: "comment", key: "shot", ver: "v0", text: "x" }, decide(2, "Approve", undefined)], "v9"), ["done", 1, []]);
   const ask = [
@@ -262,10 +263,13 @@ test("a Page's Decision on a changed Key starts a new round: Version N, earlier 
   const local = [decide(-1, "Approve", "v1", { local: true }), decide(-2, "Rework", "v2", { local: true })];
   assert.deepEqual(round(local, "v3").slice(0, 2), ["changed", 3]);
   assert.deepEqual(round(local, "v3")[2].map((h) => [h.round, h.answer]), [[1, "Approve"], [2, "Rework"]]);
-  // Re-review: content restored to v1 after v2 is round 3, which no answer has reached yet.
+  // Reviews 2 and 3: content restored to the version of the newest answer is that version again, whether or not the
+  // Event Log saw the version in between (an Update records none), and that answer holds (149: bound to its version).
   const back = [decide(1, "Approve", "v1"), { seq: 2, at: 0, origin: "human", type: "comment", key: "shot", ver: "v2", text: "x", delivery: "immediate" }];
-  assert.deepEqual(round(back, "v1"), ["changed", 3, [{ round: 1, ver: "v1", answer: "Approve", custom: false, note: null }]]);
-  assert.deepEqual(derive(back, () => "v1").toAnswer.map((d) => d.id), ["shot"]);
+  assert.deepEqual([round(back, "v2"), round(back, "v1")], [["changed", 2, [{ round: 1, ver: "v1", answer: "Approve", custom: false, note: null }]], ["done", 1, []]]);
+  assert.deepEqual([round(v1.slice(0, 1), "v2").slice(0, 2), round(v1.slice(0, 1), "v1").slice(0, 2)], [["changed", 2], ["done", 1]], "the same without any event on v2");
+  // Back on v1 after the newest answer was given on v2: that answer is for v2, so v1 asks again.
+  assert.deepEqual(round([...v2], "v1"), ["changed", 1, [{ round: 2, ver: "v2", answer: "Rework", custom: false, note: null }]]);
   // A Close or Still applies names its thread, not the Key; the version it records counts for the thread's Key.
   const closed = [{ seq: 1, at: 0, origin: "human", type: "comment", key: "shot", ver: "v1", text: "x", delivery: "immediate" }, decide(2, "Approve", "v1"), { seq: 3, at: 0, origin: "human", type: "close", target: 1, ver: "v2" }];
   assert.deepEqual(round(closed, "v3").slice(0, 2), ["changed", 3]);

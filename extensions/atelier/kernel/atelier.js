@@ -5,9 +5,9 @@
 // Page contract (mechanics only, decision 139):
 //   <script type="module" src="atelier.js"></script>   the Kernel; idiomorph.js sits beside it
 //   atl-key="turn-3"           an element the human judges; nested Keys form the address run-12/turn-3 (140)
-//   atl-ver="sha-or-rev"       version of the content under it; every event records it (149). When it changes after its
-//                              atl-decide (or an ask naming material) was answered, the Decision opens "Version 2" with
-//                              no option chosen and the earlier answer beneath; other asks stay answered
+//   atl-ver="sha-or-rev"       version of the content under it; every event records it (149). On a version other than the
+//                              one its atl-decide (or an ask naming material) was answered on, the Decision shows
+//                              "Version 2" with no option chosen and the earlier answer beneath; other asks stay answered
 //   atl-decide="A|B|C"        a Decision on a keyed element; its id is the Key address (155). Optional:
 //     atl-rec="A"              the recommended option
 //     atl-note="Redo"          options that need a note before they post. Any answer may carry a note and images
@@ -127,24 +127,27 @@ export function derive(entries, currentVer = () => null, declared = []) {
   for (const t of threads.values()) { t.stale = stale(t.key, t.ver); if (t.stale) t.closed = false; }
   // Only an answer that judged the Key's content goes stale with it: a Page's atl-decide, or an ask naming material.
   // An asked question merely sits on its Key; its answer records the Key's version but stays answered (2.11.0).
-  // Such an answer holds for one round (owner 2026-10-22: "the decision should reset or show version 2"): from the
-  // first answer on, each change of the version that events on the Key recorded, or that the Page shows now, starts
-  // the next round, even back to an earlier version; `history` keeps the last answer of each earlier round. An answer
-  // without a version, or on a Key not on the Page, stays as it is in round 1.
-  // state: "new" (never answered), "changed" (answered in an earlier round), "done"; toAnswer is every one not done.
+  // Such an answer holds while the Key shows the version it was given on (149); on any other version the Decision
+  // asks again as "Version N" (owner 2026-10-22: "the decision should reset or show version 2"). From the first answer
+  // on, versions are numbered in the order events on the Key recorded them, then the one the Page shows now; an
+  // Update records none, so a version no event saw gets no number. `history` keeps the last answer on each other
+  // version. An answer without a version, or on a Key not on the Page, stays as it is in round 1.
+  // state: "new" (never answered), "changed" (answered on another version), "done"; toAnswer is every one not done.
   const keyOfEvent = (e) => e.key ?? (e.type === "close" || e.type === "still" ? threads.get(rootOf(e.target))?.key : undefined);
   const rounds = (d, key) => {
-    const now = key ? currentVer(key) : null, one = { round: 1, history: [], current: true };
-    if ((!d.declared && !d.material) || d.answer === null || d.answer.ver == null || now == null) return one;
+    const now = key ? currentVer(key) : null;
+    if ((!d.declared && !d.material) || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
     // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
-    // ponytail: an event a tab still showing an older version posts later counts as a version change.
-    const first = live.findIndex((e) => e.type === "decide" && e.decision === d.id), runs = [];
-    const see = (ver, answer) => { if (ver == null) return; if (runs.at(-1)?.ver !== ver) runs.push({ ver, answer: null }); if (answer) runs.at(-1).answer = answer; };
-    for (const e of live.slice(first)) if (e.decision === d.id || keyOfEvent(e) === key) see(e.ver, e.type === "decide" && e.decision === d.id ? e : null);
-    see(now);
+    const first = live.findIndex((e) => e.type === "decide" && e.decision === d.id), vers = [], last = new Map();
+    for (const e of live.slice(first)) {
+      if (e.ver == null || (e.decision !== d.id && keyOfEvent(e) !== key)) continue;
+      if (!vers.includes(e.ver)) vers.push(e.ver);
+      if (e.type === "decide" && e.decision === d.id) last.set(e.ver, e);
+    }
+    if (!vers.includes(now)) vers.push(now);
     return {
-      round: runs.length, current: runs.at(-1).answer === d.answer,
-      history: runs.slice(0, -1).flatMap((r, i) => r.answer ? [{ round: i + 1, ver: r.ver, answer: r.answer.option, custom: !!r.answer.custom, note: r.answer.note ?? null }] : []),
+      round: vers.indexOf(now) + 1, current: d.answer.ver === now,
+      history: vers.flatMap((v, i) => v !== now && last.has(v) ? [{ round: i + 1, ver: v, answer: last.get(v).option, custom: !!last.get(v).custom, note: last.get(v).note ?? null }] : []),
     };
   };
   for (const d of decisions.values()) {
@@ -184,8 +187,9 @@ function keyCounts(st) {
  * event "atelier:state" carries it in `detail` whenever it changes. Kernel markup is not an API. `loaded` turns true
  * once the Event Log has been read (or there is no session to read it from). `wip` lists the atl-wip regions as {key, text}.
  * Each Decision's `state` is "new", "changed" (answered on an earlier version; `answer` is what the human said) or "done";
- * `toAnswer` lists the ones not done. `round` counts the versions it was answered across ("Version 2"), and `history`
- * keeps the last answer of each earlier round as {round, ver, answer, custom, note}. `keys` maps each Key address holding Decisions or open threads, and every Key
+ * `toAnswer` lists the ones not done. `round` is the number of the version the Key shows ("Version 2"), counted from the
+ * first answer in the order the Event Log saw them; `history` keeps the last answer on each other version as
+ * {round, ver, answer, custom, note}. `keys` maps each Key address holding Decisions or open threads, and every Key
  * around it, to {new, changed, done, threads}.
  */
 export function publicState(st, { conn = "no session", loaded = false, wip = [] } = {}) {
@@ -657,9 +661,9 @@ function boot() {
       <div class="atl-q">${esc(d.question)}</div>${d.detail ? `<div class="atl-dim">${esc(d.detail)}</div>` : ""}
       ${materialHtml(d)}<div class="atl-opts">${opts}${otherHtml(d, lock)}</div>${receiptHtml(d, st)}`;
   }
-  // A Decision whose Key changed since its first answer shows its round, "Version 2", with no option chosen until he
-  // answers again; the last answer of each earlier round sits beneath it (owner 2026-10-22, 2.11.0).
-  const roundTag = (d) => d.round > 1 ? `<span class="atl-tag atl-round${d.stale ? " atl-warn" : ""}">Version ${d.round}</span>` : "";
+  // A Decision whose Key changed since its first answer shows the version's number, "Version 2", with no option chosen
+  // until he answers on it; the last answer on each other version sits beneath it (owner 2026-10-22, 2.11.0).
+  const roundTag = (d) => d.round > 1 || d.history?.length ? `<span class="atl-tag atl-round${d.stale ? " atl-warn" : ""}">Version ${d.round}</span>` : "";
   const historyHtml = (d) => d.history?.length ? `<div class="atl-hist atl-dim">${d.history.map((x) => `Version ${x.round}: ${esc(clip(x.answer, 40))}`).join(" · ")}</div>` : "";
   const materialHtml = (d) => d.material ? `<button data-atl="material" data-id="${esc(d.id)}">${d.opened ? `${icon("check")} Material opened` : `${icon("eye")} Open the material`}</button>` : "";
   // The current answer, what it changed from, and the recommendation receipt; always editable (155). A small box below

@@ -43,10 +43,12 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
 - `atl-key="name"` on every element the human judges. Nested Keys form an address such as
   `run-12/turn-3`; use domain ids, and keep them stable across Updates.
 - `atl-ver="…"` on content that changes, such as a build SHA or a content hash. Events record it,
-  and older events show as "on an earlier version". When it changes after the human answered the Key's
-  `atl-decide` (or an `ask` that names `material`), the Decision starts a new round (each change, even back to an earlier version): it shows "Version 2" (3, …)
-  with no option chosen and the earlier answers beneath ("Version 1: Approve"), and is to answer again. Other
-  answered `ask`s stay answered: a question is not a judgement of the Key it sits on.
+  and older events show as "on an earlier version". An answer to the Key's `atl-decide` (or to an `ask` that names
+  `material`) holds for the version it was given on. On another version the Decision shows "Version 2" (3, …:
+  versions numbered from the first answer, in the order the Event Log recorded them) with no option chosen and
+  the answers on other versions beneath ("Version 1: Approve"), and is to answer again; back on the answered
+  version, that answer holds again. Other answered `ask`s stay answered: a question is not a judgement of the Key
+  it sits on.
 - `atl-decide="1|2|3|4|5"` or `"Confirm|Redo"` on a keyed element declares a Decision; its id is the
   Key address. Optional: `atl-rec="Confirm"` (recommended option), `atl-note="Redo"` (options that
   need a note), `atl-delivery="record|send|immediate"` (default immediate), `atl-material="key"`.
@@ -79,7 +81,8 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   `atelier.state()`, never Kernel markup: plain data with `decisions` (`id`, `key`, `options`, `recommended`,
   `answer`, `custom` (an own answer), `previous` (the answer this one replaced), `note`, `status`, `stale`,
   `state`: `"new"` unanswered, `"changed"` answered on an earlier version (`answer` is what he said), `"done"`;
-  `round`: its Version number; `history`: the last answer of each earlier round as `{round, ver, answer, custom, note}`),
+  `round`: the number of the version shown; `history`: the last answer on each other version as
+  `{round, ver, answer, custom, note}`),
   `keys` (per Key address, counting everything on it and under it: `{new, changed, done, threads}` with `threads`
   the open ones), `threads`, `requests`, `toAnswer` (ids of the Decisions not done), `open`, `wip`, `conn`, and
   `loaded` (true once the Event Log is read). The document event `atelier:state` carries the
