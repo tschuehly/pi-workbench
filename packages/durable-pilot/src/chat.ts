@@ -3,12 +3,13 @@
 // request_attention), and the Claude subscription (Pi's auth.json, pi-claude-code-use 2.2.1 payload rules) plus, for
 // tests and trials, the scripted faux model. The Chat's model is stored per conversation and can be switched.
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { type CompactionSettings, defineExtension, section } from "@earendil-works/pi-durable";
+import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { checkpointExtension } from "./checkpoint.ts";
 import { router } from "./faux.ts";
+import { toolGroupsExtension } from "./tool-groups.ts";
 import { type Host, MODEL, openHost } from "./host.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
@@ -52,7 +53,7 @@ export type ChatHostOptions = {
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
 export type ChatHost = Host & {
-	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings };
+	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings; extensions: readonly Extension[] };
 };
 
 /**
@@ -72,9 +73,15 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const scripted = options.model === "faux" || options.scripted === true;
 	// No paid API-key path may be taken silently: the subscription login in Pi's auth.json is the only credential.
 	for (const name of Object.keys(process.env)) if (name.startsWith("ANTHROPIC_")) delete process.env[name];
-	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION };
-	const aliases = claudeAliases("pi");
 	let opened: Host | undefined;
+	// Tool groups defer the group tools of every extension before them.
+	const extensions: Extension[] = [
+		chatTools(() => workbench.resources),
+		workbenchExtension({ chatId: options.chatId ?? options.dir, signal: (signal) => workbench.onSignal(signal) }),
+		checkpointExtension(() => opened!.harness),
+	];
+	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions };
+	const aliases = claudeAliases("pi");
 	const host = await openHost(options.dir, {
 		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200 },
 		provider: () => anthropicProvider(),
@@ -83,11 +90,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		settings: { get compaction() { return workbench.compaction; } },
 		rootAgent: { model: parseModel(options.model), cwd: options.cwd },
 		env: (target) => new NodeExecutionEnv({ cwd: target.cwd ?? options.cwd }),
-		extensions: [
-			chatTools(() => workbench.resources),
-			workbenchExtension({ chatId: options.chatId ?? options.dir, signal: (signal) => workbench.onSignal(signal) }),
-			checkpointExtension(() => opened!.harness),
-		],
+		extensions: [...extensions, toolGroupsExtension(extensions)],
 	});
 	opened = host;
 	if (scripted) {

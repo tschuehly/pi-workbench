@@ -20,6 +20,7 @@ import { CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData } from ".
 
 type WorkingModeDetailsLike = Record<string, unknown>;
 import { redact } from "./redact.ts";
+import { syncWorkersGroup } from "./tool-groups.ts";
 import { admit, context, type Host, Reconcile, resolveUncertain } from "./host.ts";
 import {
 	ANSWERS_ENTRY,
@@ -474,6 +475,7 @@ export class ChatSession {
 			return { type: "done" };
 		}
 		const result = await selectMode(root, args);
+		if (result.ok && this.#chat !== undefined) await syncWorkersGroup(harness, this.#host.registry, root, this.#chat.workbench.extensions);
 		await this.#publishStatus();
 		return result.ok ? { type: "done", message: result.message } : { type: "unsupported", message: result.message };
 	}

@@ -5,10 +5,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
-import { CompactionEntry } from "@earendil-works/pi-durable";
+import { fauxAssistantMessage, fauxText, Type } from "@earendil-works/pi-ai";
+import { CompactionEntry, defineExtension, defineTool, type SubmissionId } from "@earendil-works/pi-durable";
+import { createReadTool } from "@earendil-works/pi-durable/tools";
+import { router } from "../src/faux.ts";
+import { ToolGroupsDoc, toolGroupsExtension } from "../src/tool-groups.ts";
 import { ChatSession } from "../src/chat-session.ts";
-import { admit, context, type Host, openHost } from "../src/host.ts";
+import { admit, context, type Host, MODEL, openHost } from "../src/host.ts";
 import { entriesOf } from "../src/pilot.ts";
 import { ChatHost, family, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
@@ -290,3 +293,98 @@ for (const window of ["after the tool result", "while summarizing", "after the c
 		assert.equal(integrity(store), "ok");
 	});
 }
+
+// ─── Tool groups ─────────────────────────────────────────────────────────────
+
+const done = (text: string) => [{ type: "text" as const, text }];
+const fakeTool = (name: string) => defineTool({ name, description: name, parameters: Type.Object({}), replay: "safe", execute: async () => ({ output: done(`${name} ran`) }) });
+/** Stand-ins for the slice-4 Worker tools, and a script-like tool that calls worker_create as a nested call. */
+const Workers = defineExtension({ name: "fixture.workers", tools: [fakeTool("worker_create"), fakeTool("worker_status")] });
+const Script = defineExtension({
+	name: "fixture.script",
+	tools: [defineTool({
+		name: "script",
+		description: "calls worker_create",
+		parameters: Type.Object({}),
+		replay: "safe",
+		execute: async (_args, api, c) => {
+			const nested = await api.executeTool("worker_create", {}, c);
+			return { output: done(nested.isError ? `nested failed: ${nested.diagnostics.map((d) => d.message).join("; ")}` : "nested ok") };
+		},
+	})],
+});
+const groupExtensions = [defineExtension({ name: "fixture.read", tools: [{ ...createReadTool(), replay: "safe" as const }] }), Workers, Script];
+
+async function groupsHost(dir: string): Promise<Host> {
+	const h = await openHost(dir, { faux: { tokensPerSecond: 1000 }, settings: { compaction: { keepRecentTokens: 1 } }, extensions: [...groupExtensions, toolGroupsExtension(groupExtensions)] });
+	const step = router(dir);
+	h.faux.setResponses(Array.from({ length: 200 }, () => step));
+	await h.resume();
+	return h;
+}
+const offeredTo = (dir: string, label: string) => logged(dir).filter((l) => l.label === label).at(-1)?.tools ?? [];
+const resultText = async (h: Host, conversation = h.root) => (await entriesOf(h.harness, conversation.id)).filter((e) => e.kind === "pi.tool-result").map((e) => textOf((e.model?.[0] as { content: unknown }).content));
+
+test("tools_enable: group tools stay deferred until enabled; the exposure survives a restart and a compaction", async () => {
+	const dir = scratch("groups");
+	let h = await groupsHost(dir);
+	await settle(h, "op-1", "first");
+	assert.deepEqual(offeredTo(dir, "first").filter((t) => t.startsWith("worker_")), [], "a new Chat starts without the workers group");
+	assert.ok(offeredTo(dir, "first").includes("tools_enable"));
+	await settle(h, "op-2", 'call:tools_enable {"group":"workers"}');
+	assert.match((await resultText(h)).at(-1)!, /^Enabled: worker_create, worker_status\.$/);
+	assert.deepEqual(offeredTo(dir, "result:tools_enable").filter((t) => t.startsWith("worker_")), ["worker_create", "worker_status"], "on the next request");
+	await h.close();
+
+	h = await groupsHost(dir);
+	await settle(h, "op-3", "after restart");
+	assert.deepEqual(offeredTo(dir, "after restart").filter((t) => t.startsWith("worker_")), ["worker_create", "worker_status"], "restart keeps the group");
+	const compaction = await h.root.compact(undefined, context);
+	const { outcome } = (await h.harness.waitForTask(compaction, context)).state;
+	assert.equal(outcome.status, "completed");
+	await (await h.harness.submission((outcome as { result: { submissionId: SubmissionId } }).result.submissionId, context))!.wait(context);
+	await settle(h, "op-4", "after compaction");
+	assert.ok((await entriesOf(h.harness, h.root.id)).some((e) => e.kind === CompactionEntry.kind), "a summary was placed");
+	assert.deepEqual(offeredTo(dir, "after compaction").filter((t) => t.startsWith("worker_")), ["worker_create", "worker_status"], "compaction keeps the group");
+	assert.deepEqual((await h.harness.snapshot(ToolGroupsDoc, h.root.id, context))?.enabled, ["workers"]);
+	await h.close();
+});
+
+test("tool groups never widen an allowlist: nested calls need the group enabled, a child without the tools cannot load or call them", async () => {
+	const dir = scratch("groups-allowlist");
+	const h = await groupsHost(dir);
+	await settle(h, "op-1", "call:script");
+	assert.match((await resultText(h)).at(-1)!, /nested failed: .*workers tool group is not enabled/, "a nested caller cannot reach a hidden group tool");
+	await settle(h, "op-2", 'call:tools_enable {"group":"workers"}');
+	await settle(h, "op-3", "call:script");
+	assert.equal((await resultText(h)).at(-1), "nested ok", "once enabled, nested calls work as in the lead's model calls");
+
+	const tools = (names: string[]) => names.map((name) => h.registry.snapshot().tools().find(({ tool }) => tool.name === name)!.tool);
+	const child = await h.harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: MODEL, tools: tools(["read", "script", "tools_enable"]) } }, context);
+	const ask = async (operationId: string, text: string) => {
+		await admit(child, { operationId, text });
+		const record = await child.commit((tx) => tx.submissionByRequest(child.id, operationId), context);
+		await (await h.harness.submission(record!.id, context))!.wait(context);
+	};
+	await ask("c-1", 'call:tools_enable {"group":"workers"}');
+	assert.match((await resultText(h, child)).at(-1)!, /No workers tools are registered in this session/);
+	await ask("c-2", "call:script");
+	assert.match((await resultText(h, child)).at(-1)!, /nested failed/, "the child's allowlist still excludes worker_create for nested calls");
+	assert.ok(!(logged(dir).filter((l) => l.label.startsWith("result:")).at(-1)?.tools ?? []).some((t) => t.startsWith("worker_")), "the child was never offered the group");
+	await h.close();
+});
+
+test("Orchestration Workers shows the workers group, and leaving it hides the group again unless it was enabled", async () => {
+	const dir = scratch("groups-mode");
+	const h = await groupsHost(dir);
+	const chat = Object.assign(h, { workbench: { resources: {}, onSignal: () => {}, compaction: {}, extensions: groupExtensions } });
+	const session = new ChatSession(chat, () => {});
+	await session.start();
+	await session.mode("orchestration workers");
+	await settle(h, "op-1", "workers mode");
+	assert.deepEqual(offeredTo(dir, "workers mode").filter((t) => t.startsWith("worker_")), ["worker_create", "worker_status"]);
+	await session.mode("orchestration main");
+	await settle(h, "op-2", "solo mode");
+	assert.deepEqual(offeredTo(dir, "solo mode").filter((t) => t.startsWith("worker_")), []);
+	await session.close();
+});
