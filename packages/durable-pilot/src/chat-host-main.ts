@@ -14,6 +14,7 @@ import type { CompactionSettings } from "@earendil-works/pi-durable";
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
 import { openChatHost } from "./chat.ts";
 import { COMMANDS } from "./extensions.ts";
+import { redact } from "./redact.ts";
 import { setDelegationHold } from "./delegation.ts";
 import { type Attachment, CAPABILITIES, ChatSession, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
@@ -160,9 +161,28 @@ process.on("message", (message: Request) => {
 		}
 	})();
 });
-process.on("disconnect", () => void close());
-// An orderly shutdown (service stop, logout, the trial's stop script) closes the store gracefully: committed work and
-// the intent of a running tool stay, and restore is paused on the next open.
-for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void close().finally(() => process.exit(0)));
+/** How long an orderly shutdown waits for its close; under PI WEB's 5 s SIGTERM-to-SIGKILL grace. */
+const CLOSE_DEADLINE_MS = 3000;
+/**
+ * An orderly shutdown (service stop, logout, PI WEB going away, the trial's stop script) closes the store gracefully:
+ * committed work and the intent of a running tool stay, and restore is paused on the next open. A close that fails or
+ * outlives its deadline (a tool or package ignoring cancellation) exits non-zero: the store reopens with that work
+ * interrupted, as after a crash.
+ */
+function shutdown(): void {
+	setTimeout(() => {
+		process.stderr.write(`Durable host: close did not finish within ${CLOSE_DEADLINE_MS} ms; exiting with running work interrupted\n`);
+		process.exit(1);
+	}, CLOSE_DEADLINE_MS);
+	close().then(
+		() => process.exit(0),
+		(error: unknown) => {
+			process.stderr.write(`Durable host: close failed: ${redact(error instanceof Error ? error.message : String(error))}\n`);
+			process.exit(1);
+		},
+	);
+}
+process.on("disconnect", shutdown);
+for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, shutdown);
 
 send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch, capabilities: CAPABILITIES } });

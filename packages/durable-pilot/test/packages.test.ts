@@ -14,7 +14,7 @@ import { ChatHost as ProcHost, live, textOf, type UiEvent, writeFakeLogins } fro
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 type Message = { role: string; customType?: string; content?: unknown; details?: unknown; isError?: boolean; toolName?: string };
-type Status = { isStreaming: boolean; queuedMessages: { kind: string; text: string }[]; unresolvedEffects?: { id: string; toolName: string }[] };
+type Status = { isStreaming: boolean; queuedMessages: { kind: string; text: string }[]; warnings?: { message: string }[]; unresolvedEffects?: { id: string; toolName: string }[] };
 
 /** Where the owner's installed packages are; only read. */
 const INSTALLED = process.env.PILOT_PI_PACKAGES ?? join(homedir(), ".pi", "agent", "npm", "node_modules");
@@ -269,6 +269,31 @@ test("P113 with a ChatGPT model: the packages see a model that adds tools mid-co
 	assert.equal(enabled.isError, false, String(enabled.text));
 	assert.match(String(enabled.text), /Enabled: .*get_search_content/);
 	await host.close();
+});
+
+test("a SIGTERM close is bounded: a package tool that ignores cancellation cannot keep the owner alive; the host exits non-zero, the store reopens and the call is interrupted", async () => {
+	const f = family("stuck");
+	writeFileSync(join(f.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ packages: [join(PACKAGE, "test", "fixtures", "stuck-package")] }));
+	const host = new ChatHost(f);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-stuck", text: "call:stuck {}" });
+	await host.until((e) => e.type === "tool.start" && e.toolName === "stuck", "the stuck call");
+	// The orderly close joins the call, which never settles: only the host's own deadline ends the process.
+	const started = Date.now();
+	host.child.kill("SIGTERM");
+	const code = await Promise.race([host.exited, new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 20_000).unref())]);
+	assert.notEqual(code, "stuck", "the host exited on its own deadline");
+	assert.notEqual(code, 0, "a close cut short is not reported as a clean exit");
+	assert.ok(Date.now() - started < 20_000);
+	assert.match(host.stderr, /close did not finish/);
+
+	const reopened = new ChatHost(f);
+	await reopened.ready; // the store's exclusive owner lock was released
+	const status = await reopened.call<Status>("status");
+	assert.deepEqual(status.unresolvedEffects?.map((effect) => effect.toolName), ["stuck"], "the call is interrupted and held for the owner, not completed");
+	assert.match(JSON.stringify(status.warnings), /Restored paused/, "reopening resumes nothing until the owner sends");
+	await reopened.close();
+	assert.equal(await reopened.exited, 0, "with nothing running, the orderly close ends cleanly");
 });
 
 test("without --packages no package code runs: tools and commands stay unavailable", async () => {
