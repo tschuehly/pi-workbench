@@ -331,3 +331,14 @@ The evidence removes the two Phase A kill risks and **does not raise** any estim
   - live parity of MCP, deferred and compaction aliases
   - retained-host and PTY ownership under launchd
   - the external-package inventory
+
+## Phase B slice 3 group B: context and tools
+
+Test-first in `test/context-tools.test.ts` (part of `npm run test:chat`); red runs in `results/red-s3b-*.txt`.
+
+- **Compaction** (`chat-session.ts` `compact`, `chat.ts` `DEFAULT_COMPACTION`): `/compact [instructions]` runs Durable's manual compaction. Automatic compaction uses Pi's settings from PI WEB (`configure` `compaction`), with Durable's background compaction off (Pi has none). The summary shows as Pi's `Compacted history` row, and the full history stays visible after reopen. `isCompacting` comes from `pi.live`. The Working Mode block is attached again after compaction. A kill while summarizing reruns that summary once. The summary is redacted by the provider wrapper. The `/compact` instructions are redacted before they become task input.
+- **`compact_and_continue`** (`checkpoint.ts`): the tool rejects sibling batches. It schedules a background checkpoint task that waits for idle, creates the compaction in the same commit as its phase change, waits until the summary is placed, and then submits one continuation under a stable request ID, with the Working Mode block. A failed compaction continues once with its diagnostic. Esc during compaction records a visible cancellation and starts nothing. Kill rows: after the tool result, while summarizing, and after the continuation.
+- **Tool groups** (`tool-groups.ts`): group tools are Durable `deferred`. `tools_enable` loads them with `control.addTools`. An enabled-group document records the choice, and Orchestration Workers shows the workers group. Exposure survives restart and compaction. Nested calls to a group tool that is not enabled are blocked. A child's allowlist is never widened. Goal tools wait for pi-goal (slice 5).
+- **grep/find/ls** (`search-tools.ts`): Pi's own tool definitions (`@earendil-works/pi-coding-agent@1.4.0`), bound to Durable. They are deferred for the lead, as in legacy, and available to allowlisted children. Output is identical to Pi's and redacted before commit.
+- **Capabilities:** `ready.capabilities` = `compact`, `compact-and-continue`, `tool-groups`.
+- **MCP:** dropped by the owner's scope trim. PI WEB refuses MCP sign-in for Durable Chats visibly.
