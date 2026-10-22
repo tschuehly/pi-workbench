@@ -1,10 +1,11 @@
 // The Workbench Atelier (extensions/atelier) in a Durable Chat: the `atelier` tool and the Page server/kernel of
 // extensions/atelier/host.ts, with a durable Delivery. The Page file and its Event Log stay the authority for human
-// input; Durable records which Pages this Chat receives (to reopen them) and admits each delivery under a request ID
-// derived from the Page and its event numbers, so a delivery is admitted once whatever the kill point:
+// input; Durable records which Pages this Chat receives (to reopen them) and, before admitting a delivery, the request ID
+// each of its events is admitted under, so every event is admitted once whatever the kill point:
 // - kill after a human event's append, before its delivery: the reopened host reclaims the Page (a dead process's
 //   receiver lock is stale; the new generation is checked as in legacy), and delivers it after its undo window;
-// - kill after admission, before the Event Log records it: the replay finds the admitted submission and only records it;
+// - kill after admission, before the Event Log records it: the replay finds each event's admitted submission and only
+//   records it, even when the kernel batches it with events that fell due while the host was down (those are batched anew);
 // - kill after the receipt: nothing is due.
 // Receiver takeover stays the kernel's: generation-checked, inside one process. A Durable Chat host is its own process,
 // so another Chat's live receiver refuses an open or takeover here with the kernel's "another process" reason.
@@ -21,8 +22,11 @@ import { context } from "./host.ts";
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { redact, redactingTool, sanitizeDeep } from "./redact.ts";
 
-/** Pages this Chat opened, reopened with the host; the page server's port, asked for again so open tabs reconnect. */
-export const AtelierDoc = defineDoc<{ pages: string[]; port?: number }>({
+/**
+ * Pages this Chat opened, reopened with the host; the page server's port, asked for again so open tabs reconnect; and the
+ * request ID of each event being delivered (`<page hash>:<seq>`), until the Event Log records its receipt.
+ */
+export const AtelierDoc = defineDoc<{ pages: string[]; port?: number; admitting?: Record<string, string> }>({
 	kind: "workbench.atelier",
 	version: 1,
 	scope: "conversation",
@@ -47,6 +51,7 @@ type PageHost = {
 	update(page: string, note?: string, fields?: Record<string, unknown>): number;
 	current(details: Message["details"]): boolean;
 	receipt(details: Message["details"]): void;
+	deliverDue(page: string, replay?: boolean): number;
 	stop(): void;
 };
 type Kernel = {
@@ -103,18 +108,48 @@ export class Atelier {
 					const host = this.#host;
 					if (this.#closed || host === undefined || !host.current(message.details)) return failed();
 					const { page, seqs } = message.details;
+					const conversation = this.#conversation!();
+					const key = (seq: number) => `${pageHash(page)}:${seq}`;
+					// The kernel batches what is due now, so a batch is no receipt: each event's request ID is committed before
+					// admission, and an event whose submission exists was admitted, whatever batch it came in.
+					const { admitted, requestId } = await conversation.commit(async (tx) => {
+						const doc = await tx.doc(AtelierDoc, conversation.id);
+						const admitted: number[] = [];
+						for (const seq of seqs) {
+							const id = doc.admitting?.[key(seq)];
+							if (id !== undefined && (await tx.submissionByRequest(conversation.id, id)) !== undefined) admitted.push(seq);
+						}
+						const requestId = `atelier:${pageHash(page)}:${seqs.join(",")}`;
+						if (admitted.length === 0) {
+							doc.admitting ??= {};
+							for (const seq of seqs) doc.admitting[key(seq)] = requestId;
+						}
+						return { admitted, requestId };
+					}, context);
+					if (admitted.length > 0) {
+						// Admitted before a kill: only its receipt is missing. The rest of the batch is composed and delivered anew.
+						host.receipt({ ...message.details, seqs: admitted });
+						failed();
+						if (admitted.length < seqs.length) host.deliverDue(page, message.details.replay);
+						return;
+					}
 					// Human input is new committed content: redacted before it is admitted.
-					await this.#conversation!().submit({
+					await conversation.submit({
 						type: "input",
 						content: redact(message.content),
 						whenBusy: "followUp",
-						requestId: `atelier:${pageHash(page)}:${seqs.join(",")}`,
+						requestId,
 						entry: { kind: PACKAGE_MESSAGE_ENTRY, data: { customType: message.customType, display: true, details: sanitizeDeep(JSON.parse(JSON.stringify(message.details)), redact) } },
 					}, context);
 					crashPoint("atelier.admitted");
 					// Admitted is held: the Event Log records the send and its receipt only now.
 					done(true);
 					host.receipt(message.details);
+					// Received: the Event Log never offers these events again, so their request IDs are no longer needed.
+					await conversation.commit(async (tx) => {
+						const doc = await tx.doc(AtelierDoc, conversation.id);
+						for (const seq of seqs) delete doc.admitting?.[key(seq)];
+					}, context);
 					crashPoint("atelier.received");
 				});
 			} catch {
