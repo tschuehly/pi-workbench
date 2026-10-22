@@ -14,6 +14,7 @@ import {
 import type { ChatHost } from "./chat.ts";
 import { parseModel } from "./chat.ts";
 import { admit, context, type Host, Reconcile, resolveUncertain } from "./host.ts";
+import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import {
 	ANSWERS_ENTRY,
 	ASK_ANSWERS_CUSTOM_TYPE,
@@ -107,6 +108,11 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	}
 	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
+	if (entry.kind === PACKAGE_MESSAGE_ENTRY) {
+		// A Pi package's sendMessage, shown as legacy Chats show a custom message: only when it asked to be displayed.
+		const data = entry.data as { customType: string; display: boolean; details?: unknown };
+		return data.display ? [custom(data.customType, textOfContent(message.content), data.details ?? null)] : [];
+	}
 	const content = message.role === "toolResult" ? { content: browserToolContent(message.content) } : {};
 	return [{ ...message, ...content, entryId, ...(streamId === undefined ? {} : { streamId }) }];
 }
@@ -155,6 +161,7 @@ export class ChatSession {
 
 	async start(): Promise<void> {
 		if (this.#chat !== undefined) this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
+		this.#chat?.listenPackages((event) => this.#emit(event));
 		const stream = await watchEvents(this.#host.harness, this.#host.root.id, context);
 		this.#reset(stream.snapshot);
 		stream.start(async (events) => {
@@ -171,6 +178,7 @@ export class ChatSession {
 	}
 
 	async close(): Promise<void> {
+		await this.#chat?.packages?.close();
 		await this.#stop?.();
 		await this.#host.close();
 		this.#record("session.shutdown", { sessionFile: null, reason: "close" });
@@ -225,11 +233,13 @@ export class ChatSession {
 				this.#record("agent.start", { sessionFile: null });
 				// Agent turns since an open set was posted drive the browser's "may be stale" mark.
 				void countTurn(this.#host.root).catch(() => {});
+				void this.#chat?.packages?.run("start");
 				return;
 			case "run_end":
 				this.#running = false;
 				this.#emit({ type: "agent.end" });
 				this.#record("agent.settled", { sessionFile: null });
+				void this.#chat?.packages?.run("end");
 				return;
 			case "message_start":
 				if (event.message.role !== "assistant") return;
@@ -504,6 +514,20 @@ export class ChatSession {
 		const { harness, root } = this.#host;
 		const inbox = await harness.snapshot(InboxDoc, root.id, context);
 		for (const item of inbox?.items ?? []) if (item.mode !== "write") await harness.abortSubmission(item.id, context, root.id);
+	}
+
+	/** Slash commands of the bound Pi packages. */
+	commands(): { name: string; description?: string }[] {
+		return this.#chat?.packages?.commands() ?? [];
+	}
+
+	/** Run a bound Pi package's command; refused visibly when blocked, unknown or in need of a dialog. */
+	async command(text: string): Promise<{ type: "done" } | { type: "unsupported"; message: string }> {
+		const packages = this.#chat?.packages;
+		if (packages === undefined) return { type: "unsupported", message: `${text.trim().split(/\s/)[0]} is not available in Durable Chats yet` };
+		const result = await packages.command(text);
+		await this.#publishStatus();
+		return result;
 	}
 
 	/** Listing metadata, read without scheduling anything. */

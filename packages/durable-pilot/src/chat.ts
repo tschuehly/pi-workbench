@@ -7,8 +7,11 @@ import { defineExtension, section } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { router } from "./faux.ts";
-import { type Host, MODEL, openHost } from "./host.ts";
+import { context, type Host, MODEL, openHost } from "./host.ts";
+import { type PackageEvent, PiPackages } from "./packages.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
@@ -47,11 +50,16 @@ export type ChatHostOptions = {
 	readonly scripted?: boolean;
 	/** Faux only: tokens per second of a streamed answer. */
 	readonly fauxTokensPerSecond?: number;
+	/** Run the bound installed Pi packages (`packages.ts`) from this agent directory's settings. */
+	readonly packages?: { readonly agentDir?: string };
 };
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
 export type ChatHost = Host & {
 	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void };
+	/** The bound Pi packages, and where their events go (buffered until a session listens). */
+	readonly packages?: PiPackages;
+	listenPackages(listener: (event: PackageEvent) => void): void;
 };
 
 export function parseModel(model: string): { provider: string; modelId: string } {
@@ -67,6 +75,17 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	for (const name of Object.keys(process.env)) if (name.startsWith("ANTHROPIC_")) delete process.env[name];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {} };
 	const aliases = claudeAliases("pi");
+	const early: PackageEvent[] = [];
+	const chat: { onPackageEvent?: (event: PackageEvent) => void } = {};
+	const packages = options.packages === undefined
+		? undefined
+		: await PiPackages.load({
+				cwd: options.cwd,
+				chatId: options.chatId ?? options.dir,
+				agentDir: options.packages.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+				scratch: join(options.dir, "pi-packages"),
+				emit: (event) => (chat.onPackageEvent === undefined ? early.push(event) : chat.onPackageEvent(event)),
+			});
 	const host = await openHost(options.dir, {
 		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200 },
 		provider: () => anthropicProvider(),
@@ -77,6 +96,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		extensions: [
 			chatTools(() => workbench.resources),
 			workbenchExtension({ chatId: options.chatId ?? options.dir, signal: (signal) => workbench.onSignal(signal) }),
+			...(packages === undefined ? [] : [packages.extension()]),
 		],
 	});
 	if (scripted) {
@@ -85,5 +105,24 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		const step = router(options.dir);
 		host.faux.setResponses(Array.from({ length: 10_000 }, () => step));
 	}
-	return Object.assign(host, { workbench });
+	await packages?.start({
+		root: host.root,
+		registry: host.registry,
+		// Durable adds tools mid-conversation natively for every model (deferred tools loaded with control.addTools), so
+		// packages see a model that supports it: pi-web-access then keeps its web tools behind web_enable, as legacy
+		// Claude Chats do.
+		model: async () => {
+			const ref = (await host.root.agent(context)).model;
+			const model = ref === undefined ? undefined : host.models.getModel(ref.provider, ref.modelId);
+			return { ...model, api: "anthropic-messages", compat: { ...model?.compat, supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true } };
+		},
+	});
+	return Object.assign(host, {
+		workbench,
+		...(packages === undefined ? {} : { packages }),
+		listenPackages: (listener: (event: PackageEvent) => void) => {
+			chat.onPackageEvent = listener;
+			for (const event of early.splice(0)) listener(event);
+		},
+	});
 }

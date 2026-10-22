@@ -1,7 +1,8 @@
 // Durable Chat host process for PI WEB (session-host protocol v2). PI WEB's session daemon spawns one per Chat family
 // with an IPC channel; requests and replies are JSON messages on it, and the host pushes PI WEB session events.
 //   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model anthropic/<id>|faux
-//                              [--session-id <PI WEB Chat ID>] [--scripted]
+//                              [--session-id <PI WEB Chat ID>] [--scripted] [--packages]
+// --packages runs the bound installed Pi packages from PI_CODING_AGENT_DIR's settings (src/packages.ts).
 // Messages in:  { id, method, params? }
 // Messages out: { ready: { protocol, durable, ownerEpoch } } once open, { id, result } | { id, error }, { event }.
 // The host exits after `close`, when PI WEB goes away (IPC disconnect), or on SIGTERM/SIGINT, closing the store
@@ -29,6 +30,7 @@ const { values } = parseArgs({
 		"session-id": { type: "string" },
 		scripted: { type: "boolean" },
 		"faux-tps": { type: "string" },
+		packages: { type: "boolean" },
 	},
 });
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
@@ -42,6 +44,7 @@ const host = await openChatHost({
 	chatId,
 	scripted: values.scripted === true,
 	...(tps === undefined ? {} : { fauxTokensPerSecond: tps }),
+	...(values.packages === true ? { packages: {} } : {}),
 });
 const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder });
 await session.start();
@@ -86,6 +89,8 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		return session.resolveEffect(text(params, "taskId"), resolution as Resolution);
 	},
 	configure: (params) => session.configure((params.resources ?? {}) as Resources),
+	commands: () => session.commands(),
+	command: (params) => session.command(text(params, "text")),
 	abort: () => session.abort(),
 	clearQueue: () => session.clearQueue(),
 	close: () => close(),
