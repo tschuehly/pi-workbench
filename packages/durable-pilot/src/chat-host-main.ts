@@ -11,6 +11,7 @@ import { parseArgs } from "node:util";
 // The Workbench telemetry extension's recorder: same JSONL events, same PI_TELEMETRY_DIR.
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
 import { openChatHost } from "./chat.ts";
+import { COMMANDS } from "./extensions.ts";
 import { type Attachment, CAPABILITIES, ChatSession, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
 
@@ -94,6 +95,8 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		return session.resolveEffect(text(params, "taskId"), resolution as Resolution);
 	},
 	configure: (params) => session.configure((params.resources ?? {}) as Resources),
+	commands: () => COMMANDS,
+	command: (params) => session.command(text(params, "name"), typeof params.args === "string" ? params.args : ""),
 	abort: () => session.abort(),
 	mutateQueue: (params) => {
 		const { action, index, expected } = params;

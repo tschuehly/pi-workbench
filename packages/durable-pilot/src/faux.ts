@@ -67,6 +67,7 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const reasoning = (streamOptions as { reasoning?: string } | undefined)?.reasoning;
 		logLine(join(dir, "requests.log"), {
 			label,
+			messages: messages.length,
 			...(block === undefined ? {} : { workingMode: Number(block) }),
 			...(sections.length === 0 ? {} : { sections }),
 			...(images === 0 ? {} : { images }),

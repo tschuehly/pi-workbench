@@ -18,6 +18,9 @@ const live = new Set<ChildProcess>();
 // Host processes inherit this: telemetry goes to scratch, never to the owner's ~/.pi/agent/telemetry.
 const TELEMETRY = scratch("chat-telemetry");
 process.env.PI_TELEMETRY_DIR = TELEMETRY;
+// Hermetic: no storage-guard notice from this machine's real free space, and PI_TMP folders in scratch.
+process.env.PI_STORAGE_GUARD_FREE_GB = "1000";
+process.env.PI_TMP_ROOT = scratch("chat-pi-tmp");
 
 class ChatHost {
 	readonly child: ChildProcess;
