@@ -25,6 +25,19 @@ process.env.PI_TMP_ROOT = scratch("chat-pi-tmp");
 // And a Pi agent dir with fake stored logins, so hosts never read or lock the owner's auth.json.
 process.env.PI_CODING_AGENT_DIR = fakeAgentDir("chat-agent");
 
+/**
+ * The reconciliation rows need an unsafe tool that a kill interrupts mid-effect: the native bash, which a Subagent or
+ * Worker execution keeps (a lead's Workbench bash reattaches to its job instead, test/background-bash.test.ts).
+ */
+function native<T>(make: () => T): T {
+	process.env.PI_WORKBENCH_EXECUTION_KIND = "subagent";
+	try {
+		return make();
+	} finally {
+		delete process.env.PI_WORKBENCH_EXECUTION_KIND;
+	}
+}
+
 class ChatHost {
 	readonly child: ChildProcess;
 	readonly events: UiEvent[] = [];
@@ -122,7 +135,7 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	const ready = await host.ready;
 	assert.equal(ready.protocol, 2);
 	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups"], "the gated PI WEB operations this host supports");
-	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt"}' });
+	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt","description":"Read and write","foreground":true}' });
 	await host.until((e) => e.type === "agent.end", "the run to end");
 	const types = host.events.map((e) => e.type);
 	for (const type of ["agent.start", "tool.start", "tool.end", "message.end", "assistant.start", "agent.end", "status.update"]) assert.ok(types.includes(type), `${type} in ${types.join(",")}`);
@@ -147,7 +160,7 @@ test("Stop withdraws the queued follow-up and ends the running bash call", async
 	const { store, cwd } = family("stop");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
-	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo running; sleep 20"}' });
+	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo running; sleep 20","description":"Run","foreground":true}' });
 	await host.until((e) => e.type === "tool.update" && String(e.text).includes("running"), "bash output");
 	await host.call("prompt", { operationId: "op-2", text: "the follow-up" });
 	const queued = await host.call<Transcript["status"]>("status");
@@ -195,12 +208,12 @@ test("crash row generation: a committed partial survives a kill, restore stays p
 
 test("crash row tools: an interrupted unsafe bash never reruns and blocks a new bash; safe read still runs", async () => {
 	const { store, cwd } = family("tools");
-	const first = new ChatHost(store, cwd);
+	const first = native(() => new ChatHost(store, cwd));
 	await first.ready;
 	await first.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo deploy >> effects.log; echo started; sleep 5"}' });
 	await first.until((e) => e.type === "tool.update" && String(e.text).includes("started"), "the effect");
 	await first.kill();
-	const second = new ChatHost(store, cwd);
+	const second = native(() => new ChatHost(store, cwd));
 	await second.ready;
 	await second.call("prompt", { operationId: "op-2", text: 'call:bash {"command":"echo deploy >> effects.log"}' });
 	await second.until((e) => e.type === "message.end" && textOf((e.message as { content?: unknown }).content) === "done after bash" && e !== undefined && second.events.filter((x) => x.type === "tool.end").length >= 2, "both bash results");
@@ -423,13 +436,13 @@ test("OpenAI models: offered from the stored ChatGPT and Copilot logins; the cho
 
 test("resolve: the owner marks an interrupted bash retry; it is recorded, the model is told once, and bash runs again", async () => {
 	const { store, cwd } = family("resolve");
-	const first = new ChatHost(store, cwd);
+	const first = native(() => new ChatHost(store, cwd));
 	await first.ready;
 	await first.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo deploy >> effects.log; echo started; sleep 5"}' });
 	await first.until((e) => e.type === "tool.update" && String(e.text).includes("started"), "the effect");
 	await first.kill();
 
-	const host = new ChatHost(store, cwd);
+	const host = native(() => new ChatHost(store, cwd));
 	await host.ready;
 	const [effect] = (await host.call<Status>("status")).unresolvedEffects ?? [];
 	assert.equal(effect?.toolName, "bash");
@@ -466,14 +479,14 @@ test("resources and telemetry: PI WEB's AGENTS.md/skill sections reach the model
 
 test("an orderly SIGTERM closes the store gracefully: exit 0, the running unsafe call is held for the owner, telemetry ends the session", async () => {
 	const { store, cwd } = family("sigterm");
-	const host = new ChatHost(store, cwd);
+	const host = native(() => new ChatHost(store, cwd));
 	await host.ready;
 	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo deploy >> effects.log; sleep 30"}' });
 	// Barrier: the effect itself (the command prints nothing, so no event would wake an event wait).
 	while (!existsSync(join(cwd, "effects.log"))) await new Promise((resolve) => setTimeout(resolve, 20));
 	host.child.kill("SIGTERM");
 	assert.equal(await host.exited, 0);
-	const reopened = new ChatHost(store, cwd);
+	const reopened = native(() => new ChatHost(store, cwd));
 	await reopened.ready;
 	assert.equal((await reopened.call<Status>("status")).unresolvedEffects?.[0]?.toolName, "bash");
 	await reopened.close();

@@ -29,6 +29,10 @@ export function fakeAgentDir(label: string): string {
 // Hermetic: every host this driver starts (and any in-process store in its tests) reads a scratch agent dir with fake
 // logins; a test passes its own PI_CODING_AGENT_DIR in `env` when it needs one.
 process.env.PI_CODING_AGENT_DIR = fakeAgentDir("chat-proc-agent");
+// Hosts here are lead Chats: a Subagent or Worker environment running these tests must not give them the native bash.
+delete process.env.PI_WORKBENCH_EXECUTION_KIND;
+// Workbench bash jobs go to a scratch registry, never the owner's ~/.pi-workbench/background-bash.
+process.env.PI_BACKGROUND_BASH_ROOT ??= join(scratch("chat-proc-jobs"), "jobs");
 
 export type UiEvent = { type: string; [key: string]: unknown };
 type Reply = { id?: number; result?: unknown; error?: { name: string; message: string }; event?: UiEvent; ready?: { protocol: number; ownerEpoch: number } };

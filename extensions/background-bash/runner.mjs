@@ -2,7 +2,7 @@
 // detached), so the job survives the Pi process or PI WEB session daemon that started it. The shell
 // shares that group; the runner writes `exit` once and kills the whole group at timeout/expiry.
 import { spawn } from "node:child_process";
-import { linkSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,6 +17,10 @@ export function writeOnce(path, data) {
 }
 
 function run(dir) {
+  // Claim the job before anything runs: a second runner for the same job (its host restarted between recording the
+  // launch and the runner's start) exits here, and so does one whose job was cancelled before it started.
+  if (!writeOnce(join(dir, "claim"), JSON.stringify({ pid: process.pid, at: Date.now() }))) process.exit(0);
+  if (existsSync(join(dir, "exit"))) process.exit(0);
   const job = JSON.parse(readFileSync(join(dir, "job.json"), "utf8"));
   const finish = (result) => writeOnce(join(dir, "exit"), JSON.stringify({ ...result, finishedAt: Date.now() }));
   const output = openSync(join(dir, "output.log"), "a", 0o600);

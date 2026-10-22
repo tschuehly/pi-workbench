@@ -1,0 +1,5 @@
+  ✘  1 [webkit] › e2e/durableBashAtelier.spec.ts:36:1 › a background bash job returns at once; its completion card shows the exit and output, and its log opens (7.6s)
+  ✘  2 [webkit] › e2e/durableBashAtelier.spec.ts:56:1 › an Atelier Comment from the Page tab reaches the Chat once, and the agent's answer and update reach the tab (6.6s)
+    Error: expect(locator).toHaveCount(expected) failed
+    Error: expect(received).not.toBe(expected) // Object.is equality
+  2 failed

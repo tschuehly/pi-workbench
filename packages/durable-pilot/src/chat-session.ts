@@ -244,6 +244,8 @@ export class ChatSession {
 	#shell: { cancel: () => void } | undefined;
 	/** `!` records finished during a run: committed when it ends, so they never land between a tool call and its result. */
 	#heldShell: BashRecord[] = [];
+	/** Deliveries (bash completions, Atelier input) waiting for a paused restore to be resumed. */
+	#deliveries: (() => void)[] = [];
 
 	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder } = {}) {
 		this.#host = host;
@@ -269,6 +271,8 @@ export class ChatSession {
 			if (events.some((event) => STATUS_EVENTS.has(event.type))) this.#emit({ type: "status.update", status: await this.status() });
 		});
 		this.#stop = () => stream.stop();
+		this.#chat?.bash?.start(this.#host.root, this.#host.harness, { deliverable: () => this.#deliverable(), changed: () => void this.#publishStatus().catch(() => {}) });
+		await this.#chat?.atelier?.start(this.#host.root, this.#host.harness, { deliverable: () => this.#deliverable() });
 		const agent = await this.#host.root.agent(context);
 		this.#record("session.start", {
 			sessionFile: null, cwd: agent.cwd ?? null, mode: "durable", reason: "open",
@@ -278,6 +282,8 @@ export class ChatSession {
 	}
 
 	async close(): Promise<void> {
+		this.#chat?.bash?.close();
+		this.#chat?.atelier?.close();
 		await this.#chat?.packages?.close();
 		await this.#stop?.();
 		await this.#host.close();
@@ -520,6 +526,7 @@ export class ChatSession {
 			extensionStatuses: {
 				[WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode),
 				...(this.#chat?.fast.active(agent.model && { provider: agent.model.provider, id: agent.model.modelId }) ? { [FAST_STATUS]: "fast" } : {}),
+				...(await this.#chat?.bash?.status()),
 			},
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
@@ -569,6 +576,17 @@ export class ChatSession {
 		if (this.#resumed) return;
 		await this.#host.resume();
 		this.#resumed = true;
+		for (const deliver of this.#deliveries.splice(0)) deliver();
+	}
+
+	/**
+	 * Resolves once a host-side delivery may submit input: at once in a running or idle Chat; a restore with
+	 * interrupted work stays paused until the user resumes it, so a delivery never resumes that work by itself.
+	 */
+	async #deliverable(): Promise<void> {
+		if (this.#resumed) return;
+		if (!this.#host.harness.wake().active) return this.#resume();
+		await new Promise<void>((resolve) => this.#deliveries.push(resolve));
 	}
 
 	/**

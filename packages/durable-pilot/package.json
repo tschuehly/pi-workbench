@@ -25,7 +25,7 @@
     "typecheck": "tsc -p .",
     "test:matrix": "node --test --test-concurrency=1 --test-timeout=1800000 test/generation-tools.test.ts test/children-queue-questions.test.ts test/ownership-storage.test.ts test/credentials.test.ts",
     "test:spikes": "node --test --test-concurrency=1 test/redaction.test.ts test/redaction-boundaries.test.ts test/claude.test.ts test/providers.test.ts",
-    "test": "npm run typecheck && npm run test:matrix && npm run test:spikes && npm run test:chat && npm run test:extensions && npm run test:packages && npm run summary",
+    "test": "npm run typecheck && npm run test:matrix && npm run test:spikes && npm run test:chat && npm run test:extensions && npm run test:packages && npm run test:bash-atelier && npm run summary",
     "summary": "node scripts/summary.ts",
     "latency": "node scripts/commit-latency.ts",
     "baseline:queue-order": "node scripts/queue-order-baseline.ts",
@@ -33,6 +33,7 @@
     "test:chat": "node --test --test-concurrency=1 --test-timeout=120000 test/chat-host.test.ts test/composer.test.ts test/context-tools.test.ts",
     "test:extensions": "node --test --test-concurrency=1 --test-timeout=120000 test/extensions-host.test.ts",
     "chat-host": "node src/chat-host-main.ts",
-    "test:packages": "node --test --test-concurrency=1 --test-timeout=120000 test/packages.test.ts"
+    "test:packages": "node --test --test-concurrency=1 --test-timeout=120000 test/packages.test.ts",
+    "test:bash-atelier": "node --test --test-concurrency=1 --test-timeout=120000 test/background-bash.test.ts test/atelier.test.ts"
   }
 }
