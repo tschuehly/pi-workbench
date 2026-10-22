@@ -277,7 +277,7 @@ Until Phase C ships, use existing `switch-web`/`switch-workbench` when their pre
 
 ## Open decisions for Thomas
 
-**Thomas decided on 2026-10-22:** (1) independent family hosts; (2) after a shutdown, restore work **paused** until he resumes it (not automatic recovery); (3) existing history stays read-only on the legacy runtime and new Chats start on Durable, so **Phase D's transcript import is dropped** (about 7–12 days less; total roughly 31–50 engineer-days); (4) compatibility floor: all Workbench behaviors plus Claude subscription, MCP and his inventoried daily-use external tools. Still open: whether to start Phase A, and decision 5 (storage durability and budget gates).
+**Thomas decided on 2026-10-22:** (1) independent family hosts; (2) after a shutdown, restore work **paused** until he resumes it (not automatic recovery); (3) existing history stays read-only on the legacy runtime and new Chats start on Durable, so **Phase D's transcript import is dropped** (about 7–12 days less; total roughly 31–50 engineer-days); (4) compatibility floor: all Workbench behaviors plus Claude subscription, MCP and his inventoried daily-use external tools. Phase A approved and passed (branch pilot/pi-durable-phase-a-20261022, packages/durable-pilot/RESULTS.md). Decision 5: SQLite WAL with `synchronous=FULL` **plus `PRAGMA fullfsync=ON`** (power-cut safe on macOS, about 4 ms per commit); budget released gate by gate. Next: independent review of Phase A, then Phase B.
 
 The recommendations below are proposed defaults, not approval inferred from the request for a plan.
 
