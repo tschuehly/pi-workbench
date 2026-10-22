@@ -158,8 +158,9 @@ export class Atelier {
 		});
 	}
 
+	/** A note the model reads with its next turn: a submission, so it waits for the delivery barrier too. */
 	async #write(message: Message): Promise<void> {
-		await this.#conversation?.().submit({ type: "write", entry: { kind: PACKAGE_MESSAGE_ENTRY, data: { customType: message.customType, display: true, details: sanitizeDeep(JSON.parse(JSON.stringify(message.details)), redact) }, model: [{ role: "user", content: redact(message.content), timestamp: Date.now() }] } }, context);
+		await this.#deliver(async () => this.#conversation?.().submit({ type: "write", entry: { kind: PACKAGE_MESSAGE_ENTRY, data: { customType: message.customType, display: true, details: sanitizeDeep(JSON.parse(JSON.stringify(message.details)), redact) }, model: [{ role: "user", content: redact(message.content), timestamp: Date.now() }] } }, context));
 	}
 
 	/**

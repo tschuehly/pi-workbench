@@ -5,8 +5,11 @@
 // - tools become Durable tools behind the redaction wrapper, with a pinned replay policy (unlisted tools are unsafe:
 //   never rerun after a crash, held for the owner); tools a package keeps inactive are deferred until a tool such as
 //   `web_enable` activates them (`setActiveTools` during a call becomes `control.addTools`);
-// - `appendEntry` and `sendMessage` commit to the Chat (redacted first): entries as passive writes, messages as inputs
-//   (a turn when asked for one) or as context for the next turn, shown as PI WEB custom messages;
+// - `appendEntry` and `sendMessage` commit to the Chat (redacted first): entries as passive bookkeeping, committed at once
+//   without scheduling anything (a paused restore stays paused while packages start, record and shut down); messages as
+//   inputs (a turn when asked for one) or as context for the next turn, shown as PI WEB custom messages, through the
+//   Chat's delivery barrier as bash completions and Atelier input are: held while a restore is paused until the owner
+//   resumes it (a message still held when the host closes is dropped, as one arriving while a legacy session is down);
 // - commands run here; `ui.notify` reaches PI WEB as command output, dialogs are refused visibly;
 // - `session_start` (with the package's own entries as its branch), `session_tree` (with the new branch's),
 //   `before_agent_start`, `agent_settled` and `session_shutdown` reach the packages' handlers; their return values are not applied.
@@ -64,6 +67,8 @@ type PiTool = {
 type PiCommand = { name: string; description?: string; handler(args: string, ctx: unknown): Promise<void> | void };
 type PiExtension = { path: string; handlers: Map<string, ((event: unknown, ctx: unknown) => unknown)[]>; tools: Map<string, { definition: PiTool }>; commands: Map<string, PiCommand> };
 type PiMessage = { customType: string; content: string | Content; display?: boolean; details?: unknown };
+/** The Chat session's delivery barrier (ChatSession `#deliver`). */
+type Deliver = <T>(work: () => Promise<T>) => Promise<T>;
 type Branch = { type: "custom"; id: string; parentId: string | null; timestamp: string; customType: string; data: unknown }[];
 
 /** The Chat a binding commits to and the model its packages see. */
@@ -94,8 +99,12 @@ export class PiPackages {
 	#branch: Branch = [];
 	#idle = true;
 	#model: Record<string, unknown> | undefined;
-	/** Commits in call order; a failure is reported, never thrown into the package. */
+	/** Passive commits in call order; a failure is reported, never thrown into the package. */
 	#queue: Promise<void> = Promise.resolve();
+	/** Messages in call order, each through the Chat's delivery barrier once a session attached it. */
+	#outbox: Promise<void> = Promise.resolve();
+	#deliver: Deliver | undefined;
+	readonly #attached = Promise.withResolvers<void>();
 	readonly #calls = new AsyncLocalStorage<{ offered: Set<string>; added: string[] }>();
 
 	private constructor(options: PackageOptions, extensions: PiExtension[]) {
@@ -129,9 +138,9 @@ export class PiPackages {
 	/** Pi's `bindCore` for this host: the runtime actions every loaded extension's API delegates to. */
 	#bind(runtime: Record<string, unknown>): void {
 		Object.assign(runtime, {
-			sendMessage: (message: PiMessage, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }) => this.#commit(() => this.#send(message, options)),
+			sendMessage: (message: PiMessage, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }) => this.#submit(() => this.#send(message, options)),
 			sendUserMessage: (content: string | Content, options?: { deliverAs?: "steer" | "followUp" }) =>
-				this.#commit(async () => void (await this.#root().submit({ type: "input", content: sanitizeDeep(content, redact) as never, whenBusy: options?.deliverAs ?? "followUp", requestId: `package:${randomUUID()}` }, context))),
+				this.#submit(async () => void (await this.#root().submit({ type: "input", content: sanitizeDeep(content, redact) as never, whenBusy: options?.deliverAs ?? "followUp", requestId: `package:${randomUUID()}` }, context))),
 			appendEntry: (customType: string, data: unknown) => this.#commit(() => this.#append(customType, data)),
 			setSessionName: () => {},
 			getSessionName: () => undefined,
@@ -161,16 +170,34 @@ export class PiPackages {
 		return this.#host.root;
 	}
 
+	readonly #failed = (error: unknown) =>
+		this.#options.emit({ type: "session.diagnostic", message: `Package action failed: ${redact(error instanceof Error ? error.message : String(error))}` });
+
 	#commit(work: () => Promise<void>): void {
-		this.#queue = this.#queue.then(work).catch((error: unknown) =>
-			this.#options.emit({ type: "session.diagnostic", message: `Package action failed: ${redact(error instanceof Error ? error.message : String(error))}` }),
-		);
+		this.#queue = this.#queue.then(work).catch(this.#failed);
 	}
 
+	/** A submission (it may start or feed a turn): only through the Chat's delivery barrier, never ahead of it. */
+	#submit(work: () => Promise<void>): void {
+		this.#outbox = this.#outbox.then(() => this.#attached.promise).then(() => this.#deliver!(work)).catch(this.#failed);
+	}
+
+	/** The Chat session's delivery barrier: package messages wait for it as bash completions and Atelier input do. */
+	attach(hooks: { deliver: Deliver }): void {
+		this.#deliver = hooks.deliver;
+		this.#attached.resolve();
+	}
+
+	/**
+	 * Bookkeeping the model never sees: appended in one commit, as Durable admits a display-only write busy or not, but
+	 * not through `Conversation.submit`, which enables scheduling and would resume a paused restore.
+	 * ponytail: lands ahead of a queued reset write; this host queues none (no `Conversation.reset`).
+	 */
 	async #append(customType: string, data: unknown): Promise<void> {
 		const clean = sanitizeDeep(json(data), redact);
-		const submission = await this.#root().submit({ type: "write", entry: { kind: PACKAGE_ENTRY, data: { customType, data: clean } } }, context);
-		const id = String((await submission.status(context)).entry ?? submission.id);
+		const root = this.#root();
+		const entry = await root.commit((tx) => tx.appendEntry(root.id, { kind: PACKAGE_ENTRY, data: { customType, data: clean } }), context);
+		const id = String(entry.id);
 		this.#branch.push({ type: "custom", id, parentId: this.#branch.at(-1)?.id ?? null, timestamp: new Date().toISOString(), customType, data: clean });
 	}
 
@@ -358,7 +385,7 @@ export class PiPackages {
 		return { type: "done" };
 	}
 
-	/** `session_shutdown`, then every pending commit. */
+	/** `session_shutdown`, then every pending passive commit; a message held for a paused restore is not sent. */
 	async close(): Promise<void> {
 		await this.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
 		await this.#queue;
