@@ -98,6 +98,7 @@ test("P089 background Subagent: routed fresh child with its allowlist and own id
 	const launched = await toolResult(host, "subagent");
 	const id = launchedId(launched);
 	assert.match(launched, /in the background on openai-codex\/gpt-6-luna:medium \(scout · routine\)/, "the launch names the routed model");
+	assert.ok(launched.includes(` in ${cwd}.`), `the launch receipt names the child's cwd: ${launched}`);
 	const collected = await toolResult(host, "subagent_collect");
 	assert.match(collected, /Completion receipt: openai-codex\/gpt-6-luna:medium · subagent · scout · routine · outcome success/);
 	assert.match(collected, new RegExp(`${id} \\[success\\]`));
@@ -296,6 +297,48 @@ test("P094 steer: delivered once with its sequence; requestUpdate wakes the lead
 	assert.equal(logged(store).filter((l) => l.label.startsWith("call:report_status {\"status\":\"after")).length, 1, "the steer reached the child once");
 	await prompt(host, call("subagent_steer", { executionId: id, message: "too late" }));
 	assert.match(await toolResult(host, "subagent_steer", 2), /^preflight_failed: .* is not running \(success\)\.$/);
+	await host.close();
+});
+
+test("P094 follow-up: the child stays running while an admitted follow-up runs after its assignment answered; no wake; cancel confirms", async () => {
+	const { store, cwd } = family("follow-up");
+	const host = open(store, cwd);
+	await host.ready;
+	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 2"}')));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await quiet(host);
+	await waitFor(() => logged(store).some((l) => (l as { model?: string }).model !== undefined), "the child's request");
+	await prompt(host, call("subagent_steer", { executionId: id, message: 'call:bash {"command":"sleep 20; echo late > late.txt"}', mode: "followUp" }));
+	assert.match(await toolResult(host, "subagent_steer"), new RegExp(`^Sent followUp #1 to ${id}\\.$`));
+	await quiet(host);
+	// The assignment answers after its bash; the follow-up then runs its own long bash.
+	await waitFor(() => logged(store).some((l) => l.label.startsWith('call:bash {"command":"sleep 20')), "the follow-up's run", 30_000);
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	await prompt(host, call("subagent_status", { executionId: id }));
+	assert.match(await toolResult(host, "subagent_status"), new RegExp(`^${id} \\[running\\]`), "the child is not settled while its follow-up runs");
+	await quiet(host);
+	await prompt(host, call("subagent_cancel", { executionId: id }));
+	assert.equal(await toolResult(host, "subagent_cancel"), `${id}: cancelled.`);
+	await quiet(host);
+	const transcript = await host.call<Transcript>("transcript");
+	assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 0, "no completion wake for a child whose follow-up was cancelled");
+	await host.close();
+	assert.equal(existsSync(join(cwd, "late.txt")), false, "the follow-up's command was stopped");
+});
+
+test("P094 follow-up failure: a follow-up run that fails after the assignment answered makes the child execution_failed, not success", async () => {
+	const { store, cwd } = family("follow-up-fail");
+	const host = open(store, cwd);
+	await host.ready;
+	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 2"}')));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await quiet(host);
+	await waitFor(() => logged(store).some((l) => (l as { model?: string }).model !== undefined), "the child's request");
+	await prompt(host, call("subagent_steer", { executionId: id, message: "fail", mode: "followUp" }));
+	assert.match(await toolResult(host, "subagent_steer"), new RegExp(`^Sent followUp #1 to ${id}\\.$`));
+	const collected = await toolResult(host, "subagent_collect");
+	assert.match(collected, new RegExp(`${id} \\[execution_failed\\]\\nexecution_failed: child run after its assignment ended error: 400 invalid request \\(scripted\\)`));
+	await quiet(host);
 	await host.close();
 });
 
