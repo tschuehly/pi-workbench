@@ -121,15 +121,27 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	cycleThinkingLevel: () => session.cycleThinkingLevel(),
 	shell: (params) => session.shell(text(params, "text")),
 	clearQueue: () => session.clearQueue(),
+	// History navigation: the tree of retained branches, and continuing from an earlier entry.
+	tree: () => session.tree(),
+	navigate: (params) => {
+		const { targetId, expectedLeafId, retainCheckpoint } = params;
+		if (typeof targetId !== "string" || targetId.trim() === "") throw new Error("Session tree target is required");
+		if (expectedLeafId !== null && typeof expectedLeafId !== "string") throw new Error("expectedLeafId must be an entry ID or null");
+		return session.navigate({ targetId, expectedLeafId, ...(retainCheckpoint === true ? { retainCheckpoint } : {}) });
+	},
 	close: () => close(),
 };
+
+/** Operations that must not overlap history navigation (legacy `assertTreeNavigationInactive`). */
+const EXCLUSIVE = new Set(["prompt", "mode", "closeAsk", "setModel", "resolveEffect", "compact", "command", "mutateQueue", "setThinkingLevel", "cycleThinkingLevel", "shell"]);
 
 process.on("message", (message: Request) => {
 	void (async () => {
 		try {
 			const method = methods[message.method];
 			if (method === undefined) throw new Error(`Unknown method ${message.method}`);
-			send({ id: message.id, result: (await method(message.params ?? {})) ?? null });
+			const run = () => Promise.resolve(method(message.params ?? {}));
+			send({ id: message.id, result: (await (EXCLUSIVE.has(message.method) ? session.exclusive(run) : run())) ?? null });
 			if (message.method === "close" && process.connected) process.disconnect?.();
 		} catch (error) {
 			send({ id: message.id, error: { name: error instanceof Error ? error.name : "Error", message: error instanceof Error ? error.message : String(error) } });

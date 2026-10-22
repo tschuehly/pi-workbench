@@ -13,7 +13,6 @@ import { checkpointExtension } from "./checkpoint.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { router } from "./faux.ts";
-import type { ConversationId } from "@earendil-works/pi-durable";
 import { clearInheritedIdentity, storedAgent, sweepPiTmp, toolEnv, warningTool, workbenchExtensions } from "./extensions.ts";
 import { context, type Host, MODEL, openHost } from "./host.ts";
 import { toolGroupsExtension } from "./tool-groups.ts";
@@ -115,7 +114,6 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	clearInheritedIdentity();
 	sweepPiTmp();
 	const chatId = options.chatId ?? options.dir;
-	let rootId: ConversationId | undefined;
 	let opened: Host | undefined;
 	// Tool groups defer the group tools of every extension before them.
 	const extensions: Extension[] = [
@@ -148,14 +146,14 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		env: async (target, c) => {
 			const cwd = target.cwd ?? options.cwd;
 			const agent = await storedAgent(target.read, target.conversationId, c);
-			const identity = { chatId, conversationId: target.conversationId, rootId, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
+			// The Chat's active branch is the Chat: its calls carry the Chat's own ID.
+			const identity = { chatId, conversationId: target.conversationId, rootId: opened?.root.id, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
 			return new NodeExecutionEnv({ cwd, shellEnv: toolEnv(identity) });
 		},
 		// Package tools keep their own deferral (web_enable); tool groups see only the Workbench extensions.
 		extensions: [...extensions, toolGroupsExtension(extensions), ...(packages === undefined ? [] : [packages.extension()])],
 	});
 	opened = host;
-	rootId = host.root.id;
 	for (const provider of subscriptionProviders(fast)) host.models.setProvider(provider);
 	if (scripted) {
 		// The scripted model takes no Claude payload rules: it is answered locally by the router.
@@ -166,7 +164,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	// As Pi does on load: a stored level the model does not support is clamped (before anything is scheduled).
 	await applyModel(host);
 	await packages?.start({
-		root: host.root,
+		// The active branch at each use: history navigation may select another.
+		get root() { return host.root; },
 		registry: host.registry,
 		// Durable adds tools mid-conversation natively for every model (deferred tools loaded with control.addTools), so
 		// packages see a model that supports it: pi-web-access then keeps its web tools behind web_enable, as legacy

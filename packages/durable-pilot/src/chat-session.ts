@@ -26,6 +26,7 @@ import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./r
 import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
+import { commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 
 type WorkingModeDetailsLike = Record<string, unknown>;
 import {
@@ -57,9 +58,9 @@ export const PROTOCOL = 2;
  * PI WEB's gated Chat operations (`CHAT_CAPABILITY_LABELS` in its `shared/apiTypes.ts`) this host supports, reported
  * in its ready message. PI WEB shows a control only once its name is here; add a name with the operation that
  * implements it. Protocol 2 hosts without the list support none of them. compact: `/compact` (method `compact`);
- * compact-and-continue: the model tool; tool-groups: `tools_enable`.
+ * compact-and-continue: the model tool; tool-groups: `tools_enable`; tree: `/tree` and `navigate` (no branch summaries).
  */
-export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups"] as const;
+export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree"] as const;
 
 /** A `!`/`!!` command's record: PI WEB's `bashExecution` message without role and timestamp. */
 export const BASH_ENTRY = "workbench.bash";
@@ -244,6 +245,9 @@ export class ChatSession {
 	#shell: { cancel: () => void } | undefined;
 	/** `!` records finished during a run: committed when it ends, so they never land between a tool call and its result. */
 	#heldShell: BashRecord[] = [];
+	/** Tree navigation in progress, and operations in flight that it must not overlap (legacy tree-exclusive gate). */
+	#navigating = false;
+	#inFlight = 0;
 
 	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder } = {}) {
 		this.#host = host;
@@ -256,6 +260,17 @@ export class ChatSession {
 	async start(): Promise<void> {
 		if (this.#chat !== undefined) this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
 		this.#chat?.listenPackages((event) => this.#emit(event));
+		await this.#watch();
+		const agent = await this.#host.root.agent(context);
+		this.#record("session.start", {
+			sessionFile: null, cwd: agent.cwd ?? null, mode: "durable", reason: "open",
+			provider: agent.model?.provider ?? null, model: agent.model?.modelId ?? null, effort: agent.thinkingLevel ?? null,
+			argv: null, parentSessionId: null, executionId: null, ownerEpoch: this.#host.store.owner.epoch,
+		});
+	}
+
+	/** Project the active branch's committed events, from its current snapshot on. */
+	async #watch(): Promise<void> {
 		const stream = await watchEvents(this.#host.harness, this.#host.root.id, context);
 		await this.#reset(stream.snapshot);
 		stream.start(async (events) => {
@@ -269,12 +284,6 @@ export class ChatSession {
 			if (events.some((event) => STATUS_EVENTS.has(event.type))) this.#emit({ type: "status.update", status: await this.status() });
 		});
 		this.#stop = () => stream.stop();
-		const agent = await this.#host.root.agent(context);
-		this.#record("session.start", {
-			sessionFile: null, cwd: agent.cwd ?? null, mode: "durable", reason: "open",
-			provider: agent.model?.provider ?? null, model: agent.model?.modelId ?? null, effort: agent.thinkingLevel ?? null,
-			argv: null, parentSessionId: null, executionId: null, ownerEpoch: this.#host.store.owner.epoch,
-		});
 	}
 
 	async close(): Promise<void> {
@@ -900,6 +909,72 @@ export class ChatSession {
 		const { harness, root } = this.#host;
 		const inbox = await harness.snapshot(InboxDoc, root.id, context);
 		for (const item of inbox?.items ?? []) if (item.mode !== "write") await harness.abortSubmission(item.id, context, root.id);
+	}
+
+	// ─── History navigation ──────────────────────────────────────────────────
+
+	/**
+	 * Run an operation that must not overlap tree navigation (input, questions, models, the queue, shell, compaction):
+	 * refused while one runs, and counted so navigation waits for nothing in flight.
+	 */
+	async exclusive<T>(work: () => Promise<T>): Promise<T> {
+		if (this.#navigating) throw new Error("Wait for session tree navigation to finish, then try again");
+		this.#inFlight += 1;
+		try {
+			return await work();
+		} finally {
+			this.#inFlight -= 1;
+		}
+	}
+
+	/** Why the Chat is not quiescent: a run, queued input, any live task (a child, compaction, delivery) or a `!` command. */
+	async #activity(): Promise<string | undefined> {
+		const busy = "Stop current session activity before navigating the session tree";
+		if (this.#navigating || this.#inFlight > 0 || this.#running || this.#shell !== undefined || this.#heldShell.length > 0) return busy;
+		const inspection = await this.#host.harness.inspect(context);
+		if (inspection.tasks.length > 0 || inspection.submissions.length > 0) return busy;
+		const reconcile = await this.#host.harness.snapshot(Reconcile, context);
+		if (Object.values(reconcile?.uncertain ?? {}).some((item) => item.resolved === undefined)) return "Resolve the interrupted tool call before navigating the session tree";
+		return undefined;
+	}
+
+	/** `/tree`: every retained branch's history and the active leaf, as Pi-shaped entries; refused while active (legacy). */
+	async tree(): Promise<{ type: "tree"; nodes: TreeEntry[]; activeLeafId: string | null } | { type: "unsupported"; message: string }> {
+		if ((await this.#activity()) !== undefined) return { type: "unsupported", message: "Cannot open the session tree while the session is active. Stop current activity and try /tree again." };
+		return { type: "tree", ...(await historyTree(this.#host.harness, this.#host.root)) };
+	}
+
+	/**
+	 * Continue the Chat from an earlier entry: select the retained branch that ends there, or fork one in the same store
+	 * (Working Mode, tool groups and the agent as of the fork point; questions as that history leaves them). Later
+	 * history stays. Quiescent and checked against the leaf PI WEB showed. Returns a user message's text for the editor.
+	 */
+	async navigate(request: { targetId: string; expectedLeafId: string | null; retainCheckpoint?: boolean }): Promise<{ editorText?: string }> {
+		const busy = await this.#activity();
+		if (busy !== undefined) throw new Error(busy);
+		this.#navigating = true;
+		try {
+			const { harness } = this.#host;
+			const plan = await planNavigation(harness, this.#host.root, request);
+			const result = plan.editorText === undefined ? {} : { editorText: plan.editorText };
+			if (plan.select === undefined && plan.fork === undefined) return result;
+			const before = (await questionsState(harness, this.#host.root)).open;
+			const next = await commitNavigation(harness, this.#host.root, plan);
+			await this.#stop?.();
+			this.#host.root = next;
+			await this.#watch();
+			this.#record("session.tree", { entryId: null, newLeafId: plan.newLeafId, oldLeafId: plan.oldLeafId });
+			this.#emit({ type: "session.tree.changed" });
+			// The browser's question chips follow the branch: the sets left behind close, the branch's own open.
+			const after = (await questionsState(harness, next)).open;
+			for (const askId of Object.keys(before)) if (after[askId] === undefined) this.#emit({ type: "ask.closed", askId, reason: "cancelled" });
+			for (const [askId, ask] of Object.entries(after)) if (before[askId]?.revision !== ask.revision) this.#emit({ type: "ask.opened", ask });
+			await this.#chat?.packages?.tree(plan.oldLeafId, plan.newLeafId);
+			await this.#publishStatus();
+			return result;
+		} finally {
+			this.#navigating = false;
+		}
 	}
 
 	/** Listing metadata, read without scheduling anything. */

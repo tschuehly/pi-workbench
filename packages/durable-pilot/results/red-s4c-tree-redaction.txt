@@ -1,0 +1,25 @@
+✖ redaction: questions a branch reopens are committed sanitized, though the set they copy came verbatim from tool-call arguments (804.191125ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1230.724792
+
+✖ failing tests:
+
+test at test/tree.test.ts:186:1
+✖ redaction: questions a branch reopens are committed sanitized, though the set they copy came verbatim from tool-call arguments (804.191125ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /^Rotate \[REDACTED:github-token\]\?$/. Input:
+  
+  'Rotate ghp_Br4nchQu3st10nT0k3nBr4nchQu3st10nT0k3n?'
+  
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'Rotate ghp_Br4nchQu3st10nT0k3nBr4nchQu3st10nT0k3n?',
+    expected: /^Rotate \[REDACTED:github-token\]\?$/,
+    operator: 'match',
+    diff: 'simple'
+  }

@@ -391,10 +391,23 @@ export type HostOptions = {
 	readonly extensions?: readonly ReturnType<typeof defineExtension>[];
 };
 
+/**
+ * A Chat's branch map: the conversations history navigation forked in this family store (the root is always one), and
+ * the one the Chat shows and continues. Retained for good, so navigation never erases history.
+ */
+export const BranchesDoc = defineDoc<{ active: ConversationId | null; branches: ConversationId[] }>({
+	kind: "workbench.branches",
+	version: 1,
+	scope: "session",
+	initial: () => ({ active: null, branches: [] }),
+	checkpointWhen: () => false,
+});
+
 export type Host = {
 	readonly store: OpenedStore;
 	readonly harness: Harness;
-	readonly root: Conversation;
+	/** The Chat's active branch: the root conversation until history navigation selects another. */
+	root: Conversation;
 	readonly registry: Registry;
 	/** The model collection: providers, catalog and credentials. */
 	readonly models: ReturnType<typeof createModels>;
@@ -449,7 +462,9 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 		},
 		context,
 	);
-	const root = await harness.root(context, { agent: options.rootAgent ?? { model: MODEL } });
+	const reserved = await harness.root(context, { agent: options.rootAgent ?? { model: MODEL } });
+	const active = (await harness.snapshot(BranchesDoc, context))?.active ?? null;
+	const root = active === null ? reserved : ((await harness.conversation(active, context)) ?? reserved);
 	const uncertain = await reconcileOnOpen(harness, registry);
 	return {
 		store,

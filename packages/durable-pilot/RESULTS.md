@@ -354,3 +354,14 @@ Durable Chats offer the model catalog of a legacy Chat: every provider with a st
 - **Concurrent refresh:** `test/refresh-race.ts` (shared with `credentials.test.ts`) races two hosts and the installed Pi on an expired ChatGPT login: one refresh request; the unlocked control sends more than one.
 - **Live:** one ChatGPT request (`gpt-6-astra`, Fast Mode on via the trial workspace's config), answered and stored with usage; no Claude request.
 - **Not here:** the enabled-model scope (P017) and the thinking-level setter (P019) are slice 3; the Durable catalog marks every model enabled.
+
+## Phase B slice 4 group C: history navigation (P044, P046)
+
+Test-first in `test/tree.test.ts` (part of `npm run test:chat`); red runs in `results/red-s4c-tree*.txt`. WebKit: PI WEB `e2e/durable/bash-atelier-tree/tree-navigation.spec.ts`.
+
+- **Branch map** (`host.ts` `BranchesDoc`, `tree.ts`): a Chat's history is the root conversation plus the conversations navigation forked in the same family store. A session document records them and the active one; `openHost` reopens on the active branch, so the choice survives a kill. Nothing is erased: every branch stays in the tree.
+- **`/tree`** (`ChatSession.tree`): every branch's visible entries, once, as Pi-shaped session entries; PI WEB projects them with its legacy `projectSessionTree`. Refused while the Chat is active, as legacy.
+- **Navigate** (`ChatSession.navigate`): Pi's `navigateTree` rules (a user message continues from before it and returns its text to the editor; any other entry continues after it), and PI WEB's `messageHistoryTargetId` for message shortcuts. It selects the newest branch that already ends there, or forks one at that entry (`Conversation.fork`), or, before the first entry, opens an empty one with the agent, Working Mode and tool groups as of the Chat's start. One commit, checked against the leaf PI WEB showed and the active branch.
+- **Quiescent:** refused visibly while a run, queued input, any live task (children, compaction, answer delivery), a `!` command or an unresolved interrupted call is pending. Input, questions, models, queue, shell and compaction requests are refused while navigation runs (`chat-host-main.ts` `EXCLUSIVE`).
+- **Branch state:** Working Mode, tool groups and the agent come from Durable's `asOf` fork. Questions follow PI WEB's `openAsksFromTranscript` rules over the branch's history (a set closed after the fork point reopens). The copy is sanitized before commit; the positive control is red without it. Withdraw results now name the set (`details.withdrawn`), as PI WEB's tool does. A retained branch keeps its own state. The browser gets `ask.closed` and `ask.opened` for the change; packages get `session_tree`; telemetry records `session.tree`.
+- **Capabilities:** `ready.capabilities` adds `tree`. Branch summaries (`tree.summary`, unused in the last two weeks) and fork into a new Chat (`fork`, P045) stay hidden and refused.
