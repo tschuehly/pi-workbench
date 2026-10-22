@@ -7,6 +7,7 @@ import { after, describe, it } from "node:test";
 import { createModels, fauxAssistantMessage, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { createRegistry, defineExtension, defineTool, Harness } from "@earendil-works/pi-durable";
+import { modelsJsonBaseUrl, withBaseUrl } from "../src/chat.ts";
 import { claudeAliases, claudePayload, PiAuthStore } from "../src/claude.ts";
 import { textOfMessage } from "../src/faux.ts";
 import { admit, context, openHost } from "../src/host.ts";
@@ -125,6 +126,22 @@ describe("claude subscription adapter (offline)", () => {
 		} finally {
 			globalThis.fetch = realFetch;
 		}
+	});
+});
+
+describe("models.json baseUrl (as legacy Pi honors it)", () => {
+	it("serves every anthropic model from the agent dir's providers.anthropic.baseUrl, and only then", () => {
+		const agentDir = scratch("models-json");
+		assert.equal(modelsJsonBaseUrl("anthropic", agentDir), undefined, "no models.json");
+		assert.equal(withBaseUrl(anthropicProvider(), undefined).getModels()[0]?.baseUrl, "https://api.anthropic.com");
+		writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { anthropic: { baseUrl: "http://127.0.0.1:9" } } }));
+		assert.equal(modelsJsonBaseUrl("openai-codex", agentDir), undefined);
+		const provider = withBaseUrl(anthropicProvider(), modelsJsonBaseUrl("anthropic", agentDir));
+		assert.ok(provider.getModels().length > 0);
+		assert.ok(provider.getModels().every((model) => model.baseUrl === "http://127.0.0.1:9"));
+		const models = createModels();
+		models.setProvider(provider);
+		assert.equal(models.getModel("anthropic", "claude-sonnet-5-5")?.baseUrl, "http://127.0.0.1:9");
 	});
 });
 
