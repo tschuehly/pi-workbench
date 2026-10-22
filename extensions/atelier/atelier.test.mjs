@@ -9,6 +9,7 @@ import test from "node:test";
 import atelierExtension, { appendLog, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
 import { compose, derive, diffPreview, keyTexts, palette, threadLayout, wordDiff } from "./kernel/atelier.js";
 
+process.env.ATELIER_PAGE_CHECK = "off"; // the browser Page check has its own test (page-check.test.mjs)
 const UNDO = 3_000; // decision 151 (owner 2026-10-21)
 
 function project() {
