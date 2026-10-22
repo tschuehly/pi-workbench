@@ -127,27 +127,31 @@ export function derive(entries, currentVer = () => null, declared = []) {
   for (const t of threads.values()) { t.stale = stale(t.key, t.ver); if (t.stale) t.closed = false; }
   // Only an answer that judged the Key's content goes stale with it: a Page's atl-decide, or an ask naming material.
   // An asked question merely sits on its Key; its answer records the Key's version but stays answered (2.11.0).
-  // state: "new" (never answered), "changed" (answered on an earlier version), "done"; toAnswer is every one not done.
-  // Such an answer also opens a round per version (owner 2026-10-22: "the decision should reset or show version 2"):
-  // from the first answer on, each change of the version that events on the Key recorded, or that the Page shows now,
-  // starts the next round; `history` keeps the last answer of each earlier round. Answers without a version stay round 1.
+  // Such an answer holds for one round (owner 2026-10-22: "the decision should reset or show version 2"): from the
+  // first answer on, each change of the version that events on the Key recorded, or that the Page shows now, starts
+  // the next round, even back to an earlier version; `history` keeps the last answer of each earlier round. An answer
+  // without a version, or on a Key not on the Page, stays as it is in round 1.
+  // state: "new" (never answered), "changed" (answered in an earlier round), "done"; toAnswer is every one not done.
+  const keyOfEvent = (e) => e.key ?? (e.type === "close" || e.type === "still" ? threads.get(rootOf(e.target))?.key : undefined);
   const rounds = (d, key) => {
-    if ((!d.declared && !d.material) || d.answer === null) return { round: 1, history: [] };
+    const now = key ? currentVer(key) : null, one = { round: 1, history: [], current: true };
+    if ((!d.declared && !d.material) || d.answer === null || d.answer.ver == null || now == null) return one;
     // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
+    // ponytail: an event a tab still showing an older version posts later counts as a version change.
     const first = live.findIndex((e) => e.type === "decide" && e.decision === d.id), runs = [];
     const see = (ver, answer) => { if (ver == null) return; if (runs.at(-1)?.ver !== ver) runs.push({ ver, answer: null }); if (answer) runs.at(-1).answer = answer; };
-    for (const e of live.slice(first)) if (e.decision === d.id || (key != null && e.key === key)) see(e.ver, e.type === "decide" && e.decision === d.id ? e : null);
-    see(key ? currentVer(key) : null);
+    for (const e of live.slice(first)) if (e.decision === d.id || keyOfEvent(e) === key) see(e.ver, e.type === "decide" && e.decision === d.id ? e : null);
+    see(now);
     return {
-      round: Math.max(1, runs.length),
+      round: runs.length, current: runs.at(-1).answer === d.answer,
       history: runs.slice(0, -1).flatMap((r, i) => r.answer ? [{ round: i + 1, ver: r.ver, answer: r.answer.option, custom: !!r.answer.custom, note: r.answer.note ?? null }] : []),
     };
   };
   for (const d of decisions.values()) {
-    const key = d.key ?? d.answer?.key;
-    d.stale = d.answer !== null && (!!d.declared || !!d.material) && stale(key, d.answer.ver);
+    const { current, ...round } = rounds(d, d.key ?? d.answer?.key);
+    d.stale = d.answer !== null && !current;
     d.state = d.answer === null ? "new" : d.stale ? "changed" : "done";
-    Object.assign(d, rounds(d, key));
+    Object.assign(d, round);
   }
   const drafts = live.filter((e) => status(e) === "draft");
   return {

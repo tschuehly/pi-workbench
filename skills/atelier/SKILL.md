@@ -44,7 +44,7 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   `run-12/turn-3`; use domain ids, and keep them stable across Updates.
 - `atl-ver="…"` on content that changes, such as a build SHA or a content hash. Events record it,
   and older events show as "on an earlier version". When it changes after the human answered the Key's
-  `atl-decide` (or an `ask` that names `material`), the Decision starts a new round: it shows "Version 2" (3, …)
+  `atl-decide` (or an `ask` that names `material`), the Decision starts a new round (each change, even back to an earlier version): it shows "Version 2" (3, …)
   with no option chosen and the earlier answers beneath ("Version 1: Approve"), and is to answer again. Other
   answered `ask`s stay answered: a question is not a judgement of the Key it sits on.
 - `atl-decide="1|2|3|4|5"` or `"Confirm|Redo"` on a keyed element declares a Decision; its id is the

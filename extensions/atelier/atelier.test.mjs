@@ -262,6 +262,15 @@ test("a Page's Decision on a changed Key starts a new round: Version N, earlier 
   const local = [decide(-1, "Approve", "v1", { local: true }), decide(-2, "Rework", "v2", { local: true })];
   assert.deepEqual(round(local, "v3").slice(0, 2), ["changed", 3]);
   assert.deepEqual(round(local, "v3")[2].map((h) => [h.round, h.answer]), [[1, "Approve"], [2, "Rework"]]);
+  // Re-review: content restored to v1 after v2 is round 3, which no answer has reached yet.
+  const back = [decide(1, "Approve", "v1"), { seq: 2, at: 0, origin: "human", type: "comment", key: "shot", ver: "v2", text: "x", delivery: "immediate" }];
+  assert.deepEqual(round(back, "v1"), ["changed", 3, [{ round: 1, ver: "v1", answer: "Approve", custom: false, note: null }]]);
+  assert.deepEqual(derive(back, () => "v1").toAnswer.map((d) => d.id), ["shot"]);
+  // A Close or Still applies names its thread, not the Key; the version it records counts for the thread's Key.
+  const closed = [{ seq: 1, at: 0, origin: "human", type: "comment", key: "shot", ver: "v1", text: "x", delivery: "immediate" }, decide(2, "Approve", "v1"), { seq: 3, at: 0, origin: "human", type: "close", target: 1, ver: "v2" }];
+  assert.deepEqual(round(closed, "v3").slice(0, 2), ["changed", 3]);
+  // A Key not on the Page has no current version: its answer stays as it was, as before 2.11.0.
+  assert.deepEqual(round(v2, null), ["done", 1, []]);
 });
 
 test("per-Key counts are own data for any Key name (review of 2.11.0)", async () => {
