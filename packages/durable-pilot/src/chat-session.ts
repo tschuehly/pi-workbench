@@ -16,6 +16,9 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
 import { DEFAULT_COMPACTION, parseModel } from "./chat.ts";
+import { CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData } from "./checkpoint.ts";
+
+type WorkingModeDetailsLike = Record<string, unknown>;
 import { redact } from "./redact.ts";
 import { admit, context, type Host, Reconcile, resolveUncertain } from "./host.ts";
 import {
@@ -100,9 +103,16 @@ export function browserMessage(entry: EntryRecord, streamId?: string): Record<st
  */
 export function browserMessages(entry: EntryRecord, streamId?: string): Record<string, unknown>[] {
 	const message = entry.model?.[0] as Message | undefined;
-	if (message === undefined || message.role === "system") return [];
 	const entryId = String(entry.id);
-	const custom = (customType: string, content: string, details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message.timestamp, entryId: id });
+	const custom = (customType: string, content: string, details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message?.timestamp ?? 0, entryId: id });
+	if (entry.kind === CHECKPOINT_ENTRY) {
+		// The legacy extension's `context-checkpoint` message, after the Working Mode block it carried.
+		const { workingMode, text, ...details } = (entry.data ?? {}) as CheckpointData & { workingMode?: WorkingModeDetailsLike };
+		const content = message === undefined ? [] : Array.isArray(message.content) ? (message.content as { type: string; text?: string }[]) : [{ type: "text", text: String(message.content) }];
+		const body = message === undefined ? (text ?? "") : (content.at(-1)?.text ?? "");
+		return [...(workingMode === undefined ? [] : [custom(WORKING_MODE_CUSTOM_TYPE, content[0]?.text ?? "", workingMode, `${entryId}:working-mode`)]), custom(CHECKPOINT_CUSTOM_TYPE, body, details)];
+	}
+	if (message === undefined || message.role === "system") return [];
 	const parts = Array.isArray(message.content) ? (message.content as { type: string; text?: string }[]) : [];
 	const mode = entryWorkingMode(entry);
 	if (mode !== undefined && message.role === "user") {
@@ -282,6 +292,8 @@ export class ChatSession {
 			}
 			case "entry_appended":
 				this.#entries.push(event.entry);
+				// Passive entries the browser shows (a cancelled checkpoint); bookkeeping entries project to nothing.
+				for (const message of browserMessages(event.entry)) this.#emit({ type: "message.end", message });
 				return;
 			case "tool_execution_start":
 				this.#toolOutput.set(event.toolCallId, "");

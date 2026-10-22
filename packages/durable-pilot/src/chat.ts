@@ -7,6 +7,7 @@ import { type CompactionSettings, defineExtension, section } from "@earendil-wor
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
+import { checkpointExtension } from "./checkpoint.ts";
 import { router } from "./faux.ts";
 import { type Host, MODEL, openHost } from "./host.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
@@ -73,6 +74,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	for (const name of Object.keys(process.env)) if (name.startsWith("ANTHROPIC_")) delete process.env[name];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION };
 	const aliases = claudeAliases("pi");
+	let opened: Host | undefined;
 	const host = await openHost(options.dir, {
 		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200 },
 		provider: () => anthropicProvider(),
@@ -84,8 +86,10 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		extensions: [
 			chatTools(() => workbench.resources),
 			workbenchExtension({ chatId: options.chatId ?? options.dir, signal: (signal) => workbench.onSignal(signal) }),
+			checkpointExtension(() => opened!.harness),
 		],
 	});
+	opened = host;
 	if (scripted) {
 		// The scripted model takes no Claude payload rules: it is answered locally by the router.
 		host.models.setProvider(wrapProvider(host.faux.provider));

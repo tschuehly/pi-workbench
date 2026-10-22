@@ -97,6 +97,9 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		}
 		if (text === "gen") return fauxAssistantMessage([fauxText(LONG)]);
 		if (text === "fail") return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 invalid request (scripted)" });
+		const batch = /^calls:(\[.*\])$/s.exec(text);
+		if (batch !== null)
+			return fauxAssistantMessage((JSON.parse(batch[1]!) as { name: string; arguments?: object }[]).map((c) => fauxToolCall(c.name, (c.arguments ?? {}) as never)), { stopReason: "toolUse" });
 		const call = /^call:(\S+)(?: (.*))?$/s.exec(text);
 		if (call !== null)
 			return fauxAssistantMessage([fauxToolCall(call[1]!, call[2] === undefined ? {} : JSON.parse(call[2]))], { stopReason: "toolUse" });

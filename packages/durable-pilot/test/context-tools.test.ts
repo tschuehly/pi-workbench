@@ -169,3 +169,124 @@ test("a compaction summary and its /compact instructions are redacted before the
 	assert.match(String(events.find((e) => e.message?.source === "compaction")?.message?.content), /\[REDACTED:env:PILOT_CONTEXT_TOKEN\]/);
 	assert.deepEqual(scan([dir], [SECRET, SECRET.slice(0, 16)]), [], "store and work directory clean");
 });
+
+// ─── compact_and_continue ────────────────────────────────────────────────────
+
+const checkpointCall = (summaryFocus: string, nextPhase = "write the docs") => `call:compact_and_continue ${JSON.stringify({ summaryFocus, nextPhase })}`;
+const isCheckpoint = (e: { type: string; message?: unknown }) => e.type === "message.end" && (e.message as Message).customType === "context-checkpoint";
+const continuations = (store: string) => logged(store).filter((l) => l.label.startsWith("Context checkpoint"));
+
+/** A Chat with two answered turns and a small keep window, so a checkpoint has history to summarize. */
+async function twoTurns(host: ChatHost): Promise<void> {
+	await host.call("configure", { resources: {}, ...SMALL });
+	for (const [n, text] of ["one", "two"].entries()) {
+		await host.call("prompt", { operationId: `op-${n}`, text });
+		await host.idle(n + 1);
+	}
+}
+
+test("compact_and_continue: the run ends, the summary is placed, then exactly one continuation starts the next phase with the Working Mode block", async () => {
+	const { store, cwd } = family("checkpoint");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("mode", { args: "attention focused" });
+	await twoTurns(host);
+	await host.call("prompt", { operationId: "op-cc", text: checkpointCall("Keep the test names") });
+	const ended = await host.until((e) => e.type === "tool.end" && e.toolName === "compact_and_continue", "the tool result");
+	assert.match(String(ended.text), /Context checkpoint scheduled/);
+	const message = await host.until(isCheckpoint, "the continuation");
+	assert.match(textOf((message.message as Message).content), /^Context checkpoint completed\.\n\nContinue with the requested next phase: write the docs/);
+	assert.equal((message.message as Message).details?.status, "compacted");
+	await host.until((e) => e.type === "message.end" && textOf((e.message as Message).content).startsWith("ok: Context checkpoint completed"), "the next phase's answer");
+	const labels = logged(store).map((l) => l.label);
+	assert.equal(labels.filter((l) => l === "summarize").length, 1);
+	assert.ok(!labels.includes("result:compact_and_continue"), "the run ended without another model request");
+	assert.ok(labels.indexOf("summarize") < labels.findIndex((l) => l.startsWith("Context checkpoint")), "the continuation follows the placed summary");
+	assert.match(String(logged(store).find((l) => l.label === "summarize")?.focus), /Summary focus directive: Keep the test names\nNext phase: write the docs/);
+	assert.equal(continuations(store).length, 1);
+	assert.equal(continuations(store)[0]?.workingMode, 2, "the block compaction summarized away rides with the continuation");
+	const transcript = await host.call<Transcript>("transcript");
+	const types = transcript.messages.map((m) => m.customType ?? m.source ?? m.role);
+	assert.deepEqual(types.slice(types.indexOf("compaction")), ["compaction", "working-mode", "context-checkpoint", "assistant"]);
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+test("compact_and_continue refuses a sibling tool batch and schedules nothing", async () => {
+	const { store, cwd } = family("checkpoint-batch");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await twoTurns(host);
+	const calls = [{ name: "compact_and_continue", arguments: { summaryFocus: "x", nextPhase: "y" } }, { name: "read", arguments: { path: "missing.txt" } }];
+	await host.call("prompt", { operationId: "op-cc", text: `calls:${JSON.stringify(calls)}` });
+	const ended = await host.until((e) => e.type === "tool.end" && e.toolName === "compact_and_continue", "the tool result");
+	assert.match(String(ended.text), /must be called alone in its assistant tool batch/);
+	await host.idle(3);
+	assert.ok(!logged(store).some((l) => l.label === "summarize"), "no compaction");
+	assert.equal(continuations(store).length, 0);
+	await host.close();
+});
+
+test("compact_and_continue: a failed compaction still continues once, with the diagnostic", async () => {
+	const { store, cwd } = family("checkpoint-fail");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await twoTurns(host);
+	await host.call("prompt", { operationId: "op-cc", text: checkpointCall("fail now") });
+	const message = await host.until(isCheckpoint, "the continuation");
+	assert.equal((message.message as Message).details?.status, "failed");
+	assert.match(textOf((message.message as Message).content), /^Context checkpoint failed: Summarization failed: 400 summarizer rejected/);
+	await host.idle(4);
+	assert.equal(continuations(store).length, 1);
+	await host.close();
+});
+
+test("compact_and_continue: Esc during the compaction cancels it visibly and starts no next phase", async () => {
+	const { store, cwd } = family("checkpoint-cancel");
+	const host = new ChatHost(store, cwd, { tps: 40 });
+	await host.ready;
+	await twoTurns(host);
+	await host.call("prompt", { operationId: "op-cc", text: checkpointCall("slow") });
+	await waitFor(() => logged(store).some((l) => l.label === "summarize"), "the summary request");
+	await host.call("abort");
+	const message = await host.until(isCheckpoint, "the cancellation record");
+	assert.equal((message.message as Message).details?.status, "cancelled");
+	assert.equal(textOf((message.message as Message).content), "Context checkpoint cancelled; the next phase was not started.");
+	const status = await host.call<Status>("status");
+	assert.equal(status.isCompacting, false);
+	assert.equal(status.isStreaming, false);
+	assert.equal(continuations(store).length, 0, "no continuation reached the model");
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+for (const window of ["after the tool result", "while summarizing", "after the continuation"] as const) {
+	test(`crash row compact_and_continue: a kill ${window} yields one summary and one continuation after reopen`, async () => {
+		const { store, cwd } = family(`checkpoint-kill-${window.split(" ").at(-1)}`);
+		let host = new ChatHost(store, cwd, { tps: window === "while summarizing" ? 40 : 400 });
+		await host.ready;
+		await twoTurns(host);
+		await host.call("prompt", { operationId: "op-cc", text: checkpointCall(window === "while summarizing" ? "slow" : "Keep it") });
+		if (window === "after the tool result") await host.until((e) => e.type === "tool.end" && e.toolName === "compact_and_continue", "the tool result");
+		if (window === "while summarizing") await waitFor(() => logged(store).some((l) => l.label === "summarize"), "the summary request");
+		if (window === "after the continuation") await host.until(isCheckpoint, "the continuation");
+		await host.kill();
+		const summariesBefore = logged(store).filter((l) => l.label === "summarize").length;
+
+		host = new ChatHost(store, cwd);
+		await host.ready;
+		await host.call("configure", { resources: {}, ...SMALL });
+		await host.call("prompt", { operationId: "op-after", text: "after restart" });
+		if (window !== "after the continuation") await host.until(isCheckpoint, "the continuation");
+		await host.until(() => logged(store).some((l) => l.label === "after restart"), "the new prompt's request");
+		await host.until(() => continuations(store).length >= 1 && (window === "after the continuation" || host.events.filter((e) => e.type === "agent.end").length >= 2), "the runs to end");
+		const transcript = await host.call<Transcript>("transcript");
+		assert.equal(transcript.messages.filter((m) => m.customType === "context-checkpoint").length, 1, "one continuation in the transcript");
+		assert.equal(compactions(transcript.messages).length, 1, "one placed summary");
+		assert.equal(continuations(store).length, 1, "the model got the continuation once");
+		const summaries = logged(store).filter((l) => l.label === "summarize").length;
+		assert.equal(summaries, window === "while summarizing" ? 2 : Math.max(summariesBefore, 1), "a summary request is resent only when the kill interrupted it");
+		await host.close();
+		assert.equal(integrity(store), "ok");
+	});
+}
