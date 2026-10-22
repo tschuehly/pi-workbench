@@ -10,6 +10,7 @@ import test, { mock } from "node:test";
 import atelierExtension, { appendLog, copyKernel, createHost, readLog } from "./index.ts";
 import { compose, derive } from "./kernel/atelier.js";
 
+process.env.ATELIER_PAGE_CHECK = "off"; // the browser Page check has its own test (page-check.test.mjs)
 const UNDO = 3_000; // decision 151 (owner 2026-10-21)
 const PAGE = "<!doctype html><title>t</title><div atl-key='a' atl-ver='1'>A</div>";
 
