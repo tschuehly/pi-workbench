@@ -24,10 +24,12 @@
     "typecheck": "tsc -p .",
     "test:matrix": "node --test --test-concurrency=1 --test-timeout=1800000 test/generation-tools.test.ts test/children-queue-questions.test.ts test/ownership-storage.test.ts test/credentials.test.ts",
     "test:spikes": "node --test --test-concurrency=1 test/redaction.test.ts test/claude.test.ts",
-    "test": "npm run typecheck && npm run test:matrix && npm run test:spikes && npm run summary",
+    "test": "npm run typecheck && npm run test:matrix && npm run test:spikes && npm run test:chat && npm run summary",
     "summary": "node scripts/summary.ts",
     "latency": "node scripts/commit-latency.ts",
     "baseline:queue-order": "node scripts/queue-order-baseline.ts",
-    "spike:claude:live": "PILOT_LIVE_CLAUDE=1 node scripts/claude-subscription-spike.ts"
+    "spike:claude:live": "PILOT_LIVE_CLAUDE=1 node scripts/claude-subscription-spike.ts",
+    "test:chat": "node --test --test-concurrency=1 --test-timeout=120000 test/chat-host.test.ts",
+    "chat-host": "node src/chat-host-main.ts"
   }
 }

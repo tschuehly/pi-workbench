@@ -7,6 +7,7 @@ import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	createModels,
+	type CredentialStore,
 	type FauxProviderHandle,
 	fauxProvider,
 	type Message,
@@ -14,8 +15,10 @@ import {
 	type RegisterFauxProviderOptions,
 } from "@earendil-works/pi-ai";
 import {
+	type AgentChange,
 	type Conversation,
 	type ConversationId,
+	type EnvTarget,
 	createRegistry,
 	defineDoc,
 	defineExtension,
@@ -279,8 +282,16 @@ export type HostOptions = {
 	readonly faux?: RegisterFauxProviderOptions;
 	readonly settings?: HarnessSettings;
 	readonly now?: () => number;
-	/** Decorate the faux provider (before redaction), e.g. with provider-side deferred jobs. */
+	/** Decorate or replace the faux provider (before redaction), e.g. with provider-side deferred jobs or a real provider. */
 	readonly provider?: (faux: Provider) => Provider;
+	/** Provider-boundary options of the redacting wrapper, e.g. the Claude subscription payload rules. */
+	readonly providerOptions?: Parameters<typeof wrapProvider>[1];
+	/** Credential store of the model collection, e.g. Pi's auth.json. */
+	readonly credentials?: CredentialStore;
+	/** The root conversation's agent when it is created; default the faux model. */
+	readonly rootAgent?: AgentChange;
+	/** Execution environment per call; default a NodeExecutionEnv in the family's work directory. */
+	readonly env?: (target: EnvTarget) => NodeExecutionEnv;
 	/** Extensions installed after the guard, in order. */
 	readonly extensions?: readonly ReturnType<typeof defineExtension>[];
 };
@@ -317,8 +328,8 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 		...(options.faults === undefined ? {} : { faults: options.faults }),
 	});
 	const faux = fauxProvider(options.faux ?? {});
-	const models = createModels();
-	models.setProvider(wrapProvider(options.provider === undefined ? faux.provider : options.provider(faux.provider)));
+	const models = createModels(options.credentials === undefined ? undefined : { credentials: options.credentials });
+	models.setProvider(wrapProvider(options.provider === undefined ? faux.provider : options.provider(faux.provider), options.providerOptions));
 	const registry = createRegistry();
 	registry.install(ReconcileGuard);
 	for (const extension of options.extensions ?? []) registry.install(extension);
@@ -329,7 +340,7 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 			models,
 			registry,
 			settings: { afterFailedRun: "keep", ...options.settings },
-			env: () => new NodeExecutionEnv({ cwd: work }),
+			env: options.env ?? (() => new NodeExecutionEnv({ cwd: work })),
 			...(options.now === undefined ? {} : { now: options.now }),
 			onReport: (error: unknown, info: ReportInfo) =>
 				reports.push({
@@ -340,7 +351,7 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 		},
 		context,
 	);
-	const root = await harness.root(context, { agent: { model: MODEL } });
+	const root = await harness.root(context, { agent: options.rootAgent ?? { model: MODEL } });
 	const uncertain = await reconcileOnOpen(harness, registry);
 	return {
 		store,
