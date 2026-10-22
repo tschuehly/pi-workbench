@@ -8,7 +8,7 @@ Open for the owner before Phase B:
 
 1. **Queued-item edit has known limits** (see [Queued input](#queued-input)): it rebuilds the queue tail, refuses when a queued write follows the item, and cannot reorder an item a run already placed.
 2. **Credential refresh is proven offline only**, against a fake OAuth endpoint, with the installed Pi's credential-store code as the stand-in. No real refresh was sent.
-3. **Open redaction boundaries:** bash spill files, leading fragments of env-only credentials, and unsafe nested tool calls (see spike b and Further findings).
+3. **Open redaction boundaries:** bash spill files, leading fragments of env-only credentials, and unsafe nested tool calls (see spike b and Further findings). **Closed in Phase B slice 2** (`test/redaction-boundaries.test.ts`, each with a positive control; red before the fix in `results/red-before-slice2.txt`).
 
 Scope: Phase A of [the rebuild plan](../../docs/plans/pi-durable-rebuild.md), approved 2026-10-22. This is a headless pilot only. No Workbench, PI WEB, installed checkout or service changed.
 
@@ -259,9 +259,9 @@ All of these are Phase B parity items.
 
 - **Stored verbatim, as with the current extension (shown by test):** tool-call arguments.
 - **Stored verbatim, not separately tested:** user input and provider-signed thinking.
-- **Bash spill files** are written by the execution environment itself, so a large output can put plaintext on disk outside Durable. This is not exercised; it needs an environment-level wrapper.
-- **Unsafe nested tool calls:** not recorded as uncertain by reconciliation (see Further findings).
-- **Leading fragment of a non-patterned env credential:** a details value ending in the first characters of a credential known only from the environment can store that fragment. Secret-shaped prefixes are masked. The production port should take the known-value list from `redact.mjs`.
+- **Bash spill files** were written by the execution environment itself. *Slice 2:* `redactingTool` gives tools an environment that runs without the raw spill and writes the sanitized stream to its own owner-only spill file.
+- **Unsafe nested tool calls** were not recorded as uncertain. *Slice 2:* `reconcileOnOpen` records nested calls in their execute phase; the guard blocks a fresh call.
+- **Leading fragment of a non-patterned env credential** in a details value. *Slice 2:* details and diagnostics mask a trailing leading-fragment (6+ characters) of any known value from `redact.mjs` `knownValues()`.
 - **Event deltas:** stream event deltas are blanked; consumers must read sanitized partials.
 
 ### (c) FULL vs NORMAL commit latency — **measured** (`results/latency.json`)

@@ -432,3 +432,21 @@ test("resources and telemetry: PI WEB's AGENTS.md/skill sections reach the model
 	for (const type of ["session.start", "prompt", "agent.start", "usage", "agent.settled", "session.shutdown"]) assert.ok(mine.some((e) => e.type === type), `${type} recorded`);
 	assert.ok(mine.find((e) => e.type === "usage")?.usageKey?.startsWith(`${store}:assistant:`));
 });
+
+test("an orderly SIGTERM closes the store gracefully: exit 0, the running unsafe call is held for the owner, telemetry ends the session", async () => {
+	const { store, cwd } = family("sigterm");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo deploy >> effects.log; sleep 30"}' });
+	// Barrier: the effect itself (the command prints nothing, so no event would wake an event wait).
+	while (!existsSync(join(cwd, "effects.log"))) await new Promise((resolve) => setTimeout(resolve, 20));
+	host.child.kill("SIGTERM");
+	assert.equal(await host.exited, 0);
+	const reopened = new ChatHost(store, cwd);
+	await reopened.ready;
+	assert.equal((await reopened.call<Status>("status")).unresolvedEffects?.[0]?.toolName, "bash");
+	await reopened.close();
+	assert.equal(integrity(store), "ok");
+	const events = readdirSync(TELEMETRY).flatMap((file) => readLog<{ type: string; sessionId: string }>(join(TELEMETRY, file))).filter((e) => e.sessionId === store);
+	assert.equal(events.filter((e) => e.type === "session.shutdown").length, 2, "both host lifetimes ended with session.shutdown");
+});

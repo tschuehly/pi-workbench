@@ -4,7 +4,8 @@
 //                              [--session-id <PI WEB Chat ID>] [--scripted]
 // Messages in:  { id, method, params? }
 // Messages out: { ready: { protocol, durable, ownerEpoch } } once open, { id, result } | { id, error }, { event }.
-// The host exits after `close`, or when PI WEB goes away (IPC disconnect), closing the store gracefully first.
+// The host exits after `close`, when PI WEB goes away (IPC disconnect), or on SIGTERM/SIGINT, closing the store
+// gracefully first.
 // ponytail: the IPC channel ties the host's life to its session daemon; Phase C moves hosts to their own service owner.
 import { parseArgs } from "node:util";
 // The Workbench telemetry extension's recorder: same JSONL events, same PI_TELEMETRY_DIR.
@@ -103,5 +104,8 @@ process.on("message", (message: Request) => {
 	})();
 });
 process.on("disconnect", () => void close());
+// An orderly shutdown (service stop, logout, the trial's stop script) closes the store gracefully: committed work and
+// the intent of a running tool stay, and restore is paused on the next open.
+for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void close().finally(() => process.exit(0)));
 
 send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch } });
