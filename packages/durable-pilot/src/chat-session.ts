@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
 import { parseModel } from "./chat.ts";
+import { type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
 import { admit, context, type Host, Reconcile, resolveUncertain } from "./host.ts";
 import {
 	ANSWERS_ENTRY,
@@ -66,6 +67,8 @@ export type ChatStatus = {
 	attentionRequest?: { id: string; reason: string };
 	/** Interrupted unsafe tool calls that block their tool until the owner resolves them. */
 	unresolvedEffects?: UnresolvedEffect[];
+	/** Running shell tool calls, as PI WEB's Activity shows them (`ActiveToolExecution`). */
+	activeToolExecutions?: { id: string; kind: "shell"; toolName: string; label: string; startedAt: string }[];
 };
 
 export type UnresolvedEffect = { id: string; toolName: string; arguments: string };
@@ -107,6 +110,8 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	}
 	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
+	const notice = NOTICE_TYPES[entry.kind];
+	if (notice !== undefined) return [custom(notice, textOfContent(message.content), entry.data ?? null)];
 	const content = message.role === "toolResult" ? { content: browserToolContent(message.content) } : {};
 	return [{ ...message, ...content, entryId, ...(streamId === undefined ? {} : { streamId }) }];
 }
@@ -141,6 +146,8 @@ export class ChatSession {
 	#streams = 0;
 	#running = false;
 	#toolOutput = new Map<string, string>();
+	/** Running bash calls of the current round (activity), from committed tool events. */
+	#shells = new Map<string, string>();
 	#stop: (() => Promise<unknown>) | undefined;
 	/** False until the first input after open: a reopened store stays paused until Thomas sends something. */
 	#resumed = false;
@@ -200,6 +207,9 @@ export class ChatSession {
 		this.#entries = [...snapshot.entries];
 		this.#running = snapshot.run !== undefined;
 		this.#partial = undefined;
+		this.#shells.clear();
+		// A restored store stays paused: its running slots are interrupted, not running, until work resumes.
+		if (this.#resumed) for (const slot of snapshot.tools) if (slot.name === "bash" && slot.status === "running") this.#shells.set(slot.callId, new Date().toISOString());
 		this.#emitted = [];
 		const partial = snapshot.generation?.message;
 		if (partial !== undefined) this.#startPartial(partial);
@@ -228,6 +238,7 @@ export class ChatSession {
 				return;
 			case "run_end":
 				this.#running = false;
+				this.#shells.clear();
 				this.#emit({ type: "agent.end" });
 				this.#record("agent.settled", { sessionFile: null });
 				return;
@@ -255,9 +266,12 @@ export class ChatSession {
 			}
 			case "entry_appended":
 				this.#entries.push(event.entry);
+				// Workbench notices (storage-guard) are passive entries; show them live.
+				if (event.entry.kind in NOTICE_TYPES) for (const message of browserMessages(event.entry)) this.#emit({ type: "message.end", message });
 				return;
 			case "tool_execution_start":
 				this.#toolOutput.set(event.toolCallId, "");
+				if (event.toolName === "bash") this.#shells.set(event.toolCallId, new Date().toISOString());
 				this.#emit({ type: "tool.start", toolName: event.toolName, toolCallId: event.toolCallId, summary: "", args: event.args });
 				return;
 			case "tool_execution_update": {
@@ -272,6 +286,7 @@ export class ChatSession {
 			}
 			case "tool_execution_end": {
 				this.#toolOutput.delete(event.toolCallId);
+				this.#shells.delete(event.toolCallId);
 				const stored = event.entry?.model?.[0] as { content?: unknown; isError?: boolean; details?: unknown } | undefined;
 				const result = stored === undefined ? undefined : { ...stored, content: browserToolContent(stored.content) };
 				this.#emit({
@@ -381,7 +396,13 @@ export class ChatSession {
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
 			...(unresolvedEffects.length === 0 ? {} : { unresolvedEffects }),
+			...(this.#shells.size === 0 ? {} : { activeToolExecutions: [...this.#shells].map(([callId, startedAt]) => ({ id: `tool:${callId}`, kind: "shell" as const, toolName: "bash", label: "Shell command", startedAt })) }),
 		};
+	}
+
+	/** A host command (`/quota-check`). It runs outside the store: nothing is committed or resumed. */
+	command(name: string, args: string): Promise<CommandResult> {
+		return runCommand(name, args);
 	}
 
 	async #resume(): Promise<void> {
@@ -398,6 +419,8 @@ export class ChatSession {
 		await this.#resume();
 		const { root } = this.#host;
 		const existing = await root.commit((tx) => tx.submissionByRequest(root.id, params.operationId), context);
+		// storage-guard: a new input that starts a lead run gets the low-disk notice first.
+		if (existing === undefined && this.#chat !== undefined && !this.#running) await storagePreflight(root);
 		// A retry keeps whatever the first attempt admitted; only a new operation picks up a pending block.
 		const block = existing === undefined && this.#chat !== undefined ? await pendingBlock(this.#host.harness, root, false) : undefined;
 		const submissionId = await admit(root, {
@@ -513,4 +536,4 @@ export class ChatSession {
 	}
 }
 
-const STATUS_EVENTS = new Set<AgentEvent["type"]>(["run_start", "run_end", "inbox_update", "usage_changed", "agent_changed", "snapshot", "message_end"]);
+const STATUS_EVENTS = new Set<AgentEvent["type"]>(["run_start", "run_end", "inbox_update", "usage_changed", "agent_changed", "snapshot", "message_end", "tool_execution_start", "tool_execution_end"]);

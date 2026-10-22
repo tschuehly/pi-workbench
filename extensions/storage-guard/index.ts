@@ -1,20 +1,7 @@
-import { statfsSync } from "node:fs";
-import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CUSTOM_TYPE, freeGb, lowDiskNotice } from "./guard.mjs";
 
-// ponytail: fixed 50 GB nudge point and 5 GB repeat step (owner choices); PI_STORAGE_GUARD_FREE_GB overrides the reading for tests.
-const LOW_GB = 50;
-const REPEAT_DROP_GB = 5;
-const CUSTOM_TYPE = "storage-guard";
-
-export function freeGb(): number {
-  const fake = process.env.PI_STORAGE_GUARD_FREE_GB;
-  if (fake !== undefined) return Number(fake);
-  const disk = statfsSync(homedir());
-  return (disk.bavail * disk.bsize) / 2 ** 30;
-}
-
-const note = (gb: number, text: string) => ({ customType: CUSTOM_TYPE, display: true, content: `Disk low: ${gb.toFixed(0)} GB free. ${text}` });
+export { freeGb };
 
 export default function storageGuard(pi: ExtensionAPI) {
   // Subagents and Workers (including the cleanup Subagent itself) are not nudged; their lead is.
@@ -24,8 +11,9 @@ export default function storageGuard(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", () => {
     const gb = freeGb();
-    if (gb >= LOW_GB || (notedAt !== undefined && gb > notedAt - REPEAT_DROP_GB)) return;
+    const content = lowDiskNotice(gb, notedAt);
+    if (content === undefined) return;
     notedAt = gb;
-    return { message: note(gb, "At the next checkpoint, clean up what this Workstream no longer needs (see `mac-storage-workspaces --workstream <id>`).") };
+    return { message: { customType: CUSTOM_TYPE, display: true, content } };
   });
 }

@@ -313,7 +313,7 @@ export type HostOptions = {
 	/** The root conversation's agent when it is created; default the faux model. */
 	readonly rootAgent?: AgentChange;
 	/** Execution environment per call; default a NodeExecutionEnv in the family's work directory. */
-	readonly env?: (target: EnvTarget) => NodeExecutionEnv;
+	readonly env?: (target: EnvTarget, context: Context) => NodeExecutionEnv | Promise<NodeExecutionEnv>;
 	/** Extensions installed after the guard, in order. */
 	readonly extensions?: readonly ReturnType<typeof defineExtension>[];
 };

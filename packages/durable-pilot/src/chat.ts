@@ -8,6 +8,8 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { router } from "./faux.ts";
+import type { ConversationId } from "@earendil-works/pi-durable";
+import { clearInheritedIdentity, storedAgent, sweepPiTmp, toolEnv, warningTool, workbenchExtensions } from "./extensions.ts";
 import { type Host, MODEL, openHost } from "./host.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
@@ -30,7 +32,7 @@ export function chatTools(resources: () => Resources) {
 			section("cwd", (input) => input.env?.cwd),
 		],
 		// read has no external effect, so a crash mid-read may rerun it; write, edit and bash stay unsafe (never rerun).
-		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), createBashTool()].map((tool) => redactingTool(tool)),
+		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), createBashTool()].map((tool) => redactingTool(warningTool(tool))),
 	});
 }
 
@@ -65,6 +67,11 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const scripted = options.model === "faux" || options.scripted === true;
 	// No paid API-key path may be taken silently: the subscription login in Pi's auth.json is the only credential.
 	for (const name of Object.keys(process.env)) if (name.startsWith("ANTHROPIC_")) delete process.env[name];
+	// Each tool call gets this Chat's identity (toolEnv), never one the host inherited.
+	clearInheritedIdentity();
+	sweepPiTmp();
+	const chatId = options.chatId ?? options.dir;
+	let rootId: ConversationId | undefined;
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {} };
 	const aliases = claudeAliases("pi");
 	const host = await openHost(options.dir, {
@@ -73,12 +80,19 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials: new PiAuthStore(),
 		rootAgent: { model: parseModel(options.model), cwd: options.cwd },
-		env: (target) => new NodeExecutionEnv({ cwd: target.cwd ?? options.cwd }),
+		env: async (target, c) => {
+			const cwd = target.cwd ?? options.cwd;
+			const agent = await storedAgent(target.read, target.conversationId, c);
+			const identity = { chatId, conversationId: target.conversationId, rootId, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
+			return new NodeExecutionEnv({ cwd, shellEnv: toolEnv(identity) });
+		},
 		extensions: [
 			chatTools(() => workbench.resources),
-			workbenchExtension({ chatId: options.chatId ?? options.dir, signal: (signal) => workbench.onSignal(signal) }),
+			workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
+			workbenchExtensions(options.cwd),
 		],
 	});
+	rootId = host.root.id;
 	if (scripted) {
 		// The scripted model takes no Claude payload rules: it is answered locally by the router.
 		host.models.setProvider(wrapProvider(host.faux.provider));
