@@ -3,7 +3,8 @@
 // request_attention), and the legacy Chat's providers from Pi's auth.json: the Claude subscription (pi-claude-code-use
 // 2.2.1 payload rules), the ChatGPT subscription (openai-codex, with pi-openai-fast-mode) and GitHub Copilot; plus, for
 // tests and trials, the scripted faux model. The Chat's model is stored per conversation and can be switched.
-import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { readFileSync } from "node:fs";
+import { clampThinkingLevel, type ModelThinkingLevel, type Provider } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -106,6 +107,32 @@ export async function applyModel(host: Host, model?: { provider: string; modelId
 	return thinkingLevel;
 }
 
+/**
+ * `providers.<id>.baseUrl` from Pi's models.json in the agent dir, which legacy Pi applies to that provider's built-in
+ * models (a proxy, or the e2e mock in pi-web `e2e/mockModels/`). Unreadable or absent: the provider's own endpoint.
+ * ponytail: only baseUrl is honored; headers, models and modelOverrides stay legacy-only until a Durable Chat needs them.
+ */
+export function modelsJsonBaseUrl(providerId: string, agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent")): string | undefined {
+	try {
+		const config = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8")) as { providers?: Record<string, { baseUrl?: unknown }> };
+		const baseUrl = config.providers?.[providerId]?.baseUrl;
+		return typeof baseUrl === "string" && baseUrl !== "" ? baseUrl : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The provider with every model served from `baseUrl`; unchanged when it is undefined. */
+export function withBaseUrl<P extends Provider>(provider: P, baseUrl: string | undefined): P {
+	if (baseUrl === undefined) return provider;
+	return {
+		...provider,
+		baseUrl,
+		getModels: () => provider.getModels().map((model) => ({ ...model, baseUrl })),
+		...(provider.getAllModels === undefined ? {} : { getAllModels: () => provider.getAllModels!().map((model) => ({ ...model, baseUrl })) }),
+	};
+}
+
 export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> {
 	const scripted = options.model === "faux" || options.scripted === true;
 	// No paid API-key path may be taken silently: the subscription logins in Pi's auth.json are the only credentials.
@@ -140,7 +167,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const host = await openHost(options.dir, {
 		// The scripted model reasons, so thinking levels apply to it as to Claude.
 		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200, models: [{ id: MODEL.modelId, reasoning: true }] },
-		provider: () => withStoredModels(anthropicProvider()),
+		provider: () => withBaseUrl(withStoredModels(anthropicProvider()), modelsJsonBaseUrl("anthropic")),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials: new PiAuthStore(),
 		settings: { get compaction() { return workbench.compaction; } },
