@@ -277,6 +277,8 @@ Until Phase C ships, use existing `switch-web`/`switch-workbench` when their pre
 
 ## Open decisions for Thomas
 
+**Thomas decided on 2026-10-22:** (1) independent family hosts; (2) after a shutdown, restore work **paused** until he resumes it (not automatic recovery); (3) existing history stays read-only on the legacy runtime and new Chats start on Durable, so **Phase D's transcript import is dropped** (about 7–12 days less; total roughly 31–50 engineer-days); (4) compatibility floor: all Workbench behaviors plus Claude subscription, MCP and his inventoried daily-use external tools. Still open: whether to start Phase A, and decision 5 (storage durability and budget gates).
+
 The recommendations below are proposed defaults, not approval inferred from the request for a plan.
 
 1. **Promotion guarantee and ownership.** Options: embed one Harness/store in sessiond and accept replay on full promotion; retain independent family hosts; or retain one shared all-Chat host. **Recommend independent family hosts**: preserves the earlier same-execution promotion goal and isolates upgrades/crashes. Cost is extra processes and service/protocol work. Also approve a one-time quiescent installation window, or request a separately estimated legacy-owner bridge. Decide before Phase B.
