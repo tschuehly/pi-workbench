@@ -154,7 +154,8 @@ test("9: closure and answers are version-scoped; stale items stay open", () => {
     { seq: 1, at: 0, origin: "human", type: "comment", key: "k", ver: "v1", text: "x", delivery: "send" },
     { seq: 2, at: 0, origin: "human", type: "send", delivery: "boundary" },
     { seq: 3, at: 0, origin: "human", type: "close", target: 1, ver: "v1", delivery: "record" },
-    { seq: 4, at: 0, origin: "agent", type: "ask", decision: { id: "d", key: "k", question: "?", options: [] } },
+    // An ask goes stale with its Key only when it names material (2.11.0).
+    { seq: 4, at: 0, origin: "agent", type: "ask", decision: { id: "d", key: "k", material: "k", question: "?", options: [] } },
     { seq: 5, at: 0, origin: "human", type: "decide", decision: "d", option: "A", key: "k", ver: "v1", delivery: "immediate" },
   ];
   assert.equal(derive(log, () => "v1").openThreads.length + derive(log, () => "v1").toAnswer.length, 0);

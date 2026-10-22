@@ -43,7 +43,12 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
 - `atl-key="name"` on every element the human judges. Nested Keys form an address such as
   `run-12/turn-3`; use domain ids, and keep them stable across Updates.
 - `atl-ver="…"` on content that changes, such as a build SHA or a content hash. Events record it,
-  and older events show as "on an earlier version".
+  and older events show as "on an earlier version". An answer to the Key's `atl-decide` (or to an `ask` that names
+  `material`) holds for the version it was given on. On another version the Decision shows "Version 2" (3, …:
+  versions numbered from the first answer, in the order the Event Log recorded them) with no option chosen and
+  the answers on other versions beneath ("Version 1: Approve"), and is to answer again; back on the answered
+  version, that answer holds again. Other answered `ask`s stay answered: a question is not a judgement of the Key
+  it sits on.
 - `atl-decide="1|2|3|4|5"` or `"Confirm|Redo"` on a keyed element declares a Decision; its id is the
   Key address. Optional: `atl-rec="Confirm"` (recommended option), `atl-note="Redo"` (options that
   need a note), `atl-delivery="record|send|immediate"` (default immediate), `atl-material="key"`.
@@ -73,9 +78,14 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   Update, and `<html>` and `<body>` take the new file's attributes. `<details>` the human opened or closed
   keep his state through every later Update; other view state (tabs, filters) the script restores itself.
 - A page script that needs to know what the human answered (progress, "next open", resume) reads
-  `atelier.state()`, never Kernel markup: plain data with `decisions` (`id`, `options`, `recommended`,
-  `answer`, `custom` (an own answer), `previous`, `note`, `status`, `stale`), `threads`, `requests`, `toAnswer` (ids), `open`,
-  `wip`, `conn`, and `loaded` (true once the Event Log is read). The document event `atelier:state` carries the
+  `atelier.state()`, never Kernel markup: plain data with `decisions` (`id`, `key`, `options`, `recommended`,
+  `answer`, `custom` (an own answer), `previous` (the answer this one replaced), `note`, `status`, `stale`,
+  `state`: `"new"` unanswered, `"changed"` answered on an earlier version (`answer` is what he said), `"done"`;
+  `round`: the number of the version shown; `history`: the last answer on each other version as
+  `{round, ver, answer, custom, note}`),
+  `keys` (per Key address, counting everything on it and under it: `{new, changed, done, threads}` with `threads`
+  the open ones), `threads`, `requests`, `toAnswer` (ids of the Decisions not done), `open`, `wip`, `conn`, and
+  `loaded` (true once the Event Log is read). The document event `atelier:state` carries the
   same object in `detail` whenever it changes, including unsent answers; register it before the Kernel loads
   to get the first one.
 - Read changing data with `fetch` (read-only): project files, or for a Page outside the project only
@@ -84,7 +94,10 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   Page, call `update` with `text`: one line on what changed. The Kernel marks every changed Key until
   the human marks it seen (opens and closes its changes, its "Seen", or "Mark all seen" on the rail);
   marks outlast further Updates but not a reload. For marks on tabs, give each hidden panel an `id` and its tab
-  `aria-controls`; in-page links (`href="#id"`) get a dot for changes in their section.
+  `aria-controls`; in-page links (`href="#id"`) get a dot for changes in their section. The same tabs let
+  "next ↓" and the Kernel's other jumps reach items in hidden panels: the Kernel clicks each hidden panel's
+  visible tab, outermost first, so the Page's own tab handler shows it (within a few frames). The document event `atelier:reveal`
+  (`detail.key`) fires before the Kernel scrolls to the item, for navigation that is not a tab.
   `atl-changes="off"` turns the marks off.
 - Kernel controls take the Page's colours: light by default, dark only when the Page declares
   `color-scheme` dark. Override `--atl-bg`, `--atl-fg`, `--atl-muted`, `--atl-line`, `--atl-accent`,
@@ -147,7 +160,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.10.1 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.11.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of

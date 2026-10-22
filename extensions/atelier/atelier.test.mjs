@@ -182,6 +182,8 @@ test("events on an earlier version are marked, stay open, and can be re-bound", 
     { seq: 3, at: 0, origin: "human", type: "decide", decision: "run/t1", options: "1|2|3", option: "2", key: "run/t1", ver: "v1", delivery: "record" },
     { seq: 4, at: 0, origin: "agent", type: "ask", decision: { id: "d", key: "run/t1", question: "?", options: [] } },
     { seq: 5, at: 0, origin: "human", type: "decide", decision: "d", option: "A", key: "run/t1", ver: "v1", delivery: "immediate" },
+    { seq: 6, at: 0, origin: "agent", type: "ask", decision: { id: "m", key: "run/t1", material: "run/t1", question: "?", options: [] } },
+    { seq: 7, at: 0, origin: "human", type: "decide", decision: "m", option: "A", key: "run/t1", ver: "v1", delivery: "immediate" },
   ];
   const same = derive(log, () => "v1");
   assert.equal(same.threads[0].stale, false);
@@ -189,11 +191,98 @@ test("events on an earlier version are marked, stay open, and can be re-bound", 
   assert.equal(moved.threads[0].stale, true);
   assert.equal(moved.openThreads.length, 1, "stays open until the human checks it");
   assert.equal(moved.decisions.find((d) => d.id === "run/t1").stale, true, "a Page-declared answer on v1");
-  assert.equal(moved.decisions.find((d) => d.id === "d").stale, true);
-  const still = derive([...log, { seq: 6, at: 0, origin: "human", type: "still", target: 1, ver: "v2" }], () => "v2");
+  assert.equal(moved.decisions.find((d) => d.id === "d").stale, false, "an asked question is not a judgement of the Key it sits on (2.11.0)");
+  assert.equal(moved.decisions.find((d) => d.id === "m").stale, true, "an ask with material judges content and goes stale");
+  const still = derive([...log, { seq: 8, at: 0, origin: "human", type: "still", target: 1, ver: "v2" }], () => "v2");
   assert.equal(still.threads[0].stale, false);
-  const fixed = derive([...log, { seq: 6, at: 0, origin: "human", type: "close", target: 1, ver: "v2" }], () => "v2");
+  const fixed = derive([...log, { seq: 8, at: 0, origin: "human", type: "close", target: 1, ver: "v2" }], () => "v2");
   assert.equal(fixed.openThreads.length, 0);
+});
+
+// 2.11.0 (owner review of the Worlds Console Page, 2026-10-22): follow-up questions asked on a Key went back to
+// "to answer" whenever that Key's atl-ver changed. The lines are Thomas's Event Log, trimmed to the fields that count.
+test("an answered ask stays answered when its Key changes; atl-decide answers in an existing Event Log still go stale", () => {
+  const opts = [{ label: "A", consequence: "a" }, { label: "B", consequence: "b" }];
+  const log = [
+    { seq: 9, at: 0, origin: "agent", type: "ask", decision: { id: "errors/pattern-scope", key: "apps/uninstall-error", question: "How far?", options: opts } },
+    { seq: 14, at: 0, origin: "human", type: "decide", decision: "errors/pattern-scope", option: "Both", custom: true, opened: null, key: "apps/uninstall-error", ver: "6c8e10dd", delivery: "immediate" },
+    { seq: 34, at: 0, origin: "agent", type: "ask", decision: { id: "settings/phone-list-shape", key: "settings/phone-strip/390x844", question: "Phone?", options: opts } },
+    { seq: 42, at: 0, origin: "human", type: "decide", decision: "settings/phone-list-shape", option: "create some prototypes", custom: true, opened: null, key: "settings/phone-strip/390x844", ver: "a717589d", delivery: "immediate" },
+    { seq: 50, at: 0, origin: "human", type: "decide", decision: "settings/phone-strip/390x844", options: "Ship|Rework", option: "Ship", key: "settings/phone-strip/390x844", ver: "a717589d", delivery: "immediate" },
+  ];
+  const st = derive(log, () => "ffffffff");
+  assert.deepEqual(st.toAnswer.map((d) => d.id), ["settings/phone-strip/390x844"], "only the Page-declared Decision on the changed Key is to answer again");
+  assert.deepEqual(st.decisions.map((d) => [d.id, d.stale]), [["errors/pattern-scope", false], ["settings/phone-list-shape", false], ["settings/phone-strip/390x844", true]]);
+});
+
+test("each Decision has a state (new, changed, done) consistent with toAnswer, and each Key sums the state under it (2.11.0)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "q", key: "run/turn-1", question: "?", options: [{ label: "A" }, { label: "B" }] } },
+    { seq: 2, at: 0, origin: "human", type: "decide", decision: "run/turn-2", key: "run/turn-2", options: "Keep|Drop", option: "Keep", ver: "v1", delivery: "immediate" },
+    { seq: 3, at: 0, origin: "human", type: "decide", decision: "run/turn-3", key: "run/turn-3", options: "Keep|Drop", option: "Drop", ver: "v2", delivery: "immediate" },
+    { seq: 4, at: 0, origin: "human", type: "comment", key: "run/turn-3", text: "x", delivery: "immediate" },
+    { seq: 5, at: 0, origin: "agent", type: "ask", decision: { id: "loose", question: "?", options: [{ label: "A" }, { label: "B" }] } },
+  ];
+  const st = derive(log, () => "v2");
+  assert.deepEqual(st.decisions.map((d) => [d.id, d.state]), [["q", "new"], ["run/turn-2", "changed"], ["run/turn-3", "done"], ["loose", "new"]]);
+  assert.deepEqual(st.toAnswer.map((d) => d.id), st.decisions.filter((d) => d.state !== "done").map((d) => d.id));
+  const s = publicState(st);
+  assert.deepEqual(s.decisions.map((d) => [d.id, d.state, d.answer]), [["q", "new", null], ["run/turn-2", "changed", "Keep"], ["run/turn-3", "done", "Drop"], ["loose", "new", null]]);
+  assert.deepEqual(s.keys, {
+    run: { new: 1, changed: 1, done: 1, threads: 1 },
+    "run/turn-1": { new: 1, changed: 0, done: 0, threads: 0 },
+    "run/turn-2": { new: 0, changed: 1, done: 0, threads: 0 },
+    "run/turn-3": { new: 0, changed: 0, done: 1, threads: 1 },
+  }, "a Key counts the Decisions and open threads on it and under it; a Decision without a Key counts on none");
+});
+
+// 2.11.0, owner 2026-10-22: "I think the decision should reset or show version 2 or so".
+test("a Page's Decision on a changed Key starts a new round: Version N, earlier answers as history; asks stay in round 1", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const decide = (seq, option, ver, extra = {}) => ({ seq, at: 0, origin: "human", type: "decide", decision: "shot", key: "shot", options: "Approve|Rework", option, ver, delivery: "immediate", ...extra });
+  const round = (log, now) => { const d = publicState(derive(log, () => now)).decisions.find((x) => x.id === "shot"); return [d.state, d.round, d.history]; };
+  const v1 = [decide(1, "Rework", "v1"), decide(2, "Approve", "v1", { previous: "Rework", note: "fine now" })];
+  assert.deepEqual(round(v1, "v1"), ["done", 1, []], "answered on the version shown: round 1");
+  assert.deepEqual(round(v1, "v2"), ["changed", 2, [{ round: 1, ver: "v1", answer: "Approve", custom: false, note: "fine now" }]], "a new version opens Version 2; the last answer on v1 is its history");
+  const v2 = [...v1, { seq: 3, at: 0, origin: "human", type: "comment", key: "shot", ver: "v2", text: "x", delivery: "immediate" }, decide(4, "Rework", "v2")];
+  assert.deepEqual(round(v2, "v2"), ["done", 2, [{ round: 1, ver: "v1", answer: "Approve", custom: false, note: "fine now" }]]);
+  assert.deepEqual(round(v2, "v3").slice(0, 2), ["changed", 3]);
+  assert.deepEqual(round(v2, "v3")[2].map((h) => [h.round, h.answer]), [[1, "Approve"], [2, "Rework"]]);
+  // Versions are numbered in the order the Event Log first saw them; back on v1, an answer given on v1 holds again.
+  assert.deepEqual(round([...v2, decide(5, "Approve", "v1")], "v1"), ["done", 1, [{ round: 2, ver: "v2", answer: "Rework", custom: false, note: null }]], "content back on v1 is Version 1 again");
+  // Before any answer, and in Event Logs whose answers carry no version, there is one round.
+  assert.deepEqual(round([{ seq: 1, at: 0, origin: "human", type: "comment", key: "shot", ver: "v0", text: "x" }, decide(2, "Approve", undefined)], "v9"), ["done", 1, []]);
+  const ask = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "q", key: "shot", question: "?", options: [{ label: "A" }, { label: "B" }] } },
+    { seq: 2, at: 0, origin: "human", type: "decide", decision: "q", option: "A", key: "shot", ver: "v1", delivery: "immediate" },
+  ];
+  const q = publicState(derive(ask, () => "v2")).decisions[0];
+  assert.deepEqual([q.state, q.round, q.history, q.answer], ["done", 1, [], "A"], "an answered ask is not reset by its Key's new version");
+  // Review of 2.11.0: answers kept in the browser without a session have falling negative seqs; their order is the log's.
+  const local = [decide(-1, "Approve", "v1", { local: true }), decide(-2, "Rework", "v2", { local: true })];
+  assert.deepEqual(round(local, "v3").slice(0, 2), ["changed", 3]);
+  assert.deepEqual(round(local, "v3")[2].map((h) => [h.round, h.answer]), [[1, "Approve"], [2, "Rework"]]);
+  // Reviews 2 and 3: content restored to the version of the newest answer is that version again, whether or not the
+  // Event Log saw the version in between (an Update records none), and that answer holds (149: bound to its version).
+  const back = [decide(1, "Approve", "v1"), { seq: 2, at: 0, origin: "human", type: "comment", key: "shot", ver: "v2", text: "x", delivery: "immediate" }];
+  assert.deepEqual([round(back, "v2"), round(back, "v1")], [["changed", 2, [{ round: 1, ver: "v1", answer: "Approve", custom: false, note: null }]], ["done", 1, []]]);
+  assert.deepEqual([round(v1.slice(0, 1), "v2").slice(0, 2), round(v1.slice(0, 1), "v1").slice(0, 2)], [["changed", 2], ["done", 1]], "the same without any event on v2");
+  // Back on v1 after the newest answer was given on v2: that answer is for v2, so v1 asks again.
+  assert.deepEqual(round([...v2], "v1"), ["changed", 1, [{ round: 2, ver: "v2", answer: "Rework", custom: false, note: null }]]);
+  // A Close or Still applies names its thread, not the Key; the version it records counts for the thread's Key.
+  const closed = [{ seq: 1, at: 0, origin: "human", type: "comment", key: "shot", ver: "v1", text: "x", delivery: "immediate" }, decide(2, "Approve", "v1"), { seq: 3, at: 0, origin: "human", type: "close", target: 1, ver: "v2" }];
+  assert.deepEqual(round(closed, "v3").slice(0, 2), ["changed", 3]);
+  // A Key not on the Page has no current version: its answer stays as it was, as before 2.11.0.
+  assert.deepEqual(round(v2, null), ["done", 1, []]);
+});
+
+test("per-Key counts are own data for any Key name (review of 2.11.0)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const log = ["__proto__", "constructor"].map((key, i) => ({ seq: i + 1, at: 0, origin: "agent", type: "ask", decision: { id: `q${i}`, key, question: "?", options: [{ label: "A" }, { label: "B" }] } }));
+  const s = publicState(derive(log));
+  assert.deepEqual(JSON.parse(JSON.stringify(s.keys)), JSON.parse('{"__proto__":{"new":1,"changed":0,"done":0,"threads":0},"constructor":{"new":1,"changed":0,"done":0,"threads":0}}'));
+  assert.equal(Object.prototype.new, undefined, "no count leaks onto Object.prototype");
 });
 
 test("threads, drafts and Requests replay with revisions on rework", () => {
@@ -217,7 +306,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.10\.1 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.11\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;

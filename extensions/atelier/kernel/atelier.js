@@ -1,11 +1,13 @@
-// Atelier Kernel 2.10.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.11.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
 // Page contract (mechanics only, decision 139):
 //   <script type="module" src="atelier.js"></script>   the Kernel; idiomorph.js sits beside it
 //   atl-key="turn-3"           an element the human judges; nested Keys form the address run-12/turn-3 (140)
-//   atl-ver="sha-or-rev"       version of the content under it; every event records it (149)
+//   atl-ver="sha-or-rev"       version of the content under it; every event records it (149). On a version other than the
+//                              one its atl-decide (or an ask naming material) was answered on, the Decision shows
+//                              "Version 2" with no option chosen and the earlier answer beneath; other asks stay answered
 //   atl-decide="A|B|C"        a Decision on a keyed element; its id is the Key address (155). Optional:
 //     atl-rec="A"              the recommended option
 //     atl-note="Redo"          options that need a note before they post. Any answer may carry a note and images
@@ -26,10 +28,13 @@
 //                              bottom right, offset by --atl-dock-right and --atl-dock-bottom. Outside <body>'s own children
 //                              (atl-dock, or a Page script moving it) the panel takes its container's width up to 760px;
 //                              where the Page limits its height, it scrolls inside, so no control is cut off
-//   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab
+//   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab; "next ↓",
+//                              Show and the changes rail click that tab (outermost first, so nested tabs open too)
+//   document "atelier:reveal"  fires with detail {key} when the Kernel reveals an item, before it scrolls there
 //   document "atelier:update"  fires after each Update, so page scripts re-read their data files (152)
-//   window.atelier.state()     read-only Kernel state (Decisions and answers, threads, Requests); document
-//                              "atelier:state" carries it in detail whenever it changes. Kernel markup is not an API.
+//   window.atelier.state()     read-only Kernel state (Decisions with state new/changed/done, round and history, answers,
+//                              threads, Requests, per-Key counts); document "atelier:state" carries it in detail whenever it changes.
+//                              Kernel markup is not an API.
 // Human state lives only in <page>.events.jsonl, never in the HTML (147).
 // Kernel controls take the Page's colours: override --atl-bg, --atl-fg, --atl-muted, --atl-line, --atl-accent, --atl-warn.
 //
@@ -120,20 +125,72 @@ export function derive(entries, currentVer = () => null, declared = []) {
   }
   // Decision 149: a close or an answer holds for the version it was made on; a newer version reopens it.
   for (const t of threads.values()) { t.stale = stale(t.key, t.ver); if (t.stale) t.closed = false; }
-  for (const d of decisions.values()) d.stale = d.answer !== null && stale(d.key ?? d.answer.key, d.answer.ver);
+  // Only an answer that judged the Key's content goes stale with it: a Page's atl-decide, or an ask naming material.
+  // An asked question merely sits on its Key; its answer records the Key's version but stays answered (2.11.0).
+  // Such an answer holds while the Key shows the version it was given on (149); on any other version the Decision
+  // asks again as "Version N" (owner 2026-10-22: "the decision should reset or show version 2"). From the first answer
+  // on, versions are numbered in the order events on the Key recorded them, then the one the Page shows now; an
+  // Update records none, so a version no event saw gets no number. `history` keeps the last answer on each other
+  // version. An answer without a version, or on a Key not on the Page, stays as it is in round 1.
+  // state: "new" (never answered), "changed" (answered on another version), "done"; toAnswer is every one not done.
+  const keyOfEvent = (e) => e.key ?? (e.type === "close" || e.type === "still" ? threads.get(rootOf(e.target))?.key : undefined);
+  const rounds = (d, key) => {
+    const now = key ? currentVer(key) : null;
+    if ((!d.declared && !d.material) || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
+    // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
+    const first = live.findIndex((e) => e.type === "decide" && e.decision === d.id), vers = [], last = new Map();
+    for (const e of live.slice(first)) {
+      if (e.ver == null || (e.decision !== d.id && keyOfEvent(e) !== key)) continue;
+      if (!vers.includes(e.ver)) vers.push(e.ver);
+      if (e.type === "decide" && e.decision === d.id) last.set(e.ver, e);
+    }
+    if (!vers.includes(now)) vers.push(now);
+    return {
+      round: vers.indexOf(now) + 1, current: d.answer.ver === now,
+      history: vers.flatMap((v, i) => v !== now && last.has(v) ? [{ round: i + 1, ver: v, answer: last.get(v).option, custom: !!last.get(v).custom, note: last.get(v).note ?? null }] : []),
+    };
+  };
+  for (const d of decisions.values()) {
+    const { current, ...round } = rounds(d, d.key ?? d.answer?.key);
+    d.stale = d.answer !== null && !current;
+    d.state = d.answer === null ? "new" : d.stale ? "changed" : "done";
+    Object.assign(d, round);
+  }
   const drafts = live.filter((e) => status(e) === "draft");
   return {
     threads: [...threads.values()], decisions: [...decisions.values()],
     requests: [...requests.values()], drafts, status,
     openThreads: [...threads.values()].filter((t) => !t.closed && status(t.root) !== "draft"),
-    toAnswer: [...decisions.values()].filter((d) => d.answer === null || d.stale),
+    toAnswer: [...decisions.values()].filter((d) => d.state !== "done"),
   };
+}
+
+// Per Key address: the Decisions by state and the open threads on it and under it, so a tab or card needs no recount.
+function keyCounts(st) {
+  const keys = new Map(); // a Map, so a Key named __proto__ or constructor is data like any other
+  const add = (key, field) => {
+    if (typeof key !== "string" || !key) return;
+    const parts = key.split("/");
+    for (let i = 1; i <= parts.length; i++) {
+      const addr = parts.slice(0, i).join("/");
+      if (!keys.has(addr)) keys.set(addr, { new: 0, changed: 0, done: 0, threads: 0 });
+      keys.get(addr)[field]++;
+    }
+  };
+  for (const d of st.decisions) add(d.key, d.state);
+  for (const t of st.openThreads) add(t.root.key, "threads");
+  return Object.fromEntries(keys);
 }
 
 /**
  * The Kernel state a Page script may rely on, as plain data: window.atelier.state() returns it and the document
  * event "atelier:state" carries it in `detail` whenever it changes. Kernel markup is not an API. `loaded` turns true
  * once the Event Log has been read (or there is no session to read it from). `wip` lists the atl-wip regions as {key, text}.
+ * Each Decision's `state` is "new", "changed" (answered on an earlier version; `answer` is what the human said) or "done";
+ * `toAnswer` lists the ones not done. `round` is the number of the version the Key shows ("Version 2"), counted from the
+ * first answer in the order the Event Log saw them; `history` keeps the last answer on each other version as
+ * {round, ver, answer, custom, note}. `keys` maps each Key address holding Decisions or open threads, and every Key
+ * around it, to {new, changed, done, threads}.
  */
 export function publicState(st, { conn = "no session", loaded = false, wip = [] } = {}) {
   const status = (e) => e ? st.status(e) : null;
@@ -141,8 +198,9 @@ export function publicState(st, { conn = "no session", loaded = false, wip = [] 
     conn, loaded, wip, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
     decisions: st.decisions.map((d) => ({
       id: d.id, key: d.key ?? null, declared: !!d.declared, options: d.options.map((o) => o.label), recommended: d.options.find((o) => o.recommended)?.label ?? null,
-      answer: d.answer?.option ?? null, custom: !!d.answer?.custom, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, opened: !!d.opened,
+      answer: d.answer?.option ?? null, custom: !!d.answer?.custom, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, state: d.state, round: d.round, history: d.history, opened: !!d.opened,
     })),
+    keys: keyCounts(st),
     threads: st.threads.map((t) => ({ seq: t.root.seq, key: t.root.key ?? null, closed: t.closed, stale: !!t.stale, messages: t.msgs.length, status: status(t.root) })),
     requests: st.requests.map((r) => ({ seq: r.req.seq, job: r.req.job, key: r.req.key ?? null, state: r.state, revision: r.revision, accepted: r.accepted, cancel: r.cancel })),
   };
@@ -305,8 +363,10 @@ function boot() {
   const EXTRA = `<button type="button" data-atl="addnote" class="atl-addnote" aria-expanded="false" aria-label="Add a note or image" title="Add a note or image">${icon("paperclip")}</button><span class="atl-extra" hidden><span class="atl-own" hidden><input class="atl-ownans" aria-label="Your own answer" placeholder="Your own answer"><button type="button" data-atl="decideown" class="atl-primary">${icon("check")} Answer</button></span><input class="atl-note" aria-label="Note" placeholder="Optional note"><button type="button" data-atl="pickimg" aria-label="Attach an image" title="Attach an image; paste or drop one too">${icon("image")}</button><input type="file" class="atl-file" accept="${IMAGE_TYPES.join(",")}" multiple hidden><span class="atl-attached"></span></span>`;
   // A Comment or reply takes images the same way (2.7.0): its box carries its own .atl-extra without the note.
   const IMAGES = `<span class="atl-extra atl-cimg"><button type="button" data-atl="pickimg" aria-label="Attach an image" title="Attach an image; paste or drop one too">${icon("image")}</button><input type="file" class="atl-file" accept="${IMAGE_TYPES.join(",")}" multiple hidden><span class="atl-attached"></span></span>`;
+  // The answer of the Decision's current round: none while it waits for an answer on a changed Key (2.11.0).
+  const current = (d) => d.stale ? null : d.answer;
   // "Other…": the human's own answer beside the options, on every Decision (2.7.0).
-  const otherHtml = (d, lock) => `<button type="button" data-atl="other" data-id="${esc(d.id)}" class="atl-other${d.answer?.custom ? " atl-chosen" : ""}" aria-pressed="${!!d.answer?.custom}"${locked(lock)}>Other…</button>`;
+  const otherHtml = (d, lock) => `<button type="button" data-atl="other" data-id="${esc(d.id)}" class="atl-other${current(d)?.custom ? " atl-chosen" : ""}" aria-pressed="${!!current(d)?.custom}"${locked(lock)}>Other…</button>`;
   const attached = new WeakMap(); // .atl-extra -> data: URLs of the images waiting for an answer or a Comment
   const imgSrc = (x) => x.startsWith("data:") ? x : x.split("/").map(encodeURIComponent).join("/"); // stored beside the Page
   const thumbs = (list, removable) => list.map((x, i) => `<span class="atl-thumb"><a href="${esc(imgSrc(x))}" target="_blank" rel="noopener"><img src="${esc(imgSrc(x))}" alt="Image ${i + 1}"></a>${removable ? `<button type="button" data-atl="dropimg" data-i="${i}" aria-label="Remove image ${i + 1}">${icon("x")}</button>` : ""}</span>`).join("");
@@ -593,30 +653,34 @@ function boot() {
   const noting = (d) => cards.get(`d:${d.id}`)?.querySelector(".atl-extra")?.hidden === false;
   const folded = (d) => foldable(d) && !unfolded.has(d.id) && !noting(d);
   function decisionHtml(d, st, lock = null) {
-    const a = d.answer;
+    const a = current(d);
     const line = foldable(d) ? `<button type="button" data-atl="fold" data-id="${esc(d.id)}" class="atl-fold" aria-expanded="${!folded(d)}" title="${esc(d.question)}">${icon("chevron")}<span class="atl-tag">answered</span><span class="atl-fq">${esc(d.question)}</span><b>${esc(clip(a.option, 60))}</b></button>` : "";
     if (line && folded(d)) return line;
     const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}"${locked(lock)} class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
-    return `<div class="atl-head">${line || `<span class="atl-tag">${a && !d.stale ? "answered" : "to answer"}</span>`}${d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : ""}</div>
+    return `<div class="atl-head">${line || `<span class="atl-tag">${a ? "answered" : "to answer"}</span>`}${roundTag(d)}</div>
       <div class="atl-q">${esc(d.question)}</div>${d.detail ? `<div class="atl-dim">${esc(d.detail)}</div>` : ""}
       ${materialHtml(d)}<div class="atl-opts">${opts}${otherHtml(d, lock)}</div>${receiptHtml(d, st)}`;
   }
+  // A Decision whose Key changed since its first answer shows the version's number, "Version 2", with no option chosen
+  // until he answers on it; the last answer on each other version sits beneath it (owner 2026-10-22, 2.11.0).
+  const roundTag = (d) => d.round > 1 || d.history?.length ? `<span class="atl-tag atl-round${d.stale ? " atl-warn" : ""}">Version ${d.round}</span>` : "";
+  const historyHtml = (d) => d.history?.length ? `<div class="atl-hist atl-dim">${d.history.map((x) => `Version ${x.round}: ${esc(clip(x.answer, 40))}`).join(" · ")}</div>` : "";
   const materialHtml = (d) => d.material ? `<button data-atl="material" data-id="${esc(d.id)}">${d.opened ? `${icon("check")} Material opened` : `${icon("eye")} Open the material`}</button>` : "";
   // The current answer, what it changed from, and the recommendation receipt; always editable (155). A small box below
   // the options (2.7.0): the answer, its note and images, then the status line.
   function receiptHtml(d, st) {
-    const a = d.answer;
-    if (!a) return "";
+    const a = current(d);
+    if (!a) return historyHtml(d);
     const rec = d.options.find((o) => o.recommended)?.label;
     const meta = [a.previous != null ? `changed from ${esc(a.previous)}` : "", rec === undefined ? "" : a.option === rec ? "kept the recommendation" : "not the recommendation", d.material ? `material ${a.opened ? "opened" : "not opened"}` : "", esc(statusText(st, a))].filter(Boolean).join(" · ");
-    return `<div class="atl-receipt"><div class="atl-ans">${a.custom ? "Your own answer" : "Your answer"}: <b>${esc(a.option)}</b></div>${a.note ? `<p class="atl-rnote">${esc(a.note)}</p>` : ""}${a.images?.length ? `<div class="atl-thumbs">${thumbs(a.images)}</div>` : ""}${meta ? `<div class="atl-dim">${meta}</div>` : ""}</div>`;
+    return `<div class="atl-receipt"><div class="atl-ans">${a.custom ? "Your own answer" : "Your answer"}: <b>${esc(a.option)}</b></div>${a.note ? `<p class="atl-rnote">${esc(a.note)}</p>` : ""}${a.images?.length ? `<div class="atl-thumbs">${thumbs(a.images)}</div>` : ""}${meta ? `<div class="atl-dim">${meta}</div>` : ""}</div>${historyHtml(d)}`;
   }
 
   // A Page-declared Decision renders as a row of options in its atl-slot, or at the end of its element (155).
   function declaredHtml(d, st, lock = null) {
-    const a = d.answer;
+    const a = current(d);
     return d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}" aria-pressed="${a?.option === o.label}" class="${o.recommended ? "atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"${lock != null ? locked(lock) : o.recommended ? ` title="Recommended"` : ""}>${esc(o.label)}${o.recommended ? `<span class="atl-sr"> (recommended)</span>` : ""}</button>`).join("")
-      + otherHtml(d, lock) + materialHtml(d) + (d.stale ? `<span class="atl-tag atl-warn">${icon("alert")} answered on an earlier version</span>` : "");
+      + otherHtml(d, lock) + materialHtml(d) + roundTag(d);
   }
 
   function requestHtml(r, st) {
@@ -666,7 +730,7 @@ function boot() {
       const d = el.hasAttribute("atl-decide") ? st.decisions.find((x) => x.id === addr && x.declared) : undefined;
       if (d) {
         let dec = decUis.get(addr);
-        if (!dec) { dec = h(`<span atl-ui="decide" class="atl-decide" role="group" aria-label="Decision on ${esc(addr)}"><span class="atl-dopts"></span>${EXTRA}<span class="atl-dstate"></span></span>`); decUis.set(addr, dec); }
+        if (!dec) { dec = h(`<span atl-ui="decide" data-key="${esc(addr)}" class="atl-decide" role="group" aria-label="Decision on ${esc(addr)}"><span class="atl-dopts"></span>${EXTRA}<span class="atl-dstate"></span></span>`); decUis.set(addr, dec); }
         const slot = [...el.querySelectorAll("[atl-slot]")].find((s) => !isUi(s) && s.closest("[atl-decide]") === el);
         if (slot) { if (dec.parentElement !== slot) slot.append(dec); } else place(dec, el);
         set(dec.firstElementChild, declaredHtml(d, st, lockOf(el)));
@@ -1217,9 +1281,24 @@ function boot() {
   const mediaTime = (el) => { const m = el?.querySelector("video,audio"); return m ? Math.round(m.currentTime * 10) / 10 : undefined; };
   function anchorForKey(addr) { const el = findKey(addr); return { key: addr, ver: verOf(el), t: mediaTime(el) }; }
 
-  function jumpTo(el) {
+  // Reveals a hidden target, outermost first: opens each closed <details> around it and clicks the visible tab
+  // ([aria-controls~=id]) of each hidden panel around it, so nested tabs open in turn (2.11.0); a Page that shows the
+  // panel later gets a few frames before the next one. Then "atelier:reveal" names the target's Key, for navigation
+  // of the Page's own, before the Kernel scrolls there. Kernel UI names its Key in data-key, as it may sit beside it.
+  const visible = (n) => n.checkVisibility?.({ visibilityProperty: true }) ?? n.getClientRects().length > 0;
+  async function jumpTo(el, key = el && (el.closest("[atl-ui][data-key]")?.dataset.key ?? keyOf(el))) {
     if (!el) return;
-    for (let d = el.closest("details:not([open])"); d; d = d.parentElement?.closest("details:not([open])")) d.open = true; // reveal hidden Keys
+    const around = []; for (let p = el; p && p !== document.body; p = p.parentElement) around.unshift(p);
+    for (const p of around) {
+      if (p.matches("details:not([open])")) p.open = true;
+      if (!p.id || visible(p)) continue;
+      const tab = [...document.querySelectorAll(`[aria-controls~="${CSS.escape(p.id)}"]`)].find((t) => !p.contains(t) && visible(t));
+      if (!tab) continue;
+      tab.click();
+      // ponytail: waits at most 5 frames for a panel the Page shows after its click; a slower Page needs atelier:reveal.
+      for (let i = 0; i < 5 && !visible(p); i++) await new Promise((r) => requestAnimationFrame(r));
+    }
+    document.dispatchEvent(new CustomEvent("atelier:reveal", { detail: { key: key ?? null } }));
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     el.classList.add("atl-flash"); setTimeout(() => el.classList.remove("atl-flash"), 1200);
     if (el.tabIndex >= -1 && el.focus) el.focus({ preventScroll: true });
@@ -1251,9 +1330,9 @@ function boot() {
     st = state(); d = st.decisions.find((x) => x.id === b.dataset.id); // the log may have moved during the upload
     if (!d) return;
     // Always editable (155): a change is a new answer that names the one it replaces.
-    let previous = d.answer && d.answer.option !== label ? d.answer.option : undefined, replaced;
+    let previous = d.answer && !d.stale && d.answer.option !== label ? d.answer.option : undefined, replaced; // a new round replaces nothing
     // A change inside the undo window replaces the unsent answer, so only the last one is delivered (156).
-    const a = d.answer;
+    const a = current(d);
     if (a?.origin === "human" && left(a) > 0 && ["pending", "local"].includes(st.status(a))) {
       if (await post({ type: "undo", target: a.seq }) !== undefined || a.local) { // the server may have closed the window
         previous = a.previous; replaced = a;
@@ -1278,7 +1357,7 @@ function boot() {
     hidethread: () => closeThread(),
     close: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "close", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : undefined }); },
     still: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "still", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : null }); },
-    jump: (b) => { const t = state().threads.find((x) => x.root.seq === +b.dataset.seq); const p = t && placeThread(t, textIndex()); markRead(+b.dataset.seq); if (p?.range) { p.range.startContainer.parentElement.scrollIntoView({ block: "center", behavior: "smooth" }); } else jumpTo(p?.el); },
+    jump: (b) => { const t = state().threads.find((x) => x.root.seq === +b.dataset.seq); const p = t && placeThread(t, textIndex()); markRead(+b.dataset.seq); jumpTo(p?.range ? p.range.startContainer.parentElement : p?.el); },
     // One submission per Decision at a time: a click while an earlier one uploads or posts is ignored, so a slow
     // upload can never land after, and overwrite, a later choice. Locked like a saving Comment box, so what posts is
     // what it shows; a refused image unlocks it with the note, own answer and images as typed, focus back in them.
@@ -1340,9 +1419,7 @@ function boot() {
     chrail: (b) => {
       const addr = b.dataset.addr, t = traces.get(addr), el = t && (t.kind === "removed" ? t.nodes.gone : findKey(addr));
       if (!el) return;
-      const spot = visibleSpot(el);
-      if (spot !== el && spot.matches("[aria-controls]")) spot.click(); // open the tab that hides it
-      requestAnimationFrame(() => jumpTo(el));
+      jumpTo(el, addr); // opens the tab that hides it
     },
     dismiss: () => closeComposer(true),
     tuck: (b) => { // a tucked row's badge: the Key's hover state shows the row, focus goes to the first thread that needs the human
@@ -1350,11 +1427,11 @@ function boot() {
       setHot(findKey(pin.dataset.key));
       pin.querySelector(".atl-prow .atl-unread,.atl-prow .atl-open-item")?.focus({ preventScroll: true });
     },
-    next: () => {
+    next: async () => {
       const items = [...document.querySelectorAll(".atl-open-item")];
       if (!items.length) return;
       const el = items[nextIndex++ % items.length];
-      jumpTo(el);
+      await jumpTo(el);
       if (el.dataset.atl === "thread") openThread(+el.dataset.seq); // a thread's marker opens the thread
     },
     selcomment: () => {
