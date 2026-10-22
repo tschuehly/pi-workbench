@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, defineTask, type HarnessSettings, LiveDoc, type SubmissionId } from "@earendil-works/pi-durable";
 import { fileDeferred, readLog, router } from "../src/faux.ts";
-import { admit, context, type Host, type HostOptions, openHost, Reconcile } from "../src/host.ts";
+import { admit, context, editQueued, Edits, type Host, type HostOptions, openHost, Reconcile } from "../src/host.ts";
 import {
 	acknowledgeAttention,
 	Attention,
@@ -167,7 +167,7 @@ const generation: Scenario = {
 		});
 		const paused = await pausedCheck(host, dir);
 		const storedPartial = textOf((await host.harness.snapshot(LiveDoc, host.root.id, context))?.generation?.message as Message | undefined);
-		host.resume();
+		await host.resume();
 		const settled = await waitRequest(host, "op-1");
 		const evidence = {
 			paused,
@@ -205,7 +205,7 @@ const tools: Scenario = {
 	async verify(dir, options) {
 		const host = await pilotHost(dir, { replay: options.current as "safe" | "unsafe", repropose: options.repropose === true });
 		const uncertainAtOpen = [...host.uncertain];
-		host.resume();
+		await host.resume();
 		const settled = await waitRequest(host, "op-1");
 		const evidence = {
 			uncertainAtOpen,
@@ -294,7 +294,7 @@ const child: Scenario = {
 	},
 	async verify(dir) {
 		const host = await pilotHost(dir);
-		host.resume();
+		await host.resume();
 		const settled = await waitRequest(host, "op-1");
 		const doc = await host.harness.snapshot(Subagents, host.root.id, context);
 		for (const id of Object.values(doc?.reporters ?? {})) await host.harness.waitForTask(id, context);
@@ -319,6 +319,8 @@ const child: Scenario = {
 };
 
 // ─── Queued input and admission ──────────────────────────────────────────────
+
+const EDIT = { editId: "edit-1", operationId: "op-f2", text: "follow-2 edited" } as const;
 
 const queue: Scenario = {
 	async crash(dir, options, io) {
@@ -355,6 +357,18 @@ const queue: Scenario = {
 			const withdrawn = await admit(host.root, { operationId: "op-f3", text: "follow-3" });
 			const outcome = await host.harness.abortSubmission(withdrawn, context);
 			await io.barrier("queued", { withdrawn: outcome });
+		} else if (window === "edit") {
+			await admit(host.root, { operationId: "op-0", text: "call:wait_tool" });
+			await until(host, async () => (await host.harness.snapshot(LiveDoc, host.root.id, context))?.tools?.[0]?.status === "running");
+			await admit(host.root, { operationId: "op-s1", text: "steer-1", mode: "steer" });
+			await admit(host.root, { operationId: "op-f1", text: "follow-1" });
+			await admit(host.root, { operationId: "op-f2", text: "follow-2" });
+			await admit(host.root, { operationId: "op-f3", text: "follow-3" });
+			// Stop the edit at the armed step; it never acknowledges.
+			const at = `edit:${options.at as string}`;
+			void editQueued(host.harness, host.root, EDIT, {
+				at: (step) => (`edit:${step}` === at ? io.barrier(at).then(() => new Promise<never>(() => {})) : undefined),
+			}).catch(() => {});
 		} else if (window === "failed-run") {
 			io.armed.add("request:fail");
 			await admit(host.root, { operationId: "op-0", text: "fail" });
@@ -367,11 +381,19 @@ const queue: Scenario = {
 	async verify(dir, options) {
 		const window = options.window as string;
 		const host = await pilotHost(dir);
-		host.resume();
+		await host.resume();
 		const evidence: Record<string, unknown> = {};
 		if (window === "order") {
 			for (const op of ["op-0", "op-s1", "op-f1", "op-s2", "op-f2", "op-f3"]) evidence[op] = await waitRequest(host, op);
 			await host.root.waitForIdle(context);
+		} else if (window === "edit") {
+			evidence.afterResume = (await host.harness.snapshot(Edits, context))?.edits["edit-1"]?.status ?? "missing";
+			// The client never got the acknowledgement, so it retries the same edit; resume() already rolled it forward.
+			const retry = await editQueued(host.harness, host.root, EDIT);
+			evidence.retry = retry;
+			for (const op of ["op-0", "op-s1", "op-f1", "op-f2", "op-f3", ...Object.values(retry.moved)]) evidence[op] = await waitRequest(host, op);
+			await host.root.waitForIdle(context);
+			evidence.requestLabels = readLog<{ label: string }>(join(dir, "requests.log")).map((r) => r.label);
 		} else if (window === "failed-run") {
 			evidence.p0 = await waitRequest(host, "op-0");
 			await host.root.waitForIdle(context);
@@ -428,7 +450,7 @@ const question: Scenario = {
 	},
 	async verify(dir) {
 		const host = await pilotHost(dir);
-		host.resume();
+		await host.resume();
 		const asked = await waitRequest(host, "op-1");
 		let questions = (await host.harness.snapshot(Questions, host.root.id, context))?.questions ?? {};
 		const ids = Object.keys(questions);
@@ -534,7 +556,7 @@ const diskFull: Scenario = {
 	async verify(dir) {
 		const host = await pilotHost(dir);
 		const before = (await submissionByRequest(host, "op-big"))?.status ?? null;
-		host.resume();
+		await host.resume();
 		await admit(host.root, { operationId: "op-big", text: `big ${"x".repeat(400_000)}` });
 		const settled = await waitRequest(host, "op-big");
 		const t = await transcript(host);
@@ -551,7 +573,7 @@ const parking: Scenario = {
 		if (options.first === true) await admit(host.root, { operationId: "op-1", text: "call:crasher" });
 		const inspection = await host.harness.inspect(context);
 		const parked = inspection.tasks.filter((t) => t.state.kind === "blocked" && t.state.reason === "restart_limit");
-		host.resume();
+		await host.resume();
 		if (parked.length > 0) {
 			await host.harness.inspect(context);
 			await io.barrier("parked", {
@@ -614,7 +636,7 @@ const versions: Scenario = {
 			(await tx.doc(Counter(1), host.root.id)).count = 7;
 			await tx.createTask(Versioned(1), { n: 1 }, { ownership: { kind: "conversation" } });
 		}, context);
-		host.resume();
+		await host.resume();
 		return host;
 	},
 	async verify(dir, options, io) {
@@ -623,7 +645,7 @@ const versions: Scenario = {
 		const host = await pilotHost(dir);
 		const task = variant === "upgrade" ? Versioned(2, "ok") : variant === "failed" ? Versioned(2, "throw") : undefined;
 		if (task !== undefined) host.registry.install(defineExtension({ name: "pilot.versioned", tasks: [task] }));
-		host.resume();
+		await host.resume();
 		const id = (await host.root.commit((tx) => tx.scanTasks({ conversationId: host.root.id }, 100), context)).items.find((t) => t.kind === "pilot.versioned")!.id;
 		const inspect = async () => (await host.harness.inspect(context)).tasks.find((t) => t.record.id === id)?.state ?? null;
 		const evidence: Record<string, unknown> = { doc: await host.harness.snapshot(Counter(2, "ok"), host.root.id, context) };

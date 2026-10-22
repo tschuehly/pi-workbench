@@ -12,7 +12,7 @@
     "midStream": [],
     "final": [],
     "settled": "done",
-    "redactedSample": "Here is the key [REDACTED:anthropic-key] and the token [REDACTED:env:PILOT_FAKE_API_TOKEN] done. filler filler filler "
+    "redactedSample": "Here is the key [REDACTED:anthropic-key] and the token [REDACTED:env:PILOT_FAKE_API_TOKEN] done. filler filler "
   },
   "tool": {
     "received": [

@@ -1,0 +1,20 @@
+# Red run of the Phase A completion tests (5: queued edit, 6: concurrent refresh) on 55bb26a, before the features existed
+# npm run typecheck; PILOT_ITERATIONS=1 node --test (queue.edit windows; credentials.test.ts; claude.test.ts 'failed refresh')
+test/claude.test.ts(10,40): error TS2305: Module '"../src/claude.ts"' has no exported member 'PiAuthStore'.
+test/credentials.test.ts(11,10): error TS2305: Module '"../src/claude.ts"' has no exported member 'PiAuthStore'.
+test/refresher.ts(9,10): error TS2305: Module '"../src/claude.ts"' has no exported member 'PiAuthStore'.
+test/scenarios.ts(7,26): error TS2305: Module '"../src/host.ts"' has no exported member 'editQueued'.
+  ✖ queue.edit-receipt / kill (274.738042ms)
+  ✖ queue.edit-receipt / close (162.802417ms)
+  ✖ queue.edit-withdrawn / kill (158.295458ms)
+  ✖ queue.edit-withdrawn / close (160.421666ms)
+  ✖ queue.edit-readmitted / kill (169.283417ms)
+  ✖ queue.edit-readmitted / close (163.179834ms)
+ℹ tests 6
+ℹ pass 0
+ℹ fail 6
+SyntaxError: The requested module '../src/claude.ts' does not provide an export named 'PiAuthStore'
+✖ test/credentials.test.ts (77.22925ms)
+ℹ tests 1
+ℹ fail 1
+✖ test/claude.test.ts (176.500208ms)

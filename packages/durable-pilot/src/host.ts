@@ -23,6 +23,7 @@ import {
 	Harness as HarnessFactory,
 	type HarnessSettings,
 	hook,
+	InboxDoc,
 	type Registry,
 	type ReportInfo,
 	type SubmissionId,
@@ -150,6 +151,124 @@ export async function admit(
 	return submission.id;
 }
 
+// ─── Queued-input edit ───────────────────────────────────────────────────────
+
+export class EditTooLate extends Error {
+	constructor(operationId: string) {
+		super(`Operation ${operationId} is no longer queued; it cannot be edited`);
+		this.name = "EditTooLate";
+	}
+}
+
+type EditStep = { readonly from: string; readonly to: string; readonly text: string; readonly mode: "steer" | "followUp" };
+type EditReceipt = { conversationId: ConversationId; hash: string; steps: EditStep[]; status: "pending" | "done" | "too-late" };
+
+/** Durable intent of every edit, so a crash between its commits rolls forward on resume. */
+export const Edits = defineDoc<{ edits: Record<string, EditReceipt> }>({
+	kind: "pilot.edits",
+	version: 1,
+	scope: "session",
+	initial: () => ({ edits: {} }),
+	checkpointWhen: () => false,
+});
+
+export type Edit = { readonly editId: string; readonly operationId: string; readonly text: string };
+export type EditStepName = "receipt" | "withdrawn" | "readmitted";
+
+/**
+ * Edit a queued input. Durable has no edit and places queued inputs in ID order, so an edit withdraws the item and
+ * every input queued after it, then re-admits them in order (the edited one with its new text) under stable operation
+ * IDs `<editId>#<n>`. The plan is committed first as a receipt; each step is idempotent, so a retry under the same
+ * edit ID, or `resume()` after a crash, finishes it. Resolves with each moved operation's new ID; the caller
+ * acknowledges only then.
+ */
+export async function editQueued(
+	harness: Harness,
+	conversation: Conversation,
+	edit: Edit,
+	hooks: { readonly at?: (step: EditStepName) => Promise<void> | undefined } = {},
+): Promise<{ readonly moved: Record<string, string> }> {
+	const hash = createHash("sha256").update(JSON.stringify([edit.operationId, edit.text])).digest("hex");
+	const receipt = await conversation.commit(async (tx) => {
+		const doc = await tx.doc(Edits);
+		const existing = doc.edits[edit.editId];
+		if (existing !== undefined) {
+			if (existing.hash !== hash) throw new PayloadMismatch(edit.editId);
+			return JSON.parse(JSON.stringify(existing)) as EditReceipt;
+		}
+		const inbox = (await tx.doc(InboxDoc, conversation.id)).items;
+		const target = await tx.submissionByRequest(conversation.id, edit.operationId);
+		const at = inbox.findIndex((item) => item.id === target?.id);
+		if (at < 0) throw new EditTooLate(edit.operationId);
+		const tail = inbox.slice(at);
+		// ponytail: refuses an edit with a queued write behind it, since rebuilding would move the write ahead.
+		if (tail.some((item) => item.mode === "write")) throw new Error(`Cannot edit ${edit.operationId}: a queued write follows it`);
+		// ponytail: maps inbox IDs back to operation IDs by scanning every admitted operation; index them if this grows.
+		const opOf = new Map<SubmissionId, string>();
+		for (const op of Object.keys((await tx.doc(Admissions, conversation.id)).ops)) {
+			const record = await tx.submissionByRequest(conversation.id, op);
+			if (record !== undefined) opOf.set(record.id, op);
+		}
+		const steps = tail.map((item, n): EditStep => {
+			const from = opOf.get(item.id);
+			if (from === undefined || item.mode === "write" || typeof item.content !== "string")
+				throw new Error(`Cannot edit ${edit.operationId}: queued item ${item.id} was not admitted as text by this host`);
+			return { from, to: `${edit.editId}#${n}`, text: n === 0 ? edit.text : item.content, mode: item.mode };
+		});
+		const created: EditReceipt = { conversationId: conversation.id, hash, steps, status: "pending" };
+		doc.edits[edit.editId] = created;
+		return JSON.parse(JSON.stringify(created)) as EditReceipt;
+	}, context);
+	if (receipt.status === "too-late") throw new EditTooLate(edit.operationId);
+	if (receipt.status === "pending") await applyEdit(harness, conversation, edit.editId, receipt, hooks);
+	return { moved: Object.fromEntries(receipt.steps.map((step) => [step.from, step.to])) };
+}
+
+async function applyEdit(
+	harness: Harness,
+	conversation: Conversation,
+	editId: string,
+	receipt: EditReceipt,
+	hooks: { readonly at?: (step: EditStepName) => Promise<void> | undefined },
+): Promise<void> {
+	const finish = (status: EditReceipt["status"]) =>
+		harness.commit(async (tx) => void ((await tx.doc(Edits)).edits[editId]!.status = status), context);
+	await hooks.at?.("receipt");
+	// Withdraw in queue order, the edited item first: if it was already placed, nothing else is touched.
+	const readmit: EditStep[] = [];
+	for (const [n, step] of receipt.steps.entries()) {
+		const record = await conversation.commit((tx) => tx.submissionByRequest(conversation.id, step.from), context);
+		await harness.abortSubmission(record!.id, context, conversation.id);
+		const status = await (await harness.submission(record!.id, context))!.status(context);
+		const withdrawn = status.status === "unanswered" && status.reason === "aborted";
+		if (n === 0 && !withdrawn) {
+			await finish("too-late");
+			throw new EditTooLate(step.from);
+		}
+		// ponytail: a later item placed meanwhile stays where it landed (ahead of the edit); Durable has no reorder.
+		if (withdrawn) readmit.push(step);
+	}
+	await hooks.at?.("withdrawn");
+	for (const step of readmit) await admit(conversation, { operationId: step.to, text: step.text, mode: step.mode });
+	await hooks.at?.("readmitted");
+	await finish("done");
+}
+
+/** Roll forward every edit a crash interrupted. Withdrawals run before scheduling resumes; re-admission resumes it. */
+async function finishEdits(harness: Harness): Promise<void> {
+	const doc = await harness.snapshot(Edits, context);
+	for (const [editId, receipt] of Object.entries(doc?.edits ?? {})) {
+		if (receipt.status !== "pending") continue;
+		const conversation = await harness.conversation(receipt.conversationId, context);
+		if (conversation === undefined) continue;
+		try {
+			await applyEdit(harness, conversation, editId, JSON.parse(JSON.stringify(receipt)) as EditReceipt, {});
+		} catch (error) {
+			if (!(error instanceof EditTooLate)) throw error;
+		}
+	}
+}
+
 // ─── Host ────────────────────────────────────────────────────────────────────
 
 export type HostOptions = {
@@ -175,8 +294,11 @@ export type Host = {
 	readonly reports: { readonly type: string; readonly message: string; readonly task?: TaskId }[];
 	/** Task IDs recorded as uncertain at open. */
 	readonly uncertain: readonly string[];
-	/** Explicit resume: restored work stays paused until this is called (owner decision 2). */
-	resume(): void;
+	/**
+	 * Explicit resume: restored work stays paused until this is called (owner decision 2). Interrupted queued-input
+	 * edits are rolled forward first.
+	 */
+	resume(): Promise<void>;
 	close(): Promise<void>;
 };
 
@@ -228,7 +350,10 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 		faux,
 		reports,
 		uncertain,
-		resume: () => harness.resume(),
+		resume: async () => {
+			await finishEdits(harness);
+			harness.resume();
+		},
 		close: () => harness.close(context),
 	};
 }

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createModels, Type } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { createRegistry, defineExtension, defineTool, Harness, UsageDoc } from "@earendil-works/pi-durable";
-import { claudeAliases, claudePayload, PiAuthReadOnly } from "../src/claude.ts";
+import { claudeAliases, claudePayload, PiAuthStore } from "../src/claude.ts";
 import { textOfMessage } from "../src/faux.ts";
 import { context } from "../src/host.ts";
 import { wrapProvider } from "../src/redact.ts";
@@ -23,7 +23,7 @@ const MODEL = process.env.PILOT_CLAUDE_MODEL ?? "claude-haiku-5-5";
 const envCredentialNames = Object.keys(process.env).filter((name) => name.startsWith("ANTHROPIC_"));
 for (const name of envCredentialNames) delete process.env[name];
 
-const credentials = new PiAuthReadOnly();
+const credentials = new PiAuthStore();
 const credential = await credentials.read("anthropic");
 if (credential?.type !== "oauth") throw new Error("No Anthropic OAuth (subscription) login in Pi's auth.json");
 const minutesLeft = Math.round((credential.expires - Date.now()) / 60_000);
@@ -84,7 +84,7 @@ const assistant = entries.find((e) => e.kind === "pi.assistant")?.model?.[0] as 
 const result = {
 	measuredAt: new Date().toISOString(),
 	versions: { "pi-durable": "1.4.0", "pi-ai": "1.4.0", model: MODEL, piClaudeCodeUseRulesFrom: "2.2.1" },
-	credential: { source: "Pi auth.json (read-only)", type: credential.type, subscriptionTokenShape: tokenPrefixOk, minutesLeftAtStart: minutesLeft, refreshAttempts: credentials.refreshAttempts.length, anthropicEnvVarsRemoved: envCredentialNames.length },
+	credential: { source: "Pi auth.json", type: credential.type, subscriptionTokenShape: tokenPrefixOk, minutesLeftAtStart: minutesLeft, anthropicEnvVarsRemoved: envCredentialNames.length },
 	wire,
 	response,
 	run: {

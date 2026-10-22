@@ -1,12 +1,14 @@
 // Claude subscription access on Durable through public seams only: pi-ai 1.4.0's own Anthropic OAuth path (Claude
 // Code identity headers and system block for sk-ant-oat tokens), plus the pi-claude-code-use 2.2.1 payload rules
 // re-expressed at pi-ai's `onPayload` hook — flat custom tool names go out as mcp__ aliases and come back canonical
-// before Durable executes or stores them. Credentials are read from Pi's auth.json and never refreshed here: a second
-// process refreshing would race the installed Pi (production must share Pi's locked credential store).
-import { readFileSync } from "node:fs";
+// before Durable executes or stores them. Credentials live in Pi's auth.json and are refreshed under Pi's own file lock,
+// so this host, other hosts and the installed Pi refresh an expired login exactly once.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import lockfile from "proper-lockfile";
 
 /** pi-claude-code-use 2.2.1 CORE_TOOL_NAMES: Claude Code's own tools pass through, never aliased. */
 const CORE = new Set(
@@ -72,29 +74,81 @@ export function claudePayload(aliases: Aliases): (payload: unknown) => unknown {
 }
 
 /**
- * Read-only view of Pi's auth.json. `modify` (the refresh path) refuses: the pilot must never rotate the owner's
- * refresh token behind the installed Pi's back.
+ * Pi's auth.json through the installed Pi's own lock protocol (pi-coding-agent 1.0.4 `FileAuthStorageBackend`
+ * .withLockAsync, ported exactly): proper-lockfile 4.1.2 on the file itself (`realpath: false`, `stale: 30s`,
+ * `retries: 0`, own jittered backoff until the stale deadline), read, change and write back in place under the lock,
+ * mode 0600 on creation. pi-ai re-checks expiry inside `modify`, so racing hosts and Pi refresh only once. Tokens stay
+ * in auth.json; nothing is cached or copied elsewhere.
  */
-export class PiAuthReadOnly implements CredentialStore {
-	readonly refreshAttempts: string[] = [];
+export class PiAuthStore implements CredentialStore {
 	readonly #path: string;
 	constructor(path = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "auth.json")) {
 		this.#path = path;
 	}
-	#all(): Record<string, Credential> {
-		return JSON.parse(readFileSync(this.#path, "utf8")) as Record<string, Credential>;
+
+	async #withLock<T>(fn: (current: Record<string, Credential>) => Promise<{ result: T; next?: Record<string, Credential> }>, options?: AuthOperationOptions): Promise<T> {
+		const signal = options?.signal;
+		signal?.throwIfAborted();
+		if (!existsSync(dirname(this.#path))) mkdirSync(dirname(this.#path), { recursive: true, mode: 0o700 });
+		if (!existsSync(this.#path)) writeFileSync(this.#path, "{}", WRITE);
+		let compromised: Error | undefined;
+		const release = await acquire(this.#path, signal, (error) => (compromised = error));
+		const check = () => {
+			if (compromised !== undefined) throw compromised;
+			signal?.throwIfAborted();
+		};
+		try {
+			check();
+			const text = readFileSync(this.#path, "utf8");
+			const { result, next } = await fn(text === "" ? {} : (JSON.parse(text.replace(/^\uFEFF/, "")) as Record<string, Credential>));
+			check();
+			if (next !== undefined) writeFileSync(this.#path, JSON.stringify(next, null, 2), WRITE);
+			check();
+			return result;
+		} finally {
+			await release().catch(() => {}); // as Pi: ignore unlock errors of a compromised lock
+		}
 	}
-	async read(providerId: string, _options?: AuthOperationOptions): Promise<Credential | undefined> {
-		return this.#all()[providerId];
+
+	read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
+		return this.#withLock(async (all) => ({ result: all[providerId] }), options);
 	}
-	async list(): Promise<readonly CredentialInfo[]> {
-		return Object.entries(this.#all()).map(([providerId, c]) => ({ providerId, type: c.type }));
+	list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
+		return this.#withLock(async (all) => ({ result: Object.entries(all).map(([providerId, c]) => ({ providerId, type: c.type })) }), options);
 	}
-	async modify(providerId: string): Promise<Credential | undefined> {
-		this.refreshAttempts.push(providerId);
-		throw new Error(`Pilot refuses to refresh ${providerId} credentials; refresh with the installed Pi`);
+	modify(providerId: string, fn: (current: Credential | undefined) => Promise<Credential | undefined>, options?: AuthOperationOptions): Promise<Credential | undefined> {
+		return this.#withLock(async (all) => {
+			const next = await fn(all[providerId]);
+			return next === undefined ? { result: all[providerId] } : { result: next, next: { ...all, [providerId]: next } };
+		}, options);
 	}
 	async delete(): Promise<void> {
 		throw new Error("Pilot never deletes credentials");
+	}
+}
+
+// The mode applies only on creation, as in Pi, so administrator-managed modes and ACLs stay intact.
+const WRITE = { encoding: "utf8", mode: 0o600 } as const;
+
+/** Pi's `acquireLockAsync`: proper-lockfile with no internal retries, jittered exponential backoff up to the stale time. */
+async function acquire(path: string, signal: AbortSignal | undefined, onCompromised: (error: Error) => void): Promise<() => Promise<void>> {
+	const staleMs = 30_000;
+	const deadline = Date.now() + staleMs;
+	for (let retry = 0; ; retry++) {
+		signal?.throwIfAborted();
+		try {
+			const release = await lockfile.lock(path, { realpath: false, retries: 0, stale: staleMs, onCompromised });
+			if (signal?.aborted) {
+				await release();
+				signal.throwIfAborted();
+			}
+			return release;
+		} catch (error) {
+			signal?.throwIfAborted();
+			const remainingMs = deadline - Date.now();
+			if ((error as { code?: string }).code !== "ELOCKED" || remainingMs <= 0) throw error;
+			const base = Math.min(10 * 2 ** retry, 1_000);
+			await sleep(Math.min(Math.round(base * (1 + Math.random())), remainingMs), undefined, signal === undefined ? {} : { signal });
+		}
 	}
 }

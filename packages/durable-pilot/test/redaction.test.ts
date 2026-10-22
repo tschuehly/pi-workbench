@@ -113,7 +113,7 @@ describe("pre-persistence redaction", () => {
 		const midStream = leaks(dir);
 		h = await host(dir);
 		h.faux.setResponses([fauxAssistantMessage([fauxText(SECRET_TEXT)])]);
-		h.resume();
+		await h.resume();
 		const record = await h.root.commit((tx) => tx.submissionByRequest(h.root.id, "op-1"), context);
 		const settled = await (await h.harness.submission(record!.id, context))!.wait(context);
 		await h.close();

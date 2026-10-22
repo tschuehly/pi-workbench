@@ -1,13 +1,13 @@
 // Spike (a), offline part: the Claude subscription adapter's payload rules, alias canonicalization before Durable
-// executes or stores a call, and refusal to refresh credentials. The one live request is scripts/claude-subscription-spike.ts.
+// executes or stores a call, and refresh through Pi's locked auth.json. The one live request is scripts/claude-subscription-spike.ts.
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { createModels, fauxAssistantMessage, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { createRegistry, defineExtension, defineTool, Harness } from "@earendil-works/pi-durable";
-import { claudeAliases, claudePayload, PiAuthReadOnly } from "../src/claude.ts";
+import { claudeAliases, claudePayload, PiAuthStore } from "../src/claude.ts";
 import { textOfMessage } from "../src/faux.ts";
 import { admit, context, openHost } from "../src/host.ts";
 import { wrapProvider } from "../src/redact.ts";
@@ -83,24 +83,40 @@ describe("claude subscription adapter (offline)", () => {
 		assert.deepEqual([aliases.toCanonical(wire[0]), aliases.toCanonical(wire[1])], ["review-deploy", "review_deploy"], "each alias maps back to its own tool");
 	});
 
-	it("an expired subscription credential is not refreshed by the pilot: no request, visible failure", async () => {
+	it("a failed refresh of an expired login fails the turn visibly: no model request, auth.json untouched", async () => {
 		const dir = scratch("claude-expired");
 		const auth = join(dir, "auth.json");
-		writeFileSync(auth, JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-fake", refresh: "sk-ant-ort01-fake", expires: Date.now() - 60_000 } }), { mode: 0o600 });
-		const credentials = new PiAuthReadOnly(auth);
+		writeFileSync(auth, JSON.stringify({ anthropic: { type: "oauth", access: "fake-oat-expired", refresh: "fake-ort-1", expires: Date.now() - 60_000 } }), { mode: 0o600 });
+		const before = readFileSync(auth, "utf8");
+		const credentials = new PiAuthStore(auth);
 		let payloads = 0;
-		const models = createModels({ credentials });
-		models.setProvider(wrapProvider(anthropicProvider(), { onPayload: (p) => (payloads++, p) }));
-		const store = await openStore(join(dir, "store", "session.sqlite"));
-		const harness = await Harness.open(store.storage, { models, registry: createRegistry(), settings: { retry: { enabled: false } } }, context);
-		const root = await harness.root(context, { agent: { model: { provider: "anthropic", modelId: "claude-haiku-5-5" } } });
-		const settled = await (await root.submit({ type: "input", content: "hi" }, context)).wait(context);
-		await harness.close(context);
-		assert.equal(settled.status, "unanswered");
-		assert.deepEqual(credentials.refreshAttempts, ["anthropic"], "refresh was requested and refused");
-		assert.equal(payloads, 0, "no request was sent");
-		assert.equal(readdirSync(dir).includes("auth.json"), true);
-		assert.equal(JSON.parse(readFileSync(auth, "utf8")).anthropic.access, "sk-ant-oat01-fake", "credential file untouched");
+		let refreshes = 0;
+		const realFetch = globalThis.fetch;
+		// The OAuth endpoint fails; every other request is refused, so nothing leaves the machine.
+		globalThis.fetch = (async (input: string | URL | Request) => {
+			if (String(input instanceof Request ? input.url : input) === "https://platform.claude.com/v1/oauth/token") {
+				refreshes++;
+				return new Response('{"error":"server_error"}', { status: 500 });
+			}
+			throw new Error("network blocked by test");
+		}) as typeof fetch;
+		try {
+			const models = createModels({ credentials });
+			models.setProvider(wrapProvider(anthropicProvider(), { onPayload: (p) => (payloads++, p) }));
+			const store = await openStore(join(dir, "store", "session.sqlite"));
+			const harness = await Harness.open(store.storage, { models, registry: createRegistry(), settings: { retry: { enabled: false } } }, context);
+			const root = await harness.root(context, { agent: { model: { provider: "anthropic", modelId: "claude-haiku-5-5" } } });
+			const settled = await (await root.submit({ type: "input", content: "hi" }, context)).wait(context);
+			await harness.close(context);
+			assert.equal(settled.status, "unanswered");
+			assert.equal(refreshes, 1, "one refresh attempt");
+			assert.equal(payloads, 0, "no model request was sent");
+			assert.equal(readFileSync(auth, "utf8"), before, "credential file untouched");
+			assert.equal(statSync(auth).mode & 0o777, 0o600);
+			assert.equal(existsSync(`${auth}.lock`), false, "lock released");
+		} finally {
+			globalThis.fetch = realFetch;
+		}
 	});
 });
 

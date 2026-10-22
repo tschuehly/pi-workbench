@@ -149,6 +149,26 @@ const queueWindows: Window[] = [
 			for (const op of ["op-0", "op-s1", "op-f1", "op-s2", "op-f2"]) assert.equal(e[op].status, "done", op);
 		},
 	},
+	...(["receipt", "withdrawn", "readmitted"] as const).map(
+		(at): Window => ({
+			id: `queue.edit-${at}`,
+			scenario: "queue",
+			barrier: `edit:${at}`,
+			crash: { window: "edit", at, armed: ["tool:wait_tool"] },
+			verify: { window: "edit" },
+			check: (e: E) => {
+				const edited = e.retry.moved["op-f2"];
+				assert.equal(e.afterResume, "done", "resume() finished the interrupted edit before any client retry");
+				assert.deepEqual(Object.keys(e.retry.moved), ["op-f2", "op-f3"], "the edited item and the one queued after it were rebuilt");
+				assert.deepEqual(e.transcript.users, ["call:wait_tool", "steer-1", "follow-1", "follow-2 edited", "follow-3"], "order preserved");
+				assert.equal(count(e.requestLabels, "follow-2 edited"), 1, "edited message delivered exactly once");
+				assert.equal(e.requestLabels.filter((l: string) => l === "follow-2").length, 0, "original never delivered");
+				assert.deepEqual(e["op-f2"], { id: e["op-f2"].id, status: "unanswered", reason: "aborted" }, "original withdrawn");
+				assert.equal(e[edited].status, "done");
+				for (const op of ["op-0", "op-s1", "op-f1", e.retry.moved["op-f3"]]) assert.equal(e[op].status, "done", op);
+			},
+		}),
+	),
 	{
 		id: "queue.failed-run",
 		scenario: "queue",

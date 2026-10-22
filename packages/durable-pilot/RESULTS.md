@@ -1,13 +1,13 @@
 # Pi Durable Phase A — pilot results
 
-**Every built matrix row passes on the published `@earendil-works/pi-durable@1.4.0`, now under the approved storage default (WAL + `synchronous=FULL` + `fullfsync=ON`). Two rows are not built:** queued-item edit and concurrent credential refresh (owner decision pending). **Neither kill criterion fired:** Claude subscription access and pre-persistence redaction both work through public seams, with no fork or private patch, within the open boundaries listed under spike (b).
+**Every matrix row passes on the published `@earendil-works/pi-durable@1.4.0`, under the approved storage default (WAL + `synchronous=FULL` + `fullfsync=ON`), including queued-item edit and concurrent credential refresh, built after Thomas's decision.** **Neither kill criterion fired:** Claude subscription access and pre-persistence redaction both work through public seams, with no fork or private patch, within the open boundaries listed under spike (b).
 
-An independent review (openai-codex/gpt-6.1-sol) found four blockers in the first version of this pilot. All four are fixed test-first; see [Review fixes](#review-fixes). The whole matrix and the latency spike were rerun afterwards.
+An independent review (openai-codex/gpt-6.1-sol) found four blockers in the first version of this pilot. All four are fixed test-first; see [Review fixes](#review-fixes). The whole matrix and the latency spike were rerun afterwards. The two remaining rows were then built test-first; see [Completing Phase A](#completing-phase-a).
 
 Open for the owner before Phase B:
 
-1. **Queued-item edit** and **concurrent credential refresh** are not built (owner decision pending).
-2. **The pilot never refreshes Claude credentials.** A Durable host that refreshes OAuth tokens must use Pi's file-locked credential store. Otherwise it races the installed Pi.
+1. **Queued-item edit has known limits** (see [Queued input](#queued-input)): it rebuilds the queue tail, refuses when a queued write follows the item, and cannot reorder an item a run already placed.
+2. **Credential refresh is proven offline only**, against a fake OAuth endpoint, with the installed Pi's credential-store code as the stand-in. No real refresh was sent.
 3. **Open redaction boundaries:** bash spill files, leading fragments of env-only credentials, and unsafe nested tool calls (see spike b and Further findings).
 
 Scope: Phase A of [the rebuild plan](../../docs/plans/pi-durable-rebuild.md), approved 2026-10-22. This is a headless pilot only. No Workbench, PI WEB, installed checkout or service changed.
@@ -76,13 +76,13 @@ The aggregate table is in `results/summary.md`; `results/versions.json` records 
 | Safe tool, unsafe tool | `tools.safe-safe`, `tools.safe-unsafe`, `tools.unsafe-safe`, `tools.unsafe-effect-reproposed` | **pass** (4 × 40/40) | See [Tools](#tools). |
 | Child launch/report | `child.before-admission`, `child.after-result`, `child.before-delivery`, `child.after-delivery`, `child.cancel-parent`, `child.worker-leaf`, `child.cancel-worker`, `child.cancel-leaf` | **pass** (8 × 40/40) | See [Children](#children). |
 | Queued input | `queue.mid-commit`, `queue.after-commit`, `queue.changed-payload`, `queue.order`, `queue.failed-run` | **pass** (5 × 40/40) | See [Queued input](#queued-input). |
-| Queued input — item edit | none | **not built (owner decision pending)** | Durable has no queued-item edit; see [Queued input](#queued-input). |
+| Queued input — item edit | `queue.edit-receipt`, `queue.edit-withdrawn`, `queue.edit-readmitted` | **pass** (3 × 40/40) | Withdraw + re-admit under stable IDs; see [Queued input](#queued-input). |
 | Unanswered question | `question.before-commit`, `question.after-commit`, `question.answer-undelivered`, `question.delivered-unacked`, `question.attention-race` | **pass** (5 × 40/40) | See [Questions and attention](#questions-and-attention). |
 | Schema upgrade/rollback | `schema.upgrade-rollback` (20/20); `schema.task-doc-upgrade`, `-missing`, `-failed` (3 × 40/40) | **pass** | See [Schema](#schema). |
 | Ownership/storage/security | `ownership.competing-owner` (20/20), `ownership.disk-full` (40/40), `ownership.crash-loop-parking` (20/20), `ownership.store-files` (1/1), `ownership.default-pragmas` (1/1); redaction in spike (b); alias misrouting in `test/claude.test.ts` | **pass**, with the open redaction boundaries of spike (b) | See [Ownership and storage](#ownership-and-storage). |
-| Ownership — concurrent credential refresh | none | **not built (owner decision pending)** | Needs Pi's locked credential store; see [Ownership and storage](#ownership-and-storage). |
+| Ownership — concurrent credential refresh | `ownership.concurrent-refresh` (20/20), control `ownership.concurrent-refresh-control` (1/1) | **pass** | Pi's auth.json lock protocol; see [Ownership and storage](#ownership-and-storage). |
 
-All 1,040 evidence lines that report the verify host's pragmas show `synchronous` 2, `fullfsync` 1 and `checkpoint_fullfsync` 1. The other 182 lines (schema, competing-owner, parking and the two store tests) open hosts the same default way but do not record pragmas.
+All 1,160 evidence lines that report the verify host's pragmas show `synchronous` 2, `fullfsync` 1 and `checkpoint_fullfsync` 1. The other 203 lines (schema, competing-owner, parking, the two store tests and the credential race) do not record pragmas; their hosts open with the same default.
 
 ### Generation
 
@@ -123,7 +123,16 @@ All 1,040 evidence lines that report the verify host's pragmas show `synchronous
 - **Steer/follow-up order:** reproduces the no-crash baseline `[P0, steer-1, follow-1, steer-2, follow-2]`.
 - **Withdrawal:** a withdrawn follow-up ends `unanswered/aborted` and is never placed.
 - **Failed run (`afterFailedRun: keep`):** the queued follow-up stays queued and is not drained; the next input places it first.
-- **Not built:** edits. Durable has no queued-item edit; the adapter would withdraw and re-admit, which is untested.
+- **Edit** (`editQueued` in `src/host.ts`). Durable has no edit and places queued inputs in ID order, so an edit works like this:
+  1. One commit records a receipt under the edit ID: the item and every input queued after it, with their new operation IDs `<editId>#<n>`.
+  2. The items are withdrawn in queue order, the edited one first. If it was already placed, the edit fails with `EditTooLate` and nothing else is touched.
+  3. The items are re-admitted in order through `admit()`, the edited one with its new text, and the receipt is marked done.
+  4. The caller acknowledges only after that. A retry under the same edit ID is a no-op or finishes the edit; `resume()` finishes an interrupted edit before scheduling.
+- **Edit crash windows**, each 20 × kill and 20 × close, with steer-1, follow-1, follow-2 and follow-3 queued behind a held tool and follow-2 edited: after the receipt (before the withdraw commit), after the withdraw (before re-admission), and after re-admission (before the acknowledgement).
+  - `resume()` had finished the edit before the client retried, in all 120 iterations.
+  - The transcript and the model requests read `call:wait_tool, steer-1, follow-1, follow-2 edited, follow-3`: the edited message once, the original never, the order kept.
+  - The original operation ends `unanswered/aborted`; the edited and moved items answer.
+- **Edit limits:** an edit moves every input queued behind the item to new operation IDs (returned as `moved`). It refuses when a queued write follows the item. A later item a run places during the edit stays ahead of the edited one. Mapping queue entries back to operation IDs scans the conversation's admissions, which needs an index at scale.
 
 ### Questions and attention
 
@@ -178,7 +187,17 @@ Our own task and document versions:
 **Security:** redaction is covered by spike (b), with its open boundaries.
 
 - **Alias misrouting:** fixed. Colliding names get distinct, reversible aliases (see spike a).
-- **Concurrent credential refresh:** not built (owner decision pending). The pilot never refreshes; a refresh attempt is refused with no request sent and the credential file untouched (`test/claude.test.ts`). The real race between an old and a new host refreshing the same login is **not built**; it needs Pi's locked credential store (Phase B).
+- **Concurrent credential refresh:** pass (`test/credentials.test.ts`).
+  - **Lock protocol:** the installed Pi (pi-coding-agent 1.0.4) exposes no public credential-store API, so `PiAuthStore` (`src/claude.ts`) ports its `FileAuthStorageBackend.withLockAsync` exactly. That means proper-lockfile 4.1.2 on `auth.json` itself, with `realpath: false`, `stale` 30 s, `retries` 0 and the same jittered backoff. It reads, changes and writes in place under the lock, using mode 0600 on creation. pi-ai re-checks expiry inside `modify`, so a process that gets the lock after a refresh just uses the new token.
+  - **Race:** each iteration has two pilot host processes, each running a real Durable turn through `PiAuthStore`, and a stand-in for the installed Pi. The stand-in is Pi's own `AuthStorage`, loaded from the installed package's `dist/core/auth-storage.js` behind pi-ai `Models`. All three start on one signal against an expired login. A fake OAuth endpoint rotates refresh tokens and rejects a reused one, and every other network call is blocked.
+  - **20/20 iterations:**
+    - exactly 1 refresh request and 0 rejected
+    - all three processes end with the issued access token, and both hosts' blocked Messages requests carried it
+    - auth.json holds the rotated refresh token, keeps the other provider's entry, stays 0600, and no lock is left behind
+    - a concurrent reader using the same lock saw 0 torn reads
+  - **Positive control:** the same race without the lock sent 3 refresh requests; 2 were rejected for the reused refresh token.
+  - **A failed refresh** (endpoint 500) ends the turn `unanswered` with no model request and auth.json byte-identical (`test/claude.test.ts`).
+  - **Tokens:** they never leave auth.json; evidence holds only sha256 prefixes of fake tokens.
 
 ## Spikes
 
@@ -190,7 +209,7 @@ The adapter (`src/claude.ts`) works as follows:
 - The pi-claude-code-use 2.2.1 payload rules are re-expressed at pi-ai's public `onPayload` hook: flat custom tool names become `mcp__pilot__<name>`, along with tool_choice, history and the prompt phrases.
 - The provider wrapper maps alias calls back to canonical names before Durable executes or stores them.
 - Aliases never collide. As in 2.2.1's `reserveAliasName`, a name whose sanitized alias is already taken (`review-deploy` vs `review_deploy`, case, truncation) gets a `_2`, `_3`… suffix. A tool registered under a name already handed out as an alias fails the request.
-- Credentials are read-only from Pi's `auth.json`; `modify` (the refresh path) refuses.
+- Credentials live in Pi's `auth.json` and are refreshed under Pi's own lock protocol (see [Ownership and storage](#ownership-and-storage)). The one live request ran earlier with the read-only store and needed no refresh.
 
 **One live request** (`results/claude-spike.json`, `claude-sonnet-5-5`):
 
@@ -213,7 +232,7 @@ The adapter (`src/claude.ts`) works as follows:
 - model switching
 - display-side prose un-aliasing
 - quota and billing reconciliation over time
-- refresh coordination with the installed Pi
+- a real refresh against Anthropic's endpoint (coordination with the installed Pi is shown offline)
 
 All of these are Phase B parity items.
 
@@ -272,6 +291,17 @@ The review reproduced four blockers. Each now has a test that failed on `b1773c1
 
 After the fixes, `npm run setup && npm test` passed: 63/63 matrix tests and 11/11 spike tests. `results/summary.md` was generated from the working tree just before the fix commit, so its header names the parent commit.
 
+## Completing Phase A
+
+Thomas then decided to build the two missing checks. Both tests were written first and failed on `55bb26a`, because the features did not exist (`results/red-before-5-6.txt`). Afterwards `npm run setup && npm test` passed: 71/71 matrix tests and 11/11 spike tests.
+
+| Check | Implementation | Tests | Evidence |
+| --- | --- | --- | --- |
+| 5. Queued-message edit across a crash | `editQueued`, receipt document `pilot.edits`, roll-forward in `resume()` (`src/host.ts`) | `queue.edit-*` windows in `test/children-queue-questions.test.ts` | `results/evidence/queue.edit-*.jsonl`, 6 × 20/20 |
+| 6. Concurrent Claude credential refresh | `PiAuthStore` on Pi's auth.json lock protocol (`src/claude.ts`; adds `proper-lockfile` 4.1.2, the version Pi pins) | `test/credentials.test.ts`, `test/refresher.ts`; failed-refresh case in `test/claude.test.ts` | `results/evidence/ownership.concurrent-refresh*.jsonl`, 20/20 plus control |
+
+`host.resume()` is now async, because it rolls interrupted edits forward before scheduling.
+
 ## Further findings
 
 - **SQLITE_FULL surfaces as an AggregateError.** Through chord's Node facade the message is "SQLite transaction failed and rollback failed", wrapping "database or disk is full" and "cannot rollback — no transaction is active". Durable still fails closed, which is correct, but hosts should unwrap `errors` for diagnostics. This could be an upstream note.
@@ -290,7 +320,7 @@ The evidence removes the two Phase A kill risks and **does not raise** any estim
 
 | Phase | Estimate | Reason |
 | --- | --- | --- |
-| B | 7–11 days (was 8–12) | Admission receipts, paused restore, reconciliation, question/attention and child-reporter fixtures exist and are crash-tested. New Phase B work: Pi-locked credential refresh, queued-item edit, nested-tool reconciliation, and the open redaction boundaries. |
+| B | 7–11 days (was 8–12) | Admission receipts, paused restore, reconciliation, question/attention and child-reporter fixtures exist and are crash-tested. New Phase B work: wiring the queued-item edit and the locked credential store into Workbench, nested-tool reconciliation, and the open redaction boundaries. |
 | C | 15–25 days | Unchanged. |
 | D | Dropped | Owner decision 3. |
 | E | 3–5 days | Unchanged. |
