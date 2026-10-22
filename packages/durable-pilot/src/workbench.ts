@@ -69,7 +69,7 @@ export async function workingModeSnapshot(harness: Harness, conversation: Conver
 /** The Working Mode block an entry delivered to the model, if any. */
 export function entryWorkingMode(entry: EntryRecord): WorkingModeDetails | undefined {
 	const data = entry.data as { workingMode?: WorkingModeDetails } | undefined;
-	return (entry.kind === PROMPT_ENTRY || entry.kind === MODE_ENTRY) && isSelection(data?.workingMode?.selection) ? data!.workingMode : undefined;
+	return (entry.kind === PROMPT_ENTRY || entry.kind === MODE_ENTRY || entry.kind === "workbench.context-checkpoint") && isSelection(data?.workingMode?.selection) ? data!.workingMode : undefined;
 }
 
 /**

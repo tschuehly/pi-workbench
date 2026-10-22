@@ -1,0 +1,6 @@
+[no deferral, no nested guard] ✖ tools_enable: group tools stay deferred until enabled; the exposure survives a restart and a compaction (136.405417ms)
+[no deferral, no nested guard] ✖ tool groups never widen an allowlist: nested calls need the group enabled, a child without the tools cannot load or call them (229.147167ms)
+[no deferral, no nested guard] ✖ failing tests:
+[no deferral, no nested guard] ✖ tools_enable: group tools stay deferred until enabled; the exposure survives a restart and a compaction (136.405417ms)
+[no deferral, no nested guard]   AssertionError [ERR_ASSERTION]: a new Chat starts without the workers group
+[no deferral, no nested guard] ✖ tool groups never widen an allowlist: nested calls need the group enabled, a child without the tools cannot load or call them (229.147167ms)

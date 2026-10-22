@@ -6,19 +6,26 @@ import { withCancel } from "@earendil-works/chord/context";
 import { type AssistantMessage, clampThinkingLevel, getSupportedThinkingLevels, type ImageContent, type Message, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	type AgentEvent,
+	CompactionEntry,
+	type CompactionSettings,
 	type EntryRecord,
 	InboxDoc,
+	LiveDoc,
 	type SnapshotEvent,
 	type SubmissionId,
 	UsageDoc,
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
-import { parseModel } from "./chat.ts";
+import { DEFAULT_COMPACTION, parseModel } from "./chat.ts";
+import { CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData } from "./checkpoint.ts";
+import { syncWorkersGroup } from "./tool-groups.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Admissions, admit, changeQueued, context, Edits, type EditPlan, type Host, type QueuedInput, Reconcile, resolveUncertain } from "./host.ts";
 import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./redact.ts";
 import { type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
+
+type WorkingModeDetailsLike = Record<string, unknown>;
 import {
 	ANSWERS_ENTRY,
 	ASK_ANSWERS_CUSTOM_TYPE,
@@ -47,9 +54,10 @@ export const PROTOCOL = 2;
 /**
  * PI WEB's gated Chat operations (`CHAT_CAPABILITY_LABELS` in its `shared/apiTypes.ts`) this host supports, reported
  * in its ready message. PI WEB shows a control only once its name is here; add a name with the operation that
- * implements it. Protocol 2 hosts without the list support none of them.
+ * implements it. Protocol 2 hosts without the list support none of them. compact: `/compact` (method `compact`);
+ * compact-and-continue: the model tool; tool-groups: `tools_enable`.
  */
-export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell"] as const;
+export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups"] as const;
 
 /** A `!`/`!!` command's record: PI WEB's `bashExecution` message without role and timestamp. */
 export const BASH_ENTRY = "workbench.bash";
@@ -88,7 +96,7 @@ export type ChatStatus = {
 	model?: { provider: string; id: string };
 	thinkingLevel?: string;
 	isStreaming: boolean;
-	isCompacting: false;
+	isCompacting: boolean;
 	isBashRunning: boolean;
 	pendingMessageCount: number;
 	/** In run order (steers first); `id` lets PI WEB name the exact snapshot a queue mutation was made against. */
@@ -139,9 +147,16 @@ export function browserMessage(entry: EntryRecord, streamId?: string): Record<st
 export function browserMessages(entry: EntryRecord, streamId?: string): Record<string, unknown>[] {
 	if (entry.kind === BASH_ENTRY) return [bashMessage(entry)];
 	const message = entry.model?.[0] as Message | undefined;
-	if (message === undefined || message.role === "system") return [];
 	const entryId = String(entry.id);
-	const custom = (customType: string, content: string, details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message.timestamp, entryId: id });
+	const custom = (customType: string, content: string, details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message?.timestamp ?? 0, entryId: id });
+	if (entry.kind === CHECKPOINT_ENTRY) {
+		// The legacy extension's `context-checkpoint` message, after the Working Mode block it carried.
+		const { workingMode, text, ...details } = (entry.data ?? {}) as CheckpointData & { workingMode?: WorkingModeDetailsLike };
+		const content = message === undefined ? [] : Array.isArray(message.content) ? (message.content as { type: string; text?: string }[]) : [{ type: "text", text: String(message.content) }];
+		const body = message === undefined ? (text ?? "") : (content.at(-1)?.text ?? "");
+		return [...(workingMode === undefined ? [] : [custom(WORKING_MODE_CUSTOM_TYPE, content[0]?.text ?? "", workingMode, `${entryId}:working-mode`)]), custom(CHECKPOINT_CUSTOM_TYPE, body, details)];
+	}
+	if (message === undefined || message.role === "system") return [];
 	const parts = Array.isArray(message.content) ? (message.content as { type: string; text?: string }[]) : [];
 	const mode = entryWorkingMode(entry);
 	// A plain prompt's open-questions reminder is its last block, hidden as in a legacy Chat.
@@ -149,6 +164,11 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	if (mode !== undefined && message.role === "user") {
 		const block = custom(WORKING_MODE_CUSTOM_TYPE, parts[0]?.text ?? "", mode, entry.kind === MODE_ENTRY ? entryId : `${entryId}:working-mode`);
 		return entry.kind === MODE_ENTRY ? [block] : [block, { ...message, content: userParts.slice(1), entryId }];
+	}
+	if (entry.kind === CompactionEntry.kind) {
+		// Pi's transcript shape for a compaction (PI WEB transcriptMessages.ts): the summary without Durable's framing.
+		const summary = /<summary>\n([\s\S]*)\n<\/summary>$/.exec(textOfContent(message.content))?.[1] ?? textOfContent(message.content);
+		return [{ role: "system", source: "compaction", content: `Compacted history:\n\n${summary}`, timestamp: message.timestamp, entryId }];
 	}
 	if (userParts !== parts) return [{ ...message, content: userParts, entryId }];
 	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
@@ -229,9 +249,15 @@ export class ChatSession {
 	async start(): Promise<void> {
 		if (this.#chat !== undefined) this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
 		const stream = await watchEvents(this.#host.harness, this.#host.root.id, context);
-		this.#reset(stream.snapshot);
+		await this.#reset(stream.snapshot);
 		stream.start(async (events) => {
-			for (const event of events) this.#apply(event);
+			for (const event of events) {
+				if (event.type !== "snapshot") this.#apply(event);
+				else {
+					await this.#reset(event);
+					this.#emit({ type: "session.tree.changed" });
+				}
+			}
 			if (events.some((event) => STATUS_EVENTS.has(event.type))) this.#emit({ type: "status.update", status: await this.status() });
 		});
 		this.#stop = () => stream.stop();
@@ -269,8 +295,12 @@ export class ChatSession {
 		this.#emit({ type: "status.update", status: await this.status() });
 	}
 
-	#reset(snapshot: SnapshotEvent): void {
-		this.#entries = [...snapshot.entries];
+	/**
+	 * The snapshot's state, with the whole history up to its newest entry: the snapshot holds only the active context,
+	 * which after a compaction starts at the summary, while PI WEB shows every message as a legacy Chat does.
+	 */
+	async #reset(snapshot: SnapshotEvent): Promise<void> {
+		this.#entries = await this.#history(snapshot.entries.reduce((max, entry) => Math.max(max, entry.id), 0));
 		this.#running = snapshot.run !== undefined;
 		this.#partial = undefined;
 		this.#shells.clear();
@@ -279,6 +309,18 @@ export class ChatSession {
 		this.#emitted = [];
 		const partial = snapshot.generation?.message;
 		if (partial !== undefined) this.#startPartial(partial);
+	}
+
+	async #history(newest: number): Promise<EntryRecord[]> {
+		if (newest === 0) return [];
+		const entries: EntryRecord[] = [];
+		let cursor: Parameters<Host["root"]["entries"]>[2];
+		do {
+			const page = await this.#host.root.entries({ order: "ascending", maxEntryId: newest as EntryRecord["id"] }, 500, cursor, context);
+			entries.push(...page.items);
+			cursor = page.next;
+		} while (cursor !== undefined);
+		return entries;
 	}
 
 	#startPartial(partial: AssistantMessage): void {
@@ -291,10 +333,6 @@ export class ChatSession {
 		// Nested calls belong to their parent tool's result; slice 1 shows only model-issued calls.
 		if ("parentToolCallId" in event && event.parentToolCallId !== undefined) return;
 		switch (event.type) {
-			case "snapshot":
-				this.#reset(event);
-				this.#emit({ type: "session.tree.changed" });
-				return;
 			case "run_start":
 				this.#running = true;
 				this.#emit({ type: "agent.start" });
@@ -335,8 +373,9 @@ export class ChatSession {
 			}
 			case "entry_appended":
 				this.#entries.push(event.entry);
-				// Workbench notices (storage-guard) are passive entries; show them live.
-				if (event.entry.kind in NOTICE_TYPES) for (const message of browserMessages(event.entry)) this.#emit({ type: "message.end", message });
+				// Passive entries the browser shows (Workbench notices, a cancelled checkpoint); bookkeeping entries project to
+				// nothing. A `!` record was shown live by its shell events.
+				if (event.entry.kind !== BASH_ENTRY) for (const message of browserMessages(event.entry)) this.#emit({ type: "message.end", message });
 				return;
 			case "tool_execution_start":
 				this.#toolOutput.set(event.toolCallId, "");
@@ -369,6 +408,10 @@ export class ChatSession {
 				});
 				return;
 			}
+			case "compaction_end":
+				// A manual compaction reports through `compact()`; an automatic one that failed is reported here, as Pi does.
+				if (event.error !== undefined && event.reason !== "manual") this.#compactionFailed(event.error);
+				return;
 			case "task_failed":
 				this.#emit({ type: "session.diagnostic", message: `Durable task ${event.kind} failed: ${event.message}` });
 				return;
@@ -443,6 +486,8 @@ export class ChatSession {
 		const paused = harness.wake().active && !this.#resumed;
 		const contextWindow = agent.model === undefined ? undefined : this.#host.models.getModel(agent.model.provider, agent.model.modelId)?.contextWindow;
 		const contextTokens = this.#contextTokens();
+		const live = await harness.snapshot(LiveDoc, root.id, context);
+		const warnings = paused ? [{ severity: "info" as const, message: "Restored paused: unfinished work waits until you send a message." }] : [];
 		const [mode, questions, reconcile] = await Promise.all([workingModeSnapshot(harness, root), questionsState(harness, root), harness.snapshot(Reconcile, context)]);
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
@@ -453,14 +498,14 @@ export class ChatSession {
 			...(agent.model === undefined ? {} : { model: { provider: agent.model.provider, id: agent.model.modelId } }),
 			...(agent.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }),
 			isStreaming: this.#running,
-			isCompacting: false,
+			isCompacting: (live?.compactions?.length ?? 0) > 0,
 			isBashRunning: this.#shell !== undefined,
 			pendingMessageCount: queuedMessages.length,
 			queuedMessages,
 			messageCount: this.messages().length,
 			tokens,
 			cost,
-			...(paused ? { warnings: [{ severity: "info" as const, message: "Restored paused: unfinished work waits until you send a message." }] } : {}),
+			...(warnings.length === 0 ? {} : { warnings }),
 			extensionStatuses: { [WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode) },
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
@@ -558,6 +603,7 @@ export class ChatSession {
 			return { type: "done" };
 		}
 		const result = await selectMode(root, args);
+		if (result.ok && this.#chat !== undefined) await syncWorkersGroup(harness, this.#host.registry, root, this.#chat.workbench.extensions);
 		await this.#publishStatus();
 		return result.ok ? { type: "done", message: result.message } : { type: "unsupported", message: result.message };
 	}
@@ -614,10 +660,36 @@ export class ChatSession {
 		await this.#publishStatus();
 	}
 
-	/** Resources PI WEB resolved with Pi's loader; their sources are recorded when they change. */
-	async configure(resources: Resources): Promise<void> {
+	/**
+	 * `/compact [instructions]`: a manual Durable compaction, which summarizes while the Chat keeps working and places
+	 * the summary when idle or at the next turn boundary; Esc cancels it. Its outcome is reported when it settles.
+	 */
+	async compact(instructions?: string): Promise<{ type: "done" }> {
+		await this.#resume();
+		const focus = instructions?.trim();
+		// The instructions become task input, a new committed place: redacted like every other.
+		const id = await this.#host.root.compact(focus === undefined || focus === "" ? undefined : redact(focus), context);
+		await this.#publishStatus();
+		void this.#host.harness.waitForTask(id, context).then(({ state }) => {
+			const outcome = state.outcome;
+			if (outcome.status === "failed") this.#compactionFailed(outcome.error.message);
+			else if (outcome.status === "aborted") this.#emit({ type: "command.output", level: "info", message: "Compaction cancelled." });
+			else if (outcome.result?.submissionId === undefined && outcome.result?.entryId === undefined)
+				this.#emit({ type: "command.output", level: "info", message: "Nothing to compact yet." });
+		}, () => {});
+		return { type: "done" };
+	}
+
+	#compactionFailed(error: string): void {
+		this.#emit({ type: "session.diagnostic", message: `Compaction failed: ${error}` });
+		this.#emit({ type: "command.output", level: "error", message: "Couldn’t compact history. Try again." });
+	}
+
+	/** Resources PI WEB resolved with Pi's loader; their sources are recorded when they change. Compaction: Pi's settings. */
+	async configure(resources: Resources, settings: { compaction?: CompactionSettings } = {}): Promise<void> {
 		if (this.#chat === undefined) return;
 		this.#chat.workbench.resources = resources;
+		if (settings.compaction !== undefined) this.#chat.workbench.compaction = { ...DEFAULT_COMPACTION, ...settings.compaction };
 		const sources = [...(resources.sources ?? [])].map((s) => ({ path: s.path, sha256: s.sha256 }));
 		await this.#host.harness.commit(async (tx) => {
 			const doc = await tx.doc(ResourcesDoc);
@@ -798,4 +870,4 @@ export class ChatSession {
 	}
 }
 
-const STATUS_EVENTS = new Set<AgentEvent["type"]>(["run_start", "run_end", "inbox_update", "usage_changed", "agent_changed", "snapshot", "message_end", "tool_execution_start", "tool_execution_end"]);
+const STATUS_EVENTS = new Set<AgentEvent["type"]>(["run_start", "run_end", "inbox_update", "usage_changed", "agent_changed", "snapshot", "message_end", "tool_execution_start", "tool_execution_end", "compaction_start", "compaction_end"]);

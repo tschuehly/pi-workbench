@@ -118,7 +118,7 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	const host = new ChatHost(store, cwd);
 	const ready = await host.ready;
 	assert.equal(ready.protocol, 2);
-	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell"], "the gated PI WEB operations this host supports");
+	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups"], "the gated PI WEB operations this host supports");
 	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt"}' });
 	await host.until((e) => e.type === "agent.end", "the run to end");
 	const types = host.events.map((e) => e.type);

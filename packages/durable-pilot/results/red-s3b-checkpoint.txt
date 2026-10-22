@@ -1,0 +1,7 @@
+[before checkpoint] ✖ compact_and_continue: the run ends, the summary is placed, then exactly one continuation starts the next phase with the Working Mode block (396.558375ms)
+[before checkpoint] ✖ compact_and_continue refuses a sibling tool batch and schedules nothing (20001.776833ms)
+[before checkpoint] ✖ compact_and_continue: a failed compaction still continues once, with the diagnostic (20001.210542ms)
+[before checkpoint] ✖ compact_and_continue: Esc during the compaction cancels it visibly and starts no next phase (20001.866709ms)
+[before checkpoint] ✖ crash row compact_and_continue: a kill after the tool result yields one summary and one continuation after reopen (20001.694ms)
+[before checkpoint] ✖ crash row compact_and_continue: a kill while summarizing yields one summary and one continuation after reopen (20002.207875ms)
+[before checkpoint] ✖ crash row compact_and_continue: a kill after the continuation yields one summary and one continuation after reopen (20001.122333ms)

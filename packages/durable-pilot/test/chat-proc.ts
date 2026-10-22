@@ -1,5 +1,6 @@
 // Drives the Durable Chat host process PI WEB spawns (src/chat-host-main.ts) over its real IPC protocol, with the
-// scripted faux model. Shared by the composer tests; every barrier is an event the host emitted after a commit.
+// scripted faux model. Shared by the composer, context-tools and extensions tests; every barrier is an event the host
+// emitted after a commit.
 import { type ChildProcess, fork } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -66,6 +67,11 @@ export class ChatHost {
 		}
 	}
 
+	/** Wait until `count` runs have ended. */
+	idle(count: number): Promise<UiEvent> {
+		return this.until(() => this.events.filter((e) => e.type === "agent.end").length >= count, `${count} runs`);
+	}
+
 	kill(): Promise<number | null> {
 		this.child.kill("SIGKILL");
 		return this.exited;
@@ -77,6 +83,17 @@ export class ChatHost {
 	}
 }
 
+export type Message = { role: string; entryId?: string; content?: unknown; stopReason?: string; isError?: boolean; customType?: string; source?: string; details?: Record<string, unknown> };
+export type Status = {
+	isStreaming: boolean;
+	isCompacting: boolean;
+	queuedMessages: { kind: string; text: string }[];
+	warnings?: { severity: string; message: string }[];
+	extensionStatuses?: Record<string, string>;
+	unresolvedEffects?: { id: string; toolName: string; arguments: string }[];
+};
+export type Transcript = { messages: Message[]; partial: unknown; status: Status };
+
 export const textOf = (content: unknown): string =>
 	typeof content === "string" ? content : Array.isArray(content) ? content.map((c: { text?: string }) => c.text ?? "").join("") : "";
 
@@ -87,7 +104,7 @@ export function family(label: string): { store: string; cwd: string } {
 	return { store: join(dir, "family"), cwd };
 }
 
-export type Logged = { label: string; reasoning?: string; images?: number; ran?: string[] };
+export type Logged = { label: string; workingMode?: number; focus?: string; tools?: string[]; sections?: string[]; reasoning?: string; images?: number; ran?: string[]; messages?: number; reminder?: string };
 export const logged = (store: string) => readLog<Logged>(join(store, "requests.log"));
 
 export function integrity(store: string): string {
@@ -99,4 +116,13 @@ export function integrity(store: string): string {
 	}
 }
 
-export const idle = (host: ChatHost, count: number) => host.until(() => host.events.filter((e) => e.type === "agent.end").length >= count, `${count} runs`);
+export const idle = (host: ChatHost, count: number) => host.idle(count);
+
+/** Poll for a condition a file shows (an effect or a provider request), for barriers no event marks. */
+export async function waitFor(condition: () => boolean, what: string, timeoutMs = 20_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!condition()) {
+		if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+}

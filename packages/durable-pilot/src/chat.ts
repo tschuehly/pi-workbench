@@ -4,15 +4,18 @@
 // tests and trials, the scripted faux model. The Chat's model is stored per conversation and can be switched.
 import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { defineExtension, section } from "@earendil-works/pi-durable";
+import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
+import { checkpointExtension } from "./checkpoint.ts";
 import { router } from "./faux.ts";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { clearInheritedIdentity, storedAgent, sweepPiTmp, toolEnv, warningTool, workbenchExtensions } from "./extensions.ts";
 import { context, type Host, MODEL, openHost } from "./host.ts";
+import { toolGroupsExtension } from "./tool-groups.ts";
 import { redactingTool, wrapProvider } from "./redact.ts";
+import { searchTools } from "./search-tools.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
 export const PREAMBLE = [
@@ -22,7 +25,7 @@ export const PREAMBLE = [
 ].join("\n");
 
 /** Prompt sections in Pi's order (preamble, addendum, project context, skills, cwd); resources come from PI WEB. */
-export function chatTools(resources: () => Resources) {
+export function chatTools(resources: () => Resources, cwd: string) {
 	return defineExtension({
 		name: "workbench.chat",
 		sections: [
@@ -33,7 +36,8 @@ export function chatTools(resources: () => Resources) {
 			section("cwd", (input) => input.env?.cwd),
 		],
 		// read has no external effect, so a crash mid-read may rerun it; write, edit and bash stay unsafe (never rerun).
-		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), createBashTool()].map((tool) => redactingTool(warningTool(tool))),
+		// grep/find/ls: Pi's own, offered only where an allowlist names them (children), as in legacy Chats.
+		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), createBashTool(), ...searchTools(cwd)].map((tool) => redactingTool(warningTool(tool))),
 	});
 }
 
@@ -59,8 +63,14 @@ export type ChatHostOptions = {
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
 export type ChatHost = Host & {
-	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void };
+	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings; extensions: readonly Extension[] };
 };
+
+/**
+ * Pi's compaction defaults (threshold above `contextWindow - reserveTokens`, keep ~20k recent tokens), without Durable's
+ * extra background compaction, which Pi does not have; PI WEB replaces them with the user's Pi settings.
+ */
+export const DEFAULT_COMPACTION: CompactionSettings = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000, backgroundTokens: 0 };
 
 export function parseModel(model: string): { provider: string; modelId: string } {
 	if (model === "faux") return MODEL;
@@ -78,7 +88,15 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	sweepPiTmp();
 	const chatId = options.chatId ?? options.dir;
 	let rootId: ConversationId | undefined;
-	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {} };
+	let opened: Host | undefined;
+	// Tool groups defer the group tools of every extension before them.
+	const extensions: Extension[] = [
+		chatTools(() => workbench.resources, options.cwd),
+		workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
+		workbenchExtensions(options.cwd),
+		checkpointExtension(() => opened!.harness),
+	];
+	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions };
 	const aliases = claudeAliases("pi");
 	const host = await openHost(options.dir, {
 		// The scripted model reasons, so thinking levels apply to it as to Claude.
@@ -86,6 +104,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		provider: () => anthropicProvider(),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials: new PiAuthStore(),
+		settings: { get compaction() { return workbench.compaction; } },
 		rootAgent: { model: parseModel(options.model), cwd: options.cwd, thinkingLevel: (options.thinkingLevel ?? "medium") as ModelThinkingLevel },
 		env: async (target, c) => {
 			const cwd = target.cwd ?? options.cwd;
@@ -93,12 +112,9 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 			const identity = { chatId, conversationId: target.conversationId, rootId, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
 			return new NodeExecutionEnv({ cwd, shellEnv: toolEnv(identity) });
 		},
-		extensions: [
-			chatTools(() => workbench.resources),
-			workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
-			workbenchExtensions(options.cwd),
-		],
+		extensions: [...extensions, toolGroupsExtension(extensions)],
 	});
+	opened = host;
 	rootId = host.root.id;
 	if (scripted) {
 		// The scripted model takes no Claude payload rules: it is answered locally by the router.
