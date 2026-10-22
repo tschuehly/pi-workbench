@@ -34,6 +34,20 @@ export function completePrefix(text: string): string {
 	return tail === null ? head : head.slice(0, tail.index);
 }
 
+const SECRET_START = /^(?:sk-|gh[opsur]_|github_pat_|eyJ|tid=|-----BEGIN)/;
+
+/**
+ * For whole values a tool may replace while it streams (details, diagnostics): sanitize the complete part and mask a
+ * trailing fragment that starts like a secret, since no pattern can recognise half a secret.
+ */
+export function strict(sanitize: Sanitize): Sanitize {
+	return (text) => {
+		const complete = completePrefix(text);
+		const rest = text.slice(complete.length);
+		return sanitize(complete) + (SECRET_START.test(rest.trimStart()) ? "[REDACTED:partial]" : sanitize(rest));
+	};
+}
+
 const SKIP = new Set(["image", "thinking", "redacted_thinking"]);
 
 /** Deep-sanitize strings; throws if the sanitizer throws. */
@@ -188,12 +202,12 @@ export function redactingTool<T extends ToolRegistration>(tool: T, sanitize: San
 				if (property === "diagnostic")
 					return (diagnostic: Parameters<ToolExecutionApi["diagnostic"]>[0]) => {
 						try {
-							target.diagnostic({ ...diagnostic, message: sanitize(diagnostic.message) });
+							target.diagnostic({ ...diagnostic, message: strict(sanitize)(diagnostic.message) });
 						} catch {
 							failed = true;
 						}
 					};
-				if (property === "details") return (value: never, c: never) => target.details(sanitizeDeep(value, sanitize), c);
+				if (property === "details") return (value: never, c: never) => target.details(sanitizeDeep(value, strict(sanitize)), c);
 				const value = Reflect.get(target, property, target) as unknown;
 				return typeof value === "function" ? value.bind(target) : value;
 			},

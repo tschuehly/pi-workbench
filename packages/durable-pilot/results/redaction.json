@@ -1,0 +1,65 @@
+{
+  "control": {
+    "found": [
+      "session.sqlite:Q7xVb2mN",
+      "session.sqlite:Fg5Zc0Ae",
+      "session.sqlite:2e5b8d1a64"
+    ]
+  },
+  "model": {
+    "partialsObserved": 7,
+    "observedLeaks": 0,
+    "midStream": [],
+    "final": [],
+    "settled": "done",
+    "redactedSample": "Here is the key [REDACTED:anthropic-key] and the token [REDACTED:env:PILOT_FAKE_API_TOKEN] done. filler filler filler "
+  },
+  "tool": {
+    "received": [
+      "start\nkey: ",
+      "{\"sofar\":\"start\\nkey: [REDACTED:partial]\"}",
+      "{\"sofar\":\"start\\nkey: [REDACTED:partial]\"}",
+      "{\"sofar\":\"start\\nkey: [REDACTED:partial]\"}",
+      "[REDACTED:anthropic-key] tail\n",
+      "{\"sofar\":\"start\\nkey: [REDACTED:anthropic-key] tail\\n\"}",
+      "env ",
+      "{\"sofar\":\"start\\nkey: [REDACTED:anthropic-key] tail\\nenv pilotEnvS\"}",
+      "[REDACTED:env:PILOT_FAKE_API_TOKEN]\n",
+      "{\"sofar\":\"start\\nkey: [REDACTED:anthropic-key] tail\\nenv [REDACTED:env:PILOT_FAKE_API_TOKEN]\\n\"}",
+      "saw [REDACTED:partial]"
+    ],
+    "toolResults": [
+      "k=[REDACTED:anthropic-key]\n[REDACTED:env:PILOT_FAKE_API_TOKEN]\n",
+      "start\nkey: [REDACTED:anthropic-key] tail\nenv [REDACTED:env:PILOT_FAKE_API_TOKEN]\n<harness>\n[info] saw [REDACTED:partial]\n</harness>"
+    ],
+    "found": [],
+    "settled": "done",
+    "partialsObserved": 7
+  },
+  "sanitizerErrors": {
+    "model": {
+      "status": "unanswered",
+      "reason": "model_error"
+    },
+    "toolResult": [
+      "<harness>\n[error] Secret redaction failed; tool output withheld\n</harness>"
+    ],
+    "toolRun": "done",
+    "found": []
+  },
+  "argumentsBoundary": {
+    "found": [
+      "session.sqlite:Q7xVb2mN",
+      "session.sqlite:Fg5Zc0Ae"
+    ]
+  },
+  "hookControl": {
+    "reports": [
+      "extension_error"
+    ],
+    "found": [
+      "session.sqlite:Q7xVb2mN",
+      "session.sqlite:Fg5Zc0Ae"
+    ]
+  }
+}

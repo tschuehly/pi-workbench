@@ -1,0 +1,1 @@
+{"iteration":0,"mode":"close","barrier":"v1-running","barrierData":null,"crashMessages":["closed"],"doc":{"count":7,"label":"migrated"},"outcome":{"status":"completed","result":"v2 migrated"},"reports":[],"integrity":"ok","ms":307,"pass":true}

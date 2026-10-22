@@ -1,0 +1,1 @@
+{"iteration":0,"mode":"kill","barrier":"v1-running","barrierData":null,"crashMessages":[],"doc":{"count":7,"label":"migrated"},"blocked":{"kind":"blocked","reason":"missing_task"},"wake":{"active":false},"outcome":{"status":"completed","result":"v1 -"},"reports":[],"integrity":"ok","ms":300,"pass":true}

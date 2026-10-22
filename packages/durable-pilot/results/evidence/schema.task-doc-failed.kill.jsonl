@@ -1,0 +1,1 @@
+{"iteration":0,"mode":"kill","barrier":"v1-running","barrierData":null,"crashMessages":[],"doc":{"count":7,"label":"migrated"},"blocked":{"kind":"blocked","reason":"migration_failed","error":{}},"wake":{"active":false},"reports":["migration_failed"],"integrity":"ok","ms":300,"pass":true}
