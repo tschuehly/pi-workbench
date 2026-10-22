@@ -184,12 +184,13 @@ test("P090/P091 collect and status: running inspection returns at once; a long r
 		{ name: "subagent", arguments: scout("fail", { name: "Failing" }) },
 		{ name: "bash", arguments: { command: "sleep 1.5" } },
 	));
-	const failing = launchedId(await toolResult(host, "subagent", 3));
+	await toolResult(host, "subagent", 3);
 	const bulk = await toolResult(host, "subagent_collect", 3);
 	assert.match(bulk, /^Reconciled 2 of 2 terminal children\. 1 result\(s\) truncated — verification incomplete\./);
 	assert.match(bulk, /\[Result truncated: showing the first 8000 of 9000 characters; the full answer stays in child conversation \d+\.\]/);
 	assert.match(bulk, /TRUNCATED, cannot satisfy verification/);
-	assert.match(bulk, new RegExp(`${failing} \\[execution_failed\\]\\nexecution_failed: child input ended unanswered \\(model_error\\)`), "a failed child is reported as failed, not success");
+	assert.match(bulk, /\n\S+ \[execution_failed\]\nexecution_failed: child input ended unanswered \(model_error\)/, "a failed child is reported as failed, not success");
+	assert.match(bulk, /\n\S+ \[success\]\nx{8000}\n/, "the long child succeeded, bounded");
 	assert.equal((host.events.filter(isTool("subagent_collect"))[2]!.message as Message).isError, true, "a bulk collect with a failure is an error result");
 	await quiet(host);
 
