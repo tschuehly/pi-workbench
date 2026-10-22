@@ -4,7 +4,7 @@
 // the host emitted after the relevant commit; no timing sleeps.
 import assert from "node:assert/strict";
 import { type ChildProcess, execFileSync, fork } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -32,6 +32,23 @@ process.env.PI_CODING_AGENT_DIR = fakeAgentDir("chat-agent");
 function heldWrite(cwd: string): string {
 	execFileSync("mkfifo", [join(cwd, "effect.fifo")]);
 	return 'call:write {"path":"effect.fifo","content":"deploy\\n"}';
+}
+/**
+ * An orderly close joins the running call, and an open blocked on a FIFO cannot be aborted: a non-blocking reader lets
+ * the held write finish (the effect lands, its result is never committed). Returns what was written, once read.
+ */
+function releaseWrite(cwd: string): () => string {
+	const fd = openSync(join(cwd, "effect.fifo"), constants.O_RDONLY | constants.O_NONBLOCK);
+	return () => {
+		try {
+			const buffer = Buffer.alloc(64);
+			return buffer.subarray(0, readSync(fd, buffer)).toString();
+		} catch {
+			return ""; // nothing written (EAGAIN): the close came before the write's open
+		} finally {
+			closeSync(fd);
+		}
+	};
 }
 /** The held write is running: its tool task committed its intent (the live slot reads running). */
 const writing = (host: ChatHost) => host.until((e) => e.type === "tool.start" && e.toolName === "write", "the held write");
@@ -482,7 +499,9 @@ test("an orderly SIGTERM closes the store gracefully: exit 0, the running unsafe
 	await host.call("prompt", { operationId: "op-1", text: heldWrite(cwd) });
 	await writing(host);
 	host.child.kill("SIGTERM");
+	const effect = releaseWrite(cwd);
 	assert.equal(await host.exited, 0);
+	assert.match(effect(), /^(deploy\n)?$/, "the effect ran at most once");
 	const reopened = new ChatHost(store, cwd);
 	await reopened.ready;
 	assert.equal((await reopened.call<Status>("status")).unresolvedEffects?.[0]?.toolName, "write");
