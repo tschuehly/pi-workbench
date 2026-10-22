@@ -78,6 +78,11 @@ function redactWith({ regex, sources }, text) {
   return out;
 }
 
+/** The known credential values (auth.json and secret-named env), for callers that must also catch their fragments. */
+export function knownValues() {
+  return [...knownRegex().sources.keys()];
+}
+
 /** Replace known credential values and well-known secret shapes with `[REDACTED:<source>]`. */
 export function redact(text) {
   if (typeof text !== "string" || text === "") return text;

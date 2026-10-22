@@ -72,8 +72,10 @@ export const ReconcileGuard = defineExtension({
 });
 
 /**
- * Before scheduling: every model tool task stopped after intent whose rerun is not safe under both the stored and the
- * current policy may have had an external effect. Record it so the guard blocks another attempt.
+ * Before scheduling: every tool task stopped after intent whose rerun is not safe under both the stored and the
+ * current policy may have had an external effect. Record it so the guard blocks another attempt. That includes nested
+ * calls (`executeTool`): Durable abandons them after a restart when their caller is not replay-safe, but an abandoned
+ * call in its execute phase may still have run.
  */
 export async function reconcileOnOpen(harness: Harness, registry: Registry): Promise<string[]> {
 	const inspection = await harness.inspect(context);
@@ -83,13 +85,17 @@ export async function reconcileOnOpen(harness: Harness, registry: Registry): Pro
 		if (record.kind !== ToolTask.definition.name || record.state.status === "terminal" || record.state.status === "completing") continue;
 		const checkpoint = record.state.checkpoint as ToolTaskCheckpoint;
 		const input = record.input as ToolTaskInput;
-		if (checkpoint?.phase !== "execute" || input.kind !== "model") continue;
-		const conversation = (await harness.conversation(record.conversationId, context))!;
-		const entry = await conversation.commit((tx) => tx.entry(input.assistant), context);
-		const call = (entry?.model?.[0] as Message | undefined)?.role === "assistant"
-			? (entry!.model![0] as { content: { type: string; id?: string; name?: string }[] }).content.find((c) => c.type === "toolCall" && c.id === input.callId)
-			: undefined;
-		const name = call?.name ?? "unknown";
+		if (checkpoint?.phase !== "execute") continue;
+		let name = "unknown";
+		if (input.kind === "nested") name = input.call.name;
+		else {
+			const conversation = (await harness.conversation(record.conversationId, context))!;
+			const entry = await conversation.commit((tx) => tx.entry(input.assistant), context);
+			const call = (entry?.model?.[0] as Message | undefined)?.role === "assistant"
+				? (entry!.model![0] as { content: { type: string; id?: string; name?: string }[] }).content.find((c) => c.type === "toolCall" && c.id === input.callId)
+				: undefined;
+			name = call?.name ?? "unknown";
+		}
 		const current = registry.snapshot().tools().find(({ tool }) => tool.name === name)?.tool;
 		if (checkpoint.replay === "safe" && current?.replay === "safe") continue;
 		found[record.id] = { tool: name, conversationId: record.conversationId, arguments: JSON.stringify(checkpoint.arguments) };

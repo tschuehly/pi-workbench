@@ -1,0 +1,15 @@
+# test/redaction-boundaries.test.ts on 13ca7f5 (before the slice-2 fixes)
+  ✔ control: an unwrapped bash tool spills the raw secret to its full-output file (218.030625ms)
+  ✖ bash spill files hold only sanitized output, and the full output is still complete (181.939583ms)
+  ✔ control: an unwrapped tool commits the leading fragment of an env-only credential in its details (179.333209ms)
+  ✖ a details value ending in the leading fragment of an env-only credential is masked before commit (186.072417ms)
+✖ redaction boundaries (766.350459ms)
+  ✖ an unsafe nested call interrupted by a restart is recorded for reconciliation and blocks a fresh call (653.410791ms)
+✖ nested unsafe tool calls (653.704125ms)
+✖ failing tests:
+✖ bash spill files hold only sanitized output, and the full output is still complete (181.939583ms)
+  AssertionError [ERR_ASSERTION]: neither the spill file nor the store holds the secret
+✖ a details value ending in the leading fragment of an env-only credential is masked before commit (186.072417ms)
+  AssertionError [ERR_ASSERTION]: store and work directory clean
+✖ an unsafe nested call interrupted by a restart is recorded for reconciliation and blocks a fresh call (653.410791ms)
+  AssertionError [ERR_ASSERTION]: the outer call and its nested deploy are both recorded: ["13"]

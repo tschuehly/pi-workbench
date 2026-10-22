@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 // Reuse the Workbench redactor (patterns, auth.json and env values) rather than a second copy.
-import { redact as workbenchRedact } from "../../../extensions/secret-redaction/redact.mjs";
+import { knownValues, redact as workbenchRedact } from "../../../extensions/secret-redaction/redact.mjs";
 
 export type Sanitize = (text: string) => string;
 export const redact: Sanitize = (text) => workbenchRedact(text) as string;
@@ -43,16 +43,34 @@ export function sealed(sanitize: Sanitize): Sanitize {
 }
 
 const SECRET_START = /^(?:sk-|gh[opsur]_|github_pat_|eyJ|tid=|-----BEGIN)/;
+/** Shortest leading fragment of a known credential value that is masked; shorter ones are too common to tell apart. */
+const MIN_FRAGMENT = 6;
+
+/**
+ * Mask the end of `text` when it is the leading fragment of a known credential value (auth.json or a secret-named env
+ * variable): such a value has no recognisable shape, so only the known-value list can tell.
+ */
+export function maskKnownFragment(text: string, values: readonly string[] = knownValues() as string[]): string {
+	let longest = 0;
+	for (const value of values)
+		for (let k = Math.min(value.length - 1, text.length); k >= MIN_FRAGMENT && k > longest; k--)
+			if (text.endsWith(value.slice(0, k))) {
+				longest = k;
+				break;
+			}
+	return longest === 0 ? text : `${text.slice(0, text.length - longest)}[REDACTED:partial]`;
+}
 
 /**
  * For whole values a tool may replace while it streams (details, diagnostics): sanitize the complete part and mask a
- * trailing fragment that starts like a secret, since no pattern can recognise half a secret.
+ * trailing fragment that starts like a secret or like a known credential value, since no pattern can recognise half a
+ * secret.
  */
 export function strict(sanitize: Sanitize): Sanitize {
 	return (text) => {
 		const complete = completePrefix(text);
 		const rest = text.slice(complete.length);
-		return sanitize(complete) + (SECRET_START.test(rest.trimStart()) || rest.includes("-----BEGIN") ? "[REDACTED:partial]" : sanitize(rest));
+		return sanitize(complete) + (SECRET_START.test(rest.trimStart()) || rest.includes("-----BEGIN") ? "[REDACTED:partial]" : maskKnownFragment(sanitize(rest)));
 	};
 }
 
@@ -192,6 +210,77 @@ export function wrapProvider(
 
 const FAILED = "Secret redaction failed; tool output withheld";
 
+type Env = NonNullable<ToolExecutionApi["env"]>;
+type ExecOptions = NonNullable<Parameters<Env["exec"]>[1]>;
+
+/**
+ * An environment whose shell spill files hold sanitized text. The environment would write the complete raw output to
+ * its spill file itself, outside every tool wrapper; instead the command runs without `spill` (and without `window`, so
+ * every chunk arrives), and this wrapper writes the sanitized stream to its own spill file once the same thresholds are
+ * crossed, holding back a tail that may still become a secret. The tool's `onOutput` still gets the raw chunks, which
+ * the wrapped `api.output` sanitizes.
+ */
+export function sanitizingEnv(env: Env, sanitize: Sanitize): Env {
+	return new Proxy(env, {
+		get(target, property) {
+			if (property !== "exec") {
+				const value = Reflect.get(target, property, target) as unknown;
+				return typeof value === "function" ? value.bind(target) : value;
+			}
+			return async (command: Parameters<Env["exec"]>[0], options: ExecOptions | undefined, context: Parameters<Env["exec"]>[2]) => {
+				if (options?.spill === undefined) return target.exec(command, options, context);
+				const { spill, window: _window, ...rest } = options;
+				let bytes = 0;
+				let lines = 0;
+				let pending = "";
+				let head = "";
+				let path: string | undefined;
+				let writes: Promise<void> = Promise.resolve();
+				let failure: unknown;
+				const write = (text: string) => {
+					if (text === "") return;
+					if (path === undefined && bytes <= spill.afterBytes && lines <= spill.afterLines) {
+						head += text;
+						return;
+					}
+					const chunk = head + text;
+					head = "";
+					writes = writes.then(async () => {
+						if (path === undefined) {
+							const created = await target.createTempFile({ prefix: "pi-output-", suffix: ".log" }, context);
+							if (!created.ok) throw created.error;
+							path = created.value;
+						}
+						const appended = await target.appendFile(path, chunk, context);
+						if (!appended.ok) throw appended.error;
+					}).catch((error: unknown) => void (failure ??= error));
+				};
+				const result = await target.exec(
+					command,
+					{
+						...rest,
+						onOutput: (text, c, info) => {
+							bytes += Buffer.byteLength(text);
+							for (const char of text) if (char === "\n") lines++;
+							pending += text;
+							const ready = completePrefix(pending);
+							pending = pending.slice(ready.length);
+							write(sanitize(ready));
+							rest.onOutput?.(text, c, info);
+						},
+					},
+					context,
+				);
+				if (path !== undefined || bytes > spill.afterBytes || lines > spill.afterLines) write(sanitize(pending));
+				await writes;
+				if (failure !== undefined) throw new Error("Failed to preserve complete shell output", { cause: failure });
+				if (path === undefined) return result;
+				return result.ok ? { ...result, value: { ...result.value, spillPath: path } } : { ...result, error: Object.assign(result.error, { spillPath: path }) };
+			};
+		},
+	});
+}
+
 /** Wrap one tool so nothing it streams or returns reaches Durable unsanitized. */
 export function redactingTool<T extends ToolRegistration>(tool: T, inner: Sanitize = redact): T {
 	const sanitize = sealed(inner);
@@ -243,6 +332,9 @@ export function redactingTool<T extends ToolRegistration>(tool: T, inner: Saniti
 						}
 					};
 				if (property === "details") return (value: never, c: never) => target.details(sanitizeDeep(value, strict(sanitize)), c);
+				// Output is transformed here, so an environment must not omit text outside a window this wrapper never sees.
+				if (property === "outputWindow") return undefined;
+				if (property === "env") return target.env === undefined ? undefined : sanitizingEnv(target.env, sanitize);
 				const value = Reflect.get(target, property, target) as unknown;
 				return typeof value === "function" ? value.bind(target) : value;
 			},
@@ -262,7 +354,8 @@ export function redactingTool<T extends ToolRegistration>(tool: T, inner: Saniti
 		flush();
 		if (failed) throw new Error(FAILED);
 		try {
-			return sanitizeDeep(result, sanitize);
+			const { details, ...rest } = result;
+			return { ...sanitizeDeep(rest, sanitize), ...(details === undefined ? {} : { details: sanitizeDeep(details, strict(sanitize)) }) };
 		} catch {
 			throw new Error(FAILED);
 		}
