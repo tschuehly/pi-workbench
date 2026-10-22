@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import {
   WorkstreamStore,
 } from "../src/index.js";
 import * as model from "../src/model.js";
+import { acquireLock } from "../src/lock-coordinator.js";
 
 const run = promisify(execFile);
 const INDEX_URL = new URL("../src/index.js", import.meta.url).href;
@@ -201,11 +202,12 @@ test("warm cache follows deletion and recreation", async (t) => {
 test("warm trusted reads still wait for another lock owner", async (t) => {
   const { directory, store } = await fixture(t, { lockTimeoutMs: 60 });
   await store.list();
-  await mkdir(join(directory, ".workstreams.lock"));
-  for (const read of [() => store.list(), () => store.inspect("ws-1"), () => store.watch()]) {
-    await assert.rejects(read(), (error) => error.code === "STORE_BUSY");
-  }
-  await rm(join(directory, ".workstreams.lock"), { recursive: true });
+  const owner = await acquireLock(directory);
+  try {
+    for (const read of [() => store.list(), () => store.inspect("ws-1"), () => store.watch()]) {
+      await assert.rejects(read(), (error) => error.code === "STORE_BUSY");
+    }
+  } finally { await owner.release(); }
   assert.equal((await store.list()).length, 1);
 });
 
