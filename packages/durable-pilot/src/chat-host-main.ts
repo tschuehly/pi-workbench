@@ -8,6 +8,7 @@
 // gracefully first.
 // ponytail: the IPC channel ties the host's life to its session daemon; Phase C moves hosts to their own service owner.
 import { parseArgs } from "node:util";
+import type { CompactionSettings } from "@earendil-works/pi-durable";
 // The Workbench telemetry extension's recorder: same JSONL events, same PI_TELEMETRY_DIR.
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
 import { openChatHost } from "./chat.ts";
@@ -55,6 +56,8 @@ const text = (params: Record<string, unknown>, name: string): string => {
 	return value;
 };
 
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
 const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	transcript: () => session.transcript(),
 	status: () => session.status(),
@@ -85,7 +88,11 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		if (resolution !== "done" && resolution !== "not-done" && resolution !== "retry") throw new Error("resolution must be done, not-done or retry");
 		return session.resolveEffect(text(params, "taskId"), resolution as Resolution);
 	},
-	configure: (params) => session.configure((params.resources ?? {}) as Resources),
+	// Pi's compaction settings ({ enabled, reserveTokens, keepRecentTokens }, or Durable's full shape in tests).
+	configure: (params) => session.configure((params.resources ?? {}) as Resources, {
+		...(isObject(params.compaction) ? { compaction: params.compaction as CompactionSettings } : {}),
+	}),
+	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
 	abort: () => session.abort(),
 	clearQueue: () => session.clearQueue(),
 	close: () => close(),

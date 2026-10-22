@@ -363,7 +363,8 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 		{
 			models,
 			registry,
-			settings: { afterFailedRun: "keep", ...options.settings },
+			// Copies the descriptors, not the values: settings are read at every use, so a getter stays live.
+			settings: Object.defineProperties({ afterFailedRun: "keep" }, Object.getOwnPropertyDescriptors(options.settings ?? {})),
 			env: options.env ?? (() => new NodeExecutionEnv({ cwd: work })),
 			...(options.now === undefined ? {} : { now: options.now }),
 			onReport: (error: unknown, info: ReportInfo) =>

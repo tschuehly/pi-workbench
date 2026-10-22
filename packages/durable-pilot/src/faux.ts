@@ -37,6 +37,17 @@ export function readLog<T = Record<string, unknown>>(file: string): T[] {
 	}
 }
 
+/** Tools a request offers: the transcript's system messages replayed in order (Durable sends only tool changes). */
+function offered(context: { messages: readonly Message[]; tools?: readonly { name: string }[] }): string[] {
+	const names = new Set((context.tools ?? []).map((tool) => tool.name));
+	for (const message of context.messages) {
+		if (message.role !== "system") continue;
+		for (const tool of (message as { toolsRemoved?: { name: string }[] }).toolsRemoved ?? []) names.delete(tool.name);
+		for (const tool of (message as { toolsAdded?: { name: string }[] }).toolsAdded ?? []) names.add(tool.name);
+	}
+	return [...names].sort();
+}
+
 const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
 
 /**
@@ -46,6 +57,8 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
  * - `spawn:<name> <message>` → call subagent spawn; `leaf:<message>` → call leaf;
  * - `ask:<text>` → call ask_user;
  * - `fail` → a non-retryable provider error;
+ * - a compaction summary request → `Summary of <n> earlier messages.`, logged as `summarize` with its focus; a focus
+ *   containing `slow` streams a long summary, one containing `fail` is a non-retryable error;
  * - a tool result → `done`, unless `repropose` and the result says the tool was interrupted: then call it again;
  * - anything else → `ok: <text>`.
  * `hold(label)` lets a process stop a request at a barrier until it is cancelled.
@@ -60,8 +73,15 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const text = raw.replace(/^<working-mode seq="\d+">[\s\S]*?<\/working-mode>/, "");
 		const block = text !== raw ? /^<working-mode seq="(\d+)">/.exec(raw)![1] : undefined;
 		const label = last?.role === "toolResult" ? `result:${last.toolName}` : text.slice(0, 40);
-		const sections = [...system.matchAll(/<(addendum|project_context|skills)>/g)].map((match) => match[1]);
-		logLine(join(dir, "requests.log"), { label, ...(block === undefined ? {} : { workingMode: Number(block) }), ...(sections.length === 0 ? {} : { sections }) });
+		if (system.includes("context summarization assistant")) {
+			const focus = /\n\nAdditional focus: ([\s\S]*)$/.exec(raw)?.[1];
+			const count = (raw.match(/^\[(?:User|Assistant|Tool result)\]/gm) ?? []).length;
+			logLine(join(dir, "requests.log"), { label: "summarize", ...(focus === undefined ? {} : { focus }) });
+			if (focus?.includes("fail") === true) return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 summarizer rejected (scripted)" });
+			return fauxAssistantMessage([fauxText(`Summary of ${count} earlier messages.${focus?.includes("slow") === true ? ` ${LONG}` : ""}`)]);
+		}
+		const sections = [...system.matchAll(/<(addendum|project_context|skills|mcp_servers)>/g)].map((match) => match[1]);
+		logLine(join(dir, "requests.log"), { label, ...(block === undefined ? {} : { workingMode: Number(block) }), ...(sections.length === 0 ? {} : { sections }), tools: offered(context) });
 		if (options.hold !== undefined && options.holdOn !== undefined && text.startsWith(options.holdOn))
 			await options.hold(`request:${options.holdOn}`, streamOptions?.signal);
 		if (last?.role === "toolResult") {

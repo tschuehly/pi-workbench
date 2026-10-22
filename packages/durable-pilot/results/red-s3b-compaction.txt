@@ -1,0 +1,26 @@
+✖ /compact with instructions: one summary placed, full history kept around it, the Working Mode block re-attached on the next prompt (324.878458ms)
+✖ /compact with nothing to compact says so instead of failing silently (262.170958ms)
+✖ automatic compaction: above Pi's threshold the next request waits for one summary, then goes ahead (1513.655584ms)
+✖ crash row compaction: a kill while summarizing restores paused; sending reruns the summary once and places one summary (427.36725ms)
+ℹ pass 0
+ℹ fail 4
+✖ failing tests:
+✖ /compact with instructions: one summary placed, full history kept around it, the Working Mode block re-attached on the next prompt (324.878458ms)
+  Error: Unknown method compact
+✖ /compact with nothing to compact says so instead of failing silently (262.170958ms)
+  Error: Unknown method compact
+✖ automatic compaction: above Pi's threshold the next request waits for one summary, then goes ahead (1513.655584ms)
+  AssertionError [ERR_ASSERTION]: the Chat showed it was compacting
+✖ crash row compaction: a kill while summarizing restores paused; sending reruns the summary once and places one summary (427.36725ms)
+  Error: Unknown method compact
+✔ redaction control: without the redacting provider a compaction summary and its instructions commit a secret (108.125542ms)
+✖ a compaction summary and its /compact instructions are redacted before they are committed (80.559875ms)
+ℹ pass 1
+ℹ fail 1
+✖ failing tests:
+✖ a compaction summary and its /compact instructions are redacted before they are committed (80.559875ms)
+  TypeError: session.compact is not a function
+[instructions unredacted] ✖ a compaction summary and its /compact instructions are redacted before they are committed (136.524666ms)
+[instructions unredacted] ✖ failing tests:
+[instructions unredacted] ✖ a compaction summary and its /compact instructions are redacted before they are committed (136.524666ms)
+[instructions unredacted]   AssertionError [ERR_ASSERTION]: store and work directory clean

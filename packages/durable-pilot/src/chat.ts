@@ -3,7 +3,7 @@
 // request_attention), and the Claude subscription (Pi's auth.json, pi-claude-code-use 2.2.1 payload rules) plus, for
 // tests and trials, the scripted faux model. The Chat's model is stored per conversation and can be switched.
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { defineExtension, section } from "@earendil-works/pi-durable";
+import { type CompactionSettings, defineExtension, section } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
@@ -51,8 +51,14 @@ export type ChatHostOptions = {
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
 export type ChatHost = Host & {
-	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void };
+	readonly workbench: { resources: Resources; onSignal: (signal: WorkbenchSignal) => void; compaction: CompactionSettings };
 };
+
+/**
+ * Pi's compaction defaults (threshold above `contextWindow - reserveTokens`, keep ~20k recent tokens), without Durable's
+ * extra background compaction, which Pi does not have; PI WEB replaces them with the user's Pi settings.
+ */
+export const DEFAULT_COMPACTION: CompactionSettings = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000, backgroundTokens: 0 };
 
 export function parseModel(model: string): { provider: string; modelId: string } {
 	if (model === "faux") return MODEL;
@@ -65,13 +71,14 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const scripted = options.model === "faux" || options.scripted === true;
 	// No paid API-key path may be taken silently: the subscription login in Pi's auth.json is the only credential.
 	for (const name of Object.keys(process.env)) if (name.startsWith("ANTHROPIC_")) delete process.env[name];
-	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {} };
+	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION };
 	const aliases = claudeAliases("pi");
 	const host = await openHost(options.dir, {
 		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200 },
 		provider: () => anthropicProvider(),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials: new PiAuthStore(),
+		settings: { get compaction() { return workbench.compaction; } },
 		rootAgent: { model: parseModel(options.model), cwd: options.cwd },
 		env: (target) => new NodeExecutionEnv({ cwd: target.cwd ?? options.cwd }),
 		extensions: [
