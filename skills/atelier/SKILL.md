@@ -93,7 +93,7 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   marks outlast further Updates but not a reload. For marks on tabs, give each hidden panel an `id` and its tab
   `aria-controls`; in-page links (`href="#id"`) get a dot for changes in their section. The same tabs let
   "next ↓" and the Kernel's other jumps reach items in hidden panels: the Kernel clicks each hidden panel's
-  visible tab, outermost first, so the Page's own tab handler shows it. The document event `atelier:reveal`
+  visible tab, outermost first, so the Page's own tab handler shows it (within a few frames). The document event `atelier:reveal`
   (`detail.key`) fires before the Kernel scrolls to the item, for navigation that is not a tab.
   `atl-changes="off"` turns the marks off.
 - Kernel controls take the Page's colours: light by default, dark only when the Page declares

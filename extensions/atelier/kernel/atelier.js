@@ -133,9 +133,10 @@ export function derive(entries, currentVer = () => null, declared = []) {
   // starts the next round; `history` keeps the last answer of each earlier round. Answers without a version stay round 1.
   const rounds = (d, key) => {
     if ((!d.declared && !d.material) || d.answer === null) return { round: 1, history: [] };
-    const first = live.find((e) => e.type === "decide" && e.decision === d.id).seq, runs = [];
+    // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
+    const first = live.findIndex((e) => e.type === "decide" && e.decision === d.id), runs = [];
     const see = (ver, answer) => { if (ver == null) return; if (runs.at(-1)?.ver !== ver) runs.push({ ver, answer: null }); if (answer) runs.at(-1).answer = answer; };
-    for (const e of live) if (e.seq >= first && (e.decision === d.id || (key != null && e.key === key))) see(e.ver, e.type === "decide" && e.decision === d.id ? e : null);
+    for (const e of live.slice(first)) if (e.decision === d.id || (key != null && e.key === key)) see(e.ver, e.type === "decide" && e.decision === d.id ? e : null);
     see(key ? currentVer(key) : null);
     return {
       round: Math.max(1, runs.length),
@@ -159,15 +160,19 @@ export function derive(entries, currentVer = () => null, declared = []) {
 
 // Per Key address: the Decisions by state and the open threads on it and under it, so a tab or card needs no recount.
 function keyCounts(st) {
-  const keys = {};
+  const keys = new Map(); // a Map, so a Key named __proto__ or constructor is data like any other
   const add = (key, field) => {
     if (typeof key !== "string" || !key) return;
     const parts = key.split("/");
-    for (let i = 1; i <= parts.length; i++) (keys[parts.slice(0, i).join("/")] ??= { new: 0, changed: 0, done: 0, threads: 0 })[field]++;
+    for (let i = 1; i <= parts.length; i++) {
+      const addr = parts.slice(0, i).join("/");
+      if (!keys.has(addr)) keys.set(addr, { new: 0, changed: 0, done: 0, threads: 0 });
+      keys.get(addr)[field]++;
+    }
   };
   for (const d of st.decisions) add(d.key, d.state);
   for (const t of st.openThreads) add(t.root.key, "threads");
-  return keys;
+  return Object.fromEntries(keys);
 }
 
 /**
@@ -717,7 +722,7 @@ function boot() {
       const d = el.hasAttribute("atl-decide") ? st.decisions.find((x) => x.id === addr && x.declared) : undefined;
       if (d) {
         let dec = decUis.get(addr);
-        if (!dec) { dec = h(`<span atl-ui="decide" class="atl-decide" role="group" aria-label="Decision on ${esc(addr)}"><span class="atl-dopts"></span>${EXTRA}<span class="atl-dstate"></span></span>`); decUis.set(addr, dec); }
+        if (!dec) { dec = h(`<span atl-ui="decide" data-key="${esc(addr)}" class="atl-decide" role="group" aria-label="Decision on ${esc(addr)}"><span class="atl-dopts"></span>${EXTRA}<span class="atl-dstate"></span></span>`); decUis.set(addr, dec); }
         const slot = [...el.querySelectorAll("[atl-slot]")].find((s) => !isUi(s) && s.closest("[atl-decide]") === el);
         if (slot) { if (dec.parentElement !== slot) slot.append(dec); } else place(dec, el);
         set(dec.firstElementChild, declaredHtml(d, st, lockOf(el)));
@@ -1269,24 +1274,26 @@ function boot() {
   function anchorForKey(addr) { const el = findKey(addr); return { key: addr, ver: verOf(el), t: mediaTime(el) }; }
 
   // Reveals a hidden target, outermost first: opens each closed <details> around it and clicks the visible tab
-  // ([aria-controls~=id]) of each hidden panel around it, so nested tabs open in turn (2.11.0). Then "atelier:reveal"
-  // tells the Page which Key is shown, for navigation of its own, before the Kernel scrolls there.
-  function jumpTo(el) {
+  // ([aria-controls~=id]) of each hidden panel around it, so nested tabs open in turn (2.11.0); a Page that shows the
+  // panel later gets a few frames before the next one. Then "atelier:reveal" names the target's Key, for navigation
+  // of the Page's own, before the Kernel scrolls there. Kernel UI names its Key in data-key, as it may sit beside it.
+  const visible = (n) => n.checkVisibility?.({ visibilityProperty: true }) ?? n.getClientRects().length > 0;
+  async function jumpTo(el, key = el && (el.closest("[atl-ui][data-key]")?.dataset.key ?? keyOf(el))) {
     if (!el) return;
     const around = []; for (let p = el; p && p !== document.body; p = p.parentElement) around.unshift(p);
-    let clicked = false;
     for (const p of around) {
       if (p.matches("details:not([open])")) p.open = true;
-      const tab = p.id && !p.getClientRects().length && [...document.querySelectorAll(`[aria-controls~="${CSS.escape(p.id)}"]`)].find((t) => !p.contains(t) && t.getClientRects().length);
-      if (tab) { tab.click(); clicked = true; }
+      if (!p.id || visible(p)) continue;
+      const tab = [...document.querySelectorAll(`[aria-controls~="${CSS.escape(p.id)}"]`)].find((t) => !p.contains(t) && visible(t));
+      if (!tab) continue;
+      tab.click();
+      // ponytail: waits at most 5 frames for a panel the Page shows after its click; a slower Page needs atelier:reveal.
+      for (let i = 0; i < 5 && !visible(p); i++) await new Promise((r) => requestAnimationFrame(r));
     }
-    document.dispatchEvent(new CustomEvent("atelier:reveal", { detail: { key: keyOf(el) ?? null } }));
-    const go = () => {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-      el.classList.add("atl-flash"); setTimeout(() => el.classList.remove("atl-flash"), 1200);
-      if (el.tabIndex >= -1 && el.focus) el.focus({ preventScroll: true });
-    };
-    if (clicked) requestAnimationFrame(go); else go(); // a frame for a Page that lays out its tab panel after the click
+    document.dispatchEvent(new CustomEvent("atelier:reveal", { detail: { key: key ?? null } }));
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("atl-flash"); setTimeout(() => el.classList.remove("atl-flash"), 1200);
+    if (el.tabIndex >= -1 && el.focus) el.focus({ preventScroll: true });
   }
   function markRead(seq) { const st = state(); const t = st.threads.find((x) => x.root.seq === seq); if (t) { read[seq] = Math.max(...t.msgs.map((m) => m.seq)); localStorage.setItem(readKey, JSON.stringify(read)); } }
 
@@ -1404,7 +1411,7 @@ function boot() {
     chrail: (b) => {
       const addr = b.dataset.addr, t = traces.get(addr), el = t && (t.kind === "removed" ? t.nodes.gone : findKey(addr));
       if (!el) return;
-      jumpTo(el); // opens the tab that hides it
+      jumpTo(el, addr); // opens the tab that hides it
     },
     dismiss: () => closeComposer(true),
     tuck: (b) => { // a tucked row's badge: the Key's hover state shows the row, focus goes to the first thread that needs the human
@@ -1412,11 +1419,11 @@ function boot() {
       setHot(findKey(pin.dataset.key));
       pin.querySelector(".atl-prow .atl-unread,.atl-prow .atl-open-item")?.focus({ preventScroll: true });
     },
-    next: () => {
+    next: async () => {
       const items = [...document.querySelectorAll(".atl-open-item")];
       if (!items.length) return;
       const el = items[nextIndex++ % items.length];
-      jumpTo(el);
+      await jumpTo(el);
       if (el.dataset.atl === "thread") openThread(+el.dataset.seq); // a thread's marker opens the thread
     },
     selcomment: () => {

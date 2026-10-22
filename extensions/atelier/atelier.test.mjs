@@ -258,6 +258,18 @@ test("a Page's Decision on a changed Key starts a new round: Version N, earlier 
   ];
   const q = publicState(derive(ask, () => "v2")).decisions[0];
   assert.deepEqual([q.state, q.round, q.history, q.answer], ["done", 1, [], "A"], "an answered ask is not reset by its Key's new version");
+  // Review of 2.11.0: answers kept in the browser without a session have falling negative seqs; their order is the log's.
+  const local = [decide(-1, "Approve", "v1", { local: true }), decide(-2, "Rework", "v2", { local: true })];
+  assert.deepEqual(round(local, "v3").slice(0, 2), ["changed", 3]);
+  assert.deepEqual(round(local, "v3")[2].map((h) => [h.round, h.answer]), [[1, "Approve"], [2, "Rework"]]);
+});
+
+test("per-Key counts are own data for any Key name (review of 2.11.0)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const log = ["__proto__", "constructor"].map((key, i) => ({ seq: i + 1, at: 0, origin: "agent", type: "ask", decision: { id: `q${i}`, key, question: "?", options: [{ label: "A" }, { label: "B" }] } }));
+  const s = publicState(derive(log));
+  assert.deepEqual(JSON.parse(JSON.stringify(s.keys)), JSON.parse('{"__proto__":{"new":1,"changed":0,"done":0,"threads":0},"constructor":{"new":1,"changed":0,"done":0,"threads":0}}'));
+  assert.equal(Object.prototype.new, undefined, "no count leaks onto Object.prototype");
 });
 
 test("threads, drafts and Requests replay with revisions on rework", () => {

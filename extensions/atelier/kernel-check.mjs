@@ -1028,6 +1028,30 @@ document.addEventListener("click",(e)=>{const t=e.target.closest("[aria-controls
     assert.deepEqual(await js(`(()=>{const u=document.querySelector('[aria-label="Decision on b/b2/pick"]');return [u.querySelector('.atl-chosen')?.dataset.label,u.querySelector('.atl-round')?.textContent,u.querySelector('.atl-hist')?.textContent]})()`), ["Drop", "Version 2", "Version 1: Keep"]);
     await b("set", "viewport", "1440", "900");
   });
+  // Review of 2.11.0: a Page that shows a tab panel a frame after the click, a panel hidden by visibility, and a
+  // Decision whose options sit beside its Key (after an image) inside a keyed parent.
+  await fixCheck("2.11.0-review-async-tabs-visibility-and-reveal-key", async () => {
+    const later = path.join(dir, "later.html");
+    await writeFile(later, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Later</title>
+<style>body{margin:16px;font:15px/1.5 system-ui;max-width:900px}.gap{height:120vh}</style>
+<body><nav><button id="tX" aria-controls="pX">X</button><button id="tY" aria-controls="pY">Y</button></nav>
+<section class="panel" id="pX"><p>Panel X.</p></section>
+<section class="panel" id="pY" style="visibility:hidden"><nav><button id="tY1" aria-controls="pY1">Y1</button><button id="tY2" aria-controls="pY2">Y2</button></nav>
+<div class="panel" id="pY1"><p>Panel Y1.</p></div>
+<div class="panel" id="pY2" hidden><div class="gap"></div><section atl-key="parent"><img atl-key="photo" id="photo" atl-decide="Keep|Drop" width="200" height="100" alt="A photo" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></section></div></section>
+<script>window.reveals=[];document.addEventListener("atelier:reveal",(e)=>reveals.push(e.detail.key));
+document.addEventListener("click",(e)=>{const t=e.target.closest("[aria-controls]");if(!t||t.closest("[atl-ui]"))return;const p=document.getElementById(t.getAttribute("aria-controls"));
+requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classList.contains("panel")){if(s.id==="pX"||s.id==="pY")s.style.visibility=s===p?"visible":"hidden";else s.hidden=s!==p}})});</script>
+<script type="module" src="atelier.js"></script></body></html>`);
+    await b("set", "viewport", "1512", "900");
+    await b("open", (await host.open(later)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded");
+    await click("[data-atl=next]");
+    await sleep(1500);
+    const got = await js(`(()=>{const u=document.querySelector('[atl-ui=decide][aria-label="Decision on parent/photo"]'),r=u.getBoundingClientRect();return {y:getComputedStyle(document.getElementById('pY')).visibility,y2:!document.getElementById('pY2').hidden,shown:u.checkVisibility({visibilityProperty:true}),inView:r.top>=0&&r.bottom<=innerHeight,reveals}})()`);
+    assert.deepEqual(got, { y: "visible", y2: true, shown: true, inView: true, reveals: ["parent/photo"] }, "next opens a visibility-hidden panel and a nested tab shown a frame later, and names the Decision's own Key");
+    await b("set", "viewport", "1440", "900");
+  });
   assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1 and 2.11.0 fix holds");
 
   console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done.");
