@@ -16,13 +16,29 @@ const MAX = 128;
 
 export type Aliases = { readonly toWire: (name: string) => string; readonly toCanonical: (name: string) => string };
 
-/** Deterministic `mcp__<server>__<tool>` aliases for flat custom tools (the package derives <server> from provenance). */
+/**
+ * `mcp__<server>__<tool>` aliases for flat custom tools (the package derives <server> from provenance). Sanitizing can
+ * make two names collide (`a-b`, `a_b`, case, truncation); as in 2.2.1 `reserveAliasName`, a later name gets a `_2`,
+ * `_3`… suffix, so every alias maps back to exactly one tool. Assignments are stable for the life of this object.
+ */
 export function claudeAliases(server = "pilot"): Aliases {
-	const back = new Map<string, string>();
+	const wire = new Map<string, string>(); // flat name → alias
+	const back = new Map<string, string>(); // alias (lowercase) → flat name, or itself for pass-through names
 	const toWire = (name: string) => {
+		const known = wire.get(name);
+		if (known !== undefined) return known;
 		// Pi's reserved deferred-tool placeholder stays as is: it anchors the transport's cache prefix (as in 2.2.1).
-		if (CORE.has(name.toLowerCase()) || name.startsWith("mcp__") || name === "__pi_deferred_placeholder__") return name;
-		const alias = `mcp__${server}__${name.replace(/[^A-Za-z0-9_]/g, "_")}`.slice(0, MAX);
+		if (CORE.has(name.toLowerCase()) || name.startsWith("mcp__") || name === "__pi_deferred_placeholder__") {
+			const owner = back.get(name.toLowerCase());
+			// A tool registered under a name already handed out as an alias cannot be renamed: fail the request.
+			if (owner !== undefined && owner !== name) throw new Error(`Tool name ${name} collides with the alias of ${owner}`);
+			back.set(name.toLowerCase(), name);
+			return name;
+		}
+		const base = `mcp__${server}__${name.replace(/[^A-Za-z0-9_]/g, "_")}`;
+		let alias = base.slice(0, MAX);
+		for (let n = 2; back.has(alias.toLowerCase()); n++) alias = `${base.slice(0, MAX - `_${n}`.length)}_${n}`;
+		wire.set(name, alias);
 		back.set(alias.toLowerCase(), name);
 		return alias;
 	};

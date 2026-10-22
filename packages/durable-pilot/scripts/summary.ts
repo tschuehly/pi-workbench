@@ -32,6 +32,7 @@ for (const file of readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort()) 
 		sample.uncertainAtOpen?.length ? `uncertain task ${sample.uncertainAtOpen.join(",")}` : "",
 		sample.reporters?.length ? `reporter ${sample.reporters.map((r: any) => `${r.id}:${r.outcome}`).join(",")}` : "",
 		sample.owner !== undefined ? `owner epoch ${sample.owner}` : "",
+		sample.pragmas !== undefined ? `sync ${sample.pragmas.synchronous} fullfsync ${sample.pragmas.fullfsync}` : "",
 	].filter(Boolean).join("; ");
 	const ms = lines.filter((l) => typeof l.ms === "number").map((l) => l.ms as number);
 	rows.push(`| ${file.replace(/\.jsonl$/, "")} | ${pass}/${lines.length} | ${ms.length ? Math.round(ms.reduce((a, b) => a + b, 0) / ms.length) : "-"} | ${counts} |`);

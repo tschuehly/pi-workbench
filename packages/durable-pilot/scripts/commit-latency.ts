@@ -14,16 +14,17 @@ const ROUNDS = Number(process.env.ROUNDS ?? 3);
 const base = process.env.PI_TMP ?? join(import.meta.dirname, "..", ".runs");
 const Counter = defineDoc<{ n: number }>({ kind: "latency.counter", version: 1, scope: "session", initial: () => ({ n: 0 }), checkpointWhen: () => false });
 
-type Config = { name: string; synchronous: "NORMAL" | "FULL"; fullfsync: boolean };
+// The default row opens the host with no storage options, exactly as every host does; the others are comparisons.
+type Config = { name: string; options: { synchronous?: "NORMAL" | "FULL"; fullfsync?: boolean } };
 const configs: Config[] = [
-	{ name: "NORMAL", synchronous: "NORMAL", fullfsync: false },
-	{ name: "FULL", synchronous: "FULL", fullfsync: false },
-	{ name: "FULL+fullfsync", synchronous: "FULL", fullfsync: true },
+	{ name: "NORMAL", options: { synchronous: "NORMAL", fullfsync: false } },
+	{ name: "FULL", options: { synchronous: "FULL", fullfsync: false } },
+	{ name: "FULL+fullfsync (default)", options: {} },
 ];
 
 async function measure(config: Config) {
-	const dir = mkdtempSync(join(base, `latency-${config.name}-`));
-	const host = await openHost(dir, { synchronous: config.synchronous, fullfsync: config.fullfsync });
+	const dir = mkdtempSync(join(base, `latency-${config.name.replace(/\W+/g, "-")}-`));
+	const host = await openHost(dir, config.options);
 	host.faux.setResponses(Array.from({ length: TURNS }, () => fauxAssistantMessage([fauxText("ok")])));
 	const commits: number[] = [];
 	for (let i = 0; i < COMMITS; i++) {
@@ -76,4 +77,4 @@ const result = {
 writeFileSync(join(import.meta.dirname, "..", "results", "latency.json"), `${JSON.stringify(result, null, 2)}\n`);
 console.log("config            commit p50/p95/p99 ms         turn p50/p95 ms");
 for (const [name, r] of Object.entries(result.configs))
-	console.log(`${name.padEnd(17)} ${r.commitMs.p50} / ${r.commitMs.p95} / ${r.commitMs.p99}`.padEnd(48) + `${r.turnMs.p50} / ${r.turnMs.p95}`);
+	console.log(`${name.padEnd(25)} ${r.commitMs.p50} / ${r.commitMs.p95} / ${r.commitMs.p99}`.padEnd(56) + `${r.turnMs.p50} / ${r.turnMs.p95}`);

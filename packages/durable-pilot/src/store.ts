@@ -1,9 +1,10 @@
-// One Durable store per family: SQLite WAL + synchronous=FULL through the public Node facade, owned by exactly one
+// One Durable store per family: SQLite WAL + synchronous=FULL + fullfsync=ON (owner decision 5) through the public
+// Node facade, owner-only files (0700 directory, 0600 database; SQLite gives -wal/-shm the database's mode), owned by exactly one
 // process. Ownership is a kernel file lock (SQLite EXCLUSIVE locking mode), so a dead owner never leaves a stale lock
 // and a reused PID proves nothing either way. owner.json is runtime metadata (epoch, nonce, endpoint), written only by
 // the lock holder; it is never proof of liveness.
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -42,7 +43,13 @@ export type OpenedStore = {
 	readonly database: NodeSqliteDatabase;
 	readonly raw: DatabaseSync;
 	readonly owner: OwnerRecord;
-	readonly pragmas: { readonly journal_mode: string; readonly synchronous: number; readonly locking_mode: string; readonly fullfsync: number };
+	readonly pragmas: {
+		readonly journal_mode: string;
+		readonly synchronous: number;
+		readonly locking_mode: string;
+		readonly fullfsync: number;
+		readonly checkpoint_fullfsync: number;
+	};
 	/** Run a pragma or query on the owned connection (for diagnostics such as max_page_count). */
 	exec(sql: string): Promise<void>;
 };
@@ -96,22 +103,32 @@ function faulty(inner: NodeSqliteDatabase, faults: Faults): SqliteDatabase {
 }
 
 /**
- * Open a store as its single owner: EXCLUSIVE locking (taken before Durable reads anything), WAL, synchronous as
- * asked (FULL by default), each verified before Durable sees the database. Throws StoreOwnedElsewhere when another
- * live process holds it.
+ * Open a store as its single owner: EXCLUSIVE locking (taken before Durable reads anything), WAL, synchronous=FULL and
+ * fullfsync=ON unless a benchmark asks otherwise, each verified before Durable sees the database. Throws
+ * StoreOwnedElsewhere when another live process holds it.
  */
 export async function openStore(
 	path: string,
 	options: {
+		/** Benchmark comparison only (scripts/commit-latency.ts); hosts keep the default FULL. */
 		readonly synchronous?: Synchronous;
-		/** macOS: make every sync an F_FULLFSYNC (drive cache flush); plain fsync there does not reach the platter. */
+		/**
+		 * macOS: make every sync an F_FULLFSYNC (drive cache flush); plain fsync there does not reach the platter.
+		 * Default true; false is for benchmark comparison only.
+		 */
 		readonly fullfsync?: boolean;
 		readonly faults?: Faults;
 		readonly busyTimeoutMs?: number;
 	} = {},
 ): Promise<OpenedStore> {
 	const synchronous = options.synchronous ?? "FULL";
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	const fullfsync = options.fullfsync ?? true;
+	const directory = dirname(path);
+	mkdirSync(directory, { recursive: true, mode: 0o700 });
+	chmodSync(directory, 0o700);
+	// Create (or tighten) the database before SQLite opens it: SQLite creates -wal and -shm with the database's mode.
+	if (!existsSync(path)) writeFileSync(path, "", { mode: 0o600, flag: "a" });
+	for (const file of [path, `${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, 0o600);
 	const raw = new DatabaseSync(path, { timeout: options.busyTimeoutMs ?? 200 });
 	const database = new NodeSqliteDatabase(raw);
 	try {
@@ -124,22 +141,24 @@ export async function openStore(
 			throw new StoreOwnedElsewhere(path, error);
 		}
 		await database.exec(`PRAGMA synchronous = ${synchronous}`);
-		if (options.fullfsync === true) await database.exec("PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON");
+		const fsyncMode = fullfsync ? "ON" : "OFF";
+		await database.exec(`PRAGMA fullfsync = ${fsyncMode}; PRAGMA checkpoint_fullfsync = ${fsyncMode}`);
 		await database.exec("PRAGMA wal_autocheckpoint = 1000");
 		const pragmas = {
 			journal_mode: (await database.get<{ journal_mode: string }>("PRAGMA journal_mode"))!.journal_mode,
 			synchronous: (await database.get<{ synchronous: number }>("PRAGMA synchronous"))!.synchronous,
 			locking_mode: (await database.get<{ locking_mode: string }>("PRAGMA locking_mode"))!.locking_mode,
 			fullfsync: (await database.get<{ fullfsync: number }>("PRAGMA fullfsync"))!.fullfsync,
+			checkpoint_fullfsync: (await database.get<{ checkpoint_fullfsync: number }>("PRAGMA checkpoint_fullfsync"))!.checkpoint_fullfsync,
 		};
 		if (
 			pragmas.journal_mode !== "wal" ||
 			pragmas.synchronous !== SYNC_CODE[synchronous] ||
 			pragmas.locking_mode !== "exclusive" ||
-			pragmas.fullfsync !== (options.fullfsync === true ? 1 : 0)
+			pragmas.fullfsync !== (fullfsync ? 1 : 0) ||
+			pragmas.checkpoint_fullfsync !== (fullfsync ? 1 : 0)
 		)
 			throw new Error(`Store ${path} refused: unexpected pragmas ${JSON.stringify(pragmas)}`);
-		chmodSync(path, 0o600);
 		const previous = readOwner(path);
 		const owner: OwnerRecord = { epoch: (previous?.epoch ?? 0) + 1, nonce: randomUUID(), pid: process.pid, startedAt: Date.now() };
 		writeOwner(path, owner);

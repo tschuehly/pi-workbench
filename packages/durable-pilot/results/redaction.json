@@ -7,12 +7,12 @@
     ]
   },
   "model": {
-    "partialsObserved": 6,
+    "partialsObserved": 8,
     "observedLeaks": 0,
     "midStream": [],
     "final": [],
     "settled": "done",
-    "redactedSample": "Here is the key [REDACTED:anthropic-key] and the token [REDACTED:env:PILOT_FAKE_API_TOKEN] done. filler filler "
+    "redactedSample": "Here is the key [REDACTED:anthropic-key] and the token [REDACTED:env:PILOT_FAKE_API_TOKEN] done. filler filler filler "
   },
   "tool": {
     "received": [
@@ -34,7 +34,35 @@
     ],
     "found": [],
     "settled": "done",
-    "partialsObserved": 8
+    "partialsObserved": 9
+  },
+  "splitStreams": {
+    "control": {
+      "settled": "done",
+      "partials": 10,
+      "observed": [
+        "syntheticPemBody",
+        "syntheticPemTail",
+        "Q7xVb2mN",
+        "Fg5Zc0Ae"
+      ],
+      "found": [
+        "session.sqlite:Q7xVb2mN",
+        "session.sqlite:Fg5Zc0Ae",
+        "session.sqlite:syntheticPemBody",
+        "session.sqlite:syntheticPemTail"
+      ],
+      "peekedRaw": true
+    },
+    "wrapped": {
+      "settled": "done",
+      "partials": 5,
+      "observed": [],
+      "found": [],
+      "peeked": [
+        "token [REDACTED:partial]"
+      ]
+    }
   },
   "sanitizerErrors": {
     "model": {

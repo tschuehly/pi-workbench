@@ -22,16 +22,24 @@ export type Sanitize = (text: string) => string;
 export const redact: Sanitize = (text) => workbenchRedact(text) as string;
 
 const UNTERMINATED_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/;
+// A PEM opening header still being written: it contains spaces, so the trailing-token rule alone would release it.
+const PARTIAL_HEADER = /-----BEGIN[A-Z ]*-{0,4}$/;
 
 /**
  * The part of a growing text that can be sanitized now. Secrets never contain whitespace, so a trailing
- * non-whitespace run may still be the start of one; an unterminated private-key block may still grow.
+ * non-whitespace run may still be the start of one; an unterminated private-key block, or an opening header that may
+ * become one, may still grow.
  */
 export function completePrefix(text: string): string {
-	const key = UNTERMINATED_KEY.exec(text);
+	const key = UNTERMINATED_KEY.exec(text) ?? PARTIAL_HEADER.exec(text);
 	const head = key === null ? text : text.slice(0, key.index);
 	const tail = /\S+$/.exec(head);
 	return tail === null ? head : head.slice(0, tail.index);
+}
+
+/** For text that will not grow: mask a private-key block that never ended (the redactor only matches whole blocks). */
+export function sealed(sanitize: Sanitize): Sanitize {
+	return (text) => sanitize(text).replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/, "[REDACTED:private-key]");
 }
 
 const SECRET_START = /^(?:sk-|gh[opsur]_|github_pat_|eyJ|tid=|-----BEGIN)/;
@@ -44,7 +52,7 @@ export function strict(sanitize: Sanitize): Sanitize {
 	return (text) => {
 		const complete = completePrefix(text);
 		const rest = text.slice(complete.length);
-		return sanitize(complete) + (SECRET_START.test(rest.trimStart()) ? "[REDACTED:partial]" : sanitize(rest));
+		return sanitize(complete) + (SECRET_START.test(rest.trimStart()) || rest.includes("-----BEGIN") ? "[REDACTED:partial]" : sanitize(rest));
 	};
 }
 
@@ -139,7 +147,7 @@ export function wrapProvider(
 		readonly canonicalToolName?: (name: string) => string;
 	} = {},
 ): Provider {
-	const sanitize = options.sanitize ?? redact;
+	const sanitize = sealed(options.sanitize ?? redact);
 	const rename = options.canonicalToolName;
 	type Options = { signal?: AbortSignal; onPayload?: (payload: unknown, model: never) => unknown; onResponse?: (r: never, m: never) => unknown } | undefined;
 	const withPayload = (o: Options, signal: AbortSignal): Options => {
@@ -185,7 +193,8 @@ export function wrapProvider(
 const FAILED = "Secret redaction failed; tool output withheld";
 
 /** Wrap one tool so nothing it streams or returns reaches Durable unsanitized. */
-export function redactingTool<T extends ToolRegistration>(tool: T, sanitize: Sanitize = redact): T {
+export function redactingTool<T extends ToolRegistration>(tool: T, inner: Sanitize = redact): T {
+	const sanitize = sealed(inner);
 	const execute: ToolRegistration["execute"] = async (args, api, context) => {
 		const decoder = new TextDecoder();
 		let pending = "";
@@ -198,6 +207,7 @@ export function redactingTool<T extends ToolRegistration>(tool: T, sanitize: San
 				failed = true;
 			}
 		};
+		// Only when the tool has returned: the held tail can no longer grow.
 		const flush = () => {
 			const rest = pending;
 			pending = "";
@@ -212,10 +222,17 @@ export function redactingTool<T extends ToolRegistration>(tool: T, sanitize: San
 						pending = pending.slice(ready.length);
 						forward(ready, skipped);
 					};
+				// Never flushes: the held tail may be half a secret. The tool sees it masked; nothing is committed.
 				if (property === "retainedOutput")
 					return () => {
-						flush();
-						return target.retainedOutput();
+						const retained = target.retainedOutput();
+						let tail = "";
+						try {
+							tail = strict(sanitize)(pending);
+						} catch {
+							failed = true;
+						}
+						return { ...retained, text: retained.text + tail };
 					};
 				if (property === "diagnostic")
 					return (diagnostic: Parameters<ToolExecutionApi["diagnostic"]>[0]) => {

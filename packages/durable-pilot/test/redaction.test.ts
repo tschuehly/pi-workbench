@@ -30,9 +30,9 @@ after(() => {
 	writeFileSync(join(PACKAGE, "results", "redaction.json"), `${JSON.stringify(results, null, 2)}\n`);
 });
 
-/** Every file under dir (store, WAL, spill files) that contains a fragment of either secret. */
-function leaks(dir: string): string[] {
-	const needles = [BODY.slice(0, 8), BODY.slice(-8), ENV_SECRET.slice(-10)];
+/** Every file under dir (store, WAL, spill files) that contains a fragment of either secret (or of `extra`). */
+function leaks(dir: string, extra: readonly string[] = []): string[] {
+	const needles = [BODY.slice(0, 8), BODY.slice(-8), ENV_SECRET.slice(-10), ...extra];
 	const found: string[] = [];
 	const walk = (path: string) => {
 		for (const name of readdirSync(path)) {
@@ -189,6 +189,84 @@ describe("pre-persistence redaction", () => {
 		assert.deepEqual(received.filter((chunk) => fragments.some((f) => chunk.includes(f))), [], "no raw fragment reached Durable on any channel");
 		assert.ok(toolResults.every((t) => t.includes("[REDACTED:")), "both tools' results show redaction markers");
 		assert.deepEqual(found, [], "store and work directory clean");
+	});
+
+	it("split PEM headers and retained-output reads between token fragments never commit a partial secret", async () => {
+		const PEM_BODY = "MIIEpAIBAAKCAQEAsyntheticPemBodyA1b2C3d4E5f6";
+		const PEM_TAIL = "MHcCAQEEIsyntheticPemTailZ9y8X7w6V5u4";
+		const needles = ["syntheticPemBody", "syntheticPemTail"];
+		const pause = () => new Promise((resolve) => setTimeout(resolve, 30));
+		const peeked: string[] = [];
+		const tools = (wrap: boolean): ToolRegistration[] => {
+			const w = (tool: ToolRegistration) => (wrap ? redactingTool(tool) : tool);
+			return [
+				// The PEM opening header is split at whitespace; the second key is cut off before its END line.
+				w(
+					defineTool({
+						name: "pem",
+						description: "prints keys in pieces",
+						parameters: Type.Object({}),
+						execute: async (_args, api) => {
+							for (const piece of ["cert follows\n-----BEGIN RSA ", "PRIVATE KEY-----\n", `${PEM_BODY}\n`, `${PEM_BODY}\n`, "-----END RSA PRIVATE KEY-----\nnext ", "-----BEGIN EC ", "PRIVATE KEY-----\n", `${PEM_TAIL}\n`]) {
+								api.output(piece);
+								await pause();
+							}
+							return {};
+						},
+					}),
+				),
+				// Reads its retained output while a token is only half written.
+				w(
+					defineTool({
+						name: "peek",
+						description: "reads retained output mid-token",
+						parameters: Type.Object({}),
+						execute: async (_args, api) => {
+							api.output(`token sk-ant-api03-${BODY.slice(0, 10)}`);
+							peeked.push(api.retainedOutput().text);
+							await pause();
+							api.output(`${BODY.slice(10)} done\n`);
+							await pause();
+							return {};
+						},
+					}),
+				),
+			];
+		};
+		const run = async (wrap: boolean) => {
+			const dir = scratch(`redact-split-${wrap}`);
+			const h = await host(dir, { tools: tools(wrap) });
+			h.faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("pem", {})], { stopReason: "toolUse" }),
+				fauxAssistantMessage([fauxToolCall("peek", {})], { stopReason: "toolUse" }),
+				fauxAssistantMessage([fauxText("done")]),
+			]);
+			const { seen } = await watchPartials(h);
+			await admit(h.root, { operationId: "op-1", text: "run" });
+			const record = await h.root.commit((tx) => tx.submissionByRequest(h.root.id, "op-1"), context);
+			const settled = await (await h.harness.submission(record!.id, context))!.wait(context);
+			await h.close();
+			const all = [...needles, BODY.slice(0, 8), BODY.slice(-8)];
+			return {
+				settled: settled.status,
+				partials: seen.length,
+				observed: [...new Set(seen.flatMap((s) => all.filter((n) => s.includes(n))))],
+				found: leaks(dir, needles),
+			};
+		};
+		const control = await run(false);
+		const controlPeek = peeked.splice(0);
+		const wrapped = await run(true);
+		// Record whether the read was raw, not the raw text itself.
+		results.splitStreams = { control: { ...control, peekedRaw: controlPeek.some((t) => t.includes(BODY.slice(0, 8))) }, wrapped: { ...wrapped, peeked } };
+		assert.equal(control.settled, "done");
+		assert.ok(control.found.some((f) => f.includes("syntheticPemBody")) && control.found.some((f) => f.includes(BODY.slice(0, 8))), "control: unwrapped, the scan finds both secrets in the store");
+		assert.ok(control.observed.length > 0, "control: unwrapped, observers see the secrets in committed output");
+		assert.equal(wrapped.settled, "done");
+		assert.ok(wrapped.partials > 3, "tool output was committed while streaming");
+		assert.deepEqual(wrapped.observed, [], "no committed LiveDoc output held a secret fragment");
+		assert.ok(peeked.every((text) => !text.includes(BODY.slice(0, 8))), "retainedOutput never hands back an unsafe tail");
+		assert.deepEqual(wrapped.found, [], "session.sqlite, WAL and work directory clean after close");
 	});
 
 	it("sanitizer errors fail closed: the model response and the tool call are withheld, never committed raw", async () => {

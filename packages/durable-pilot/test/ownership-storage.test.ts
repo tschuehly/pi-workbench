@@ -1,11 +1,12 @@
 // Matrix rows: "Ownership/storage/security" (competing owner, stale endpoint, disk full, crash-loop parking) and
 // "Schema upgrade/rollback" (Durable 1.3 → 1.4 copy, old binary refusal, backup restore; task/document versions).
 import assert from "node:assert/strict";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { fork } from "node:child_process";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, describe, it } from "node:test";
+import { context, openHost } from "../src/host.ts";
 import { probeEndpoint, type OwnerRecord } from "../src/store.ts";
 import { HostProcess, integrity, ITERATIONS, type Mode, PACKAGE, cleanup, runWindow, scratch, type Window } from "./runner.ts";
 
@@ -32,6 +33,51 @@ async function repeat(id: string, body: (i: number) => Promise<object>): Promise
 		}
 	}
 }
+
+describe("store files and pragmas", () => {
+	it("a new family under umask 022 in a traversable ancestor is owner-only from creation: dir, db, -wal, -shm, work", async () => {
+		const ancestor = scratch("perms");
+		chmodSync(ancestor, 0o755);
+		const family = join(ancestor, "family");
+		const previous = process.umask(0o022);
+		const modes: Record<string, string> = {};
+		try {
+			const host = await openHost(family);
+			await host.root.submit({ type: "write", entry: { kind: "perm.probe", data: "x".repeat(10_000) } }, context);
+			// What the execution environment does for a bash spill file: a plain write with the default mode.
+			writeFileSync(join(family, "work", "spill.txt"), "x");
+			const walk = (path: string, label: string) => {
+				modes[label] = (statSync(path).mode & 0o777).toString(8);
+				if (statSync(path).isDirectory()) for (const name of readdirSync(path)) walk(join(path, name), `${label}/${name}`);
+			};
+			walk(family, "family");
+			await host.close();
+		} finally {
+			process.umask(previous);
+		}
+		reset("ownership.store-files");
+		record("ownership.store-files", { modes, pass: Object.values(modes).every((m) => m === "700" || m === "600") });
+		assert.ok("family/session.sqlite" in modes && "family/session.sqlite-wal" in modes, `db and WAL exist while open: ${JSON.stringify(modes)}`);
+		assert.deepEqual(
+			Object.entries(modes).filter(([, mode]) => mode !== "700" && mode !== "600"),
+			[],
+			`every family file is owner-only: ${JSON.stringify(modes)}`,
+		);
+	});
+
+	it("every host opens with WAL + synchronous=FULL + fullfsync=ON by default, verified on the live connection", async () => {
+		const host = await openHost(scratch("pragmas"));
+		const live = Object.fromEntries(
+			["journal_mode", "synchronous", "fullfsync", "checkpoint_fullfsync"].map((p) => [p, Object.values(host.store.raw.prepare(`PRAGMA ${p}`).get()!)[0]]),
+		);
+		const reported = host.store.pragmas;
+		await host.close();
+		reset("ownership.default-pragmas");
+		record("ownership.default-pragmas", { live, reported, pass: true });
+		assert.deepEqual(live, { journal_mode: "wal", synchronous: 2, fullfsync: 1, checkpoint_fullfsync: 1 });
+		assert.deepEqual(reported, { ...reported, synchronous: 2, fullfsync: 1, checkpoint_fullfsync: 1 }, "open verified and reports the approved config");
+	});
+});
 
 describe("ownership and storage", () => {
 	it("competing owner rejected; stale and dead endpoints refused; next owner fenced by epoch", () =>

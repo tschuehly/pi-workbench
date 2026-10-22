@@ -114,6 +114,7 @@ export async function common(host: Host, dir: string) {
 		liveTasks: inspection.tasks.map((t) => ({ id: t.record.id, kind: t.record.kind, state: t.state.kind })),
 		reports: host.reports,
 		owner: host.store.owner.epoch,
+		pragmas: host.store.pragmas,
 	};
 }
 

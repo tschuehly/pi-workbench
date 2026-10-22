@@ -1,0 +1,1 @@
+{"live":{"journal_mode":"wal","synchronous":2,"fullfsync":1,"checkpoint_fullfsync":1},"reported":{"journal_mode":"wal","synchronous":2,"locking_mode":"exclusive","fullfsync":1,"checkpoint_fullfsync":1},"pass":true}

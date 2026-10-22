@@ -1,11 +1,14 @@
 # Pi Durable Phase A — pilot results
 
-**Every matrix row and all three spikes pass on the published `@earendil-works/pi-durable@1.4.0`. Neither kill criterion fired:** Claude subscription access and pre-persistence redaction both work through public seams, with no fork or private patch.
+**Every built matrix row passes on the published `@earendil-works/pi-durable@1.4.0`, now under the approved storage default (WAL + `synchronous=FULL` + `fullfsync=ON`). Two rows are not built:** queued-item edit and concurrent credential refresh (owner decision pending). **Neither kill criterion fired:** Claude subscription access and pre-persistence redaction both work through public seams, with no fork or private patch, within the open boundaries listed under spike (b).
 
-Two findings need owner decisions before Phase B:
+An independent review (openai-codex/gpt-6.1-sol) found four blockers in the first version of this pilot. All four are fixed test-first; see [Review fixes](#review-fixes). The whole matrix and the latency spike were rerun afterwards.
 
-1. **`synchronous=FULL` alone does not protect against power loss on macOS.** Plain `fsync` there does not flush the drive cache. The plan's storage intent needs FULL + `PRAGMA fullfsync=ON`. That costs about 4 ms per commit and about 23 ms per scripted turn (spike c below; open decision 5).
+Open for the owner before Phase B:
+
+1. **Queued-item edit** and **concurrent credential refresh** are not built (owner decision pending).
 2. **The pilot never refreshes Claude credentials.** A Durable host that refreshes OAuth tokens must use Pi's file-locked credential store. Otherwise it races the installed Pi.
+3. **Open redaction boundaries:** bash spill files, leading fragments of env-only credentials, and unsafe nested tool calls (see spike b and Further findings).
 
 Scope: Phase A of [the rebuild plan](../../docs/plans/pi-durable-rebuild.md), approved 2026-10-22. This is a headless pilot only. No Workbench, PI WEB, installed checkout or service changed.
 
@@ -17,7 +20,7 @@ npm run setup                 # exact pins from both lockfiles (pilot 1.4.0, dis
 npm run typecheck             # compiles the pilot against the pinned 1.4.0 types
 npm run test:matrix           # crash matrix: 20 iterations per fault window, each in kill and close mode (~3.5 min)
 npm run test:spikes           # redaction spike and offline Claude-adapter tests
-npm run latency               # NORMAL vs FULL vs FULL+fullfsync → results/latency.json
+npm run latency               # NORMAL vs FULL vs the default FULL+fullfsync → results/latency.json
 npm run summary               # results/summary.md and results/versions.json from results/evidence/
 npm run baseline:queue-order  # optional: no-crash placement order the queue.order window must reproduce
 npm run spike:claude:live     # sends ONE real request with the local Claude login: run only with owner authorization
@@ -54,7 +57,8 @@ The aggregate table is in `results/summary.md`; `results/versions.json` records 
 
 **The host under test** is `src/host.ts`, `src/store.ts` and `src/pilot.ts`. It has:
 
-- **One owned store.** It uses SQLite WAL with `synchronous=FULL` through the public `NodeSqliteDatabase` facade. Every pragma is verified on open, before Durable reads.
+- **One owned store.** It uses SQLite WAL with `synchronous=FULL` and `fullfsync=ON` (plus `checkpoint_fullfsync=ON`) through the public `NodeSqliteDatabase` facade. That is the default for every host. Every pragma is verified on open, before Durable reads, and a mismatch refuses the store. Only the latency script opts out, for comparison rows.
+- **Owner-only files.** The family directory is created 0700 before anything else; the database is created 0600 before SQLite opens it, so `-wal` and `-shm` inherit 0600; the host sets umask 077 so work and spill files are owner-only too.
 - **Single-owner claim.** SQLite `EXCLUSIVE` locking mode gives a kernel file lock, so a dead owner leaves no stale lock and PIDs are never trusted. Each new owner gets a fencing epoch and nonce in `owner.json`.
 - **Paused restore.** After reopen, nothing runs until an explicit `resume()`.
 - **Reconciliation before scheduling.** Uncertain unsafe tool intents are recorded first. A `beforeTool` guard then blocks that tool in that conversation until the owner resolves it.
@@ -71,10 +75,14 @@ The aggregate table is in `results/summary.md`; `results/versions.json` records 
 | Generation before/after partial commit | `generation.before-partial`, `generation.after-partial`, `generation.deferred` | **pass** (3 × 40/40) | See [Generation](#generation). |
 | Safe tool, unsafe tool | `tools.safe-safe`, `tools.safe-unsafe`, `tools.unsafe-safe`, `tools.unsafe-effect-reproposed` | **pass** (4 × 40/40) | See [Tools](#tools). |
 | Child launch/report | `child.before-admission`, `child.after-result`, `child.before-delivery`, `child.after-delivery`, `child.cancel-parent`, `child.worker-leaf`, `child.cancel-worker`, `child.cancel-leaf` | **pass** (8 × 40/40) | See [Children](#children). |
-| Queued input | `queue.mid-commit`, `queue.after-commit`, `queue.changed-payload`, `queue.order`, `queue.failed-run` | **pass** (5 × 40/40); **edits not built** | See [Queued input](#queued-input). |
+| Queued input | `queue.mid-commit`, `queue.after-commit`, `queue.changed-payload`, `queue.order`, `queue.failed-run` | **pass** (5 × 40/40) | See [Queued input](#queued-input). |
+| Queued input — item edit | none | **not built (owner decision pending)** | Durable has no queued-item edit; see [Queued input](#queued-input). |
 | Unanswered question | `question.before-commit`, `question.after-commit`, `question.answer-undelivered`, `question.delivered-unacked`, `question.attention-race` | **pass** (5 × 40/40) | See [Questions and attention](#questions-and-attention). |
 | Schema upgrade/rollback | `schema.upgrade-rollback` (20/20); `schema.task-doc-upgrade`, `-missing`, `-failed` (3 × 40/40) | **pass** | See [Schema](#schema). |
-| Ownership/storage/security | `ownership.competing-owner` (20/20), `ownership.disk-full` (40/40), `ownership.crash-loop-parking` (20/20); redaction in spike (b) | **pass**; **partial** for refresh race and alias misrouting | See [Ownership and storage](#ownership-and-storage). |
+| Ownership/storage/security | `ownership.competing-owner` (20/20), `ownership.disk-full` (40/40), `ownership.crash-loop-parking` (20/20), `ownership.store-files` (1/1), `ownership.default-pragmas` (1/1); redaction in spike (b); alias misrouting in `test/claude.test.ts` | **pass**, with the open redaction boundaries of spike (b) | See [Ownership and storage](#ownership-and-storage). |
+| Ownership — concurrent credential refresh | none | **not built (owner decision pending)** | Needs Pi's locked credential store; see [Ownership and storage](#ownership-and-storage). |
+
+All 1,040 evidence lines that report the verify host's pragmas show `synchronous` 2, `fullfsync` 1 and `checkpoint_fullfsync` 1. The other 182 lines (schema, competing-owner, parking and the two store tests) open hosts the same default way but do not record pragmas.
 
 ### Generation
 
@@ -162,10 +170,15 @@ Our own task and document versions:
 - A tool that SIGKILLs its own host ran exactly 3 times and was parked on the 4th open.
 - The host sees `blocked/restart_limit`, `wake().active=false` and one `task_parked` report.
 
-**Security:** redaction is covered by spike (b). Partial items:
+**Store files and pragmas:**
 
-- **Alias misrouting:** covered offline and in the one live request (see spike a).
-- **Duplicate provider refresh:** only half covered. The pilot never refreshes; a refresh attempt is refused with no request sent and the credential file untouched (`test/claude.test.ts`). The real race between an old and a new host refreshing the same login is **not built**; it needs Pi's locked credential store (Phase B).
+- A new family under umask 022, inside a 0755 ancestor, comes out with the directory and `work/` at 0700 and the database, WAL, `owner.json` and a spill-style work file at 0600 (`ownership.store-files`). No `-shm` exists: with EXCLUSIVE locking, SQLite keeps the WAL index in heap memory. The test checks `-shm` too whenever it is present.
+- A host opened with no options runs `journal_mode=wal`, `synchronous=2`, `fullfsync=1`, `checkpoint_fullfsync=1` on its live connection (`ownership.default-pragmas`).
+
+**Security:** redaction is covered by spike (b), with its open boundaries.
+
+- **Alias misrouting:** fixed. Colliding names get distinct, reversible aliases (see spike a).
+- **Concurrent credential refresh:** not built (owner decision pending). The pilot never refreshes; a refresh attempt is refused with no request sent and the credential file untouched (`test/claude.test.ts`). The real race between an old and a new host refreshing the same login is **not built**; it needs Pi's locked credential store (Phase B).
 
 ## Spikes
 
@@ -176,6 +189,7 @@ The adapter (`src/claude.ts`) works as follows:
 - pi-ai 1.4.0 already handles Anthropic OAuth tokens: Claude Code identity headers and the system block.
 - The pi-claude-code-use 2.2.1 payload rules are re-expressed at pi-ai's public `onPayload` hook: flat custom tool names become `mcp__pilot__<name>`, along with tool_choice, history and the prompt phrases.
 - The provider wrapper maps alias calls back to canonical names before Durable executes or stores them.
+- Aliases never collide. As in 2.2.1's `reserveAliasName`, a name whose sanitized alias is already taken (`review-deploy` vs `review_deploy`, case, truncation) gets a `_2`, `_3`… suffix. A tool registered under a name already handed out as an alias fails the request.
 - Credentials are read-only from Pi's `auth.json`; `modify` (the refresh path) refuses.
 
 **One live request** (`results/claude-spike.json`, `claude-sonnet-5-5`):
@@ -209,12 +223,16 @@ All of these are Phase B parity items.
 
 - **Model output:** a pi-ai Provider wrapper that sanitizes every streamed partial before Durable copies it into `pi.live`. It withholds a trailing token or an unterminated private-key block that could still become a secret, and sanitizes the final and error messages.
 - **Tool output:** a tool wrapper whose API proxy sanitizes output chunks (with the same holdback), details and diagnostics (masking secret-shaped trailing fragments), the returned result and thrown error text.
+- **Holdback:** a trailing token, an unterminated private-key block, and an opening PEM header still being written (it contains spaces) are held until they can no longer grow.
+- **`retainedOutput()`** never flushes the held tail. The tool sees the committed text plus the tail masked (`[REDACTED:partial]`); nothing is committed early.
+- **Text that will not grow** (the final model message, the last tool flush, the result) has any unterminated private-key block masked to its end.
 - It reuses the Workbench redactor (`extensions/secret-redaction/redact.mjs`).
 
 **Evidence** (`test/redaction.test.ts`, `results/redaction.json`): a byte scan of every store and work-directory file, which was checked against a control that does find plaintext.
 
 - **Model:** many committed partials while a key and an env credential stream in 1–3-character tokens; a close mid-stream plus reopen; and completion. No partial and no file holds a fragment.
 - **Tool:** a key split across 4 output chunks plus details and a diagnostic, and a real bash process printing a key in two writes 200 ms apart. A spy shows that only sanitized text reached Durable, and the store is clean.
+- **Split PEM header and mid-token `retainedOutput()`:** a tool streams a key whose opening header is split at a space (then a second key cut off before END); another reads its retained output between two token fragments. Unwrapped (positive control) both secrets appear in committed LiveDoc output and in `session.sqlite`; wrapped, neither does, and the retained output it read is masked.
 - **Sanitizer errors fail closed:** the model response is withheld (`unanswered/model_error`) and the tool call returns a fixed error; nothing raw is stored.
 - **Why not hooks:** a throwing `afterTool` hook is reported and skipped by Durable, and the raw result was committed, as demonstrated in the test.
 
@@ -223,23 +241,36 @@ All of these are Phase B parity items.
 - **Stored verbatim, as with the current extension (shown by test):** tool-call arguments.
 - **Stored verbatim, not separately tested:** user input and provider-signed thinking.
 - **Bash spill files** are written by the execution environment itself, so a large output can put plaintext on disk outside Durable. This is not exercised; it needs an environment-level wrapper.
+- **Unsafe nested tool calls:** not recorded as uncertain by reconciliation (see Further findings).
 - **Leading fragment of a non-patterned env credential:** a details value ending in the first characters of a credential known only from the environment can store that fragment. Secret-shaped prefixes are masked. The production port should take the known-value list from `redact.mjs`.
 - **Event deltas:** stream event deltas are blanked; consumers must read sanitized partials.
 
 ### (c) FULL vs NORMAL commit latency — **measured** (`results/latency.json`)
 
-Measured on an Apple M4 Pro, macOS 26.5.2, internal SSD; 3 interleaved rounds of 300 commits and 60 faux turns each. Values are p50 / p95 in ms.
+Rerun after the review fixes. Measured on an Apple M4 Pro, macOS 26.5.2, internal SSD; 3 interleaved rounds of 300 commits and 60 faux turns each. Values are p50 / p95 in ms. The default row opens the host with no storage options, as every host does; its recorded pragmas show `fullfsync` 1.
 
 | Config | One Durable commit | One scripted turn |
 | --- | --- | --- |
-| NORMAL | 0.035 / 0.059 | 0.73 / 1.70 |
-| FULL | 0.111 / 0.137 | 1.07 / 1.49 |
-| FULL + `fullfsync` | 3.99 / 4.93 | 22.95 / 28.08 |
+| NORMAL (comparison) | 0.044 / 0.104 | 0.96 / 1.95 |
+| FULL (comparison) | 0.133 / 0.232 | 1.44 / 2.49 |
+| FULL + `fullfsync` (**default**) | 4.88 / 5.96 | 27.0 / 34.0 |
 
 - **FULL is nearly free on macOS** because plain `fsync` does not flush the drive cache. Only FULL + `fullfsync` (F_FULLFSYNC) actually reaches stable storage.
-- **The fullfsync cost is small for real use.** Partials commit at most every 100 ms, so 4 ms per commit is about 4% of that interval. About 23 ms per turn is negligible beside model latency.
-- **Recommendation for decision 5:** FULL + fullfsync on macOS. `openStore({ fullfsync: true })` is implemented and verified.
-- **Pilot default:** the pilot stays at FULL only, as the plan specified, until Thomas decides.
+- **The fullfsync cost is small for real use.** Partials commit at most every 100 ms, so about 5 ms per commit is about 5% of that interval. About 27 ms per turn is negligible beside model latency.
+- **Decision 5 (Thomas):** FULL + fullfsync. It is now the default for every host and verified on open; the crash matrix above ran under it.
+
+## Review fixes
+
+The review reproduced four blockers. Each now has a test that failed on `b1773c1` (red output in `results/red-before-fix.txt`) and passes after the fix.
+
+| Blocker | Fix | Test | Red on `b1773c1` |
+| --- | --- | --- | --- |
+| 1. Streamed tool output reached storage unredacted | `src/redact.ts`: hold back a partial PEM header; `retainedOutput()` no longer flushes; seal unterminated keys | `test/redaction.test.ts` "split PEM headers and retained-output reads" | PEM body, PEM tail and key-tail fragments in committed LiveDoc output |
+| 2. Claude aliases could run the wrong tool | `src/claude.ts`: collision-free, reversible aliases (`_2` suffix) | `test/claude.test.ts` "colliding tool names get distinct, reversible aliases" | the `review-deploy` alias ran `review_deploy` |
+| 3. Store files not owner-only | `src/host.ts`, `src/store.ts`: 0700 family dir first, 0600 database before SQLite opens it, umask 077 | `test/ownership-storage.test.ts` "a new family under umask 022" | family 755, WAL 644, `work/` 755 |
+| 4. Approved storage config not the default | `src/store.ts`: FULL + `fullfsync` + `checkpoint_fullfsync` by default, verified on open | `test/ownership-storage.test.ts` "every host opens with WAL + synchronous=FULL + fullfsync=ON" | `fullfsync` 0, `checkpoint_fullfsync` 0 |
+
+After the fixes, `npm run setup && npm test` passed: 63/63 matrix tests and 11/11 spike tests. `results/summary.md` was generated from the working tree just before the fix commit, so its header names the parent commit.
 
 ## Further findings
 
@@ -259,13 +290,13 @@ The evidence removes the two Phase A kill risks and **does not raise** any estim
 
 | Phase | Estimate | Reason |
 | --- | --- | --- |
-| B | 7–11 days (was 8–12) | Admission receipts, paused restore, reconciliation, question/attention and child-reporter fixtures exist and are crash-tested. New Phase B work: Pi-locked credential refresh, the fullfsync decision, and nested-tool reconciliation. |
+| B | 7–11 days (was 8–12) | Admission receipts, paused restore, reconciliation, question/attention and child-reporter fixtures exist and are crash-tested. New Phase B work: Pi-locked credential refresh, queued-item edit, nested-tool reconciliation, and the open redaction boundaries. |
 | C | 15–25 days | Unchanged. |
 | D | Dropped | Owner decision 3. |
 | E | 3–5 days | Unchanged. |
 
 - **Total for B–E:** about 25–41 engineer-days (was 26–42; the plan's 31–50 included Phase A).
-- **Contingency:** about 15% (was 20–30%), since the provider and security risks are now spike-proven rather than open.
+- **Contingency:** about 15% (was 20–30%), since the provider and security risks are now spike-proven rather than open. The review's four blockers were fixed within Phase A; the open redaction boundaries remain Phase B work.
 - **Remaining unknowns that could move it:**
   - live parity of MCP, deferred and compaction aliases
   - retained-host and PTY ownership under launchd

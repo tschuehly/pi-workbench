@@ -1,7 +1,7 @@
 // Minimal headless Durable host for one Chat family: one owned store, explicit (paused) restore, reconciliation of
 // uncertain unsafe tool effects before scheduling, and stable-ID admission. Not a Workbench port.
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -153,6 +153,7 @@ export async function admit(
 // ─── Host ────────────────────────────────────────────────────────────────────
 
 export type HostOptions = {
+	/** Benchmark comparison only; every host defaults to FULL + fullfsync=ON, verified on open. */
 	readonly synchronous?: Synchronous;
 	readonly fullfsync?: boolean;
 	readonly faults?: Faults;
@@ -180,8 +181,14 @@ export type Host = {
 };
 
 export async function openHost(dir: string, options: HostOptions = {}): Promise<Host> {
+	// Owner-only from creation: the family dir before anything is created in it, and a process umask so files the
+	// execution environment and tools write later (work files, bash spill files) are 0600/0700 too.
+	// ponytail: process-wide umask; fine for a process that only hosts families, revisit if a host embeds elsewhere.
+	process.umask(0o077);
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+	chmodSync(dir, 0o700);
 	const work = join(dir, "work");
-	mkdirSync(work, { recursive: true });
+	mkdirSync(work, { recursive: true, mode: 0o700 });
 	const store = await openStore(join(dir, "session.sqlite"), {
 		...(options.synchronous === undefined ? {} : { synchronous: options.synchronous }),
 		...(options.fullfsync === undefined ? {} : { fullfsync: options.fullfsync }),

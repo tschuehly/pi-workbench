@@ -16,5 +16,5 @@
     "@earendil-works/pi-telemetry": "1.3.0"
   },
   "piClaudeCodeUseRules": "2.2.1 (re-expressed in src/claude.ts)",
-  "commit": "364ed65"
+  "commit": "b1773c1"
 }

@@ -1,0 +1,27 @@
+# Red run of the four review-blocker tests at b1773c1 (before the fixes)
+# node --test --test-name-pattern=<test> on redaction, claude, ownership-storage test files
+  ✖ split PEM headers and retained-output reads between token fragments never commit a partial secret (687.777167ms)
+ℹ tests 1
+ℹ pass 0
+ℹ fail 1
+  AssertionError [ERR_ASSERTION]: no committed LiveDoc output held a secret fragment
+    actual: [ 'syntheticPemBody', 'syntheticPemTail', 'Fg5Zc0Ae' ],
+    expected: [],
+  ✖ colliding tool names get distinct, reversible aliases: the call runs the tool the model chose (21.588041ms)
+ℹ tests 1
+ℹ pass 0
+ℹ fail 1
+  AssertionError [ERR_ASSERTION]: the first tool's alias runs the first tool, not its collision
+    actual: [ 'review_deploy' ],
+    expected: [ 'review-deploy' ],
+  ✖ a new family under umask 022 in a traversable ancestor is owner-only from creation: dir, db, -wal, -shm, work (11.309625ms)
+  ✖ every host opens with WAL + synchronous=FULL + fullfsync=ON by default, verified on the live connection (3.795958ms)
+ℹ tests 2
+ℹ pass 0
+ℹ fail 2
+  AssertionError [ERR_ASSERTION]: every family file is owner-only: {"family":"755","family/owner.json":"600","family/session.sqlite":"600","family/session.sqlite-wal":"644","family/work":"755"}
+    actual: [ [ 'family', '755' ], [ 'family/session.sqlite-wal', '644' ], [ 'family/work', '755' ] ],
+    expected: [],
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+    actual: { journal_mode: 'wal', synchronous: 2, fullfsync: 0, checkpoint_fullfsync: 0 },
+    expected: { journal_mode: 'wal', synchronous: 2, fullfsync: 1, checkpoint_fullfsync: 1 },

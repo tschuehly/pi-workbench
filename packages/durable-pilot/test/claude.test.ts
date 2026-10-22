@@ -61,6 +61,28 @@ describe("claude subscription adapter (offline)", () => {
 		assert.equal(stored.includes("mcp__pilot__"), false, "the wire alias never reaches the store");
 	});
 
+	it("colliding tool names get distinct, reversible aliases: the call runs the tool the model chose", async () => {
+		const dir = scratch("claude-collide");
+		const ran: string[] = [];
+		const tool = (name: string) =>
+			defineTool({ name, description: name, parameters: Type.Object({}), execute: async () => (ran.push(name), { output: [{ type: "text", text: `ran ${name}` }], control: { terminate: true } }) });
+		const aliases = claudeAliases();
+		const wire = (claudePayload(aliases)({ tools: [{ name: "review-deploy" }, { name: "review_deploy" }, { name: "__pi_deferred_placeholder__" }] }) as any).tools.map((t: any) => t.name);
+		const host = await openHost(dir, {
+			extensions: [defineExtension({ name: "collide", tools: [tool("review-deploy"), tool("review_deploy")] })],
+			provider: (faux) => wrapProvider(faux, { canonicalToolName: aliases.toCanonical, sanitize: (t) => t }),
+		});
+		host.faux.setResponses([fauxAssistantMessage([fauxToolCall(wire[0], {})], { stopReason: "toolUse" }), fauxAssistantMessage([fauxText("unused")])]);
+		const id = await admit(host.root, { operationId: "op-1", text: "deploy" });
+		const settled = await (await host.harness.submission(id, context))!.wait(context);
+		await host.close();
+		assert.equal(settled.status, "done");
+		assert.deepEqual(ran, ["review-deploy"], "the first tool's alias runs the first tool, not its collision");
+		assert.equal(new Set(wire.map((n: string) => n.toLowerCase())).size, 3, `distinct wire names: ${wire.join(", ")}`);
+		assert.equal(wire[2], "__pi_deferred_placeholder__", "the placeholder stays unaliased");
+		assert.deepEqual([aliases.toCanonical(wire[0]), aliases.toCanonical(wire[1])], ["review-deploy", "review_deploy"], "each alias maps back to its own tool");
+	});
+
 	it("an expired subscription credential is not refreshed by the pilot: no request, visible failure", async () => {
 		const dir = scratch("claude-expired");
 		const auth = join(dir, "auth.json");
