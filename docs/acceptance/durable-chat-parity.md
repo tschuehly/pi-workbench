@@ -568,7 +568,7 @@ Compound rows deliberately remain one AC, with all named variants required.
 - **Then:** the active path and transcript change without erasing later history, branch-appropriate questions return, and stale revisions or active children/queued work block navigation.
 - **Legacy equivalence:** Preserve the behavior in `PSS:3483; SCS:116; PWc/components/SessionTreeNavigator.ts:3`; the Survival step, when present, adds Durable recovery rather than copying legacy process lifetime.
 - **Negative control:** Ignore expectedLeafId.
-- **Spec:** TBD (e2e/durable/bash-atelier-tree/...)
+- **Spec:** e2e/durable/bash-atelier-tree/tree-navigation.spec.ts (host rows: packages/durable-pilot/test/tree.test.ts)
 
 ### AC-P045 — Fork from tree, 'Clone session from this message', /fork, /clone
 
@@ -590,7 +590,7 @@ Compound rows deliberately remain one AC, with all named variants required.
 - **Then:** the same public Chat selects the prior history position and returns the editable prompt as appropriate; later history is retained and busy/archive states disable the action.
 - **Legacy equivalence:** Preserve the behavior in `PWc/plugins/core/messageActions.ts:21`; the Survival step, when present, adds Durable recovery rather than copying legacy process lifetime.
 - **Negative control:** Erase later history rather than selecting a retained branch.
-- **Spec:** TBD (e2e/durable/bash-atelier-tree/...)
+- **Spec:** e2e/durable/bash-atelier-tree/tree-navigation.spec.ts (host rows: packages/durable-pilot/test/tree.test.ts)
 
 ### AC-P047 — Copy message, reply-to-selection quotes
 

@@ -345,7 +345,8 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 			}, c);
 			if (result.kind === "withdrawn") {
 				if (!result.rerun) signal({ type: "ask.closed", askId: result.askId, reason: "withdrawn" });
-				return { output: text(`Withdrew question set ${result.askId}; its question chips are gone from the user's composer.`) };
+				// As PI WEB's tool: the result names the withdrawn set, so a branch rebuilt from history closes it too.
+				return { output: text(`Withdrew question set ${result.askId}; its question chips are gone from the user's composer.`), details: { withdrawn: { askId: result.askId }, sessionId: chatId } as JsonObject };
 			}
 			const posted = JSON.parse(JSON.stringify(result.ask)) as PendingAsk;
 			if (!result.rerun) {

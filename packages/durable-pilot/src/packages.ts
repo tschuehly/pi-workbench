@@ -8,8 +8,8 @@
 // - `appendEntry` and `sendMessage` commit to the Chat (redacted first): entries as passive writes, messages as inputs
 //   (a turn when asked for one) or as context for the next turn, shown as PI WEB custom messages;
 // - commands run here; `ui.notify` reaches PI WEB as command output, dialogs are refused visibly;
-// - `session_start` (with the package's own entries as its branch), `before_agent_start`, `agent_settled` and
-//   `session_shutdown` reach the packages' handlers; their return values are not applied.
+// - `session_start` (with the package's own entries as its branch), `session_tree` (with the new branch's),
+//   `before_agent_start`, `agent_settled` and `session_shutdown` reach the packages' handlers; their return values are not applied.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
@@ -287,10 +287,17 @@ export class PiPackages {
 	async start(host: PackageHost): Promise<void> {
 		this.#host = host;
 		this.#model = await host.model();
+		await this.#readBranch();
+		await this.emit("session_start", { type: "session_start", reason: "startup" });
+		host.registry.install(this.extension());
+	}
+
+	/** The package entries of the Chat's active branch, as each package's branch. */
+	async #readBranch(): Promise<void> {
 		this.#branch = [];
 		let cursor: Cursor | undefined;
 		do {
-			const page = await host.root.entries({ order: "ascending" }, 200, cursor, context);
+			const page = await this.#root().entries({ order: "ascending" }, 200, cursor, context);
 			for (const entry of page.items) {
 				if (entry.kind !== PACKAGE_ENTRY) continue;
 				const data = entry.data as { customType: string; data: unknown };
@@ -298,8 +305,12 @@ export class PiPackages {
 			}
 			cursor = page.next;
 		} while (cursor !== undefined);
-		await this.emit("session_start", { type: "session_start", reason: "startup" });
-		host.registry.install(this.extension());
+	}
+
+	/** History navigation selected another branch: the packages read its entries and get `session_tree`, as in Pi. */
+	async tree(oldLeafId: string | null, newLeafId: string | null): Promise<void> {
+		await this.#readBranch();
+		await this.emit("session_tree", { type: "session_tree", oldLeafId, newLeafId });
 	}
 
 	/** Run boundaries from the Chat: `before_agent_start` when a run starts, `agent_settled` when it ends. */

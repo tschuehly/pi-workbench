@@ -1,0 +1,37 @@
+✖ tree: going back keeps later history, forks once, reselects a retained branch, and the branch map survives a kill (431.190083ms)
+✖ tree: navigation is refused visibly while a turn, queued input or interrupted work is pending (493.73525ms)
+✖ tree: questions and Working Mode are those of the branch point; each branch keeps its own after a kill (807.49025ms)
+✖ tree: tool-group exposure is that of the branch point (186.9255ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2341.156042
+
+✖ failing tests:
+
+test at test/tree.test.ts:42:1
+✖ tree: going back keeps later history, forks once, reselects a retained branch, and the branch map survives a kill (431.190083ms)
+  AssertionError [ERR_ASSERTION]: the host reports tree navigation
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/tree.test.ts:105:1
+✖ tree: navigation is refused visibly while a turn, queued input or interrupted work is pending (493.73525ms)
+  Error: Unknown method tree
+
+test at test/tree.test.ts:138:1
+✖ tree: questions and Working Mode are those of the branch point; each branch keeps its own after a kill (807.49025ms)
+  Error: Unknown method tree
+
+test at test/tree.test.ts:192:1
+✖ tree: tool-group exposure is that of the branch point (186.9255ms)
+  TypeError: session.tree is not a function
