@@ -139,7 +139,7 @@ describe("pre-persistence redaction", () => {
 		assert.equal(redact(`split secret ${head}${rest} complete.`), "split secret [REDACTED:env:PILOT_FAKE_API_TOKEN] complete.");
 		// The same across three blocks, and a private key whose body continues into the next block.
 		assert.deepEqual(acrossBlocks([`a ${ENV_SECRET.slice(0, 6)}`, ENV_SECRET.slice(6, 12), `${ENV_SECRET.slice(12)} b`], redact), ["a [REDACTED:env:PILOT_FAKE_API_TOKEN]", "", " b"]);
-		assert.deepEqual(acrossBlocks(["key -----BEGIN RSA PRIVATE KEY-----\nMIIEsynthetic", "Body\n-----END RSA PRIVATE KEY----- after"], redact), ["key -----BEGIN RSA PRIVATE KEY-----\nMIIEsynthetic", " after"]);
+		assert.deepEqual(acrossBlocks(["key -----BEGIN RSA PRIVATE KEY-----\nMIIEsynthetic", "Body\n-----END RSA PRIVATE KEY----- after"], redact), ["key [REDACTED:private-key]", " after"]);
 		const dir = scratch("redact-blocks");
 		const h = await host(dir);
 		h.faux.setResponses([fauxAssistantMessage([fauxText(`split secret ${head}`), fauxText(`${rest} complete.`)])]);

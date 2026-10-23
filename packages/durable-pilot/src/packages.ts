@@ -9,7 +9,8 @@
 //   without scheduling anything (a paused restore stays paused while packages start, record and shut down); messages as
 //   inputs (a turn when asked for one) or as context for the next turn, shown as PI WEB custom messages, through the
 //   Chat's delivery barrier as bash completions and Atelier input are: held while a restore is paused until the owner
-//   resumes it (a message still held when the host closes is dropped, as one arriving while a legacy session is down);
+//   resumes it. Each message is committed passively to the Chat's package outbox when sent, so one still held when the
+//   host closes is delivered after the reopened Chat resumes, once (its stable request ID survives a kill mid-delivery);
 // - `ctx.model` is the Chat's model as the host has it, flagged for mid-conversation tool additions; `ctx.modelRegistry`
 //   reads the host's models and Pi's stored logins through the host's credential store, and requests through its providers;
 // - commands run here; `ui.notify` reaches PI WEB as command output, `ui.setStatus` as the Chat's extension statuses,
@@ -24,7 +25,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import { type Conversation, type Cursor, defineExtension, type ToolRegistration } from "@earendil-works/pi-durable";
+import { type Conversation, type Cursor, defineDoc, defineExtension, type DocumentReader, type ToolRegistration } from "@earendil-works/pi-durable";
 import { fileRevision } from "./claude.ts";
 import { context } from "./host.ts";
 import { redact, sanitizeDeep } from "./redact.ts";
@@ -48,6 +49,21 @@ export const BLOCKED_COMMANDS: Record<string, string> = {
 export const PACKAGE_ENTRY = "workbench.package-entry";
 /** A package's `sendMessage`: the model sees the content; PI WEB shows it as a custom message when `display`. */
 export const PACKAGE_MESSAGE_ENTRY = "workbench.package-message";
+
+/** A package message (`sendMessage`) or user message (`sendUserMessage`) waiting for delivery, already redacted. */
+type Held =
+	| { id: string; kind: "message"; content: JsonValue; data: JsonValue; triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }
+	| { id: string; kind: "user"; content: JsonValue; deliverAs?: "steer" | "followUp" };
+type HeldDraft = Held extends infer H ? (H extends Held ? Omit<H, "id"> : never) : never;
+
+/** The package outbox: messages in call order, committed when sent, removed once admitted under their `id` as request ID. */
+export const PackageOutboxDoc = defineDoc<{ held: Held[] }>({
+	kind: "workbench.package-outbox",
+	version: 1,
+	scope: "session",
+	initial: () => ({ held: [] }),
+	checkpointWhen: () => false,
+});
 
 export class DialogUnavailable extends Error {
 	constructor() {
@@ -97,6 +113,8 @@ type Branch = { type: "custom"; id: string; parentId: string | null; timestamp: 
 /** The Chat a binding commits to, the model its packages see, and the host's models with their stored logins. */
 export type PackageHost = {
 	readonly root: Conversation;
+	/** Committed document reads (the package outbox), without a commit. */
+	readonly reader: DocumentReader;
 	readonly registry: { install(extension: ReturnType<typeof defineExtension>): void };
 	model(): Promise<Record<string, unknown> | undefined>;
 	readonly models: Models;
@@ -184,7 +202,7 @@ export class PiPackages {
 	#resources: ContributedResources = { skillPaths: [], promptPaths: [], themePaths: [] };
 	/** Passive commits in call order; a failure is reported, never thrown into the package. */
 	#queue: Promise<void> = Promise.resolve();
-	/** Messages in call order, each through the Chat's delivery barrier once a session attached it. */
+	/** Outbox deliveries in call order, each through the Chat's delivery barrier once a session attached it. */
 	#outbox: Promise<void> = Promise.resolve();
 	#deliver: Deliver | undefined;
 	readonly #attached = Promise.withResolvers<void>();
@@ -221,9 +239,16 @@ export class PiPackages {
 	/** Pi's `bindCore` for this host: the runtime actions every loaded extension's API delegates to. */
 	#bind(runtime: Record<string, unknown>): void {
 		Object.assign(runtime, {
-			sendMessage: (message: PiMessage, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }) => this.#submit(() => this.#send(message, options)),
+			sendMessage: (message: PiMessage, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }) =>
+				this.#hold({
+					kind: "message",
+					content: sanitizeDeep(json(message.content), redact),
+					data: json({ customType: message.customType, display: message.display === true, ...(message.details === undefined ? {} : { details: sanitizeDeep(json(message.details), redact) }) }),
+					...(options?.triggerTurn === undefined ? {} : { triggerTurn: options.triggerTurn }),
+					...(options?.deliverAs === undefined ? {} : { deliverAs: options.deliverAs }),
+				}),
 			sendUserMessage: (content: string | Content, options?: { deliverAs?: "steer" | "followUp" }) =>
-				this.#submit(async () => void (await this.#root().submit({ type: "input", content: sanitizeDeep(content, redact) as never, whenBusy: options?.deliverAs ?? "followUp", requestId: `package:${randomUUID()}` }, context))),
+				this.#hold({ kind: "user", content: sanitizeDeep(json(content), redact), ...(options?.deliverAs === undefined ? {} : { deliverAs: options.deliverAs }) }),
 			appendEntry: (customType: string, data: unknown) => this.#commit(() => this.#append(customType, data)),
 			setSessionName: () => {},
 			getSessionName: () => undefined,
@@ -260,15 +285,50 @@ export class PiPackages {
 		this.#queue = this.#queue.then(work).catch(this.#failed);
 	}
 
-	/** A submission (it may start or feed a turn): only through the Chat's delivery barrier, never ahead of it. */
-	#submit(work: () => Promise<void>): void {
-		this.#outbox = this.#outbox.then(() => this.#attached.promise).then(() => this.#deliver!(work)).catch(this.#failed);
+	/**
+	 * A message (it may start or feed a turn): committed to the outbox at once, passively, then delivered only through the
+	 * Chat's delivery barrier, never ahead of it.
+	 */
+	#hold(draft: HeldDraft): void {
+		const held = (this.#queue = this.#queue.then(() => this.#commitHeld(draft)).catch(this.#failed));
+		this.#outbox = this.#outbox.then(() => held).then(() => this.#flush()).catch(this.#failed);
 	}
 
-	/** The Chat session's delivery barrier: package messages wait for it as bash completions and Atelier input do. */
+	async #commitHeld(draft: HeldDraft): Promise<void> {
+		await this.#root().commit(async (tx) => void (await tx.doc(PackageOutboxDoc)).held.push({ ...draft, id: `package:${randomUUID()}` } as Held), context);
+	}
+
+	/** The oldest held message, if any. */
+	async #oldest(): Promise<Held | undefined> {
+		if (this.#host === undefined) throw new Error("Package runtime not attached to its Chat yet");
+		return (await this.#host.reader.snapshot(PackageOutboxDoc, context))?.held[0];
+	}
+
+	/** Deliver what the outbox holds, once the session attached and its barrier lets it (never while a restore is paused). */
+	async #flush(): Promise<void> {
+		await this.#attached.promise;
+		if ((await this.#oldest()) === undefined) return;
+		await this.#deliver!(async () => {
+			// Admitted under its request ID, then removed: a kill between the two finds the admission on the next delivery.
+			for (let item = await this.#oldest(); item !== undefined; item = await this.#oldest()) {
+				await this.#send(item);
+				const id = item.id;
+				await this.#root().commit(async (tx) => {
+					const doc = await tx.doc(PackageOutboxDoc);
+					doc.held = doc.held.filter((held) => held.id !== id);
+				}, context);
+			}
+		});
+	}
+
+	/**
+	 * The Chat session's delivery barrier: package messages wait for it as bash completions and Atelier input do. Messages
+	 * a closed host still held are delivered first.
+	 */
 	attach(hooks: { deliver: Deliver }): void {
 		this.#deliver = hooks.deliver;
 		this.#attached.resolve();
+		this.#outbox = this.#outbox.then(() => this.#flush()).catch(this.#failed);
 	}
 
 	/**
@@ -284,19 +344,23 @@ export class PiPackages {
 		this.#branch.push({ type: "custom", id, parentId: this.#branch.at(-1)?.id ?? null, timestamp: new Date().toISOString(), customType, data: clean });
 	}
 
-	/** Pi's `sendMessage`: a turn when asked for one (or queued while busy), otherwise context for the next turn. */
-	async #send(message: PiMessage, options: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" } = {}): Promise<void> {
-		const content = sanitizeDeep(typeof message.content === "string" ? message.content : json(message.content), redact) as string | Content;
-		const data = json({ customType: message.customType, display: message.display === true, ...(message.details === undefined ? {} : { details: sanitizeDeep(json(message.details), redact) }) });
-		const text = textOf(content);
-		if (options.triggerTurn === true || (!this.#idle && options.deliverAs !== "nextTurn")) {
-			await this.#root().submit(
-				{ type: "input", content: text, whenBusy: options.deliverAs === "followUp" ? "followUp" : "steer", requestId: `package:${randomUUID()}`, entry: { kind: PACKAGE_MESSAGE_ENTRY, data } },
-				context,
-			);
+	/**
+	 * Pi's `sendUserMessage`, and `sendMessage`: a turn when asked for one (or queued while busy), otherwise context for
+	 * the next turn. The held message's ID is the request ID, so delivering it again admits nothing twice.
+	 */
+	async #send(item: Held): Promise<void> {
+		const root = this.#root();
+		if (item.kind === "user") {
+			await root.submit({ type: "input", content: item.content as never, whenBusy: item.deliverAs ?? "followUp", requestId: item.id }, context);
 			return;
 		}
-		await this.#root().submit({ type: "write", entry: { kind: PACKAGE_MESSAGE_ENTRY, data, model: [{ role: "user", content: text, timestamp: Date.now() }] } }, context);
+		const text = textOf(item.content as string | Content);
+		const data = item.data;
+		if (item.triggerTurn === true || (!this.#idle && item.deliverAs !== "nextTurn")) {
+			await root.submit({ type: "input", content: text, whenBusy: item.deliverAs === "followUp" ? "followUp" : "steer", requestId: item.id, entry: { kind: PACKAGE_MESSAGE_ENTRY, data } }, context);
+			return;
+		}
+		await root.submit({ type: "write", requestId: item.id, entry: { kind: PACKAGE_MESSAGE_ENTRY, data, model: [{ role: "user", content: text, timestamp: Date.now() }] } }, context);
 	}
 
 	#ui(command: boolean) {
@@ -540,7 +604,7 @@ export class PiPackages {
 		return { type: "done" };
 	}
 
-	/** `session_shutdown`, then every pending passive commit; a message held for a paused restore is not sent. */
+	/** `session_shutdown`, then every pending passive commit; a message held for a paused restore stays in the outbox. */
 	async close(): Promise<void> {
 		await this.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
 		await this.#queue;
