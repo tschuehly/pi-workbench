@@ -9,6 +9,7 @@
 // gracefully first.
 // ponytail: the IPC channel ties the host's life to its session daemon; Phase C moves hosts to their own service owner.
 import { parseArgs } from "node:util";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { CompactionSettings } from "@earendil-works/pi-durable";
 // The Workbench telemetry extension's recorder: same JSONL events, same PI_TELEMETRY_DIR.
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
@@ -120,6 +121,18 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	// One command list and dispatcher: host commands (/quota-check) and the bound Pi packages' commands.
 	commands: () => session.commands(),
 	command: (params) => session.command(text(params, "name"), typeof params.args === "string" ? params.args : ""),
+	// One request outside the conversation (PI WEB's Chat title).
+	complete: (params) => {
+		const { maxTokens, reasoning, timeoutMs, model } = params;
+		return session.complete({
+			systemPrompt: text(params, "systemPrompt"),
+			prompt: text(params, "prompt"),
+			...(typeof maxTokens === "number" ? { maxTokens } : {}),
+			...(typeof reasoning === "string" ? { reasoning: reasoning as ModelThinkingLevel } : {}),
+			...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+			...(isObject(model) && typeof model.provider === "string" && typeof model.modelId === "string" ? { model: { provider: model.provider, modelId: model.modelId } } : {}),
+		});
+	},
 	abort: () => session.abort(),
 	mutateQueue: (params) => {
 		const { action, index, expected } = params;

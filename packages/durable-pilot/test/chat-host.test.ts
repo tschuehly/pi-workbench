@@ -206,6 +206,12 @@ test("crash row generation: a committed partial survives a kill, restore stays p
 	assert.equal(ready.ownerEpoch, 2);
 	const paused = await second.call<Transcript>("transcript");
 	assert.ok((paused.status.warnings ?? []).length > 0, "restored paused");
+	// P005: the partial the kill cut off shows as interrupted while paused, not as an answer still streaming.
+	const cut = paused.partial as { stopReason?: string; errorMessage?: string; content: unknown };
+	assert.match(textOf(cut.content), /word0/, "the committed partial text survives");
+	assert.equal(cut.stopReason, "aborted");
+	assert.match(cut.errorMessage ?? "", /interrupted/i);
+	assert.match(JSON.stringify(paused.status.warnings), /interrupted/i, "the paused warning says the answer was interrupted");
 	assert.deepEqual(requests(store), ["gen"], "status and transcript reads send no request");
 	// Sending is Thomas's resume: the interrupted generation is reissued first, then the new input is answered.
 	await second.call("prompt", { operationId: "op-next", text: "next" });
@@ -299,6 +305,26 @@ const answered = (askId: string) => ({
 	askId, reason: "submitted", askedAt: "", closedAt: "", context: ASK.context,
 	questions: [{ question: ASK.questions[0], answered: true, values: ["staging"] }],
 	answeredCount: 1, unansweredIds: [], summary: "Answered 1 of 1; none left unanswered",
+});
+
+test("P031 complete: PI WEB's Chat title request goes to the Chat's model outside the conversation; nothing is committed or scheduled", async () => {
+	const { store, cwd } = family("title");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const title = await host.call<string>("complete", {
+		systemPrompt: "Generate a concise title for a coding-agent chat session. Return only the title.",
+		prompt: "Create a 2-6 word title for this request:\n\nMigrate the build",
+		maxTokens: 24,
+		reasoning: "minimal",
+		timeoutMs: 10_000,
+	});
+	assert.equal(title, "Scripted title");
+	const transcript = await host.call<Transcript>("transcript");
+	assert.deepEqual(transcript.messages, [], "no turn, no entry");
+	assert.equal(transcript.status.isStreaming, false);
+	assert.deepEqual(requests(store), [], "not a conversation request");
+	await assert.rejects(host.call("complete", { systemPrompt: "x", prompt: "y", model: { provider: "nobody", modelId: "none" } }), /Unknown model nobody\/none/);
+	await host.close();
 });
 
 test("Working Mode: a selection survives a restart, rides with the next prompt once, /mode send delivers it now, alignment is recorded", async () => {
