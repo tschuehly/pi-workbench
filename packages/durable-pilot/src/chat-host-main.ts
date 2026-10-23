@@ -15,7 +15,7 @@ import type { CompactionSettings } from "@earendil-works/pi-durable";
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
 import { openChatHost } from "./chat.ts";
 import { COMMANDS } from "./extensions.ts";
-import { redact } from "./redact.ts";
+import { redact, sealed } from "./redact.ts";
 import { setDelegationHold } from "./delegation.ts";
 import { type Attachment, CAPABILITIES, ChatSession, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
@@ -134,6 +134,8 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 			...(isObject(model) && typeof model.provider === "string" && typeof model.modelId === "string" ? { model: { provider: model.provider, modelId: model.modelId } } : {}),
 		});
 	},
+	// PI WEB's title fallback source: whole text through the host's redactor, before PI WEB formats or truncates it.
+	redact: (params) => sealed(redact)(text(params, "text")),
 	abort: () => session.abort(),
 	mutateQueue: (params) => {
 		const { action, index, expected } = params;

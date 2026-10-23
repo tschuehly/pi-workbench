@@ -327,6 +327,27 @@ test("P031 complete: PI WEB's Chat title request goes to the Chat's model outsid
 	await host.close();
 });
 
+test("P031 title redaction: a title the model echoes and the fallback source PI WEB asks to redact are masked by the host's redactor", async () => {
+	const { store, cwd } = family("title-redact");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const secret = `ghp_${"T1tl3S3cr3t".repeat(4)}`;
+	const system = "Generate a concise title for a coding-agent chat session. Return only the title.";
+	// Positive control: the successful title path goes through the redacting provider.
+	const title = await host.call<string>("complete", { systemPrompt: system, prompt: `Create a 2-6 word title for this request:\n\necho-title:Rotate ${secret} now` });
+	assert.ok(!title.includes(secret.slice(4, 20)), `title masked: ${title}`);
+	assert.match(title, /^Rotate .*REDACTED.* now$/);
+	// The fallback source: the whole secret, and an unfinished private key (whole-text, sealed).
+	const masked = await host.call<string>("redact", { text: `Use ${secret} to deploy_the_service today` });
+	assert.ok(!masked.includes(secret.slice(4, 20)), `fallback source masked: ${masked}`);
+	assert.match(masked, /^Use .*REDACTED.* to deploy_the_service today$/);
+	const key = await host.call<string>("redact", { text: "fix -----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA" });
+	assert.ok(!key.includes("b3BlbnNzaC1rZXktdjEAAAAA"), `unfinished key masked: ${key}`);
+	await assert.rejects(host.call("redact", {}), /text must be a non-empty string/);
+	assert.deepEqual(requests(store), [], "no conversation request");
+	await host.close();
+});
+
 test("Working Mode: a selection survives a restart, rides with the next prompt once, /mode send delivers it now, alignment is recorded", async () => {
 	const { store, cwd } = family("mode");
 	let host = new ChatHost(store, cwd);
