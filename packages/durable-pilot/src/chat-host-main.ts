@@ -165,4 +165,5 @@ process.on("disconnect", () => void close());
 // the intent of a running tool stay, and restore is paused on the next open.
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void close().finally(() => process.exit(0)));
 
-send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch, capabilities: CAPABILITIES } });
+// `resources`: what the bound packages contributed (resources_discover), for PI WEB to load with the Chat's others.
+send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch, capabilities: CAPABILITIES, resources: session.resources() } });

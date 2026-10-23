@@ -32,8 +32,11 @@ export function crashPoint(name: string): void {
 	if (process.env.PI_DURABLE_CRASH_AT === name) process.kill(process.pid, "SIGKILL");
 }
 
-/** A job this conversation launched: its tool task, whether it runs in the background, and its delivery receipt. */
-type JobRef = { taskId: string; startedAt: number; background: boolean; delivery?: "foreground" | "completion"; admitted?: boolean };
+/**
+ * A job this conversation launched: its tool task and call, whether it runs in the background, and its delivery receipt.
+ * `callId` is absent on refs committed before it was recorded.
+ */
+type JobRef = { taskId: string; callId?: string; startedAt: number; background: boolean; delivery?: "foreground" | "completion"; admitted?: boolean };
 /**
  * A fork starts without the source's jobs, as a new legacy session does.
  * ponytail: refs are never pruned (the registry prunes week-old jobs); drop settled, admitted refs if Chats grow huge.
@@ -149,7 +152,7 @@ export class BackgroundBash {
 					const startedAt = api.now();
 					ref = await api.commit(async (tx) => {
 						const doc = await tx.doc(BashJobsDoc, api.conversationId);
-						doc.jobs[id] ??= { taskId: String(api.taskId), startedAt, background: !foreground };
+						doc.jobs[id] ??= { taskId: String(api.taskId), callId: api.callId, startedAt, background: !foreground };
 						return { ...doc.jobs[id]! };
 					}, c);
 				}
@@ -270,12 +273,19 @@ export class BackgroundBash {
 		clearInterval(this.#timer);
 	}
 
-	/** Running jobs for PI WEB's Activity, as the legacy extension publishes them. */
+	/**
+	 * Running jobs for PI WEB's Activity, as the legacy extension publishes them, each with the `bash` call that launched
+	 * it: while that call runs, Activity shows the job once, not also as the running tool call.
+	 */
 	async status(): Promise<Record<string, string>> {
 		if (this.#conversation === undefined) return {};
 		const running = (await this.#read()).filter((job) => job.state === "running");
 		if (running.length === 0) return {};
-		const jobs = running.map((job) => ({ id: job.id, elapsedSeconds: Math.floor((Date.now() - job.startedAt) / 1000), bytes: job.bytes, ...previewJob(job, 1200) }));
+		const refs = (await this.#reader!.snapshot(BashJobsDoc, this.#conversation().id, context))?.jobs ?? {};
+		const jobs = running.map((job) => {
+			const toolCallId = refs[job.id]?.callId;
+			return { id: job.id, elapsedSeconds: Math.floor((Date.now() - job.startedAt) / 1000), bytes: job.bytes, ...previewJob(job, 1200), ...(toolCallId === undefined ? {} : { toolCallId }) };
+		});
 		return { [BACKGROUND_BASH_STATUS]: JSON.stringify({ schemaVersion: 1, jobs }) };
 	}
 

@@ -7,7 +7,10 @@
 //   `web_enable` activates them (`setActiveTools` during a call becomes `control.addTools`);
 // - `appendEntry` and `sendMessage` commit to the Chat (redacted first): entries as passive writes, messages as inputs
 //   (a turn when asked for one) or as context for the next turn, shown as PI WEB custom messages;
-// - commands run here; `ui.notify` reaches PI WEB as command output, dialogs are refused visibly;
+// - commands run here; `ui.notify` reaches PI WEB as command output, `ui.setStatus` as the Chat's extension statuses,
+//   dialogs are refused visibly;
+// - `resources_discover` (after `session_start`, as in Pi) collects the skill, prompt and theme paths packages
+//   contribute; PI WEB loads them with the Chat's other resources;
 // - `session_start` (with the package's own entries as its branch), `session_tree` (with the new branch's),
 //   `before_agent_start`, `agent_settled` and `session_shutdown` reach the packages' handlers; their return values are not applied.
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -46,8 +49,20 @@ export class DialogUnavailable extends Error {
 	}
 }
 
-/** Host events the binding emits: PI WEB's `command.output` and `session.diagnostic`. */
-export type PackageEvent = { type: "command.output"; level: "info" | "error"; message: string } | { type: "session.diagnostic"; message: string };
+/** Host events the binding emits: PI WEB's `command.output` and `session.diagnostic`, and status changes. */
+export type PackageEvent =
+	| { type: "command.output"; level: "info" | "error"; message: string }
+	| { type: "session.diagnostic"; message: string }
+	/** A package's status line changed: the Chat publishes its status (not a browser event itself). */
+	| { type: "extension.status" };
+
+/** Resource paths packages contributed through `resources_discover`, each with the extension it came from (Pi's shape). */
+export type ContributedResources = Record<"skillPaths" | "promptPaths" | "themePaths", { path: string; extensionPath: string }[]>;
+
+/** PI WEB's limits on extension statuses (`EXTENSION_STATUS_*` in its shared/apiTypes.ts). */
+const STATUS_LIMIT = 64;
+const STATUS_KEY_MAX = 128;
+const STATUS_TEXT_MAX = 65_536;
 
 // The structural part of Pi's extension types this binding uses (pi-coding-agent `core/extensions/types.ts`).
 type Content = { type: string; text?: string; [key: string]: unknown }[];
@@ -94,6 +109,9 @@ export class PiPackages {
 	#branch: Branch = [];
 	#idle = true;
 	#model: Record<string, unknown> | undefined;
+	/** `ui.setStatus` lines, by key (in memory, as in a legacy Chat: packages publish them again at session_start). */
+	readonly #statuses = new Map<string, string>();
+	#resources: ContributedResources = { skillPaths: [], promptPaths: [], themePaths: [] };
 	/** Commits in call order; a failure is reported, never thrown into the package. */
 	#queue: Promise<void> = Promise.resolve();
 	readonly #calls = new AsyncLocalStorage<{ offered: Set<string>; added: string[] }>();
@@ -196,12 +214,26 @@ export class PiPackages {
 			if (command) this.#options.emit({ type: "command.output", level: type === "error" ? "error" : "info", message: clean });
 			else if (type === "warning" || type === "error") this.#options.emit({ type: "session.diagnostic", message: clean });
 		};
+		// PI WEB's legacy `setStatus`: bounded, unchanged values ignored; text is redacted like every package output.
+		const setStatus = (key: unknown, text: unknown) => {
+			if (typeof key !== "string" || key === "" || key.length > STATUS_KEY_MAX) return;
+			if (text !== undefined && (typeof text !== "string" || text.length > STATUS_TEXT_MAX)) return;
+			if (text === undefined) {
+				if (!this.#statuses.delete(key)) return;
+			} else {
+				const clean = redact(text);
+				if ((!this.#statuses.has(key) && this.#statuses.size >= STATUS_LIMIT) || this.#statuses.get(key) === clean) return;
+				this.#statuses.set(key, clean);
+			}
+			this.#options.emit({ type: "extension.status" });
+		};
 		return new Proxy({} as Record<string, unknown>, {
 			get: (_target, property) => {
 				if (property === "notify") return notify;
+				if (property === "setStatus") return setStatus;
 				if (property === "theme") return plainTheme;
 				if (property === "select" || property === "confirm" || property === "input" || property === "editor" || property === "custom") return () => Promise.reject(new DialogUnavailable());
-				// Widgets, footers, status lines and the editor are terminal surfaces: nothing to show them in.
+				// Widgets, footers and the editor are terminal surfaces: nothing to show them in.
 				return () => undefined;
 			},
 		});
@@ -289,7 +321,36 @@ export class PiPackages {
 		this.#model = await host.model();
 		await this.#readBranch();
 		await this.emit("session_start", { type: "session_start", reason: "startup" });
+		await this.#discover();
 		host.registry.install(this.extension());
+	}
+
+	/** Pi's `emitResourcesDiscover` at startup: every handler's paths, with the extension that contributed them. */
+	async #discover(): Promise<void> {
+		const found: ContributedResources = { skillPaths: [], promptPaths: [], themePaths: [] };
+		for (const extension of this.#extensions)
+			for (const handler of extension.handlers.get("resources_discover") ?? []) {
+				try {
+					const result = (await handler({ type: "resources_discover", cwd: this.#options.cwd, reason: "startup" }, this.#context(false))) as Partial<Record<keyof ContributedResources, unknown>> | undefined;
+					for (const kind of ["skillPaths", "promptPaths", "themePaths"] as const) {
+						const paths = result?.[kind];
+						if (Array.isArray(paths)) for (const path of paths) if (typeof path === "string") found[kind].push({ path, extensionPath: extension.path });
+					}
+				} catch (error) {
+					this.#options.emit({ type: "session.diagnostic", message: `resources_discover handler of ${extension.path} failed: ${redact(error instanceof Error ? error.message : String(error))}` });
+				}
+			}
+		this.#resources = found;
+	}
+
+	/** Resources the packages contributed at startup, for PI WEB's resource loader. */
+	resources(): ContributedResources {
+		return this.#resources;
+	}
+
+	/** The packages' status lines. */
+	statuses(): Record<string, string> {
+		return Object.fromEntries(this.#statuses);
 	}
 
 	/** The package entries of the Chat's active branch, as each package's branch. */

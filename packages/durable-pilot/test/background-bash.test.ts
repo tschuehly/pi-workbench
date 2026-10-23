@@ -104,6 +104,33 @@ test("P071 foreground waits for the output inline; a failing exit is an error re
 	await host.close();
 });
 
+test("P073 one foreground bash is one Activity shell: its job names the running call, so PI WEB shows it once; nothing once it ends", async () => {
+	const { store, cwd } = family("activity");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const gate = join(cwd, "gate");
+	await host.call("prompt", { operationId: "op-1", text: call("bash", { description: "Held activity", command: `while [ ! -e ${gate} ]; do sleep 0.05; done; echo released`, foreground: true }) });
+	type ActivityStatus = Status & { activeToolExecutions?: { id: string }[] };
+	let status: ActivityStatus = {};
+	for (let i = 0; i < 200; i++) {
+		status = await host.call<ActivityStatus>("status");
+		if (status.extensionStatuses?.["pi-workbench:background-bash"] !== undefined) break;
+		await sleep(50);
+	}
+	const jobs = JSON.parse(status.extensionStatuses?.["pi-workbench:background-bash"] ?? "{}") as { jobs?: { description?: string; toolCallId?: string }[] };
+	assert.deepEqual(jobs.jobs?.map((job) => job.description), ["Held activity"], "the running job is shown");
+	assert.equal(status.activeToolExecutions?.length, 1, "the running call is reported at its tool boundary");
+	assert.equal(`tool:${String(jobs.jobs?.[0]?.toolCallId)}`, status.activeToolExecutions?.[0]?.id, "the job names that call, so it is one shell");
+	writeFileSync(gate, "");
+	const ended = await toolEnd(host);
+	assert.equal(String(ended.text), "released\n");
+	await host.idle(1);
+	const after = await host.call<ActivityStatus>("status");
+	assert.equal(after.activeToolExecutions, undefined);
+	assert.equal(after.extensionStatuses?.["pi-workbench:background-bash"], undefined);
+	await host.close();
+});
+
 test("P071/P078 a foreground wait over 30 seconds hands off the same job, launched once; its completion follows once", async () => {
 	const { store, cwd } = family("handoff");
 	const host = new ChatHost(store, cwd);

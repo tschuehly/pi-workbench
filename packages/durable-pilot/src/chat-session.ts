@@ -26,7 +26,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Admissions, admit, changeQueued, context, Edits, type EditPlan, type Host, type QueuedInput, Reconcile, resolveUncertain } from "./host.ts";
 import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./redact.ts";
 import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
-import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
+import { type ContributedResources, PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BashJobsDoc } from "./background-bash.ts";
@@ -270,7 +270,17 @@ export class ChatSession {
 	async start(): Promise<void> {
 		if (this.#chat !== undefined) {
 			this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
-			this.#chat.workbench.record = (type, data) => this.#record(type, data);
+			this.#chat.workbench.record = (type, data) => {
+				this.#record(type, data);
+				// A child is its own telemetry session, as a legacy child Pi process is: its start names the lead as its parent,
+				// so the lead's report includes the child's usage (recorded under childSessionId).
+				if (type === "execution.launched" && typeof data?.childSessionId === "string")
+					this.#record("session.start", {
+						sessionId: data.childSessionId, sessionFile: null, cwd: null, mode: "durable", reason: "startup",
+						provider: data.provider ?? null, model: data.model ?? null, effort: data.effort ?? null,
+						argv: null, parentSessionId: this.#chatId, executionId: data.executionId ?? null, ownerEpoch: this.#host.store.owner.epoch,
+					});
+			};
 		}
 		// The delegate roster changes with this Chat's children (launch, status report, result, collection).
 		// Filtered on the active branch at commit time, so it follows navigation without resubscribing.
@@ -284,7 +294,7 @@ export class ChatSession {
 				void this.#publishStatus().catch(() => {});
 			}, 0);
 		});
-		this.#chat?.listenPackages((event) => this.#emit(event));
+		this.#chat?.listenPackages((event) => (event.type === "extension.status" ? void this.#publishStatus().catch(() => {}) : this.#emit(event)));
 		await this.#watch();
 		const lead = () => this.#host.root;
 		const deliver = <T>(work: () => Promise<T>) => this.#deliver(work);
@@ -559,6 +569,8 @@ export class ChatSession {
 			cost,
 			...(warnings.length === 0 ? {} : { warnings }),
 			extensionStatuses: {
+				// Package status lines first: a key the host owns (Working Mode, Activity, fast, bash) stays the host's.
+				...this.#chat?.packages?.statuses(),
 				[WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode),
 				...(delegates === undefined ? {} : { [ACTIVITY_STATUS_KEY]: delegates }),
 				...(this.#chat?.fast.active(agent.model && { provider: agent.model.provider, id: agent.model.modelId }) ? { [FAST_STATUS]: "fast" } : {}),
@@ -572,6 +584,11 @@ export class ChatSession {
 				? {}
 				: { contextUsage: { tokens: contextTokens, contextWindow, percent: contextTokens === null ? null : (contextTokens / contextWindow) * 100 } }),
 		};
+	}
+
+	/** Resources the bound packages contributed (`resources_discover`), for PI WEB to load with the Chat's others. */
+	resources(): ContributedResources {
+		return this.#chat?.packages?.resources() ?? { skillPaths: [], promptPaths: [], themePaths: [] };
 	}
 
 	/** The Chat's slash commands: the host's own (`/quota-check`, `/fast`), then the bound Pi packages'. */
