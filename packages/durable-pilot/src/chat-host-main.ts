@@ -198,4 +198,5 @@ function shutdown(): void {
 process.on("disconnect", shutdown);
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, shutdown);
 
-send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch, capabilities: CAPABILITIES } });
+// `resources`: what the bound packages contributed (resources_discover), for PI WEB to load with the Chat's others.
+send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch, capabilities: CAPABILITIES, resources: session.resources() } });

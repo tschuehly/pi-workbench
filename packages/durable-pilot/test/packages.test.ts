@@ -352,6 +352,66 @@ test("the package login snapshot: a stale auth.json lock (a host killed holding 
 	await host.close();
 });
 
+/** A bound package (by name) whose extension publishes a status line and contributes a skill, as legacy extensions may. */
+function probeFamily(label: string) {
+	const f = family(label);
+	const dir = join(f.store, "..", "probe-package");
+	const skill = join(dir, "contributed", "probe-skill");
+	mkdirSync(skill, { recursive: true });
+	writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "pi-process-monitor", pi: { extensions: ["./probe.ts"] } }));
+	writeFileSync(join(skill, "SKILL.md"), "---\nname: probe-skill\ndescription: Contributed by the probe\n---\nProbe skill body.\n");
+	writeFileSync(
+		join(dir, "probe.ts"),
+		`export default function (pi) {
+	pi.registerCommand("probe-status", { handler: async (args, ctx) => ctx.ui.setStatus("probe", args === "clear" ? undefined : args) });
+	pi.registerCommand("probe-working-mode", { handler: async (args, ctx) => ctx.ui.setStatus("working-mode", args) });
+	pi.on("resources_discover", (event) => ({ skillPaths: [${JSON.stringify(join(dir, "contributed"))}], promptPaths: [event.reason === "startup" ? ${JSON.stringify(join(dir, "prompts"))} : "wrong-reason"] }));
+}
+`,
+	);
+	writeFileSync(join(f.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ packages: [dir] }));
+	return { ...f, dir };
+}
+
+test("P041: a package's ctx.ui.setStatus shows in the Chat status, updates and clears; Working Mode's own status stays the host's", async () => {
+	const f = probeFamily("status");
+	const host = new ChatHost(f);
+	await host.ready;
+	type Statuses = { extensionStatuses?: Record<string, string> };
+	const statuses = async () => (await host.call<Statuses>("status")).extensionStatuses ?? {};
+	const mode = (await statuses())["working-mode"];
+	assert.ok(mode !== undefined);
+	assert.deepEqual(await host.call("command", { name: "probe-status", args: "one" }), { type: "done" });
+	assert.equal((await statuses()).probe, "one");
+	await host.call("command", { name: "probe-status", args: `two ${SECRET}` });
+	assert.match((await statuses()).probe ?? "", /^two /, "updated");
+	assert.ok(!(await statuses()).probe!.includes(SECRET), "a status is redacted like every other package output");
+	const published = host.events.filter((e) => e.type === "status.update").map((e) => (e.status as Statuses).extensionStatuses?.probe);
+	assert.ok(published.includes("one"), "the browser is told when a status changes");
+	await host.call("command", { name: "probe-working-mode", args: "spoofed" });
+	assert.equal((await statuses())["working-mode"], mode, "a package cannot overwrite a host-owned status");
+	await host.call("command", { name: "probe-status", args: "clear" });
+	assert.equal((await statuses()).probe, undefined, "cleared");
+	assert.equal((await statuses())["working-mode"], mode, "Working Mode unchanged");
+	await host.close();
+});
+
+test("P110: resources a package contributes through resources_discover are named in the ready message for PI WEB's resource loader, with their extension", async () => {
+	const f = probeFamily("resources");
+	const host = new ChatHost(f);
+	const ready = (await host.ready) as { resources?: unknown };
+	const probe = join(f.dir, "probe.ts");
+	assert.deepEqual(ready.resources, {
+		skillPaths: [{ path: join(f.dir, "contributed"), extensionPath: probe }],
+		promptPaths: [{ path: join(f.dir, "prompts"), extensionPath: probe }],
+		themePaths: [],
+	});
+	await host.close();
+	const off = new ChatHost(family("resources-off"), false);
+	assert.deepEqual(((await off.ready) as { resources?: unknown }).resources, { skillPaths: [], promptPaths: [], themePaths: [] }, "no packages, no contributions");
+	await off.close();
+});
+
 test("without --packages no package code runs: tools and commands stay unavailable", async () => {
 	const f = family("off");
 	const host = new ChatHost(f, false);

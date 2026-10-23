@@ -850,3 +850,27 @@ test("navigation: the Chat keeps control of its Workers on another branch (a for
 	await quiet(host);
 	await host.close();
 });
+
+test("P101 telemetry lineage: a child conversation starts its own telemetry session naming the lead, so the lead's report includes its usage", async () => {
+	const { store, cwd } = family("telemetry-lineage");
+	// Its own telemetry directory: the other tests share this file's directory and Chat ID.
+	const dir = scratch("delegation-lineage-telemetry");
+	const host = open(store, cwd, { PI_TELEMETRY_DIR: dir });
+	await host.ready;
+	await prompt(host, call("subagent", scout("lineage child", { background: false })));
+	await toolResult(host, "subagent");
+	await quiet(host);
+	await host.close();
+	const events = readdirSync(dir).flatMap((file) => readFileSync(join(dir, file), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>));
+	const launched = events.filter((event) => event.type === "execution.launched");
+	assert.equal(launched.length, 1, "the launch is recorded");
+	assert.equal(launched[0]!.sessionId, CHAT);
+	const starts = events.filter((event) => event.type === "session.start" && event.sessionId === launched[0]!.childSessionId);
+	assert.equal(starts.length, 1, "one session.start for the child");
+	assert.equal(starts[0]!.parentSessionId, CHAT, "its parent is the Durable lead");
+	assert.equal(starts[0]!.executionId, launched[0]!.executionId);
+	assert.ok(events.some((event) => event.type === "usage" && event.sessionId === launched[0]!.childSessionId), "the child's usage is under its session ID");
+	const { buildReport } = await import("../../../extensions/telemetry/telemetry.mjs");
+	const report = buildReport(events, { rootSessionId: CHAT }) as { sessionIds: string[] };
+	assert.deepEqual(report.sessionIds, [CHAT, String(launched[0]!.childSessionId)].sort(), "the lead's report reaches the child");
+});
