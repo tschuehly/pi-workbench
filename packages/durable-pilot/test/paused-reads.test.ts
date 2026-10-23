@@ -113,6 +113,8 @@ test("reads never schedule: a paused restore with every component's saved state 
 	await run("enable", call("tools_enable", { group: "atelier" }));
 	await run("open", call("atelier", { action: "open", page: "page.html" }));
 	const url = /Page open: (http:\/\/127\.0\.0\.1:\d+\/page\.html)/.exec(String(first.events.find((e) => e.type === "tool.end" && e.toolName === "atelier")?.text))?.[1] ?? assert.fail("no Page URL");
+	// The monitor tools are a tool group (hidden until enabled), as in legacy Chats.
+	await run("enable-monitor", call("tools_enable", { group: "monitor" }));
 	await run("watch", call("monitor", { source: { type: "tail", path: f.log }, options: { notifyOn: ["DONE"], coalesceSeconds: 0, label: "job" } }));
 	await run("bash", call("bash", { description: "Outlives host", command: "echo x >> launches.log; sleep 3; echo survived" }));
 	const job = /bash ([0-9a-f-]{36})/.exec(String(first.events.find((e) => e.type === "tool.end" && e.toolName === "bash")?.text))?.[1] ?? assert.fail("no job ID");
