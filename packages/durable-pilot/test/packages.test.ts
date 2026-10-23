@@ -11,10 +11,11 @@ import { after, before, test } from "node:test";
 import { claudeAliases, claudePayload } from "../src/claude.ts";
 import { readLog } from "../src/faux.ts";
 import { ChatHost as ProcHost, live, textOf, type UiEvent, writeFakeLogins } from "./chat-proc.ts";
+import { codexToken } from "./refresh-race.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 type Message = { role: string; customType?: string; content?: unknown; details?: unknown; isError?: boolean; toolName?: string };
-type Status = { isStreaming: boolean; queuedMessages: { kind: string; text: string }[]; unresolvedEffects?: { id: string; toolName: string }[] };
+type Status = { isStreaming: boolean; queuedMessages: { kind: string; text: string }[]; warnings?: { message: string }[]; unresolvedEffects?: { id: string; toolName: string }[] };
 
 /** Where the owner's installed packages are; only read. */
 const INSTALLED = process.env.PILOT_PI_PACKAGES ?? join(homedir(), ".pi", "agent", "npm", "node_modules");
@@ -100,10 +101,14 @@ class ChatHost extends ProcHost {
 
 const storeBytes = (store: string) => ["session.sqlite", "session.sqlite-wal"].map((file) => (existsSync(join(store, file)) ? readFileSync(join(store, file)).toString("latin1") : "")).join("");
 
-test("P113 P114 P115 P116 P117 P119 P112: web tools stay deferred until web_enable; search, fetch and stored content work and survive a restart; stored pages are redacted", async () => {
+/** A Claude Chat answered by the scripted model: the packages see the real Claude model. */
+const CLAUDE = ["--model", "anthropic/claude-opus-5-5", "--scripted-providers"];
+
+test("P113 P114 P115 P116 P117 P119 P112: in a Claude Chat web tools stay deferred until web_enable; search, fetch and stored content work and survive a restart; stored pages are redacted", async () => {
 	const f = family("web");
-	let host = new ChatHost(f);
+	let host = new ChatHost(f, true, CLAUDE);
 	await host.ready;
+	assert.deepEqual((await host.call<{ model?: unknown }>("status")).model, { provider: "anthropic", id: "claude-opus-5-5" });
 	const early = await host.tool("get_search_content", { responseId: "none" }, "op-early");
 	assert.equal(early.isError, true, "a deferred web tool is not offered before web_enable");
 	assert.doesNotMatch(String(early.text), /responseId|No stored/i, "the package never ran it");
@@ -130,7 +135,7 @@ test("P113 P114 P115 P116 P117 P119 P112: web tools stay deferred until web_enab
 	assert.match(String(stored.text), /Plain paragraph text/);
 	await host.kill();
 
-	host = new ChatHost(f);
+	host = new ChatHost(f, true, CLAUDE);
 	await host.ready;
 	// session_start rebuilt the package's stored results from its committed entries; the tool stays loaded on this branch.
 	const restored = await host.tool("get_search_content", { responseId, url: `http://127.0.0.1:${port}/page` }, "op-restored");
@@ -254,21 +259,75 @@ test("P133 P135: a tail watcher pings the Chat, survives a kill and resumes; pin
 	assert.ok(!storeBytes(f.store).includes(SECRET), "neither the ping nor the watcher state holds the token");
 });
 
-test("P113 with a ChatGPT model: the packages see a model that adds tools mid-conversation, so web tools start deferred", async () => {
+test("P113 with a ChatGPT model: current-model OpenAI hosted search sees the real Codex model, uses only the stored subscription login and reaches the (mocked) ChatGPT endpoint", async () => {
 	const f = family("codex");
-	// A new Chat on openai-codex (fake stored login): pi-web-access decides deferral at session_start from the model it
-	// sees (the host's view relabels it anthropic-messages; Codex models also qualify on their own compat flags). The
-	// scripted model then answers, so no request reaches ChatGPT.
-	const host = new ChatHost(f, true, ["--model", "openai-codex/gpt-6-astra", "--scripted"]);
+	const token = codexToken("codex");
+	const hits: { url: string; authorization?: string; account?: string; model?: unknown; body: string }[] = [];
+	const chatgpt = createServer((request, response) => {
+		let body = "";
+		request.on("data", (chunk) => (body += chunk));
+		request.on("end", () => {
+			hits.push({ url: request.url ?? "", authorization: request.headers.authorization, account: request.headers["chatgpt-account-id"] as string | undefined, model: (JSON.parse(body) as { model?: unknown }).model, body });
+			response.setHeader("content-type", "application/json");
+			response.end(JSON.stringify({
+				output: [
+					{ type: "web_search_call", status: "completed", action: { type: "search", query: "durable hosted" } },
+					{ type: "message", content: [{ type: "output_text", text: "Hosted answer from the mock.", annotations: [{ type: "url_citation", url: "https://example.com/hosted", title: "Hosted source", start_index: 0, end_index: 6 }] }] },
+				],
+			}));
+		});
+	});
+	await new Promise<void>((resolve) => chatgpt.listen(0, "127.0.0.1", resolve));
+	try {
+		// The owner's configured search: OpenAI hosted search with the Chat's current model, no other provider.
+		writeFileSync(join(f.env.PI_CODING_AGENT_DIR, "web-search.json"), JSON.stringify({ searchRouting: { providers: ["openai"], useCurrentModel: true, fallbackOn: ["transient"] } }));
+		const env = { ...f.env, NODE_OPTIONS: `--import ${join(PACKAGE, "test", "fixtures", "chatgpt-to-mock.mjs")}`, PILOT_CHATGPT_MOCK: `http://127.0.0.1:${(chatgpt.address() as { port: number }).port}` };
+		// The Chat stays on openai-codex throughout; the scripted model answers in its place, so no model request leaves.
+		const host = new ChatHost({ ...f, env }, true, ["--model", "openai-codex/gpt-6-astra", "--scripted-providers"]);
+		await host.ready;
+		assert.deepEqual((await host.call<{ model?: unknown }>("status")).model, { provider: "openai-codex", id: "gpt-6-astra" });
+		const early = await host.tool("web_search", { query: "too early" }, "op-early");
+		assert.equal(early.isError, true, "deferred for a ChatGPT Chat: not offered before web_enable");
+		const enabled = await host.tool("web_enable", {}, "op-enable");
+		assert.equal(enabled.isError, false, String(enabled.text));
+		const search = await host.tool("web_search", { query: "durable hosted" }, "op-search");
+		assert.equal(search.isError, false, String(search.text));
+		assert.match(String(search.text), /Hosted answer from the mock/);
+		await host.close();
+		assert.equal(hits.length, 1, "one hosted search request, to the mock");
+		assert.equal(hits[0]!.url, "/backend-api/codex/responses", "the ChatGPT subscription endpoint of the current Codex model");
+		assert.equal(hits[0]!.model, "gpt-6-astra", "the Chat's own model runs the search");
+		assert.equal(hits[0]!.authorization, `Bearer ${token}`, "the stored subscription login, read through the host's auth store");
+		assert.equal(hits[0]!.account, "acct-codex");
+		assert.doesNotMatch(JSON.stringify(hits), /fake-oat|fake-gh|tid=fake/, "no other stored credential is sent");
+	} finally {
+		chatgpt.close();
+	}
+});
+
+test("a SIGTERM close is bounded: a package tool that ignores cancellation cannot keep the owner alive; the host exits non-zero, the store reopens and the call is interrupted", async () => {
+	const f = family("stuck");
+	writeFileSync(join(f.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ packages: [join(PACKAGE, "test", "fixtures", "stuck-package")] }));
+	const host = new ChatHost(f);
 	await host.ready;
-	assert.deepEqual((await host.call<{ model?: unknown }>("status")).model, { provider: "openai-codex", id: "gpt-6-astra" });
-	await host.call("setModel", { provider: "faux", modelId: "faux-1" });
-	const early = await host.tool("get_search_content", { responseId: "none" }, "op-early");
-	assert.equal(early.isError, true, "deferred for a ChatGPT Chat too: not offered before web_enable");
-	const enabled = await host.tool("web_enable", {}, "op-enable");
-	assert.equal(enabled.isError, false, String(enabled.text));
-	assert.match(String(enabled.text), /Enabled: .*get_search_content/);
-	await host.close();
+	await host.call("prompt", { operationId: "op-stuck", text: "call:stuck {}" });
+	await host.until((e) => e.type === "tool.start" && e.toolName === "stuck", "the stuck call");
+	// The orderly close joins the call, which never settles: only the host's own deadline ends the process.
+	const started = Date.now();
+	host.child.kill("SIGTERM");
+	const code = await Promise.race([host.exited, new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 20_000).unref())]);
+	assert.notEqual(code, "stuck", "the host exited on its own deadline");
+	assert.notEqual(code, 0, "a close cut short is not reported as a clean exit");
+	assert.ok(Date.now() - started < 20_000);
+	assert.match(host.stderr, /close did not finish/);
+
+	const reopened = new ChatHost(f);
+	await reopened.ready; // the store's exclusive owner lock was released
+	const status = await reopened.call<Status>("status");
+	assert.deepEqual(status.unresolvedEffects?.map((effect) => effect.toolName), ["stuck"], "the call is interrupted and held for the owner, not completed");
+	assert.match(JSON.stringify(status.warnings), /Restored paused/, "reopening resumes nothing until the owner sends");
+	await reopened.close();
+	assert.equal(await reopened.exited, 0, "with nothing running, the orderly close ends cleanly");
 });
 
 test("without --packages no package code runs: tools and commands stay unavailable", async () => {
