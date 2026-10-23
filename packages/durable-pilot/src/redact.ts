@@ -39,58 +39,83 @@ export function strict(sanitize: Sanitize): Sanitize {
 
 const SKIP = new Set(["image", "thinking", "redacted_thinking"]);
 
-/** Deep-sanitize strings; throws if the sanitizer throws. */
+type TextBlock = { type: "text"; text: string };
+const isText = (item: unknown): item is TextBlock =>
+	item !== null && typeof item === "object" && (item as { type?: unknown }).type === "text" && typeof (item as { text?: unknown }).text === "string";
+
+/**
+ * Deep-sanitize strings; throws if the sanitizer throws. The text blocks of a content array (a tool result, a package
+ * message) are one text to their reader: a secret split across them is masked as a whole first (`acrossBlocks`).
+ */
 export function sanitizeDeep<T>(value: T, sanitize: Sanitize): T {
 	if (typeof value === "string") return sanitize(value) as T;
 	if (value === null || typeof value !== "object") return value;
 	if (SKIP.has((value as { type?: string }).type ?? "")) return value;
-	if (Array.isArray(value)) return value.map((item) => sanitizeDeep(item, sanitize)) as T;
+	if (Array.isArray(value)) {
+		const texts = acrossBlocks(value.flatMap((item) => (isText(item) ? [item.text] : [])), sanitize);
+		let n = 0;
+		return value.map((item) => sanitizeDeep(isText(item) ? { ...item, text: texts[n++]! } : item, sanitize)) as T;
+	}
 	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeDeep(item, sanitize)])) as T;
 }
 
-const OPEN_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/;
-const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
+/** A private-key block, or one that never ends (it is masked to the end, as `sealed` does). */
+const KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
 
 /**
  * Text blocks as their reader sees them, one text, with secrets masked across block boundaries; each block is still
- * sanitized on its own afterwards. A token running across a boundary is masked in the block where it starts and removed
- * from the blocks it continues into; a private-key block opened in one block is removed from the next through its END.
+ * sanitized on its own afterwards. The joined text is cut into private-key blocks, whitespace and whitespace-free runs
+ * (every other secret is one run); a key block or a run that the sanitizer changes and that crosses a boundary is
+ * replaced, masked, in the block where it starts and removed from the blocks it continues into. A key's opening header
+ * split at its spaces is matched in the joined text, so no block's piece of it survives. `partial`: the blocks of a
+ * message still streaming; the joined text's incomplete tail (`completePrefix`) is withheld from every block.
  */
-export function acrossBlocks(texts: readonly string[], sanitize: Sanitize): string[] {
-	const out = [...texts];
-	for (let i = 0; i < out.length - 1; i++) {
-		if (OPEN_KEY.test(out[i]!)) {
-			// Masked to its end by `sealed` in this block; its body continues in the next ones.
-			for (let j = i + 1; j < out.length; j++) {
-				const end = KEY_END.exec(out[j]!);
-				out[j] = end === null ? "" : out[j]!.slice(end.index + end[0].length);
-				if (end !== null) break;
-			}
-			continue;
+export function acrossBlocks(texts: readonly string[], sanitize: Sanitize, partial = false): string[] {
+	if (texts.length < 2) return [...texts];
+	const ends: number[] = [];
+	let total = 0;
+	for (const text of texts) ends.push((total += text.length));
+	const joined = partial ? completePrefix(texts.join("")) : texts.join("");
+	const out = texts.map(() => "");
+	let block = 0;
+	// Positions only grow, so the block holding the next one is found by moving forward.
+	const at = (position: number) => {
+		while (ends[block]! <= position) block++;
+		return block;
+	};
+	const unit = (from: number, to: number, masked?: string) => {
+		if (from === to) return;
+		const start = at(from);
+		if (to > ends[start]!) {
+			const raw = joined.slice(from, to);
+			const clean = masked ?? sanitize(raw);
+			if (clean !== raw) return void (out[start] += clean);
 		}
-		const tail = /\S+$/.exec(out[i]!)?.[0];
-		if (tail === undefined) continue;
-		let token = tail;
-		const heads: number[] = [];
-		for (let j = i + 1; j < out.length; j++) {
-			const head = /^\S*/.exec(out[j]!)![0];
-			token += head;
-			heads.push(head.length);
-			if (head.length < out[j]!.length) break;
+		for (let position = from; position < to; ) {
+			const k = at(position);
+			const stop = Math.min(to, ends[k]!);
+			out[k] += joined.slice(position, stop);
+			position = stop;
 		}
-		if (heads.every((length) => length === 0)) continue;
-		const clean = sanitize(token);
-		if (clean === token) continue;
-		out[i] = out[i]!.slice(0, out[i]!.length - tail.length) + clean;
-		heads.forEach((length, k) => (out[i + 1 + k] = out[i + 1 + k]!.slice(length)));
+	};
+	const runs = (from: number, to: number) => {
+		for (const run of joined.slice(from, to).matchAll(/\s+|\S+/g)) unit(from + run.index, from + run.index + run[0].length);
+	};
+	let done = 0;
+	for (const key of joined.matchAll(KEY_BLOCK)) {
+		if (key[0] === "") continue;
+		runs(done, key.index);
+		unit(key.index, key.index + key[0].length, "[REDACTED:private-key]");
+		done = key.index + key[0].length;
 	}
+	runs(done, joined.length);
 	return out;
 }
 
 /** Sanitize the text blocks of an assistant message; `partial` withholds what may still become a secret. */
 function sanitizeMessage(message: AssistantMessage, sanitize: Sanitize, partial: boolean, rename?: (name: string) => string): AssistantMessage {
 	// A secret may run across text blocks the reader sees as one text: mask it there before each block is sanitized.
-	const texts = acrossBlocks(message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])), sanitize);
+	const texts = acrossBlocks(message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])), sanitize, partial);
 	let n = 0;
 	const clean = (text: string) => sanitize(partial ? completePrefix(text) : text);
 	return {
