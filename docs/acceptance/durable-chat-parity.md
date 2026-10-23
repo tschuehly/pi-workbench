@@ -59,7 +59,9 @@ PI_WEB_E2E_PI_PACKAGES=~/.pi/agent/npm/node_modules npm run test:e2e
 # Fleet areas (each run separately)
 bash e2e/durable/bash-atelier-tree/run.sh
 PI_WEB_E2E_FLEET=1 PI_WEB_E2E_PI_PACKAGES=~/.pi/agent/npm/node_modules npx playwright test e2e/durable/composer-attention/
-PI_WEB_E2E_FLEET=1 PI_WEB_E2E_PI_PACKAGES=~/.pi/agent/npm/node_modules npx playwright test e2e/durable/context-tools/
+# context-tools: AC-P087 needs the area's synthetic fixture secret (never a real one) in the environment
+export PILOT_CONTEXT_TOKEN="$(python3 -c 'import re; from pathlib import Path; print(re.search(r"fakeSecret = \"([^\"]+)\"", Path("e2e/durable/context-tools/support.ts").read_text())[1])')"
+TMPDIR="$PI_TMP" PI_WEB_E2E_FLEET=1 PI_WEB_E2E_PI_PACKAGES=~/.pi/agent/npm/node_modules npx playwright test e2e/durable/context-tools/
 PI_WEB_E2E_PI_PACKAGES=~/.pi/agent/npm/node_modules npx playwright test -c e2e/durable/extensions-packages/fleet.config.ts
 TMPDIR="$PI_TMP" npx playwright test -c e2e/durable/subagents-workers/playwright.config.ts
 ```
