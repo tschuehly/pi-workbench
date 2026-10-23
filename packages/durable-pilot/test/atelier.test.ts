@@ -10,7 +10,7 @@ import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
 type Message = { role: string; customType?: string; content?: unknown; details?: Record<string, unknown> };
-type Entry = { seq: number; type: string; origin: string; of?: number[]; op?: string; text?: string };
+type Entry = { seq: number; at: number; type: string; origin: string; of?: number[]; op?: string; text?: string };
 
 const ROOT = scratch("s4b-atelier");
 process.env.ATELIER_PAGE_CHECK = "off"; // the browser Page check has its own tests (extensions/atelier/page-check.test.mjs)
@@ -208,6 +208,30 @@ test("survival: a kill after admission, before the Event Log records it, admits 
 	await sleep(UNDO);
 	assert.equal((await delivered(second)).length, 1, "one message");
 	assert.equal(atelierRequests(store), 1, "one turn");
+	await second.close();
+});
+
+test("survival: a kill after admitting one event, with a second falling due while down, delivers each event in exactly one admitted message", async () => {
+	const { store, cwd, page } = family("kill-admitted-staggered");
+	const first = new ChatHost(store, cwd, { env: { PI_DURABLE_CRASH_AT: "atelier.admitted" } });
+	await first.ready;
+	const url = await open(first, 1);
+	await first.idle(2);
+	const a = await post(url, { type: "comment", key: "a", text: "staggered A" });
+	await sleep(1_400);
+	const b = await post(url, { type: "comment", key: "a", text: "staggered B" });
+	await first.exited;
+	assert.ok(!log(page).some((e) => e.type === "delivered" || e.type === "received"), "killed after A's admission, before the Event Log heard of it");
+	// Reopened once B is due too: the kernel now batches A and B.
+	await sleep(Math.max(0, b.entry!.at + UNDO + 200 - Date.now()));
+	const second = new ChatHost(store, cwd);
+	await second.ready;
+	await second.call("prompt", { operationId: "op-next", text: "next" });
+	await waitFor(() => [a, b].every((x) => log(page).some((e) => e.type === "received" && e.of?.includes(x.entry!.seq))), "both receipts");
+	await second.until(() => logged(store).some((l) => l.label === "next"), "the next input");
+	await sleep(UNDO);
+	const texts = (await delivered(second)).map((m) => textOf(m.content));
+	for (const text of ["staggered A", "staggered B"]) assert.equal(texts.filter((t) => t.includes(text)).length, 1, `${text} in exactly one admitted message: ${JSON.stringify(texts)}`);
 	await second.close();
 });
 

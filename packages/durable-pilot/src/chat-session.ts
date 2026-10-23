@@ -255,7 +255,7 @@ export class ChatSession {
 	/** Tree navigation in progress, and operations in flight that it must not overlap (legacy tree-exclusive gate). */
 	#navigating = false;
 	#inFlight = 0;
-	/** Deliveries (bash completions, Atelier input) waiting for a paused restore to be resumed, or for navigation to end. */
+	/** Deliveries (bash completions, Atelier input, package messages) waiting for a paused restore to be resumed, or for navigation to end. */
 	#deliveries: (() => void)[] = [];
 	#afterNavigation: (() => void)[] = [];
 
@@ -290,6 +290,7 @@ export class ChatSession {
 		const deliver = <T>(work: () => Promise<T>) => this.#deliver(work);
 		this.#chat?.bash?.start(lead, this.#host.harness, { deliver, changed: () => void this.#publishStatus().catch(() => {}) });
 		await this.#chat?.atelier?.start(lead, this.#host.harness, { deliver });
+		this.#chat?.packages?.attach({ deliver });
 		const agent = await this.#host.root.agent(context);
 		this.#record("session.start", {
 			sessionFile: null, cwd: agent.cwd ?? null, mode: "durable", reason: "open",
@@ -622,7 +623,7 @@ export class ChatSession {
 	}
 
 	/**
-	 * Resolves once a host-side delivery (a bash completion, Atelier input) may submit input: at once in a running or
+	 * Resolves once a host-side delivery (a bash completion, Atelier input, a package message) may submit: at once in a running or
 	 * idle Chat; a restore with interrupted work stays paused until the user resumes it, so a delivery never resumes
 	 * that work by itself. Checkpoint barrier, as for child completions: during `compact_and_continue` it waits until
 	 * the continuation is admitted, so the delivery's follow-up queues behind it (legacy checkpoint-barrier).
