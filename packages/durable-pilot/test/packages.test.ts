@@ -3,7 +3,7 @@
 // packages without a Durable surface. Every host runs with an isolated HOME and agent directory; the network is a local
 // fixture server. Parity-matrix rows are named in each test title.
 import assert from "node:assert/strict";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -336,6 +336,20 @@ test("a SIGTERM close is bounded: a package tool that ignores cancellation canno
 	assert.match(JSON.stringify(status.warnings), /Restored paused/, "reopening resumes nothing until the owner sends");
 	await reopened.close();
 	assert.equal(await reopened.exited, 0, "with nothing running, the orderly close ends cleanly");
+});
+
+test("the package login snapshot: a stale auth.json lock (a host killed holding it) does not stall opening a Chat", async () => {
+	const f = family("stale-lock");
+	// proper-lockfile's lock: a fresh directory beside auth.json, held as by a host SIGKILLed mid-read (stale after 30 s).
+	const lock = join(f.env.PI_CODING_AGENT_DIR, "auth.json.lock");
+	mkdirSync(lock);
+	const started = Date.now();
+	const host = new ChatHost(f);
+	await host.ready;
+	assert.ok(Date.now() - started < 10_000, `opening took ${String(Date.now() - started)} ms behind a stale lock`);
+	rmdirSync(lock);
+	await host.tool("notify_human", { message: "after the lock" }, "op-1");
+	await host.close();
 });
 
 test("without --packages no package code runs: tools and commands stay unavailable", async () => {

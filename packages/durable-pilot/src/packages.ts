@@ -17,7 +17,7 @@
 //   `before_agent_start`, `agent_settled` and `session_shutdown` reach the packages' handlers; their return values are not applied.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
@@ -91,13 +91,29 @@ export type PackageHost = {
 /** What a sync `ModelRegistry` read needs: the models with a stored login, and each provider's login type. */
 type Logins = { available: Model<Api>[]; types: Map<string, string> };
 
-async function readLogins(models: Models): Promise<Logins> {
+/** How long a login snapshot waits for auth.json's lock (Pi's own sync reload gives up within ~200 ms). */
+const LOGIN_READ_MS = 1_000;
+
+/** Throws when auth.json stays locked past `signal`: the caller keeps its last snapshot. */
+async function readLogins(models: Models, signal: AbortSignal): Promise<Logins> {
 	const types = new Map<string, string>();
 	for (const provider of models.getProviders()) {
-		const check = await models.checkAuth(provider.id).catch(() => undefined);
+		const check = await models.checkAuth(provider.id, { signal }).catch(() => undefined);
 		if (check !== undefined) types.set(provider.id, check.type);
 	}
-	return { available: [...(await models.getAvailable().catch(() => []))], types };
+	const available = await models.getAvailable(undefined, { signal });
+	signal.throwIfAborted();
+	return { available: [...available], types };
+}
+
+/** auth.json's revision: stored logins change only when it does. */
+function fileRevision(path: string): string {
+	try {
+		const stat = statSync(path);
+		return `${String(stat.mtimeMs)}:${String(stat.size)}`;
+	} catch {
+		return "none";
+	}
 }
 
 /**
@@ -157,6 +173,7 @@ export class PiPackages {
 	#idle = true;
 	#model: Record<string, unknown> | undefined;
 	#logins: Logins = { available: [], types: new Map() };
+	#authRevision: string | undefined;
 	#registry: ReturnType<typeof modelRegistry> | undefined;
 	/** Passive commits in call order; a failure is reported, never thrown into the package. */
 	#queue: Promise<void> = Promise.resolve();
@@ -382,10 +399,26 @@ export class PiPackages {
 		this.#host = host;
 		this.#registry = modelRegistry(host.models, () => this.#logins);
 		this.#model = await host.model();
-		this.#logins = await readLogins(host.models);
+		await this.#refreshLogins(host.models);
 		await this.#readBranch();
 		await this.emit("session_start", { type: "session_start", reason: "startup" });
 		host.registry.install(this.extension());
+	}
+
+	/**
+	 * The login snapshot, read again only when auth.json changed: every read takes Pi's auth.json lock, and a host killed
+	 * while holding it leaves the lock for 30 s, stalling every Chat and Pi that waits on it. A lock held past
+	 * LOGIN_READ_MS keeps the last snapshot, as Pi's reload does.
+	 */
+	async #refreshLogins(models: Models): Promise<void> {
+		const revision = fileRevision(join(this.#options.agentDir, "auth.json"));
+		if (revision === this.#authRevision) return;
+		try {
+			this.#logins = await readLogins(models, AbortSignal.timeout(LOGIN_READ_MS));
+			this.#authRevision = revision;
+		} catch {
+			// auth.json stayed locked: the last snapshot stands until the next run start.
+		}
 	}
 
 	/** The package entries of the Chat's active branch, as each package's branch. */
@@ -414,7 +447,7 @@ export class PiPackages {
 		this.#idle = phase === "end";
 		if (phase === "start" && this.#host !== undefined) {
 			this.#model = (await this.#host.model()) ?? this.#model;
-			this.#logins = await readLogins(this.#host.models);
+			await this.#refreshLogins(this.#host.models);
 		}
 		await this.emit(phase === "start" ? "before_agent_start" : "agent_settled", { type: phase === "start" ? "before_agent_start" : "agent_settled" });
 	}
