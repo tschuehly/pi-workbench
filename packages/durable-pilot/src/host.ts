@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Context, JsonRepresentation } from "@earendil-works/chord";
+import { type Context, copyJson, type JsonRepresentation } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	createModels,
@@ -29,6 +29,7 @@ import {
 	type InputEntry,
 	type UserInput,
 	InboxDoc,
+	LiveDoc,
 	type Registry,
 	type ReportInfo,
 	type SubmissionId,
@@ -148,6 +149,11 @@ export type Admit = {
 	readonly content?: UserInput;
 	/** The entry the input is placed as, instead of `pi.user`. */
 	readonly entry?: InputEntry;
+	/**
+	 * Queue behind a busy conversation's run without asking for progress: `Conversation.submit` enables scheduling for
+	 * the whole family, which would resume a paused restore. An idle conversation is submitted as usual.
+	 */
+	readonly hold?: boolean;
 };
 
 /**
@@ -169,6 +175,21 @@ export async function admit(
 		doc.ops[request.operationId] ??= { hash };
 	}, context);
 	await hooks.afterReceipt?.();
+	if (request.hold === true) {
+		// What Durable's admission commits for a busy conversation (`Tx.createSubmission` is meant for hosts that admit
+		// themselves): a queued submission and its inbox item, which the run places at its next boundary.
+		const queued = await conversation.commit(async (tx) => {
+			const existing = await tx.submissionByRequest(conversation.id, request.operationId);
+			if (existing !== undefined) return existing.id;
+			if ((await tx.doc(LiveDoc, conversation.id)).run === undefined) return undefined;
+			const inbox = await tx.doc(InboxDoc, conversation.id);
+			const { id } = await tx.createSubmission({ conversationId: conversation.id, requestId: request.operationId, type: "input", status: "queued" });
+			const entry = request.entry === undefined ? {} : { entry: copyJson({ kind: request.entry.kind, data: request.entry.data }, { omitUndefinedProperties: true }) as JsonRepresentation<InputEntry> };
+			inbox.items.push({ id, mode: request.mode ?? "followUp", content: copyJson(request.content ?? request.text, { omitUndefinedProperties: true }) as JsonRepresentation<UserInput>, ...entry });
+			return id;
+		}, context);
+		if (queued !== undefined) return queued;
+	}
 	const submission = await conversation.submit(
 		{
 			type: "input",
@@ -338,7 +359,9 @@ async function applyEdit(
 		const step = receipt.steps[item.step]!;
 		const stored = (step.content ?? step.text) as UserInput;
 		const content = item.text === undefined ? stored : replaceText(stored, item.text);
+		// Held: an edit while a restore is paused changes the queue without resuming the paused work.
 		await admit(conversation, {
+			hold: true,
 			operationId: item.to,
 			text: item.text ?? step.text,
 			mode: item.mode,

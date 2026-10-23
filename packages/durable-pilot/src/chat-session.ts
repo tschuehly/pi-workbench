@@ -547,7 +547,7 @@ export class ChatSession {
 			tokens.total += bucket.totalTokens;
 			cost += bucket.cost.total;
 		}
-		const paused = harness.wake().active && !this.#resumed;
+		const paused = this.#paused();
 		const contextWindow = agent.model === undefined ? undefined : this.#host.models.getModel(agent.model.provider, agent.model.modelId)?.contextWindow;
 		const contextTokens = this.#contextTokens();
 		const live = await harness.snapshot(LiveDoc, root.id, context);
@@ -633,6 +633,15 @@ export class ChatSession {
 		return null;
 	}
 
+	/**
+	 * A restore with unfinished work the owner has not resumed (plan decision 2): only a send, an answer or a resolution
+	 * resumes it. Stop, queue edits and a finished `!` command act without `Conversation.submit`/`abort`, which enable
+	 * scheduling for the whole family.
+	 */
+	#paused(): boolean {
+		return !this.#resumed && this.#host.harness.wake().active;
+	}
+
 	async #resume(): Promise<void> {
 		if (this.#resumed) return;
 		await this.#host.resume();
@@ -649,10 +658,8 @@ export class ChatSession {
 	 * the continuation is admitted, so the delivery's follow-up queues behind it (legacy checkpoint-barrier).
 	 */
 	async #deliverable(): Promise<void> {
-		if (!this.#resumed) {
-			if (this.#host.harness.wake().active) await new Promise<void>((resolve) => this.#deliveries.push(resolve));
-			else await this.#resume();
-		}
+		if (this.#paused()) await new Promise<void>((resolve) => this.#deliveries.push(resolve));
+		else await this.#resume();
 		const { harness } = this.#host;
 		for (;;) {
 			const active = (await harness.snapshot(CheckpointDoc, this.#host.root.id, context))?.active;
@@ -865,10 +872,18 @@ export class ChatSession {
 		}, context);
 	}
 
-	/** Stop: withdraw queued inputs and abort the current run (background work excluded). */
+	/**
+	 * Stop: withdraw queued inputs and abort the current run (background work excluded). A paused restore stays paused:
+	 * the queue is withdrawn and the lead's own foreground tasks are marked aborted; their abort, and its cascade to the
+	 * work they own, runs once the owner resumes, so the interrupted run never answers.
+	 */
 	async abort(): Promise<void> {
 		this.#shell?.cancel();
-		await this.#host.root.abort(context);
+		if (!this.#paused()) return this.#host.root.abort(context);
+		await this.clearQueue();
+		const { harness, root } = this.#host;
+		for (const { record } of (await harness.inspect(context)).tasks)
+			if (record.conversationId === root.id && record.owner === undefined && !record.background) await harness.abortTask(record.id, context);
 	}
 
 	// ─── Queue ───────────────────────────────────────────────────────────────
@@ -1021,7 +1036,12 @@ export class ChatSession {
 	async #flushShell(): Promise<void> {
 		for (const record of this.#heldShell.splice(0)) {
 			const model = record.excludeFromContext ? {} : { model: [{ role: "user" as const, content: [{ type: "text" as const, text: bashExecutionToText(record) }], timestamp: record.timestamp }] };
-			await this.#host.root.submit({ type: "write", entry: { kind: BASH_ENTRY, data: record, ...model } }, context);
+			const entry = { kind: BASH_ENTRY, data: record, ...model };
+			const { root } = this.#host;
+			// A paused restore stays paused: its lead is idle here (a held record waits for the run), so the record is
+			// appended directly; a write submission would enable scheduling.
+			if (this.#paused()) await root.commit((tx) => tx.appendEntry(root.id, entry), context);
+			else await root.submit({ type: "write", entry }, context);
 		}
 	}
 

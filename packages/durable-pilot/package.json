@@ -33,7 +33,7 @@
     "test:chat": "node --test --test-concurrency=1 --test-timeout=150000 test/chat-host.test.ts test/composer.test.ts test/context-tools.test.ts test/tree.test.ts test/delegation.test.ts",
     "test:extensions": "node --test --test-concurrency=1 --test-timeout=120000 test/extensions-host.test.ts",
     "chat-host": "node src/chat-host-main.ts",
-    "test:packages": "node --test --test-concurrency=1 --test-timeout=120000 test/packages.test.ts test/paused-reads.test.ts",
+    "test:packages": "node --test --test-concurrency=1 --test-timeout=120000 test/packages.test.ts test/paused-reads.test.ts test/paused-actions.test.ts",
     "test:bash-atelier": "node --test --test-concurrency=1 --test-timeout=120000 test/background-bash.test.ts test/atelier.test.ts"
   }
 }
