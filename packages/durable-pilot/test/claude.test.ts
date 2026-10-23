@@ -40,6 +40,29 @@ describe("claude subscription adapter (offline)", () => {
 		assert.equal(aliases.toCanonical("mcp__other__x"), "mcp__other__x", "foreign mcp__ tools are left alone");
 	});
 
+	it("mid-conversation tool additions and removals use the same aliases as the initial tools", () => {
+		const aliases = claudeAliases();
+		const out = claudePayload(aliases)({
+			tools: [{ name: "pilot_echo" }, { name: "__pi_deferred_placeholder__" }],
+			messages: [
+				{ role: "user", content: [{ type: "text", text: "hi" }] },
+				{
+					role: "system",
+					content: [
+						{ type: "tool_removal", tool: { type: "tool_reference", name: "pilot_echo" } },
+						{ type: "tool_removal", tool: { type: "tool_reference", name: "Bash" } },
+						{ type: "tool_addition", tool: { type: "tool_definition", definition: { name: "worker_create", input_schema: {} } } },
+						{ type: "tool_addition", tool: { type: "tool_definition", definition: { name: "Read", input_schema: {} } } },
+					],
+				},
+			],
+		}) as any;
+		const blocks = out.messages[1].content;
+		assert.deepEqual(blocks.map((b: any) => b.tool.name ?? b.tool.definition.name), ["mcp__pilot__pilot_echo", "Bash", "mcp__pilot__worker_create", "Read"]);
+		assert.equal(aliases.toCanonical("mcp__pilot__worker_create"), "worker_create", "a call of an added tool comes back canonical");
+		assert.deepEqual(out.messages[0], { role: "user", content: [{ type: "text", text: "hi" }] });
+	});
+
 	it("an aliased tool call is canonical before Durable executes and stores it", async () => {
 		const dir = scratch("claude-alias");
 		const aliases = claudeAliases();

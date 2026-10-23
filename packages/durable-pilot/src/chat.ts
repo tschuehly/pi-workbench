@@ -34,6 +34,41 @@ export const PREAMBLE = [
 	"Keep answers short and concrete.",
 ].join("\n");
 
+/**
+ * The edit tool with PI WEB's preview (legacy `createPiWebEditToolDefinition`): before applying, the diff it will apply
+ * (or why it cannot) reaches the browser as running `details.preview`; the result's own details replace it. The
+ * preview runs the same edit against the call's environment with writes discarded, so it matches exactly what is
+ * applied next.
+ */
+export function previewingEdit(edit = createEditTool()): typeof edit {
+	const discardWrites = <T extends object>(env: T): T =>
+		new Proxy(env, {
+			get(target, property) {
+				if (property === "writeFile") return async () => ({ ok: true, value: undefined });
+				const value = Reflect.get(target, property, target) as unknown;
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+	return {
+		...edit,
+		execute: async (args, api, c) => {
+			const dry = new Proxy(api, {
+				get(target, property) {
+					if (property === "env") return target.env === undefined ? undefined : discardWrites(target.env);
+					const value = Reflect.get(target, property, target) as unknown;
+					return typeof value === "function" ? value.bind(target) : value;
+				},
+			});
+			const preview = await edit.execute(args, dry, c).then(
+				({ details }) => ({ diff: details?.diff ?? "", ...(details?.firstChangedLine === undefined ? {} : { firstChangedLine: details.firstChangedLine }) }),
+				(error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
+			);
+			if (c.abortSignal?.aborted !== true) await api.details({ preview } as never, c);
+			return edit.execute(args, api, c);
+		},
+	};
+}
+
 /** Prompt sections in Pi's order (preamble, addendum, project context, skills, cwd); resources come from PI WEB. */
 export function chatTools(resources: () => Resources, cwd: string) {
 	return defineExtension({
@@ -48,7 +83,7 @@ export function chatTools(resources: () => Resources, cwd: string) {
 		// read has no external effect, so a crash mid-read may rerun it; write and edit stay unsafe (never rerun). bash is
 		// the Workbench one (background-bash.ts). grep/find/ls: Pi's own, offered only where an allowlist names them
 		// (children), as in legacy Chats.
-		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), ...searchTools(cwd)],
+		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), previewingEdit(), ...searchTools(cwd)],
 	});
 }
 
@@ -187,8 +222,9 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 			const identity = { chatId, conversationId: target.conversationId, rootId: opened?.root.id, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
 			return new NodeExecutionEnv({ cwd, shellEnv: toolEnv(identity) });
 		},
-		// Package tools keep their own deferral (web_enable); tool groups see only the Workbench extensions.
-		extensions: [...extensions, toolGroupsExtension(extensions), ...(packages === undefined ? [] : [packages.extension()])],
+		// Package tools keep their own deferral (web_enable); tool groups also gate the package groups (monitor), as in
+		// legacy Chats. Their wraps apply to the package extension installed after them.
+		extensions: [...extensions, toolGroupsExtension([...extensions, ...(packages?.sources() ?? [])]), ...(packages === undefined ? [] : [packages.extension()])],
 	});
 	opened = host;
 	for (const provider of subscriptionProviders(fast)) host.models.setProvider(provider);

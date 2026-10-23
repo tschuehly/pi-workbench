@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord";
-import { type Conversation, type JsonObject, defineDoc, defineExtension, defineTask, defineTool, type EntryRecord, type Harness, type ToolRegistration } from "@earendil-works/pi-durable";
+import { type Conversation, type JsonObject, defineDoc, defineExtension, defineTask, defineTool, type EntryRecord, GenerationTask, type Harness, hook, type ToolRegistration } from "@earendil-works/pi-durable";
 import {
 	ALIGNMENT_RESET_TOOL,
 	ALIGNMENT_TOOL,
@@ -92,6 +92,31 @@ export async function pendingBlock(harness: Harness, conversation: Conversation,
 		return { text: renderBlock(doc.selected, doc.seq, doc.aligned, sent), details: JSON.parse(JSON.stringify(details)) as WorkingModeDetails };
 	}, context);
 }
+
+/** Durable's framing of a placed compaction summary (pi-durable `SUMMARY_PREFIX`), as model context carries it. */
+const SUMMARY_PREFIX = "The conversation history before this point was compacted into the following summary:";
+const BLOCK = /<working-mode seq="\d+">/;
+const partsOf = (content: unknown): { type: string; text?: string }[] => (typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : []);
+const textOf = (content: unknown) => partsOf(content).map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
+
+/**
+ * The applied Working Mode block for requests whose context starts at a compaction summary that took the last block
+ * with it. Legacy Pi compacts before a prompt, so `before_agent_start` attaches the block to that prompt; a Durable
+ * threshold compaction runs after the prompt was admitted, so the requests that follow the summary carry the block
+ * right after it, memoized per generation (a retried or recovered request sends the same text). The next prompt
+ * delivers it again as recorded input (`pendingBlock`), after which nothing is added here.
+ */
+const reattachMode = hook(GenerationTask, {
+	beforeRequest: async ({ messages }, api, c) => {
+		const at = messages.findLastIndex((m) => m.role === "user" && textOf(m.content).startsWith(SUMMARY_PREFIX));
+		if (at < 0 || messages.slice(at + 1).some((m) => m.role === "user" && BLOCK.test(textOf(m.content)))) return undefined;
+		const doc = await api.snapshot(WorkingModeDoc, api.conversationId, c);
+		if (doc?.applied == null || (same(doc.applied, defaults) && !doc.aligned)) return undefined;
+		const block = await api.memo<string>("workbench.working-mode-reattach", renderBlock(doc.applied, doc.seq, doc.aligned, false), c);
+		const summary = messages[at]!;
+		return { messages: messages.map((m, i) => (i === at ? ({ ...summary, content: [...partsOf(summary.content), { type: "text", text: block }] } as typeof m) : m)) };
+	},
+});
 
 /** `/mode <axis> <value>`: change the selection for the next prompt; a usage message for invalid arguments. */
 export async function selectMode(conversation: Conversation, args: string): Promise<{ ok: boolean; message: string }> {
@@ -529,5 +554,6 @@ export function workbenchExtension(options: Omit<WorkbenchOptions, "resources">)
 		name: "workbench.chat-behaviors",
 		tools: [...alignmentTools, ...askTools(options.chatId, options.signal)],
 		tasks: [AnswerDelivery],
+		hooks: [reattachMode],
 	});
 }
