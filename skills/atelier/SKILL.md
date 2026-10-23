@@ -138,6 +138,9 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 - **The choice sits at its evidence.** Put the Decision on each version or stage where he sees it (under its
   screenshot), not in a row at the end; one Decision per grain where versions differ (e.g. per viewport).
   For a long section, keep the Decision in view (sticky top or bottom bar).
+- **Options name the result, not the action.** Each option says what he gets if he picks it. When a proposal
+  becomes a shown version, change its options to judge that version (`atl-decide="Keep this|Change"`,
+  `atl-note="Change"`); bumping only `atl-ver` re-asks the old question ("Fix|Leave") about the fix itself.
 - **One comparison per view.** Show Before once; put 1–2 versions side by side, not many stacked.
 - **Pictures carry claims.** Every compared claim has its screenshot. Screenshots open in a zoom modal with
   pinch-to-zoom, not a new tab. Portrait shots fit one row of cards; wide shots get at most two per row;
