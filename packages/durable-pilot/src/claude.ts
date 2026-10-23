@@ -64,14 +64,19 @@ export function claudePayload(aliases: Aliases): (payload: unknown) => unknown {
 		if (typeof out.system === "string") out.system = rewritePrompt(out.system);
 		else if (Array.isArray(out.system))
 			out.system = out.system.map((b) => (isObject(b) && b.type === "text" && typeof b.text === "string" ? { ...b, text: rewritePrompt(b.text) } : b));
-		if (Array.isArray(out.tools)) out.tools = out.tools.map((t) => (isObject(t) && typeof t.name === "string" && t.type === undefined ? { ...t, name: aliases.toWire(t.name) } : t));
+		// A custom tool definition (no server-tool `type`): the initial list and mid-conversation `tool_addition`s alike.
+		const definition = (t: unknown) => (isObject(t) && typeof t.name === "string" && t.type === undefined ? { ...t, name: aliases.toWire(t.name) } : t);
+		const block = (b: unknown) => {
+			if (!isObject(b)) return b;
+			if (b.type === "tool_use" && typeof b.name === "string") return { ...b, name: aliases.toWire(b.name) };
+			// Native tool changes (pi-ai's mid-conversation system messages) name the same tools: same aliases.
+			if (b.type === "tool_addition" && isObject(b.tool) && isObject(b.tool.definition)) return { ...b, tool: { ...b.tool, definition: definition(b.tool.definition) } };
+			if (b.type === "tool_removal" && isObject(b.tool) && typeof b.tool.name === "string") return { ...b, tool: { ...b.tool, name: aliases.toWire(b.tool.name) } };
+			return b;
+		};
+		if (Array.isArray(out.tools)) out.tools = out.tools.map(definition);
 		if (isObject(out.tool_choice) && typeof out.tool_choice.name === "string") out.tool_choice = { ...out.tool_choice, name: aliases.toWire(out.tool_choice.name) };
-		if (Array.isArray(out.messages))
-			out.messages = out.messages.map((m) =>
-				isObject(m) && Array.isArray(m.content)
-					? { ...m, content: m.content.map((b) => (isObject(b) && b.type === "tool_use" && typeof b.name === "string" ? { ...b, name: aliases.toWire(b.name) } : b)) }
-					: m,
-			);
+		if (Array.isArray(out.messages)) out.messages = out.messages.map((m) => (isObject(m) && Array.isArray(m.content) ? { ...m, content: m.content.map(block) } : m));
 		return out;
 	};
 }

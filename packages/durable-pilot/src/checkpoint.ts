@@ -77,7 +77,10 @@ export function checkpointExtension(harness: () => Harness) {
 					// so a restart never creates a second one.
 					const compaction = await tx.createTask(CompactionTask, { reason: "manual", instructions: compactionInstructions(task.input.request) }, { ownership: { kind: "conversation" } });
 					const live = await tx.doc(LiveDoc, runtime.conversationId);
-					(live.compactions ??= []).push({ taskId: compaction, reason: "manual", blocking: false, attempt: 1 });
+					// Pushed through the draft (as Durable's addCompactionStatus): `(x ??= []).push` would mutate an untracked array,
+					// leaving the status (and so isCompacting and Stop) empty while the summary runs.
+					live.compactions ??= [];
+					live.compactions.push({ taskId: compaction, reason: "manual", blocking: false, attempt: 1 });
 					const doc = await tx.doc(CheckpointDoc, runtime.conversationId);
 					if (doc.active !== null) doc.active.state = "compacting";
 					return { status: "running", checkpoint: { phase: "compacting", compaction } };

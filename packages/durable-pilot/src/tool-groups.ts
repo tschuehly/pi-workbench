@@ -37,8 +37,11 @@ export const ToolGroupsDoc = defineDoc<{ enabled: string[] }>({
 	checkpointWhen: () => false,
 });
 
-/** Group members among the extensions' tools: by name, or (monitor) by the extension that provides them. */
-export function groupMembers(extensions: readonly Extension[]): Record<Group, string[]> {
+/** Tools by provider: a Durable extension, or a Pi package's provenance (`PiPackages.sources`). */
+type Provider = { readonly name: string; readonly tools?: readonly { readonly name: string }[] };
+
+/** Group members among the providers' tools: by name, or (monitor) by the extension or package that provides them. */
+export function groupMembers(extensions: readonly Provider[]): Record<Group, string[]> {
 	const members = Object.fromEntries(GROUP_IDS.map((id) => [id, [] as string[]])) as Record<Group, string[]>;
 	for (const extension of extensions)
 		for (const tool of extension.tools ?? [])
@@ -52,7 +55,7 @@ const added = (modelTools: unknown): string[] => (Array.isArray(modelTools) ? (m
  * The tool-groups extension for the given extensions' tools: deferral of every group tool, `tools_enable`, and the
  * nested-call guard.
  */
-export function toolGroupsExtension(extensions: readonly Extension[]) {
+export function toolGroupsExtension(extensions: readonly Provider[]) {
 	const members = groupMembers(extensions);
 	const all = new Map(GROUP_IDS.flatMap((id) => members[id].map((name) => [name, id] as const)));
 	const enable = defineTool({

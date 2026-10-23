@@ -62,7 +62,7 @@ type PiTool = {
 	execute(callId: string, params: unknown, signal: AbortSignal | undefined, onUpdate: (partial: { details?: unknown }) => void, ctx: unknown): Promise<PiToolResult>;
 };
 type PiCommand = { name: string; description?: string; handler(args: string, ctx: unknown): Promise<void> | void };
-type PiExtension = { path: string; handlers: Map<string, ((event: unknown, ctx: unknown) => unknown)[]>; tools: Map<string, { definition: PiTool }>; commands: Map<string, PiCommand> };
+type PiExtension = { path: string; sourceInfo?: { source?: string }; handlers: Map<string, ((event: unknown, ctx: unknown) => unknown)[]>; tools: Map<string, { definition: PiTool }>; commands: Map<string, PiCommand> };
 type PiMessage = { customType: string; content: string | Content; display?: boolean; details?: unknown };
 type Branch = { type: "custom"; id: string; parentId: string | null; timestamp: string; customType: string; data: unknown }[];
 
@@ -273,6 +273,14 @@ export class PiPackages {
 			},
 		};
 		return redactingTool(tool);
+	}
+
+	/**
+	 * Each package extension's tool names under its provenance (Pi's source and the loaded path), so tool groups match
+	 * package tools by package as legacy `inGroup` does (monitor: pi-process-monitor).
+	 */
+	sources(): { name: string; tools: { name: string }[] }[] {
+		return this.#extensions.map((extension) => ({ name: `${extension.sourceInfo?.source ?? ""} ${extension.path}`, tools: [...extension.tools.keys()].map((name) => ({ name })) }));
 	}
 
 	/** The Durable extension with every bound package tool. */

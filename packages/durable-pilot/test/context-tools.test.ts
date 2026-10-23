@@ -118,6 +118,44 @@ test("automatic compaction: above Pi's threshold the next request waits for one 
 	await host.close();
 });
 
+test("automatic compaction re-sends the Working Mode block it summarized away on the first request after the summary", async () => {
+	const { store, cwd } = family("compact-auto-mode");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("configure", { resources: {}, compaction: { modelOverrides: { "faux/faux-1": { reserveTokens: 128_000 - 400, keepRecentTokens: 1 } } } });
+	await host.call("mode", { args: "attention focused" });
+	await host.call("prompt", { operationId: "op-1", text: "gen" });
+	await host.idle(1);
+	await host.call("prompt", { operationId: "op-2", text: "gen" });
+	await host.idle(2);
+	await host.call("prompt", { operationId: "op-3", text: "third" });
+	await host.until((e) => e.type === "message.end" && textOf((e.message as Message).content) === "ok: third", "the third answer");
+	const lines = logged(store);
+	const summary = lines.findIndex((l) => l.label === "summarize");
+	assert.ok(summary > 0, "the threshold compacted");
+	assert.deepEqual(lines[0]?.modes, [1], "the first prompt delivered the block");
+	assert.deepEqual(lines[summary + 1]?.modes, [1], "the first request after the summary carries the block once");
+	assert.ok(lines.slice(summary + 1).every((l) => l.label === "summarize" || l.modes?.length === 1), "every later request sees exactly one block");
+	await host.call("prompt", { operationId: "op-4", text: "fourth" });
+	await host.until((e) => e.type === "message.end" && textOf((e.message as Message).content) === "ok: fourth", "the fourth answer");
+	assert.equal(logged(store).find((l) => l.label === "fourth")?.modes?.length, 1, "a later prompt carries exactly one block");
+	await host.close();
+});
+
+test("automatic compaction without a Working Mode selection adds no block", async () => {
+	const { store, cwd } = family("compact-auto-nomode");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("configure", { resources: {}, compaction: { modelOverrides: { "faux/faux-1": { reserveTokens: 128_000 - 400, keepRecentTokens: 1 } } } });
+	for (const [n, text] of ["gen", "gen", "third"].entries()) {
+		await host.call("prompt", { operationId: `op-${n}`, text });
+		await host.idle(n + 1);
+	}
+	assert.ok(logged(store).some((l) => l.label === "summarize"));
+	assert.deepEqual(logged(store).flatMap((l) => l.modes ?? []), []);
+	await host.close();
+});
+
 test("crash row compaction: a kill while summarizing restores paused; sending reruns the summary once and places one summary", async () => {
 	const { store, cwd } = family("compact-kill");
 	let host = new ChatHost(store, cwd, { tps: 40 });
@@ -256,6 +294,9 @@ test("compact_and_continue: Esc during the compaction cancels it visibly and sta
 	await twoTurns(host);
 	await host.call("prompt", { operationId: "op-cc", text: checkpointCall("slow") });
 	await waitFor(() => logged(store).some((l) => l.label === "summarize"), "the summary request");
+	// PI WEB enables Stop from this status: the summarizing checkpoint must read as running work.
+	const during = await host.call<Status>("status");
+	assert.equal(during.isCompacting, true, "the checkpoint's summary shows as compacting");
 	await host.call("abort");
 	const message = await host.until(isCheckpoint, "the cancellation record");
 	assert.equal((message.message as Message).details?.status, "cancelled");
@@ -399,6 +440,35 @@ test("the host reports the capabilities this group adds, so PI WEB can enable th
 	const host = new ChatHost(store, cwd);
 	const ready = (await host.ready) as { capabilities?: string[] };
 	for (const name of ["compact", "compact-and-continue", "tool-groups"]) assert.ok(ready.capabilities?.includes(name), name);
+	await host.close();
+});
+
+// ─── edit preview ────────────────────────────────────────────────────────────
+
+test("edit shows its old/new preview (PI WEB's details.preview) before the result, as the legacy edit tool does", async () => {
+	const { store, cwd } = family("edit-preview");
+	mkdirSync(cwd, { recursive: true });
+	writeFileSync(join(cwd, "preview.txt"), "before-preview\n");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const call = (edits: object) => `call:edit ${JSON.stringify({ path: "preview.txt", edits })}`;
+	await host.call("prompt", { operationId: "op-1", text: call([{ oldText: "before-preview", newText: "after-preview" }]) });
+	const end = await host.until((e) => e.type === "tool.end" && e.toolName === "edit", "the edit result");
+	const updates = host.events.slice(0, host.events.indexOf(end)).filter((e) => e.type === "tool.update" && e.toolCallId === end.toolCallId);
+	const preview = (updates.at(-1)?.details as { preview?: { diff?: string } } | undefined)?.preview;
+	assert.match(String(preview?.diff), /-1 before-preview\n\+1 after-preview/, "the preview names old and new text before the result");
+	assert.equal(end.isError, false);
+	assert.equal(readFileSync(join(cwd, "preview.txt"), "utf8"), "after-preview\n", "applied once");
+	assert.equal(typeof (end.details as { diff?: unknown }).diff, "string", "the result keeps the edit's own details");
+	await host.idle(1);
+
+	// A failing edit previews its error and changes nothing.
+	await host.call("prompt", { operationId: "op-2", text: call([{ oldText: "absent", newText: "x" }]) });
+	const failed = await host.until((e) => e.type === "tool.end" && e.toolName === "edit" && e !== end, "the failed edit");
+	const failedPreview = host.events.slice(0, host.events.indexOf(failed)).filter((e) => e.type === "tool.update" && e.toolCallId === failed.toolCallId).at(-1)?.details as { preview?: { error?: string } } | undefined;
+	assert.match(String(failedPreview?.preview?.error), /Could not find/);
+	assert.equal(failed.isError, true);
+	assert.equal(readFileSync(join(cwd, "preview.txt"), "utf8"), "after-preview\n");
 	await host.close();
 });
 

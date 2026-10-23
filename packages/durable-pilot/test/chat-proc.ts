@@ -128,7 +128,7 @@ export function family(label: string): { store: string; cwd: string } {
 	return { store: join(dir, "family"), cwd };
 }
 
-export type Logged = { label: string; workingMode?: number; focus?: string; tools?: string[]; sections?: string[]; reasoning?: string; images?: number; ran?: string[]; messages?: number; reminder?: string };
+export type Logged = { label: string; workingMode?: number; modes?: number[]; focus?: string; tools?: string[]; sections?: string[]; reasoning?: string; images?: number; ran?: string[]; messages?: number; reminder?: string };
 export const logged = (store: string) => readLog<Logged>(join(store, "requests.log"));
 
 export function integrity(store: string): string {

@@ -228,6 +228,14 @@ test("P133 P135: a tail watcher pings the Chat, survives a kill and resumes; pin
 	writeFileSync(log, "");
 	let host = new ChatHost(f);
 	await host.ready;
+	// P102: the monitor tools are a tool group, hidden until tools_enable as in legacy Chats.
+	const early = await host.tool("monitor_status", {}, "op-early");
+	assert.equal(early.isError, true, "a hidden monitor tool is not offered before tools_enable");
+	const offered = readLog<{ label: string; tools?: string[] }>(join(f.store, "requests.log")).find((l) => l.label.startsWith("call:monitor_status"))?.tools ?? [];
+	assert.deepEqual(offered.filter((name) => name.startsWith("monitor")), [], `no monitor tool in ${offered.join(",")}`);
+	assert.ok(offered.includes("tools_enable"));
+	const enabled = await host.tool("tools_enable", { group: "monitor" }, "op-enable");
+	assert.match(String(enabled.text), /^Enabled: monitor/);
 	const created = await host.tool("monitor", { source: { type: "tail", path: log }, options: { notifyOn: ["DONE"], coalesceSeconds: 0, label: "job" } }, "op-watch");
 	assert.equal(created.isError, false, String(created.text));
 	assert.match(String(created.text), /CREATED: watcher \S+ \[file\]/);
