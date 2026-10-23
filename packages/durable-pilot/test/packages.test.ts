@@ -374,3 +374,25 @@ test("every tool a Durable Chat registers is behind the redacting wrapper: deleg
 		Object.assign(process.env, saved);
 	}
 });
+
+test("P028: a package's own warnings and errors reach PI WEB as retained notifications (redacted); its info notices do not", async () => {
+	const f = family("notify");
+	// A local stub in a bound package slot, notifying outside any command, as the legacy notification inbox retains.
+	const stub = join(f.store, "..", "notify-stub");
+	mkdirSync(stub, { recursive: true });
+	writeFileSync(join(stub, "package.json"), JSON.stringify({ name: "pi-process-monitor", version: "0.0.0", type: "module", pi: { extensions: ["./index.mjs"] } }));
+	writeFileSync(join(stub, "index.mjs"), `export default function (pi) {
+  pi.on("session_start", (_event, ctx) => { ctx.ui.notify("watch A", "warning"); ctx.ui.notify("quiet", "info"); ctx.ui.notify("leak ${SECRET}", "error"); });
+}`);
+	writeFileSync(join(f.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ packages: [stub] }));
+	const host = new ChatHost(f);
+	await host.ready;
+	await host.until((e) => e.type === "durable.notification" && String(e.message).startsWith("leak"), "the error notification");
+	const notices = host.events.filter((e) => e.type === "durable.notification").map(({ severity, message }) => ({ severity, message }));
+	assert.equal(notices.length, 2, JSON.stringify(notices));
+	assert.deepEqual(notices[0], { severity: "warning", message: "watch A" });
+	assert.equal(notices[1]?.severity, "error");
+	assert.ok(!String(notices[1]?.message).includes(SECRET), "redacted before it leaves the host");
+	assert.ok(!host.events.some((e) => JSON.stringify(e).includes("quiet")), "info notices outside commands stay silent, as in a legacy Chat");
+	await host.close();
+});

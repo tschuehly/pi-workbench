@@ -64,6 +64,7 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
  *   Worker's settle reminder → `subagent_collect`; `long:<n>` → an answer of n characters; a summary focus with
  *   `gate:<file>` waits until that file exists;
  * - a request to a routed (non-faux) model is logged with its `model`;
+ * - PI WEB's Chat title request → `Scripted title`, not logged;
  * - anything else → `ok: <text>`.
  * `hold(label)` lets a process stop a request at a barrier until it is cancelled.
  */
@@ -93,6 +94,8 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			if (focus?.includes("fail") === true) return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 summarizer rejected (scripted)" });
 			return fauxAssistantMessage([fauxText(`Summary of ${count} earlier messages.${focus?.includes("slow") === true ? ` ${LONG}` : ""}`)]);
 		}
+		// PI WEB's Chat title request (its sessionNameGenerator prompt): not a turn, so not counted.
+		if (system.includes("Generate a concise title for a coding-agent chat session")) return fauxAssistantMessage([fauxText("Scripted title")]);
 		const sections = [...system.matchAll(/<(addendum|project_context|skills)>/g)].map((match) => match[1]);
 		// What the composer adds to a request: images in context, the thinking level, `!` commands the model sees.
 		const images = messages.flatMap((m) => (m.role === "user" && Array.isArray(m.content) ? m.content.filter((part) => part.type === "image") : [])).length;

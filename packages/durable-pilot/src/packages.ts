@@ -52,8 +52,14 @@ export class DialogUnavailable extends Error {
 	}
 }
 
-/** Host events the binding emits: PI WEB's `command.output` and `session.diagnostic`. */
-export type PackageEvent = { type: "command.output"; level: "info" | "error"; message: string } | { type: "session.diagnostic"; message: string };
+/**
+ * Host events the binding emits: PI WEB's `command.output` and `session.diagnostic`, and `durable.notification`, which
+ * PI WEB keeps in the Chat's notification inbox.
+ */
+export type PackageEvent =
+	| { type: "command.output"; level: "info" | "error"; message: string }
+	| { type: "session.diagnostic"; message: string }
+	| { type: "durable.notification"; severity: "warning" | "error"; message: string };
 
 // The structural part of Pi's extension types this binding uses (pi-coding-agent `core/extensions/types.ts`).
 type Content = { type: string; text?: string; [key: string]: unknown }[];
@@ -272,9 +278,9 @@ export class PiPackages {
 	#ui(command: boolean) {
 		const notify = (message: string, type?: "info" | "warning" | "error") => {
 			const clean = redact(String(message));
-			// As in a legacy Chat: command notices are command output; others surface only as warnings and errors.
+			// As in a legacy Chat: command notices are command output; others are retained notifications, warnings and errors only.
 			if (command) this.#options.emit({ type: "command.output", level: type === "error" ? "error" : "info", message: clean });
-			else if (type === "warning" || type === "error") this.#options.emit({ type: "session.diagnostic", message: clean });
+			else if (type === "warning" || type === "error") this.#options.emit({ type: "durable.notification", severity: type, message: clean });
 		};
 		return new Proxy({} as Record<string, unknown>, {
 			get: (_target, property) => {

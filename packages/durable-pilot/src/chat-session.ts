@@ -359,7 +359,8 @@ export class ChatSession {
 		if (this.#resumed) for (const slot of snapshot.tools) if (slot.name === "bash" && slot.status === "running") this.#shells.set(slot.callId, new Date().toISOString());
 		this.#emitted = [];
 		const partial = snapshot.generation?.message;
-		if (partial !== undefined) this.#startPartial(partial);
+		// A paused restore's partial was cut off by the host's death: shown as aborted, as resuming commits it.
+		if (partial !== undefined) this.#startPartial(this.#resumed ? partial : { ...partial, stopReason: "aborted", errorMessage: INTERRUPTED });
 	}
 
 	async #history(newest: number): Promise<EntryRecord[]> {
@@ -540,7 +541,9 @@ export class ChatSession {
 		const contextWindow = agent.model === undefined ? undefined : this.#host.models.getModel(agent.model.provider, agent.model.modelId)?.contextWindow;
 		const contextTokens = this.#contextTokens();
 		const live = await harness.snapshot(LiveDoc, root.id, context);
-		const warnings = paused ? [{ severity: "info" as const, message: "Restored paused: unfinished work waits until you send a message." }] : [];
+		const warnings = paused
+			? [{ severity: "info" as const, message: `Restored paused: unfinished work waits until you send a message.${this.#partial === undefined ? "" : ` ${INTERRUPTED}`}` }]
+			: [];
 		const [mode, questions, reconcile, delegates] = await Promise.all([workingModeSnapshot(harness, root), questionsState(harness, root), harness.snapshot(Reconcile, context), roster(harness, root.id, context)]);
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
@@ -756,6 +759,27 @@ export class ChatSession {
 		const thinkingLevel = await applyModel(this.#host, model);
 		this.#record("model.select", { provider, model: modelId, effort: thinkingLevel ?? null, source: "set" });
 		await this.#publishStatus();
+	}
+
+	/**
+	 * One request outside the conversation (PI WEB's Chat title): the Chat's model, or the one named, through the same
+	 * providers, logins and redaction as its turns. Nothing is committed or scheduled; returns the answer's text.
+	 */
+	async complete(request: { systemPrompt: string; prompt: string; maxTokens?: number; reasoning?: ModelThinkingLevel; timeoutMs?: number; model?: { provider: string; modelId: string } }): Promise<string> {
+		const ref = request.model ?? (await this.#host.root.agent(context)).model;
+		const model = ref === undefined ? undefined : this.#host.models.getModel(ref.provider, ref.modelId);
+		if (model === undefined) throw new Error(`Unknown model ${ref === undefined ? "(none)" : `${ref.provider}/${ref.modelId}`}`);
+		const answer = await this.#host.models.completeSimple(
+			model,
+			{ systemPrompt: request.systemPrompt, messages: [{ role: "user", content: request.prompt, timestamp: Date.now() }] },
+			{
+				...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+				...(request.reasoning === undefined || request.reasoning === "off" ? {} : { reasoning: request.reasoning }),
+				signal: AbortSignal.timeout(request.timeoutMs ?? 10_000),
+			},
+		);
+		if (answer.stopReason === "error" || answer.stopReason === "aborted") throw new Error(answer.errorMessage ?? `The model request ${answer.stopReason === "error" ? "failed" : "was aborted"}`);
+		return textOfContent(answer.content);
 	}
 
 	/** `/fast [on|off|toggle]` (pi-openai-fast-mode), one of the Chat's commands. */
@@ -1071,5 +1095,7 @@ export class ChatSession {
 		return { messageCount: this.messages().length, firstMessage: textOfContent(first?.content) };
 	}
 }
+
+const INTERRUPTED = "The answer in progress was interrupted when the Chat's host stopped.";
 
 const STATUS_EVENTS = new Set<AgentEvent["type"]>(["run_start", "run_end", "inbox_update", "usage_changed", "agent_changed", "snapshot", "message_end", "tool_execution_start", "tool_execution_end", "compaction_start", "compaction_end"]);
