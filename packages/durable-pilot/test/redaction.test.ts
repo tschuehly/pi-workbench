@@ -9,8 +9,9 @@ import { fauxAssistantMessage, fauxText, fauxToolCall, Type } from "@earendil-wo
 import { defineExtension, defineTool, hook, LiveDoc, type ToolRegistration, ToolTask } from "@earendil-works/pi-durable";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { textOfMessage } from "../src/faux.ts";
+import { entriesOf } from "../src/pilot.ts";
 import { admit, context, type Host, openHost } from "../src/host.ts";
-import { redact, redactingTool, type Sanitize, wrapProvider } from "../src/redact.ts";
+import { acrossBlocks, redact, redactingTool, type Sanitize, wrapProvider } from "../src/redact.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 const BODY = "Q7xVb2mNp4Lk9Rt3Wy6Hs8Jd1Fg5Zc0Ae";
@@ -127,6 +128,30 @@ describe("pre-persistence redaction", () => {
 		assert.deepEqual(midStream, [], "store clean after a close mid-stream");
 		assert.equal(settled.status, "done");
 		assert.deepEqual(final, [], "store clean after completion");
+	});
+
+	it("a known secret split across two completed assistant text blocks leaves neither fragment in partials, the answer or the store", async () => {
+		const head = ENV_SECRET.slice(0, 18);
+		const rest = ENV_SECRET.slice(18);
+		// Controls: each block alone is no recognisable secret; the complete value is masked whole.
+		assert.equal(redact(`split secret ${head}`), `split secret ${head}`);
+		assert.equal(redact(`${rest} complete.`), `${rest} complete.`);
+		assert.equal(redact(`split secret ${head}${rest} complete.`), "split secret [REDACTED:env:PILOT_FAKE_API_TOKEN] complete.");
+		// The same across three blocks, and a private key whose body continues into the next block.
+		assert.deepEqual(acrossBlocks([`a ${ENV_SECRET.slice(0, 6)}`, ENV_SECRET.slice(6, 12), `${ENV_SECRET.slice(12)} b`], redact), ["a [REDACTED:env:PILOT_FAKE_API_TOKEN]", "", " b"]);
+		assert.deepEqual(acrossBlocks(["key -----BEGIN RSA PRIVATE KEY-----\nMIIEsynthetic", "Body\n-----END RSA PRIVATE KEY----- after"], redact), ["key -----BEGIN RSA PRIVATE KEY-----\nMIIEsynthetic", " after"]);
+		const dir = scratch("redact-blocks");
+		const h = await host(dir);
+		h.faux.setResponses([fauxAssistantMessage([fauxText(`split secret ${head}`), fauxText(`${rest} complete.`)])]);
+		const { seen } = await watchPartials(h);
+		await admit(h.root, { operationId: "op-1", text: "split it" });
+		const record = await h.root.commit((tx) => tx.submissionByRequest(h.root.id, "op-1"), context);
+		assert.equal((await (await h.harness.submission(record!.id, context))!.wait(context)).status, "done");
+		const answer = (await entriesOf(h.harness, h.root.id)).flatMap((entry) => (entry.model?.[0] as { role?: string } | undefined)?.role === "assistant" ? [entry.model![0] as never] : []);
+		await h.close();
+		assert.equal(textOfMessage(answer[0]), "split secret [REDACTED:env:PILOT_FAKE_API_TOKEN] complete.", "the answer keeps its text around one mask");
+		assert.ok(!seen.some((text) => text.includes(head) || text.includes(rest)), `no committed partial holds a fragment: ${seen.join(" | ")}`);
+		assert.deepEqual(leaks(dir, [head, rest]), [], "store and work directory hold neither fragment");
 	});
 
 	it("tool output split across chunks, details, diagnostics and a real bash process are sanitized before commit", async () => {

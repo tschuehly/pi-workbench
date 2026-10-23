@@ -48,13 +48,56 @@ export function sanitizeDeep<T>(value: T, sanitize: Sanitize): T {
 	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeDeep(item, sanitize)])) as T;
 }
 
+const OPEN_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/;
+const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
+
+/**
+ * Text blocks as their reader sees them, one text, with secrets masked across block boundaries; each block is still
+ * sanitized on its own afterwards. A token running across a boundary is masked in the block where it starts and removed
+ * from the blocks it continues into; a private-key block opened in one block is removed from the next through its END.
+ */
+export function acrossBlocks(texts: readonly string[], sanitize: Sanitize): string[] {
+	const out = [...texts];
+	for (let i = 0; i < out.length - 1; i++) {
+		if (OPEN_KEY.test(out[i]!)) {
+			// Masked to its end by `sealed` in this block; its body continues in the next ones.
+			for (let j = i + 1; j < out.length; j++) {
+				const end = KEY_END.exec(out[j]!);
+				out[j] = end === null ? "" : out[j]!.slice(end.index + end[0].length);
+				if (end !== null) break;
+			}
+			continue;
+		}
+		const tail = /\S+$/.exec(out[i]!)?.[0];
+		if (tail === undefined) continue;
+		let token = tail;
+		const heads: number[] = [];
+		for (let j = i + 1; j < out.length; j++) {
+			const head = /^\S*/.exec(out[j]!)![0];
+			token += head;
+			heads.push(head.length);
+			if (head.length < out[j]!.length) break;
+		}
+		if (heads.every((length) => length === 0)) continue;
+		const clean = sanitize(token);
+		if (clean === token) continue;
+		out[i] = out[i]!.slice(0, out[i]!.length - tail.length) + clean;
+		heads.forEach((length, k) => (out[i + 1 + k] = out[i + 1 + k]!.slice(length)));
+	}
+	return out;
+}
+
 /** Sanitize the text blocks of an assistant message; `partial` withholds what may still become a secret. */
 function sanitizeMessage(message: AssistantMessage, sanitize: Sanitize, partial: boolean, rename?: (name: string) => string): AssistantMessage {
+	// A secret may run across text blocks the reader sees as one text: mask it there before each block is sanitized.
+	const texts = acrossBlocks(message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])), sanitize);
+	let n = 0;
+	const clean = (text: string) => sanitize(partial ? completePrefix(text) : text);
 	return {
 		...message,
 		content: message.content.map((block) =>
 			block.type === "text"
-				? { ...block, text: sanitize(partial ? completePrefix(block.text) : block.text) }
+				? { ...block, text: clean(texts[n++]!) }
 				: block.type === "toolCall" && rename !== undefined
 					? { ...block, name: rename(block.name) }
 					: block,
