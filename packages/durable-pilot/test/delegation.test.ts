@@ -626,15 +626,17 @@ test("kill row cancellation epoch: killed after the cancellation committed but b
 	await host.kill();
 	host = open(store, cwd);
 	await host.ready;
-	// Stop ends the interrupted cancel call (it never reruns) and lets the reporter run on its own.
+	// Stop ends the interrupted cancel call (it never reruns) without resuming the paused reporter (paused restore: only
+	// the owner's input resumes); the next prompt lets it run and finishes the cancellation.
+	const requests = logged(store).length;
 	await host.call("abort");
 	await waitFor(() => false, "the reporter's chance to run", 2_500).catch(() => undefined);
-	await quiet(host, 90_000);
-	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-completion").length, 0, "the late reporter woke nobody");
+	assert.equal(logged(store).length, requests, "Stop on a paused restore sends nothing");
 	const mark = host.events.length;
 	await prompt(host, "resume");
 	await since(host, mark, (e) => e.type === "status.update" && (e.status as Status).extensionStatuses?.["pi-workbench:activity"] === undefined, "the cancellation to finish");
-	await quiet(host);
+	await quiet(host, 90_000);
+	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-completion").length, 0, "the late reporter woke nobody");
 	await prompt(host, call("subagent_status", { executionId: id }));
 	assert.match(await toolResult(host, "subagent_status"), /\[cancelled, collected\]/, "resuming finished the cancellation");
 	await quiet(host);

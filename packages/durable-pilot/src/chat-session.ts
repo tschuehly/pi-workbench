@@ -645,6 +645,11 @@ export class ChatSession {
 	async #resume(): Promise<void> {
 		if (this.#resumed) return;
 		await this.#host.resume();
+		// A Stop while paused (here or before a restart) only marked the lead's tasks: their abort lands first, as an aborted
+		// run places nothing, so the input that resumes would otherwise wait behind it for good.
+		const { harness, root } = this.#host;
+		for (const { record } of (await harness.inspect(context)).tasks)
+			if (stopReaches(record, root.id) && record.abortRequested && record.abortReason === undefined) await harness.waitForTask(record.id, context);
 		this.#resumed = true;
 		// Cancellations a restart interrupted stay cancelled: finish them now that work runs again.
 		void finishCancellations(this.#host.harness, this.#host.root.id).then(() => this.#publishStatus(), () => {});
@@ -882,8 +887,7 @@ export class ChatSession {
 		if (!this.#paused()) return this.#host.root.abort(context);
 		await this.clearQueue();
 		const { harness, root } = this.#host;
-		for (const { record } of (await harness.inspect(context)).tasks)
-			if (record.conversationId === root.id && record.owner === undefined && !record.background) await harness.abortTask(record.id, context);
+		for (const { record } of (await harness.inspect(context)).tasks) if (stopReaches(record, root.id)) await harness.abortTask(record.id, context);
 	}
 
 	// ─── Queue ───────────────────────────────────────────────────────────────
@@ -1134,5 +1138,10 @@ export class ChatSession {
 }
 
 const INTERRUPTED = "The answer in progress was interrupted when the Chat's host stopped.";
+
+/** A task Stop marks on a paused restore: the lead's own foreground work; `Conversation.abort` cascades from it. */
+function stopReaches(task: { conversationId: unknown; owner?: unknown; background: boolean }, lead: unknown): boolean {
+	return task.conversationId === lead && task.owner === undefined && !task.background;
+}
 
 const STATUS_EVENTS = new Set<AgentEvent["type"]>(["run_start", "run_end", "inbox_update", "usage_changed", "agent_changed", "snapshot", "message_end", "tool_execution_start", "tool_execution_end", "compaction_start", "compaction_end"]);
