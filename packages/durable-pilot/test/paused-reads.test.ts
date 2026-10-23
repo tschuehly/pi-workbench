@@ -152,10 +152,15 @@ test("reads never schedule: a paused restore with every component's saved state 
 	await sleep(1_500);
 	await assertPaused(third, f, before, "reopen after a paused close");
 	await third.call("prompt", { operationId: "resume", text: "next" });
-	await third.until((e) => e.type === "message.end" && textOf((e.message as Message).content) === "ok: next", "the owner's input answered");
+	// Placed behind the resumed generation and the held deliveries; it may share its run with a child's completion wake.
+	await third.until((e) => e.type === "message.end" && (e.message as Message).role === "user" && textOf((e.message as Message).content) === "next", "the owner's input placed");
 	await waitFor(() => events(f.page).some((e) => e.type === "received"), "the Comment delivered after resume");
 	await third.until((e) => e.type === "message.end" && (e.message as Message).customType === "monitor" && textOf((e.message as Message).content).includes("step two DONE"), "the watcher notification held until resume");
+	// N4: the notification the watcher consumed while paused, before the paused close, survived the close.
+	await waitFor(() => third.events.some((e) => e.type === "message.end" && (e.message as Message).customType === "monitor" && textOf((e.message as Message).content).includes("step one DONE")), "the notification held across the paused close");
 	const messages = (await third.call<{ messages: Message[] }>("transcript")).messages;
+	const monitor = (step: string) => messages.filter((m) => m.customType === "monitor" && textOf(m.content).includes(step)).length;
+	assert.deepEqual([monitor("step one DONE"), monitor("step two DONE")], [1, 1], "each held watcher notification delivered once");
 	await waitFor(() => logged(f.store).some((l) => l.label.startsWith("Background bash")), "the bash completion after resume");
 	assert.equal(messages.filter((m) => m.customType === "atelier:immediate").length, 1, "the Comment once");
 	assert.equal(logged(f.store).filter((l) => l.label === "gen" && (l as { model?: string }).model === undefined).length, 2, "the lead's generation reissued once, only after resume");

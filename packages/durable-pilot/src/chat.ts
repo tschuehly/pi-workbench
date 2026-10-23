@@ -243,6 +243,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	await packages?.start({
 		// The active branch at each use: history navigation may select another.
 		get root() { return host.root; },
+		reader: host.harness,
 		registry: host.registry,
 		models: host.models,
 		// The Chat's model as it is (api, provider, baseUrl: pi-web-access picks current-model hosted search by them). Durable
