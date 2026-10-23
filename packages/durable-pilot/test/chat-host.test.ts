@@ -324,7 +324,17 @@ test("P031 complete: PI WEB's Chat title request goes to the Chat's model outsid
 	assert.equal(transcript.status.isStreaming, false);
 	assert.deepEqual(requests(store), [], "not a conversation request");
 	await assert.rejects(host.call("complete", { systemPrompt: "x", prompt: "y", model: { provider: "nobody", modelId: "none" } }), /Unknown model nobody\/none/);
+	// A failed title request was still a provider request: it is accounted too.
+	await assert.rejects(host.call("complete", { systemPrompt: "Generate a concise title for a coding-agent chat session. Return only the title.", prompt: "fail", timeoutMs: 10_000 }), /title rejected/);
 	await host.close();
+	// N6: each paid request outside the conversation leaves one usage record, marked auxiliary, under the Chat's session;
+	// no conversation usage, so a report counts it once.
+	const usage = readdirSync(TELEMETRY)
+		.flatMap((file) => readLog<{ type: string; sessionId: string; usageKey?: string; kind?: string; purpose?: string; provider?: string; stopReason?: string; usage?: { totalTokens: number } }>(join(TELEMETRY, file)))
+		.filter((e) => e.sessionId === store && e.type === "usage");
+	assert.deepEqual(usage.map((e) => [e.kind, e.purpose, e.provider, e.stopReason]), [["auxiliary", "title", "faux", "stop"], ["auxiliary", "title", "faux", "error"]]);
+	assert.ok(usage.every((e) => e.usageKey?.startsWith(`${store}:auxiliary:`)) && new Set(usage.map((e) => e.usageKey)).size === 2, "each request its own usage key");
+	assert.ok((usage[0]?.usage?.totalTokens ?? 0) > 0, "the provider's usage is recorded");
 });
 
 test("Working Mode: a selection survives a restart, rides with the next prompt once, /mode send delivers it now, alignment is recorded", async () => {

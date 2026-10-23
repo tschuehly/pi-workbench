@@ -795,6 +795,11 @@ export class ChatSession {
 				signal: AbortSignal.timeout(request.timeoutMs ?? 10_000),
 			},
 		);
+		// A provider request no entry records, failed or not: its own usage record, marked auxiliary, counted once.
+		this.#record("usage", {
+			usageKey: `${this.#chatId}:auxiliary:${crypto.randomUUID()}`, usage: answer.usage, kind: "auxiliary", purpose: "title",
+			provider: answer.provider ?? null, model: answer.model ?? null, stopReason: answer.stopReason ?? null, entryId: null,
+		});
 		if (answer.stopReason === "error" || answer.stopReason === "aborted") throw new Error(answer.errorMessage ?? `The model request ${answer.stopReason === "error" ? "failed" : "was aborted"}`);
 		return textOfContent(answer.content);
 	}
