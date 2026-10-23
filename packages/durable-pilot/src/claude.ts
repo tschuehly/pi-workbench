@@ -3,7 +3,7 @@
 // re-expressed at pi-ai's `onPayload` hook — flat custom tool names go out as mcp__ aliases and come back canonical
 // before Durable executes or stores them. Credentials live in Pi's auth.json and are refreshed under Pi's own file lock,
 // so this host, other hosts and the installed Pi refresh an expired login exactly once.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -85,11 +85,15 @@ export function claudePayload(aliases: Aliases): (payload: unknown) => unknown {
  * Pi's auth.json through the installed Pi's own lock protocol (pi-coding-agent 1.0.4 `FileAuthStorageBackend`
  * .withLockAsync, ported exactly): proper-lockfile 4.1.2 on the file itself (`realpath: false`, `stale: 30s`,
  * `retries: 0`, own jittered backoff until the stale deadline), read, change and write back in place under the lock,
- * mode 0600 on creation. pi-ai re-checks expiry inside `modify`, so racing hosts and Pi refresh only once. Tokens stay
- * in auth.json; nothing is cached or copied elsewhere.
+ * mode 0600 on creation. pi-ai re-checks expiry inside `modify`, so racing hosts and Pi refresh only once. Reads take
+ * the lock only when auth.json changed since the last locked read, as Pi 1.4's `AuthStorage.readLatestData` does: a host
+ * killed while holding the lock leaves it for 30 s, and a read that waited it out would stall the next host's requests.
+ * Tokens stay in auth.json; nothing is copied elsewhere.
  */
 export class PiAuthStore implements CredentialStore {
 	readonly #path: string;
+	/** The last locked read and auth.json's revision then. */
+	#snapshot: { revision: string; all: Record<string, Credential> } | undefined;
 	constructor(path = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "auth.json")) {
 		this.#path = path;
 	}
@@ -108,21 +112,30 @@ export class PiAuthStore implements CredentialStore {
 		try {
 			check();
 			const text = readFileSync(this.#path, "utf8");
-			const { result, next } = await fn(text === "" ? {} : (JSON.parse(text.replace(/^\uFEFF/, "")) as Record<string, Credential>));
+			const current = text === "" ? {} : (JSON.parse(text.replace(/^\uFEFF/, "")) as Record<string, Credential>);
+			const { result, next } = await fn(structuredClone(current));
 			check();
 			if (next !== undefined) writeFileSync(this.#path, JSON.stringify(next, null, 2), WRITE);
 			check();
+			this.#snapshot = { revision: fileRevision(this.#path), all: structuredClone(next ?? current) };
 			return result;
 		} finally {
 			await release().catch(() => {}); // as Pi: ignore unlock errors of a compromised lock
 		}
 	}
 
-	read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
-		return this.#withLock(async (all) => ({ result: all[providerId] }), options);
+	/** Every stored login: the last locked read while auth.json is unchanged, else a locked read. */
+	async #latest(options?: AuthOperationOptions): Promise<Record<string, Credential>> {
+		options?.signal?.throwIfAborted();
+		const snapshot = this.#snapshot;
+		return structuredClone(snapshot !== undefined && snapshot.revision === fileRevision(this.#path) ? snapshot.all : await this.#withLock(async (all) => ({ result: all }), options));
 	}
-	list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
-		return this.#withLock(async (all) => ({ result: Object.entries(all).map(([providerId, c]) => ({ providerId, type: c.type })) }), options);
+
+	async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
+		return (await this.#latest(options))[providerId];
+	}
+	async list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
+		return Object.entries(await this.#latest(options)).map(([providerId, c]) => ({ providerId, type: c.type }));
 	}
 	modify(providerId: string, fn: (current: Credential | undefined) => Promise<Credential | undefined>, options?: AuthOperationOptions): Promise<Credential | undefined> {
 		return this.#withLock(async (all) => {
@@ -132,6 +145,16 @@ export class PiAuthStore implements CredentialStore {
 	}
 	async delete(): Promise<void> {
 		throw new Error("Pilot never deletes credentials");
+	}
+}
+
+/** A file's revision (mtime and size), as Pi's `getFileRevision`: its content changes only when this does. */
+export function fileRevision(path: string): string {
+	try {
+		const stat = statSync(path);
+		return `${String(stat.mtimeMs)}:${String(stat.size)}`;
+	} catch {
+		return "none";
 	}
 }
 

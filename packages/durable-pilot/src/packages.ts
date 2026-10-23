@@ -20,11 +20,12 @@
 //   `before_agent_start`, `agent_settled` and `session_shutdown` reach the packages' handlers; their return values are not applied.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { type Conversation, type Cursor, defineExtension, type ToolRegistration } from "@earendil-works/pi-durable";
+import { fileRevision } from "./claude.ts";
 import { context } from "./host.ts";
 import { redact, sanitizeDeep } from "./redact.ts";
 
@@ -117,16 +118,6 @@ async function readLogins(models: Models, signal: AbortSignal): Promise<Logins> 
 	const available = await models.getAvailable(undefined, { signal });
 	signal.throwIfAborted();
 	return { available: [...available], types };
-}
-
-/** auth.json's revision: stored logins change only when it does. */
-function fileRevision(path: string): string {
-	try {
-		const stat = statSync(path);
-		return `${String(stat.mtimeMs)}:${String(stat.size)}`;
-	} catch {
-		return "none";
-	}
 }
 
 /**

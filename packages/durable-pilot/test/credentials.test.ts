@@ -5,8 +5,36 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
+import lockfile from "proper-lockfile";
+import { PiAuthStore } from "../src/claude.ts";
 import { type E, installedPiAuthStorage, race } from "./refresh-race.ts";
-import { cleanup, ITERATIONS, PACKAGE } from "./runner.ts";
+import { cleanup, ITERATIONS, PACKAGE, scratch } from "./runner.ts";
+
+// Fleet flake "SIGKILL worker child:after-delivery": every credential read took auth.json's lock, so a host killed
+// mid-read left it held until it went stale (30 s), and the reopened host's next model request waited it out.
+describe("auth.json lock left by a killed host", () => {
+	it("reads of an unchanged auth.json never wait for the lock; a changed one and every write still take it", async () => {
+		const path = join(scratch("auth-lock"), "auth.json");
+		const login = (access: string) => JSON.stringify({ anthropic: { type: "oauth", access, refresh: "fake-ort", expires: Date.now() + 3_600_000 } });
+		writeFileSync(path, login("fake-oat-1"), { mode: 0o600 });
+		const store = new PiAuthStore(path);
+		const access = async (options?: { signal: AbortSignal }) => ((await store.read("anthropic", options)) as { access?: string } | undefined)?.access;
+		assert.equal(await access(), "fake-oat-1", "the host's first read");
+		// What a host killed mid-read leaves behind: a held lock nobody releases until it is stale.
+		const release = await lockfile.lock(path, { realpath: false, stale: 30_000 });
+		try {
+			const quick = () => ({ signal: AbortSignal.timeout(1_000) });
+			assert.equal(await access(quick()), "fake-oat-1", "a read of the unchanged file does not wait");
+			assert.deepEqual((await store.list(quick())).map((c) => c.providerId), ["anthropic"]);
+			await assert.rejects(store.modify("anthropic", async () => undefined, { signal: AbortSignal.timeout(300) }), "a write still waits for the lock");
+			writeFileSync(path, login("fake-oat-2-changed"));
+			await assert.rejects(store.read("anthropic", { signal: AbortSignal.timeout(300) }), "a changed file is read under the lock only");
+		} finally {
+			await release();
+		}
+		assert.equal(await access(), "fake-oat-2-changed", "the change is read once the lock is free");
+	});
+});
 
 describe("concurrent credential refresh", () => {
 	it("control: the same race without the lock sends more than one refresh request", async () => {
