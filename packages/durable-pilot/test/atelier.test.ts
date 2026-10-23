@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { after, test } from "node:test";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
@@ -108,6 +109,22 @@ test("P075/P076 open links a served Page; a human Comment reaches the Chat once 
 	await sleep(UNDO);
 	assert.equal((await delivered(host)).length, 2, "the Comment and the Request, not the undone Comment");
 	assert.equal(atelierRequests(store), 2);
+	await host.close();
+});
+
+test("P075 check measures the Page in a real browser: the Chat's PI_TMP holds its report, and a session-scoped TMPDIR leaves the browser socket working", { skip: spawnSync("agent-browser", ["--version"]).status !== 0 && "agent-browser is not installed" }, async () => {
+	const { store, cwd } = family("check");
+	// A session-scoped TMPDIR as long as a PI_TMP folder: a socket below it would overflow the 104-byte path limit.
+	const longTmp = join(ROOT, "t".repeat(Math.max(1, 90 - ROOT.length)));
+	mkdirSync(longTmp, { recursive: true });
+	const host = new ChatHost(store, cwd, { env: { ATELIER_PAGE_CHECK: "on", TMPDIR: longTmp } });
+	await host.ready;
+	await open(host, 1);
+	const end = await toolEnd(host, 1);
+	assert.match(String(end.text), /Page check/);
+	assert.doesNotMatch(String(end.text), /unchecked/, String(end.text));
+	assert.match(String(end.text), /Views \(1\)/);
+	assert.match(String(end.text), new RegExp(`Full report: ${join(ROOT, "pi-tmp")}/`), "the report is in the Chat's PI_TMP");
 	await host.close();
 });
 

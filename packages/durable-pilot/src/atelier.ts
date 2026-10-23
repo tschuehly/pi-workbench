@@ -17,6 +17,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { type Conversation, type ConversationId, defineDoc, defineExtension, defineTool, type DocumentReader, type Harness } from "@earendil-works/pi-durable";
 import { DESCRIPTION } from "../../../extensions/atelier/description.mjs";
 import { derive, REQUEST_STATES } from "../../../extensions/atelier/kernel/atelier.js";
+import { piTmpDir } from "../../../extensions/pi-tmp/pitmp.mjs";
 import { crashPoint } from "./background-bash.ts";
 import { context } from "./host.ts";
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
@@ -58,7 +59,7 @@ type Kernel = {
 	createHost(options: { root: string; sessionId: string; label: string; send: (message: Message, done: (idle: boolean) => void, failed: () => void) => void; handoff: (message: Message) => void; idle: () => boolean; port?: number }): PageHost;
 	readLog(page: string): Entry[];
 };
-type Check = { checkPage(page: string, options: { root: string; source?: Buffer; signal?: AbortSignal }): Promise<unknown>; formatCheck(check: unknown): string };
+type Check = { checkPage(page: string, options: { root: string; source?: Buffer; signal?: AbortSignal; tmp?: string }): Promise<unknown>; formatCheck(check: unknown): string };
 // tsc would check the Workbench extension's .ts files as CommonJS (no package type there), so the kernel host and the
 // Page check (which imports it) are loaded by URL and typed by the facades above; Node runs them as the modules they are.
 const { createHost, readLog } = (await import(new URL("../../../extensions/atelier/host.ts", import.meta.url).href)) as Kernel;
@@ -224,9 +225,10 @@ export class Atelier {
 				const op = String(api.taskId);
 				const result = (t: string, details: Record<string, unknown> = {}) => ({ output: text(t), details: JSON.parse(JSON.stringify({ action: params.action, page: host.rel(page!), ...details })) });
 				// The Page check (check-page.mjs) on a test copy; ATELIER_PAGE_CHECK=off skips it. It never fails the action.
+				// Its screenshots go to the Chat's PI_TMP (toolEnv's), not the process's: the host clears inherited identity.
 				const checked = async (t: string, details: Record<string, unknown> = {}, source?: Buffer) => {
 					if (process.env.ATELIER_PAGE_CHECK === "off") return result(t, details);
-					const check = await checkPage(page!, { root, source, signal: c.abortSignal }).catch((error: unknown) => ({ status: "unchecked", viewport: "", revision: null, checks: [], views: [], unchecked: [redact(String(error)).slice(0, 300)], report: null }));
+					const check = await checkPage(page!, { root, source, signal: c.abortSignal, tmp: piTmpDir(this.#options.cwd, this.#options.chatId) }).catch((error: unknown) => ({ status: "unchecked", viewport: "", revision: null, checks: [], views: [], unchecked: [redact(String(error)).slice(0, 300)], report: null }));
 					return result([t, formatCheck(check)].filter(Boolean).join("\n\n"), { ...details, check });
 				};
 				if (params.action === "check") return checked("");

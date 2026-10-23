@@ -432,7 +432,8 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
   const js = async (code) => (await b("eval", code)).result;
   const kc = { of: 0, count: 0, props: new Set(), selectors: new Set(), examples: new Set(), handlers: new Set(), shots: new Set() };
   try {
-    sockets = mkdtempSync(path.join(tmpdir(), "atl-"));
+    // A session-scoped TMPDIR (a PI_TMP folder) is too long for the daemon's Unix socket (104 bytes on macOS).
+    sockets = mkdtempSync(path.join(tmpdir().length <= 60 ? tmpdir() : "/tmp", "atl-"));
     await ab(["--version"], { timeout: 10_000 }).catch((error) => { throw stop.aborted ? error : new Error(`${browser} is not installed or not on PATH`); });
     launched = true;
     if (tmp) { shots = path.join(tmp, `atelier-check-${path.basename(page).replace(/\W+/g, "-").slice(0, 60)}-${id}`); mkdirSync(shots, { recursive: true }); }
