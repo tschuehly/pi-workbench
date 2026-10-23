@@ -25,7 +25,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -370,7 +370,7 @@ const MEASURE = `({ view: ${evalFn(viewMeasure)}, controls: ${evalFn(viewControl
  * (update passes what it just showed). signal: cancels the check; deadlineMs bounds it.
  * Returns a capped summary; report.json beside the screenshots holds the full values.
  */
-export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "agent-browser", root, source, signal, deadlineMs = DEADLINE_MS } = {}) {
+export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "agent-browser", root, source, signal, deadlineMs = DEADLINE_MS, socketRoot = path.join(homedir(), ".pi-workbench", "run") } = {}) {
   const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT}`, revision: null, checks: [], views: [], notReached: 0, coverage: null, unchecked: [], report: null };
   const hard = (name, ok, detail) => result.checks.push({ name, status: ok ? "pass" : "fail", detail });
   let page, bytes;
@@ -432,8 +432,11 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
   const js = async (code) => (await b("eval", code)).result;
   const kc = { of: 0, count: 0, props: new Set(), selectors: new Set(), examples: new Set(), handlers: new Set(), shots: new Set() };
   try {
-    // A session-scoped TMPDIR (a PI_TMP folder) is too long for the daemon's Unix socket (104 bytes on macOS).
-    sockets = mkdtempSync(path.join(tmpdir().length <= 60 ? tmpdir() : "/tmp", "atl-"));
+    // The daemon binds <sockets>/<session>.sock, capped at 104 bytes on macOS: a session TMPDIR (a PI_TMP folder) is too
+    // long, and /tmp is off limits, so an owner-only folder under ~/.pi-workbench/run.
+    if (Buffer.byteLength(path.join(socketRoot, "atl-XXXXXX", `${session}.sock`)) >= 104) throw new Error(`socket folder ${clip(socketRoot, 120)} is too long for a Unix socket`);
+    mkdirSync(socketRoot, { recursive: true, mode: 0o700 });
+    sockets = mkdtempSync(path.join(socketRoot, "atl-"));
     await ab(["--version"], { timeout: 10_000 }).catch((error) => { throw stop.aborted ? error : new Error(`${browser} is not installed or not on PATH`); });
     launched = true;
     if (tmp) { shots = path.join(tmp, `atelier-check-${path.basename(page).replace(/\W+/g, "-").slice(0, 60)}-${id}`); mkdirSync(shots, { recursive: true }); }

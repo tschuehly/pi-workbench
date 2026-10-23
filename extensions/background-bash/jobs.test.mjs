@@ -121,7 +121,16 @@ test("a job keeps running after shutdown; a new instance for the same owner reat
   assert.match(fx.messages[0].message.content, /cancelled/);
   assert.equal(fx.messages[0].message.details.description, "Wait half a minute");
   assert.deepEqual(fx.messages[0].options, { triggerTurn: false, deliverAs: "followUp" });
+  // AC-P081: Pi appends a non-turn message itself and emits no extension message_start, so nothing acknowledges it;
+  // the send is the delivery. agent_settled and a later reattach must not resend it.
+  second.redeliver();
+  assert.equal(fx.messages.length, 1, "a cancelled completion is not resent at agent_settled");
   second.shutdown();
+  const third = fx.make();
+  third.attach("owner");
+  await sleep(50);
+  assert.equal(fx.messages.length, 1, "nor on reattach");
+  third.shutdown();
 });
 
 test("a job finishing while detached delivers its completion exactly once on reattach", async () => {

@@ -135,8 +135,9 @@ export function cancelJob(root, id) {
  * Session-owned background bash jobs. Each job runs under a detached runner (runner.mjs) and is
  * recorded in `<root>/<id>/{job.json,output.log,exit,delivered}`, so it survives shutdown, reload
  * and daemon restarts; `attach(sessionId)` resumes this session's jobs and delivers each completion.
- * `delivered` is written only when Pi starts the completion message (`acknowledge`); until then
- * `attach` and `redeliver` (at agent_settled) resend it, so a dropped queue cannot lose it.
+ * `delivered` is written when Pi starts a turn-triggering completion message (`acknowledge`), or at send for a
+ * non-triggering one (cancelled); until then `attach` and `redeliver` (at agent_settled) resend it, so a dropped
+ * queue cannot lose it.
  */
 export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs = 5_000, lifetimeSeconds = MAX_LIFETIME_SECONDS, onChange = () => {} } = {}) {
   const jobs = new Map();
@@ -189,6 +190,9 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
           content: redact(content),
           details: redactDeep(describe(job)),
         }, { triggerTurn, deliverAs: "followUp" });
+        // Pi appends a non-turn message itself (now, or at the end of the running turn) and emits no extension
+        // message_start for it, so nothing would acknowledge it: the send is its delivery.
+        if (!triggerTurn) try { writeFileSync(join(job.dir, "delivered"), "", { flag: "wx", mode: 0o600 }); } catch { /* already delivered */ }
       } catch (error) {
         console.error(`Background bash ${job.id} could not deliver completion:`, error);
       }

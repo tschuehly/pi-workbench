@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -96,9 +96,11 @@ function shim() {
   const log = path.join(dir, "log.jsonl"), bin = path.join(dir, "agent-browser");
   writeFileSync(bin, `#!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 const a = process.argv.slice(2), log = (o) => appendFileSync(process.env.SHIM_LOG, JSON.stringify({ pid: process.pid, ...o }) + "\\n");
 const reply = (ok) => { console.log(JSON.stringify(ok ? { success: true, data: {} } : { success: false, error: "shim" })); process.exit(0); };
+const sockets = process.env.AGENT_BROWSER_SOCKET_DIR;
+log({ sockets, mode: sockets && existsSync(sockets) ? statSync(sockets).mode & 0o777 : null });
 if (a[0] === "--version") { console.log("shim"); process.exit(0); }
 const cmd = a.includes("close") ? "close" : a[a.indexOf("--json") + 1];
 log({ cmd });
@@ -243,6 +245,33 @@ test("the check never touches files it did not create: another Page named like a
     assert(existsSync(`${other}.events.jsonl.lock`) && existsSync(`${other}.images`));
     assert.deepEqual(leftovers(root), []);
   } finally { s.restore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("agent-browser sockets live in an owner-only folder under ~/.pi-workbench/run, never /tmp, short enough for macOS, removed after", async () => {
+  const root = project({ page: FIXTURES.good });
+  const run = path.join(homedir(), ".pi-workbench", "run");
+  // macOS caps a Unix socket path at 104 bytes with its NUL; agent-browser binds <socket dir>/<session>.sock, the folder
+  // is mkdtemp's atl-XXXXXX and the session atl-<8 hex>.
+  const worst = Buffer.byteLength(path.join(run, "atl-XXXXXX", "atl-12345678.sock"));
+  assert(worst < 104, `worst-case socket path is ${worst} bytes`);
+  const long = path.join(root, "x".repeat(80)), saved = process.env.TMPDIR;
+  mkdirSync(long);
+  const s = shim();
+  try {
+    process.env.TMPDIR = long; // a session TMPDIR too long for a socket: the check must not fall back to /tmp
+    s.use();
+    assert.equal((await checkPage(path.join(root, "page.html"))).status, "unchecked");
+    const seen = s.calls().filter((c) => c.sockets);
+    assert(seen.length, JSON.stringify(s.calls()));
+    const dir = seen[0].sockets;
+    assert.equal(path.dirname(dir), run);
+    assert.match(path.basename(dir), /^atl-/);
+    assert(seen.every((c) => c.sockets === dir && c.mode === 0o700), JSON.stringify(seen));
+    assert.equal(existsSync(dir), false, "the socket folder is removed");
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved;
+    s.restore(); rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("cancel and deadline stop the check, kill agent-browser and delete the copy; SIGTERM does the same for the CLI", { timeout: 60_000 }, async () => {
@@ -418,19 +447,19 @@ test("third review, finding 4: a Kernel layout shift behind a display:contents w
 });
 
 test("third review, finding 5: a check stopped while its browser blocks leaves no browser process behind", { skip: noBrowser, timeout: 120_000 }, async () => {
-  const tmp = mkdtempSync(path.join(tmpdir(), "t-")), saved = process.env.TMPDIR;
+  mkdirSync(path.join(homedir(), ".pi-workbench", "run"), { recursive: true, mode: 0o700 });
+  const tmp = mkdtempSync(path.join(homedir(), ".pi-workbench", "run", "t-"));
   const root = project({ blocked: bare("<h1>Blocked</h1>", "", "setTimeout(() => { const end = Date.now() + 60000; while (Date.now() < end); }, 100)") });
   const ours = () => spawnSync("ps", ["eww", "-A", "-o", "pid=,command="], { encoding: "utf8", env: { PATH: process.env.PATH } }).stdout.split("\n")
     .filter((l) => l.includes(tmp) || l.includes(`atelier-check-${process.pid}-`));
   try {
-    process.env.TMPDIR = tmp; // the check puts its agent-browser sockets here; its daemon and browser carry the path
-    const t = Date.now(), r = await checkPage(path.join(root, "blocked.html"), { deadlineMs: 2_500 });
+    // the check puts its agent-browser sockets here; its daemon and browser carry the path
+    const t = Date.now(), r = await checkPage(path.join(root, "blocked.html"), { deadlineMs: 2_500, socketRoot: tmp });
     assert.deepEqual(r.unchecked.filter((u) => u.startsWith("browser")), ["browser checks: stopped at the 2.5 s deadline"], formatCheck(r));
     assert(Date.now() - t < 30_000, `took ${Date.now() - t} ms`);
     await new Promise((res) => setTimeout(res, 1_000));
     assert.deepEqual(ours(), [], "no agent-browser or browser process of the check is left");
   } finally {
-    if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved;
     for (const l of ours()) try { process.kill(Number(l.trim().split(" ")[0]), "SIGKILL"); } catch { /* gone */ }
     rmSync(tmp, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
   }
