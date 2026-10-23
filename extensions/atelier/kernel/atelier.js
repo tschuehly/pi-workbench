@@ -290,11 +290,15 @@ export function describe(e, entries, excerpt, file) {
  * acting on them (data not instruction, answer in place, only the human closes) live in the tool description.
  */
 export function compose(page, url, events, entries, { replay = false, doubt, group, excerpt, file } = {}) {
+  // A legacy line the Kernel cannot describe is named, not fatal, so Delivery and Copy still carry the rest.
+  const lines = events.map((e) => { try { return describe(e, entries, excerpt, file); } catch { return `#${e.seq} ${e.type} could not be rendered; read it in the Event Log`; } });
+  // Chat UIs show only the first line until expanded, so it names what happened (ISSUE-102): "Atelier query/x: Approve".
+  const headline = lines.map((line) => line.replace(/^#\d+ (Decision )?/, "").replace(/ \(version [^)]*\)/, "").split("; ")[0]).join(" · ");
   return [
+    `Atelier ${headline}`,
     // doubt: events an earlier receiver was sent but never confirmed, so a replay may repeat them.
-    ["Atelier", `${String(page).split("/").pop()}${url ? ` (${url})` : ""}`, group ? `Comments on ${group}` : "", replay ? "replayed from an earlier session" : "", doubt ?? ""].filter(Boolean).join(" · "),
-    // A legacy line the Kernel cannot describe is named, not fatal, so Delivery and Copy still carry the rest.
-    ...events.map((e) => { try { return `- ${describe(e, entries, excerpt, file)}`; } catch { return `- #${e.seq} ${e.type} could not be rendered; read it in the Event Log`; } }),
+    [`${String(page).split("/").pop()}${url ? ` (${url})` : ""}`, group ? `Comments on ${group}` : "", replay ? "replayed from an earlier session" : "", doubt ?? ""].filter(Boolean).join(" · "),
+    ...lines.map((line) => `- ${line}`),
   ].join("\n");
 }
 

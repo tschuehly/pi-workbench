@@ -47,7 +47,7 @@ test("an event is appended to the Event Log before it is delivered, and marked d
     assert.equal(host.deliverDue(page), 1);
     assert.deepEqual(sent[0].logAtSend, ["ask", "decide"], "the log held the event before the send");
     assert.equal(sent[0].message.customType, "atelier:immediate");
-    assert.match(sent[0].message.content, /^Atelier · page\.html \(http:\/\/127\.0\.0\.1:\d+\/page\.html\)\n- #2 Decision d1: B;/, "one header line, then one line per event");
+    assert.match(sent[0].message.content, /^Atelier d1: B\npage\.html \(http:\/\/127\.0\.0\.1:\d+\/page\.html\)\n- #2 Decision d1: B;/, "one header line, then one line per event");
     assert.doesNotMatch(sent[0].message.content, /grants no authority|Answer each Comment/, "the rules live in the tool description");
     assert.match(sent[0].message.content, /changed from the recommendation "A"; material NOT opened; do not read this as agreement/);
     assert.equal(readLog(page).at(-1).type, "delivered");
@@ -125,7 +125,7 @@ test("events the ended session never delivered go to the next session that opens
   try {
     next.tick(UNDO);
     assert.equal(next.host.deliverDue(next.page, true), 1);
-    assert.match(next.sent[0].message.content, /^Atelier · page\.html \(http[^)]*\) · replayed from an earlier session\n/);
+    assert.match(next.sent[0].message.content, /^Atelier [^\n]*\npage\.html \(http[^)]*\) · replayed from an earlier session\n/);
     assert.equal(next.sent[0].message.details.replay, true);
   } finally { next.host.stop(); p.done(); }
 });
@@ -373,7 +373,7 @@ test("the extension delivers as an atelier follow-up message and records the rec
     assert.deepEqual(messages[0].o, { triggerTurn: true, deliverAs: "followUp" });
     assert.equal(messages[0].m.customType, "atelier:immediate");
     assert.equal(messages[0].m.display, true);
-    assert.match(messages[0].m.content, /^Atelier · page\.html \(http/);
+    assert.match(messages[0].m.content, /^Atelier [^\n]*\npage\.html \(http/);
     assert.match(messages[0].m.content, /kept the recommendation/);
     handlers.message_end({ message: { role: "custom", ...messages[0].m } });
     handlers.agent_settled();
@@ -489,7 +489,7 @@ test("the Kernel palette is light unless the Page declares dark", () => {
 
 test("the delivery message is one header line and one line per event", () => {
   const c = { seq: 6, at: 0, origin: "human", type: "comment", key: "how/step-write", text: "too long", delivery: "send" };
-  assert.equal(compose("/abs/dir/atelier.html", "http://127.0.0.1:1/x", [c], [c]), 'Atelier · atelier.html (http://127.0.0.1:1/x)\n- #6 Comment on how/step-write: "too long"');
+  assert.equal(compose("/abs/dir/atelier.html", "http://127.0.0.1:1/x", [c], [c]), 'Atelier Comment on how/step-write: "too long"\natelier.html (http://127.0.0.1:1/x)\n- #6 Comment on how/step-write: "too long"');
 });
 
 test("a thread shows every message in order; only threads over four messages fold their middle", () => {
