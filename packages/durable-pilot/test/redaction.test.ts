@@ -77,8 +77,8 @@ async function host(dir: string, options: { tools?: ToolRegistration[]; hooks?: 
 	});
 }
 
-/** Every committed partial (model text and tool output) as observers see it; `until` resolves on a match. */
-async function watchPartials(h: Host, until?: (text: string) => boolean): Promise<{ seen: string[]; reached: Promise<void> }> {
+/** Every committed partial (model text and tool output) as observers see it; `until` resolves once it holds for all seen so far. */
+async function watchPartials(h: Host, until?: (seen: readonly string[]) => boolean): Promise<{ seen: string[]; reached: Promise<void> }> {
 	const seen: string[] = [];
 	let reach!: () => void;
 	const reached = new Promise<void>((resolve) => (reach = resolve));
@@ -87,7 +87,7 @@ async function watchPartials(h: Host, until?: (text: string) => boolean): Promis
 		const text = textOfMessage(value?.generation?.message as never);
 		if (text !== "") seen.push(text);
 		for (const tool of value?.tools ?? []) if (tool.output !== undefined) seen.push(tool.output);
-		if (until !== undefined && seen.some(until)) reach();
+		if (until?.(seen) === true) reach();
 	});
 	return { seen, reached };
 }
@@ -108,9 +108,9 @@ describe("pre-persistence redaction", () => {
 		const dir = scratch("redact-model");
 		let h = await host(dir);
 		h.faux.setResponses([fauxAssistantMessage([fauxText(`${SECRET_TEXT} ${"filler ".repeat(200)}`)])]);
-		const { seen, reached } = await watchPartials(h, (text) => text.includes("filler filler"));
+		const { seen, reached } = await watchPartials(h, (all) => all.length > 5 && all.some((text) => text.includes("filler filler")));
 		await admit(h.root, { operationId: "op-1", text: "say it" });
-		// Close while streaming, once a committed partial is past both secrets: it becomes an aborted entry on reopen.
+		// Close while streaming, once several committed partials exist and one is past both secrets: it becomes an aborted entry on reopen.
 		await reached;
 		await h.close();
 		const midStream = leaks(dir);
