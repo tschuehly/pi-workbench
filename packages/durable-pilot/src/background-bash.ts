@@ -20,7 +20,7 @@ import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot,
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
-import { redact, redactingTool, sanitizeDeep } from "./redact.ts";
+import { redact, sanitizeDeep } from "./redact.ts";
 
 export const FOREGROUND_WAIT_MS = 30_000;
 const MAX_ACTIVE = 8;
@@ -193,7 +193,7 @@ export class BackgroundBash {
 				return { output: text(`Cancellation requested for ${args.id} (state=${job.state}).`), details: describeJob(job) };
 			},
 		});
-		return defineExtension({ name: "workbench.background-bash", tools: [bash, status, cancel].map((tool) => redactingTool(warningTool(tool))) });
+		return defineExtension({ name: "workbench.background-bash", tools: [bash, status, cancel].map((tool) => warningTool(tool)) });
 	}
 
 	/**

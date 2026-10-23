@@ -544,7 +544,11 @@ export class ChatSession {
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
 			.filter(([, item]) => item.resolved === undefined && item.conversationId === root.id)
-			.map(([id, item]) => ({ id, toolName: item.tool, arguments: item.arguments.length > 300 ? `${item.arguments.slice(0, 300)}…` : item.arguments }));
+			.map(([id, item]) => {
+				// A browser copy of verbatim arguments: sanitized before the cut, which would leave a fragment no redactor knows.
+				const args = redact(item.arguments);
+				return { id, toolName: item.tool, arguments: args.length > 300 ? `${args.slice(0, 300)}…` : args };
+			});
 		return {
 			persisted: true,
 			...(agent.model === undefined ? {} : { model: { provider: agent.model.provider, id: agent.model.modelId } }),

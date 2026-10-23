@@ -14,64 +14,27 @@ import {
 	createAssistantMessageEventStream,
 	type Provider,
 } from "@earendil-works/pi-ai";
-import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type { Extension, Registry, ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 // Reuse the Workbench redactor (patterns, auth.json and env values) rather than a second copy.
-import { knownValues, redact as workbenchRedact } from "../../../extensions/secret-redaction/redact.mjs";
+import { completePrefix, maskKnownFragment, redactGrowing, redact as workbenchRedact } from "../../../extensions/secret-redaction/redact.mjs";
 
 export type Sanitize = (text: string) => string;
 export const redact: Sanitize = (text) => workbenchRedact(text) as string;
 
-const UNTERMINATED_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/;
-// A PEM opening header still being written: it contains spaces, so the trailing-token rule alone would release it.
-const PARTIAL_HEADER = /-----BEGIN[A-Z ]*-{0,4}$/;
-
-/**
- * The part of a growing text that can be sanitized now. Secrets never contain whitespace, so a trailing
- * non-whitespace run may still be the start of one; an unterminated private-key block, or an opening header that may
- * become one, may still grow.
- */
-export function completePrefix(text: string): string {
-	const key = UNTERMINATED_KEY.exec(text) ?? PARTIAL_HEADER.exec(text);
-	const head = key === null ? text : text.slice(0, key.index);
-	const tail = /\S+$/.exec(head);
-	return tail === null ? head : head.slice(0, tail.index);
-}
+// The split-safe helpers live with the redactor, so the legacy extensions (background bash) share them.
+export { completePrefix, maskKnownFragment };
 
 /** For text that will not grow: mask a private-key block that never ended (the redactor only matches whole blocks). */
 export function sealed(sanitize: Sanitize): Sanitize {
 	return (text) => sanitize(text).replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/, "[REDACTED:private-key]");
 }
 
-const SECRET_START = /^(?:sk-|gh[opsur]_|github_pat_|eyJ|tid=|-----BEGIN)/;
-/** Shortest leading fragment of a known credential value that is masked; shorter ones are too common to tell apart. */
-const MIN_FRAGMENT = 6;
-
 /**
- * Mask the end of `text` when it is the leading fragment of a known credential value (auth.json or a secret-named env
- * variable): such a value has no recognisable shape, so only the known-value list can tell.
- */
-export function maskKnownFragment(text: string, values: readonly string[] = knownValues() as string[]): string {
-	let longest = 0;
-	for (const value of values)
-		for (let k = Math.min(value.length - 1, text.length); k >= MIN_FRAGMENT && k > longest; k--)
-			if (text.endsWith(value.slice(0, k))) {
-				longest = k;
-				break;
-			}
-	return longest === 0 ? text : `${text.slice(0, text.length - longest)}[REDACTED:partial]`;
-}
-
-/**
- * For whole values a tool may replace while it streams (details, diagnostics): sanitize the complete part and mask a
- * trailing fragment that starts like a secret or like a known credential value, since no pattern can recognise half a
- * secret.
+ * For whole values a tool may replace while it streams (details, diagnostics): the Workbench `redactGrowing`, which
+ * sanitizes the complete part and masks a trailing fragment that may be half a secret.
  */
 export function strict(sanitize: Sanitize): Sanitize {
-	return (text) => {
-		const complete = completePrefix(text);
-		const rest = text.slice(complete.length);
-		return sanitize(complete) + (SECRET_START.test(rest.trimStart()) || rest.includes("-----BEGIN") ? "[REDACTED:partial]" : maskKnownFragment(sanitize(rest)));
-	};
+	return (text) => redactGrowing(text, sanitize);
 }
 
 const SKIP = new Set(["image", "thinking", "redacted_thinking"]);
@@ -85,13 +48,56 @@ export function sanitizeDeep<T>(value: T, sanitize: Sanitize): T {
 	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeDeep(item, sanitize)])) as T;
 }
 
+const OPEN_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/;
+const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
+
+/**
+ * Text blocks as their reader sees them, one text, with secrets masked across block boundaries; each block is still
+ * sanitized on its own afterwards. A token running across a boundary is masked in the block where it starts and removed
+ * from the blocks it continues into; a private-key block opened in one block is removed from the next through its END.
+ */
+export function acrossBlocks(texts: readonly string[], sanitize: Sanitize): string[] {
+	const out = [...texts];
+	for (let i = 0; i < out.length - 1; i++) {
+		if (OPEN_KEY.test(out[i]!)) {
+			// Masked to its end by `sealed` in this block; its body continues in the next ones.
+			for (let j = i + 1; j < out.length; j++) {
+				const end = KEY_END.exec(out[j]!);
+				out[j] = end === null ? "" : out[j]!.slice(end.index + end[0].length);
+				if (end !== null) break;
+			}
+			continue;
+		}
+		const tail = /\S+$/.exec(out[i]!)?.[0];
+		if (tail === undefined) continue;
+		let token = tail;
+		const heads: number[] = [];
+		for (let j = i + 1; j < out.length; j++) {
+			const head = /^\S*/.exec(out[j]!)![0];
+			token += head;
+			heads.push(head.length);
+			if (head.length < out[j]!.length) break;
+		}
+		if (heads.every((length) => length === 0)) continue;
+		const clean = sanitize(token);
+		if (clean === token) continue;
+		out[i] = out[i]!.slice(0, out[i]!.length - tail.length) + clean;
+		heads.forEach((length, k) => (out[i + 1 + k] = out[i + 1 + k]!.slice(length)));
+	}
+	return out;
+}
+
 /** Sanitize the text blocks of an assistant message; `partial` withholds what may still become a secret. */
 function sanitizeMessage(message: AssistantMessage, sanitize: Sanitize, partial: boolean, rename?: (name: string) => string): AssistantMessage {
+	// A secret may run across text blocks the reader sees as one text: mask it there before each block is sanitized.
+	const texts = acrossBlocks(message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])), sanitize);
+	let n = 0;
+	const clean = (text: string) => sanitize(partial ? completePrefix(text) : text);
 	return {
 		...message,
 		content: message.content.map((block) =>
 			block.type === "text"
-				? { ...block, text: sanitize(partial ? completePrefix(block.text) : block.text) }
+				? { ...block, text: clean(texts[n++]!) }
 				: block.type === "toolCall" && rename !== undefined
 					? { ...block, name: rename(block.name) }
 					: block,
@@ -281,8 +287,17 @@ export function sanitizingEnv(env: Env, sanitize: Sanitize): Env {
 	});
 }
 
-/** Wrap one tool so nothing it streams or returns reaches Durable unsanitized. */
+/** Each `redactingTool` wrapper and the sanitizer it applies. */
+const wrapped = new WeakMap<object, Sanitize>();
+
+/** Whether `tool` is a `redactingTool` wrapper with the default sanitizer. */
+export function isRedacting(tool: object): boolean {
+	return wrapped.get(tool) === redact;
+}
+
+/** Wrap one tool so nothing it streams or returns reaches Durable unsanitized; a tool wrapped alike is returned as is. */
 export function redactingTool<T extends ToolRegistration>(tool: T, inner: Sanitize = redact): T {
+	if (wrapped.get(tool) === inner) return tool;
 	const sanitize = sealed(inner);
 	const execute: ToolRegistration["execute"] = async (args, api, context) => {
 		const decoder = new TextDecoder();
@@ -360,5 +375,18 @@ export function redactingTool<T extends ToolRegistration>(tool: T, inner: Saniti
 			throw new Error(FAILED);
 		}
 	};
-	return { ...tool, execute } as T;
+	const result = { ...tool, execute } as T;
+	wrapped.set(result, inner);
+	return result;
+}
+
+/**
+ * The one registration point of a host's tools: every extension installed in `registry`, at open or later (packages),
+ * has its tools behind `redactingTool`, so no tool's output, details, diagnostics or error reach Durable unsanitized.
+ */
+export function redactingRegistry<R extends Registry>(registry: R): R {
+	const install = registry.install.bind(registry);
+	registry.install = (extension: Extension) =>
+		install(extension.tools === undefined ? extension : { ...extension, tools: extension.tools.map((tool) => redactingTool(tool)) });
+	return registry;
 }

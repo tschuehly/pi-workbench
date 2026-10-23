@@ -178,6 +178,7 @@ export const WorkersDoc = defineDoc<{ workers: Record<string, Worker>; byTask: R
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+/** A display bound. Sanitize first: a cut through a secret leaves a fragment no redactor recognizes. */
 const bounded = (value: string, max: number) => (value.length <= max ? value : `${value.slice(0, max)}…`);
 const iso = (ms: number) => new Date(ms).toISOString();
 function stableId(...parts: string[]): string {
@@ -510,7 +511,7 @@ async function admit(tx: Parameters<Parameters<Api["commit"]>[0]>[0], api: Api, 
 		provider: launch.binding.provider, model: launch.binding.model, effort: launch.binding.effort,
 		...(launch.binding.fallback === undefined ? {} : { fallback: launch.binding.fallback }),
 		...(launch.binding.independence === undefined ? {} : { independence: launch.binding.independence }),
-		cwd: launch.cwd, taskPreview: sanitize(bounded(launch.task, 200)), launchedAt: iso(api.now()),
+		cwd: launch.cwd, taskPreview: bounded(sanitize(launch.task), 200), launchedAt: iso(api.now()),
 		conversationId: child.id, anchor, reporter: task, background: launch.background,
 		...(launch.worker === undefined ? {} : { workerId: launch.worker.workerId, workerName: sanitize(launch.worker.name), continuing: launch.worker.forkFrom !== undefined }),
 		outcome: "running", collected: false, steers: 0,
@@ -638,7 +639,7 @@ export function delegationExtension(options: DelegationOptions) {
 					const prior = doc.byTask[String(api.taskId)];
 					if (prior !== undefined) return copy(doc.executions[prior]!);
 					return admit(tx, api, {
-						kind: "subagent", executionId, name: taskLabel(params.name ?? params.task), profile: params.profile, cognitiveRole: params.cognitiveRole,
+						kind: "subagent", executionId, name: taskLabel(sanitize(params.name ?? params.task)), profile: params.profile, cognitiveRole: params.cognitiveRole,
 						binding, task: params.task, assignment, background: params.background === true, tools: childTools(api, profile.tools), cwd, depth: who.depth + 1,
 					}, Reporter, options.leadOnly);
 				}, c);

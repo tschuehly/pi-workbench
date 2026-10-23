@@ -22,7 +22,7 @@ import { context, type Host, MODEL, openHost } from "./host.ts";
 import { toolGroupsExtension } from "./tool-groups.ts";
 import { type PackageEvent, PiPackages } from "./packages.ts";
 import { ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
-import { redactingTool, wrapProvider } from "./redact.ts";
+import { wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
 import { BackgroundBash } from "./background-bash.ts";
@@ -48,7 +48,7 @@ export function chatTools(resources: () => Resources, cwd: string) {
 		// read has no external effect, so a crash mid-read may rerun it; write and edit stay unsafe (never rerun). bash is
 		// the Workbench one (background-bash.ts). grep/find/ls: Pi's own, offered only where an allowlist names them
 		// (children), as in legacy Chats.
-		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), ...searchTools(cwd)].map((tool) => redactingTool(tool)),
+		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), createEditTool(), ...searchTools(cwd)],
 	});
 }
 
@@ -152,7 +152,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data), leadOnly: [workbenchBash] }),
 		// Subagents and Workers keep the native blocking bash, as the legacy extension leaves it to them: their
 		// conversations deselect the Workbench bash, so this one is theirs (decided per conversation, not per process).
-		defineExtension({ name: "workbench.native-bash", tools: [redactingTool(warningTool(createBashTool()))] }),
+		defineExtension({ name: "workbench.native-bash", tools: [warningTool(createBashTool())] }),
 		workbenchBash,
 		atelier.extension(),
 	];

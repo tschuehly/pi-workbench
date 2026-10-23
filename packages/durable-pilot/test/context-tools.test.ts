@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import { fauxAssistantMessage, fauxText, Type } from "@earendil-works/pi-ai";
 import { CompactionEntry, type Conversation, defineExtension, defineTool, type SubmissionId } from "@earendil-works/pi-durable";
@@ -18,7 +19,7 @@ import { ToolGroupsDoc, toolGroupsExtension } from "../src/tool-groups.ts";
 import { ChatSession } from "../src/chat-session.ts";
 import { admit, context, type Host, MODEL, openHost } from "../src/host.ts";
 import { entriesOf } from "../src/pilot.ts";
-import { ChatHost, family, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
+import { ChatHost, eventCopies, family, hideIn, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 process.env.PI_TELEMETRY_DIR = scratch("context-telemetry");
@@ -268,6 +269,42 @@ test("compact_and_continue: Esc during the compaction cancels it visibly and sta
 	assert.equal(integrity(store), "ok");
 });
 
+/** Every stored row (any table) holding `needle`, as `table:<kind>:<row JSON>`. */
+function storedCopies(store: string, needle: string): string[] {
+	const db = new DatabaseSync(join(store, "session.sqlite"));
+	try {
+		const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name);
+		return tables.flatMap((table) => (db.prepare(`SELECT * FROM "${table}"`).all() as Record<string, unknown>[]).flatMap((row) => {
+			const text = JSON.stringify(row, (_key, value) => (value instanceof Uint8Array ? Buffer.from(value).toString("utf8") : value));
+			if (!text.includes(needle)) return [];
+			return [`${table}:${String(row.kind ?? row.doc_kind ?? row.type ?? "?")}:${text.slice(0, 400)}`];
+		}));
+	} finally {
+		db.close();
+	}
+}
+
+test("compact_and_continue: a secret in summaryFocus and nextPhase is redacted before any task, instruction, tool result or continuation copy commits", async () => {
+	const { store, cwd } = family("checkpoint-redact");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await twoTurns(host);
+	// The user's input names the secret only \u-escaped; the model's call (its stored arguments) holds it.
+	await host.call("prompt", { operationId: "op-cc", text: hideIn(checkpointCall(`keep ${SECRET}`, `next ${SECRET} phase`), SECRET) });
+	const message = await host.until(isCheckpoint, "the continuation");
+	await host.until((e) => e.type === "message.end" && textOf((e.message as Message).content).startsWith("ok: Context checkpoint completed"), "the next phase's answer");
+	await host.close();
+	const prefix = SECRET.slice(0, 12);
+	assert.match(textOf((message.message as Message).content), /next \[REDACTED:env:PILOT_CONTEXT_TOKEN\] phase/, "the continuation keeps the surrounding text");
+	assert.ok(!eventCopies(host.events).includes(prefix), "no emitted event other than the call itself carries the secret or its prefix");
+	assert.ok(!JSON.stringify(logged(store)).includes(prefix), "the summarizer's instructions and the continuation the model got are redacted");
+	// Positive control: the scan finds the complete secret where it is kept verbatim, the model's own call.
+	const complete = storedCopies(store, SECRET);
+	assert.equal(complete.length, 1, complete.join("\n"));
+	assert.match(complete[0]!, /^entries:.*\\"role\\":\\"assistant\\".*\\"name\\":\\"compact_and_continue\\"/, "the one stored copy is the assistant's tool call");
+	assert.deepEqual(storedCopies(store, prefix), complete, "no task input, instruction, tool result, document or continuation holds the secret or its prefix");
+});
+
 for (const window of ["after the tool result", "while summarizing", "after the continuation"] as const) {
 	test(`crash row compact_and_continue: a kill ${window} yields one summary and one continuation after reopen`, async () => {
 		const { store, cwd } = family(`checkpoint-kill-${window.split(" ").at(-1)}`);
@@ -411,7 +448,7 @@ async function searchHost(dir: string, wrapped = true): Promise<{ h: Host; cwd: 
 	writeFileSync(join(cwd, "src", "util.ts"), "export function tidy() {}\n");
 	writeFileSync(join(cwd, "secrets.env"), `TOKEN_LINE=${SECRET}\n`);
 	const tools = wrapped ? chatTools(() => ({}), cwd) : defineExtension({ name: "unwrapped.search", tools: searchTools(cwd) });
-	const h = await openHost(join(dir, "family"), { rootAgent: { model: MODEL, cwd }, env: (target) => new NodeExecutionEnv({ cwd: target.cwd ?? cwd }), extensions: [tools] });
+	const h = await openHost(join(dir, "family"), { rootAgent: { model: MODEL, cwd }, env: (target) => new NodeExecutionEnv({ cwd: target.cwd ?? cwd }), extensions: [tools], rawTools: !wrapped });
 	const step = router(join(dir, "family"));
 	h.faux.setResponses(Array.from({ length: 50 }, () => step));
 	await h.resume();

@@ -24,6 +24,7 @@ import {
 	MAX_SUMMARY_FOCUS_CHARS,
 	validateCheckpointRequest,
 } from "../../../extensions/context-checkpoint/coordinator.mjs";
+import { redact, sealed } from "./redact.ts";
 import { pendingBlock } from "./workbench.ts";
 
 /** The continuation (or the record of a cancelled checkpoint) as placed in the transcript. */
@@ -59,6 +60,7 @@ type Checkpoint =
 	| { phase: "continue"; status: Status; diagnostic?: string };
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
+const sanitize = sealed(redact);
 
 /** Extension of the checkpoint tool and task; `harness` is the host's, for the conversation-level operations. */
 export function checkpointExtension(harness: () => Harness) {
@@ -88,7 +90,7 @@ export function checkpointExtension(harness: () => Harness) {
 				const { outcome } = (await runtime.waitForTask(id, c)).state;
 				let next: Extract<Checkpoint, { phase: "continue" }>;
 				if (outcome.status === "aborted") next = { phase: "continue", status: "cancelled" };
-				else if (outcome.status === "failed") next = { phase: "continue", status: "failed", diagnostic: outcome.error.message };
+				else if (outcome.status === "failed") next = { phase: "continue", status: "failed", diagnostic: sanitize(outcome.error.message) };
 				else if (outcome.result?.submissionId === undefined) next = { phase: "continue", status: "failed", diagnostic: "Nothing to compact" };
 				else {
 					// Completed means the summary was admitted; continue only once it is placed.
@@ -161,9 +163,12 @@ export function checkpointExtension(harness: () => Harness) {
 		// Keyed by the tool task: a rerun finds the checkpoint it already scheduled.
 		replay: "safe",
 		execute: async (args, api, c) => {
-			const request: Request = { summaryFocus: args.summaryFocus.trim(), nextPhase: args.nextPhase.trim() };
-			const invalid = validateCheckpointRequest(request);
+			const raw: Request = { summaryFocus: args.summaryFocus.trim(), nextPhase: args.nextPhase.trim() };
+			const invalid = validateCheckpointRequest(raw);
 			if (invalid !== undefined) throw new Error(invalid);
+			// The request is copied into the checkpoint task, the summarizer's instructions, this result and the
+			// continuation: only its tool-call arguments keep it verbatim. A sanitizer throw fails the call.
+			const request: Request = { summaryFocus: sanitize(raw.summaryFocus), nextPhase: sanitize(raw.nextPhase) };
 			const input = (await api.getTask(api.taskId, c))?.input as ToolTaskInput | undefined;
 			const assistant = input?.kind === "model" ? await api.commit((tx) => tx.entry(input.assistant), c) : undefined;
 			const calls = ((assistant?.model?.[0] as { content?: { type: string }[] } | undefined)?.content ?? []).filter((block) => block.type === "toolCall").length;

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
-import { redact, redactDeep } from "../secret-redaction/redact.mjs";
+import { redact, redactDeep, redactGrowing } from "../secret-redaction/redact.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { writeOnce } from "./runner.mjs";
 
@@ -39,7 +39,18 @@ export function readTail(path, size) {
   const buffer = Buffer.alloc(length);
   const fd = openSync(path, "r");
   try { readSync(fd, buffer, 0, length, size - length); } finally { closeSync(fd); }
-  return buffer.toString("utf8").replace(/^\uFFFD+/u, "");
+  const tail = buffer.toString("utf8").replace(/^\uFFFD+/u, "");
+  return length < size ? dropCutHead(tail) : tail;
+}
+
+/**
+ * A tail cut from a longer log may start inside a secret, where no redactor recognizes it: drop the cut token, and the
+ * rest of a private-key block whose header was cut off.
+ */
+function dropCutHead(tail) {
+  const text = tail.replace(/^\S+/, "");
+  const end = /-----END [A-Z ]*PRIVATE KEY-----/.exec(text);
+  return end !== null && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text.slice(0, end.index)) ? text.slice(end.index + end[0].length) : text;
 }
 
 /** A job as tools, status and completions show it. */
@@ -59,8 +70,9 @@ export function completionContent(job) {
 
 /** Redacted, control-free command, description and recent output for the Activity drawer. */
 export function previewJob(job, chars) {
-  // Redact before cutting so a secret split at the edge is still recognized.
-  const full = redact(cleanOutput(readTail(job.logPath, job.bytes)));
+  // Redact before cutting so a secret split at the edge is still recognized. The log may still grow: a trailing fragment
+  // of a secret is masked, since this preview is published now and a later redaction cannot retract it.
+  const full = redactGrowing(cleanOutput(readTail(job.logPath, job.bytes)));
   let output = full.slice(-chars);
   // Start at a line boundary when the cut fell mid-line.
   if (output.length < full.length && full[full.length - output.length - 1] !== "\n" && output.includes("\n")) output = output.slice(output.indexOf("\n") + 1);

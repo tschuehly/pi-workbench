@@ -150,3 +150,14 @@ export async function waitFor(condition: () => boolean, what: string, timeoutMs 
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
 }
+
+/** JSON text with every occurrence of `secret` `\u`-escaped: a scripted model's call holds the secret, the prompt does not. */
+export const hideIn = (json: string, secret: string): string =>
+	json.replaceAll(secret, [...secret].map((char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join(""));
+
+/**
+ * The emitted events as JSON, without the copies of tool-call arguments (the assistant's messages and `tool.start`
+ * args), which are stored verbatim by design; every other copy must be redacted.
+ */
+export const eventCopies = (events: readonly UiEvent[]): string =>
+	JSON.stringify(events.filter((e) => (e.message as { role?: string } | undefined)?.role !== "assistant").map((e) => (e.type === "tool.start" ? { ...e, args: undefined } : e)));

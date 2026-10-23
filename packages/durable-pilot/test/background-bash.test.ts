@@ -213,6 +213,48 @@ test("P081 output is redacted in the tool result, the completion and the store; 
 		assert.equal(readFileSync(join(store, file)).includes("S".repeat(36)), false, `no plaintext secret in ${file}`);
 });
 
+test("P081 a running job's Activity preview never publishes the start of a credential; a secret across the retained-tail cut leaves no suffix", async () => {
+	const { store, cwd } = family("split-preview");
+	// No recognisable shape: only the known-value list (a secret-named env variable) can mask it.
+	const secret = "opaqueBashSecret-5e8a1c3f9b2d7046";
+	const host = new ChatHost(store, cwd, { env: { S4B_SPLIT_TOKEN: secret } });
+	await host.ready;
+	const gated = 'printf "start %s" "${S4B_SPLIT_TOKEN:0:14}"; while [ ! -e gate ]; do sleep 0.1; done; printf "%s end\\n" "${S4B_SPLIT_TOKEN:14}"';
+	await host.call("prompt", { operationId: "op-1", text: call("bash", { description: "Print a credential in two parts", command: gated }) });
+	const id = jobId((await toolEnd(host)).text);
+	const log = join(JOBS, id, "output.log");
+	await waitFor(() => existsSync(log) && readFileSync(log, "utf8") === `start ${secret.slice(0, 14)}`, "the first 14 characters in the log");
+	const seen: string[] = [];
+	for (let n = 0; n < 6; n++) {
+		seen.push((await host.call<Status>("status")).extensionStatuses?.["pi-workbench:background-bash"] ?? "");
+		await sleep(250);
+	}
+	const fragment = secret.slice(0, 8);
+	const published = JSON.stringify(host.events.filter((e) => e.type === "status.update"));
+	assert.ok(published.includes("Print a credential in two parts"), "the running job was published");
+	assert.ok(seen.every((status) => status.includes('"output":"start [REDACTED:partial]"')), `the fragment is masked, the text before it kept: ${seen.at(-1)}`);
+	assert.ok(!seen.some((status) => status.includes(fragment)) && !published.includes(fragment), "no status read or status.update holds the fragment");
+	writeFileSync(join(cwd, "gate"), "");
+	await host.until(() => completionRequests(store) === 1, "the completion");
+	assert.match(textOf((await completions(host))[0]!.content), /start \[REDACTED:env:S4B_SPLIT_TOKEN\] end/, "positive control: the complete secret is masked whole");
+
+	// The retained tail (12,000 bytes) starts 10 characters into the secret; a failure shows the whole tail.
+	const filler = 12_000 + "head ".length + 10 - ("head ".length + secret.length + 2);
+	const cut = `printf "head %s\\n" "$S4B_SPLIT_TOKEN"; head -c ${String(filler)} /dev/zero | tr '\\0' y; printf "\\n"; exit 1`;
+	await host.call("prompt", { operationId: "op-2", text: call("bash", { description: "Cut through a credential", command: cut }) });
+	const cutId = jobId((await toolEnd(host, 2)).text);
+	await host.until(() => completionRequests(store) === 2, "the failed job's completion");
+	await host.call("prompt", { operationId: "op-3", text: call("bash", { description: "Cut through a credential", command: cut, foreground: true }) });
+	const foreground = String((await toolEnd(host, 3)).text);
+	const failed = textOf((await completions(host))[1]!.content);
+	await host.close();
+	assert.equal(readFileSync(join(JOBS, cutId, "output.log"), "utf8").length - 12_000, "head ".length + 10, "positive control: the tail cut falls inside the secret");
+	const suffix = secret.slice(10);
+	assert.ok(!failed.includes(suffix) && !failed.includes(secret.slice(-8)), `no suffix in the completion: ${failed.slice(0, 300)}`);
+	assert.match(failed, /\[showing recent output only\]\n+y{100}/, "the completion shows the tail after the cut token");
+	assert.ok(foreground.includes("yyyy") && !foreground.includes(suffix) && !foreground.includes(secret.slice(-8)), `no suffix in the foreground result: ${foreground.slice(0, 300)}`);
+});
+
 // ─── Survival ───────────────────────────────────────────────────────────────
 
 test("checkpoint barrier: a job finishing during compact_and_continue is delivered only after the continuation is placed", async () => {

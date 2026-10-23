@@ -89,6 +89,58 @@ export function redact(text) {
   return redactWith(knownRegex(), text);
 }
 
+const UNTERMINATED_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/;
+// A PEM opening header still being written: it contains spaces, so the trailing-token rule alone would release it.
+const PARTIAL_HEADER = /-----BEGIN[A-Z ]*-{0,4}$/;
+
+/**
+ * The part of a growing text that can be redacted now. Secrets never contain whitespace, so a trailing non-whitespace
+ * run may still be the start of one; an unterminated private-key block, or an opening header that may become one, may
+ * still grow.
+ * @param {string} text
+ * @returns {string}
+ */
+export function completePrefix(text) {
+  const key = UNTERMINATED_KEY.exec(text) ?? PARTIAL_HEADER.exec(text);
+  const head = key === null ? text : text.slice(0, key.index);
+  const tail = /\S+$/.exec(head);
+  return tail === null ? head : head.slice(0, tail.index);
+}
+
+const SECRET_START = /^(?:sk-|gh[opsur]_|github_pat_|eyJ|tid=|-----BEGIN)/;
+/** Shortest leading fragment of a known credential value that is masked; shorter ones are too common to tell apart. */
+const MIN_FRAGMENT = 6;
+
+/**
+ * Mask the end of `text` when it is the leading fragment of a known credential value (auth.json or a secret-named env
+ * variable): such a value has no recognisable shape, so only the known-value list can tell.
+ * @param {string} text
+ * @param {readonly string[]} [values]
+ * @returns {string}
+ */
+export function maskKnownFragment(text, values = knownValues()) {
+  let longest = 0;
+  for (const value of values)
+    for (let k = Math.min(value.length - 1, text.length); k >= MIN_FRAGMENT && k > longest; k--)
+      if (text.endsWith(value.slice(0, k))) { longest = k; break; }
+  return longest === 0 ? text : `${text.slice(0, text.length - longest)}[REDACTED:partial]`;
+}
+
+/**
+ * Redact a snapshot of text that may still grow (a running job's log, a value a tool replaces while it streams):
+ * redact the complete part and mask a trailing fragment that starts like a secret or like a known credential value,
+ * since no pattern can recognise half a secret. Redacting a later, longer snapshot cannot retract a published prefix.
+ * @param {string} text
+ * @param {(text: string) => string} [sanitize]
+ * @returns {string}
+ */
+export function redactGrowing(text, sanitize = redact) {
+  const complete = completePrefix(text);
+  // A trailing token that is already a whole secret is masked as such; one that still starts like a secret is masked.
+  const rest = sanitize(text.slice(complete.length));
+  return sanitize(complete) + (SECRET_START.test(rest.trimStart()) || rest.includes("-----BEGIN") ? "[REDACTED:partial]" : maskKnownFragment(rest));
+}
+
 const SKIP_BLOCKS = new Set(["image", "thinking", "redacted_thinking"]); // binary data and provider-signed reasoning
 
 /**

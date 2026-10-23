@@ -19,7 +19,7 @@ import { derive, REQUEST_STATES } from "../../../extensions/atelier/kernel/ateli
 import { crashPoint } from "./background-bash.ts";
 import { context } from "./host.ts";
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
-import { redact, redactingTool, sanitizeDeep } from "./redact.ts";
+import { redact, sanitizeDeep } from "./redact.ts";
 
 /** Pages this Chat opened, reopened with the host; the page server's port, asked for again so open tabs reconnect. */
 export const AtelierDoc = defineDoc<{ pages: string[]; port?: number }>({
@@ -190,7 +190,7 @@ export class Atelier {
 				// The Page check (check-page.mjs) on a test copy; ATELIER_PAGE_CHECK=off skips it. It never fails the action.
 				const checked = async (t: string, details: Record<string, unknown> = {}, source?: Buffer) => {
 					if (process.env.ATELIER_PAGE_CHECK === "off") return result(t, details);
-					const check = await checkPage(page!, { root, source, signal: c.abortSignal }).catch((error: unknown) => ({ status: "unchecked", viewport: "", revision: null, checks: [], views: [], unchecked: [String(error).slice(0, 300)], report: null }));
+					const check = await checkPage(page!, { root, source, signal: c.abortSignal }).catch((error: unknown) => ({ status: "unchecked", viewport: "", revision: null, checks: [], views: [], unchecked: [redact(String(error)).slice(0, 300)], report: null }));
 					return result([t, formatCheck(check)].filter(Boolean).join("\n\n"), { ...details, check });
 				};
 				if (params.action === "check") return checked("");
@@ -244,6 +244,6 @@ export class Atelier {
 				return result(`Request #${params.request} is ${params.state} (revision ${request.revision}, #${entry.seq}).`, { seq: entry.seq, revision: request.revision });
 			},
 		});
-		return defineExtension({ name: "workbench.atelier", tools: [redactingTool(atelier)] });
+		return defineExtension({ name: "workbench.atelier", tools: [atelier] });
 	}
 }

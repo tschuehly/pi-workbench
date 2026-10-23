@@ -282,3 +282,28 @@ test("without --packages no package code runs: tools and commands stay unavailab
 	await host.close();
 	assert.ok(!existsSync(f.pingLog));
 });
+
+test("every tool a Durable Chat registers is behind the redacting wrapper: delegation, checkpoint, tool groups, Atelier, bash, Workbench and package tools, and a later install", async () => {
+	const f = family("wrapped");
+	// The in-process host reads this family's HOME and agent directory, as the host process would.
+	const saved = { ...process.env };
+	Object.assign(process.env, f.env);
+	const { defineExtension } = await import("@earendil-works/pi-durable");
+	const { openChatHost } = await import("../src/chat.ts");
+	const { isRedacting } = await import("../src/redact.ts");
+	const host = await openChatHost({ dir: f.store, cwd: f.cwd, model: "faux", chatId: f.chatId, packages: { agentDir: f.env.PI_CODING_AGENT_DIR } });
+	try {
+		host.registry.install(defineExtension({ name: "late.fixture", tools: [{ name: "late_tool", description: "late", parameters: { type: "object", properties: {} } as never, execute: async () => ({ output: [] }) }] }));
+		const registered = host.registry.snapshot().tools();
+		const names = registered.map(({ tool }) => tool.name);
+		for (const name of ["read", "write", "edit", "grep", "ask_user", "request_attention", "compact_and_continue", "subagent", "subagent_status", "worker_dispatch", "tools_enable", "bash", "bash_status", "bash_cancel", "atelier", "web_enable", "late_tool"])
+			assert.ok(names.includes(name), `${name} is registered: ${names.join(", ")}`);
+		const bare = registered.filter(({ tool }) => !isRedacting(tool)).map(({ extension, tool }) => `${extension.name}/${tool.name}`);
+		assert.deepEqual(bare, [], `${String(registered.length)} tools registered; not wrapped: ${bare.join(", ")}`);
+	} finally {
+		await host.packages?.close();
+		await host.close();
+		for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+		Object.assign(process.env, saved);
+	}
+});

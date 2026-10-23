@@ -26,6 +26,7 @@ import {
 	type WorkingModeState,
 } from "../../../extensions/working-mode/rules.mts";
 import { context } from "./host.ts";
+import { redact } from "./redact.ts";
 
 // ─── Entry kinds the browser projection recognises ───────────────────────────
 
@@ -366,7 +367,8 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 		parameters: Type.Object({ reason: Type.String({ description: "One short, self-contained line: what you need from the user and why, readable without the Chat." }) }),
 		replay: "safe",
 		execute: async (args, api, c) => {
-			const reason = args.reason.trim().slice(0, TEXT_MAX);
+			// Bounded after sanitizing: a cut through a secret leaves a fragment no later redaction recognizes.
+			const reason = redact(args.reason.trim()).slice(0, TEXT_MAX);
 			if (reason === "") throw new Error("request_attention needs a reason: what you need from the user and why");
 			const request: Attention = { id: stableId(chatId, String(api.taskId), "attention"), reason };
 			const fresh = await api.commit(async (tx) => {
