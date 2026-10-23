@@ -30,6 +30,7 @@ import {
 	LiveDoc,
 	type TaskId,
 	type ToolRegistration,
+	type Tx,
 } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord";
 import { taskLabel } from "../../../packages/pi-execution-adapter/src/index.js";
@@ -257,32 +258,53 @@ function reporterTask(options: DelegationOptions) {
 				const child = (await runtime.conversation(conversation, c))!;
 				const submission = await child.submit({ type: "input", content: task.input.assignment, whenBusy: "followUp", requestId: `assignment:${id}` }, c);
 				const settled = await submission.wait(c);
-				if (before.kind === "worker" && settled.status === "done") await settleLeaves(runtime, child, id, c);
-				await holdFn("child:after-result", runtime.signal);
-				const view = await runtime.context(conversation, c);
-				const answers = view.entries.flatMap((entry) => {
-					const message = entry.model?.[0] as AssistantMessage | undefined;
-					return message?.role === "assistant" && message.stopReason === "stop" ? [{ entry, message }] : [];
-				});
-				const answer = sanitize(messageText(answers.at(-1)?.message));
-				const outcome: Outcome = settled.status === "done" ? "success" : settled.reason === "aborted" ? "cancelled" : "execution_failed";
-				const endedAt = iso(runtime.now());
-				const committed = await runtime.commit(async (tx) => {
-					const doc = await tx.doc(DelegationDoc, runtime.conversationId);
-					const e = doc.executions[id]!;
-					const cancelled = e.cancelEpoch !== undefined;
-					if (!cancelled && e.outcome === "running") {
-						e.outcome = outcome;
-						e.endedAt = endedAt;
-						e.length = answer.length;
-						e.text = answer.slice(0, RESULT_MAX);
-						if (answer.length > RESULT_MAX) e.truncated = true;
-						if (outcome !== "success") e.diagnostic = settled.status === "unanswered" ? `child input ended unanswered (${settled.reason})` : "child failed";
-						if (e.workerId !== undefined) settleWorker(await tx.doc(WorkersDoc), e);
-					}
-					return { status: "running", checkpoint: { phase: "wake", deliver: e.background && !cancelled && !e.collected } };
-				}, c);
-				void committed;
+				const done = settled.status === "done";
+				let answers: { entry: { id: unknown }; message: AssistantMessage }[];
+				// Steers and follow-ups the lead admitted run after the assignment answered: the child ends once they all have.
+				for (;;) {
+					if (done) await child.waitForIdle(c);
+					if (before.kind === "worker" && done) await settleLeaves(runtime, child, id, c);
+					await holdFn("child:after-result", runtime.signal);
+					const view = await runtime.context(conversation, c);
+					const replies = view.entries.flatMap((entry) => {
+						const message = entry.model?.[0] as AssistantMessage | undefined;
+						return message?.role === "assistant" ? [{ entry, message }] : [];
+					});
+					answers = replies.filter(({ message }) => message.stopReason === "stop");
+					// A later run that failed or was stopped decides the outcome, not the assignment's earlier answer.
+					const late = done ? replies.at(-1)?.message : undefined;
+					const lateEnd = late?.stopReason === "error" || late?.stopReason === "aborted" ? late : undefined;
+					const answer = sanitize(messageText(answers.at(-1)?.message));
+					const outcome: Outcome = lateEnd !== undefined ? (lateEnd.stopReason === "aborted" ? "cancelled" : "execution_failed")
+						: done ? "success" : settled.reason === "aborted" ? "cancelled" : "execution_failed";
+					const diagnostic = lateEnd !== undefined ? `child run after its assignment ended ${lateEnd.stopReason}${lateEnd.errorMessage === undefined ? "" : `: ${sanitize(lateEnd.errorMessage)}`}`
+						: settled.status === "unanswered" ? `child input ended unanswered (${settled.reason})` : "child failed";
+					const endedAt = iso(runtime.now());
+					let pending = false;
+					await runtime.commit(async (tx) => {
+						const doc = await tx.doc(DelegationDoc, runtime.conversationId);
+						const e = doc.executions[id]!;
+						const cancelled = e.cancelEpoch !== undefined;
+						if (!cancelled && e.outcome === "running") {
+							// Checked in this commit, which the steer tool's admission commit is ordered against: none slips past.
+							if (outcome === "success" && (await steerPending(tx, conversation, e))) {
+								pending = true;
+								return undefined;
+							}
+							e.outcome = outcome;
+							e.endedAt = endedAt;
+							e.length = answer.length;
+							e.text = answer.slice(0, RESULT_MAX);
+							if (answer.length > RESULT_MAX) e.truncated = true;
+							if (outcome !== "success") e.diagnostic = diagnostic;
+							if (e.workerId !== undefined) settleWorker(await tx.doc(WorkersDoc), e);
+						}
+						return { status: "running", checkpoint: { phase: "wake", deliver: e.background && !cancelled && !e.collected } };
+					}, c);
+					if (!pending) break;
+					// A steer admitted but not yet submitted to the child: wait for it to arrive and run.
+					await sleep(50, undefined, { signal: runtime.signal });
+				}
 				const record = (await runtime.snapshot(DelegationDoc, runtime.conversationId, c))!.executions[id]!;
 				options.record("execution.settled", { executionId: id, kind: record.kind, outcome: record.outcome, childSessionId: `${options.chatId}:${String(conversation)}`, ...(record.workerId === undefined ? {} : { workerId: record.workerId }) });
 				for (const { entry, message } of answers)
@@ -338,6 +360,15 @@ function reporterTask(options: DelegationOptions) {
 		},
 		abort: (_task, runtime, c) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c),
 	});
+}
+
+/** Whether a steer or follow-up admitted for this child is not yet submitted to it, or not yet answered. */
+async function steerPending(tx: Tx, conversation: ConversationId, e: Execution): Promise<boolean> {
+	for (let seq = 1; seq <= e.steers; seq++) {
+		const submission = await tx.submissionByRequest(conversation, `steer:${e.executionId}:${String(seq)}`);
+		if (submission === undefined || submission.status === "queued" || submission.status === "placed") return true;
+	}
+	return false;
 }
 
 /** What settling leaves needs of the reporter's runtime. */
@@ -541,8 +572,8 @@ export function delegationExtension(options: DelegationOptions) {
 	};
 
 	const launched = (e: Execution, verb: string): Result => ({
-		output: text(`${verb} ${e.kind} ${e.executionId}${e.workerName === undefined ? "" : ` (worker "${e.workerName}"${e.continuing === true ? ", resuming its scope" : ", first dispatch"})`} in the background on ${e.provider}/${e.model}:${e.effort}${e.fallback === undefined ? "" : ` (fallback from ${e.fallback})`} (${e.profile} · ${e.cognitiveRole}). The completion signal starts your next turn; end this turn instead of waiting.`),
-		details: copy({ outcome: "launched", executionId: e.executionId, kind: e.kind, provider: e.provider, model: e.model, effort: e.effort, profile: e.profile, cognitiveRole: e.cognitiveRole, acceptedAt: e.launchedAt, ...(e.workerId === undefined ? {} : { workerId: e.workerId }) }),
+		output: text(`${verb} ${e.kind} ${e.executionId}${e.workerName === undefined ? "" : ` (worker "${e.workerName}"${e.continuing === true ? ", resuming its scope" : ", first dispatch"})`} in the background on ${e.provider}/${e.model}:${e.effort}${e.fallback === undefined ? "" : ` (fallback from ${e.fallback})`} (${e.profile} · ${e.cognitiveRole}) in ${e.cwd}. The completion signal starts your next turn; end this turn instead of waiting.`),
+		details: copy({ outcome: "launched", executionId: e.executionId, kind: e.kind, provider: e.provider, model: e.model, effort: e.effort, profile: e.profile, cognitiveRole: e.cognitiveRole, cwd: e.cwd, acceptedAt: e.launchedAt, ...(e.workerId === undefined ? {} : { workerId: e.workerId }) }),
 	});
 
 	/** Foreground: wait for the child's settled result and collect it with this call; Esc cancels the child. */
