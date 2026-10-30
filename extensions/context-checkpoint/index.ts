@@ -118,10 +118,11 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
 
   // The nudge is a boundary entry, not a message: it rides into the next request instead of starting one.
   const ceiling = createContextCeiling();
-  pi.on("turn_end", (_event, ctx) => {
+  pi.on("turn_end", (event, ctx) => {
     if (!pi.getActiveTools().includes("compact_and_continue")) return undefined;
     const entry = ceiling(ctx.getContextUsage()?.tokens);
-    return entry === undefined ? undefined : { entries: [entry] };
+    // Pi replaces the chained boundary entries with the returned list: keep earlier handlers' entries.
+    return entry === undefined ? undefined : { entries: [...(event.entries ?? []), entry] };
   });
 
   pi.on("agent_start", (_event, ctx) => {

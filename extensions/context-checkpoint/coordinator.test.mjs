@@ -201,6 +201,11 @@ test("nudges once when context crosses the ceiling and re-arms after it drops", 
   assert.equal(turnEnd(80_000), undefined);
   assert.ok(turnEnd(251_000), "a compacted session that grows back is nudged again");
 
+  const earlier = { type: "custom", customType: "other-extension" };
+  assert.equal(turnEnd(80_000), undefined);
+  const chained = handlers.get("turn_end")({ type: "turn_end", toolResults: [], entries: [earlier] }, { getContextUsage: () => ({ tokens: 260_000, contextWindow: 1_000_000, percent: null }) });
+  assert.deepEqual(chained.entries.map((entry) => entry.customType), ["other-extension", "context-ceiling"], "Pi replaces the chained entries with the returned list, so earlier handlers' entries are kept");
+
   active = ["read"];
   assert.equal(turnEnd(80_000), undefined);
   assert.equal(turnEnd(400_000), undefined, "no nudge toward a tool this session cannot call");
