@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Block until the first condition holds, then print one line about it. Silent while waiting, so a
 // child that has only foreground bash waits in one tool call instead of sleep or tail -f turns.
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { parseArgs } from "node:util";
@@ -23,7 +23,8 @@ try {
   } }));
 } catch (error) { fail(error.message); }
 if (values.help) { console.log(USAGE); process.exit(0); }
-const seconds = (name) => { const n = Number(values[name]); if (!(n > 0)) fail(`--${name} must be a positive number of seconds`); return n; };
+// Node timers hold at most 2^31-1 ms (about 24 days); a larger value would fire at once.
+const seconds = (name) => { const n = Number(values[name]); if (!(n > 0 && n * 1000 <= 2 ** 31 - 1)) fail(`--${name} must be a positive number of seconds, at most 2147483`); return n; };
 const timeout = seconds("timeout");
 const every = seconds("every");
 const started = Date.now();
@@ -49,58 +50,64 @@ if (conditions.length === 0) fail("give at least one of --file, --pid, --cmd, --
 function fileCondition(file, match) {
   let regex;
   if (match !== undefined) { try { regex = new RegExp(match); } catch (error) { fail(`--match: ${error.message}`); } }
-  // Read only what was appended since the last poll. A replaced, shrunk, or rewritten file (the bytes
-  // just before the offset changed) starts over.
-  let offset = 0, inode, seen = Buffer.alloc(0), partial = "", decoder = new StringDecoder("utf8"), last = "";
-  const reset = (ino) => { inode = ino; offset = 0; seen = Buffer.alloc(0); partial = ""; decoder = new StringDecoder("utf8"); };
+  let version, last = "";
   return {
     check() {
       let stat;
       try { stat = statSync(file); } catch { return null; }
       if (!regex) return `file ${file} exists`;
       if (!stat.isFile()) { last = "not a regular file"; return null; } // opening a FIFO would block
+      // Rescan the whole file whenever it changed: a log rewritten in place can keep its size, head, and footer.
+      // ponytail: rereads a growing log every poll; track appends by offset if multi-GB logs make that slow.
+      const now = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      if (now === version) return null;
+      version = now;
       const fd = openSync(file, "r");
       try {
-        if (stat.ino !== inode || stat.size < offset) reset(stat.ino);
-        else if (seen.length > 0) {
-          const now = Buffer.alloc(seen.length);
-          readSync(fd, now, 0, seen.length, offset - seen.length);
-          if (!now.equals(seen)) reset(stat.ino);
-        }
-        const buffer = Buffer.alloc(1 << 20);
-        for (let n; offset < stat.size && (n = readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - offset), offset)) > 0;) {
-          offset += n;
-          seen = Buffer.from(buffer.subarray(Math.max(0, n - 4096), n));
+        const buffer = Buffer.alloc(1 << 20), decoder = new StringDecoder("utf8");
+        let partial = "";
+        for (let offset = 0, n; (n = readSync(fd, buffer, 0, buffer.length, offset)) > 0; offset += n) {
           const lines = (partial + decoder.write(buffer.subarray(0, n))).split("\n");
-          partial = lines.pop().slice(-65536);
+          partial = lines.pop();
           for (const line of lines) { if (line) last = line; if (regex.test(line)) return `file ${file} matched: ${line}`; }
         }
+        if (partial) last = partial;
+        // A last line without its newline yet still counts.
+        return partial && regex.test(partial) ? `file ${file} matched: ${partial}` : null;
       } finally { closeSync(fd); }
-      if (partial) last = partial;
-      // A last line without its newline yet still counts; it stays in `partial` for the next poll.
-      return partial && regex.test(partial) ? `file ${file} matched: ${partial}` : null;
     },
-    pending: () => regex ? `file ${file} has no line matching /${match}/${last ? `; last line: ${last}` : ""}` : `file ${file} missing`,
+    pending: () => regex ? `file ${file} has no line matching /${match}/${last ? `; last line: ${last.slice(0, 300)}` : ""}` : `file ${file} missing`,
   };
 }
+
+// Each probe runs in its own process group, so killing the group reaches everything it started, even
+// after the probe's shell exited. A guard in that group kills it once this process is gone, which covers
+// Pi aborting the bash call with SIGKILL.
+const GUARD = `(while kill -0 ${process.pid} 2>/dev/null; do sleep 1; done; kill -KILL 0) </dev/null >/dev/null 2>&1 & exec /bin/bash -c "$1"`;
+const killGroup = (pid) => { try { process.kill(-pid, "SIGKILL"); } catch {} };
 
 function commandCondition(command) {
   let last = "command still running at the timeout";
   return {
-    // Not detached: Pi's bash abort SIGKILLs its process group, and the probe must die with it.
     check: () => new Promise((resolve) => {
-      const child = spawn("/bin/bash", ["-c", command], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn("/bin/bash", ["-c", GUARD, "wait-until", command], { stdio: ["ignore", "pipe", "pipe"], detached: true });
       probes.add(child.pid);
       let output = "";
       const collect = (d) => { output = (output + d).slice(-8192); };
       child.stdout.on("data", collect);
       child.stderr.on("data", collect);
       child.on("error", (error) => { probes.delete(child.pid); last = error.message; resolve(null); });
-      child.on("close", (code) => {
-        probes.delete(child.pid);
-        last = `command exit ${code}: ${tail(output, 5)}`;
-        resolve(code === 0 ? `command succeeded: ${command}${output.trim() ? `\n${tail(output)}` : ""}` : null);
-      });
+      // The exit status decides. Killing the group then ends any background child holding the output
+      // pipes open, so the output can be read to its end.
+      let status = null, done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        last = `command exit ${status}: ${tail(output, 5)}`;
+        resolve(status === 0 ? `command succeeded: ${command}${output.trim() ? `\n${tail(output)}` : ""}` : null);
+      };
+      child.on("exit", (code) => { status = code; probes.delete(child.pid); killGroup(child.pid); setTimeout(finish, 1000); });
+      child.on("close", finish);
     }),
     pending: () => last,
   };
@@ -121,24 +128,6 @@ function urlCondition(url) {
   };
 }
 
-// Kill a still-running command probe and everything it started.
-// ponytail: one ps snapshot; a process forked after it survives. Add a process-group wrapper if that bites.
-function killProbes() {
-  if (probes.size === 0) return;
-  const children = new Map();
-  try {
-    for (const line of execFileSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" }).trim().split("\n")) {
-      const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-      children.set(ppid, [...(children.get(ppid) ?? []), pid]);
-    }
-  } catch {}
-  for (const stack = [...probes]; stack.length > 0;) {
-    const pid = stack.pop();
-    try { process.kill(pid, "SIGKILL"); } catch {}
-    stack.push(...(children.get(pid) ?? []));
-  }
-}
-
 // Every condition polls on its own, so a slow command or URL never delays the others.
 const met = await new Promise((resolve) => {
   setTimeout(() => resolve(null), deadline - Date.now());
@@ -150,7 +139,7 @@ const met = await new Promise((resolve) => {
     }
   })();
 });
-killProbes();
+for (const pid of probes) killGroup(pid);
 if (met) { console.log(`waited ${Math.round((Date.now() - started) / 100) / 10}s: ${met}`); process.exit(0); }
 console.log(`wait-until: timed out after ${timeout}s; nothing held:\n${conditions.map((c) => `- ${c.pending()}`).join("\n")}`);
 process.exit(124);

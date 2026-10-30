@@ -84,6 +84,12 @@ test("summarizes child tool activity without exposing shell arguments", () => {
   // A silent wait-until names what it waits for, never the command or URL it runs.
   assert.equal(summarizeToolAction("bash", { command: "wait-until --timeout 900 --file /repo/target/gate.log --match 'BUILD (SUCCESS|FAILURE)' --pid 42" }), "waiting for target/gate.log or pid 42");
   assert.equal(summarizeToolAction("bash", { command: "cd /repo && wait-until --cmd 'gh pr checks 7 --token=abc' --url https://user:pw@example.test/health" }), "waiting for a command or a URL");
+  // Shell words, not whitespace: quoted paths stay whole and a quoted command never leaks its contents.
+  assert.equal(summarizeToolAction("bash", { command: "wait-until --file '/repo/build output/done' --timeout 60" }), "waiting for build output/done");
+  assert.equal(summarizeToolAction("bash", { command: "wait-until --file=ready" }), "waiting for ready");
+  assert.equal(summarizeToolAction("bash", { command: "wait-until --cmd 'grep --file SECRET_NAME x'" }), "waiting for a command");
+  assert.equal(summarizeToolAction("bash", { command: "echo wait-until --file fake" }), "running bash");
+  assert.equal(summarizeToolAction("bash", { command: "node ~/x/extensions/subagent/wait-until.mjs --pid 9" }), "waiting for pid 9");
   assert.equal(summarizeToolAction("grep", { path: "/repo/src", pattern: "AWS_SECRET_ACCESS_KEY=abc" }), "searching repo/src");
   assert.equal(summarizeToolAction("read", { path: "/repo/src/\u001b[2Jauth.ts" }).includes("\u001b"), false);
 });

@@ -539,19 +539,44 @@ function cleanText(value) {
 }
 
 // Children wait silently with extensions/subagent/wait-until.mjs; name what they wait for, but never a
-// command or URL, which can carry credentials.
+// command or URL, which can carry credentials. Reads shell words so a quoted value stays one word.
 function waitTargets(value) {
-  const parts = cleanText(value).split(" ");
-  const at = parts.findIndex((part) => /^wait-until(\.mjs)?$/.test(part.split(/[\\/]/).at(-1)));
+  const words = shellWords(String(value ?? ""));
+  const at = words.findIndex((word, i) => typeof word === "string" && /^wait-until(\.mjs)?$/.test(word.split("/").at(-1))
+    && (i === 0 || words[i - 1] === SHELL_OPERATOR || (words[i - 1] === "node" && (i === 1 || words[i - 2] === SHELL_OPERATOR))));
   if (at < 0) return undefined;
   const targets = [];
-  for (let i = at + 1; i < parts.length; i += 1) {
-    if (parts[i] === "--file") targets.push(concisePath(parts[i + 1]) ?? "a file");
-    if (parts[i] === "--pid" && /^\d+$/.test(parts[i + 1] ?? "")) targets.push(`pid ${parts[i + 1]}`);
-    if (parts[i] === "--cmd") targets.push("a command");
-    if (parts[i] === "--url") targets.push("a URL");
+  for (let i = at + 1; i < words.length && words[i] !== SHELL_OPERATOR; i += 1) {
+    const [flag, inline] = words[i].split(/=(.*)/s);
+    const argument = inline ?? words[i + 1] ?? "";
+    if (flag === "--file") targets.push(concisePath(argument) ?? "a file");
+    if (flag === "--pid" && /^\d+$/.test(argument)) targets.push(`pid ${argument}`);
+    if (flag === "--cmd") targets.push("a command");
+    if (flag === "--url") targets.push("a URL");
+    if (inline === undefined && flag !== "--help") i += 1; // every other option takes a value
   }
   return targets.length > 0 ? `waiting for ${targets.join(" or ")}` : "waiting";
+}
+
+const SHELL_OPERATOR = Symbol("shell operator");
+// ponytail: quotes, backslashes, and ; & | only; no expansions or subshells, which a label does not need.
+function shellWords(text) {
+  const words = [];
+  let word = null;
+  const flush = () => { if (word !== null) words.push(word); word = null; };
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      const close = text.indexOf(c, i + 1);
+      word = (word ?? "") + text.slice(i + 1, close < 0 ? text.length : close);
+      i = close < 0 ? text.length : close;
+    } else if (c === "\\") word = (word ?? "") + (text[++i] ?? "");
+    else if (/\s/.test(c)) flush();
+    else if (";&|".includes(c)) { flush(); if (words.at(-1) !== SHELL_OPERATOR) words.push(SHELL_OPERATOR); }
+    else word = (word ?? "") + c;
+  }
+  flush();
+  return words;
 }
 
 function safeCommandName(value) {

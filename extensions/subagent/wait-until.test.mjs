@@ -60,6 +60,22 @@ test("rescans a log rewritten in place to the same size", async () => {
   assert.match(out, /DONE!!!/);
 });
 
+test("rescans a large log rewritten in place with the same size and footer", async () => {
+  const file = join(dir, "stable-footer.log");
+  const footer = "padding\n".repeat(1000);
+  writeFileSync(file, `waiting\n${footer}`);
+  later(150, () => writeFileSync(file, `DONE!!!\n${footer}`));
+  const { code } = await waitUntil("--timeout", "3", "--file", file, "--match", "DONE");
+  assert.equal(code, 0);
+});
+
+test("matches inside a line longer than any read chunk", async () => {
+  const file = join(dir, "long-line.log");
+  writeFileSync(file, `DONE${"x".repeat(3 << 20)}`);
+  const { code } = await waitUntil("--timeout", "3", "--file", file, "--match", "DONE");
+  assert.equal(code, 0);
+});
+
 test("a FIFO cannot hold the wait past its timeout", async () => {
   const fifo = join(dir, "fifo");
   spawnSync("mkfifo", [fifo]);
@@ -93,7 +109,7 @@ test("the first of several conditions wins", async () => {
 test("a slow command does not starve the other conditions, and is killed when they win", async () => {
   const marker = join(dir, "marker");
   const probe = join(dir, "slow-probe.pid");
-  later(200, () => writeFileSync(marker, ""));
+  const appear = setInterval(() => { if (existsSync(probe)) { clearInterval(appear); writeFileSync(marker, ""); } }, 50);
   const started = Date.now();
   const { code, out } = await waitUntil("--timeout", "5", "--file", marker, "--cmd", `echo $$ > ${probe}; sleep 30; true`);
   assert.equal(code, 0);
@@ -110,11 +126,29 @@ test("killing the bash tool's process group also kills a running command probe",
   for (let i = 0; i < 100 && !existsSync(probe); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
   await new Promise((resolve) => setTimeout(resolve, 50));
   process.kill(-shell.pid, "SIGKILL");
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await new Promise((resolve) => setTimeout(resolve, 2000)); // the probe's guard checks its owner every second
   const pid = Number(readFileSync(probe, "utf8"));
   const leaked = alive(pid);
   if (leaked) process.kill(pid, "SIGKILL");
   assert.equal(leaked, false);
+});
+
+test("a command's exit status counts even while its background child holds the output open, and the child dies with the wait", async () => {
+  const child = join(dir, "background-child.pid");
+  const started = Date.now();
+  const { code } = await waitUntil("--timeout", "5", "--cmd", `sleep 30 & echo $! > ${child}; exit 0`);
+  assert.equal(code, 0);
+  assert.ok(Date.now() - started < 3000);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(alive(Number(readFileSync(child, "utf8"))), false);
+});
+
+test("a failed attempt's background child does not outlive the wait", async () => {
+  const child = join(dir, "failed-child.pid");
+  const { code } = await waitUntil("--timeout", "0.5", "--cmd", `sleep 30 >/dev/null 2>&1 & echo $! >> ${child}; exit 1`);
+  assert.equal(code, 124);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  for (const pid of readFileSync(child, "utf8").trim().split("\n").map(Number)) assert.equal(alive(pid), false);
 });
 
 test("reruns a command until it succeeds and prints its output; reports the last failure on timeout", async () => {
@@ -154,4 +188,5 @@ test("rejects a call without a condition or with an invalid one", async () => {
   assert.equal((await waitUntil("--file", "x", "--match", "(")).code, 2);
   assert.equal((await waitUntil("--timeout", "soon", "--pid", "1")).code, 2);
   assert.equal((await waitUntil("--pid", "abc")).code, 2);
+  assert.equal((await waitUntil("--timeout", "Infinity", "--pid", "1")).code, 2, "a timer Node cannot represent");
 });
