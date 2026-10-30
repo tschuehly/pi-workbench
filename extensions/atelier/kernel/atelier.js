@@ -999,9 +999,16 @@ function boot() {
   document.addEventListener("selectionchange", () => { if (!selQueued) { selQueued = true; requestAnimationFrame(() => { selQueued = false; placeSel(); }); } });
   // A floating box or an atl-wip label follows its anchor through any scroll, the Page's or an inner container's.
   // A pin follows its Key through an inner container's scroll (2.8.1); the Page's own scroll moves it with the Key.
-  let popQueued = false, pinsQueued = false; const scrolled = new Set();
+  let popQueued = false, pinsQueued = false, seenQueued = false; const scrolled = new Set();
   addEventListener("scroll", (ev) => {
     if (!selBtn.hidden) placeSel();
+    if (traces.size && !seenQueued && !isUi(ev.target)) {
+      seenQueued = true;
+      requestAnimationFrame(() => {
+        seenQueued = false;
+        for (const [addr, t] of traces) { const m = t.nodes.mark, el = m?.isConnected && m.classList.contains("atl-mark-bar") && findKey(addr); if (el) placeSeen(m, el); }
+      });
+    }
     if (ev.target !== document && !isUi(ev.target) && (pins.size || spots.size || spotDots.size)) {
       scrolled.add(ev.target);
       if (!pinsQueued) {
@@ -1215,16 +1222,22 @@ function boot() {
       const p = m.getBoundingClientRect(), r = el.getBoundingClientRect();
       m.style.translate = `${Math.round(Math.max(2, r.left - 10) - p.left)}px ${Math.round(r.top - p.top)}px`;
       m.firstElementChild.style.height = `${Math.round(r.height)}px`;
-      // "Seen" takes the first spot on screen and clear of the Page's content (a sub-tab list beside the Key, a control
-      // above it): the gutter left of the bar, above the Key's top edge at the bar, the gutter right of the Key; with
-      // none clear, the left gutter if on screen, else above.
-      const s = m.lastElementChild, vw = document.documentElement.clientWidth;
-      const at = (cls, left = "") => { s.classList.remove("atl-seen-up", "atl-seen-right"); if (cls) s.classList.add(cls); s.style.left = left; return s.getBoundingClientRect(); };
-      const onScreen = (b) => b.left >= 2 && b.right <= vw - 2, clear = (b) => onScreen(b) && !contentIn(b, el).out.some((o) => meets(o, b));
-      const right = `${Math.round(r.right + 6 - m.getBoundingClientRect().left)}px`;
-      if (!clear(at("")) && !clear(at("atl-seen-up")) && !clear(at("atl-seen-right", right)) && !onScreen(at(""))) at("atl-seen-up");
+      placeSeen(m, el);
     }
     for (const [s, d] of spotDots) placeDot(s, d);
+  }
+  // "Seen" takes the first spot on screen and clear of the Page's content (a sub-tab list beside the Key, a control
+  // above it): the gutter left of the bar, above the Key's top edge at the bar, the gutter right of the Key; with none
+  // clear, the left gutter if on screen, else above. Only a Key in view (with a Seen's height to spare) is checked, so
+  // the cost follows the marks on screen; any scroll rechecks those, so Seen follows fixed content and newly shown Keys.
+  function placeSeen(m, el) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom < -40 || r.top > innerHeight + 40) return;
+    const s = m.lastElementChild, vw = document.documentElement.clientWidth;
+    const at = (cls, left = "") => { s.classList.remove("atl-seen-up", "atl-seen-right"); if (cls) s.classList.add(cls); s.style.left = left; return s.getBoundingClientRect(); };
+    const onScreen = (b) => b.left >= 2 && b.right <= vw - 2, clear = (b) => onScreen(b) && !contentIn(b, el).out.some((o) => meets(o, b));
+    const right = `${Math.round(r.right + 6 - m.getBoundingClientRect().left)}px`;
+    if (!clear(at("")) && !clear(at("atl-seen-up")) && !clear(at("atl-seen-right", right)) && !onScreen(at(""))) at("atl-seen-up");
   }
   // A tab switch or an opened details moves the in-page mark.
   document.addEventListener("click", () => { if (traces.size) requestAnimationFrame(renderMarks); });

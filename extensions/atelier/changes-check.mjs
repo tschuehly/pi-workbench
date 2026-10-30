@@ -152,6 +152,23 @@ try {
   await js(`document.getElementById("tab-flow").click(); true`); await sleep(300);
   assert.equal(await js(`document.querySelectorAll("#tab-flow [atl-ui=mark]").length`), 0, "the dot leaves when the tab opens again");
   assert.equal(await js(`document.querySelectorAll("[atl-ui=mark].atl-mark-bar").length`), 3, "the bars return");
+  // Seen stays clear through a scroll: a fixed Page control that the scroll brings under Seen moves Seen elsewhere.
+  await js(`document.getElementById("card").scrollIntoView({block:"center"}); true`); await sleep(300);
+  const seen0 = await rect('[atl-ui=mark] .atl-seen[data-addr="proto/card"]');
+  await js(`(()=>{const f=document.createElement("button");f.id="fixed";f.textContent="Publish";f.style.cssText="position:fixed;margin:0;left:${seen0.l - 4}px;top:${seen0.t - 150 - 4}px;width:${seen0.r - seen0.l + 8}px;height:${seen0.b - seen0.t + 8}px";document.body.append(f);return true})()`);
+  await js("scrollBy(0, 150); true"); await sleep(300);
+  const seen1 = await rect('[atl-ui=mark] .atl-seen[data-addr="proto/card"]'), fixed = await rect("#fixed");
+  assert(!overlap(seen1, fixed), `the card's Seen leaves a fixed control the scroll brought under it: ${JSON.stringify({ seen1, fixed })}`);
+  await js(`document.getElementById("fixed").remove(); true`);
+  // Placing Seen costs nothing per mark off screen: reads grow with the marks, not with marks times Page content (here the
+  // changed Keys sit indented in one box, so each Seen's gutter lies in it and checking the spot walks all of them).
+  const many = (n) => update({ ...now, extra: `<div style="padding-left:200px">${Array.from({ length: n }, (_, i) => `<p atl-key="bulk-${i}">Bulk ${i}.</p>`).join("")}</div>` }, `${n} new`);
+  // Counted in the Page's own world (a script element), where the Kernel runs.
+  const reads = () => js(`(()=>{const s=document.createElement("script");s.textContent='{let n=0;const E=Element.prototype,R=Range.prototype,g=E.getBoundingClientRect,c=R.getClientRects;E.getBoundingClientRect=function(){n++;return g.call(this)};R.getClientRects=function(){n++;return c.call(this)};try{dispatchEvent(new Event("resize"))}finally{E.getBoundingClientRect=g;R.getClientRects=c}document.body.dataset.reads=n}';document.body.append(s);s.remove();return +document.body.dataset.reads})()`);
+  const bottom = async () => { await js("scrollTo(0, document.body.scrollHeight); true"); await sleep(300); };
+  await bottom(); await many(100); await bottom(); const r100 = await reads();
+  await many(300); await bottom(); const r300 = await reads();
+  assert(r300 < r100 * 4.5, `reads grow linearly with the marks (100 marks: ${r100}, 300: ${r300})`);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
   console.log("PASS change indicators: four kinds, accumulated diff, nav and rail, removed block, hidden tab, marks stay until Seen or Mark all seen, one tab dot in its corner, Seen clear of the gutter's content.");
 } finally {
