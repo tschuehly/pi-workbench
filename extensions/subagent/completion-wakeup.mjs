@@ -1,3 +1,5 @@
+import { redact, redactDeep } from "../secret-redaction/redact.mjs";
+
 const CUSTOM_TYPE = "pi-workbench:child-completion";
 const NORMAL_ATTENTION = "terminal-results";
 // Matches subagent_collect's bulk budget: the notice replaces that collect turn.
@@ -15,14 +17,15 @@ function composeNotice(ready, maxChars) {
   let used = 0;
   let truncated = 0;
   for (const [executionId, entry] of ready) {
-    if (entry.text === undefined || (delivered.length > 0 && used + entry.text.length > maxChars)) {
+    const section = entry.text === undefined ? undefined : `${executionId} [${entry.outcome}]\n${entry.text}`;
+    if (section === undefined || (delivered.length > 0 && used + section.length > maxChars)) {
       collect.push(executionId);
       continue;
     }
     delivered.push(executionId);
-    used += entry.text.length;
+    used += section.length;
     if (entry.truncated) truncated += 1;
-    sections.push(`${executionId} [${entry.outcome}]\n${entry.text}`);
+    sections.push(section);
   }
   const notes = [
     delivered.length === 0 ? "Background children finished." : `Background children finished; their results follow and are already collected.`,
@@ -50,7 +53,10 @@ export function isNormalCompletionAttention(message) {
  * compact results that fit its budget; delivery reports them through `onDelivered`, which marks
  * them collected. A child that finishes after the signal was composed rides the next one.
  */
-export function createCompletionWakeup({ sendMessage, onDelivered = () => {}, maxChars = NOTICE_MAX_CHARS }) {
+export function createCompletionWakeup({ sendMessage: send, onDelivered = () => {}, maxChars = NOTICE_MAX_CHARS }) {
+  // A displayed custom message is persisted before any redaction hook sees it (that hook covers
+  // tool results and assistant text), and child results can quote credentials, so redact here.
+  const sendMessage = (message, options) => send({ ...message, content: redact(message.content), details: redactDeep(message.details) }, options);
   const handled = new Set();
   const receiptFailuresObserved = new Set();
   const reconciliationInFlight = new Set();

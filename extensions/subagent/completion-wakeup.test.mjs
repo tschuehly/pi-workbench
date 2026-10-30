@@ -104,7 +104,7 @@ test("bounds the notice and leaves results that do not fit for subagent_collect"
   const second = sent[1].message;
   assert.deepEqual(second.details.delivered, ["exec-b"], "one oversized result is still carried alone");
 
-  const { wakeup: fanOut, sent: fanSent, delivered: fanDelivered } = harness({ maxChars: 100 });
+  const { wakeup: fanOut, sent: fanSent, delivered: fanDelivered } = harness({ maxChars: 150 });
   fanOut.notify({ ...subagent, executionId: "exec-1", text: "x".repeat(10) });
   fanSent.length = 0; // Pi dropped it; three more finish before the settle re-sends.
   for (const n of [2, 3, 4]) fanOut.notify({ ...subagent, executionId: `exec-${n}`, text: "y".repeat(40) });
@@ -343,4 +343,29 @@ test("returns foreground Worker receipt failure as outcome_unknown with inspecti
 test("rejects malformed internal completion metadata", () => {
   const { wakeup } = harness();
   assert.throws(() => wakeup.notify({ ...subagent, outcome: undefined }), /outcome must be a non-empty string/);
+});
+
+test("redacts credentials in a carried result before it is displayed or persisted", async () => {
+  const { wakeup, sent } = harness();
+  const token = "ghp_" + "A".repeat(36);
+  wakeup.notify({ ...subagent, outcome: "execution_failed", text: `execution_failed: git push said ${token}` });
+  assert.doesNotMatch(sent[0].message.content, new RegExp(token));
+  assert.match(sent[0].message.content, /\[REDACTED:github-token\]/);
+
+  await assert.rejects(settleWorkerReceipt({
+    settle: async () => { throw new Error(`registry write failed near ${token}`); },
+    wakeup,
+    background: true,
+    completion: { ...subagent, executionId: "exec-worker", workerId: "worker-1", workerName: "Worker" },
+  }));
+  assert.doesNotMatch(JSON.stringify(sent[1].message), new RegExp(token), "a receipt-failure diagnostic is redacted too");
+});
+
+test("counts each carried section, not only the result text, against the budget", () => {
+  const { wakeup, sent } = harness({ maxChars: 100 });
+  wakeup.notify({ ...subagent, executionId: "exec-1", text: "x".repeat(10) });
+  sent.length = 0;
+  wakeup.notify({ ...subagent, executionId: "exec-2-with-a-long-identifier-that-takes-room", text: "y".repeat(60) });
+  wakeup.rearm();
+  assert.deepEqual(sent[0].message.details.collect, ["exec-2-with-a-long-identifier-that-takes-room"]);
 });
