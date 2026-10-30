@@ -172,3 +172,41 @@ test("session shutdown during a checkpoint drops queued wakes with the pending c
   assert.deepEqual(delivered, []);
   assert.equal(barrier.queuedCount, 0);
 });
+
+test("nudges once when context crosses the ceiling and re-arms after it drops", async () => {
+  const { default: contextCheckpointExtension } = await import("./index.ts");
+  const handlers = new Map();
+  let active = ["read", "compact_and_continue"];
+  contextCheckpointExtension({
+    on: (event, handler) => handlers.set(event, handler),
+    registerTool: () => {},
+    sendMessage: () => assert.fail("the nudge must not cost a turn of its own"),
+    getActiveTools: () => active,
+  });
+  const turnEnd = (tokens) => handlers.get("turn_end")({ type: "turn_end", toolResults: [] }, { getContextUsage: () => ({ tokens, contextWindow: 1_000_000, percent: null }) });
+
+  assert.equal(turnEnd(249_999), undefined);
+  const nudge = turnEnd(262_400);
+  assert.equal(nudge.entries.length, 1);
+  const [entry] = nudge.entries;
+  assert.equal(entry.type, "custom_message", "the nudge rides into the next request without triggering one");
+  assert.equal(entry.customType, "context-ceiling");
+  assert.equal(entry.display, true, "the owner sees the nudge");
+  assert.match(entry.content, /262k tokens/);
+  assert.match(entry.content, /next phase boundary[\s\S]*compact_and_continue/);
+  assert.equal(nudge.continue, undefined, "the nudge never forces a continuation");
+  assert.equal(turnEnd(300_000), undefined, "one nudge per crossing");
+  assert.equal(turnEnd(null), undefined, "unknown usage right after compaction changes nothing");
+  assert.equal(turnEnd(300_000), undefined);
+  assert.equal(turnEnd(80_000), undefined);
+  assert.ok(turnEnd(251_000), "a compacted session that grows back is nudged again");
+
+  const earlier = { type: "custom", customType: "other-extension" };
+  assert.equal(turnEnd(80_000), undefined);
+  const chained = handlers.get("turn_end")({ type: "turn_end", toolResults: [], entries: [earlier] }, { getContextUsage: () => ({ tokens: 260_000, contextWindow: 1_000_000, percent: null }) });
+  assert.deepEqual(chained.entries.map((entry) => entry.customType), ["other-extension", "context-ceiling"], "Pi replaces the chained entries with the returned list, so earlier handlers' entries are kept");
+
+  active = ["read"];
+  assert.equal(turnEnd(80_000), undefined);
+  assert.equal(turnEnd(400_000), undefined, "no nudge toward a tool this session cannot call");
+});

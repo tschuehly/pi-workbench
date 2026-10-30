@@ -1,6 +1,44 @@
+import { redact, redactDeep } from "../secret-redaction/redact.mjs";
+
 const CUSTOM_TYPE = "pi-workbench:child-completion";
 const NORMAL_ATTENTION = "terminal-results";
-const NORMAL_CONTENT = "Background children finished. Call `subagent_collect` without an executionId once (repeat only if it reports a budget-limited remainder), then resume the run that launched them at its next incomplete step. Use `subagent_status` only if collect reports children still running and you must decide something about them. This notice authorizes no retry, relaunch, publication, or acceptance beyond that run's existing authorization.";
+// Matches subagent_collect's bulk budget: the notice replaces that collect turn.
+const NOTICE_MAX_CHARS = 24_000;
+const AUTHORITY = "This notice authorizes no retry, relaunch, publication, or acceptance beyond that run's existing authorization.";
+
+/**
+ * One notice carries every ready result that fits the budget, in completion order; the rest are
+ * named for subagent_collect. The first result is always carried: the adapter already bounds it.
+ */
+function composeNotice(ready, maxChars) {
+  const delivered = [];
+  const collect = [];
+  const sections = [];
+  let used = 0;
+  let truncated = 0;
+  for (const [executionId, entry] of ready) {
+    const section = entry.text === undefined ? undefined : `${executionId} [${entry.outcome}]\n${entry.text}`;
+    if (section === undefined || (delivered.length > 0 && used + section.length > maxChars)) {
+      collect.push(executionId);
+      continue;
+    }
+    delivered.push(executionId);
+    used += section.length;
+    if (entry.truncated) truncated += 1;
+    sections.push(section);
+  }
+  const notes = [
+    delivered.length === 0 ? "Background children finished." : `Background children finished; their results follow and are already collected.`,
+    truncated === 0 ? "" : `${truncated} result(s) truncated — verification incomplete; read the full text the result names.`,
+    collect.length === 0 ? "" : `Call \`subagent_collect\` without an executionId once for the results this notice could not carry: ${collect.join(", ")}.`,
+    "Then resume the run that launched them at its next incomplete step.",
+    AUTHORITY,
+  ].filter((note) => note !== "");
+  return {
+    content: [notes.join(" "), ...sections].join("\n\n"),
+    details: { attention: NORMAL_ATTENTION, delivered, collect },
+  };
+}
 
 /** True only for the delivered coalesced normal-attention message; receipt failures never match. */
 export function isNormalCompletionAttention(message) {
@@ -11,14 +49,19 @@ export function isNormalCompletionAttention(message) {
  * Owns session-local completion attention: normal completions coalesce into one steer
  * signal, while a Worker receipt failure keeps its own exact per-execution attention.
  * Attention stays pending until its marker is delivered (or the result is collected), so a
- * signal Pi drops from its queue is re-sent once at the next settle. Terminal result content
- * remains behind subagent_collect.
+ * signal Pi drops from its queue is re-sent once at the next settle. The signal carries the
+ * compact results that fit its budget; delivery reports them through `onDelivered`, which marks
+ * them collected. A child that finishes after the signal was composed is signalled at its delivery.
  */
-export function createCompletionWakeup({ sendMessage }) {
+export function createCompletionWakeup({ sendMessage: send, onDelivered = () => {}, maxChars = NOTICE_MAX_CHARS }) {
+  // A displayed custom message is persisted before any redaction hook sees it (that hook covers
+  // tool results and assistant text), and child results can quote credentials, so redact here.
+  const sendMessage = (message, options) => send({ ...message, content: redact(message.content), details: redactDeep(message.details) }, options);
   const handled = new Set();
   const receiptFailuresObserved = new Set();
   const reconciliationInFlight = new Set();
-  const undelivered = new Set();
+  // executionId → { outcome, text?, truncated? } for terminal children whose attention is pending.
+  const undelivered = new Map();
   const receiptFailuresUndelivered = new Map();
   let shuttingDown = false;
   let queued = false;
@@ -30,7 +73,7 @@ export function createCompletionWakeup({ sendMessage }) {
     queued = true;
     resent = resend;
     sendMessage(
-      { customType: CUSTOM_TYPE, content: NORMAL_CONTENT, display: true, details: { attention: NORMAL_ATTENTION } },
+      { customType: CUSTOM_TYPE, display: true, ...composeNotice(undelivered, maxChars) },
       { deliverAs: "steer", triggerTurn: true },
     );
   };
@@ -45,13 +88,23 @@ export function createCompletionWakeup({ sendMessage }) {
     acknowledge(message) {
       if (isNormalCompletionAttention(message)) {
         queued = false;
-        undelivered.clear();
+        // A delivery proves the session is not spinning on resends.
+        resent = false;
+        const { delivered, collect } = message.details;
+        // A notice without a composition list (an earlier revision's) asked the lead to collect everything.
+        if (!Array.isArray(delivered)) return undelivered.clear();
+        for (const executionId of collect ?? []) undelivered.delete(executionId);
+        for (const executionId of delivered) if (undelivered.delete(executionId)) onDelivered(executionId);
+        // A child that finished after this notice was composed is queued now, inside the running turn
+        // (delivery means the session is streaming, so this steers rather than racing a prompt).
+        // Waiting for settle is too late for a Worker: its settle ends the dispatch.
+        if (undelivered.size > 0 && !shuttingDown) signal();
       } else if (message?.role === "custom" && message.customType === CUSTOM_TYPE && message.details?.receiptStatus === "failed") {
         receiptFailuresUndelivered.delete(message.details.executionId);
       }
     },
 
-    /** Agent settled: whatever is still pending was dropped, so re-send it once; subagent_collect still holds the results. */
+    /** Agent settled: whatever is still pending was dropped or finished late, so send it once; subagent_collect still holds the results. */
     rearm() {
       queued = false;
       if (shuttingDown) return;
@@ -89,7 +142,7 @@ export function createCompletionWakeup({ sendMessage }) {
       } else {
         if (reconciliationInFlight.has(executionId) || handled.has(executionId)) return false;
         handled.add(executionId);
-        undelivered.add(executionId);
+        undelivered.set(executionId, { outcome: meta.outcome, text: meta.text, truncated: meta.truncated === true });
       }
 
       requiredString(meta.outcome, "outcome");
@@ -97,8 +150,8 @@ export function createCompletionWakeup({ sendMessage }) {
       requiredString(meta.cognitiveRole, "cognitiveRole");
 
       if (!receiptFailed) {
-        // One signal per attention cycle: the lead reconciles the whole default status roster,
-        // so a second child adds nothing until the first signal has been delivered.
+        // One signal per attention cycle: two turn-triggering sends while idle would race into a
+        // concurrent prompt. A child that finishes meanwhile is signalled when this one is delivered.
         if (queued) return false;
         signal();
         return true;
