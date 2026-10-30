@@ -24,7 +24,7 @@ Tiers, default first: ${Object.entries(policy.tiers).map(([t, m]) => `${t}=${m.j
   Routing never moves to another tier; with both tier models unavailable it blocks.
 - review: needs the author (--independent-of-model, or --independent-of). It selects the tier model
   of the other family, then the third family; --model is allowed when its family differs.
-- --effort may not go below a role's minEffort (frontier and review: xhigh).
+- --effort may not go below a role's minEffort (frontier and review: medium).
 - --model selects one exact model with no fallback; the reserve tier is reachable only this way.
 - PI_WORKBENCH_ROUTING_OVERLAY=<abs path> narrows routing to an allowlist; see references/*-overlay.json.
 Exit: 0 pass (JSON or env on stdout), 1 unknown role, 2 usage, 3 ROUTING=BLOCKED with REASON.`;
