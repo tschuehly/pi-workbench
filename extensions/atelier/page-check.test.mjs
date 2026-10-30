@@ -481,6 +481,9 @@ test("open, update and check on the atelier tool append the Page check, served f
       const opened = await t.run({ action: "open", page: "broken-grid.html" });
       assert.match(opened.content[0].text, /^Page open: .*\n[\s\S]*\n\nPage check \(revision [0-9a-f]{12}, test copy at 1512×900\): FAIL\n[\s\S]*- FAIL {2}Kernel layout: /);
       assert.equal(opened.details.check.status, "fail");
+      const shots = opened.details.check.views.map((v) => v.screenshot);
+      assert(shots.length && shots.every((s) => s?.startsWith(path.join(PI_TMP_ROOT, path.basename(root)) + path.sep) && existsSync(s)), "screenshots in the session's PI_TMP folder");
+      assert(existsSync(opened.details.check.report));
       assert.equal(existsSync(path.join(root, "broken-grid.html.events.jsonl")), false, "the Page's own Event Log is untouched");
       const updated = await t.run({ action: "update", page: "broken-grid.html", text: "x" });
       assert.match(updated.content[0].text, /Page check \(revision [0-9a-f]{12}, test copy at 1512×900\): FAIL/);
