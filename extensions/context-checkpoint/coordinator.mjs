@@ -73,6 +73,30 @@ export function latestAssistantToolCallCount(branch) {
   return 0;
 }
 
+// ponytail: one fixed ceiling for every model; derive it from the context window if windows diverge.
+export const CONTEXT_CEILING_TOKENS = 250_000;
+
+/** Once per crossing of the ceiling, a boundary entry that asks for a checkpoint at the next phase boundary. */
+export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS) {
+  let nudged = false;
+  return (tokens) => {
+    if (typeof tokens !== "number") return undefined;
+    if (tokens < threshold) {
+      nudged = false;
+      return undefined;
+    }
+    if (nudged) return undefined;
+    nudged = true;
+    return {
+      type: "custom_message",
+      customType: "context-ceiling",
+      display: true,
+      content: `Context is at ${Math.round(tokens / 1000)}k tokens, above the ${threshold / 1000}k ceiling. Finish the current step; at the next phase boundary, save and verify the work that must survive, then call compact_and_continue alone with a short summaryFocus and the concrete nextPhase.`,
+      details: { tokens, threshold },
+    };
+  };
+}
+
 export const MAX_SUMMARY_FOCUS_CHARS = 1200;
 export const MAX_NEXT_PHASE_CHARS = 800;
 

@@ -2,6 +2,7 @@ import type { CompactionResult, ExtensionAPI } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import {
   createCheckpointCoordinator,
+  createContextCeiling,
   latestAssistantToolCallCount,
   MAX_NEXT_PHASE_CHARS,
   MAX_SUMMARY_FOCUS_CHARS,
@@ -113,6 +114,14 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
         terminate: scheduled.accepted,
       };
     },
+  });
+
+  // The nudge is a boundary entry, not a message: it rides into the next request instead of starting one.
+  const ceiling = createContextCeiling();
+  pi.on("turn_end", (_event, ctx) => {
+    if (!pi.getActiveTools().includes("compact_and_continue")) return undefined;
+    const entry = ceiling(ctx.getContextUsage()?.tokens);
+    return entry === undefined ? undefined : { entries: [entry] };
   });
 
   pi.on("agent_start", (_event, ctx) => {

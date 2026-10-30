@@ -188,7 +188,8 @@ function fakeRpc(options = {}) {
       if (command.type === "abort" && options.settleOnAbort) queueMicrotask(() => send({ type: "agent_settled" }));
       if (command.type === "prompt") {
         send({ id: command.id, type: "response", command: "prompt", success: true });
-        if (!options.hang) queueMicrotask(() => {
+        if (options.onPrompt) queueMicrotask(() => options.onPrompt(send));
+        else if (!options.hang) queueMicrotask(() => {
           send({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "secret reasoning" } });
           send({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "src" } });
           send({ type: "message_end", message: options.finalMessage ?? { role: "assistant", content: [{ type: "text", text: options.text ?? "Compact result" }], stopReason: "stop" } });
@@ -201,6 +202,51 @@ function fakeRpc(options = {}) {
 }
 
 async function eventuallyResult(adapter, id) { return await adapter.result(id); }
+
+test("a child's own context checkpoint does not end the execution", async () => {
+  let resume;
+  const checkpoint = (send, accepted) => {
+    send({ type: "agent_start" });
+    send({ type: "tool_execution_start", toolCallId: "cp", toolName: "compact_and_continue", args: {} });
+    send({ type: "tool_execution_end", toolCallId: "cp", toolName: "compact_and_continue", isError: false, result: { content: [], details: { accepted, state: accepted ? "pending" : "batched" } } });
+    send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Phase one done." }], stopReason: "toolUse" } });
+    send({ type: "agent_settled" });
+  };
+  const child = fakeRpc({
+    onPrompt: (send) => {
+      checkpoint(send, true);
+      // A Worker's settlement hold may continue the run once before it settles; that is not the resume.
+      send({ type: "agent_start" });
+      send({ type: "agent_settled" });
+      resume = () => {
+        send({ type: "compaction_start", reason: "manual" });
+        send({ type: "compaction_end", reason: "manual" });
+        const resumeMessage = { role: "custom", customType: "context-checkpoint", content: "Context checkpoint completed.", display: true };
+        send({ type: "agent_start" });
+        send({ type: "message_start", message: resumeMessage });
+        send({ type: "message_end", message: resumeMessage });
+        send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Final after checkpoint." }], stopReason: "stop" } });
+        send({ type: "agent_settled" });
+      };
+    },
+  });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, settlementProbeMs: 1 });
+  const receipt = await adapter.dispatch(spec({ tools: ["read", "compact_and_continue"] }));
+  let settled = false;
+  const result = adapter.result(receipt.executionId).then((value) => { settled = true; return value; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false, "the settle that starts compaction is not the child's end");
+  assert.equal(adapter.status(receipt.executionId).running, true);
+  assert.equal(adapter.status(receipt.executionId).latestObservation.type, "checkpoint_pending");
+  resume();
+  const final = await result;
+  assert.equal(final.outcome, "success");
+  assert.equal(final.text, "Final after checkpoint.");
+
+  const rejected = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ onPrompt: (send) => checkpoint(send, false) }) });
+  const again = await rejected.dispatch(spec({ tools: ["read", "compact_and_continue"] }));
+  assert.equal((await rejected.result(again.executionId)).outcome, "success", "a checkpoint the tool did not accept ends at the settle as before");
+});
 
 test("launches one persistent RPC child, verifies binding, and returns compact metadata", async () => {
   const children = [];

@@ -82,10 +82,10 @@ progress, while `background: true` returns a handle reconciled through the exist
 `background: true` the system-prompt preference for most Worker dispatches; foreground blocking is
 only for a result that is the lead's immediate next input when nothing useful can happen first.
 After a background dispatch, the lead finishes any genuinely independent work and ends the turn;
-the completion signal starts the next turn. The lead never calls collect to wait. On that signal,
-the lead calls `subagent_collect` without an execution ID first, repeating only for a reported
-budget-limited remainder; `subagent_status` is diagnostic and is used only if collect reports
-children still running and the lead must decide something about them. Collect-by-ID on a running
+the completion signal starts the next turn. The lead never calls collect to wait. That signal
+carries the receipt-safe results that fit its budget (Decision 98); the lead calls
+`subagent_collect` without an execution ID only for children the signal names; `subagent_status`
+is diagnostic. Collect-by-ID on a running
 dispatch or a finished dispatch whose Worker receipt is still settling returns a bounded snapshot
 immediately without marking it collected. Bulk collect reports and skips settling Workers; each
 receipt settlement sends the normal completion signal.
