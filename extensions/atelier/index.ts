@@ -7,6 +7,7 @@ import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs"
 import { REQUEST_STATES, derive } from "./kernel/atelier.js";
 import { WATCHDOG_MS, createHost, readLog } from "./host.ts";
 import { checkPage, formatCheck } from "./check-page.mjs";
+import { piTmpDir } from "../pi-tmp/pitmp.mjs";
 import type { Host, Message } from "./host.ts";
 
 // Atelier extension (decisions 129-156): the `atelier` tool, and Delivery of human events from a Page's Event Log
@@ -103,10 +104,13 @@ export default function atelierExtension(pi: ExtensionAPI) {
       host ??= createHost({ root, send, sessionId, label: pi.getSessionName?.(), handoff: (m) => pi.sendMessage(m, { deliverAs: "steer" }), idle: () => !starting && (current?.isIdle() ?? true) });
       const text = (t: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text: t }], details: { action: params.action, page: host!.rel(page), ...details } });
       // The Page check (check-page.mjs) on a test copy served from this host's root; ATELIER_PAGE_CHECK=off skips it
-      // (unit tests). It never fails the action; a cancelled tool call cancels it.
+      // (unit tests). It never fails the action; a cancelled tool call cancels it. Screenshots and the full report go to
+      // this session's PI_TMP folder: an attended process hosts several sessions and has no process-wide PI_TMP.
       const checked = async (t: string, details: Record<string, unknown> = {}, source?: Buffer) => {
         if (process.env.ATELIER_PAGE_CHECK === "off") return text(t, details);
-        const check = await checkPage(page!, { root: host!.root, source, signal }).catch((error: unknown) => ({ status: "unchecked", viewport: "", revision: null, checks: [], views: [], unchecked: [String(error).slice(0, 300)], report: null }));
+        let tmp = process.env.PI_TMP;
+        try { if (sessionId) tmp = piTmpDir(ctx.cwd, sessionId); } catch { /* unwritable root: checkPage reports it unchecked */ }
+        const check = await checkPage(page!, { root: host!.root, tmp, source, signal }).catch((error: unknown) => ({ status: "unchecked", viewport: "", revision: null, checks: [], views: [], unchecked: [String(error).slice(0, 300)], report: null }));
         return text([t, formatCheck(check)].filter(Boolean).join("\n\n"), { ...details, check });
       };
 

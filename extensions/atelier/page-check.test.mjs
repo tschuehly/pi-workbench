@@ -13,6 +13,9 @@ import atelierExtension from "./index.ts";
 import { checkPage, formatCheck, tagBalance } from "./check-page.mjs";
 
 const CHECK = fileURLToPath(new URL("./check-page.mjs", import.meta.url));
+// The tool writes check output to its session's PI_TMP folder; keep those folders out of the real root.
+const PI_TMP_ROOT = process.env.PI_TMP_ROOT = realpathSync(mkdtempSync(path.join(process.env.PI_TMP ?? tmpdir(), "atelier-pitmp-")));
+test.after(() => rmSync(PI_TMP_ROOT, { recursive: true, force: true }));
 const noBrowser = spawnSync("agent-browser", ["--version"]).status !== 0 && "agent-browser is not on PATH: Page check browser cases skipped";
 const sha = (b) => createHash("sha256").update(b).digest("hex").slice(0, 12);
 const HEAD = /^Page check \(revision [0-9a-f]{12}, test copy at 1512×900\): /;
@@ -321,6 +324,37 @@ test("update shows the new revision at once and returns the check of exactly tha
     assert.match(served.url, /\/pages\/p\.atelier-check-[0-9a-f]{8}\.html$/);
     assert(updated.details.check.unchecked.some((u) => u.startsWith("revision: the Page file changed")));
   } finally { t.stop(); s.restore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the tool check writes screenshots and the full report to the calling session's PI_TMP folder, without setting PI_TMP", async () => {
+  // An attended process (PI WEB daemon) hosts several sessions and has no process-wide PI_TMP.
+  const saved = { PI_TMP: process.env.PI_TMP, PI_WORKBENCH_EXECUTION_KIND: process.env.PI_WORKBENCH_EXECUTION_KIND };
+  const root = project({ page: FIXTURES.good });
+  delete process.env.PI_TMP; delete process.env.PI_WORKBENCH_EXECUTION_KIND;
+  const s = shim(), runs = [];
+  try {
+    s.use();
+    for (const id of ["session-a", "session-b"]) {
+      const tools = new Map(), handlers = {};
+      atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: () => {} });
+      const ctx = { cwd: root, isIdle: () => true, sessionManager: { getSessionId: () => id } };
+      handlers.session_start({}, ctx);
+      try { runs.push([id, await withCheck(undefined, () => tools.get("atelier").execute("id", { action: "check", page: "page.html" }, undefined, undefined, ctx))]); }
+      finally { handlers.session_shutdown(); }
+    }
+    for (const [id, res] of runs) {
+      const report = res.details.check.report;
+      assert(report, res.content[0].text);
+      assert.equal(path.dirname(path.dirname(report)), path.join(PI_TMP_ROOT, path.basename(root), id), "in the session's own folder");
+      assert(existsSync(report));
+      assert.doesNotMatch(res.content[0].text, /PI_TMP is not set/);
+    }
+    assert.equal(process.env.PI_TMP, undefined, "no process-wide PI_TMP");
+  } finally {
+    s.restore();
+    for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the Page check flags each real defect by its measured check and passes the good Pages", { skip: noBrowser, timeout: 1_200_000 }, async () => {
