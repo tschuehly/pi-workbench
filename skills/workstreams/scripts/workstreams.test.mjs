@@ -284,3 +284,14 @@ test("repeated writes are no-ops; overview and close need the reviewed revision"
     assert.match(run(directory, ["list"]).out, /count: 0 open \(1 closed\)/);
   });
 });
+
+// mac-storage-workspaces reads `docker-volume:<name>` references and "keep until" labels as ownership.
+test("a retained link records a Docker volume the Workstream keeps", async () => {
+  await withStore(async (directory) => {
+    seed(directory);
+    const retained = ["link", "ws-a", "--kind", "retained", "--ref", "docker-volume:eval_neo4j_data", "--label", "frozen eval store; keep until close"];
+    assert.match(run(directory, retained).out, /^ok: link retained-/);
+    const { links } = JSON.parse(run(directory, ["show", "ws-a", "--json"]).out);
+    assert.ok(links.some((link) => link.kind === "retained" && link.reference === "docker-volume:eval_neo4j_data"), JSON.stringify(links));
+  });
+});
