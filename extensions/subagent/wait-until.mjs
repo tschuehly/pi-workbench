@@ -67,6 +67,7 @@ function fileCondition(file, match) {
         const buffer = Buffer.alloc(1 << 20), decoder = new StringDecoder("utf8");
         let partial = "";
         for (let offset = 0, n; (n = readSync(fd, buffer, 0, buffer.length, offset)) > 0; offset += n) {
+          if (Date.now() >= deadline) { version = undefined; return null; } // a huge scan must not outlast the timeout
           const lines = (partial + decoder.write(buffer.subarray(0, n))).split("\n");
           partial = lines.pop();
           for (const line of lines) { if (line) last = line; if (regex.test(line)) return `file ${file} matched: ${line}`; }
