@@ -1215,12 +1215,14 @@ function boot() {
       const p = m.getBoundingClientRect(), r = el.getBoundingClientRect();
       m.style.translate = `${Math.round(Math.max(2, r.left - 10) - p.left)}px ${Math.round(r.top - p.top)}px`;
       m.firstElementChild.style.height = `${Math.round(r.height)}px`;
-      // "Seen" sits in the gutter left of the bar; when that is off screen or holds the Page's own content (a sub-tab
-      // list beside the Key), above the Key's top edge at the bar.
-      // ponytail: above the Key can touch the element before it on a Page with no gap; move it if that bites.
-      const s = m.lastElementChild; s.classList.remove("atl-seen-up");
-      const b = s.getBoundingClientRect();
-      if (b.left < 2 || contentIn(b, el).out.some((o) => meets(o, b))) s.classList.add("atl-seen-up");
+      // "Seen" takes the first spot on screen and clear of the Page's content (a sub-tab list beside the Key, a control
+      // above it): the gutter left of the bar, above the Key's top edge at the bar, the gutter right of the Key; with
+      // none clear, the left gutter if on screen, else above.
+      const s = m.lastElementChild, vw = document.documentElement.clientWidth;
+      const at = (cls, left = "") => { s.classList.remove("atl-seen-up", "atl-seen-right"); if (cls) s.classList.add(cls); s.style.left = left; return s.getBoundingClientRect(); };
+      const onScreen = (b) => b.left >= 2 && b.right <= vw - 2, clear = (b) => onScreen(b) && !contentIn(b, el).out.some((o) => meets(o, b));
+      const right = `${Math.round(r.right + 6 - m.getBoundingClientRect().left)}px`;
+      if (!clear(at("")) && !clear(at("atl-seen-up")) && !clear(at("atl-seen-right", right)) && !onScreen(at(""))) at("atl-seen-up");
     }
     for (const [s, d] of spotDots) placeDot(s, d);
   }
@@ -1699,7 +1701,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}
 [atl-ui].atl-mark-bar>button:hover{width:6px}
 [atl-ui].atl-mark-bar>button.atl-seen,[atl-ui].atl-rail>button.atl-allseen{display:flex;align-items:center;gap:3px;width:auto;min-height:0;padding:1px 6px;border:1px solid var(--atl-line);border-radius:9px;background:var(--atl-bg);color:var(--atl-muted);font:11px/16px system-ui,sans-serif;white-space:nowrap;cursor:pointer}
-[atl-ui].atl-mark-bar>button.atl-seen{left:auto;right:4px}[atl-ui].atl-mark-bar>button.atl-seen.atl-seen-up{right:auto;left:0;top:auto;bottom:0}
+[atl-ui].atl-mark-bar>button.atl-seen{left:auto;right:4px}[atl-ui].atl-mark-bar>button.atl-seen.atl-seen-up{right:auto;left:0;top:auto;bottom:0}[atl-ui].atl-mark-bar>button.atl-seen.atl-seen-right{right:auto}
 [atl-ui].atl-mark-bar>button.atl-seen:hover,[atl-ui].atl-rail>button.atl-allseen:hover{width:auto;color:var(--atl-fg)}
 [atl-ui].atl-rail>button.atl-allseen{top:0;right:16px;height:auto;pointer-events:auto}
 .atl-seen svg,.atl-allseen svg{width:12px;height:12px}

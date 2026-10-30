@@ -22,7 +22,7 @@ const write = ({ intro = "Comments wait for Send and go out together.", extra = 
 <section id="catalogue" atl-key="catalogue"><h2>Catalogue</h2>${table ? `<table atl-key="blocks" id="blocks"><tr><th>Block</th><th>Use</th></tr><tr><td>decision</td><td>ask a question</td></tr></table>` : ""}<p atl-key="after-table" id="after-table">After the table.</p>${filler}</section>
 <section id="proto" atl-key="proto"><h2>Protocol</h2><div id="tabs" style="overflow:auto;white-space:nowrap;width:260px;transform:scale(1.25);transform-origin:0 0;margin-bottom:12px"><button role="tab" id="tab-flow" aria-controls="p-flow" style="overflow:hidden">Flow<span id="badge" style="position:absolute;left:0;top:0;width:4px;height:4px"></span></button><button role="tab" id="tab-log" aria-controls="p-log">Log</button><input type="button" role="tab" id="tab-more" aria-controls="p-more" value="More"><span style="display:inline-block;width:400px"></span></div>
 <div role="tabpanel" id="p-flow"><p>The flow.</p><p atl-key="flow-a" id="flow-a">${flow[0]}</p><p atl-key="flow-b" id="flow-b">${flow[1]}</p></div><div role="tabpanel" id="p-more" hidden><p atl-key="more" id="more">${more}</p></div><div role="tabpanel" id="p-log" hidden><p atl-key="log" id="log">${tab}</p></div>
-<div style="display:flex;gap:24px"><div id="side" style="flex:none;width:200px"><button id="side-1" style="width:100%;text-align:left">A sub-tab with a long label</button></div><p atl-key="card" id="card" style="margin:0">${card}</p></div>${filler}</section>
+<div style="display:flex;gap:24px"><div id="side" style="flex:none;width:200px"><button id="side-1" style="width:100%;text-align:left">A sub-tab with a long label</button></div><div><button id="above" style="display:block">Previous card</button><p atl-key="card" id="card" style="margin:0">${card}</p></div></div>${filler}</section>
 <script>document.addEventListener("click",(e)=>{const t=e.target.closest("[role=tab]");if(!t)return;for(const p of document.querySelectorAll("[role=tabpanel]"))p.hidden=p.id!==t.getAttribute("aria-controls")});</script>
 <script type="module" src="atelier.js"></script></body></html>`);
 await write();
@@ -119,8 +119,9 @@ try {
   assert.deepEqual(await js(`[...document.querySelectorAll("[atl-ui=mark]")].filter((m)=>m.classList.contains("atl-mark-bar")).map((m)=>m.parentElement.id).sort()`), ["card", "flow-a", "flow-b"]);
   const overlap = (a, o) => a.l < o.r && o.l < a.r && a.t < o.b && o.t < a.b;
   const rect = (sel) => js(`(()=>{const r=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom}})()`);
-  const seenBox = await rect('[atl-ui=mark] .atl-seen[data-addr="proto/card"]'), side = await rect("#side-1");
+  const seenBox = await rect('[atl-ui=mark] .atl-seen[data-addr="proto/card"]'), side = await rect("#side-1"), above = await rect("#above");
   assert(!overlap(seenBox, side), `the card's Seen leaves the sub-tab alone: ${JSON.stringify({ seenBox, side })}`);
+  assert(!overlap(seenBox, above), `the card's Seen leaves the button above it alone: ${JSON.stringify({ seenBox, above })}`);
   await js(`document.getElementById("tab-log").click(); true`); await sleep(300);
   const dots = await js(`[...document.querySelectorAll("#tab-flow [atl-ui=mark]")].map((m)=>{const r=m.querySelector(".atl-dot").getBoundingClientRect();return {cls:m.className,title:m.querySelector(".atl-dot").title,l:r.left,r:r.right,t:r.top,b:r.bottom}})`);
   const tab = await tabBox();
