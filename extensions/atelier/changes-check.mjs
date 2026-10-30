@@ -14,13 +14,15 @@ assert(process.env.PI_TMP, "Set PI_TMP to a disposable directory.");
 const dir = await realpath(await mkdtemp(path.join(process.env.PI_TMP, "atelier-changes-")));
 const page = path.join(dir, "page.html");
 const filler = "<p>Filler text so the sections need scrolling.</p>".repeat(14);
-const write = ({ intro = "Comments wait for Send and go out together.", extra = "", table = true, tab = "Events are lines in a log file." } = {}) => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Changes check</title>
-<style>body{font:15px/1.5 system-ui;max-width:700px;margin:24px auto 24px 220px;background:#fff;color:#111}nav.toc{position:fixed;left:16px;top:24px;display:grid}[role=tabpanel][hidden]{display:none}</style>
+// flow: the two Keys in the Flow tab; card: the Key beside a sub-tab list that fills its left gutter.
+const write = ({ intro = "Comments wait for Send and go out together.", extra = "", table = true, tab = "Events are lines in a log file.", flow = ["Step one.", "Step two."], card = "The related card." } = {}) => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Changes check</title>
+<style>body{font:15px/1.5 system-ui;max-width:700px;margin:24px auto 24px 220px;background:#fff;color:#111}nav.toc{position:fixed;left:16px;top:24px;display:grid}[role=tabpanel][hidden]{display:none}[role=tab]{display:inline-flex;gap:4px}</style>
 <body><nav class="toc"><a href="#how">How it works</a><a href="#catalogue">Catalogue</a><a href="#proto">Protocol</a></nav>
 <section id="how" atl-key="how"><h2>How it works</h2><p atl-key="intro" id="intro">${intro}</p>${extra}${filler}</section>
 <section id="catalogue" atl-key="catalogue"><h2>Catalogue</h2>${table ? `<table atl-key="blocks" id="blocks"><tr><th>Block</th><th>Use</th></tr><tr><td>decision</td><td>ask a question</td></tr></table>` : ""}<p atl-key="after-table" id="after-table">After the table.</p>${filler}</section>
 <section id="proto" atl-key="proto"><h2>Protocol</h2><button role="tab" id="tab-flow" aria-controls="p-flow">Flow</button><button role="tab" id="tab-log" aria-controls="p-log">Log</button>
-<div role="tabpanel" id="p-flow"><p>The flow.</p></div><div role="tabpanel" id="p-log" hidden><p atl-key="log" id="log">${tab}</p></div>${filler}</section>
+<div role="tabpanel" id="p-flow"><p>The flow.</p><p atl-key="flow-a" id="flow-a">${flow[0]}</p><p atl-key="flow-b" id="flow-b">${flow[1]}</p></div><div role="tabpanel" id="p-log" hidden><p atl-key="log" id="log">${tab}</p></div>
+<div style="display:flex;gap:24px"><div id="side" style="flex:none;width:200px"><button id="side-1" style="width:100%;text-align:left">A sub-tab with a long label</button></div><p atl-key="card" id="card" style="margin:0">${card}</p></div>${filler}</section>
 <script>document.addEventListener("click",(e)=>{const t=e.target.closest("[role=tab]");if(!t)return;for(const p of document.querySelectorAll("[role=tabpanel]"))p.hidden=p.id!==t.getAttribute("aria-controls")});</script>
 <script type="module" src="atelier.js"></script></body></html>`);
 await write();
@@ -52,7 +54,7 @@ try {
   await until("document.querySelector('.atl-conn')?.textContent==='live'");
   await js("window.updates=0; document.addEventListener('atelier:update',()=>updates++); true");
   // Read the whole Page once (the Log tab too), then go to the bottom so nothing changed is in view.
-  for (const id of ["intro", "blocks", "after-table"]) { await scrollTo(id); await seen(id); }
+  for (const id of ["intro", "blocks", "after-table", "flow-a", "flow-b", "card"]) { await scrollTo(id); await seen(id); }
   await js(`document.getElementById("tab-log").click(); document.getElementById("log").scrollIntoView(); true`); await seen("log");
   await js(`document.getElementById("tab-flow").click(); scrollTo(0, document.body.scrollHeight); true`); await sleep(200);
 
@@ -102,8 +104,34 @@ try {
   assert.equal(await js(`document.querySelectorAll('[atl-ui=mark] [data-addr="proto/log"]').length`), 2, "read in its tab, still marked: bar and Seen");
   await js(`document.querySelector("[atl-ui=rail] .atl-allseen").click(); true`); await sleep(800);
   assert.equal(await js(`document.querySelectorAll("[atl-ui=mark],[atl-ui=gone],[atl-ui=rail] [data-atl=chrail],nav.toc .atl-dot").length`), 0, "Mark all seen clears every mark");
+
+  // 2.11.1: changed Keys whose tab closes after their bars were drawn mark the tab with one dot in its corner, taking
+  // no layout space (2.11.0 kept each bar's offset, so the dot floated off the tab, and added a dot per change).
+  // A bar's Seen moves above its Key when the gutter holds the Page's own content.
+  await js(`document.getElementById("tab-flow").click(); true`); await sleep(200);
+  const tabBox = () => js(`(()=>{const r=document.getElementById("tab-flow").getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom,w:r.width,h:r.height}})()`);
+  const before = await tabBox();
+  const now = { intro: "Comments go out when you save them.", table: false, extra: `<p atl-key="new-p" id="new-p">A new paragraph.</p>`, tab: "Events are JSON lines." };
+  await update({ ...now, flow: ["Step one, reworded.", "Step two, reworded."], card: "The related card, reworded." }, "Flow and card");
+  await scrollTo("tab-flow"); await sleep(200);
+  assert.deepEqual(await js(`[...document.querySelectorAll("[atl-ui=mark]")].filter((m)=>m.classList.contains("atl-mark-bar")).map((m)=>m.parentElement.id).sort()`), ["card", "flow-a", "flow-b"]);
+  const overlap = (a, o) => a.l < o.r && o.l < a.r && a.t < o.b && o.t < a.b;
+  const rect = (sel) => js(`(()=>{const r=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom}})()`);
+  const seenBox = await rect('[atl-ui=mark] .atl-seen[data-addr="proto/card"]'), side = await rect("#side-1");
+  assert(!overlap(seenBox, side), `the card's Seen leaves the sub-tab alone: ${JSON.stringify({ seenBox, side })}`);
+  await js(`document.getElementById("tab-log").click(); true`); await sleep(300);
+  const dots = await js(`[...document.querySelectorAll("#tab-flow [atl-ui=mark]")].map((m)=>{const r=m.querySelector(".atl-dot").getBoundingClientRect();return {cls:m.className,title:m.querySelector(".atl-dot").title,l:r.left,r:r.right,t:r.top,b:r.bottom}})`);
+  const tab = await tabBox();
+  assert.equal(dots.length, 1, `one dot for the tab, not one per change: ${JSON.stringify(dots)}`);
+  assert.match(dots[0].cls, /atl-mark-dot atl-k-reworded/);
+  assert.match(dots[0].title, /Step one, reworded[\s\S]*Step two, reworded/, "the dot's tip lists both changes");
+  assert(dots[0].l >= tab.l && dots[0].r <= tab.r && dots[0].t >= tab.t && dots[0].b <= tab.b && dots[0].l > tab.l + tab.w / 2 && dots[0].t < tab.t + tab.h / 2, `the dot sits in the tab's top-right corner: ${JSON.stringify({ dots, tab })}`);
+  assert.deepEqual([tab.w, tab.h], [before.w, before.h], "the dot takes no layout space in the tab");
+  await js(`document.getElementById("tab-flow").click(); true`); await sleep(300);
+  assert.equal(await js(`document.querySelectorAll("#tab-flow [atl-ui=mark]").length`), 0, "the dot leaves when the tab opens again");
+  assert.equal(await js(`document.querySelectorAll("[atl-ui=mark].atl-mark-bar").length`), 3, "the bars return");
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
-  console.log("PASS change indicators: four kinds, accumulated diff, nav and rail, removed block, hidden tab, marks stay until Seen or Mark all seen.");
+  console.log("PASS change indicators: four kinds, accumulated diff, nav and rail, removed block, hidden tab, marks stay until Seen or Mark all seen, one tab dot in its corner, Seen clear of the gutter's content.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

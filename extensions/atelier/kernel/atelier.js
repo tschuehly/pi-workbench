@@ -1,4 +1,4 @@
-// Atelier Kernel 2.11.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.11.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -1107,6 +1107,8 @@ function boot() {
     return el;
   }
   const navDots = new Map(); // in-page link -> its dot; one per link, coloured by its strongest change
+  const spotDots = new Map(); // tab, summary or ancestor that hides changed Keys -> its one dot, in its top-right corner
+  const strongest = (list) => list.reduce((x, y) => RANK[y.t.kind] > RANK[x.t.kind] ? y : x);
   const nodesOf = (t) => [t.nodes.mark, t.nodes.gone, t.nodes.diff, t.nodes.rail].filter(Boolean);
   function removeTrace(addr) { const t = traces.get(addr); if (t) nodesOf(t).forEach((n) => n.remove()); traces.delete(addr); }
   // Fades them all, renders once, removes them together: "Mark all seen" on n marks is one render, not n.
@@ -1130,7 +1132,7 @@ function boot() {
     rail.hidden = !traces.size;
     if (rail.firstElementChild !== allSeen) rail.prepend(allSeen);
     const links = traces.size ? [...document.querySelectorAll('a[href^="#"]')].filter((a) => !isUi(a) && a.hash.length > 1) : [];
-    const height = document.documentElement.scrollHeight || 1, nav = new Map();
+    const height = document.documentElement.scrollHeight || 1, nav = new Map(), hid = new Map();
     for (const [addr, t] of [...traces]) {
       const n = t.nodes, cls = `atl-k-${t.kind}`, tip = tipOf(addr, t);
       let el;
@@ -1147,11 +1149,14 @@ function boot() {
       } else {
         el = findKey(addr);
         if (!el) { removeTrace(addr); continue; }
-        const spot = visibleSpot(el), bar = spot === el;
-        n.mark ??= h(`<span atl-ui="mark"></span>`);
-        n.mark.className = `atl-mark ${cls} ${bar ? "atl-mark-bar" : "atl-mark-dot"}`;
-        set(n.mark, bar ? `<button data-atl="chmark" data-addr="${esc(addr)}" aria-label="${esc(tip)}" title="${esc(tip)}${t.before != null ? "\n(click: show changes)" : ""}"></button><button data-atl="chseen" data-addr="${esc(addr)}" class="atl-seen" title="Mark this change as seen">${icon("check")} Seen</button>` : `<span class="atl-dot" title="${esc(tip)}"></span>`);
-        if (n.mark.parentElement !== spot) place(n.mark, spot);
+        const spot = visibleSpot(el);
+        if (spot !== el) { n.mark?.remove(); n.mark = null; hid.set(spot, [...hid.get(spot) ?? [], { t, tip }]); }
+        else {
+          n.mark ??= h(`<span atl-ui="mark"></span>`);
+          n.mark.className = `atl-mark ${cls} atl-mark-bar${t.fading ? " atl-fade" : ""}`;
+          set(n.mark, `<button data-atl="chmark" data-addr="${esc(addr)}" aria-label="${esc(tip)}" title="${esc(tip)}${t.before != null ? "\n(click: show changes)" : ""}"></button><button data-atl="chseen" data-addr="${esc(addr)}" class="atl-seen" title="Mark this change as seen">${icon("check")} Seen</button>`);
+          if (n.mark.parentElement !== spot) place(n.mark, spot);
+        }
         if (t.open && n.diff && n.diff.parentElement !== el) place(n.diff, el);
       }
       // The Page's own navigation: the in-page link to the innermost section that holds the change.
@@ -1166,11 +1171,19 @@ function boot() {
     for (const [a, dot] of navDots) if (!nav.has(a)) { dot.remove(); navDots.delete(a); }
     for (const [a, list] of nav) {
       const dot = navDots.get(a) ?? h(`<span atl-ui="dot"></span>`);
-      const best = list.reduce((x, y) => RANK[y.t.kind] > RANK[x.t.kind] ? y : x);
-      dot.className = `atl-dot atl-k-${best.t.kind}${list.every((x) => x.t.fading) ? " atl-fade" : ""}`;
+      dot.className = `atl-dot atl-k-${strongest(list).t.kind}${list.every((x) => x.t.fading) ? " atl-fade" : ""}`;
       dot.title = list.map((x) => x.tip).join("\n\n");
       navDots.set(a, dot);
       if (dot.parentElement !== a) a.append(dot);
+    }
+    // Hidden changes: one dot per tab or summary, laid out as nothing (positionMarks puts it in the corner).
+    for (const [s, dot] of spotDots) if (!hid.has(s)) { dot.remove(); spotDots.delete(s); }
+    for (const [s, list] of hid) {
+      const dot = spotDots.get(s) ?? h(`<span atl-ui="mark"><span class="atl-dot"></span></span>`);
+      dot.className = `atl-mark atl-mark-dot atl-k-${strongest(list).t.kind}${list.every((x) => x.t.fading) ? " atl-fade" : ""}`;
+      dot.firstElementChild.title = list.map((x) => x.tip).join("\n\n");
+      spotDots.set(s, dot);
+      if (dot.parentElement !== s) place(dot, s);
     }
     positionMarks();
   }
@@ -1182,11 +1195,24 @@ function boot() {
       const p = m.getBoundingClientRect(), r = el.getBoundingClientRect();
       m.style.translate = `${Math.round(Math.max(2, r.left - 10) - p.left)}px ${Math.round(r.top - p.top)}px`;
       m.firstElementChild.style.height = `${Math.round(r.height)}px`;
-      // "Seen" sits in the gutter left of the bar; without room there, above the Key's top edge at the bar.
+      // "Seen" sits in the gutter left of the bar; when that is off screen or holds the Page's own content (a sub-tab
+      // list beside the Key), above the Key's top edge at the bar.
       // ponytail: above the Key can touch the element before it on a Page with no gap; move it if that bites.
       const s = m.lastElementChild; s.classList.remove("atl-seen-up");
-      if (s.getBoundingClientRect().left < 2) s.classList.add("atl-seen-up");
+      if (s.getBoundingClientRect().left < 2 || covers(s, el)) s.classList.add("atl-seen-up");
     }
+    for (const [s, d] of spotDots) {
+      if (!d.isConnected) continue;
+      d.style.translate = "";
+      const p = d.getBoundingClientRect(), r = s.getBoundingClientRect();
+      d.style.translate = `${Math.round(r.right - 6 - p.left)}px ${Math.round(r.top + 6 - p.top)}px`;
+    }
+  }
+  // Whether ui's box lies over Page content other than el and what holds it (sampled at its corners and centre).
+  function covers(ui, el) {
+    const r = ui.getBoundingClientRect();
+    return [[r.left + 1, r.top + 1], [r.right - 1, r.top + 1], [r.left + 1, r.bottom - 1], [r.right - 1, r.bottom - 1], [(r.left + r.right) / 2, (r.top + r.bottom) / 2]]
+      .some(([x, y]) => document.elementsFromPoint(x, y).some((e) => !isUi(e) && !e.contains(el) && !el.contains(e)));
   }
   // A tab switch or an opened details moves the in-page mark.
   document.addEventListener("click", () => { if (traces.size) requestAnimationFrame(renderMarks); });
@@ -1658,7 +1684,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
 ::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
 .atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
-.atl-mark-bar{position:absolute;width:0;height:0;z-index:2147481000}
+.atl-mark-bar,.atl-mark-dot{position:absolute;width:0;height:0;z-index:2147481000}.atl-mark-dot>.atl-dot{position:absolute;left:-3.5px;top:-3.5px;margin:0}
 [atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}
 [atl-ui].atl-mark-bar>button:hover{width:6px}
 [atl-ui].atl-mark-bar>button.atl-seen,[atl-ui].atl-rail>button.atl-allseen{display:flex;align-items:center;gap:3px;width:auto;min-height:0;padding:1px 6px;border:1px solid var(--atl-line);border-radius:9px;background:var(--atl-bg);color:var(--atl-muted);font:11px/16px system-ui,sans-serif;white-space:nowrap;cursor:pointer}
