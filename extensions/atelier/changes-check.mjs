@@ -169,6 +169,14 @@ try {
   await bottom(); await many(100); await bottom(); const r100 = await reads();
   await many(300); await bottom(); const r300 = await reads();
   assert(r300 < r100 * 4.5, `reads grow linearly with the marks (100 marks: ${r100}, 300: ${r300})`);
+  // A scroll rechecks only the Seens of Keys on screen, sideways too: a wide 20x15 grid of changed Keys, scrolled so
+  // most columns lie off to the side, measures only the Seens of Keys in view (2.11.1 round 6 measured every Seen of the
+  // grid, four times each, 146 ms per scroll frame). The check runs from <head>: a <body> change re-renders the Page.
+  await update({ ...now, extra: `<div id="grid" style="padding-left:100px;display:grid;grid-auto-flow:column;grid-template-rows:repeat(15,32px);grid-auto-columns:300px;width:max-content">${Array.from({ length: 300 }, (_, i) => `<p atl-key="grid-${i}" style="margin:0;width:200px">Cell ${i}.</p>`).join("")}</div>` }, "wide grid");
+  await js(`document.getElementById("grid").scrollIntoView({block:"start",inline:"start"}); scrollBy(300, 0); true`); await sleep(300);
+  const sideways = await js(`new Promise((done)=>{document.addEventListener("atl-check-frame",()=>done(JSON.parse(document.body.dataset.frame)),{once:true});const s=document.createElement("script");s.textContent='{const E=Element.prototype,g=E.getBoundingClientRect,raf=requestAnimationFrame,vw=document.documentElement.clientWidth;const seen=new Set();let ms=0;const keys=[...document.querySelectorAll("[atl-key^=grid-]")],inView=keys.filter((k)=>{const r=k.getBoundingClientRect();return r.right>=-80&&r.left<=vw+80&&r.bottom>=-40&&r.top<=innerHeight+40}).length;E.getBoundingClientRect=function(){if(this.matches(".atl-seen"))seen.add(this);return g.call(this)};window.requestAnimationFrame=(f)=>raf((t)=>{const a=performance.now();f(t);ms+=performance.now()-a});scrollBy(0,1);raf(()=>raf(()=>raf(()=>{E.getBoundingClientRect=g;window.requestAnimationFrame=raf;document.body.dataset.frame=JSON.stringify({seen:seen.size,ms:Math.round(ms),inView,keys:keys.length});document.dispatchEvent(new Event("atl-check-frame"))})))}';document.head.append(s);s.remove()})`);
+  assert(sideways.keys === 300 && sideways.inView > 0 && sideways.inView < 150, `the grid lies mostly off screen sideways: ${JSON.stringify(sideways)}`);
+  assert(sideways.seen <= sideways.inView, `a scroll measures only the Seens of Keys in view: ${JSON.stringify(sideways)}`);
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
   console.log("PASS change indicators: four kinds, accumulated diff, nav and rail, removed block, hidden tab, marks stay until Seen or Mark all seen, one tab dot in its corner, Seen clear of the gutter's content.");
 } finally {

@@ -1228,15 +1228,18 @@ function boot() {
   }
   // "Seen" takes the first spot on screen and clear of the Page's content (a sub-tab list beside the Key, a control
   // above it): the gutter left of the bar, above the Key's top edge at the bar, the gutter right of the Key; with none
-  // clear, the left gutter if on screen, else above. Only a Key in view (with a Seen's height to spare) is checked, so
-  // the cost follows the marks on screen; any scroll rechecks those, so Seen follows fixed content and newly shown Keys.
+  // clear, the left gutter if on screen, else above. Only a Key in view (with a Seen's room to spare, up, down and
+  // sideways) is checked, so the cost follows the marks on screen; any scroll rechecks those, so Seen follows fixed
+  // content and newly shown Keys. A Seen whose spot is still clear stays there, so a scroll does not move it about.
   function placeSeen(m, el) {
-    const r = el.getBoundingClientRect();
-    if (r.bottom < -40 || r.top > innerHeight + 40) return;
-    const s = m.lastElementChild, vw = document.documentElement.clientWidth;
+    const r = el.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+    if (r.bottom < -40 || r.top > innerHeight + 40 || r.right < -80 || r.left > vw + 80) return;
+    const s = m.lastElementChild;
     const at = (cls, left = "") => { s.classList.remove("atl-seen-up", "atl-seen-right"); if (cls) s.classList.add(cls); s.style.left = left; return s.getBoundingClientRect(); };
     const onScreen = (b) => b.left >= 2 && b.right <= vw - 2, clear = (b) => onScreen(b) && !contentIn(b, el).out.some((o) => meets(o, b));
     const right = `${Math.round(r.right + 6 - m.getBoundingClientRect().left)}px`;
+    if (s.classList.contains("atl-seen-right")) s.style.left = right; // the right gutter follows the Key's width
+    if (clear(s.getBoundingClientRect())) return;
     if (!clear(at("")) && !clear(at("atl-seen-up")) && !clear(at("atl-seen-right", right)) && !onScreen(at(""))) at("atl-seen-up");
   }
   // A tab switch or an opened details moves the in-page mark.
