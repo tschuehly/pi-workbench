@@ -315,6 +315,13 @@ export class PiRpcExecutionAdapter {
     state.completing = true;
     try {
       const current = await this.#command(state, "get_state", {}, this.controlTimeoutMs);
+      // An extension may start a run from agent_settled (a completion notice, a checkpoint resume);
+      // Pi runs it after emitting the event. Wait for that run's own settle; the probe backs it up.
+      if (current?.isStreaming === true || current?.pendingMessageCount > 0) {
+        state.completing = false;
+        this.#scheduleSettlementProbe(state);
+        return;
+      }
       await this.#finishSuccess(state, current);
     } catch (error) {
       this.#settleFailure(state, "execution_failed", errorMessage(error));

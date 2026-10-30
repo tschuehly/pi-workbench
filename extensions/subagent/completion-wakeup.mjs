@@ -51,7 +51,7 @@ export function isNormalCompletionAttention(message) {
  * Attention stays pending until its marker is delivered (or the result is collected), so a
  * signal Pi drops from its queue is re-sent once at the next settle. The signal carries the
  * compact results that fit its budget; delivery reports them through `onDelivered`, which marks
- * them collected. A child that finishes after the signal was composed rides the next one.
+ * them collected. A child that finishes after the signal was composed is signalled at its delivery.
  */
 export function createCompletionWakeup({ sendMessage: send, onDelivered = () => {}, maxChars = NOTICE_MAX_CHARS }) {
   // A displayed custom message is persisted before any redaction hook sees it (that hook covers
@@ -95,6 +95,10 @@ export function createCompletionWakeup({ sendMessage: send, onDelivered = () => 
         if (!Array.isArray(delivered)) return undelivered.clear();
         for (const executionId of collect ?? []) undelivered.delete(executionId);
         for (const executionId of delivered) if (undelivered.delete(executionId)) onDelivered(executionId);
+        // A child that finished after this notice was composed is queued now, inside the running turn
+        // (delivery means the session is streaming, so this steers rather than racing a prompt).
+        // Waiting for settle is too late for a Worker: its settle ends the dispatch.
+        if (undelivered.size > 0 && !shuttingDown) signal();
       } else if (message?.role === "custom" && message.customType === CUSTOM_TYPE && message.details?.receiptStatus === "failed") {
         receiptFailuresUndelivered.delete(message.details.executionId);
       }
@@ -147,7 +151,7 @@ export function createCompletionWakeup({ sendMessage: send, onDelivered = () => 
 
       if (!receiptFailed) {
         // One signal per attention cycle: two turn-triggering sends while idle would race into a
-        // concurrent prompt. A child that finishes meanwhile rides the next signal, at the latest when the agent settles.
+        // concurrent prompt. A child that finishes meanwhile is signalled when this one is delivered.
         if (queued) return false;
         signal();
         return true;

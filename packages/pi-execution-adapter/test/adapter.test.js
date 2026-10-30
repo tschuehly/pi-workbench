@@ -174,6 +174,7 @@ function fakeRpc(options = {}) {
   const send = (value) => child.stdout.write(`${JSON.stringify(value)}\n`);
   const stateResponse = (command) => ({ id: command.id, type: "response", command: "get_state", success: true, data: { model: { provider: options.provider ?? "anthropic", id: options.model ?? "claude-test" }, thinkingLevel: options.effort ?? "high", sessionId: options.sessionId ?? "child-session", isStreaming: false, isCompacting: false, pendingMessageCount: 0 } });
   let pendingGetState;
+  let streamingStates = options.streamingStates ?? 0;
   function drain() {
     for (;;) {
       const index = input.indexOf("\n"); if (index < 0) return;
@@ -181,6 +182,10 @@ function fakeRpc(options = {}) {
       if (command.type === "get_state") {
         if (options.hangOnGetState || (options.dropFinalState && child.commands.some((sent) => sent.type === "prompt"))) pendingGetState = command;
         else if (options.stateDelayMs !== undefined) setTimeout(() => send(stateResponse(command)), options.stateDelayMs);
+        else if (streamingStates > 0 && child.commands.some((sent) => sent.type === "prompt")) {
+          streamingStates -= 1;
+          send({ ...stateResponse(command), data: { ...stateResponse(command).data, isStreaming: true } });
+        }
         else send(stateResponse(command));
       }
       if (command.type === "new_session" || command.type === "set_session_name") send({ id: command.id, type: "response", command: command.type, success: true, data: command.type === "new_session" ? { cancelled: false } : undefined });
@@ -202,6 +207,29 @@ function fakeRpc(options = {}) {
 }
 
 async function eventuallyResult(adapter, id) { return await adapter.result(id); }
+
+test("a settle after which Pi starts a deferred run does not end the execution", async () => {
+  let more;
+  const child = fakeRpc({
+    streamingStates: 1,
+    onPrompt: (send) => {
+      send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Answer before the late leaf." }], stopReason: "stop" } });
+      send({ type: "agent_settled" });
+      more = () => {
+        send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Answer with the late leaf." }], stopReason: "stop" } });
+        send({ type: "agent_settled" });
+      };
+    },
+  });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, settlementProbeMs: 1_000 });
+  const receipt = await adapter.dispatch(spec());
+  let settled = false;
+  const result = adapter.result(receipt.executionId).then((value) => { settled = true; return value; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false, "Pi reported a run still streaming after agent_settled");
+  more();
+  assert.equal((await result).text, "Answer with the late leaf.");
+});
 
 test("a child's own context checkpoint does not end the execution", async () => {
   let resume;

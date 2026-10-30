@@ -126,12 +126,14 @@ test("a child that finishes after the notice was composed is carried by the next
   assert.equal(wakeup.notify({ ...subagent, executionId: "exec-2", text: "second" }), false, "coalesced while the first notice is outstanding");
   wakeup.acknowledge(marker(sent[0]));
   assert.deepEqual(delivered, ["exec-1"]);
-  wakeup.rearm();
-  assert.equal(sent.length, 2, "the late child wakes the lead at settle");
+  assert.equal(sent.length, 2, "the late child is queued at delivery, inside the running turn, not at settle: a Worker's settle ends its dispatch");
+  assert.deepEqual(sent[1].options, { deliverAs: "steer", triggerTurn: true });
   assert.deepEqual(sent[1].message.details.delivered, ["exec-2"]);
   assert.match(sent[1].message.content, /exec-2 \[success\]\nsecond/);
   wakeup.acknowledge(marker(sent[1]));
   assert.deepEqual(delivered, ["exec-1", "exec-2"]);
+  wakeup.rearm();
+  assert.equal(sent.length, 2, "nothing is left to re-send at settle");
 });
 
 test("flags a truncated carried result as incomplete verification", () => {
