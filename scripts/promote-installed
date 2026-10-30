@@ -81,9 +81,10 @@ check_settings() { # [settings.json]
     process.exit(bad.length?6:0)' "${1:-$HOME/.pi/agent/settings.json}" "$STORE" "$HOME/.pi-web/plugins/pi-workbench"
 }
 
-link_cli() { # skills/workstreams calls `workstreams` on PATH; Pi puts ~/.pi/agent/bin on PATH.
+link_cli() { # skills/workstreams and the child assignment wrapper call these on PATH; Pi puts ~/.pi/agent/bin on PATH.
   mkdir -p "$HOME/.pi/agent/bin" &&
-    ln -sfn "$PROJECTS/pi-workbench.installed/skills/workstreams/scripts/workstreams.mjs" "$HOME/.pi/agent/bin/workstreams"
+    ln -sfn "$PROJECTS/pi-workbench.installed/skills/workstreams/scripts/workstreams.mjs" "$HOME/.pi/agent/bin/workstreams" &&
+    ln -sfn "$PROJECTS/pi-workbench.installed/extensions/subagent/wait-until.mjs" "$HOME/.pi/agent/bin/wait-until"
 }
 
 healthy() {

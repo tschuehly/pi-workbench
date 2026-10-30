@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -81,6 +81,22 @@ test("summarizes child tool activity without exposing shell arguments", () => {
   assert.equal(summarizeToolAction("edit", { path: "src/index.ts" }), "editing src/index.ts");
   assert.equal(summarizeToolAction("bash", { command: "npm test -- --runInBand" }), "running npm test");
   assert.equal(summarizeToolAction("bash", { command: "curl -u user:password https://example.test" }), "running bash");
+  // Anything in Pi's own bin directory is named, never its arguments, at any command position.
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-agent-"));
+  mkdirSync(join(agentDir, "bin"));
+  writeFileSync(join(agentDir, "bin", "wait-until"), "");
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    assert.equal(summarizeToolAction("bash", { command: "wait-until --timeout 900 --file /repo/target/gate.log --pid 42" }), "running wait-until");
+    assert.equal(summarizeToolAction("bash", { command: 'cd /repo\nwait-until --cmd "echo \\" --file FAKE_SECRET \\""' }), "running wait-until");
+    assert.equal(summarizeToolAction("bash", { command: "cd /repo && npm test" }), "running npm");
+    assert.equal(summarizeToolAction("bash", { command: 'echo "x; npm hunter2"' }), "running npm");
+    assert.equal(summarizeToolAction("bash", { command: "echo wait-until --file fake" }), "running bash");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
   assert.equal(summarizeToolAction("grep", { path: "/repo/src", pattern: "AWS_SECRET_ACCESS_KEY=abc" }), "searching repo/src");
   assert.equal(summarizeToolAction("read", { path: "/repo/src/\u001b[2Jauth.ts" }).includes("\u001b"), false);
 });

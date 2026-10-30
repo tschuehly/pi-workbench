@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -538,12 +538,27 @@ function cleanText(value) {
   return stripVTControlCharacters(String(value ?? "")).replace(/\s+/g, " ").trim();
 }
 
+// Names a command only by an executable known to be safe to show: a fixed set of build tools (with a
+// safe first argument), or anything installed in Pi's own bin directory, such as `wait-until`. Every
+// command position is considered, so `cd repo && npm test` still names npm. Arguments show only for the
+// first command: a later "command" may be text inside quotes.
+const SAFE_EXECUTABLES = ["npm", "pnpm", "yarn", "git", "node", "python", "python3", "mvn", "gradle", "gradlew", "cargo", "go"];
 function safeCommandName(value) {
-  const parts = cleanText(value).split(" ");
-  const executable = parts[0]?.split(/[\\/]/).at(-1);
-  if (!["npm", "pnpm", "yarn", "git", "node", "python", "python3", "mvn", "gradle", "gradlew", "cargo", "go"].includes(executable)) return undefined;
-  const safe = parts.slice(1, executable === "npm" && parts[1] === "run" ? 3 : 2).filter((part) => /^[\w.:-]+$/.test(part) && !/(?:token|secret|password|key)/i.test(part));
-  return [executable, ...safe].join(" ");
+  for (const [index, segment] of String(value ?? "").split(/[;&|\n]+/).entries()) {
+    const parts = cleanText(segment).split(" ");
+    const executable = parts[0]?.split(/[\\/]/).at(-1);
+    if (piBinNames().has(executable)) return executable;
+    if (!SAFE_EXECUTABLES.includes(executable)) continue;
+    if (index > 0) return executable;
+    const safe = parts.slice(1, executable === "npm" && parts[1] === "run" ? 3 : 2).filter((part) => /^[\w.:-]+$/.test(part) && !/(?:token|secret|password|key)/i.test(part));
+    return [executable, ...safe].join(" ");
+  }
+  return undefined;
+}
+
+function piBinNames() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR?.replace(/^~(?=$|\/)/, homedir()) ?? join(homedir(), ".pi", "agent");
+  try { return new Set(readdirSync(join(agentDir, "bin"))); } catch { return new Set(); }
 }
 
 function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
