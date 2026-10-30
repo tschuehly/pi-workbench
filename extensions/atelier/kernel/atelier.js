@@ -1108,6 +1108,12 @@ function boot() {
   }
   const navDots = new Map(); // in-page link -> its dot; one per link, coloured by its strongest change
   const spotDots = new Map(); // tab, summary or ancestor that hides changed Keys -> its one dot, in its top-right corner
+  // A dot sits absolutely in its box's corner, so it follows the box through scroll, transforms and clipping with no
+  // Kernel code; a static box becomes position:relative while it holds the dot, its own inline value back after.
+  // ponytail: the lifted box is a containing block for the Page's own absolute children meanwhile; fine for tab labels.
+  const lifted = new Map(); // box -> its inline position before the dot
+  const lift = (box) => { if (getComputedStyle(box).position !== "static") return; if (!lifted.has(box)) lifted.set(box, box.style.position); box.style.position = "relative"; };
+  const unlift = (box) => { if (box && lifted.has(box)) { box.style.position = lifted.get(box); lifted.delete(box); } };
   const strongest = (list) => list.reduce((x, y) => RANK[y.t.kind] > RANK[x.t.kind] ? y : x);
   const nodesOf = (t) => [t.nodes.mark, t.nodes.gone, t.nodes.diff, t.nodes.rail].filter(Boolean);
   function removeTrace(addr) { const t = traces.get(addr); if (t) nodesOf(t).forEach((n) => n.remove()); traces.delete(addr); }
@@ -1177,13 +1183,14 @@ function boot() {
       if (dot.parentElement !== a) a.append(dot);
     }
     // Hidden changes: one dot per tab or summary, laid out as nothing (positionMarks puts it in the corner).
-    for (const [s, dot] of spotDots) if (!hid.has(s)) { dot.remove(); spotDots.delete(s); }
+    for (const [s, dot] of spotDots) if (!hid.has(s)) { unlift(dot.parentElement); dot.remove(); spotDots.delete(s); }
     for (const [s, list] of hid) {
       const dot = spotDots.get(s) ?? h(`<span atl-ui="mark"><span class="atl-dot"></span></span>`);
       dot.className = `atl-mark atl-mark-dot atl-k-${strongest(list).t.kind}${list.every((x) => x.t.fading) ? " atl-fade" : ""}`;
       dot.firstElementChild.title = list.map((x) => x.tip).join("\n\n");
       spotDots.set(s, dot);
       if (dot.parentElement !== s) place(dot, s);
+      lift(dot.parentElement);
     }
     positionMarks();
   }
@@ -1199,20 +1206,9 @@ function boot() {
       // list beside the Key), above the Key's top edge at the bar.
       // ponytail: above the Key can touch the element before it on a Page with no gap; move it if that bites.
       const s = m.lastElementChild; s.classList.remove("atl-seen-up");
-      if (s.getBoundingClientRect().left < 2 || covers(s, el)) s.classList.add("atl-seen-up");
+      const b = s.getBoundingClientRect();
+      if (b.left < 2 || contentIn(b, el).out.some((o) => meets(o, b))) s.classList.add("atl-seen-up");
     }
-    for (const [s, d] of spotDots) {
-      if (!d.isConnected) continue;
-      d.style.translate = "";
-      const p = d.getBoundingClientRect(), r = s.getBoundingClientRect();
-      d.style.translate = `${Math.round(r.right - 6 - p.left)}px ${Math.round(r.top + 6 - p.top)}px`;
-    }
-  }
-  // Whether ui's box lies over Page content other than el and what holds it (sampled at its corners and centre).
-  function covers(ui, el) {
-    const r = ui.getBoundingClientRect();
-    return [[r.left + 1, r.top + 1], [r.right - 1, r.top + 1], [r.left + 1, r.bottom - 1], [r.right - 1, r.bottom - 1], [(r.left + r.right) / 2, (r.top + r.bottom) / 2]]
-      .some(([x, y]) => document.elementsFromPoint(x, y).some((e) => !isUi(e) && !e.contains(el) && !el.contains(e)));
   }
   // A tab switch or an opened details moves the in-page mark.
   document.addEventListener("click", () => { if (traces.size) requestAnimationFrame(renderMarks); });
@@ -1684,7 +1680,8 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
 ::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
 .atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
-.atl-mark-bar,.atl-mark-dot{position:absolute;width:0;height:0;z-index:2147481000}.atl-mark-dot>.atl-dot{position:absolute;left:-3.5px;top:-3.5px;margin:0}
+.atl-mark-bar{position:absolute;width:0;height:0;z-index:2147481000}
+.atl-mark-dot{position:absolute;top:3px;right:3px;line-height:0}.atl-mark-dot>.atl-dot{display:block;margin:0}
 [atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}
 [atl-ui].atl-mark-bar>button:hover{width:6px}
 [atl-ui].atl-mark-bar>button.atl-seen,[atl-ui].atl-rail>button.atl-allseen{display:flex;align-items:center;gap:3px;width:auto;min-height:0;padding:1px 6px;border:1px solid var(--atl-line);border-radius:9px;background:var(--atl-bg);color:var(--atl-muted);font:11px/16px system-ui,sans-serif;white-space:nowrap;cursor:pointer}
