@@ -139,7 +139,15 @@ try {
   await js(`document.getElementById("tabs").scrollLeft=12; true`); await sleep(300);
   const moved = await tabBox(), d2 = await js(`(()=>{const r=document.querySelector("#tab-flow .atl-dot").getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom}})()`);
   assert(moved.l < tab.l && d2.l >= moved.l && d2.r <= moved.r && d2.t >= moved.t && d2.b <= moved.b, `the dot follows its tab through the strip's scroll: ${JSON.stringify({ d2, moved })}`);
-  await js(`document.getElementById("tabs").scrollLeft=0; true`);
+  // The same strip without its transform (a plain scroller; the dot's containing block lies outside it): the dot
+  // follows the scroll, and hides once the strip scrolls its tab out of view.
+  await js(`(()=>{const t=document.getElementById("tabs");t.style.transform="none";t.scrollLeft=0;return true})()`); await sleep(300);
+  await js(`document.getElementById("tabs").scrollLeft=12; true`); await sleep(300);
+  const plain = await tabBox(), d3 = await js(`(()=>{const r=document.querySelector("#tab-flow .atl-dot").getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom}})()`);
+  assert(d3.l >= plain.l && d3.r <= plain.r && d3.t >= plain.t && d3.b <= plain.b, `the dot follows its tab through a plain scroller: ${JSON.stringify({ d3, plain })}`);
+  await js(`document.getElementById("tabs").scrollLeft=200; true`); await sleep(300);
+  assert.equal(await js(`getComputedStyle(document.querySelector("#tab-flow .atl-dot")).visibility`), "hidden", "a dot whose tab scrolled out of the strip hides");
+  await js(`(()=>{const t=document.getElementById("tabs");t.scrollLeft=0;t.style.transform="scale(1.25)";return true})()`); await sleep(300);
   await js(`document.getElementById("tab-flow").click(); true`); await sleep(300);
   assert.equal(await js(`document.querySelectorAll("#tab-flow [atl-ui=mark]").length`), 0, "the dot leaves when the tab opens again");
   assert.equal(await js(`document.querySelectorAll("[atl-ui=mark].atl-mark-bar").length`), 3, "the bars return");

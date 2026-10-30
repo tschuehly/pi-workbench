@@ -1002,7 +1002,7 @@ function boot() {
   let popQueued = false, pinsQueued = false; const scrolled = new Set();
   addEventListener("scroll", (ev) => {
     if (!selBtn.hidden) placeSel();
-    if (ev.target !== document && !isUi(ev.target) && (pins.size || spots.size)) {
+    if (ev.target !== document && !isUi(ev.target) && (pins.size || spots.size || spotDots.size)) {
       scrolled.add(ev.target);
       if (!pinsQueued) {
         pinsQueued = true;
@@ -1011,6 +1011,7 @@ function boot() {
           const near = (n) => [...scrolled].some((t) => t.contains(n) || n.contains(t)); // in the scroller, or a Key around it
           for (const pin of pins.values()) { const key = findKey(pin.dataset.key); if (key && near(key)) pinAt(pin); }
           for (const s of spots.values()) if (near(s)) spotAt(s);
+          for (const [s, d] of spotDots) if (near(s)) placeDot(s, d);
           scrolled.clear();
         });
       }
@@ -1108,17 +1109,24 @@ function boot() {
   }
   const navDots = new Map(); // in-page link -> its dot; one per link, coloured by its strongest change
   const spotDots = new Map(); // tab, summary or ancestor that hides changed Keys -> its one dot, in its top-right corner
-  // An element's border box in the padding-box coordinates of root, its offsetParent chain's layout units: untouched by
-  // transforms and by scrolling anything they share. Null when the chain misses root.
-  function offsetIn(el, root) {
-    if (el === root) return { x: -el.clientLeft, y: -el.clientTop };
-    let x = 0, y = 0;
-    for (let e = el; ; ) {
-      x += e.offsetLeft; y += e.offsetTop; e = e.offsetParent;
-      if (e === root) return { x, y };
-      if (!e) return null;
-      x += e.clientLeft; y += e.clientTop;
+  // A dot is absolute at its static place in (or, for a void element, beside) its spot, shifted to the spot's top-right
+  // corner, so the Page's own styles stay untouched. Its containing block may be scaled (a transform) or lie outside a
+  // scroller that moves the spot: the shift is measured in the dot's own units and redone on an inner scroll, and the
+  // dot hides where a clipping ancestor hides the spot's corner. ponytail: a rotated ancestor puts it off the corner.
+  function placeDot(s, d) {
+    if (!d.isConnected) return;
+    d.style.translate = "100px 100px"; const q = d.getBoundingClientRect();
+    d.style.translate = ""; const p = d.getBoundingClientRect(), r = s.getBoundingClientRect();
+    const sx = (q.left - p.left) / 100 || 1, sy = (q.top - p.top) / 100 || 1;
+    d.style.translate = `${((r.right - p.left) / sx).toFixed(1)}px ${((r.top - p.top) / sy).toFixed(1)}px`;
+    const x = r.right - 6, y = r.top + 6;
+    let shown = r.width > 0 || r.height > 0;
+    for (let a = s.parentElement; shown && a && a !== document.body; a = a.parentElement) {
+      const st = getComputedStyle(a);
+      if (st.overflowX === "visible" && st.overflowY === "visible") continue;
+      const c = a.getBoundingClientRect(); shown = x >= c.left && x <= c.right && y >= c.top && y <= c.bottom;
     }
+    d.style.visibility = shown ? "" : "hidden";
   }
   const strongest = (list) => list.reduce((x, y) => RANK[y.t.kind] > RANK[x.t.kind] ? y : x);
   const nodesOf = (t) => [t.nodes.mark, t.nodes.gone, t.nodes.diff, t.nodes.rail].filter(Boolean);
@@ -1214,16 +1222,7 @@ function boot() {
       const b = s.getBoundingClientRect();
       if (b.left < 2 || contentIn(b, el).out.some((o) => meets(o, b))) s.classList.add("atl-seen-up");
     }
-    // A dot is absolute at its static place in or beside its spot and shifted to the spot's top-right corner in layout
-    // units, so it follows the spot through scroll, transforms and clipping and the Page's own styles stay untouched.
-    for (const [s, d] of spotDots) {
-      if (!d.isConnected) continue;
-      d.style.translate = "";
-      const at = d.offsetParent && offsetIn(s, d.offsetParent);
-      if (at) { d.style.translate = `${at.x + s.offsetWidth - d.offsetLeft}px ${at.y - d.offsetTop}px`; continue; }
-      const p = d.getBoundingClientRect(), r = s.getBoundingClientRect(); // ponytail: no shared offsetParent (SVG, fixed); viewport units
-      d.style.translate = `${Math.round(r.right - p.left)}px ${Math.round(r.top - p.top)}px`;
-    }
+    for (const [s, d] of spotDots) placeDot(s, d);
   }
   // A tab switch or an opened details moves the in-page mark.
   document.addEventListener("click", () => { if (traces.size) requestAnimationFrame(renderMarks); });
