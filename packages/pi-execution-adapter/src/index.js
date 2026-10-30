@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -525,7 +525,7 @@ export function summarizeToolAction(toolName, args) {
   if (toolName === "ls") return bounded(`listing ${path ?? "files"}`, 56);
   if (toolName === "grep") return bounded(`searching ${concisePath(args?.path) ?? "files"}`, 56);
   if (toolName === "find") return bounded(`finding ${concisePath(args?.path) ?? "files"}`, 56);
-  if (toolName === "bash" || toolName === "powershell") return bounded(waitTargets(args?.command) ?? `running ${safeCommandName(args?.command) ?? toolName}`, 56);
+  if (toolName === "bash" || toolName === "powershell") return bounded(`running ${safeCommandName(args?.command) ?? toolName}`, 56);
   return cleanText(toolName) || "working";
 }
 
@@ -538,53 +538,27 @@ function cleanText(value) {
   return stripVTControlCharacters(String(value ?? "")).replace(/\s+/g, " ").trim();
 }
 
-// Children wait silently with extensions/subagent/wait-until.mjs; name what they wait for, but never a
-// command or URL, which can carry credentials. Reads shell words so a quoted value stays one word.
-function waitTargets(value) {
-  const words = shellWords(String(value ?? ""));
-  const at = words.findIndex((word, i) => typeof word === "string" && /^wait-until(\.mjs)?$/.test(word.split("/").at(-1))
-    && (i === 0 || words[i - 1] === SHELL_OPERATOR || (words[i - 1] === "node" && (i === 1 || words[i - 2] === SHELL_OPERATOR))));
-  if (at < 0) return undefined;
-  const targets = [];
-  for (let i = at + 1; i < words.length && words[i] !== SHELL_OPERATOR; i += 1) {
-    const [flag, inline] = words[i].split(/=(.*)/s);
-    const argument = inline ?? words[i + 1] ?? "";
-    if (flag === "--file") targets.push(concisePath(argument) ?? "a file");
-    if (flag === "--pid" && /^\d+$/.test(argument)) targets.push(`pid ${argument}`);
-    if (flag === "--cmd") targets.push("a command");
-    if (flag === "--url") targets.push("a URL");
-    if (inline === undefined && flag !== "--help") i += 1; // every other option takes a value
-  }
-  return targets.length > 0 ? `waiting for ${targets.join(" or ")}` : "waiting";
-}
-
-const SHELL_OPERATOR = Symbol("shell operator");
-// ponytail: quotes, backslashes, and ; & | only; no expansions or subshells, which a label does not need.
-function shellWords(text) {
-  const words = [];
-  let word = null;
-  const flush = () => { if (word !== null) words.push(word); word = null; };
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text[i];
-    if (c === "'" || c === '"') {
-      const close = text.indexOf(c, i + 1);
-      word = (word ?? "") + text.slice(i + 1, close < 0 ? text.length : close);
-      i = close < 0 ? text.length : close;
-    } else if (c === "\\") word = (word ?? "") + (text[++i] ?? "");
-    else if (/\s/.test(c)) flush();
-    else if (";&|".includes(c)) { flush(); if (words.at(-1) !== SHELL_OPERATOR) words.push(SHELL_OPERATOR); }
-    else word = (word ?? "") + c;
-  }
-  flush();
-  return words;
-}
-
+// Names a command only by an executable known to be safe to show: a fixed set of build tools (with a
+// safe first argument), or anything installed in Pi's own bin directory, such as `wait-until`. Every
+// command position is considered, so `cd repo && npm test` still names npm. Arguments show only for the
+// first command: a later "command" may be text inside quotes.
+const SAFE_EXECUTABLES = ["npm", "pnpm", "yarn", "git", "node", "python", "python3", "mvn", "gradle", "gradlew", "cargo", "go"];
 function safeCommandName(value) {
-  const parts = cleanText(value).split(" ");
-  const executable = parts[0]?.split(/[\\/]/).at(-1);
-  if (!["npm", "pnpm", "yarn", "git", "node", "python", "python3", "mvn", "gradle", "gradlew", "cargo", "go"].includes(executable)) return undefined;
-  const safe = parts.slice(1, executable === "npm" && parts[1] === "run" ? 3 : 2).filter((part) => /^[\w.:-]+$/.test(part) && !/(?:token|secret|password|key)/i.test(part));
-  return [executable, ...safe].join(" ");
+  for (const [index, segment] of String(value ?? "").split(/[;&|\n]+/).entries()) {
+    const parts = cleanText(segment).split(" ");
+    const executable = parts[0]?.split(/[\\/]/).at(-1);
+    if (piBinNames().has(executable)) return executable;
+    if (!SAFE_EXECUTABLES.includes(executable)) continue;
+    if (index > 0) return executable;
+    const safe = parts.slice(1, executable === "npm" && parts[1] === "run" ? 3 : 2).filter((part) => /^[\w.:-]+$/.test(part) && !/(?:token|secret|password|key)/i.test(part));
+    return [executable, ...safe].join(" ");
+  }
+  return undefined;
+}
+
+function piBinNames() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR?.replace(/^~(?=$|\/)/, homedir()) ?? join(homedir(), ".pi", "agent");
+  try { return new Set(readdirSync(join(agentDir, "bin"))); } catch { return new Set(); }
 }
 
 function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
