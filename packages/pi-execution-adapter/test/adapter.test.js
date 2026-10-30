@@ -81,6 +81,9 @@ test("summarizes child tool activity without exposing shell arguments", () => {
   assert.equal(summarizeToolAction("edit", { path: "src/index.ts" }), "editing src/index.ts");
   assert.equal(summarizeToolAction("bash", { command: "npm test -- --runInBand" }), "running npm test");
   assert.equal(summarizeToolAction("bash", { command: "curl -u user:password https://example.test" }), "running bash");
+  // A silent wait-until names what it waits for, never the command or URL it runs.
+  assert.equal(summarizeToolAction("bash", { command: "wait-until --timeout 900 --file /repo/target/gate.log --match 'BUILD (SUCCESS|FAILURE)' --pid 42" }), "waiting for target/gate.log or pid 42");
+  assert.equal(summarizeToolAction("bash", { command: "cd /repo && wait-until --cmd 'gh pr checks 7 --token=abc' --url https://user:pw@example.test/health" }), "waiting for a command or a URL");
   assert.equal(summarizeToolAction("grep", { path: "/repo/src", pattern: "AWS_SECRET_ACCESS_KEY=abc" }), "searching repo/src");
   assert.equal(summarizeToolAction("read", { path: "/repo/src/\u001b[2Jauth.ts" }).includes("\u001b"), false);
 });

@@ -525,7 +525,7 @@ export function summarizeToolAction(toolName, args) {
   if (toolName === "ls") return bounded(`listing ${path ?? "files"}`, 56);
   if (toolName === "grep") return bounded(`searching ${concisePath(args?.path) ?? "files"}`, 56);
   if (toolName === "find") return bounded(`finding ${concisePath(args?.path) ?? "files"}`, 56);
-  if (toolName === "bash" || toolName === "powershell") return bounded(`running ${safeCommandName(args?.command) ?? toolName}`, 56);
+  if (toolName === "bash" || toolName === "powershell") return bounded(waitTargets(args?.command) ?? `running ${safeCommandName(args?.command) ?? toolName}`, 56);
   return cleanText(toolName) || "working";
 }
 
@@ -536,6 +536,22 @@ function concisePath(value) {
 
 function cleanText(value) {
   return stripVTControlCharacters(String(value ?? "")).replace(/\s+/g, " ").trim();
+}
+
+// Children wait silently with extensions/subagent/wait-until.mjs; name what they wait for, but never a
+// command or URL, which can carry credentials.
+function waitTargets(value) {
+  const parts = cleanText(value).split(" ");
+  const at = parts.findIndex((part) => /^wait-until(\.mjs)?$/.test(part.split(/[\\/]/).at(-1)));
+  if (at < 0) return undefined;
+  const targets = [];
+  for (let i = at + 1; i < parts.length; i += 1) {
+    if (parts[i] === "--file") targets.push(concisePath(parts[i + 1]) ?? "a file");
+    if (parts[i] === "--pid" && /^\d+$/.test(parts[i + 1] ?? "")) targets.push(`pid ${parts[i + 1]}`);
+    if (parts[i] === "--cmd") targets.push("a command");
+    if (parts[i] === "--url") targets.push("a URL");
+  }
+  return targets.length > 0 ? `waiting for ${targets.join(" or ")}` : "waiting";
 }
 
 function safeCommandName(value) {

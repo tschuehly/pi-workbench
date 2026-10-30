@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Block until the first condition holds, then print one line about it. Silent while waiting, so a
 // child that has only foreground bash waits in one tool call instead of sleep or tail -f turns.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { parseArgs } from "node:util";
@@ -29,6 +29,7 @@ const every = seconds("every");
 const started = Date.now();
 const deadline = started + timeout * 1000;
 const tail = (text, n = 20) => text.trimEnd().split("\n").slice(-n).join("\n");
+const probes = new Set();
 
 const conditions = [];
 if (values.match !== undefined && values.file === undefined) fail("--match needs --file");
@@ -48,21 +49,30 @@ if (conditions.length === 0) fail("give at least one of --file, --pid, --cmd, --
 function fileCondition(file, match) {
   let regex;
   if (match !== undefined) { try { regex = new RegExp(match); } catch (error) { fail(`--match: ${error.message}`); } }
-  // Read only what was appended since the last poll; a smaller or replaced file starts over.
-  let offset = 0, inode, partial = "", decoder = new StringDecoder("utf8"), last = "";
+  // Read only what was appended since the last poll. A replaced, shrunk, or rewritten file (the bytes
+  // just before the offset changed) starts over.
+  let offset = 0, inode, seen = Buffer.alloc(0), partial = "", decoder = new StringDecoder("utf8"), last = "";
+  const reset = (ino) => { inode = ino; offset = 0; seen = Buffer.alloc(0); partial = ""; decoder = new StringDecoder("utf8"); };
   return {
     check() {
       let stat;
       try { stat = statSync(file); } catch { return null; }
       if (!regex) return `file ${file} exists`;
-      if (stat.ino !== inode || stat.size < offset) { inode = stat.ino; offset = 0; partial = ""; decoder = new StringDecoder("utf8"); }
+      if (!stat.isFile()) { last = "not a regular file"; return null; } // opening a FIFO would block
       const fd = openSync(file, "r");
       try {
+        if (stat.ino !== inode || stat.size < offset) reset(stat.ino);
+        else if (seen.length > 0) {
+          const now = Buffer.alloc(seen.length);
+          readSync(fd, now, 0, seen.length, offset - seen.length);
+          if (!now.equals(seen)) reset(stat.ino);
+        }
         const buffer = Buffer.alloc(1 << 20);
         for (let n; offset < stat.size && (n = readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - offset), offset)) > 0;) {
           offset += n;
+          seen = Buffer.from(buffer.subarray(Math.max(0, n - 4096), n));
           const lines = (partial + decoder.write(buffer.subarray(0, n))).split("\n");
-          partial = lines.pop();
+          partial = lines.pop().slice(-65536);
           for (const line of lines) { if (line) last = line; if (regex.test(line)) return `file ${file} matched: ${line}`; }
         }
       } finally { closeSync(fd); }
@@ -75,22 +85,20 @@ function fileCondition(file, match) {
 }
 
 function commandCondition(command) {
-  let last = "not run";
+  let last = "command still running at the timeout";
   return {
+    // Not detached: Pi's bash abort SIGKILLs its process group, and the probe must die with it.
     check: () => new Promise((resolve) => {
-      const child = spawn("/bin/bash", ["-c", command], { stdio: ["ignore", "pipe", "pipe"], detached: true });
+      const child = spawn("/bin/bash", ["-c", command], { stdio: ["ignore", "pipe", "pipe"] });
+      probes.add(child.pid);
       let output = "";
       const collect = (d) => { output = (output + d).slice(-8192); };
       child.stdout.on("data", collect);
       child.stderr.on("data", collect);
-      // A hanging command must not hold the wait past its timeout; kill its whole process group.
-      // The cut-off attempt keeps the previous attempt's report, which says more.
-      let cut = false;
-      const killer = setTimeout(() => { cut = true; try { process.kill(-child.pid, "SIGKILL"); } catch {} }, Math.max(0, deadline - Date.now()));
-      child.on("error", (error) => { clearTimeout(killer); last = error.message; resolve(null); });
+      child.on("error", (error) => { probes.delete(child.pid); last = error.message; resolve(null); });
       child.on("close", (code) => {
-        clearTimeout(killer);
-        if (!cut || last === "not run") last = cut ? `command still running at the timeout: ${tail(output, 5)}` : `command exit ${code}: ${tail(output, 5)}`;
+        probes.delete(child.pid);
+        last = `command exit ${code}: ${tail(output, 5)}`;
         resolve(code === 0 ? `command succeeded: ${command}${output.trim() ? `\n${tail(output)}` : ""}` : null);
       });
     }),
@@ -113,15 +121,36 @@ function urlCondition(url) {
   };
 }
 
-const elapsed = () => `${Math.round((Date.now() - started) / 100) / 10}s`;
-for (;;) {
-  for (const condition of conditions) {
-    const met = await condition.check();
-    if (met) { console.log(`waited ${elapsed()}: ${met}`); process.exit(0); }
+// Kill a still-running command probe and everything it started.
+// ponytail: one ps snapshot; a process forked after it survives. Add a process-group wrapper if that bites.
+function killProbes() {
+  if (probes.size === 0) return;
+  const children = new Map();
+  try {
+    for (const line of execFileSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" }).trim().split("\n")) {
+      const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+      children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+    }
+  } catch {}
+  for (const stack = [...probes]; stack.length > 0;) {
+    const pid = stack.pop();
+    try { process.kill(pid, "SIGKILL"); } catch {}
+    stack.push(...(children.get(pid) ?? []));
   }
-  if (Date.now() >= deadline) {
-    console.log(`wait-until: timed out after ${timeout}s; nothing held:\n${conditions.map((c) => `- ${c.pending()}`).join("\n")}`);
-    process.exit(124);
-  }
-  await new Promise((resolve) => setTimeout(resolve, Math.min(every * 1000, Math.max(0, deadline - Date.now()))));
 }
+
+// Every condition polls on its own, so a slow command or URL never delays the others.
+const met = await new Promise((resolve) => {
+  setTimeout(() => resolve(null), deadline - Date.now());
+  for (const condition of conditions) (async () => {
+    for (;;) {
+      const result = await condition.check();
+      if (result) return resolve(result);
+      await new Promise((wake) => setTimeout(wake, every * 1000));
+    }
+  })();
+});
+killProbes();
+if (met) { console.log(`waited ${Math.round((Date.now() - started) / 100) / 10}s: ${met}`); process.exit(0); }
+console.log(`wait-until: timed out after ${timeout}s; nothing held:\n${conditions.map((c) => `- ${c.pending()}`).join("\n")}`);
+process.exit(124);
