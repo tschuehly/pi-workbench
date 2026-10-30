@@ -70,6 +70,9 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   its input. Move it with `status`.
 - Close the loop on every thread you answered or acted on: the `answer` says what you did and where, so he
   can close it at a glance (only the human closes a thread).
+- Explanation lives in the Page. When he asks for clarification or more explanation of Page content (a Comment, a
+  Decision note, an own answer), rewrite that content at its Key and `update`; then `answer` in one line naming
+  where the explanation now sits. Reserve `ask` for a real choice.
 - Comments go out when saved and, like replies, may carry up to four images; the Delivery names their paths. `atl-delivery="send"` on a keyed element batches the Comments inside
   it until the human sends them; `atl-group` gives such a batch its own "Send (n)".
 - Prefer static keyed HTML: write rows and cards into the Page file. An Update makes the body match
