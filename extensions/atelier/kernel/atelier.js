@@ -1108,12 +1108,18 @@ function boot() {
   }
   const navDots = new Map(); // in-page link -> its dot; one per link, coloured by its strongest change
   const spotDots = new Map(); // tab, summary or ancestor that hides changed Keys -> its one dot, in its top-right corner
-  // A dot sits absolutely in its box's corner, so it follows the box through scroll, transforms and clipping with no
-  // Kernel code; a static box becomes position:relative while it holds the dot, its own inline value back after.
-  // ponytail: the lifted box is a containing block for the Page's own absolute children meanwhile; fine for tab labels.
-  const lifted = new Map(); // box -> its inline position before the dot
-  const lift = (box) => { if (getComputedStyle(box).position !== "static") return; if (!lifted.has(box)) lifted.set(box, box.style.position); box.style.position = "relative"; };
-  const unlift = (box) => { if (box && lifted.has(box)) { box.style.position = lifted.get(box); lifted.delete(box); } };
+  // An element's border box in the padding-box coordinates of root, its offsetParent chain's layout units: untouched by
+  // transforms and by scrolling anything they share. Null when the chain misses root.
+  function offsetIn(el, root) {
+    if (el === root) return { x: -el.clientLeft, y: -el.clientTop };
+    let x = 0, y = 0;
+    for (let e = el; ; ) {
+      x += e.offsetLeft; y += e.offsetTop; e = e.offsetParent;
+      if (e === root) return { x, y };
+      if (!e) return null;
+      x += e.clientLeft; y += e.clientTop;
+    }
+  }
   const strongest = (list) => list.reduce((x, y) => RANK[y.t.kind] > RANK[x.t.kind] ? y : x);
   const nodesOf = (t) => [t.nodes.mark, t.nodes.gone, t.nodes.diff, t.nodes.rail].filter(Boolean);
   function removeTrace(addr) { const t = traces.get(addr); if (t) nodesOf(t).forEach((n) => n.remove()); traces.delete(addr); }
@@ -1183,14 +1189,13 @@ function boot() {
       if (dot.parentElement !== a) a.append(dot);
     }
     // Hidden changes: one dot per tab or summary, laid out as nothing (positionMarks puts it in the corner).
-    for (const [s, dot] of spotDots) if (!hid.has(s)) { unlift(dot.parentElement); dot.remove(); spotDots.delete(s); }
+    for (const [s, dot] of spotDots) if (!hid.has(s)) { dot.remove(); spotDots.delete(s); }
     for (const [s, list] of hid) {
       const dot = spotDots.get(s) ?? h(`<span atl-ui="mark"><span class="atl-dot"></span></span>`);
       dot.className = `atl-mark atl-mark-dot atl-k-${strongest(list).t.kind}${list.every((x) => x.t.fading) ? " atl-fade" : ""}`;
       dot.firstElementChild.title = list.map((x) => x.tip).join("\n\n");
       spotDots.set(s, dot);
-      if (dot.parentElement !== s) place(dot, s);
-      lift(dot.parentElement);
+      if (dot.parentElement !== s && dot.previousElementSibling !== s) place(dot, s);
     }
     positionMarks();
   }
@@ -1208,6 +1213,16 @@ function boot() {
       const s = m.lastElementChild; s.classList.remove("atl-seen-up");
       const b = s.getBoundingClientRect();
       if (b.left < 2 || contentIn(b, el).out.some((o) => meets(o, b))) s.classList.add("atl-seen-up");
+    }
+    // A dot is absolute at its static place in or beside its spot and shifted to the spot's top-right corner in layout
+    // units, so it follows the spot through scroll, transforms and clipping and the Page's own styles stay untouched.
+    for (const [s, d] of spotDots) {
+      if (!d.isConnected) continue;
+      d.style.translate = "";
+      const at = d.offsetParent && offsetIn(s, d.offsetParent);
+      if (at) { d.style.translate = `${at.x + s.offsetWidth - d.offsetLeft}px ${at.y - d.offsetTop}px`; continue; }
+      const p = d.getBoundingClientRect(), r = s.getBoundingClientRect(); // ponytail: no shared offsetParent (SVG, fixed); viewport units
+      d.style.translate = `${Math.round(r.right - p.left)}px ${Math.round(r.top - p.top)}px`;
     }
   }
   // A tab switch or an opened details moves the in-page mark.
@@ -1681,7 +1696,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 ::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
 .atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
 .atl-mark-bar{position:absolute;width:0;height:0;z-index:2147481000}
-.atl-mark-dot{position:absolute;top:3px;right:3px;line-height:0}.atl-mark-dot>.atl-dot{display:block;margin:0}
+.atl-mark-dot{position:absolute;width:0;height:0;line-height:0}.atl-mark-dot>.atl-dot{position:absolute;left:-10px;top:3px;margin:0}
 [atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}
 [atl-ui].atl-mark-bar>button:hover{width:6px}
 [atl-ui].atl-mark-bar>button.atl-seen,[atl-ui].atl-rail>button.atl-allseen{display:flex;align-items:center;gap:3px;width:auto;min-height:0;padding:1px 6px;border:1px solid var(--atl-line);border-radius:9px;background:var(--atl-bg);color:var(--atl-muted);font:11px/16px system-ui,sans-serif;white-space:nowrap;cursor:pointer}

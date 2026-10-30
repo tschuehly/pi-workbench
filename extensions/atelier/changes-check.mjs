@@ -15,13 +15,13 @@ const dir = await realpath(await mkdtemp(path.join(process.env.PI_TMP, "atelier-
 const page = path.join(dir, "page.html");
 const filler = "<p>Filler text so the sections need scrolling.</p>".repeat(14);
 // flow: the two Keys in the Flow tab; card: the Key beside a sub-tab list that fills its left gutter.
-const write = ({ intro = "Comments wait for Send and go out together.", extra = "", table = true, tab = "Events are lines in a log file.", flow = ["Step one.", "Step two."], card = "The related card." } = {}) => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Changes check</title>
+const write = ({ intro = "Comments wait for Send and go out together.", extra = "", table = true, tab = "Events are lines in a log file.", flow = ["Step one.", "Step two."], card = "The related card.", more = "More text." } = {}) => writeFile(page, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Changes check</title>
 <style>body{font:15px/1.5 system-ui;max-width:700px;margin:24px auto 24px 220px;background:#fff;color:#111}nav.toc{position:fixed;left:16px;top:24px;display:grid}[role=tabpanel][hidden]{display:none}[role=tab]{display:inline-flex;gap:4px}</style>
 <body><nav class="toc"><a href="#how">How it works</a><a href="#catalogue">Catalogue</a><a href="#proto">Protocol</a></nav>
 <section id="how" atl-key="how"><h2>How it works</h2><p atl-key="intro" id="intro">${intro}</p>${extra}${filler}</section>
 <section id="catalogue" atl-key="catalogue"><h2>Catalogue</h2>${table ? `<table atl-key="blocks" id="blocks"><tr><th>Block</th><th>Use</th></tr><tr><td>decision</td><td>ask a question</td></tr></table>` : ""}<p atl-key="after-table" id="after-table">After the table.</p>${filler}</section>
-<section id="proto" atl-key="proto"><h2>Protocol</h2><div id="tabs" style="overflow:auto;white-space:nowrap;width:260px;transform:scale(1.25);transform-origin:0 0;margin-bottom:12px"><button role="tab" id="tab-flow" aria-controls="p-flow" style="overflow:hidden">Flow</button><button role="tab" id="tab-log" aria-controls="p-log">Log</button><span style="display:inline-block;width:400px"></span></div>
-<div role="tabpanel" id="p-flow"><p>The flow.</p><p atl-key="flow-a" id="flow-a">${flow[0]}</p><p atl-key="flow-b" id="flow-b">${flow[1]}</p></div><div role="tabpanel" id="p-log" hidden><p atl-key="log" id="log">${tab}</p></div>
+<section id="proto" atl-key="proto"><h2>Protocol</h2><div id="tabs" style="overflow:auto;white-space:nowrap;width:260px;transform:scale(1.25);transform-origin:0 0;margin-bottom:12px"><button role="tab" id="tab-flow" aria-controls="p-flow" style="overflow:hidden">Flow<span id="badge" style="position:absolute;left:0;top:0;width:4px;height:4px"></span></button><button role="tab" id="tab-log" aria-controls="p-log">Log</button><input type="button" role="tab" id="tab-more" aria-controls="p-more" value="More"><span style="display:inline-block;width:400px"></span></div>
+<div role="tabpanel" id="p-flow"><p>The flow.</p><p atl-key="flow-a" id="flow-a">${flow[0]}</p><p atl-key="flow-b" id="flow-b">${flow[1]}</p></div><div role="tabpanel" id="p-more" hidden><p atl-key="more" id="more">${more}</p></div><div role="tabpanel" id="p-log" hidden><p atl-key="log" id="log">${tab}</p></div>
 <div style="display:flex;gap:24px"><div id="side" style="flex:none;width:200px"><button id="side-1" style="width:100%;text-align:left">A sub-tab with a long label</button></div><p atl-key="card" id="card" style="margin:0">${card}</p></div>${filler}</section>
 <script>document.addEventListener("click",(e)=>{const t=e.target.closest("[role=tab]");if(!t)return;for(const p of document.querySelectorAll("[role=tabpanel]"))p.hidden=p.id!==t.getAttribute("aria-controls")});</script>
 <script type="module" src="atelier.js"></script></body></html>`);
@@ -55,6 +55,7 @@ try {
   await js("window.updates=0; document.addEventListener('atelier:update',()=>updates++); true");
   // Read the whole Page once (the Log tab too), then go to the bottom so nothing changed is in view.
   for (const id of ["intro", "blocks", "after-table", "flow-a", "flow-b", "card"]) { await scrollTo(id); await seen(id); }
+  await js(`document.getElementById("tab-more").click(); document.getElementById("more").scrollIntoView(); true`); await seen("more");
   await js(`document.getElementById("tab-log").click(); document.getElementById("log").scrollIntoView(); true`); await seen("log");
   await js(`document.getElementById("tab-flow").click(); scrollTo(0, document.body.scrollHeight); true`); await sleep(200);
 
@@ -110,10 +111,10 @@ try {
   // A bar's Seen moves above its Key when the gutter holds the Page's own content.
   await js(`document.getElementById("tab-flow").click(); true`); await sleep(200);
   const tabBox = () => js(`(()=>{const r=document.getElementById("tab-flow").getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom,w:r.width,h:r.height}})()`);
-  const before = await tabBox();
+  const before = await tabBox(), badgeAt = () => js(`(()=>{const r=document.getElementById("badge").getBoundingClientRect(),t=document.getElementById("tabs").getBoundingClientRect();return [r.left-t.left,r.top-t.top,r.width,r.height]})()`), badge0 = await badgeAt();
   const now = { intro: "Comments go out when you save them.", table: false, extra: `<p atl-key="new-p" id="new-p">A new paragraph.</p>`, tab: "Events are JSON lines." };
   await js("scrollTo(0, document.body.scrollHeight); true"); await sleep(200); // the card is off screen at the Update
-  await update({ ...now, flow: ["Step one, reworded.", "Step two, reworded."], card: "The related card, reworded." }, "Flow and card");
+  await update({ ...now, flow: ["Step one, reworded.", "Step two, reworded."], card: "The related card, reworded.", more: "More text, reworded." }, "Flow and card");
   await scrollTo("tab-flow"); await sleep(200);
   assert.deepEqual(await js(`[...document.querySelectorAll("[atl-ui=mark]")].filter((m)=>m.classList.contains("atl-mark-bar")).map((m)=>m.parentElement.id).sort()`), ["card", "flow-a", "flow-b"]);
   const overlap = (a, o) => a.l < o.r && o.l < a.r && a.t < o.b && o.t < a.b;
@@ -128,6 +129,11 @@ try {
   assert.match(dots[0].title, /Step one, reworded[\s\S]*Step two, reworded/, "the dot's tip lists both changes");
   assert(dots[0].l >= tab.l && dots[0].r <= tab.r && dots[0].t >= tab.t && dots[0].b <= tab.b && dots[0].l > tab.l + tab.w / 2 && dots[0].t < tab.t + tab.h / 2, `the dot sits in the tab's top-right corner: ${JSON.stringify({ dots, tab })}`);
   assert.deepEqual([tab.w, tab.h], [before.w, before.h], "the dot takes no layout space in the tab");
+  assert.equal(await js(`document.getElementById("tab-flow").getAttribute("style")`), "overflow:hidden", "the Kernel leaves the tab's own style alone");
+  assert.deepEqual(await badgeAt(), badge0, "the Page's own absolute child in the tab stays put");
+  // A void-element tab: the dot sits beside it in the DOM, but in its corner on screen.
+  const more = await js(`(()=>{const r=document.getElementById("tab-more").getBoundingClientRect(),m=document.querySelector("#tab-more + [atl-ui=mark] .atl-dot")?.getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom,d:m&&[m.left,m.right,m.top,m.bottom]}})()`);
+  assert(more.d && more.d[0] >= more.l && more.d[1] <= more.r && more.d[2] >= more.t && more.d[3] <= more.b, `the dot sits in the input tab's corner: ${JSON.stringify(more)}`);
   assert.equal(await js(`(()=>{const d=document.querySelector("#tab-flow .atl-dot").getBoundingClientRect();return document.elementFromPoint(d.left+d.width/2,d.top+d.height/2)?.classList.contains("atl-dot")})()`), true, "the dot is painted, not clipped by the tab's overflow");
   // The tab strip scrolls sideways (an unpositioned scroller): the dot moves with its tab, with no Kernel event.
   await js(`document.getElementById("tabs").scrollLeft=12; true`); await sleep(300);
@@ -136,7 +142,6 @@ try {
   await js(`document.getElementById("tabs").scrollLeft=0; true`);
   await js(`document.getElementById("tab-flow").click(); true`); await sleep(300);
   assert.equal(await js(`document.querySelectorAll("#tab-flow [atl-ui=mark]").length`), 0, "the dot leaves when the tab opens again");
-  assert.equal(await js(`document.getElementById("tab-flow").getAttribute("style")`), "overflow: hidden;", "the tab gets its own inline style back");
   assert.equal(await js(`document.querySelectorAll("[atl-ui=mark].atl-mark-bar").length`), 3, "the bars return");
   assert.deepEqual((await b("errors")).errors ?? [], [], "no browser errors");
   console.log("PASS change indicators: four kinds, accumulated diff, nav and rail, removed block, hidden tab, marks stay until Seen or Mark all seen, one tab dot in its corner, Seen clear of the gutter's content.");
