@@ -240,7 +240,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Use one invocation for one bounded assignment while the user is attending.",
       "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output with the evidence to show; a result missing that evidence is a gap, not a pass. Do not add 'think carefully' lines; Model Effort controls thinking.",
       "Adjust a running child with subagent_steer; when the assignment itself changes, cancel it and launch a new child. Do not imply managed authority, recovery, or durable background work that survives the session.",
-      "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review never go below xhigh.",
+      "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review default to high and never go below medium.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: never launch a Worker from it. The Worker cannot finish until its background Subagents end and are collected.",
     ],

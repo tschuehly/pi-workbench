@@ -99,7 +99,7 @@ try {
 
   for (const [role, model, effort, tier] of [
     ["routine", "gpt-6-luna", "medium", "light"], ["implementation", "claude-opus-5-5", "medium", "standard"],
-    ["frontier", "gpt-6-astra", "xhigh", "strong"], ["coordination", "claude-opus-5-5", "medium", "standard"],
+    ["frontier", "gpt-6-astra", "high", "strong"], ["coordination", "claude-opus-5-5", "medium", "standard"],
   ]) {
     const resolved = JSON.parse(execFileSync(process.execPath, [resolver, role, "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
     assert.equal(resolved.modelBinding.model, model, role);
@@ -125,12 +125,14 @@ try {
   // The reserve tier (Fable) is reachable only by name, e.g. the second member of a frontier panel.
   const reserve = JSON.parse(execFileSync(process.execPath, [resolver, "frontier", "--model", "anthropic/claude-fable-5-1", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(reserve.modelBinding.model, "claude-fable-5-1");
-  assert.equal(reserve.modelBinding.effort, "xhigh");
+  assert.equal(reserve.modelBinding.effort, "high");
   assert.equal(reserve.modelBinding.tier, undefined, "an explicit model is outside tier routing");
 
-  const lowFrontier = spawnSync(process.execPath, [resolver, "frontier", "--effort", "high", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  const mediumFrontier = JSON.parse(execFileSync(process.execPath, [resolver, "frontier", "--effort", "medium", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(mediumFrontier.modelBinding.effort, "medium", "frontier may drop to its medium floor");
+  const lowFrontier = spawnSync(process.execPath, [resolver, "frontier", "--effort", "low", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(lowFrontier.status, 3);
-  assert.match(lowFrontier.stderr, /needs at least Model Effort 'xhigh'/);
+  assert.match(lowFrontier.stderr, /needs at least Model Effort 'medium'/);
   const maxFrontier = JSON.parse(execFileSync(process.execPath, [resolver, "frontier", "--effort", "max", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(maxFrontier.modelBinding.effort, "max", "raising effort above the floor is allowed");
 
@@ -177,7 +179,7 @@ try {
   assert.equal(unmappedQuota.status, 3);
   assert.match(unmappedQuota.stderr, /no quota provider mapping/i);
 
-  const unsupportedEffort = spawnSync(process.execPath, [resolver, "frontier", "--model", "github-copilot/gpt-5-mini", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  const unsupportedEffort = spawnSync(process.execPath, [resolver, "frontier", "--model", "github-copilot/gpt-5-mini", "--effort", "xhigh", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(unsupportedEffort.status, 3);
   assert.match(unsupportedEffort.stderr, /does not support Model Effort 'xhigh'/);
 
@@ -208,7 +210,7 @@ try {
   // Reviewing strong-tier work: the lead names the other family's strong model; independence still holds.
   const strongReview = passIndependent(["review", "--model", "openai-codex/gpt-6-astra", "--independent-of", "anthropic"]);
   assert.equal(strongReview.modelBinding.model, "gpt-6-astra");
-  assert.equal(strongReview.modelBinding.effort, "xhigh");
+  assert.equal(strongReview.modelBinding.effort, "high");
   assert.equal(strongReview.modelBinding.independence.selectedFamily, "openai");
   const sameFamilyOverride = runIndependent(["review", "--model", "anthropic/claude-sonnet-5-5", "--independent-of", "anthropic"]);
   assert.equal(sameFamilyOverride.status, 3);
@@ -219,10 +221,11 @@ try {
   assert.equal(reviewOfOpenAi.modelBinding.independence.independentOfFamily, "openai");
   assert.equal(reviewOfOpenAi.modelBinding.independence.selectedFamily, "anthropic");
 
-  assert.equal(reviewOfOpenAi.modelBinding.effort, "xhigh");
-  const lowerEffortReview = runIndependent(["review", "--independent-of", "openai-codex", "--effort", "high"]);
-  assert.equal(lowerEffortReview.status, 3, "review never runs below its xhigh floor");
-  assert.match(lowerEffortReview.stderr, /needs at least Model Effort 'xhigh'/);
+  assert.equal(reviewOfOpenAi.modelBinding.effort, "high");
+  assert.equal(passIndependent(["review", "--independent-of", "openai-codex", "--effort", "medium"]).modelBinding.effort, "medium");
+  const lowerEffortReview = runIndependent(["review", "--independent-of", "openai-codex", "--effort", "low"]);
+  assert.equal(lowerEffortReview.status, 3, "review never runs below its medium floor");
+  assert.match(lowerEffortReview.stderr, /needs at least Model Effort 'medium'/);
 
   const exactModelWithoutOverlay = passIndependent(["review", "--independent-of-model", "openai-codex/gpt-6.1-sol"]);
   assert.deepEqual(exactModelWithoutOverlay.modelBinding.independence, {
@@ -249,7 +252,7 @@ try {
   const secondReviewer = passIndependent(["review", "--independent-of-model", "openai-codex/gpt-6.1-sol", "--exclude-family", "anthropic"]);
   assert.equal(secondReviewer.modelBinding.provider, "github-copilot");
   assert.equal(secondReviewer.modelBinding.model, "grok-4.7");
-  assert.equal(secondReviewer.modelBinding.effort, "xhigh");
+  assert.equal(secondReviewer.modelBinding.effort, "high");
   assert.equal(secondReviewer.modelBinding.independence.selectedFamily, "xai");
   assert.deepEqual(secondReviewer.modelBinding.independence.excludedFamilies, ["anthropic"]);
 
@@ -277,7 +280,7 @@ try {
   assert.equal(reviewOfClaude.modelBinding.model, "gpt-6.1-sol");
   assert.equal(reviewOfClaude.modelBinding.independence.selectedFamily, "openai");
 
-  assert.equal(reviewOfClaude.modelBinding.effort, "xhigh", "review of Anthropic work never drops to the light tier");
+  assert.equal(reviewOfClaude.modelBinding.effort, "high", "review of Anthropic work never drops to the light tier");
 
   // light-review keeps the family rule but uses the light tier for text and triage checks.
   const lightOfClaude = passIndependent(["light-review", "--independent-of", "anthropic"]);
@@ -310,11 +313,11 @@ try {
 
   const unsupportedGrokPath = path.join(temp, "models-unsupported-grok.json");
   const unsupportedGrok = JSON.parse(fs.readFileSync(modelMetadataPath, "utf8"));
-  unsupportedGrok["github-copilot"].models.find((model) => model.id === "grok-4.7").thinkingLevelMap.xhigh = null;
+  unsupportedGrok["github-copilot"].models.find((model) => model.id === "grok-4.7").thinkingLevelMap.high = null;
   fs.writeFileSync(unsupportedGrokPath, JSON.stringify(unsupportedGrok));
   const selectedEffortUnsupported = runIndependent(["review", "--independent-of", "openai", "--exclude-family", "anthropic"], { metadata: unsupportedGrokPath });
   assert.equal(selectedEffortUnsupported.status, 3);
-  assert.match(selectedEffortUnsupported.stderr, /does not support Model Effort 'xhigh'/);
+  assert.match(selectedEffortUnsupported.stderr, /does not support Model Effort 'high'/);
 
   quota.providers[0].windows[0].percentRemaining = 0;
   quota.providers[0].state = {

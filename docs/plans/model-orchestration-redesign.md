@@ -54,9 +54,9 @@ lead runs a **frontier panel**: the same frozen brief to Astra and to Fable, com
 | --- | --- | --- | --- | --- |
 | `routine` | `mechanics`, `investigation` | Light | GPT-6 Luna `xhigh` | Luna `max`; Sonnet 5 `high` |
 | `implementation` | `implementation`, `problem-solving` | Standard | Claude Opus 5.5 `high` | Sol `high`, to test whether Opus is worth its Claude quota; Luna `max` for AFK work with an accepted plan |
-| `frontier` | `design`, `escalation` | Strong | GPT-6 Astra `xhigh` | Fable 5.1 `xhigh`; the Astra + Fable panel |
+| `frontier` | `design`, `escalation` | Strong | GPT-6 Astra `high` | Fable 5.1 `xhigh`; the Astra + Fable panel |
 | `coordination` | `coordination` | Standard | Claude Opus 5.5 `high` | — |
-| `review` | `independent-review`, `challenge`, `independent-judgment` | Standard or above | Opus 5.5 or Sol `xhigh`, whichever family differs from the author; for frontier work, the other family's strong model by name | Sol vs Opus on the same review |
+| `review` | `independent-review`, `challenge`, `independent-judgment` | Standard or above | Opus 5.5 or Sol `high`, whichever family differs from the author; for frontier work, the other family's strong model by name | Sol vs Opus on the same review |
 
 The old role names are removed, not aliased.
 
@@ -80,7 +80,8 @@ still answers simple steps quickly. Choose effort by latency tolerance and remai
 - Avoid `low`: well-defined tasks still meet ambiguous context.
 - `max` may force thinking on every request. It is an evaluation arm, not a default.
 
-`frontier` and `review` have an `xhigh` floor: an effort override may raise it, never lower it.
+`frontier` and `review` default to `high` with a `medium` floor: an effort override may raise the
+default or lower it to `medium`, never below.
 
 ### Working Mode opens model slots
 
