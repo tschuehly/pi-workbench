@@ -21,7 +21,7 @@ const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "su
 // web_enable-only list would leave it nothing to enable. keepChildWebToolsLazy keeps them inactive until then.
 const WEB_TOOLS = ["web_search", "source_check", "fetch_content", "get_search_content"];
 const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content"] as const;
-const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found.";
+const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found. To wait for a job, log, check, or server, make one bash call to `wait-until --timeout SECONDS` with any of `--file PATH [--match REGEX]`, `--pid PID`, `--cmd 'SHELL'`, `--url URL`, and no shorter bash timeout; it stays silent and returns when the first condition holds (exit 0) or at the timeout (exit 124). Never wait with sleep, tail -f, or repeated checks.";
 export const PROFILES = {
   scout: {
     tools: [...CHILD_TOOLS],

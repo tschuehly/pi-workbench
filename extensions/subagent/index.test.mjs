@@ -667,6 +667,9 @@ test("plain adds the shared status instruction without an empty profile preamble
   const { dispatched } = await dispatchSubagentWithName({ task: "Use only this contract.", profile: "plain" });
   assert.match(dispatched.task, /^Keep going while a step needs no input from the lead/);
   assert.match(dispatched.task, /Start your final report with anything you need from the lead/);
+  // Children keep native foreground bash; one blocking wait-until call replaces sleep and tail -f polls.
+  assert.match(dispatched.task, /wait-until --timeout SECONDS/);
+  assert.match(dispatched.task, /Never wait with sleep, tail -f, or repeated checks/);
   assert.match(dispatched.task, /Assignment:\nUse only this contract\.$/);
 });
 
