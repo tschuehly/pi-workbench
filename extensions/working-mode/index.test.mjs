@@ -351,14 +351,20 @@ test("ask_user stays offered to the model in every Attention value", async () =>
   s.session.dispose();
 });
 
-test("AFK warns once when the Mac is on battery, and not on AC", async () => {
+test("AFK on battery sounds the alarm and warns; on AC it stays quiet", async () => {
   const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { tmpdir } = await import("node:os");
   const bin = mkdtempSync(join(process.env.PI_TMP ?? tmpdir(), "pmset-"));
   const power = join(bin, "power");
+  const calls = join(bin, "calls");
+  writeFileSync(calls, "");
   writeFileSync(join(bin, "pmset"), `#!/bin/sh\necho "Now drawing from '$(cat ${power})'"\n`);
-  chmodSync(join(bin, "pmset"), 0o755);
+  for (const name of ["afplay", "say", "osascript"]) writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> ${calls}\n`);
+  writeFileSync(join(bin, "pgrep"), "#!/bin/sh\nexit 1\n");
+  for (const name of ["pmset", "afplay", "say", "osascript", "pgrep"]) chmodSync(join(bin, name), 0o755);
+  const { readFileSync } = await import("node:fs");
+  const alarms = () => readFileSync(calls, "utf8").split("\n").filter(Boolean).sort();
   const path = process.env.PATH;
   process.env.PATH = `${bin}:${path}`;
   try {
@@ -372,18 +378,20 @@ test("AFK warns once when the Mac is on battery, and not on AC", async () => {
       ui: { setStatus() {}, notify: (text, level) => warnings.push([level, text]) },
     };
     handlers.get("session_start")({ reason: "startup" }, ctx);
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 1000));
 
     writeFileSync(power, "AC Power");
     await command.handler("attention afk", ctx);
     await settle();
     assert.deepEqual(warnings, []);
+    assert.deepEqual(alarms(), []);
 
     await command.handler("attention default", ctx);
     writeFileSync(power, "Battery Power");
     await command.handler("attention afk", ctx);
     await settle();
-    assert.deepEqual(warnings, [["warning", AFK_BATTERY_WARNING]]);
+    assert.deepEqual(warnings, [["error", AFK_BATTERY_WARNING]]);
+    assert.deepEqual(alarms(), ["afplay", "osascript", "say"]);
     handlers.get("session_shutdown")();
   } finally {
     process.env.PATH = path;

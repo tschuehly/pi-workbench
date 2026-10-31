@@ -7,6 +7,19 @@ export const onBattery = () => new Promise<boolean>((resolve) =>
   execFile("pmset", ["-g", "batt"], (error, stdout) => resolve(!error && stdout.includes("'Battery Power'"))));
 
 export const AFK_BATTERY_WARNING = "AFK on battery power: plug in the Mac, or it may sleep or run out and stop this session.";
+const ALARM_TAG = "pi-workbench-afk-battery";
+
+/** Loud macOS alarm: sound and speech every call, plus one critical dialog machine-wide until dismissed. */
+// ponytail: each AFK session sounds its own alarm; share one alarm process if several AFK sessions overlap.
+export function batteryAlarm() {
+  const ignore = () => {};
+  execFile("afplay", ["-v", "8", "/System/Library/Sounds/Sosumi.aiff"], ignore);
+  execFile("say", ["Plug in the Mac. Pi is AFK on battery."], ignore);
+  // pgrep exits non-zero when no dialog is open yet.
+  execFile("pgrep", ["-f", ALARM_TAG], (noDialog) => {
+    if (noDialog) execFile("osascript", ["-e", `display alert "PLUG IN THE MAC" message "${AFK_BATTERY_WARNING}" as critical -- ${ALARM_TAG}`], ignore);
+  });
+}
 
 export const axes = {
   alignment: {
@@ -140,7 +153,8 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   let powerTimer: ReturnType<typeof setInterval> | undefined;
   let warnedOnBattery = false;
 
-  // While Attention is AFK, warn once each time the Mac is (or goes) on battery.
+  // While Attention is AFK and the Mac is on battery, sound the alarm every minute until it is plugged in;
+  // the in-app notification appears once per unplug.
   // ponytail: polls pmset every minute; subscribe to IOKit power notifications if latency matters.
   function watchPower(ctx: ExtensionContext) {
     if (selected.attention !== "AFK") {
@@ -152,7 +166,8 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     if (powerTimer) return;
     const check = async () => {
       const battery = await onBattery();
-      if (battery && !warnedOnBattery && ctx.hasUI) ctx.ui.notify(AFK_BATTERY_WARNING, "warning");
+      if (battery) batteryAlarm();
+      if (battery && !warnedOnBattery && ctx.hasUI) ctx.ui.notify(AFK_BATTERY_WARNING, "error");
       warnedOnBattery = battery;
     };
     void check();
