@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
-import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL } from "./index.ts";
+import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING } from "./index.ts";
 
 const cwd = "/tmp/working-mode-test";
 const agentDir = `${cwd}/agent`;
@@ -349,4 +349,43 @@ test("ask_user stays offered to the model in every Attention value", async () =>
   await s.session.prompt("focused");
   assert.equal(offered(), true);
   s.session.dispose();
+});
+
+test("AFK warns once when the Mac is on battery, and not on AC", async () => {
+  const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const bin = mkdtempSync(join(process.env.PI_TMP ?? tmpdir(), "pmset-"));
+  const power = join(bin, "power");
+  writeFileSync(join(bin, "pmset"), `#!/bin/sh\necho "Now drawing from '$(cat ${power})'"\n`);
+  chmodSync(join(bin, "pmset"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try {
+    const handlers = new Map();
+    let command;
+    const warnings = [];
+    workingMode({ on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, registerTool() {}, events: { emit() {} } });
+    const ctx = {
+      mode: "rpc", hasUI: true,
+      sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
+      ui: { setStatus() {}, notify: (text, level) => warnings.push([level, text]) },
+    };
+    handlers.get("session_start")({ reason: "startup" }, ctx);
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+
+    writeFileSync(power, "AC Power");
+    await command.handler("attention afk", ctx);
+    await settle();
+    assert.deepEqual(warnings, []);
+
+    await command.handler("attention default", ctx);
+    writeFileSync(power, "Battery Power");
+    await command.handler("attention afk", ctx);
+    await settle();
+    assert.deepEqual(warnings, [["warning", AFK_BATTERY_WARNING]]);
+    handlers.get("session_shutdown")();
+  } finally {
+    process.env.PATH = path;
+  }
 });

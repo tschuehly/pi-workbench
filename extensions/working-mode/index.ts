@@ -1,5 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { execFile } from "node:child_process";
+
+/** True when macOS reports battery power; false on AC, other platforms, or any error. */
+export const onBattery = () => new Promise<boolean>((resolve) =>
+  execFile("pmset", ["-g", "batt"], (error, stdout) => resolve(!error && stdout.includes("'Battery Power'"))));
+
+export const AFK_BATTERY_WARNING = "AFK on battery power: plug in the Mac, or it may sleep or run out and stop this session.";
 
 export const axes = {
   alignment: {
@@ -130,6 +137,28 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   let aligned = false;
   // Block sent by `/mode send` that may still wait in the steer queue, outside the session branch.
   let queued: WorkingModeDetails | null = null;
+  let powerTimer: ReturnType<typeof setInterval> | undefined;
+  let warnedOnBattery = false;
+
+  // While Attention is AFK, warn once each time the Mac is (or goes) on battery.
+  // ponytail: polls pmset every minute; subscribe to IOKit power notifications if latency matters.
+  function watchPower(ctx: ExtensionContext) {
+    if (selected.attention !== "AFK") {
+      clearInterval(powerTimer);
+      powerTimer = undefined;
+      warnedOnBattery = false;
+      return;
+    }
+    if (powerTimer) return;
+    const check = async () => {
+      const battery = await onBattery();
+      if (battery && !warnedOnBattery && ctx.hasUI) ctx.ui.notify(AFK_BATTERY_WARNING, "warning");
+      warnedOnBattery = battery;
+    };
+    void check();
+    powerTimer = setInterval(check, 60_000);
+    powerTimer.unref?.();
+  }
 
   /** Next block to deliver, or null when the model already sees (or will see) the selection. */
   function pendingBlock(ctx: ExtensionContext, sent: boolean) {
@@ -172,7 +201,10 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     applied = null;
     queued = null;
     publish(ctx, "selected");
+    watchPower(ctx);
   });
+
+  pi.on("session_shutdown", () => clearInterval(powerTimer));
 
   // A run's end means a queued steer either landed in the branch or was dropped (abort, clearQueue).
   // ponytail: a steer queued after the loop's last queue check can survive into the next run and
@@ -212,6 +244,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         select(axis, value);
       }
       publish(ctx, "selected");
+      watchPower(ctx);
       if (ctx.mode === "tui") ctx.ui.notify("Working Mode applies with the next prompt.", "info");
     },
   });
