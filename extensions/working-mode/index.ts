@@ -153,19 +153,21 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   let powerTimer: ReturnType<typeof setInterval> | undefined;
   let warnedOnBattery = false;
 
-  // While Attention is AFK and the Mac is on battery, sound the alarm every minute until it is plugged in;
-  // the in-app notification appears once per unplug.
+  // Once AFK has started and a turn runs under it, sound the alarm every minute on battery until it is
+  // plugged in; the in-app notification appears once per unplug. `arm` is set only where a turn runs, so
+  // an idle session restored with an old AFK selection stays quiet.
   // ponytail: polls pmset every minute; subscribe to IOKit power notifications if latency matters.
-  function watchPower(ctx: ExtensionContext) {
-    if (selected.attention !== "AFK") {
+  const afkActive = () => selected.attention === "AFK" && !afkPending(selected, aligned);
+  function watchPower(ctx: ExtensionContext, arm: boolean) {
+    if (!afkActive()) {
       clearInterval(powerTimer);
       powerTimer = undefined;
       warnedOnBattery = false;
       return;
     }
-    if (powerTimer) return;
+    if (powerTimer || !arm) return;
     const check = async () => {
-      const battery = await onBattery();
+      const battery = await onBattery() && afkActive();
       if (battery) batteryAlarm();
       if (battery && !warnedOnBattery && ctx.hasUI) ctx.ui.notify(AFK_BATTERY_WARNING, "error");
       warnedOnBattery = battery;
@@ -216,7 +218,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     applied = null;
     queued = null;
     publish(ctx, "selected");
-    watchPower(ctx);
+    watchPower(ctx, false);
   });
 
   pi.on("session_shutdown", () => clearInterval(powerTimer));
@@ -238,6 +240,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         queued = message.details;
         applied = { ...selected };
         publish(ctx, "applied");
+        watchPower(ctx, true);
         // Idle: starts a turn. Streaming: steers the running turn after its current tool calls.
         pi.sendMessage(message, { triggerTurn: true, deliverAs: "steer" });
         return;
@@ -259,7 +262,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         select(axis, value);
       }
       publish(ctx, "selected");
-      watchPower(ctx);
+      watchPower(ctx, false);
       if (ctx.mode === "tui") ctx.ui.notify("Working Mode applies with the next prompt.", "info");
     },
   });
@@ -267,6 +270,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", (_event, ctx) => {
     applied = { ...selected };
     publish(ctx, "applied");
+    watchPower(ctx, true);
     const message = pendingBlock(ctx, false);
     return message ? { message } : undefined;
   });
@@ -280,6 +284,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
       const wasPending = afkPending(selected, aligned);
       aligned = true;
       publish(ctx, "applied");
+      watchPower(ctx, true);
       const text = wasPending
         ? `Alignment recorded. AFK starts now: ${axes.attention.values.AFK}`
         : "Alignment recorded.";
@@ -295,6 +300,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       aligned = false;
       publish(ctx, "applied");
+      watchPower(ctx, false);
       const text = afkPending(selected, aligned) ? `Alignment cleared. ${afkPreparationText(selected)}` : "Alignment cleared.";
       return { content: [{ type: "text", text }], details: { alignment: selected.alignment, reason: params.reason } };
     },

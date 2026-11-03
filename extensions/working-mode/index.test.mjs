@@ -351,7 +351,7 @@ test("ask_user stays offered to the model in every Attention value", async () =>
   s.session.dispose();
 });
 
-test("AFK on battery sounds the alarm and warns; on AC it stays quiet", async () => {
+test("AFK on battery alarms once a turn runs; AC, preparing, restored, and non-AFK sessions stay quiet", async () => {
   const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { tmpdir } = await import("node:os");
@@ -377,11 +377,28 @@ test("AFK on battery sounds the alarm and warns; on AC it stays quiet", async ()
       sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
       ui: { setStatus() {}, notify: (text, level) => warnings.push([level, text]) },
     };
-    handlers.get("session_start")({ reason: "startup" }, ctx);
     const settle = () => new Promise((resolve) => setTimeout(resolve, 1000));
+    const turn = () => handlers.get("before_agent_start")({}, ctx);
+
+    // A session restored with an old AFK selection stays quiet until a turn runs.
+    writeFileSync(power, "Battery Power");
+    const afkBlock = { type: "custom_message", customType: "working-mode", details: { schemaVersion: 2, seq: 1, selection: { ...defaults, attention: "AFK" }, aligned: false } };
+    handlers.get("session_start")({ reason: "startup" }, { ...ctx, sessionManager: { getBranch: () => [afkBlock], buildContextEntries: () => [afkBlock] } });
+    await settle();
+    assert.deepEqual(alarms(), []);
+    await command.handler("attention default", ctx);
+
+    // Non-AFK turns and AFK still preparing alignment stay quiet.
+    turn();
+    await command.handler("alignment align", ctx);
+    await command.handler("attention afk", ctx);
+    turn();
+    await settle();
+    assert.deepEqual(alarms(), []);
+    await command.handler("alignment default", ctx);
 
     writeFileSync(power, "AC Power");
-    await command.handler("attention afk", ctx);
+    turn();
     await settle();
     assert.deepEqual(warnings, []);
     assert.deepEqual(alarms(), []);
@@ -389,6 +406,7 @@ test("AFK on battery sounds the alarm and warns; on AC it stays quiet", async ()
     await command.handler("attention default", ctx);
     writeFileSync(power, "Battery Power");
     await command.handler("attention afk", ctx);
+    turn();
     await settle();
     assert.deepEqual(warnings, [["error", AFK_BATTERY_WARNING]]);
     assert.deepEqual(alarms(), ["afplay", "osascript", "say"]);
