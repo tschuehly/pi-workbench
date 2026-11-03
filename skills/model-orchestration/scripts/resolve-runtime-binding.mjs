@@ -23,7 +23,7 @@ Tiers, default first: ${Object.entries(policy.tiers).map(([t, m]) => `${t}=${m.j
   exhausted quota, the other model of the same tier runs and the receipt records the fallback.
   Routing never moves to another tier; with both tier models unavailable it blocks.
 - review: needs the author (--independent-of-model, or --independent-of). It selects the tier model
-  of the other family, then the third family; --model is allowed when its family differs.
+  of the other family; --model is allowed when its family differs.
 - --effort may not go below a role's minEffort (frontier and review: medium).
 - --model selects one exact model with no fallback; the reserve tier is reachable only this way.
 - PI_WORKBENCH_ROUTING_OVERLAY=<abs path> narrows routing to an allowlist; see references/*-overlay.json.
