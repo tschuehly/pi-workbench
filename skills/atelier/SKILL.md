@@ -27,11 +27,13 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
 - `open` and `update` run the Page check and append its result; `update` shows the owner the new version first, so
   fix a FAIL with another `update`. `check` runs it alone; without the tool, run
   `node ../../extensions/atelier/check-page.mjs <page.html>` from the project directory (exit 1 only on a FAIL). On a
-  test copy at 1512×900 it opens the view of each `aria-controls` control once, nested views by their click path.
+  test copy at 1512×900 it opens the view of each `aria-controls` control once, nested views by their click path,
+  and measures each view again at 900×900.
   - FAIL is measured; fix every one: console or page errors and horizontal overflow in a view (errors also after a
     click that shows no view), a Kernel version other
     than the host's, Page state not loaded, Kernel elements moving Page content (lay out a wrapper, never `<body>`).
-  - WARN is a heuristic and never fails the check: possible text overlap in a view, Page CSS or `onclick` reaching
+  - WARN is a heuristic and never fails the check: possible text overlap in a view, text no scrolling frees from
+    under a fixed or sticky layer, Kernel controls overlapping each other, Page CSS or `onclick` reaching
     Kernel controls (scope selectors such as `aside button` or `nav button` to Page markup), unbalanced tags. Each
     names what it saw and the screenshots to look at; look at them and fix what is really broken.
   - "unchecked": the browser checks stopped (no agent-browser, cancel, deadline); the checks and views listed were
@@ -135,12 +137,15 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 - **No provenance noise.** No Git SHAs, app ids, timestamps, viewport/pointer/scale lines or "evidence
   limit" boxes on the Page; keep them in `atl-ver` or data files.
 - **Use the full desktop width.** No narrow centred column with empty margins; use several columns, compact
-  padding, and one-line headers. Navigation collapses so content can take the screen.
+  padding, and one-line headers. Navigation has a collapse toggle and starts collapsed below ~1100px, so
+  content takes the screen. Leave the Kernel panel room through `atl-dock`. Before handing a Page over,
+  look at it at 860–1100px wide as well as at full width.
 - **Detail opens where it is clicked.** A box or stage that acts as navigation opens its content in place (tab
   panel or expand), never by jumping far down the Page. Navigation shows progress and what needs him, not a wall of links.
 - **The choice sits at its evidence.** Put the Decision on each version or stage where he sees it (under its
   screenshot), not in a row at the end; one Decision per grain where versions differ (e.g. per viewport).
-  For a long section, keep the Decision in view (sticky top or bottom bar).
+  For a long section, keep the Decision in view (sticky top or bottom bar). A sticky bar never covers
+  content: reserve its height, or let it stop sticking when the section is short or the window narrow.
 - **Options name the result, not the action.** Each option says what he gets if he picks it. When a proposal
   becomes a shown version, change its options to judge that version (`atl-decide="Keep this|Change"`,
   `atl-note="Change"`); bumping only `atl-ver` re-asks the old question ("Fix|Leave") about the fix itself.
