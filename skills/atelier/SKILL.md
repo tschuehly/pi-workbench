@@ -67,11 +67,13 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
 - `atl-wip="Reworking scene 3"` on a Key or any element containing Keys marks it under construction
   while you rework it: the Kernel dims it, labels it with the text and locks its Decisions (answers stay
   shown; Comments stay open). Remove it in the Update that delivers the rework; `atelier.state().wip`
-  lists the marked regions as `{key, text}`.
+  lists the marked regions as `{key, text}`. Mark every rework this way; where the region holds a Decision he
+  still owes (e.g. the whole Page), add `atl-wip-lock="off"`: dimmed and labelled, but still answerable.
 - `atl-request="job"` on a button or form lets the human ask for a typed job; form fields become
   its input. Move it with `status`.
-- Close the loop on every thread you answered or acted on: the `answer` says what you did and where, so he
-  can close it at a glance (only the human closes a thread).
+- A Comment or own answer that starts work taking more than a moment: show it at once with `atl-wip` on the
+  region (and `update`), or `answer` "In progress: what, where". Then close the loop: the `answer` says what you
+  did and where, so he can close it at a glance (only the human closes a thread).
 - Explanation lives in the Page. When he asks for clarification or more explanation of Page content (a Comment, a
   Decision note, an own answer), rewrite that content at its Key and `update`; then `answer` in one line naming
   where the explanation now sits. Reserve `ask` for a real choice.
@@ -171,7 +173,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.11.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.12.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of

@@ -1,4 +1,4 @@
-// Atelier Kernel 2.11.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.12.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -22,6 +22,7 @@
 //   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (156)
 //   atl-wip="Reworking scene 3"  on a Key or any element: under construction while an agent reworks it; the Kernel
 //                              dims it, labels it and locks its Decisions (answers stay shown, Comments stay open)
+//     atl-wip-lock="off"       dims and labels without locking: work in progress around Decisions he still answers
 //   atl-changes="off"          anywhere on the Page: no change indicators after Updates. Otherwise a mark stays until the
 //                              human opens and closes its changes, clicks its "Seen", or "Mark all seen" (156)
 //   atl-dock                   an empty element where the Kernel panel sits in the Page's layout; else it floats at the
@@ -409,10 +410,11 @@ function boot() {
   const all = () => [...entries, ...local];
   const state = () => derive(all(), currentVer, declared());
   let loaded = !online, published = null;
-  // atl-wip: a region an agent is reworking; its text labels it and locks the Decisions inside it.
+  // atl-wip: a region an agent is reworking; its text labels it and locks the Decisions inside it, unless
+  // atl-wip-lock="off" (2.12.0), so a Page-wide "in progress" mark leaves the Decisions he still owes answerable.
   const wips = () => [...document.querySelectorAll("[atl-wip]")].filter((el) => !isUi(el));
   const wipText = (el) => el.getAttribute("atl-wip") || "Work in progress";
-  const lockOf = (el) => { const w = el.closest("[atl-wip]"); return w ? wipText(w) : null; };
+  const lockOf = (el) => { const w = el.closest("[atl-wip]:not([atl-wip-lock=off])"); return w ? wipText(w) : null; };
   const wipState = () => wips().map((el) => ({ key: keyOf(el) ?? null, text: wipText(el) }));
   globalThis.atelier = Object.freeze({ state: () => publicState(state(), { conn, loaded, wip: wipState() }) });
   const now = () => Date.now();

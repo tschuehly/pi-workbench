@@ -50,7 +50,8 @@ _Avoid_: Ready, refresh, publish
 
 **Under Construction**:
 The state of a Page region the agent is reworking, marked with `atl-wip` and a one-line reason: the
-Kernel dims it and locks its Decisions until an Update removes the mark.
+Kernel dims it and locks its Decisions until an Update removes the mark. With `atl-wip-lock="off"` it
+dims and labels only, so Decisions inside stay answerable.
 _Avoid_: draft, pending, locked
 
 **Event Log**:
