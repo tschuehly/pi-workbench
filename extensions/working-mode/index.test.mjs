@@ -410,6 +410,14 @@ test("AFK on battery alarms once a turn runs; AC, preparing, restored, and non-A
     await settle();
     assert.deepEqual(warnings, [["error", AFK_BATTERY_WARNING]]);
     assert.deepEqual(alarms(), ["afplay", "osascript", "say"]);
+
+    // Switching Attention away from AFK stops the repeating alarm, even mid-turn.
+    const cleared = [];
+    const realClear = globalThis.clearInterval;
+    globalThis.clearInterval = (timer) => { if (timer) cleared.push(timer); realClear(timer); };
+    try { await command.handler("attention switching", ctx); } finally { globalThis.clearInterval = realClear; }
+    assert.equal(cleared.length, 1);
+    assert.equal(cleared[0]._destroyed, true);
     handlers.get("session_shutdown")();
   } finally {
     process.env.PATH = path;
