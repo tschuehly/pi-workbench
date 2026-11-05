@@ -36,9 +36,10 @@ When the model already sees the selection, it only notifies "Working Mode unchan
   Default, AFK starts at once. The snapshot's `aligned` field reports the state.
 - **Battery alarm:** once AFK has started (alignment reached, or Alignment Default) and a turn runs
   under it, while the Mac is on battery, every minute it plays a loud
-  sound, speaks "Plug in the Mac", and opens a critical macOS alert (one at a time, machine-wide),
-  plus an error notification once per unplug. Sleep or a drained battery would stop the session.
-  Leaving AFK stops it; an idle session restored with an old AFK selection stays quiet.
+  sound, speaks "Plug in the Mac", and opens a critical macOS alert naming the session and folder
+  (one open per session), plus an error notification once per unplug. Sleep or a drained battery
+  would stop the session. Leaving AFK in that session stops it, as does a disposed session; an idle
+  session restored with an old AFK selection stays quiet.
 - Guidance only: the `alignment_reached` and `alignment_reset` tools record state; no permissions or skill catalog change.
 
 The behavioral contract is [Working Mode](../../docs/foundation/working-mode.md).

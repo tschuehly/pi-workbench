@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { execFile } from "node:child_process";
+import { basename } from "node:path";
 
 /** True when macOS reports battery power; false on AC, other platforms, or any error. */
 export const onBattery = () => new Promise<boolean>((resolve) =>
@@ -9,16 +10,25 @@ export const onBattery = () => new Promise<boolean>((resolve) =>
 export const AFK_BATTERY_WARNING = "AFK on battery power: plug in the Mac, or it may sleep or run out and stop this session.";
 const ALARM_TAG = "pi-workbench-afk-battery";
 
-/** Loud macOS alarm: sound and speech every call, plus one critical dialog machine-wide until dismissed. */
+/** Loud macOS alarm: sound and speech every call, plus one critical dialog per session until dismissed. */
 // ponytail: each AFK session sounds its own alarm; share one alarm process if several AFK sessions overlap.
-export function batteryAlarm() {
+export function batteryAlarm(session: { id: string; label: string }) {
   const ignore = () => {};
+  const tag = `${ALARM_TAG}-${session.id.replace(/[^\w-]/g, "")}`;
+  const label = session.label.replace(/["\\\n\r]/g, "");
   execFile("afplay", ["-v", "8", "/System/Library/Sounds/Sosumi.aiff"], ignore);
   execFile("say", ["Plug in the Mac. Pi is AFK on battery."], ignore);
-  // pgrep exits non-zero when no dialog is open yet.
-  execFile("pgrep", ["-f", ALARM_TAG], (noDialog) => {
-    if (noDialog) execFile("osascript", ["-e", `display alert "PLUG IN THE MAC" message "${AFK_BATTERY_WARNING}" as critical -- ${ALARM_TAG}`], ignore);
+  // pgrep exits non-zero when this session has no dialog open yet.
+  execFile("pgrep", ["-f", tag], (noDialog) => {
+    if (noDialog) execFile("osascript", ["-e", `display alert "PLUG IN THE MAC" message "AFK session: ${label}\n\n${AFK_BATTERY_WARNING} Switch that session's Attention away from AFK to stop this alarm." as critical -- ${tag}`], ignore);
   });
+}
+
+/** Session name and folder, so the alarm tells Thomas which session to switch. */
+export function alarmSession(ctx: ExtensionContext) {
+  const folder = basename(ctx.cwd ?? "");
+  const name = ctx.sessionManager.getSessionName?.();
+  return { id: ctx.sessionManager.getSessionId?.() ?? "", label: name ? `${name} (${folder})` : folder };
 }
 
 export const axes = {
@@ -158,17 +168,20 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   // an idle session restored with an old AFK selection stays quiet.
   // ponytail: polls pmset every minute; subscribe to IOKit power notifications if latency matters.
   const afkActive = () => selected.attention === "AFK" && !afkPending(selected, aligned);
+  function stopPower() {
+    clearInterval(powerTimer);
+    powerTimer = undefined;
+    warnedOnBattery = false;
+  }
   function watchPower(ctx: ExtensionContext, arm: boolean) {
-    if (!afkActive()) {
-      clearInterval(powerTimer);
-      powerTimer = undefined;
-      warnedOnBattery = false;
-      return;
-    }
+    if (!afkActive()) return stopPower();
     if (powerTimer || !arm) return;
+    const session = alarmSession(ctx);
     const check = async () => {
+      // A session disposed without session_shutdown leaves a stale ctx whose getters throw: stop there.
+      try { void ctx.hasUI; } catch { return stopPower(); }
       const battery = await onBattery() && afkActive();
-      if (battery) batteryAlarm();
+      if (battery) batteryAlarm(session);
       if (battery && !warnedOnBattery && ctx.hasUI) ctx.ui.notify(AFK_BATTERY_WARNING, "error");
       warnedOnBattery = battery;
     };
@@ -221,7 +234,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     watchPower(ctx, false);
   });
 
-  pi.on("session_shutdown", () => clearInterval(powerTimer));
+  pi.on("session_shutdown", stopPower);
 
   // A run's end means a queued steer either landed in the branch or was dropped (abort, clearQueue).
   // ponytail: a steer queued after the loop's last queue check can survive into the next run and
