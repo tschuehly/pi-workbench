@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
@@ -12,7 +12,7 @@ import { CLASSES, UNDO_MS, compose, derive, inGroup, keyTexts } from "./kernel/a
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-export const KERNEL_VERSION = "2.13.0";
+export const KERNEL_VERSION = "3.0.0";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
@@ -32,6 +32,29 @@ export type Message = { customType: string; content: string; display: true; deta
 export const logPath = (page: string) => `${page}.events.jsonl`;
 /** Images the human attaches to a Decision's answer or a Comment live beside the Event Log; the log names them relative to the Page's directory. */
 export const imagesDir = (page: string) => `${page}.images`;
+
+/** Stored Updates (Kernel 3.0): each Update's snapshot of the Working copy, `<page>.revisions/<n>.html`. */
+export const revisionsDir = (page: string) => `${page}.revisions`;
+export const revisionFile = (page: string, n: number) => path.join(revisionsDir(page), `${n}.html`);
+export function revisions(page: string): number[] {
+  let names: string[];
+  try { names = readdirSync(revisionsDir(page)); } catch { return []; }
+  return names.flatMap((n) => /^([1-9]\d*)\.html$/.exec(n)?.[1] ?? []).map(Number).sort((a, b) => a - b);
+}
+/** What the human sees: a Page with stored Updates shows its latest revision, never the Working copy on disk. */
+export function shown(page: string) {
+  const last = revisions(page).at(-1);
+  return last ? revisionFile(page, last) : page;
+}
+/** Snapshots the Working copy as the next revision and returns its number. */
+export function storeRevision(page: string) {
+  const dir = revisionsDir(page);
+  mkdirSync(dir, { recursive: true });
+  if (!lstatSync(dir).isDirectory()) throw new Error(`${dir} is not a directory; Atelier stores revisions only beside the Page.`);
+  const n = (revisions(page).at(-1) ?? 0) + 1;
+  writeFileSync(revisionFile(page, n), readFileSync(page), { flag: "wx" });
+  return n;
+}
 
 /** The Event Log (143): append-only JSON lines beside the Page. A torn last line is skipped, never fatal. */
 export function readLog(page: string): Entry[] {
@@ -179,6 +202,28 @@ export function copyKernel(dir: string) {
   });
 }
 
+/** The Kernel version the Page loads: its copy beside it, by content or stamp; "none" or "unknown" otherwise. */
+export function pageKernel(page: string) {
+  let text: string;
+  try { text = readFileSync(path.join(path.dirname(page), "atelier.js"), "utf8"); } catch { return "none"; }
+  const stamp = STAMP.exec(text);
+  if ((stamp ? text.slice(stamp[0].length) : text) === readFileSync(path.join(KERNEL_DIR, "atelier.js"), "utf8")) return KERNEL_VERSION;
+  return stamp?.[1] ?? "unknown";
+}
+
+/** A read-only view of a session transcript: the Log a Session Page links to. */
+function logHtml(name: string, entries: readonly any[]) {
+  const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const part = (p: any) => p.type === "text" ? p.text : p.type === "toolCall" ? `→ ${p.name} ${JSON.stringify(p.arguments)}` : p.type === "thinking" ? "" : `[${p.type}]`;
+  const rows = entries.flatMap((e) => {
+    const m = e?.type === "message" ? e.message : e?.type === "custom_message" ? { role: e.customType, content: e.content } : undefined;
+    if (!m) return [];
+    const text = typeof m.content === "string" ? m.content : (m.content ?? []).map(part).filter(Boolean).join("\n");
+    return [`<h3>${esc(m.role === "toolResult" ? `result of ${m.toolName}` : m.role)}</h3><pre>${esc(text.slice(0, 20_000))}</pre>`];
+  });
+  return `<!doctype html><meta charset="utf-8"><title>Log · ${esc(name)}</title><style>body{font:14px/1.45 system-ui,sans-serif;max-width:960px;margin:0 auto;padding:16px}pre{white-space:pre-wrap;background:#f6f8fa;padding:8px;border-radius:6px}h3{margin:16px 0 4px;font-size:13px;color:#59636e}</style><h1>Log · ${esc(name)}</h1>${rows.join("") || "<p>Empty.</p>"}`;
+}
+
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".jsonl": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8",
@@ -258,7 +303,7 @@ function storedImage(page: string, name: string) {
 
 export type Host = ReturnType<typeof createHost>;
 type Send = (message: Message, done: (idle: boolean) => void, failed: () => void) => void;
-type Receiver = { session: string; label: string; generation: number; send: Send; handoff?: (message: Message) => void; idle?: () => boolean };
+type Receiver = { session: string; label: string; generation: number; send: Send; handoff?: (message: Message) => void; idle?: () => boolean; transcript?: () => readonly any[] };
 /**
  * A served Page: its serving endpoint (the page server that gave the tab its URL, its connected tabs, its undo
  * timers) and its current receiver session. A takeover inside the process swaps only the receiver.
@@ -288,6 +333,8 @@ export function createHost(options: {
   handoff?: (message: Message) => void;
   /** Whether this session is between runs; a takeover from it waits for that. */
   idle?: () => boolean;
+  /** This session's transcript entries, for the Log view (`?atl=log` on a Page it receives). */
+  transcript?: () => readonly any[];
   quiesceMs?: number;
   now?: () => number;
   undoMs?: number;
@@ -344,7 +391,7 @@ export function createHost(options: {
     const entries = readLog(page);
     const sentTo = new Map<number, string>(entries.filter((e) => e.type === "delivered").flatMap((e) => e.of.map((s: number) => [s, e.label ?? e.session])));
     let texts: Map<string, string> | undefined;
-    const excerpts = () => texts ??= (() => { try { return keyTexts(readFileSync(page, "utf8")); } catch { return new Map(); } })();
+    const excerpts = () => texts ??= (() => { try { return keyTexts(readFileSync(shown(page), "utf8")); } catch { return new Map(); } })();
     let sent = 0;
     for (const due of dueMessages(entries, now(), undoMs, rec.inFlight)) {
       // Plannotator: nothing to send means no turn.
@@ -447,8 +494,9 @@ export function createHost(options: {
   function serveFile(req: IncomingMessage, res: ServerResponse, pathname: string) {
     let decoded: string;
     try { decoded = decodeURIComponent(pathname); } catch { return json(res, 400, { error: "Bad path" }); }
-    const file = resolve(decoded.slice(1));
-    if (!file || !statSync(file).isFile()) return json(res, 404, { error: "Not found" });
+    const found = resolve(decoded.slice(1));
+    if (!found || !statSync(found).isFile()) return json(res, 404, { error: "Not found" });
+    const file = shown(found);
     const size = statSync(file).size;
     const headers: Record<string, string | number> = { "content-type": TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream", "cache-control": "no-store", "accept-ranges": "bytes" };
     // Byte ranges so <video> seeks (Review Studio 11f5d33c9).
@@ -492,13 +540,21 @@ export function createHost(options: {
       if (u.pathname === "/.atelier/stream") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
         rec.clients.add(res);
-        res.write(`event: hello\ndata: ${JSON.stringify({ mtime: statSync(page).mtimeMs, test: options.test || undefined, receiver: receiverInfo(rec.receiver) })}\n\n`);
+        res.write(`event: hello\ndata: ${JSON.stringify({ mtime: statSync(shown(page)).mtimeMs, test: options.test || undefined, receiver: receiverInfo(rec.receiver) })}\n\n`);
         req.on("close", () => rec.clients.delete(res));
         return;
       }
       return json(res, 404, { error: "Unknown Atelier route" });
     }
     if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "Read-only" });
+    if (u.searchParams.get("atl") === "log") {
+      let decoded: string;
+      try { decoded = decodeURIComponent(u.pathname); } catch { return json(res, 400, { error: "Bad path" }); }
+      const page = resolve(decoded.slice(1)), r = page ? served(page)?.receiver : undefined;
+      if (!r?.transcript) return json(res, 404, { error: "No Pi session receiving this Page keeps a Log here." });
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      return res.end(logHtml(r.label, r.transcript()));
+    }
     if (u.pathname === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(`<!doctype html><title>Atelier</title><ul>${[...REG.served.values()].filter((r) => r.ep === ep).map((r) => r.page).map((p) => `<li><a href="${url(p)}">${rel(p).replace(/[<&]/g, "")}</a></li>`).join("")}</ul>`);
@@ -557,7 +613,7 @@ export function createHost(options: {
     const previous = rec.receiver;
     if (previous?.session !== sessionId || previous.generation !== generation) {
       // Sends the previous receiver queued but never confirmed are replayed here, flagged; the rest it held are dropped.
-      rec.receiver = { session: sessionId, label, generation, send: options.send, handoff: options.handoff, idle: options.idle };
+      rec.receiver = { session: sessionId, label, generation, send: options.send, handoff: options.handoff, idle: options.idle, transcript: options.transcript };
       rec.inFlight.clear(); rec.seen.clear(); rec.awaiting.length = 0;
       rec.ep.broadcast(page, "receiver", { receiver: receiverInfo(rec.receiver) });
     }
@@ -624,10 +680,10 @@ export function createHost(options: {
     takeover,
     agent(page: string, entry: Record<string, unknown>) { return receiving(page).ep.append(page, { ...entry, origin: "agent" }); },
     /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */
-    update(page: string, note?: string) {
+    update(page: string, note?: string, revision?: number) {
       const rec = receiving(page);
-      if (note) rec.ep.append(page, { origin: "agent", type: "update", note });
-      rec.ep.broadcast(page, "update", { mtime: statSync(page).mtimeMs, note });
+      if (note || revision) rec.ep.append(page, { origin: "agent", type: "update", ...(note ? { note } : {}), ...(revision ? { revision } : {}) });
+      rec.ep.broadcast(page, "update", { mtime: statSync(shown(page)).mtimeMs, note });
       return rec.clients.size;
     },
     receipt(details: { page?: string; seqs?: number[]; generation?: number } | undefined) {

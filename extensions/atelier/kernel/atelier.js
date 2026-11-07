@@ -1,4 +1,4 @@
-// Atelier Kernel 2.13.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 3.0.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -38,6 +38,8 @@
 //   window.atelier.state()     read-only Kernel state (Decisions with state new/changed/done, round and history, answers,
 //                              threads, Requests, per-Key counts); document "atelier:state" carries it in detail whenever it changes.
 //                              Kernel markup is not an API.
+// Stored Updates (3.0.0): once a Page has <page>.revisions/, the host serves its latest revision, not the Working copy
+//                              on disk; each Update stores the next one. An agent `attend` event marks its Key Needs you.
 // Human state lives only in <page>.events.jsonl, never in the HTML (147).
 // Kernel controls take the Page's colours: override --atl-bg, --atl-fg, --atl-muted, --atl-line, --atl-accent, --atl-warn.
 //

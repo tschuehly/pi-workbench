@@ -1,11 +1,14 @@
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { REQUEST_STATES, derive } from "./kernel/atelier.js";
-import { WATCHDOG_MS, createHost, readLog } from "./host.ts";
+import { WATCHDOG_MS, createHost, pageKernel, readLog, revisionFile, revisions, storeRevision } from "./host.ts";
+import { createUserLocalWorkstreamStore } from "../../packages/workstream-store/src/index.js";
 import { checkPage, formatCheck } from "./check-page.mjs";
 import { piTmpDir } from "../pi-tmp/pitmp.mjs";
 import type { Host, Message } from "./host.ts";
@@ -25,10 +28,85 @@ Rules:
 7. End your turn after asking.
 8. Answer a Comment where it was written, with answer, not in chat.`;
 
+// The Session Page's fixed starting layout (Page mode): header with the Log link, the agent's area, the composer.
+// The composer posts a Comment on its Key, delivered like any Comment; document-level listeners survive Updates.
+const SESSION_PAGE = (title: string) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;max-width:880px;margin:0 auto;padding:24px}header{border-bottom:1px solid #d1d9e0;margin-bottom:16px}#atl-composer{display:grid;gap:6px;margin-top:24px}#atl-composer textarea{font:inherit;width:100%;box-sizing:border-box}</style>
+</head><body>
+<header atl-key="header"><h1>${title}</h1><p><a id="atl-log" href="?atl=log" target="_blank">Log</a></p></header>
+<main atl-key="main"></main>
+<section atl-key="composer"><form id="atl-composer"><textarea name="text" rows="3" required aria-label="Message to the agent" placeholder="Ask or tell the agent something"></textarea><button type="submit">Send</button></form></section>
+<script type="module" src="atelier.js"></script>
+<script>
+document.addEventListener("submit", async (ev) => {
+  const form = ev.target.closest("#atl-composer"), text = form?.text.value.trim();
+  if (!form) return;
+  ev.preventDefault();
+  if (!text) return;
+  const r = await fetch("/.atelier/events?page=" + encodeURIComponent(decodeURIComponent(location.pathname.slice(1))), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "comment", key: "composer", text }) });
+  if (r.ok) form.reset();
+});
+</script>
+</body></html>
+`;
+
+/** The session's home Workstream, if the Workstream store names one. */
+async function sessionWorkstream(sessionId: string) {
+  try {
+    const [ws] = await createUserLocalWorkstreamStore({ directory: process.env.PI_WORKBENCH_WORKSTREAM_DIR }).list({ sessionId, includeClosed: true });
+    return /^[\w.-]+$/.test(ws?.id ?? "") ? ws.id as string : undefined;
+  } catch { return undefined; }
+}
+
 export default function atelierExtension(pi: ExtensionAPI) {
   let host: Host | undefined;
   let current: ExtensionContext | undefined;
   let sessionId: string | undefined;
+  // Page mode: Thomas's Working Mode as working-mode publishes it, and this session's Session Page once made.
+  let surface = "Chat";
+  let sessionPage: string | undefined;
+  let making = false;
+
+  const ensureHost = (ctx: ExtensionContext) => host ??= createHost({
+    root: realpathSync(ctx.cwd), send, sessionId, label: pi.getSessionName?.(),
+    // The handover note reaches a busy session mid-run and an idle one without starting a turn.
+    // Idle for a takeover: no run, and none starting from a send already queued.
+    handoff: (m) => pi.sendMessage(m, { deliverAs: "steer" }), idle: () => !starting && (current?.isIdle() ?? true),
+    transcript: () => current?.sessionManager.getEntries() ?? [],
+  });
+
+  // When Surface becomes Page: make the Session Page from the template (in the Workstream's scratch folder, else the
+  // session's PI_TMP), store revision 1, receive it here, open it in the browser and tell the agent where it is.
+  async function makeSessionPage(ctx: ExtensionContext) {
+    const id = ctx.sessionManager.getSessionId();
+    const ws = await sessionWorkstream(id);
+    const dir = ws ? path.join(homedir(), ".pi-workbench", "scratch", ws, "session-pages") : path.join(piTmpDir(ctx.cwd, id), "session-page");
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(realpathSync(dir), `${id.replace(/[^\w.-]/g, "_")}.html`);
+    if (!existsSync(file)) writeFileSync(file, SESSION_PAGE(`Session Page \u00b7 ${(pi.getSessionName?.() || id.slice(0, 8)).replace(/[<&]/g, "")}`));
+    const opened = await ensureHost(ctx).open(file);
+    if (!revisions(file).length) host!.update(file, undefined, storeRevision(file));
+    sessionPage = file;
+    // ponytail: macOS only (Thomas's Mac); other platforms get the link in the session.
+    if (process.platform === "darwin") execFile("open", [opened.url], () => {});
+    const told = ctx.sessionManager.buildContextEntries().some((e: any) => e.type === "custom_message" && e.customType === "atelier:session-page" && e.details?.page === file);
+    if (!told) pi.sendMessage({
+      customType: "atelier:session-page", display: true, details: { page: file, url: opened.url },
+      content: `Session Page: ${file}\nServed at ${opened.url} and opened in Thomas's browser; this session receives its input. The file is the Working copy: edit it, then send an Update (atelier action update) to show it.`,
+    }, { deliverAs: "followUp" });
+  }
+  const pageMode = () => {
+    if (surface !== "Page" || sessionPage || making || !current) return;
+    const ctx = current;
+    making = true;
+    makeSessionPage(ctx).catch((error) => { try { ctx.ui.notify(`Session Page: ${error instanceof Error ? error.message : error}`, "error"); } catch { /* stale */ } }).finally(() => { making = false; });
+  };
+  pi.events?.on("pi-workbench:working-mode", (value: any) => {
+    surface = value?.selected?.surface ?? "Chat";
+    pageMode();
+  });
 
   // Delivery (131, 150): a follow-up custom message that wakes the session, held by the context-checkpoint barrier like Subagent wakes.
   // A send to an idle session starts a run, but Pi marks the session streaming only at agent_start; a second
@@ -59,7 +137,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
     if (sessionId === undefined || checkpointBarrier(sessionId).defer(fire, key) !== true) fire();
   };
 
-  pi.on("session_start", (_event, ctx) => { current = ctx; sessionId = ctx.sessionManager.getSessionId?.() ?? sessionId; });
+  pi.on("session_start", (_event, ctx) => { current = ctx; sessionId = ctx.sessionManager.getSessionId?.() ?? sessionId; pageMode(); });
   pi.on("message_end", (event) => {
     const message = event.message as { role?: string; customType?: string; details?: { page?: string; seqs?: number[] } };
     if (message.role === "custom" && message.customType?.startsWith("atelier:")) host?.seen(message.details);
@@ -74,7 +152,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
     description: DESCRIPTION,
     promptSnippet: "Show the human an interactive HTML Page and act on their input",
     parameters: Type.Object({
-      action: StringEnum(["open", "takeover", "update", "ask", "answer", "status", "check"]),
+      action: StringEnum(["open", "takeover", "update", "ask", "answer", "status", "check", "revisions"]),
       page: Type.String({ description: "Page path, relative to the project or absolute" }),
       decision: Type.Optional(Type.Object({
         id: Type.String(),
@@ -89,6 +167,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
       state: Type.Optional(StringEnum(REQUEST_STATES)),
       text: Type.Optional(Type.String({ description: "answer text, status note, or update note" })),
       generation: Type.Optional(Type.Number({ description: "takeover: receiver generation" })),
+      revision: Type.Optional(Type.Number({ description: "revisions: the stored revision to read" })),
     }),
     executionMode: "sequential",
 
@@ -99,9 +178,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
       let page: string | undefined;
       try { page = realpathSync(path.resolve(root, params.page)); } catch { /* missing */ }
       if (!page || !statSync(page).isFile()) throw new Error(`No Page file at ${params.page}.`);
-      // The handover note reaches a busy session mid-run and an idle one without starting a turn.
-      // Idle for a takeover: no run, and none starting from a send already queued.
-      host ??= createHost({ root, send, sessionId, label: pi.getSessionName?.(), handoff: (m) => pi.sendMessage(m, { deliverAs: "steer" }), idle: () => !starting && (current?.isIdle() ?? true) });
+      const host = ensureHost(ctx);
       const text = (t: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text: t }], details: { action: params.action, page: host!.rel(page), ...details } });
       // The Page check (check-page.mjs) on a test copy served from this host's root; ATELIER_PAGE_CHECK=off skips it
       // (unit tests). It never fails the action; a cancelled tool call cancels it. Screenshots and the full report go to
@@ -131,7 +208,23 @@ export default function atelierExtension(pi: ExtensionAPI) {
           opened.replayed ? `${opened.replayed} message(s) of undelivered human events from an earlier session follow.` : "",
         ].filter(Boolean).join("\n"), { url: opened.url, kernel: opened.kernel, replayed: opened.replayed, generation: opened.generation });
       }
-      if (!host.isOpen(page)) throw new Error(`Open ${params.page} first (action open).`);
+      if (!host!.isOpen(page)) throw new Error(`Open ${params.page} first (action open).`);
+      // Kernel 3.0 actions: refused on a Page that loads an older Kernel (2.x Pages stay as they are).
+      const kernel = pageKernel(page), v3 = Number.parseInt(kernel) >= 3;
+      const only3 = () => { if (!v3) throw new Error(`${params.action} needs Atelier Kernel 3.0; this Page loads Kernel ${kernel}.`); };
+
+      if (params.action === "revisions") {
+        only3();
+        const stored = revisions(page), log = readLog(page).filter((e) => e.type === "update" && e.revision);
+        if (params.revision !== undefined) {
+          if (!stored.includes(params.revision)) throw new Error(`No revision ${params.revision}; stored: ${stored.join(", ") || "none"}.`);
+          return text(`Revision ${params.revision} is stored at ${revisionFile(page, params.revision)}; read it there.`, { revision: params.revision, file: revisionFile(page, params.revision) });
+        }
+        return text(stored.map((n) => {
+          const e = log.find((x) => x.revision === n);
+          return `Revision ${n}${e ? ` \u00b7 ${new Date(e.at).toISOString()}${e.note ? ` \u00b7 ${e.note}` : ""}` : ""}`;
+        }).join("\n") || "No stored revisions yet; the next update stores revision 1.", { revisions: stored });
+      }
       const entries = readLog(page);
 
       if (params.action === "update") {
