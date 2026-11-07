@@ -72,9 +72,14 @@ async function session() {
   const reply = (...replies) => queue.push(...replies);
   const tool = (args) => fauxAssistantMessage(fauxToolCall("atelier", args));
   // Quit as Pi does: session_shutdown first (the Atelier host stops serving), then dispose.
-  const close = async () => { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); };
+  let closed = false;
+  const close = async () => { if (closed) return; closed = true; await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); };
+  live.push(close);
   return { close, session, sessionManager, requests, recorded, messages, results, text, sessionPage, reply, tool };
 }
+// A failed test leaves its session open; closing it after each test lets the run end.
+const live = [];
+test.afterEach(async () => { for (const close of live.splice(0)) await close(); });
 const served = async (url) => (await fetch(url)).text();
 
 test("/mode surface page creates the Session Page, stores revision 1 and opens it in the browser", async () => {
@@ -95,5 +100,16 @@ test("/mode surface page creates the Session Page, stores revision 1 and opens i
   const log = /id="atl-log"[^>]*href="([^"]+)"|href="([^"]+)"[^>]*id="atl-log"/.exec(html);
   assert.ok(log, "the header links the Log");
   assert.match(await served(new URL(log[1] ?? log[2], url)), /list the revisions/);
+  await s.close();
+});
+
+test("editing the Working copy without an update leaves the served Session Page unchanged", async () => {
+  const s = await session();
+  await s.session.prompt("/mode surface page");
+  const { url, page } = await s.sessionPage();
+  const before = await served(url);
+  writeFileSync(page, readFileSync(page, "utf8").replace('<main atl-key="main"></main>', '<main atl-key="main"><p atl-key="draft">Half done</p></main>'));
+  assert.equal(await served(url), before);
+  assert.doesNotMatch(await served(url), /Half done/);
   await s.close();
 });
