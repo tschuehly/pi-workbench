@@ -161,7 +161,9 @@ test("reads never schedule: a paused restore with every component's saved state 
 	const messages = (await third.call<{ messages: Message[] }>("transcript")).messages;
 	const monitor = (step: string) => messages.filter((m) => m.customType === "monitor" && textOf(m.content).includes(step)).length;
 	assert.deepEqual([monitor("step one DONE"), monitor("step two DONE")], [1, 1], "each held watcher notification delivered once");
-	await waitFor(() => logged(f.store).some((l) => l.label.startsWith("Background bash")), "the bash completion after resume");
+	// The model answers with it in context; it may share its run with a held package message (their order is not fixed).
+	const placed = () => third.events.findIndex((e) => e.type === "message.end" && (e.message as Message).customType === "background-bash");
+	await waitFor(() => placed() >= 0 && third.events.slice(placed() + 1).some((e) => e.type === "message.end" && (e.message as Message).role === "assistant"), "the bash completion after resume, answered");
 	assert.equal(messages.filter((m) => m.customType === "atelier:immediate").length, 1, "the Comment once");
 	assert.equal(logged(f.store).filter((l) => l.label === "gen" && (l as { model?: string }).model === undefined).length, 2, "the lead's generation reissued once, only after resume");
 	await waitFor(() => childRequests() === 2, "the Subagent's generation reissued after resume");

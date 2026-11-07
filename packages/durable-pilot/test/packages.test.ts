@@ -9,7 +9,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { claudeAliases, claudePayload } from "../src/claude.ts";
+import { openChatHost } from "../src/chat.ts";
+import { ChatSession } from "../src/chat-session.ts";
 import { readLog } from "../src/faux.ts";
+import { context } from "../src/host.ts";
+import { PACKAGE_MESSAGE_ENTRY, PackageOutboxDoc } from "../src/packages.ts";
 import { ChatHost as ProcHost, live, textOf, type UiEvent, writeFakeLogins } from "./chat-proc.ts";
 import { codexToken } from "./refresh-race.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
@@ -469,4 +473,41 @@ test("P028: a package's own warnings and errors reach PI WEB as retained notific
 	assert.ok(!String(notices[1]?.message).includes(SECRET), "redacted before it leaves the host");
 	assert.ok(!host.events.some((e) => JSON.stringify(e).includes("quiet")), "info notices outside commands stay silent, as in a legacy Chat");
 	await host.close();
+});
+
+test("R3-1: a package message admitted as input while busy, then not acknowledged, is not resubmitted as a write after reopen; later held messages still arrive once", async () => {
+	const root = scratch("outbox-retry");
+	const agentDir = join(root, "agent");
+	const cwd = join(root, "workspace");
+	for (const path of [agentDir, cwd]) mkdirSync(path, { recursive: true });
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
+	const open = async () => {
+		const host = await openChatHost({ dir: join(root, "family"), cwd, model: "faux", scripted: true, packages: { agentDir } });
+		const events: UiEvent[] = [];
+		const session = new ChatSession(host, (event) => events.push(event));
+		await session.start();
+		return { host, session, events };
+	};
+	const message = (text: string) => ({ kind: "message" as const, content: text, data: { customType: "monitor", display: true } });
+	const first = await open();
+	// The state a kill leaves between admission and acknowledgement: "one" admitted as input (the Chat was busy), both
+	// still in the outbox.
+	await first.host.root.submit({ type: "input", content: "one", whenBusy: "steer", requestId: "package:one", entry: { kind: PACKAGE_MESSAGE_ENTRY, data: message("one").data } }, context);
+	await first.host.root.commit(async (tx) => void (await tx.doc(PackageOutboxDoc)).held.push({ id: "package:one", ...message("one") }, { id: "package:two", ...message("two") }), context);
+	for (let i = 0; i < 500 && !first.events.some((e) => e.type === "agent.end"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.ok(first.events.some((e) => e.type === "agent.end"), "the admitted input's run ended");
+	await first.session.close();
+	// Reopened idle: the retry must recognize the input admission, not recompute it as a write.
+	const second = await open();
+	try {
+	const held = async () => (await second.host.harness.snapshot(PackageOutboxDoc, context))?.held ?? [];
+	for (let i = 0; i < 500 && (await held()).length > 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+	const diagnostics = second.events.filter((e) => e.type === "session.diagnostic").map((e) => String(e.message));
+	assert.deepEqual(await held(), [], `the outbox drains (${diagnostics.join("; ")})`);
+	const shown = (text: string) => (second.session.messages() as Message[]).filter((m) => m.customType === "monitor" && textOf(m.content as never) === text).length;
+	assert.deepEqual([shown("one"), shown("two")], [1, 1], "each held message once");
+	assert.ok(!diagnostics.some((d) => d.includes("already identifies")), diagnostics.join("; "));
+	} finally {
+		await second.session.close();
+	}
 });

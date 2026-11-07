@@ -309,11 +309,13 @@ export class PiPackages {
 		await this.#attached.promise;
 		if ((await this.#oldest()) === undefined) return;
 		await this.#deliver!(async () => {
-			// Admitted under its request ID, then removed: a kill between the two finds the admission on the next delivery.
+			// Admitted under its request ID, then removed: a kill between the two finds the admission on the next delivery,
+			// which only removes it (resubmitting could pick another type, `input` or `write`, than the one admitted).
 			for (let item = await this.#oldest(); item !== undefined; item = await this.#oldest()) {
-				await this.#send(item);
 				const id = item.id;
-				await this.#root().commit(async (tx) => {
+				const root = this.#root();
+				if ((await root.commit((tx) => tx.submissionByRequest(root.id, id), context)) === undefined) await this.#send(item);
+				await root.commit(async (tx) => {
 					const doc = await tx.doc(PackageOutboxDoc);
 					doc.held = doc.held.filter((held) => held.id !== id);
 				}, context);
