@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -136,4 +137,32 @@ test("update stores the next revision and the served Page shows it; restore brin
   assert.equal(restore.isError, false, s.text(restore));
   assert.equal(readFileSync(page, "utf8"), first, "the Working copy is revision 1 again");
   assert.match(await served(url), /Tests pass/, "nothing is shown before the next update");
+});
+
+test("attend marks an existing Key and names the Attention channel; an unknown Key or an older Kernel is refused", async () => {
+  const s = await session();
+  await s.session.prompt("/mode surface page");
+  await s.session.prompt("/mode attention switching");
+  const { url, page } = await s.sessionPage();
+  const cwd = s.sessionManager.getCwd();
+  const old = join(cwd, "old.html"), body = "export {};\n";
+  writeFileSync(old, '<!doctype html><p atl-key="header">Old</p><script type="module" src="atelier.js"></script>');
+  writeFileSync(join(cwd, "atelier.js"), `// atelier-copy 2.13.0 sha256:${createHash("sha256").update(body).digest("hex")} old\n${body}`);
+  s.reply(
+    s.tool({ action: "attend", page, key: "header", text: "Pick the release date" }),
+    s.tool({ action: "attend", page, key: "nowhere", text: "Look here" }),
+    s.tool({ action: "open", page: "old.html" }),
+    s.tool({ action: "attend", page: "old.html", key: "header", text: "Look here" }),
+    fauxAssistantMessage(""),
+  );
+  await s.session.prompt("ask Thomas");
+  const [attended, unknown, , refused] = s.results("atelier");
+  assert.equal(attended.isError, false, s.text(attended));
+  assert.match(s.text(attended), /request_attention/);
+  const events = await (await fetch(new URL(`/.atelier/events?page=${encodeURIComponent(decodeURIComponent(new URL(url).pathname.slice(1)))}`, url))).json();
+  assert.deepEqual(events.entries.filter((e) => e.type === "attend").map((e) => [e.origin, e.key, e.reason]), [["agent", "header", "Pick the release date"]]);
+  assert.equal(unknown.isError, true);
+  assert.match(s.text(unknown), /nowhere/);
+  assert.equal(refused.isError, true);
+  assert.match(s.text(refused), /Kernel 3\.0/);
 });

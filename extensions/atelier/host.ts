@@ -446,7 +446,7 @@ export function createHost(options: {
     if (body.type === "comment" && body.thread !== undefined && !readLog(page).some((e) => e.seq === body.thread && e.type === "comment")) return { status: 400, json: { error: `No Comment #${body.thread} to reply to.` } };
     // Seen names only agent asks and replies already in the log, so it never acknowledges one still to come.
     if (body.type === "seen") {
-      const agent = new Set(readLog(page).filter((e) => e.origin === "agent" && (e.type === "ask" || e.type === "answer")).map((e) => e.seq));
+      const agent = new Set(readLog(page).filter((e) => e.origin === "agent" && (e.type === "ask" || e.type === "answer" || e.type === "attend")).map((e) => e.seq));
       if (!body.of.every((s: number) => agent.has(s))) return { status: 400, json: { error: "Seen names only the agent's asks and replies on this Page." } };
     }
     if (body.type === "undo") {

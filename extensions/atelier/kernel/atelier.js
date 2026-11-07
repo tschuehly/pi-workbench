@@ -1101,6 +1101,9 @@ function boot() {
   function needs(st) {
     const seen = new Set(all().filter((e) => e.type === "seen").flatMap((e) => e.of)), out = new Map();
     for (const d of st.decisions) if (d.askSeq && d.state !== "done" && !seen.has(d.askSeq)) out.set(d.askSeq, { key: d.key, note: `New Decision: ${clip(d.question, 80)}` });
+    // 3.0.0: an attend marks its Key until he acts on that Key or marks it seen.
+    const acted = (e) => all().some((h) => h.origin === "human" && h.seq > e.seq && h.key === e.key && h.type !== "seen");
+    for (const e of all()) if (e.origin === "agent" && e.type === "attend" && !seen.has(e.seq) && !acted(e)) out.set(e.seq, { key: e.key, note: `Needs you: ${clip(e.reason, 80)}` });
     for (const t of st.threads) {
       const m = t.msgs.at(-1);
       if (m.type === "answer" && m.origin === "agent" && !seen.has(m.seq) && !(t.closedAt < 0 || t.closedAt > m.seq)) out.set(m.seq, { key: t.root.key, note: `Agent replied: ${clip(m.text, 80)}` });
