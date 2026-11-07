@@ -172,10 +172,11 @@ test("P089 independent review: routed to another model family, the receipt names
 	const host = open(store, cwd);
 	await host.ready;
 	await prompt(host, call("subagent", scout("review it", { cognitiveRole: "review", profile: "reviewer", background: false, independentOfModel: "openai-codex/gpt-6.1-sol" })));
-	assert.match(await toolResult(host, "subagent"), /Completion receipt: anthropic\/claude-opus-5-5:xhigh · subagent · reviewer · review · outcome success · family anthropic/);
+	assert.match(await toolResult(host, "subagent"), /Completion receipt: anthropic\/claude-opus-5-5:high · subagent · reviewer · review · outcome success · family anthropic/);
 	await quiet(host);
 	await prompt(host, call("subagent", scout("review again", { cognitiveRole: "review", profile: "reviewer", background: false, independentOfModel: "openai-codex/gpt-6.1-sol", excludeFamilies: ["anthropic"] })));
-	assert.match(await toolResult(host, "subagent", 2), /Completion receipt: github-copilot\/grok-4.7:\w+ · subagent · reviewer · review · outcome success · family xai/);
+	// Routing policy v6 has no third family: excluding the only other family leaves no independent reviewer.
+	assert.match(await toolResult(host, "subagent", 2), /^preflight_failed: Routing resolver failed[\s\S]*No independent candidate remains for author family 'openai' after exclusions/);
 	await quiet(host);
 	await prompt(host, call("subagent", scout("x", { independentOfModel: "openai-codex/gpt-6.1-sol" })));
 	assert.match(await toolResult(host, "subagent", 3), /^preflight_failed: Cognitive Role 'routine' does not use an independence constraint/);
@@ -184,7 +185,7 @@ test("P089 independent review: routed to another model family, the receipt names
 	assert.match(await toolResult(host, "subagent", 4), /^preflight_failed: Routing resolver failed[\s\S]*not independent of author family 'openai'/);
 	await quiet(host);
 	await prompt(host, call("subagent", scout("x", { cognitiveRole: "frontier", effort: "low" })));
-	assert.match(await toolResult(host, "subagent", 5), /^preflight_failed: Routing resolver failed[\s\S]*Role 'frontier' needs at least Model Effort 'xhigh', got 'low'/, "effort ceilings of the routing policy hold");
+	assert.match(await toolResult(host, "subagent", 5), /^preflight_failed: Routing resolver failed[\s\S]*Role 'frontier' needs at least Model Effort 'medium', got 'low'/, "effort ceilings of the routing policy hold");
 	await host.close();
 });
 
