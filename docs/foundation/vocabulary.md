@@ -283,23 +283,19 @@ _Avoid_: Freshness, isolation
 Proposed terms from the 2026-11-07 Page-mode grilling (`ws-workbench-future-source-learning-20261008`). They describe a trial and do not yet hold for the installed Workbench.
 
 **Page mode:**
-A per-session setting in which the lead agent communicates with Thomas only through its Session Page and never through text messages. Subagents and Workers are not affected.
+The `Page` value of the Working Mode axis Surface (`Chat` by default): a per-session setting in which the lead agent communicates with Thomas only through its Session Page and never through text messages. Subagents and Workers are not affected.
 _Avoid_: Chat-less mode, silent mode
 
 **Session Page:**
 The live Atelier Page that a Page-mode session maintains for Thomas in place of the Chat.
 _Avoid_: Chat, report Page, dashboard
 
-**Draft:**
-The agent's unpublished working state of a Session Page. Thomas never sees it.
-_Avoid_: Preview, staging copy
-
-**Publish:**
-Sending a Draft to Thomas as one stored revision. A Session Page's history is its publishes.
-_Avoid_: Update (an Update is a Page element), push, save
+**Working copy:**
+The Page file the agent edits in Page mode. Thomas never sees it until an Atelier Update sends it; each Update stores one revision, and a Session Page's history is its Updates.
+_Avoid_: Draft (Atelier reserves the idea for Under Construction), staging copy, Publish
 
 **Attend:**
-The agent's request for Thomas's attention on one element of a Page, delivered through his Attention setting.
+The agent's request for Thomas's attention on one Key of a Page, delivered through his Attention setting.
 _Avoid_: Ping, notification, request_attention
 
 **Open item:**
@@ -311,5 +307,5 @@ A session's raw transcript, kept out of normal view for audit and debugging.
 _Avoid_: Chat, history
 
 **Slip:**
-A Page-mode turn that ends with text written for Thomas and no publish.
+A Page-mode turn that ends with text written for Thomas and no Update.
 _Avoid_: Violation, error
