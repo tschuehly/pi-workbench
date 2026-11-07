@@ -8,6 +8,7 @@ import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import workingMode from "../working-mode/index.ts";
 import { registerTelemetry } from "../telemetry/index.ts";
+import { buildReport } from "../telemetry/telemetry.mjs";
 import atelier from "./index.ts";
 
 // Page mode at its one seam: a real Pi session with a scripted model, Working Mode, Atelier and an injected telemetry
@@ -126,7 +127,7 @@ test("update stores the next revision and the served Page shows it; restore brin
   assert.match(await served(url), /Tests pass/);
   const [update, listed] = s.results("atelier");
   assert.equal(update.isError, false, s.text(update));
-  assert.match(s.text(update), /revision 2/i);
+  assert.match(s.text(update), /Stored as revision 2\b/);
   assert.match(s.text(listed), /^Revision 2 .*Added the test status$/m);
   const events = await (await fetch(new URL(`/.atelier/events?page=${encodeURIComponent(decodeURIComponent(new URL(url).pathname.slice(1)))}`, url))).json();
   assert.deepEqual(events.entries.filter((e) => e.type === "update").map((e) => [e.revision, e.note]), [[1, undefined], [2, "Added the test status"]]);
@@ -165,4 +166,36 @@ test("attend marks an existing Key and names the Attention channel; an unknown K
   assert.match(s.text(unknown), /nowhere/);
   assert.equal(refused.isError, true);
   assert.match(s.text(refused), /Kernel 3\.0/);
+});
+
+test("a run ending with text and no update gets one correction and records a slip; a silent ending records none", async () => {
+  const s = await session();
+  await s.session.prompt("/mode surface page");
+  const { page } = await s.sessionPage();
+  const corrections = () => s.sessionManager.getEntries().filter((e) => e.type === "custom_message" && e.customType === "page-mode:slip");
+  const slips = () => s.recorded.filter((e) => e.type === "slip").map((e) => [e.sessionId, e.corrected]);
+  const id = s.sessionManager.getSessionId();
+
+  s.reply(fauxAssistantMessage("Here is what I found"), s.tool({ action: "update", page, text: "Findings" }), fauxAssistantMessage(""));
+  await s.session.prompt("investigate");
+  assert.equal(corrections().length, 1);
+  assert.deepEqual(slips(), [[id, true]]);
+  const corrected = s.requests.at(-2).messages.at(-1);
+  assert.match(s.text(corrected), /Update/, "the model sees the correction");
+
+  s.reply(fauxAssistantMessage("More prose"), fauxAssistantMessage("Still prose"));
+  await s.session.prompt("go on");
+  assert.equal(corrections().length, 2, "one correction per run, no loop");
+  assert.deepEqual(slips(), [[id, true], [id, false]]);
+
+  s.reply(s.tool({ action: "revisions", page }), fauxAssistantMessage(""));
+  await s.session.prompt("quietly");
+  assert.equal(corrections().length, 2);
+  assert.equal(slips().length, 2, "a silent ending is no slip");
+
+  const report = buildReport(s.recorded);
+  assert.equal(report.slips.total, 2);
+  assert.equal(report.slips.corrected, 1);
+  assert.deepEqual(report.slips.bySession, { [id]: 2 });
+  assert.deepEqual(Object.values(report.slips.byDay), [2]);
 });

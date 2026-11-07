@@ -11,6 +11,7 @@ import { WATCHDOG_MS, createHost, pageKernel, readLog, revisionFile, revisions, 
 import { createUserLocalWorkstreamStore } from "../../packages/workstream-store/src/index.js";
 import { checkPage, formatCheck } from "./check-page.mjs";
 import { piTmpDir } from "../pi-tmp/pitmp.mjs";
+import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import type { Host, Message } from "./host.ts";
 
 // Atelier extension (decisions 129-156): the `atelier` tool, and Delivery of human events from a Page's Event Log
@@ -75,6 +76,9 @@ export default function atelierExtension(pi: ExtensionAPI) {
   let sessionId: string | undefined;
   // Page mode: Thomas's Working Mode as working-mode publishes it, and this session's Session Page once made.
   let surface = "Chat", attention = "Default";
+  // Slips: the Page rule reaches the model once Surface=Page is applied; one correction per run.
+  let ruled = false, updated = false, runs = 0;
+  let slip: { turn: number } | undefined;
   let sessionPage: string | undefined;
   let making = false;
 
@@ -115,6 +119,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
   pi.events?.on("pi-workbench:working-mode", (value: any) => {
     surface = value?.selected?.surface ?? "Chat";
     attention = value?.selected?.attention ?? "Default";
+    ruled = (value?.applied ?? value?.selected)?.surface === "Page";
     pageMode();
   });
 
@@ -153,6 +158,21 @@ export default function atelierExtension(pi: ExtensionAPI) {
     if (message.role === "custom" && message.customType?.startsWith("atelier:")) host?.seen(message.details);
   });
   pi.on("agent_start", release);
+  pi.on("before_agent_start", () => { runs += 1; updated = false; slip = undefined; });
+  // A Page-mode run that ends with text and no Update is a slip: one correction continues it, and the next end
+  // records whether that run sent an Update. A silent ending is no slip.
+  pi.on("agent_before_settle", (event, ctx) => {
+    if (!ruled || event.outcome !== "completed") { slip = undefined; return; }
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (slip) { pi.events.emit(EXECUTION_CHANNEL, { type: "slip", sessionId, turn: slip.turn, corrected: updated }); slip = undefined; return; }
+    const last = event.context.contextMessages.findLast((m: any) => m.role === "assistant") as any;
+    const said = typeof last?.content === "string" ? last.content : (last?.content ?? []).filter((p: any) => p.type === "text").map((p: any) => p.text).join("");
+    if (updated || !said.trim()) return;
+    slip = { turn: runs };
+    updated = false;
+    return { continue: true, entries: [{ type: "custom_message", customType: "page-mode:slip", display: true,
+      content: "Page mode: this run ended with text for Thomas and no Update, so he has not seen it; the text stays in the Log. Put what he needs on the Session Page (the Working copy) and send an Update with atelier action update; attend a Key if he must act. Do not answer in text." }] };
+  });
   pi.on("agent_settled", () => { release(); host?.settled(); });
   pi.on("session_shutdown", () => { held.length = 0; starting = false; clearTimeout(startTimer); host?.stop(); host = undefined; });
 
@@ -243,9 +263,11 @@ export default function atelierExtension(pi: ExtensionAPI) {
         const source = readFileSync(page);
         // Kernel 3.0: the Working copy becomes the next stored revision, which the Page serves from now on.
         const revision = v3 ? storeRevision(page) : undefined;
+        updated = true;
         const tabs = host.update(page, params.text, revision);
-        const stored = revision ? `Stored as revision ${revision}. ` : "";
-        return checked(stored + (tabs ? `Update sent to ${tabs} connected tab(s); the owner sees this revision now.` : "No tab is connected; the Page shows this version when it is next opened."), { tabs, revision }, source);
+        const result = await checked(tabs ? `Update sent to ${tabs} connected tab(s); the owner sees this revision now.` : "No tab is connected; the Page shows this version when it is next opened.", { tabs, revision }, source);
+        if (revision) result.content.push({ type: "text", text: `Stored as revision ${revision}; the Page shows it until the next update.` });
+        return result;
       }
       if (params.action === "attend") {
         only3();

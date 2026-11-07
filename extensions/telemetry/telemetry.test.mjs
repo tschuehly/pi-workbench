@@ -64,6 +64,7 @@ test("reports descendant usage once and unions parallel active intervals", () =>
     rootSessionId: "root",
     sessionIds: ["child", "root"],
     activeMs: 15_000,
+    slips: { total: 0, corrected: 0, bySession: {}, byDay: {} },
     incompleteActiveIntervals: 0,
     usage: { eventCount: 2, inputTokens: 15, outputTokens: 4, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 19, knownCost: 2, totalCost: null, unknownCostEvents: 1 },
     usageByAttribution: [
