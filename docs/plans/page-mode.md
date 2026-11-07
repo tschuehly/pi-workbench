@@ -1,6 +1,6 @@
 # Page mode
 
-Status: specified 2026-11-07, not started. Owner Workstream: `ws-workbench-future-source-learning-20261008`. Exists only on branch `page-mode`; nothing is promoted to the installed Workbench until Thomas decides. Terms are defined in the Page mode section of [vocabulary](../foundation/vocabulary.md) and in the Atelier glossary.
+Status: specified 2026-11-07; implemented on branch `page-mode` (Atelier decision 157), not promoted. Owner Workstream: `ws-workbench-future-source-learning-20261008`. Exists only on branch `page-mode`; nothing is promoted to the installed Workbench until Thomas decides. Terms are defined in the Page mode section of [vocabulary](../foundation/vocabulary.md) and in the Atelier glossary.
 
 ## Problem Statement
 
@@ -92,7 +92,7 @@ Page mode is the `Page` value of a new Working Mode axis, **Surface** (`Chat` by
 
 ## Testing Decisions
 
-- Thomas decided: **no automated tests** for this trial.
+- Thomas decided (revised 2026-11-07): **test-first at one seam**, a real Pi session with the scripted faux provider (as in the Working Mode tests) running Working Mode, Atelier and an injected telemetry recorder, with the Atelier host serving the Session Page over HTTP. `extensions/atelier/page-mode.test.mjs` drives one behaviour per test: `/mode surface page` creates the Session Page and revision 1; editing the Working copy leaves the served Page unchanged; `update` stores the next revision and the Page serves it (and `restore` copies one back); `attend` marks an existing Key and is refused on an unknown Key or an older Kernel; a run ending with text and no Update gets one correction and records a slip, a silent ending none. No host-internal unit tests and no mocks of internal collaborators. The seam does not see the Kernel's browser rendering (the attend mark itself) or the real browser launch.
 - Verification is daily use. Thomas runs his Workbench sessions with Surface=Page, and the slip count and his judgement decide whether to keep the soft rule, force tool use, or drop Page mode.
 - Before daily use starts, the implementing agent exercises the flow once by hand in a scratch session:
   - set Surface=Page;
@@ -101,7 +101,6 @@ Page mode is the `Page` value of a new Working Mode axis, **Surface** (`Chat` by
   - attend a Key and confirm the mark and alert;
   - end a turn with text and confirm one re-prompt and a recorded slip.
 - It reports what it saw. The existing Atelier and Working Mode suites must keep passing, since Kernel 2.x behaviour must not change.
-- Prior art, should tests be wanted later: the Working Mode tests (a real Pi session with a scripted faux provider) are the natural seam; the Atelier host tests drive the tool and Event Log directly.
 
 ## Out of Scope
 
