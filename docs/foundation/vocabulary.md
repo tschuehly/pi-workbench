@@ -277,3 +277,39 @@ _Avoid_: Durability, resumption
 Intentional separation from prior conclusions so a judgment or verification is not anchored by the
 work it evaluates.
 _Avoid_: Freshness, isolation
+
+## Page mode
+
+Proposed terms from the 2026-11-07 Page-mode grilling (`ws-workbench-future-source-learning-20261008`). They describe a trial and do not yet hold for the installed Workbench.
+
+**Page mode:**
+A per-session setting in which the lead agent communicates with Thomas only through its Session Page and never through text messages. Subagents and Workers are not affected.
+_Avoid_: Chat-less mode, silent mode
+
+**Session Page:**
+The live Atelier Page that a Page-mode session maintains for Thomas in place of the Chat.
+_Avoid_: Chat, report Page, dashboard
+
+**Draft:**
+The agent's unpublished working state of a Session Page. Thomas never sees it.
+_Avoid_: Preview, staging copy
+
+**Publish:**
+Sending a Draft to Thomas as one stored revision. A Session Page's history is its publishes.
+_Avoid_: Update (an Update is a Page element), push, save
+
+**Attend:**
+The agent's request for Thomas's attention on one element of a Page, delivered through his Attention setting.
+_Avoid_: Ping, notification, request_attention
+
+**Open item:**
+A Decision, Request, or question on a Page that waits for Thomas. It stays where it belongs on the Page and is marked as open until he answers it.
+_Avoid_: Pending task, Human Task
+
+**Log:**
+A session's raw transcript, kept out of normal view for audit and debugging.
+_Avoid_: Chat, history
+
+**Slip:**
+A Page-mode turn that ends with text written for Thomas and no publish.
+_Avoid_: Violation, error
