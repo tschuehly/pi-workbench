@@ -12,7 +12,7 @@ import { CLASSES, UNDO_MS, compose, derive, inGroup, keyTexts } from "./kernel/a
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-export const KERNEL_VERSION = "2.12.0";
+export const KERNEL_VERSION = "2.13.0";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
@@ -208,6 +208,8 @@ const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
   close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str }, send: { key: opt(str) },
+  // seen: the agent events (asks, replies) whose Needs you mark the human cleared, so a reload marks them no more (2.13.0).
+  seen: { of: (v) => Array.isArray(v) && v.length > 0 && v.length <= 1000 && v.every(seqNo) },
 };
 
 // The bytes decide an image's type; the client's declared type and file name are never trusted.
