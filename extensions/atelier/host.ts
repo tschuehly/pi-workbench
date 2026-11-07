@@ -36,15 +36,23 @@ export const imagesDir = (page: string) => `${page}.images`;
 /** Stored Updates (Kernel 3.0): each Update's snapshot of the Working copy, `<page>.revisions/<n>.html`. */
 export const revisionsDir = (page: string) => `${page}.revisions`;
 export const revisionFile = (page: string, n: number) => path.join(revisionsDir(page), `${n}.html`);
+/** A Session Page is one with a revisions folder, empty or not; every other Page is served from disk. */
+export const isSessionPage = (page: string) => existsSync(revisionsDir(page));
+/** The stored revision numbers; none without a folder. A folder that cannot be read throws, so nothing falls back to the Working copy. */
 export function revisions(page: string): number[] {
   let names: string[];
-  try { names = readdirSync(revisionsDir(page)); } catch { return []; }
+  try { names = readdirSync(revisionsDir(page)); } catch (error: any) {
+    if (error.code === "ENOENT") return [];
+    throw new Error(`Cannot read ${revisionsDir(page)} (${error.code}); this Session Page shows nothing until it can.`);
+  }
   return names.flatMap((n) => /^([1-9]\d*)\.html$/.exec(n)?.[1] ?? []).map(Number).sort((a, b) => a - b);
 }
-/** What the human sees: a Page with stored Updates shows its latest revision, never the Working copy on disk. */
+/** What the human sees: a Session Page shows its latest revision, never the Working copy on disk; with none it throws. */
 export function shown(page: string) {
+  if (!isSessionPage(page)) return page;
   const last = revisions(page).at(-1);
-  return last ? revisionFile(page, last) : page;
+  if (!last) throw new Error(`${path.basename(page)} is a Session Page with no revision yet; it shows nothing before its first update.`);
+  return revisionFile(page, last);
 }
 /** Snapshots the Working copy as the next revision under a temp name; `update` publishes it once its Event Log entry is written. */
 export type Staged = { n: number; tmp: string };
@@ -497,8 +505,8 @@ export function createHost(options: {
     try { decoded = decodeURIComponent(pathname); } catch { return json(res, 400, { error: "Bad path" }); }
     const found = resolve(decoded.slice(1));
     if (!found || !statSync(found).isFile()) return json(res, 404, { error: "Not found" });
-    const file = shown(found);
-    const size = statSync(file).size;
+    let file: string, size: number;
+    try { file = shown(found); size = statSync(file).size; } catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : String(error) }); }
     const headers: Record<string, string | number> = { "content-type": TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream", "cache-control": "no-store", "accept-ranges": "bytes" };
     // Byte ranges so <video> seeks (Review Studio 11f5d33c9).
     const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
@@ -541,7 +549,9 @@ export function createHost(options: {
       if (u.pathname === "/.atelier/stream") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
         rec.clients.add(res);
-        res.write(`event: hello\ndata: ${JSON.stringify({ mtime: statSync(shown(page)).mtimeMs, test: options.test || undefined, receiver: receiverInfo(rec.receiver) })}\n\n`);
+        let mtime = 0;
+        try { mtime = statSync(shown(page)).mtimeMs; } catch { /* a Session Page with nothing to show yet */ }
+        res.write(`event: hello\ndata: ${JSON.stringify({ mtime, test: options.test || undefined, receiver: receiverInfo(rec.receiver) })}\n\n`);
         req.on("close", () => rec.clients.delete(res));
         return;
       }

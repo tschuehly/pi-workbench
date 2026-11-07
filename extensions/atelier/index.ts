@@ -7,7 +7,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { REQUEST_STATES, derive, keyTexts } from "./kernel/atelier.js";
-import { WATCHDOG_MS, createHost, pageKernel, readLog, revisionFile, revisions, shown, stageRevision } from "./host.ts";
+import { WATCHDOG_MS, createHost, isSessionPage, pageKernel, readLog, revisionFile, revisions, shown, stageRevision } from "./host.ts";
 import { createUserLocalWorkstreamStore } from "../../packages/workstream-store/src/index.js";
 import { checkPage, formatCheck } from "./check-page.mjs";
 import { piTmpDir } from "../pi-tmp/pitmp.mjs";
@@ -249,10 +249,10 @@ export default function atelierExtension(pi: ExtensionAPI) {
       }
       if (!host!.isOpen(page)) throw new Error(`Open ${params.page} first (action open).`);
       host.receiving(page); // after a takeover nothing here may write: no stored revision, no restore
-      // Kernel 3.0 actions apply only to Session Pages: Page mode marks one by storing its revision 1. Every other Page
+      // Kernel 3.0 actions apply only to Session Pages: Page mode marks one by its revisions folder. Every other Page
       // keeps 2.x behaviour (served from disk, no stored revisions), even beside a 3.0 Kernel copy.
-      const kernel = pageKernel(page), v3 = Number.parseInt(kernel) >= 3 && revisions(page).length > 0;
-      const only3 = () => { if (!v3) throw new Error(`${params.action} needs a Session Page (Page mode, Atelier Kernel 3.0); this Page loads Kernel ${kernel}${revisions(page).length ? "" : " and is no Session Page"}.`); };
+      const kernel = pageKernel(page), v3 = Number.parseInt(kernel) >= 3 && isSessionPage(page);
+      const only3 = () => { if (!v3) throw new Error(`${params.action} needs a Session Page (Page mode, Atelier Kernel 3.0); this Page loads Kernel ${kernel}${isSessionPage(page) ? "" : " and is no Session Page"}.`); };
 
       if (params.action === "revisions") {
         only3();

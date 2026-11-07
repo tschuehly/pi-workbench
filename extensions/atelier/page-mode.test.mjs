@@ -263,6 +263,51 @@ test("an update whose Event Log entry fails leaves the served Page unchanged and
   assert.deepEqual(revisionsOf(page), ["1.html"], "no revision stored");
 });
 
+test("a Session Page whose revisions folder cannot be read fails closed and never serves the Working copy", async () => {
+  const s = await session();
+  await s.session.prompt("/mode surface page");
+  const { url, page } = await s.sessionPage();
+  writeFileSync(page, readFileSync(page, "utf8").replace('<main atl-key="main"></main>', '<main atl-key="main"><p atl-key="draft">Unpublished</p></main>'));
+  chmodSync(`${page}.revisions`, 0o000);
+  let response, body;
+  try {
+    response = await fetch(url);
+    body = await response.text();
+    s.reply(s.tool({ action: "update", page, text: "Draft" }), fauxAssistantMessage(""));
+    await s.session.prompt("show it");
+  } finally { chmodSync(`${page}.revisions`, 0o755); }
+  assert.equal(response.ok, false, body);
+  assert.doesNotMatch(body, /Unpublished/);
+  assert.match(body, /revisions/);
+  const [update] = s.results("atelier");
+  assert.equal(update.isError, true, s.text(update));
+  assert.deepEqual(revisionsOf(page), ["1.html"], "no revision stored");
+});
+
+test("a Page with an empty revisions folder is a Session Page: nothing is served until update stores revision 1", async () => {
+  const s = await session();
+  const cwd = s.sessionManager.getCwd(), page = join(cwd, "fresh.html");
+  writeFileSync(page, '<!doctype html><p atl-key="a">Draft</p><script type="module" src="atelier.js"></script>');
+  mkdirSync(`${page}.revisions`);
+  s.reply(s.tool({ action: "open", page: "fresh.html" }), s.tool({ action: "revisions", page: "fresh.html" }), fauxAssistantMessage(""));
+  await s.session.prompt("open it");
+  const [open, listed] = s.results("atelier");
+  assert.equal(open.isError, false, s.text(open));
+  assert.equal(listed.isError, false, s.text(listed));
+  assert.deepEqual(listed.details.revisions, []);
+  const response = await fetch(open.details.url), body = await response.text();
+  assert.equal(response.ok, false, body);
+  assert.doesNotMatch(body, /Draft/);
+  assert.match(body, /no revision/i);
+  s.reply(s.tool({ action: "update", page: "fresh.html", text: "First" }), fauxAssistantMessage(""));
+  await s.session.prompt("show it");
+  const update = s.results("atelier").at(-1);
+  assert.equal(update.isError, false, s.text(update));
+  assert.match(s.text(update), /Stored as revision 1\b/);
+  assert.deepEqual(revisionsOf(page), ["1.html"]);
+  assert.match(await served(open.details.url), /Draft/);
+});
+
 test("an ordinary Page opened in a Chat session keeps 2.x behaviour: served from disk, no stored revisions", async () => {
   const s = await session();
   const cwd = s.sessionManager.getCwd(), page = join(cwd, "plain.html");
