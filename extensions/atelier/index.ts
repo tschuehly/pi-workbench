@@ -7,7 +7,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { REQUEST_STATES, derive, keyTexts } from "./kernel/atelier.js";
-import { WATCHDOG_MS, createHost, pageKernel, readLog, revisionFile, revisions, shown, storeRevision } from "./host.ts";
+import { WATCHDOG_MS, createHost, pageKernel, readLog, revisionFile, revisions, shown, stageRevision } from "./host.ts";
 import { createUserLocalWorkstreamStore } from "../../packages/workstream-store/src/index.js";
 import { checkPage, formatCheck } from "./check-page.mjs";
 import { piTmpDir } from "../pi-tmp/pitmp.mjs";
@@ -104,7 +104,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
     const file = path.join(realpathSync(dir), `${id.replace(/[^\w.-]/g, "_")}.html`);
     if (!existsSync(file)) writeFileSync(file, SESSION_PAGE(`Session Page \u00b7 ${(pi.getSessionName?.() || id.slice(0, 8)).replace(/[<&]/g, "")}`));
     const opened = await ensureHost(ctx).open(file);
-    if (!revisions(file).length) host!.update(file, undefined, storeRevision(file));
+    if (!revisions(file).length) host!.update(file, undefined, stageRevision(file));
     sessionPage = file;
     // ponytail: macOS only (Thomas's Mac); other platforms get the link in the session.
     if (process.platform === "darwin") execFile("open", [opened.url], () => {});
@@ -272,8 +272,8 @@ export default function atelierExtension(pi: ExtensionAPI) {
         // The owner sees this revision at once; its check follows in this result, so fix a FAIL with another update.
         const source = readFileSync(page);
         // Kernel 3.0: the Working copy becomes the next stored revision, which the Page serves from now on.
-        const revision = v3 ? storeRevision(page) : undefined;
-        const tabs = host.update(page, params.text, revision);
+        const staged = v3 ? stageRevision(page) : undefined, revision = staged?.n;
+        const tabs = host.update(page, params.text, staged);
         updated = true;
         const result = await checked(tabs ? `Update sent to ${tabs} connected tab(s); the owner sees this revision now.` : "No tab is connected; the Page shows this version when it is next opened.", { tabs, revision }, source);
         if (revision) result.content.push({ type: "text", text: `Stored as revision ${revision}; the Page shows it until the next update.` });

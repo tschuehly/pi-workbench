@@ -46,14 +46,15 @@ export function shown(page: string) {
   const last = revisions(page).at(-1);
   return last ? revisionFile(page, last) : page;
 }
-/** Snapshots the Working copy as the next revision and returns its number. */
-export function storeRevision(page: string) {
+/** Snapshots the Working copy as the next revision under a temp name; `update` publishes it once its Event Log entry is written. */
+export type Staged = { n: number; tmp: string };
+export function stageRevision(page: string): Staged {
   const dir = revisionsDir(page);
   mkdirSync(dir, { recursive: true });
   if (!lstatSync(dir).isDirectory()) throw new Error(`${dir} is not a directory; Atelier stores revisions only beside the Page.`);
-  const n = (revisions(page).at(-1) ?? 0) + 1;
-  writeFileSync(revisionFile(page, n), readFileSync(page), { flag: "wx" });
-  return n;
+  const n = (revisions(page).at(-1) ?? 0) + 1, tmp = path.join(dir, `.staged-${randomUUID()}`);
+  writeFileSync(tmp, readFileSync(page), { flag: "wx" });
+  return { n, tmp };
 }
 
 /** The Event Log (143): append-only JSON lines beside the Page. A torn last line is skipped, never fatal. */
@@ -682,9 +683,15 @@ export function createHost(options: {
     receiving(page: string) { receiving(page); },
     agent(page: string, entry: Record<string, unknown>) { return receiving(page).ep.append(page, { ...entry, origin: "agent" }); },
     /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */
-    update(page: string, note?: string, revision?: number) {
-      const rec = receiving(page);
-      if (note || revision) rec.ep.append(page, { origin: "agent", type: "update", ...(note ? { note } : {}), ...(revision ? { revision } : {}) });
+    update(page: string, note?: string, staged?: Staged) {
+      // A staged revision becomes servable only after its update entry is in the Event Log; a failure discards it.
+      let rec: Served;
+      try {
+        rec = receiving(page);
+        const revision = staged?.n;
+        if (note || revision) rec.ep.append(page, { origin: "agent", type: "update", ...(note ? { note } : {}), ...(revision ? { revision } : {}) });
+        if (staged) linkSync(staged.tmp, revisionFile(page, staged.n));
+      } finally { if (staged) rmSync(staged.tmp, { force: true }); }
       rec.ep.broadcast(page, "update", { mtime: statSync(shown(page)).mtimeMs, note });
       return rec.clients.size;
     },

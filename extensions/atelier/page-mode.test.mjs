@@ -246,6 +246,23 @@ test("a rejected update leaves the served Page unchanged", async () => {
   assert.equal(await served(url), before);
 });
 
+test("an update whose Event Log entry fails leaves the served Page unchanged and stores no revision", async () => {
+  const s = await session();
+  await s.session.prompt("/mode surface page");
+  const { url, page } = await s.sessionPage();
+  const before = await served(url);
+  writeFileSync(page, before.replace('<main atl-key="main"></main>', '<main atl-key="main"><p atl-key="late">Unlogged edit</p></main>'));
+  chmodSync(`${page}.events.jsonl`, 0o444);
+  try {
+    s.reply(s.tool({ action: "update", page, text: "Unlogged" }), fauxAssistantMessage(""));
+    await s.session.prompt("show it");
+  } finally { chmodSync(`${page}.events.jsonl`, 0o644); }
+  const [update] = s.results("atelier");
+  assert.equal(update.isError, true, s.text(update));
+  assert.equal(await served(url), before);
+  assert.deepEqual(revisionsOf(page), ["1.html"], "no revision stored");
+});
+
 test("an ordinary Page opened in a Chat session keeps 2.x behaviour: served from disk, no stored revisions", async () => {
   const s = await session();
   const cwd = s.sessionManager.getCwd(), page = join(cwd, "plain.html");
