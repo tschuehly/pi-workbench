@@ -7,7 +7,8 @@ import test from "node:test";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const adapter = readFileSync(resolve(root, "packages/pi-execution-adapter/src/index.js"), "utf8");
-const profiles = readFileSync(resolve(root, "extensions/subagent/index.ts"), "utf8");
+// The runtime-neutral profiles live in core.mjs, shared by the legacy extension and the Durable Chat host.
+const profiles = readFileSync(resolve(root, "extensions/subagent/core.mjs"), "utf8");
 const routing = JSON.parse(readFileSync(resolve(root, "skills/model-orchestration/references/routing-policy.json"), "utf8"));
 
 function list(source, name) {
@@ -32,11 +33,12 @@ test("bundled child profile tools fit the adapter host ceiling and skill roles e
   const ceiling = adapter.match(/this\.hostTools = new Set\(options\.hostTools \?\? \[([^\]]*)\]/);
   assert.ok(ceiling, "missing adapter host tool ceiling");
   const delegation = list(profiles, "DELEGATION_TOOLS");
-  const childTools = list(profiles, "CHILD_TOOLS");
+  const childTools = expandTools(profiles.match(/export const CHILD_TOOLS = \[([^\]]*)\]/)?.[1] ?? "", { WEB_TOOLS: list(profiles, "WEB_TOOLS") });
+  assert.ok(childTools.includes("read") && childTools.includes("web_search"), "missing CHILD_TOOLS list");
   // Expand the adapter's delegation-tool spread against the bundled extension declaration.
   const adapterTools = new Set(expandTools(ceiling[1], { DELEGATION_TOOLS: delegation }));
   const symbols = { CHILD_TOOLS: childTools, DELEGATION_TOOLS: delegation };
-  const profileBlock = profiles.match(/export const PROFILES = \{([\s\S]*?)\n\} as const/);
+  const profileBlock = profiles.match(/export const PROFILES = \{([\s\S]*?)\n\}(?: as const)?;/);
   assert.ok(profileBlock, "missing bundled profiles");
   const bundled = [...profileBlock[1].matchAll(/^\s+(\w+): \{\s*\n\s+tools: \[([^\]]*)\]/gm)];
   assert.ok(bundled.length > 0, "no bundled profiles parsed");
