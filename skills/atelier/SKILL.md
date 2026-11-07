@@ -100,7 +100,7 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
 - Never write `<page>.events.jsonl` and never keep human state in the HTML. After rewriting the
   Page, call `update` with `text`: one line on what changed. The Kernel marks every changed Key until
   the human marks it seen (opens and closes its changes, its "Seen", or "Mark all seen" on the rail);
-  marks outlast further Updates but not a reload. For marks on tabs, give each hidden panel an `id` and its tab
+  change marks last until a reload; open questions and unread agent replies are also marked on load. For marks on tabs, give each hidden panel an `id` and its tab
   `aria-controls`; in-page links (`href="#id"`) get a dot for changes in their section. The same tabs let
   "next ↓" and the Kernel's other jumps reach items in hidden panels: the Kernel clicks each hidden panel's
   visible tab, outermost first, so the Page's own tab handler shows it (within a few frames). The document event `atelier:reveal`
@@ -173,7 +173,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.12.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.13.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of

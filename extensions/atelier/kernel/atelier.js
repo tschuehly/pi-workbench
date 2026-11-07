@@ -1,4 +1,4 @@
-// Atelier Kernel 2.12.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.13.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -24,7 +24,9 @@
 //                              dims it, labels it and locks its Decisions (answers stay shown, Comments stay open)
 //     atl-wip-lock="off"       dims and labels without locking: work in progress around Decisions he still answers
 //   atl-changes="off"          anywhere on the Page: no change indicators after Updates. Otherwise a mark stays until the
-//                              human opens and closes its changes, clicks its "Seen", or "Mark all seen" (156)
+//                              human opens and closes its changes, clicks its "Seen", or "Mark all seen" (156). On load (2.13.0)
+//                              the Kernel marks each open ask and each thread whose last message is an agent reply, until he
+//                              answers, replies, closes it or marks it seen; Seen records a `seen` event naming those agent events
 //   atl-dock                   an empty element where the Kernel panel sits in the Page's layout; else it floats at the
 //                              bottom right, offset by --atl-dock-right and --atl-dock-bottom. Outside <body>'s own children
 //                              (atl-dock, or a Page script moving it) the panel takes its container's width up to 760px;
@@ -53,7 +55,7 @@ export const UNDO_MS = 3_000; // decision 151 (owner 2026-10-21: 10 s → 3 s)
 // A Comment goes out when saved, after its undo window (156); a Page opts into batching with atl-delivery="send".
 export const CLASSES = {
   comment: "immediate", decide: "immediate", request: "immediate", cancel: "immediate", rework: "immediate",
-  accept: "record", opened: "record", close: "record", still: "record", send: "boundary", undo: "control",
+  accept: "record", opened: "record", close: "record", still: "record", seen: "record", send: "boundary", undo: "control",
 };
 export const REQUEST_STATES = ["queued", "running", "done", "failed", "cancelled"];
 
@@ -103,7 +105,7 @@ export function derive(entries, currentVer = () => null, declared = []) {
       if (root) { root.msgs.push(e); root.closed = false; }
       else threads.set(e.seq, { root: e, msgs: [e], closed: false, ver: e.ver ?? null, key: e.key ?? null });
     } else if (e.type === "answer") threads.get(rootOf(e.target))?.msgs.push(e);
-    else if (e.type === "close") { const t = threads.get(rootOf(e.target)); if (t) { t.closed = true; if (e.ver !== undefined) t.ver = e.ver; } } // closed on the version the human saw
+    else if (e.type === "close") { const t = threads.get(rootOf(e.target)); if (t) { t.closed = true; t.closedAt = e.seq; if (e.ver !== undefined) t.ver = e.ver; } } // closed on the version the human saw
     else if (e.type === "still") { const t = threads.get(rootOf(e.target)); if (t) { t.ver = e.ver ?? null; t.closed = false; } }
     else if (e.type === "ask") decisions.set(e.decision.id, { ...e.decision, askSeq: e.seq, answer: null, opened: false });
     else if (e.type === "opened") { const d = decisions.get(e.decision); if (d) d.opened = true; }
@@ -471,7 +473,6 @@ function boot() {
       const list = (await r.json()).entries;
       cursor = list.reduce((max, e) => Math.max(max, e.seq), cursor);
       const fresh = add(list);
-      if (!first) markAgent(fresh);
       if (fresh.length || first) { first = false; loaded = true; render(); }
     } catch { conn = "no session"; loaded = true; render(); }
   }
@@ -486,6 +487,8 @@ function boot() {
       } catch { /* no server: fall through */ }
       conn = "no session";
     }
+    // A Seen counts only once the host saved it: kept here it would hide the mark and never reach the log.
+    if (body.type === "seen") { flash("Could not save Seen; the mark stays."); return; }
     // No session serves this Page: keep the event here and offer Copy (decision 131; pi-artifacts' 503 + Copy).
     if (body.type === "undo") { local = local.filter((e) => e.seq !== body.target); render(); return; }
     const e = { ...body, seq: -(local.length + 1), at: now(), origin: "human", local: true, delivery: body.delivery ?? CLASSES[body.type] };
@@ -825,6 +828,7 @@ function boot() {
       if (label.textContent !== wipText(el)) label.textContent = wipText(el);
       if (!label.isConnected) document.documentElement.append(label);
     }
+    syncNeeds(st);
     renderMarks();
     positionPins();
     const pub = publicState(st, { conn, loaded, wip: wipState() }), json = JSON.stringify(pub);
@@ -1020,7 +1024,7 @@ function boot() {
     if ((composer || thread || wipLabels.size) && !popQueued) { popQueued = true; requestAnimationFrame(() => { popQueued = false; placePops(); positionWip(); }); }
   }, { capture: true, passive: true });
 
-  const undoable = () => all().filter((e) => e.origin === "human" && e.type !== "undo" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
+  const undoable = () => all().filter((e) => e.origin === "human" && e.type !== "undo" && e.type !== "seen" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
   function renderUndo(list) {
     // Decision 151: every interaction can be undone for 3 seconds, with a visible countdown. One row for all of them,
     // so a batch of answers never stacks rows over the Page (k-buttons).
@@ -1033,7 +1037,8 @@ function boot() {
   // ---- change indicators (156): what an Update changed, marked on the spot, in the Page's navigation and on a
   // right-edge rail, until the human says he has seen it: he opens and closes its changes, clicks its "Seen", or
   // "Mark all seen" on the rail. No timer clears a mark (2.5.0). One trace per Key accumulates every Update since.
-  // ponytail: traces live in memory only, so a reload drops them; persisting them would need new Event Log events.
+  // ponytail: traces live in memory only, so a reload drops what an Update changed; what needs the human (open asks,
+  // unread agent replies) is derived from the Event Log on load and stays until a `seen` event or his answer (2.13.0).
   const changesOn = () => !document.querySelector('[atl-changes="off"]');
   const traces = new Map(), everSeen = new Set();
   const RANK = { needs: 4, added: 3, removed: 2, reworded: 1 };
@@ -1063,7 +1068,7 @@ function boot() {
   const parentAddr = (addr) => addr.includes("/") ? addr.slice(0, addr.lastIndexOf("/")) : null;
   const titleOf = (el, addr) => clip(el?.querySelector?.("h1,h2,h3,h4,h5,h6,summary,figcaption,caption")?.textContent || (el ? ownText(el) : "") || addr, 60);
   function mark(addr, kind, extra = {}, note = pendingNote) {
-    const t = traces.get(addr) ?? { kinds: new Set(), notes: [], nodes: {} };
+    const t = traces.get(addr) ?? { kinds: new Set(), notes: [], nodes: {}, seqs: new Set() };
     t.kinds.add(kind);
     t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0];
     if (note && t.notes[0] !== note) t.notes.unshift(note);
@@ -1088,23 +1093,56 @@ function boot() {
       if (!after.has(addr) && everSeen.has(addr) && (!p || after.has(p))) mark(addr, "removed", { old: b.old, title: b.title, parent: b.parent, next: b.next });
     }
   }
-  // An agent reply or a new Decision needs the human, even where nothing on the Page changed.
-  function markAgent(fresh) {
-    if (!changesOn()) return;
-    const st = state();
-    for (const e of fresh.filter((x) => x.origin === "agent")) {
-      if (e.type === "answer") { const t = st.threads.find((x) => x.msgs.some((m) => m.seq === e.seq)); if (t?.root.key && findKey(t.root.key)) mark(t.root.key, "needs", {}, `Agent replied: ${clip(e.text, 80)}`); }
-      if (e.type === "ask" && e.decision.key && findKey(e.decision.key)) mark(e.decision.key, "needs", {}, `New Decision: ${clip(e.decision.question, 80)}`);
+  // An agent reply or a new Decision needs the human, even where nothing on the Page changed (2.13.0): an ask still
+  // open, or a thread whose last message is an agent reply he has not answered, closed or marked seen. Agent event
+  // seq -> the Key it marks; a mark remembers the seqs behind it, so Seen can record them.
+  function needs(st) {
+    const seen = new Set(all().filter((e) => e.type === "seen").flatMap((e) => e.of)), out = new Map();
+    for (const d of st.decisions) if (d.askSeq && d.state !== "done" && !seen.has(d.askSeq)) out.set(d.askSeq, { key: d.key, note: `New Decision: ${clip(d.question, 80)}` });
+    for (const t of st.threads) {
+      const m = t.msgs.at(-1);
+      if (m.type === "answer" && m.origin === "agent" && !seen.has(m.seq) && !(t.closedAt < 0 || t.closedAt > m.seq)) out.set(m.seq, { key: t.root.key, note: `Agent replied: ${clip(m.text, 80)}` });
     }
-    if (fresh.length) renderMarks();
+    return out;
+  }
+  // Every render reconciles the Needs you marks with the Event Log: his answer, reply or close takes a mark away (one
+  // that also shows a change keeps that), and each agent event that needs him gets one once its Key is on the Page,
+  // unless he cleared it here and its seen event is on its way. A Key gone from the Page drops its Needs you, so a
+  // removal notice on it stays.
+  const dismissed = new Set();
+  function syncNeeds(st) {
+    if (!changesOn()) return;
+    const need = needs(st), marked = new Set();
+    for (const [addr, t] of traces) {
+      if (!t.seqs.size) continue;
+      if (!t.fading) {
+        const here = !!findKey(addr);
+        for (const s of t.seqs) if (!here || !need.has(s)) t.seqs.delete(s);
+        if (!t.seqs.size) { t.kinds.delete("needs"); if (!t.kinds.size) { clearTrace(addr); continue; } t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0]; }
+      }
+      t.seqs.forEach((s) => marked.add(s));
+    }
+    for (const [seq, n] of need) if (!marked.has(seq) && !dismissed.has(seq) && n.key && findKey(n.key)) { mark(n.key, "needs", {}, n.note); traces.get(n.key).seqs.add(seq); }
+  }
+  // Seen saves what he cleared in events of at most 1000 seqs (the host's limit); a refused one keeps its marks.
+  async function saveSeen(seqs) {
+    seqs.forEach((s) => dismissed.add(s));
+    for (let i = 0; i < seqs.length; i += 1000) {
+      const part = seqs.slice(i, i + 1000);
+      if (await post({ type: "seen", of: part })) continue;
+      part.forEach((s) => dismissed.delete(s));
+      for (const t of traces.values()) if (t.fading && part.some((s) => t.seqs.has(s))) { t.fading = false; nodesOf(t).forEach((n) => n.classList.remove("atl-fade")); }
+      render(); // a mark already gone comes back through syncNeeds
+    }
   }
   // Where a change shows on the Page: the Key itself, else the tab or summary that hides it, else a visible ancestor.
+  // The Key itself may be the hidden panel; visibility:hidden counts as hidden (2.13.0), like jumpTo's tabs.
   function visibleSpot(el) {
-    if (el.getClientRects().length) return el;
-    for (let p = el.parentElement; p; p = p.parentElement) {
-      if (p.id) { const tab = [...document.querySelectorAll(`[aria-controls="${CSS.escape(p.id)}"]`)].find((t) => t.getClientRects().length); if (tab) return tab; }
-      if (p.matches("details:not([open])")) { const s = p.querySelector(":scope > summary"); if (s) return s; }
-      if (p.getClientRects().length) return p;
+    if (visible(el)) return el;
+    for (let p = el; p; p = p.parentElement) {
+      if (p.id) { const tab = [...document.querySelectorAll(`[aria-controls~="${CSS.escape(p.id)}"]`)].find((t) => !p.contains(t) && visible(t)); if (tab) return tab; }
+      if (p.matches("details:not([open])")) { const s = p.querySelector(":scope > summary"); if (s && visible(s)) return s; }
+      if (p !== el && visible(p)) return p;
     }
     return el;
   }
@@ -1116,6 +1154,8 @@ function boot() {
     const fading = addrs.map((a) => [a, traces.get(a)]).filter(([, t]) => t && !t.fading);
     if (!fading.length) return;
     for (const [, t] of fading) { t.fading = true; nodesOf(t).forEach((n) => n.classList.add("atl-fade")); }
+    const seen = fading.flatMap(([, t]) => [...t.seqs]);
+    if (seen.length) saveSeen(seen); // the human saw these agent events: no mark for them on the next load
     renderMarks(); // a nav dot fades when every change under it fades
     setTimeout(() => {
       const gone = fading.filter(([a, t]) => traces.get(a) === t && t.fading);

@@ -1068,9 +1068,160 @@ requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classLis
     await click('#owed [data-atl=decide][data-label="Keep"]');
     await until("atelier.state().decisions.find(d=>d.id==='owed').answer==='Keep'");
   });
-  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0 and 2.12.0 fix holds");
+  // 2.13.0 (owner 2026-11-07): opened fresh, the Page marks what needs the human from the Event Log alone: an open ask
+  // and an unread agent reply (on the tab hiding it), not an answered ask. Answering and Seen clear them for good.
+  await fixCheck("2.13.0-load-marks-open-asks-and-unread-replies", async () => {
+    const lm = path.join(dir, "loadmarks.html");
+    await writeFile(lm, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Load marks</title>
+<style>body{margin:16px 16px 16px 60px;font:15px/1.5 system-ui;max-width:800px}[atl-key]{border:1px solid #ccc;padding:8px;margin:16px 0}</style>
+<body><nav><button id="tA" aria-controls="pA">A</button><button id="tB" aria-controls="pB">B</button></nav>
+<section class="panel" id="pA"><div atl-key="q-open" id="q-open">Open question here.</div><div atl-key="q-done" id="q-done">Answered question here.</div></section>
+<section class="panel" id="pB" hidden><div atl-key="c-reply" id="c-reply">A paragraph the human commented on.</div></section>
+<script>document.addEventListener("click",(e)=>{const t=e.target.closest("[aria-controls]");if(!t||t.closest("[atl-ui]"))return;const p=document.getElementById(t.getAttribute("aria-controls"));for(const s of p.parentElement.children)if(s.classList.contains("panel"))s.hidden=s!==p});</script>
+<script type="module" src="atelier.js"></script></body></html>`);
+    const opts = [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }];
+    appendLog(lm, { origin: "agent", type: "ask", decision: { id: "open-q", key: "q-open", question: "Still open?", options: opts } }, Date.now() - 120_000);
+    appendLog(lm, { origin: "agent", type: "ask", decision: { id: "done-q", key: "q-done", question: "Answered?", options: opts } }, Date.now() - 110_000);
+    appendLog(lm, { origin: "human", type: "decide", decision: "done-q", option: "Yes", key: "q-done", delivery: "immediate" }, Date.now() - 100_000);
+    const root = appendLog(lm, { origin: "human", type: "comment", key: "c-reply", text: "Why this?", delivery: "immediate" }, Date.now() - 90_000);
+    const reply = appendLog(lm, { origin: "agent", type: "answer", target: root.seq, text: "Because of the source." }, Date.now() - 80_000);
+    const marks = () => js(`(()=>{const m=(sel)=>[...document.querySelectorAll(sel+' [atl-ui=mark].atl-k-needs:not(.atl-fade)')].map(x=>x.classList.contains('atl-mark-bar')?'bar':'dot');return {open:m('#q-open'),done:m('#q-done'),reply:m('#c-reply'),tabB:m('#tB'),tabA:m('#tA'),all:document.querySelectorAll('[atl-ui=mark]:not(.atl-fade)').length}})()`);
+    const { url } = await host.open(lm);
+    await b("set", "viewport", "1512", "900");
+    await b("open", url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded"); await sleep(300);
+    assert.deepEqual(await marks(), { open: ["bar"], done: [], reply: [], tabB: ["dot"], tabA: [], all: 2 }, "on load the open ask is marked on its Key, the hidden reply on its tab, the answered ask not at all");
+    // His answer clears the open ask's mark; Seen clears the reply's and records it.
+    await click('[data-atl=decide][data-id="open-q"][data-label="No"]');
+    await until("!document.querySelector('#q-open [atl-ui=mark]')");
+    await click("#tB");
+    await until("!!document.querySelector('#c-reply [atl-ui=mark].atl-mark-bar')");
+    await js(`document.querySelector('[data-atl=chseen][data-addr="c-reply"]').click(); true`);
+    await until("document.querySelectorAll('[atl-ui=mark]').length===0");
+    assert.deepEqual(readLog(lm).filter((e) => e.type === "seen").map((e) => [e.of, e.origin, e.delivery]), [[[reply.seq], "human", "record"]], "Seen records the reply it cleared, never delivered");
+    await b("open", url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded"); await sleep(300);
+    assert.deepEqual(await marks(), { open: [], done: [], reply: [], tabB: [], tabA: [], all: 0 }, "after answering, Seen and a reload no mark comes back");
+    // A reply that arrives while no tab is connected is marked on the next load.
+    appendLog(lm, { origin: "agent", type: "answer", target: root.seq, text: "One more point." });
+    await b("open", url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded"); await sleep(300);
+    assert.deepEqual((await marks()).tabB, ["dot"], "a later reply is marked on load");
+    await b("set", "viewport", "1440", "900");
+  });
+  // Review of 2.13.0 (Sol): each finding has its own check.
+  const needsAt = (sel) => js(`[...document.querySelectorAll('${sel} [atl-ui=mark].atl-k-needs:not(.atl-fade)')].length`);
+  const ask = (page, id, key, at = Date.now() - 60_000) => appendLog(page, { origin: "agent", type: "ask", decision: { id, key, question: `Question ${id}?`, options: [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }] } }, at);
+  const openFresh = async (page) => { await b("open", (await host.open(page)).url); await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded"); await sleep(300); };
+  // Finding 1: a Key the Page renders after load gets its mark, and an undone answer brings it back.
+  await fixCheck("2.13.0-review-1-marks-reconcile-on-every-render", async () => {
+    const late = path.join(dir, "late.html");
+    await writeFile(late, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Late</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div id="host"></div><script>document.addEventListener("atelier:state",(e)=>{if(!e.detail.loaded||window.drawn)return;window.drawn=1;setTimeout(()=>{const d=document.createElement("div");d.setAttribute("atl-key","late");d.id="late";d.textContent="Rendered after load.";document.getElementById("host").append(d)},300)});</script>
+<script type="module" src="atelier.js"></script></body></html>`);
+    ask(late, "late-q", "late");
+    await openFresh(late);
+    await until("!!document.getElementById('late')"); await sleep(500);
+    assert.equal(await needsAt("#late"), 1, "a Key rendered after load gets its open ask's mark");
+    await click('[data-atl=decide][data-id="late-q"][data-label="Yes"]');
+    await until("!document.querySelector('#late [atl-ui=mark]')");
+    await click("[data-atl=undo]");
+    await until("atelier.state().toAnswer.includes('late-q')"); await sleep(300);
+    assert.equal(await needsAt("#late"), 1, "an undone answer brings the mark back");
+  });
+  // Finding 2: Mark all seen on more than 1000 marks saves them all; a refused Seen keeps the mark.
+  await fixCheck("2.13.0-review-2-seen-batches-and-keeps-refused-marks", async () => {
+    const many = path.join(dir, "many.html");
+    await writeFile(many, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Many</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><nav><button id="mA" aria-controls="qA">A</button><button id="mB" aria-controls="qB">B</button></nav><section id="qA"><p>Front.</p></section><section id="qB" hidden><div atl-key="m" id="m">Many questions.</div></section>
+<script type="module" src="atelier.js"></script></body></html>`);
+    for (let i = 0; i < 1001; i++) ask(many, `m${i}`, "m");
+    await openFresh(many);
+    assert.equal(await needsAt("#mB"), 1, "1001 open asks mark the tab");
+    await js("document.querySelector('[data-atl=chall]').click(); true");
+    const covered = () => readLog(many).filter((e) => e.type === "seen").flatMap((e) => e.of).length;
+    for (let i = 0; i < 40 && covered() < 1001; i++) await sleep(250);
+    assert.equal(covered(), 1001, "Mark all seen records all 1001 asks");
+    await openFresh(many);
+    assert.equal(await needsAt("#mB"), 0, "after a reload none comes back");
+    const one = path.join(dir, "refused.html");
+    await writeFile(one, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Refused</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="r" id="r">One question.</div><script type="module" src="atelier.js"></script></body></html>`);
+    ask(one, "r-q", "r");
+    await openFresh(one);
+    await js(REFUSE);
+    await js(`document.querySelector('[data-atl=chseen][data-addr="r"]').click(); true`); await sleep(1200);
+    await js("window.fetch=window.__fetch; true");
+    assert.equal(await needsAt("#r"), 1, "a Seen the host refused keeps the mark");
+  });
+  // Finding 3: closing a thread after the agent's reply counts as seeing it, also once the Key moved to a new version.
+  await fixCheck("2.13.0-review-3-close-after-reply-is-seen-on-a-new-version", async () => {
+    const ver = path.join(dir, "ver.html");
+    await writeFile(ver, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Ver</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="v" atl-ver="v2" id="v">Version two.</div><script type="module" src="atelier.js"></script></body></html>`);
+    const root = appendLog(ver, { origin: "human", type: "comment", key: "v", ver: "v1", text: "Fix this.", delivery: "immediate" }, Date.now() - 90_000);
+    appendLog(ver, { origin: "agent", type: "answer", target: root.seq, text: "Fixed in v2." }, Date.now() - 80_000);
+    appendLog(ver, { origin: "human", type: "close", target: root.seq, ver: "v1", delivery: "record" }, Date.now() - 70_000);
+    await openFresh(ver);
+    assert.equal(await needsAt("#v"), 0, "a reply he closed the thread after stays seen on v2");
+  });
+  // Finding 4: the host takes Seen only for existing agent asks and replies.
+  await fixCheck("2.13.0-review-4-seen-only-names-existing-agent-events", async () => {
+    const fut = path.join(dir, "future.html");
+    await writeFile(fut, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Future</title><body><div atl-key="f">F.</div><script type="module" src="atelier.js"></script></body></html>`);
+    const u = new URL((await host.open(fut)).url);
+    const seen = async (of) => (await fetch(`${u.origin}/.atelier/events?page=${encodeURIComponent(decodeURIComponent(u.pathname.slice(1)))}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "seen", of }) })).status;
+    const human = appendLog(fut, { origin: "human", type: "comment", key: "f", text: "Hm.", delivery: "record" });
+    const got = [await seen([human.seq + 1]), await seen([-1]), await seen([2 ** 53]), await seen([human.seq])];
+    const asked = ask(fut, "f-q", "f", Date.now());
+    got.push(await seen([asked.seq]));
+    assert.deepEqual(got, [400, 400, 400, 400, 200], "a future, negative, unsafe or human seq is refused; an agent ask is taken");
+  });
+  // Second review of 2.13.0 (Sol).
+  // Finding 1: a Seen the host never confirmed (network failure) keeps its mark, and a later Seen saves it.
+  await fixCheck("2.13.0-review2-1-seen-needs-the-host", async () => {
+    const net = path.join(dir, "net.html");
+    await writeFile(net, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Net</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="n" id="n">One question.</div><script type="module" src="atelier.js"></script></body></html>`);
+    ask(net, "n-q", "n");
+    await openFresh(net);
+    await js(`(()=>{window.__fetch??=window.fetch;window.fetch=(u,o)=>o?.method==="POST"&&String(u).startsWith("/.atelier/events")?Promise.reject(new TypeError("Failed to fetch")):window.__fetch(u,o);return true})()`);
+    await js(`document.querySelector('[data-atl=chseen][data-addr="n"]').click(); true`); await sleep(1200);
+    await js("window.fetch=window.__fetch; true");
+    const saved = () => readLog(net).filter((e) => e.type === "seen").length;
+    assert.deepEqual([await needsAt("#n"), saved()], [1, 0], "a Seen that never reached the host keeps the mark");
+    await js(`document.querySelector('[data-atl=chseen][data-addr="n"]').click(); true`);
+    for (let i = 0; i < 20 && !saved(); i++) await sleep(250);
+    await openFresh(net);
+    assert.deepEqual([saved(), await needsAt("#n")], [1, 0], "the next Seen saves it and the reload brings no mark");
+  });
+  // Finding 2: an Update removing a Key with an open ask keeps its removal notice.
+  await fixCheck("2.13.0-review2-2-removed-key-keeps-its-notice", async () => {
+    const gone = path.join(dir, "gone.html");
+    const page2 = (withK) => writeFile(gone, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Gone</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:8px;margin:16px 0}</style>
+<body><section atl-key="s" id="s">${withK ? `<div atl-key="k" id="k">Goes away.</div>` : ""}<div atl-key="sib" id="sib">Stays.</div></section><script>window.ups=0;document.addEventListener("atelier:update",()=>ups++);</script><script type="module" src="atelier.js"></script></body></html>`);
+    await page2(true);
+    ask(gone, "k-q", "s/k");
+    await openFresh(gone); await sleep(500);
+    assert.equal(await needsAt("#k"), 1, "the open ask marks k");
+    await page2(false); host.update(gone); await until("ups===1"); await sleep(300);
+    assert.equal(await js("document.querySelectorAll('[atl-ui=gone]').length"), 1, "the removal notice stays");
+  });
+  // Finding 3: a hidden panel that is itself the Key, and a Key in a visibility:hidden panel, mark their tab.
+  await fixCheck("2.13.0-review2-3-hidden-keys-mark-their-tab", async () => {
+    const hid = path.join(dir, "hidden.html");
+    await writeFile(hid, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Hidden</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><nav><button id="tF" aria-controls="pF">Front</button><button id="tK" aria-controls="pk">Keyed panel</button><button id="tV" aria-controls="pv">Invisible panel</button><button id="tD" aria-controls="pd">Details panel</button></nav>
+<section id="pF"><p>Front.</p></section><section id="pk" atl-key="pk" hidden><p>The panel is the Key.</p></section><section id="pv" style="visibility:hidden"><div atl-key="vk" id="vk">In an invisible panel.</div></section><section id="pd" hidden><details id="details"><summary>Closed details</summary><p atl-key="dk" id="dk">Inside closed details.</p></details></section>
+<script type="module" src="atelier.js"></script></body></html>`);
+    ask(hid, "pk-q", "pk"); ask(hid, "vk-q", "vk"); ask(hid, "dk-q", "dk");
+    await openFresh(hid);
+    const got = await js(`(()=>{const at=(sel)=>document.querySelectorAll(sel+' [atl-ui=mark].atl-k-needs.atl-mark-dot').length;return {tK:at('#tK'),tV:at('#tV'),tD:at('#tD'),onBody:[...document.body.children].filter(n=>n.getAttribute('atl-ui')==='mark').length,invisible:[...document.querySelectorAll('[atl-ui=mark]')].filter(m=>!m.checkVisibility({visibilityProperty:true})).length}})()`);
+    assert.deepEqual(got, { tK: 1, tV: 1, tD: 1, onBody: 0, invisible: 0 }, "each hidden Key, including one below closed details, marks its visible tab");
+  });
+  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0 and 2.13.0 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }
