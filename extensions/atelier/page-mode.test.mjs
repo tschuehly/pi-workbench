@@ -242,3 +242,19 @@ test("a rejected update leaves the served Page unchanged", async () => {
   assert.equal(a.results("atelier")[0].isError, true);
   assert.equal(await served(url), before);
 });
+
+test("an ordinary Page opened in a Chat session keeps 2.x behaviour: served from disk, no stored revisions", async () => {
+  const s = await session();
+  const cwd = s.sessionManager.getCwd(), page = join(cwd, "plain.html");
+  writeFileSync(page, '<!doctype html><p atl-key="a">One</p><script type="module" src="atelier.js"></script>');
+  s.reply(s.tool({ action: "open", page: "plain.html" }), s.tool({ action: "update", page: "plain.html", text: "Two" }), s.tool({ action: "revisions", page: "plain.html" }), fauxAssistantMessage(""));
+  await s.session.prompt("show it");
+  const [open, update, listed] = s.results("atelier");
+  assert.equal(open.isError, false, s.text(open));
+  assert.equal(update.isError, false, s.text(update));
+  assert.doesNotMatch(s.text(update), /revision/i);
+  assert.equal(listed.isError, true, "revisions is a Session Page action");
+  assert.deepEqual(revisionsOf(page), []);
+  writeFileSync(page, '<!doctype html><p atl-key="a">Edited on disk</p>');
+  assert.match(await served(open.details.url), /Edited on disk/);
+});
