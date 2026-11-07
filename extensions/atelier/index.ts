@@ -41,18 +41,21 @@ const SESSION_PAGE = (title: string) => `<!doctype html>
 <section atl-key="composer"><form id="atl-composer"><textarea name="text" rows="3" required aria-label="Message to the agent" placeholder="Ask or tell the agent something"></textarea><button type="submit">Send</button></form></section>
 <script type="module" src="atelier.js"></script>
 <script>
+{ let saving = false;
 document.addEventListener("submit", async (ev) => {
-  const form = ev.target.closest("#atl-composer"), text = form?.text.value.trim();
+  const form = ev.target.closest("#atl-composer"), sent = form?.text.value, text = sent?.trim();
   if (!form) return;
   ev.preventDefault();
-  if (!text || form.dataset.busy) return;
-  // Locked while it saves, as the Kernel's Comment box: what posts is what the box shows; a refusal keeps the text.
-  const lock = (on) => { form.text.readOnly = on; form.querySelector("[type=submit]").disabled = on; if (on) form.dataset.busy = "1"; else delete form.dataset.busy; };
-  lock(true);
+  if (!text || saving) return;
+  // Locked while it saves, as the Kernel's Comment box. An Update's morph drops the lock attributes, so the flag guards
+  // against a second post and only the text that posted leaves the box: anything typed meanwhile stays.
+  const lock = (on) => { form.text.readOnly = on; form.querySelector("[type=submit]").disabled = on; };
+  saving = true; lock(true);
   const r = await fetch("/.atelier/events?page=" + encodeURIComponent(decodeURIComponent(location.pathname.slice(1))), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "comment", key: "composer", text }) }).catch(() => null);
-  lock(false);
-  if (r?.ok) form.reset();
-});
+  saving = false; lock(false);
+  const box = document.querySelector("#atl-composer textarea") ?? form.text, now = box.value;
+  if (r?.ok && now.startsWith(sent)) box.value = now.slice(sent.length).trimStart();
+}); }
 </script>
 </body></html>
 `;
