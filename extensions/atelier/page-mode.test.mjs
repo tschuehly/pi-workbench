@@ -113,3 +113,27 @@ test("editing the Working copy without an update leaves the served Session Page 
   assert.doesNotMatch(await served(url), /Half done/);
   await s.close();
 });
+
+test("update stores the next revision and the served Page shows it; restore brings an earlier one back to the Working copy", async () => {
+  const s = await session();
+  await s.session.prompt("/mode surface page");
+  const { url, page } = await s.sessionPage();
+  const first = await served(url);
+  writeFileSync(page, first.replace('<main atl-key="main"></main>', '<main atl-key="main"><p atl-key="status">Tests pass</p></main>'));
+  s.reply(s.tool({ action: "update", page, text: "Added the test status" }), s.tool({ action: "revisions", page }), fauxAssistantMessage(""));
+  await s.session.prompt("show it");
+  assert.match(await served(url), /Tests pass/);
+  const [update, listed] = s.results("atelier");
+  assert.equal(update.isError, false, s.text(update));
+  assert.match(s.text(update), /revision 2/i);
+  assert.match(s.text(listed), /^Revision 2 .*Added the test status$/m);
+  const events = await (await fetch(new URL(`/.atelier/events?page=${encodeURIComponent(decodeURIComponent(new URL(url).pathname.slice(1)))}`, url))).json();
+  assert.deepEqual(events.entries.filter((e) => e.type === "update").map((e) => [e.revision, e.note]), [[1, undefined], [2, "Added the test status"]]);
+
+  s.reply(s.tool({ action: "restore", page, revision: 1 }), fauxAssistantMessage(""));
+  await s.session.prompt("bring back revision 1");
+  const restore = s.results("atelier").at(-1);
+  assert.equal(restore.isError, false, s.text(restore));
+  assert.equal(readFileSync(page, "utf8"), first, "the Working copy is revision 1 again");
+  assert.match(await served(url), /Tests pass/, "nothing is shown before the next update");
+});
