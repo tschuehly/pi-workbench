@@ -84,7 +84,7 @@ Page mode is the `Page` value of a new Working Mode axis, **Surface** (`Chat` by
 - **Log.** The transcript stays in Pi's session file. The Session Page links to a read-only view of it. Nothing is deleted.
 - **Slip handling** is a Page-mode hook in the extension.
   - At the end of an agent turn it checks whether the turn produced assistant text and no `update` call.
-  - If so, it adds one correction to the context and continues once, then records a `slip` telemetry event (session, turn, whether the correction succeeded).
+  - If so, it records a `slip` telemetry event (session, turn), adds one correction to the context and continues once, then records a `slip.correction` event (whether the correction succeeded, and the run outcome if it errored or was aborted).
   - A turn without text is not a slip. At most one correction per turn.
 - **Telemetry** gains a `slip` event type. Slips are reported per session and per day from the existing recorder. Turn classification lives in the Page-mode hook, not in telemetry.
 - **Codemode**: no special support; the atelier actions are ordinary tools, so codemode scripts can call them.

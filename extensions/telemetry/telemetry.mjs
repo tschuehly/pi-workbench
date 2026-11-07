@@ -58,13 +58,14 @@ export function buildReport(events, options = {}) {
   };
 }
 
-// Page-mode slips (docs/plans/page-mode.md): per session and per local day, and how many one correction fixed.
+// Page-mode slips (docs/plans/page-mode.md): one `slip` per detection, per session and per local day, and how many
+// one correction fixed (its `slip.correction` outcome).
 function slipReport(events) {
   const slips = events.filter((event) => event.type === "slip");
   const count = (key) => slips.reduce((out, event) => { const k = key(event); out[k] = (out[k] ?? 0) + 1; return out; }, {});
   return {
     total: slips.length,
-    corrected: slips.filter((event) => event.corrected === true).length,
+    corrected: events.filter((event) => event.type === "slip.correction" && event.corrected === true).length,
     bySession: count((event) => event.sessionId ?? "unknown"),
     byDay: count((event) => new Date(event.at).toLocaleDateString("sv")),
   };

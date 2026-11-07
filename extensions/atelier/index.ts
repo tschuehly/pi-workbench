@@ -159,17 +159,21 @@ export default function atelierExtension(pi: ExtensionAPI) {
   });
   pi.on("agent_start", release);
   pi.on("before_agent_start", () => { runs += 1; updated = false; slip = undefined; });
-  // A Page-mode run that ends with text and no Update is a slip: one correction continues it, and the next end
-  // records whether that run sent an Update. A silent ending is no slip.
+  // A Page-mode run that ends with text and no Update is a slip, recorded when detected: one correction continues it,
+  // and the next end records the correction's outcome (an errored or aborted one too). A silent ending is no slip.
   pi.on("agent_before_settle", (event, ctx) => {
-    if (!ruled || event.outcome !== "completed") { slip = undefined; return; }
     const sessionId = ctx.sessionManager.getSessionId();
-    if (slip) { pi.events.emit(EXECUTION_CHANNEL, { type: "slip", sessionId, turn: slip.turn, corrected: updated }); slip = undefined; return; }
+    if (slip) {
+      pi.events.emit(EXECUTION_CHANNEL, { type: "slip.correction", sessionId, turn: slip.turn, corrected: event.outcome === "completed" && updated, outcome: event.outcome });
+      slip = undefined;
+      return;
+    }
+    if (!ruled || event.outcome !== "completed") return;
     const last = event.context.contextMessages.findLast((m: any) => m.role === "assistant") as any;
     const said = typeof last?.content === "string" ? last.content : (last?.content ?? []).filter((p: any) => p.type === "text").map((p: any) => p.text).join("");
     if (updated || !said.trim()) return;
     slip = { turn: runs };
-    updated = false;
+    pi.events.emit(EXECUTION_CHANNEL, { type: "slip", sessionId, turn: runs, corrected: "pending" });
     return { continue: true, entries: [{ type: "custom_message", customType: "page-mode:slip", display: true,
       content: "Page mode: this run ended with text for Thomas and no Update, so he has not seen it; the text stays in the Log. Put what he needs on the Session Page (the Working copy) and send an Update with atelier action update; attend a Key if he must act. Do not answer in text." }] };
   });

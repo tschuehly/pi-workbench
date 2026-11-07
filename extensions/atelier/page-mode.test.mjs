@@ -179,19 +179,22 @@ test("a run ending with text and no update gets one correction and records a sli
   const { page } = await s.sessionPage();
   const corrections = () => s.sessionManager.getEntries().filter((e) => e.type === "custom_message" && e.customType === "page-mode:slip");
   const slips = () => s.recorded.filter((e) => e.type === "slip").map((e) => [e.sessionId, e.corrected]);
+  const outcomes = () => s.recorded.filter((e) => e.type === "slip.correction").map((e) => e.corrected);
   const id = s.sessionManager.getSessionId();
 
   s.reply(fauxAssistantMessage("Here is what I found"), s.tool({ action: "update", page, text: "Findings" }), fauxAssistantMessage(""));
   await s.session.prompt("investigate");
   assert.equal(corrections().length, 1);
-  assert.deepEqual(slips(), [[id, true]]);
+  assert.deepEqual(slips(), [[id, "pending"]]);
+  assert.deepEqual(outcomes(), [true]);
   const corrected = s.requests.at(-2).messages.at(-1);
   assert.match(s.text(corrected), /Update/, "the model sees the correction");
 
   s.reply(fauxAssistantMessage("More prose"), fauxAssistantMessage("Still prose"));
   await s.session.prompt("go on");
   assert.equal(corrections().length, 2, "one correction per run, no loop");
-  assert.deepEqual(slips(), [[id, true], [id, false]]);
+  assert.deepEqual(slips(), [[id, "pending"], [id, "pending"]]);
+  assert.deepEqual(outcomes(), [true, false]);
 
   s.reply(s.tool({ action: "revisions", page }), fauxAssistantMessage(""));
   await s.session.prompt("quietly");
@@ -257,4 +260,18 @@ test("an ordinary Page opened in a Chat session keeps 2.x behaviour: served from
   assert.deepEqual(revisionsOf(page), []);
   writeFileSync(page, '<!doctype html><p atl-key="a">Edited on disk</p>');
   assert.match(await served(open.details.url), /Edited on disk/);
+});
+
+test("a slip whose correction errors still records one slip", async () => {
+  const s = await session();
+  await s.session.prompt("/mode surface page");
+  await s.sessionPage();
+  s.reply(fauxAssistantMessage("Here is prose"), fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider broke" }));
+  await s.session.prompt("investigate").catch(() => {});
+  const slips = s.recorded.filter((e) => e.type === "slip");
+  assert.equal(slips.length, 1, JSON.stringify(s.recorded.filter((e) => /slip/.test(e.type))));
+  const report = buildReport(s.recorded);
+  assert.equal(report.slips.total, 1);
+  assert.equal(report.slips.corrected, 0);
+  assert.deepEqual(s.recorded.filter((e) => e.type === "slip.correction").map((e) => [e.corrected, e.outcome]), [[false, "error"]]);
 });
