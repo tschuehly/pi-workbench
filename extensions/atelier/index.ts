@@ -45,9 +45,13 @@ document.addEventListener("submit", async (ev) => {
   const form = ev.target.closest("#atl-composer"), text = form?.text.value.trim();
   if (!form) return;
   ev.preventDefault();
-  if (!text) return;
-  const r = await fetch("/.atelier/events?page=" + encodeURIComponent(decodeURIComponent(location.pathname.slice(1))), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "comment", key: "composer", text }) });
-  if (r.ok) form.reset();
+  if (!text || form.dataset.busy) return;
+  // Locked while it saves, as the Kernel's Comment box: what posts is what the box shows; a refusal keeps the text.
+  const lock = (on) => { form.text.readOnly = on; form.querySelector("[type=submit]").disabled = on; if (on) form.dataset.busy = "1"; else delete form.dataset.busy; };
+  lock(true);
+  const r = await fetch("/.atelier/events?page=" + encodeURIComponent(decodeURIComponent(location.pathname.slice(1))), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "comment", key: "composer", text }) }).catch(() => null);
+  lock(false);
+  if (r?.ok) form.reset();
 });
 </script>
 </body></html>
