@@ -149,7 +149,10 @@ test("attend marks an existing Key and names the Attention channel; an unknown K
   const old = join(cwd, "old.html"), body = "export {};\n";
   writeFileSync(old, '<!doctype html><p atl-key="header">Old</p><script type="module" src="atelier.js"></script>');
   writeFileSync(join(cwd, "atelier.js"), `// atelier-copy 2.13.0 sha256:${createHash("sha256").update(body).digest("hex")} old\n${body}`);
+  writeFileSync(page, readFileSync(page, "utf8").replace('<main atl-key="main"></main>', '<main atl-key="main"><p atl-key="due">Friday</p></main>'));
   s.reply(
+    s.tool({ action: "update", page }),
+    s.tool({ action: "attend", page, key: "due", text: "Confirm Friday" }),
     s.tool({ action: "attend", page, key: "header", text: "Pick the release date" }),
     s.tool({ action: "attend", page, key: "nowhere", text: "Look here" }),
     s.tool({ action: "open", page: "old.html" }),
@@ -157,7 +160,9 @@ test("attend marks an existing Key and names the Attention channel; an unknown K
     fauxAssistantMessage(""),
   );
   await s.session.prompt("ask Thomas");
-  const [attended, unknown, , refused] = s.results("atelier");
+  const [, nested, attended, unknown, , refused] = s.results("atelier");
+  assert.equal(nested.isError, true);
+  assert.match(s.text(nested), /main\/due/, "a nested Key is named by its address");
   assert.equal(attended.isError, false, s.text(attended));
   assert.match(s.text(attended), /request_attention/);
   const events = await (await fetch(new URL(`/.atelier/events?page=${encodeURIComponent(decodeURIComponent(new URL(url).pathname.slice(1)))}`, url))).json();

@@ -197,7 +197,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
       state: Type.Optional(StringEnum(REQUEST_STATES)),
       text: Type.Optional(Type.String({ description: "answer text, status note, or update note" })),
       generation: Type.Optional(Type.Number({ description: "takeover: receiver generation" })),
-      key: Type.Optional(Type.String({ description: "attend: the Key that needs the human" })),
+      key: Type.Optional(Type.String({ description: "attend: the address of the Key that needs the human (nested: parent/child)" })),
       revision: Type.Optional(Type.Number({ description: "revisions: the stored revision to read; restore: the one to copy back to the Working copy" })),
     }),
     executionMode: "sequential",
@@ -272,7 +272,11 @@ export default function atelierExtension(pi: ExtensionAPI) {
       if (params.action === "attend") {
         only3();
         if (!params.key || !params.text?.trim()) throw new Error("attend needs key and text: one line on what the owner must do.");
-        if (!keyTexts(readFileSync(shown(page), "utf8")).has(params.key)) throw new Error(`No Key ${params.key} on the revision the owner sees; attend a Key it shows, or update first.`);
+        const keys = [...keyTexts(readFileSync(shown(page), "utf8")).keys()];
+        if (!keys.includes(params.key)) {
+          const like = keys.filter((k) => k.endsWith(`/${params.key}`));
+          throw new Error(`No Key ${params.key} on the revision the owner sees${like.length ? `; nested Keys go by their address: ${like.join(", ")}` : "; attend a Key it shows, or update first"}.`);
+        }
         const entry = host.agent(page, { type: "attend", key: params.key, reason: params.text.replace(/\s+/g, " ").trim() });
         // The extension cannot call another extension's tool, so the result names the channel Attention allows.
         return text(`Key ${params.key} is marked Needs you (#${entry.seq}). ${ALERT[attention] ?? ALERT.Default}`, { seq: entry.seq, attention });
