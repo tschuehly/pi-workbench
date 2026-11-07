@@ -1109,6 +1109,74 @@ requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classLis
     assert.deepEqual((await marks()).tabB, ["dot"], "a later reply is marked on load");
     await b("set", "viewport", "1440", "900");
   });
+  // Review of 2.13.0 (Sol): each finding has its own check.
+  const needsAt = (sel) => js(`[...document.querySelectorAll('${sel} [atl-ui=mark].atl-k-needs:not(.atl-fade)')].length`);
+  const ask = (page, id, key, at = Date.now() - 60_000) => appendLog(page, { origin: "agent", type: "ask", decision: { id, key, question: `Question ${id}?`, options: [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }] } }, at);
+  const openFresh = async (page) => { await b("open", (await host.open(page)).url); await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded"); await sleep(300); };
+  // Finding 1: a Key the Page renders after load gets its mark, and an undone answer brings it back.
+  await fixCheck("2.13.0-review-1-marks-reconcile-on-every-render", async () => {
+    const late = path.join(dir, "late.html");
+    await writeFile(late, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Late</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div id="host"></div><script>document.addEventListener("atelier:state",(e)=>{if(!e.detail.loaded||window.drawn)return;window.drawn=1;setTimeout(()=>{const d=document.createElement("div");d.setAttribute("atl-key","late");d.id="late";d.textContent="Rendered after load.";document.getElementById("host").append(d)},300)});</script>
+<script type="module" src="atelier.js"></script></body></html>`);
+    ask(late, "late-q", "late");
+    await openFresh(late);
+    await until("!!document.getElementById('late')"); await sleep(500);
+    assert.equal(await needsAt("#late"), 1, "a Key rendered after load gets its open ask's mark");
+    await click('[data-atl=decide][data-id="late-q"][data-label="Yes"]');
+    await until("!document.querySelector('#late [atl-ui=mark]')");
+    await click("[data-atl=undo]");
+    await until("atelier.state().toAnswer.includes('late-q')"); await sleep(300);
+    assert.equal(await needsAt("#late"), 1, "an undone answer brings the mark back");
+  });
+  // Finding 2: Mark all seen on more than 1000 marks saves them all; a refused Seen keeps the mark.
+  await fixCheck("2.13.0-review-2-seen-batches-and-keeps-refused-marks", async () => {
+    const many = path.join(dir, "many.html");
+    await writeFile(many, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Many</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><nav><button id="mA" aria-controls="qA">A</button><button id="mB" aria-controls="qB">B</button></nav><section id="qA"><p>Front.</p></section><section id="qB" hidden><div atl-key="m" id="m">Many questions.</div></section>
+<script type="module" src="atelier.js"></script></body></html>`);
+    for (let i = 0; i < 1001; i++) ask(many, `m${i}`, "m");
+    await openFresh(many);
+    assert.equal(await needsAt("#mB"), 1, "1001 open asks mark the tab");
+    await js("document.querySelector('[data-atl=chall]').click(); true");
+    const covered = () => readLog(many).filter((e) => e.type === "seen").flatMap((e) => e.of).length;
+    for (let i = 0; i < 40 && covered() < 1001; i++) await sleep(250);
+    assert.equal(covered(), 1001, "Mark all seen records all 1001 asks");
+    await openFresh(many);
+    assert.equal(await needsAt("#mB"), 0, "after a reload none comes back");
+    const one = path.join(dir, "refused.html");
+    await writeFile(one, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Refused</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="r" id="r">One question.</div><script type="module" src="atelier.js"></script></body></html>`);
+    ask(one, "r-q", "r");
+    await openFresh(one);
+    await js(REFUSE);
+    await js(`document.querySelector('[data-atl=chseen][data-addr="r"]').click(); true`); await sleep(1200);
+    await js("window.fetch=window.__fetch; true");
+    assert.equal(await needsAt("#r"), 1, "a Seen the host refused keeps the mark");
+  });
+  // Finding 3: closing a thread after the agent's reply counts as seeing it, also once the Key moved to a new version.
+  await fixCheck("2.13.0-review-3-close-after-reply-is-seen-on-a-new-version", async () => {
+    const ver = path.join(dir, "ver.html");
+    await writeFile(ver, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Ver</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="v" atl-ver="v2" id="v">Version two.</div><script type="module" src="atelier.js"></script></body></html>`);
+    const root = appendLog(ver, { origin: "human", type: "comment", key: "v", ver: "v1", text: "Fix this.", delivery: "immediate" }, Date.now() - 90_000);
+    appendLog(ver, { origin: "agent", type: "answer", target: root.seq, text: "Fixed in v2." }, Date.now() - 80_000);
+    appendLog(ver, { origin: "human", type: "close", target: root.seq, ver: "v1", delivery: "record" }, Date.now() - 70_000);
+    await openFresh(ver);
+    assert.equal(await needsAt("#v"), 0, "a reply he closed the thread after stays seen on v2");
+  });
+  // Finding 4: the host takes Seen only for existing agent asks and replies.
+  await fixCheck("2.13.0-review-4-seen-only-names-existing-agent-events", async () => {
+    const fut = path.join(dir, "future.html");
+    await writeFile(fut, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Future</title><body><div atl-key="f">F.</div><script type="module" src="atelier.js"></script></body></html>`);
+    const u = new URL((await host.open(fut)).url);
+    const seen = async (of) => (await fetch(`${u.origin}/.atelier/events?page=${encodeURIComponent(decodeURIComponent(u.pathname.slice(1)))}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "seen", of }) })).status;
+    const human = appendLog(fut, { origin: "human", type: "comment", key: "f", text: "Hm.", delivery: "record" });
+    const got = [await seen([human.seq + 1]), await seen([-1]), await seen([2 ** 53]), await seen([human.seq])];
+    const asked = ask(fut, "f-q", "f", Date.now());
+    got.push(await seen([asked.seq]));
+    assert.deepEqual(got, [400, 400, 400, 400, 200], "a future, negative, unsafe or human seq is refused; an agent ask is taken");
+  });
   assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0 and 2.13.0 fix holds");
 
   console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen.");

@@ -473,7 +473,6 @@ function boot() {
       const list = (await r.json()).entries;
       cursor = list.reduce((max, e) => Math.max(max, e.seq), cursor);
       const fresh = add(list);
-      if (first) markNeeds(); else markAgent(fresh);
       if (fresh.length || first) { first = false; loaded = true; render(); }
     } catch { conn = "no session"; loaded = true; render(); }
   }
@@ -827,7 +826,7 @@ function boot() {
       if (label.textContent !== wipText(el)) label.textContent = wipText(el);
       if (!label.isConnected) document.documentElement.append(label);
     }
-    pruneNeeds(st);
+    syncNeeds(st);
     renderMarks();
     positionPins();
     const pub = publicState(st, { conn, loaded, wip: wipState() }), json = JSON.stringify(pub);
@@ -1100,27 +1099,36 @@ function boot() {
     for (const d of st.decisions) if (d.askSeq && d.state !== "done" && !seen.has(d.askSeq)) out.set(d.askSeq, { key: d.key, note: `New Decision: ${clip(d.question, 80)}` });
     for (const t of st.threads) {
       const m = t.msgs.at(-1);
-      if (m.type === "answer" && m.origin === "agent" && !seen.has(m.seq) && !(t.closed && (t.closedAt < 0 || t.closedAt > m.seq))) out.set(m.seq, { key: t.root.key, note: `Agent replied: ${clip(m.text, 80)}` });
+      if (m.type === "answer" && m.origin === "agent" && !seen.has(m.seq) && !(t.closedAt < 0 || t.closedAt > m.seq)) out.set(m.seq, { key: t.root.key, note: `Agent replied: ${clip(m.text, 80)}` });
     }
     return out;
   }
-  // only: the agent events to mark (those a connected tab just received); none marks all that need him (on load).
-  function markNeeds(only) {
+  // Every render reconciles the Needs you marks with the Event Log: his answer, reply or close takes a mark away (one
+  // that also shows a change keeps that), and each agent event that needs him gets one once its Key is on the Page,
+  // unless he cleared it here and its seen event is on its way.
+  const dismissed = new Set();
+  function syncNeeds(st) {
     if (!changesOn()) return;
-    for (const [seq, n] of needs(state())) if ((!only || only.has(seq)) && n.key && findKey(n.key)) { mark(n.key, "needs", {}, n.note); traces.get(n.key).seqs.add(seq); }
-    renderMarks();
-  }
-  const markAgent = (fresh) => { const agent = fresh.filter((x) => x.origin === "agent"); if (agent.length) markNeeds(new Set(agent.map((x) => x.seq))); };
-  // His answer, reply or close takes the Needs you mark away; a mark that also shows a change keeps that.
-  function pruneNeeds(st) {
-    if (![...traces.values()].some((t) => t.seqs.size)) return;
-    const need = needs(st);
+    const need = needs(st), marked = new Set();
     for (const [addr, t] of traces) {
-      if (!t.seqs.size || t.fading) continue;
-      for (const s of t.seqs) if (!need.has(s)) t.seqs.delete(s);
-      if (t.seqs.size) continue;
-      t.kinds.delete("needs");
-      if (!t.kinds.size) clearTrace(addr); else t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0];
+      if (!t.seqs.size) continue;
+      if (!t.fading) {
+        for (const s of t.seqs) if (!need.has(s)) t.seqs.delete(s);
+        if (!t.seqs.size) { t.kinds.delete("needs"); if (!t.kinds.size) { clearTrace(addr); continue; } t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0]; }
+      }
+      t.seqs.forEach((s) => marked.add(s));
+    }
+    for (const [seq, n] of need) if (!marked.has(seq) && !dismissed.has(seq) && n.key && findKey(n.key)) { mark(n.key, "needs", {}, n.note); traces.get(n.key).seqs.add(seq); }
+  }
+  // Seen saves what he cleared in events of at most 1000 seqs (the host's limit); a refused one keeps its marks.
+  async function saveSeen(seqs) {
+    seqs.forEach((s) => dismissed.add(s));
+    for (let i = 0; i < seqs.length; i += 1000) {
+      const part = seqs.slice(i, i + 1000);
+      if (await post({ type: "seen", of: part })) continue;
+      part.forEach((s) => dismissed.delete(s));
+      for (const t of traces.values()) if (t.fading && part.some((s) => t.seqs.has(s))) { t.fading = false; nodesOf(t).forEach((n) => n.classList.remove("atl-fade")); }
+      render(); // a mark already gone comes back through syncNeeds
     }
   }
   // Where a change shows on the Page: the Key itself, else the tab or summary that hides it, else a visible ancestor.
@@ -1142,7 +1150,7 @@ function boot() {
     if (!fading.length) return;
     for (const [, t] of fading) { t.fading = true; nodesOf(t).forEach((n) => n.classList.add("atl-fade")); }
     const seen = fading.flatMap(([, t]) => [...t.seqs]);
-    if (seen.length) post({ type: "seen", of: seen }); // the human saw these agent events: no mark for them on the next load
+    if (seen.length) saveSeen(seen); // the human saw these agent events: no mark for them on the next load
     renderMarks(); // a nav dot fades when every change under it fades
     setTimeout(() => {
       const gone = fading.filter(([a, t]) => traces.get(a) === t && t.fading);
