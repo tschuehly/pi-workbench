@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +21,9 @@ function scenario({ healthy, daemonChanged = false }) {
     put(join(dir, "package-lock.json"), "lock\n");
   }
   put(`${next}.prepared`, "");
+  const stale = join(store, "pi-web-111111111111");
+  put(join(stale, "dist/server/index.js"), "web\n");
+  put(`${stale}.prepared`, "");
   put(join(la, "com.pi-web.sessiond.plist"), plist(`${old}/dist/server/sessiond.js`));
   put(join(la, "com.pi-web.web.plist"), plist(`${old}/dist/server/index.js`));
   mkdirSync(join(projects, "pi-web"), { recursive: true });
@@ -37,16 +40,19 @@ function scenario({ healthy, daemonChanged = false }) {
   });
   const web = readFileSync(join(la, "com.pi-web.web.plist"), "utf8");
   const log = (() => { try { return readFileSync(join(home, "launchctl.log"), "utf8"); } catch { return ""; } })();
-  return { result, web, log, link: readlinkSync(join(projects, "pi-web.installed")), old, next };
+  return { result, web, log, link: readlinkSync(join(projects, "pi-web.installed")), old, next, stale };
 }
 
 test("switch-web restarts only the web service on the new build", () => {
-  const { result, web, log, link, next } = scenario({ healthy: true });
+  const { result, web, log, link, old, next, stale } = scenario({ healthy: true });
   assert.equal(result.status, 0, result.stderr);
   assert.match(web, new RegExp(`${next}/dist/server/index.js`));
   assert.equal(link, next);
   assert.doesNotMatch(log, /sessiond/);
   assert.match(result.stdout, /roll back: .* switch-web 000000000000/);
+  // The build switched away from becomes the rollback; older builds are pruned.
+  assert.ok(existsSync(`${old}.retired`) && existsSync(old));
+  assert.ok(!existsSync(stale) && !existsSync(`${stale}.prepared`), result.stdout);
 });
 
 test("switch-web restores the previous web service when the new one stays unhealthy", () => {

@@ -30,6 +30,12 @@
 #   promote-installed check-settings [settings.json]
 #       Exit 6 unless every Pi Workbench or PI WEB package path in Pi's settings, and the PI WEB
 #       pi-workbench plugin link, resolves into ~/.pi-workbench/installed (never a development checkout).
+#   promote-installed prune [--apply]
+#       List the builds under ~/.pi-workbench/installed to keep and to remove; --apply removes them and
+#       their Git worktree registrations. Keeps per product the live build, one rollback (the build
+#       most recently switched away from), any build the PI WEB services, Pi settings or a Workstream
+#       name, and any build a running process has as working directory or open file. Every successful
+#       switch, switch-workbench and switch-web runs it with --apply.
 set -Eeuo pipefail
 export PATH=${PI_PROMOTE_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
@@ -117,8 +123,41 @@ process.exit(changed.length ? 1 : 0);
 JS
 }
 
+prune_builds() { # [--apply]
+  [[ -d $STORE ]] || return 0
+  local apply=${1:-} real used refs product build live rollback reason
+  real=$(cd "$STORE" && pwd -P)
+  used=$(lsof -n -P -w -Fn 2>/dev/null | sed -n "s|^n$real/\([^/]*\).*|\1|p" | sort -u || true)
+  refs=$(cat "$HOME"/Library/LaunchAgents/com.pi-web.*.plist "$HOME/.pi/agent/settings.json" \
+    "$HOME/.config/pi-web/config.json" "$HOME/.pi-workbench/workstreams/workstreams.json" 2>/dev/null || true)
+  for product in pi-workbench pi-web; do
+    live=$(cd "$PROJECTS/$product.installed" 2>/dev/null && pwd -P || true)
+    # Rollback: the build most recently switched away from; before any .retired marker, the newest prepared.
+    rollback=$(cd "$STORE" && ls -t $product-????????????.retired 2>/dev/null | sed 's/\.retired$//' | grep -vx "${live##*/}" | head -1 || true)
+    [[ -n $rollback ]] || rollback=$(cd "$STORE" && ls -t $product-????????????.prepared 2>/dev/null | sed 's/\.prepared$//' | grep -vx "${live##*/}" | head -1 || true)
+    for build in "$STORE"/$product-????????????; do
+      [[ -d $build && ${build##*/} =~ ^$product-[0-9a-f]{12}$ ]] || continue
+      reason=
+      if [[ $real/${build##*/} == "$live" ]]; then reason=live
+      elif [[ ${build##*/} == "$rollback" ]]; then reason=rollback
+      elif grep -qx "${build##*/}" <<<"$used"; then reason="in use by a running process"
+      elif grep -qF "/${build##*/}" <<<"$refs"; then reason="named by PI WEB services, Pi settings or a Workstream"
+      fi
+      if [[ -n $reason ]]; then echo "keep   ${build##*/}: $reason"; continue; fi
+      if [[ $apply != --apply ]]; then echo "remove ${build##*/} ($(du -sh "$build" 2>/dev/null | awk '{print $1}'))"; continue; fi
+      git -C "$PROJECTS/$product" worktree remove --force "$build" 2>/dev/null || true
+      rm -rf "$build" # when Git refused; the prune below drops its registration
+      rm -f "$build.prepared" "$build.retired"
+      echo "removed ${build##*/}"
+    done
+    git -C "$PROJECTS/$product" worktree prune 2>/dev/null || true
+  done
+  [[ $apply == --apply ]] || echo "dry run: nothing removed; rerun with --apply"
+}
+
 force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
+[[ ${1:-} == prune && $# -le 2 ]] && { prune_builds "${2:-}"; exit $?; }
 [[ ${1:-} == check-settings && $# -le 2 ]] && { check_settings "${2:-}"; exit $?; }
 [[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
 if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
@@ -140,7 +179,12 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   }
   up() { for _ in $(seq 60); do healthy && return 0; sleep 1; done; return 1; }
   swap "$old" "$pw"
-  if up; then echo "web: $old -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $0 switch-web ${old##*-}"; exit 0; fi
+  if up; then
+    echo "web: $old -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $0 switch-web ${old##*-}"
+    [[ $old == "$pw" ]] || touch "$old.retired"
+    prune_builds --apply || true
+    exit 0
+  fi
   echo "FAILED; restoring $old" >&2
   swap "$pw" "$old"
   up && exit 1
@@ -156,9 +200,11 @@ if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   python3 -c 'import os,sys; t,l=sys.argv[1:]; os.symlink(t,l+".new"); os.replace(l+".new",l)' "$wb" "$link"
   echo "pi-workbench.installed: ${previous:-none} -> $wb" | tee -a "$STORE/switch-workbench.log"
   echo "roll back: $0 switch-workbench ${previous##*-}"
+  [[ -z $previous || $previous == "$wb" ]] || touch "$previous.retired"
+  prune_builds --apply || true
   exit 0
 fi
-[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,32p' "$0"; exit 2; }
+[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,38p' "$0"; exit 2; }
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
 link_cli
@@ -224,6 +270,7 @@ rollback() {
   exit 4
 }
 
+for l in pi-workbench.installed pi-web.installed; do t=\$(readlink "$PROJECTS/\$l") && [[ -d \$t ]] && touch "\$t.retired"; done
 ln -sfn "$wb" "$PROJECTS/pi-workbench.installed"
 ln -sfn "$pw" "$PROJECTS/pi-web.installed"
 ln -sfn "$PROJECTS/pi-workbench.installed/packages" \$HOME/.pi-web/plugins/pi-workbench
@@ -240,7 +287,7 @@ node -e '
   c.port=$PORT; fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' \$HOME/.config/pi-web/config.json
 stop_all
 (cd "$pw" && "${PI_PROMOTE_ZSH:-/bin/zsh}" -lc 'node dist/cli.js install') || rollback
-for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; exit 0; }; sleep 1; done
+for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; "$self" prune --apply || true; exit 0; }; sleep 1; done
 rollback
 EOF
 chmod +x "$job/job.sh"
