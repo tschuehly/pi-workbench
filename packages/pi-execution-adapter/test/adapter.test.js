@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -81,6 +81,22 @@ test("summarizes child tool activity without exposing shell arguments", () => {
   assert.equal(summarizeToolAction("edit", { path: "src/index.ts" }), "editing src/index.ts");
   assert.equal(summarizeToolAction("bash", { command: "npm test -- --runInBand" }), "running npm test");
   assert.equal(summarizeToolAction("bash", { command: "curl -u user:password https://example.test" }), "running bash");
+  // Anything in Pi's own bin directory is named, never its arguments, at any command position.
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-agent-"));
+  mkdirSync(join(agentDir, "bin"));
+  writeFileSync(join(agentDir, "bin", "wait-until"), "");
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    assert.equal(summarizeToolAction("bash", { command: "wait-until --timeout 900 --file /repo/target/gate.log --pid 42" }), "running wait-until");
+    assert.equal(summarizeToolAction("bash", { command: 'cd /repo\nwait-until --cmd "echo \\" --file FAKE_SECRET \\""' }), "running wait-until");
+    assert.equal(summarizeToolAction("bash", { command: "cd /repo && npm test" }), "running npm");
+    assert.equal(summarizeToolAction("bash", { command: 'echo "x; npm hunter2"' }), "running npm");
+    assert.equal(summarizeToolAction("bash", { command: "echo wait-until --file fake" }), "running bash");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
   assert.equal(summarizeToolAction("grep", { path: "/repo/src", pattern: "AWS_SECRET_ACCESS_KEY=abc" }), "searching repo/src");
   assert.equal(summarizeToolAction("read", { path: "/repo/src/\u001b[2Jauth.ts" }).includes("\u001b"), false);
 });
@@ -158,6 +174,7 @@ function fakeRpc(options = {}) {
   const send = (value) => child.stdout.write(`${JSON.stringify(value)}\n`);
   const stateResponse = (command) => ({ id: command.id, type: "response", command: "get_state", success: true, data: { model: { provider: options.provider ?? "anthropic", id: options.model ?? "claude-test" }, thinkingLevel: options.effort ?? "high", sessionId: options.sessionId ?? "child-session", isStreaming: false, isCompacting: false, pendingMessageCount: 0 } });
   let pendingGetState;
+  let streamingStates = options.streamingStates ?? 0;
   function drain() {
     for (;;) {
       const index = input.indexOf("\n"); if (index < 0) return;
@@ -165,6 +182,10 @@ function fakeRpc(options = {}) {
       if (command.type === "get_state") {
         if (options.hangOnGetState || (options.dropFinalState && child.commands.some((sent) => sent.type === "prompt"))) pendingGetState = command;
         else if (options.stateDelayMs !== undefined) setTimeout(() => send(stateResponse(command)), options.stateDelayMs);
+        else if (streamingStates > 0 && child.commands.some((sent) => sent.type === "prompt")) {
+          streamingStates -= 1;
+          send({ ...stateResponse(command), data: { ...stateResponse(command).data, isStreaming: true } });
+        }
         else send(stateResponse(command));
       }
       if (command.type === "new_session" || command.type === "set_session_name") send({ id: command.id, type: "response", command: command.type, success: true, data: command.type === "new_session" ? { cancelled: false } : undefined });
@@ -172,7 +193,8 @@ function fakeRpc(options = {}) {
       if (command.type === "abort" && options.settleOnAbort) queueMicrotask(() => send({ type: "agent_settled" }));
       if (command.type === "prompt") {
         send({ id: command.id, type: "response", command: "prompt", success: true });
-        if (!options.hang) queueMicrotask(() => {
+        if (options.onPrompt) queueMicrotask(() => options.onPrompt(send));
+        else if (!options.hang) queueMicrotask(() => {
           send({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "secret reasoning" } });
           send({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "src" } });
           send({ type: "message_end", message: options.finalMessage ?? { role: "assistant", content: [{ type: "text", text: options.text ?? "Compact result" }], stopReason: "stop" } });
@@ -185,6 +207,74 @@ function fakeRpc(options = {}) {
 }
 
 async function eventuallyResult(adapter, id) { return await adapter.result(id); }
+
+test("a settle after which Pi starts a deferred run does not end the execution", async () => {
+  let more;
+  const child = fakeRpc({
+    streamingStates: 1,
+    onPrompt: (send) => {
+      send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Answer before the late leaf." }], stopReason: "stop" } });
+      send({ type: "agent_settled" });
+      more = () => {
+        send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Answer with the late leaf." }], stopReason: "stop" } });
+        send({ type: "agent_settled" });
+      };
+    },
+  });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, settlementProbeMs: 1_000 });
+  const receipt = await adapter.dispatch(spec());
+  let settled = false;
+  const result = adapter.result(receipt.executionId).then((value) => { settled = true; return value; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false, "Pi reported a run still streaming after agent_settled");
+  more();
+  assert.equal((await result).text, "Answer with the late leaf.");
+});
+
+test("a child's own context checkpoint does not end the execution", async () => {
+  let resume;
+  const checkpoint = (send, accepted) => {
+    send({ type: "agent_start" });
+    send({ type: "tool_execution_start", toolCallId: "cp", toolName: "compact_and_continue", args: {} });
+    send({ type: "tool_execution_end", toolCallId: "cp", toolName: "compact_and_continue", isError: false, result: { content: [], details: { accepted, state: accepted ? "pending" : "batched" } } });
+    send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Phase one done." }], stopReason: "toolUse" } });
+    send({ type: "agent_settled" });
+  };
+  const child = fakeRpc({
+    onPrompt: (send) => {
+      checkpoint(send, true);
+      // A Worker's settlement hold may continue the run once before it settles; that is not the resume.
+      send({ type: "agent_start" });
+      send({ type: "agent_settled" });
+      resume = () => {
+        send({ type: "compaction_start", reason: "manual" });
+        send({ type: "compaction_end", reason: "manual" });
+        const resumeMessage = { role: "custom", customType: "context-checkpoint", content: "Context checkpoint completed.", display: true };
+        send({ type: "agent_start" });
+        send({ type: "message_start", message: resumeMessage });
+        send({ type: "message_end", message: resumeMessage });
+        send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Final after checkpoint." }], stopReason: "stop" } });
+        send({ type: "agent_settled" });
+      };
+    },
+  });
+  const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => child, settlementProbeMs: 1 });
+  const receipt = await adapter.dispatch(spec({ tools: ["read", "compact_and_continue"] }));
+  let settled = false;
+  const result = adapter.result(receipt.executionId).then((value) => { settled = true; return value; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false, "the settle that starts compaction is not the child's end");
+  assert.equal(adapter.status(receipt.executionId).running, true);
+  assert.equal(adapter.status(receipt.executionId).latestObservation.type, "checkpoint_pending");
+  resume();
+  const final = await result;
+  assert.equal(final.outcome, "success");
+  assert.equal(final.text, "Final after checkpoint.");
+
+  const rejected = new PiRpcExecutionAdapter({ clock: () => now, spawn: () => fakeRpc({ onPrompt: (send) => checkpoint(send, false) }) });
+  const again = await rejected.dispatch(spec({ tools: ["read", "compact_and_continue"] }));
+  assert.equal((await rejected.result(again.executionId)).outcome, "success", "a checkpoint the tool did not accept ends at the settle as before");
+});
 
 test("launches one persistent RPC child, verifies binding, and returns compact metadata", async () => {
   const children = [];

@@ -29,6 +29,7 @@ Out of scope: CPU/heavy-job limits, worktree pools (Treehouse), PI WEB grouping 
 - The owning agent decides by its own judgment what to delete, including scratch, volumes and unmerged work. Anything another open Workstream links to stays. If the Workstream Store cannot be read, nothing is deleted.
 - Things no open Workstream links to may be cleaned by any agent working in that repository.
 - Only the owner cleans installed snapshots, `reports/` and `evals/`.
+- Ownership is recorded at creation, not inferred from use (2026-10-30, after a 29 Oct cleanup removed three eval Neo4j volumes and a frozen worktree another Workstream needed): worktrunk's `pre-start` hook writes the creating session and its Workstream to `pi-owner.json` in the new worktree's Git dir; volumes carry the `pi.workstream=<id>` label; anything made otherwise that must stay gets a `retained` Workstream link (`<path>` or `docker-volume:<name>`, label `<purpose>; keep until <date|close>`). Every cleanup plan names each object with its owner: owner open → keep; every owner closed → candidate; owner unknown → ask Thomas by name. No blanket prune.
 - A merged worktree may be removed even if old chats ran in it, once the checkpoint records branch and commit; `wt switch --create <branch> --base <commit>` recreates it at the same path to continue a chat.
 
 ## The four parts
@@ -38,6 +39,8 @@ Out of scope: CPU/heavy-job limits, worktree pools (Treehouse), PI WEB grouping 
 3. **Storage hook.** A `storage-guard` Pi extension: below 50 GB free, `before_agent_start` adds one line ("Disk low: N GB free") once per session, and again only after another 5 GB is gone; cleanup itself runs at the next checkpoint. (2026-10-22: the earlier forced cleanup turn at every run end fired about 180 times in three days at 49–50 GB, so Thomas replaced it.)
 4. **Worktrunk.** Rules in harness.md and global `AGENTS.md` (repo CLAUDE.md files carry no scratch or worktree rules): create with `wt switch --create`, remove with `wt remove` after merge; `wt merge` is not used. Before removal the agent moves what it needs from `.scratch/` into the Workstream's scratch; a user-level `pre-remove` hook in `~/.config/worktrunk/config.toml` (`mac-storage-rescue-scratch`) moves any leftover there and aborts removal if the move fails.
 
+5. **Owners.** `mac-storage-workspaces` without arguments is the whole-machine cleanup plan: every worktree and Docker volume with owner, evidence (owner record, label, link, session) and verdict, and one command per candidate. `--record-owner <worktree>` is the pre-start hook and also sets a purpose or keep-until date by hand.
+
 The 6-hourly `mac-storage-candidates.sh` job stays as it is.
 
 ## Checks
@@ -46,11 +49,11 @@ The 6-hourly `mac-storage-candidates.sh` job stays as it is.
 2. Checkpoint/orient: one real checkpoint shows the list and the agent acts on it.
 3. Hook: with a faked free-space value, the line appears and the run continues exactly once.
 4. Worktrunk: create and remove a worktree with `wt`; leftover `.scratch` lands in the Workstream's scratch; a failed move aborts removal.
+5. Owners: `python3 test_workstream_mode.py` in mac-storage-maintenance — an unattached worktree or volume of an open Workstream stays `keep`, one of a closed Workstream is `candidate`, an unknown one is `ask`, and no plan line is a prune.
 
 ## Deferred (add when the named problem shows up)
 
 - Waking idle Chats from the 6-hourly job — if the disk fills while all chats are idle.
 - `PI_SCRATCH` variable in every session type — if agents keep getting the scratch path wrong.
 - Locking around worktree removal — if a removal ever hits a chat opening.
-- Recording the owner when a worktree is created — if Workstream links prove unreliable.
 - Per-repo cache-copy config (`.worktreeinclude`) — if new worktrees start slowly.

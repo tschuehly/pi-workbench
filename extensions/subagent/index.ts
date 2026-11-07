@@ -11,6 +11,7 @@ import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/sr
 import { ACTIVITY_CHANNEL, removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
+import { latestAssistantToolCallCount } from "../context-checkpoint/coordinator.mjs";
 import { createCompletionWakeup, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
 import { COGNITIVE_ROLES, INDEPENDENT_ROLES, LEAF_PROFILES, MODEL_EFFORTS, NO_NESTED_WORKERS, PROFILES, RESOLVER as resolver, ROLE_GUIDE, STATUS_INSTRUCTION, UPDATE_REQUEST, WEB_TOOLS, WORKER_PROFILES, WORKER_ROLES, collectAll, providerOf, resolveBinding } from "./core.mjs";
@@ -194,7 +195,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Use one invocation for one bounded assignment while the user is attending.",
       "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output with the evidence to show; a result missing that evidence is a gap, not a pass. Do not add 'think carefully' lines; Model Effort controls thinking.",
       "Adjust a running child with subagent_steer; when the assignment itself changes, cancel it and launch a new child. Do not imply managed authority, recovery, or durable background work that survives the session.",
-      "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review never go below xhigh.",
+      "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review default to high and never go below medium.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
       "Inside a Worker, a Subagent is the deepest supported level: never launch a Worker from it. The Worker cannot finish until its background Subagents end and are collected.",
     ],
@@ -305,6 +306,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
             outcome: final.outcome,
             profile: params.profile,
             cognitiveRole: params.cognitiveRole,
+            text: terminalText(final),
+            truncated: final.truncated === true,
           });
         }
       });
@@ -331,7 +334,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "subagent_collect",
     label: "Subagent collect",
-    description: "Reconcile background children. Without executionId, collect all ready terminal children; repeat only for a reported budget-limited remainder. With one, return an immediate bounded snapshot if running or if a finished Worker receipt is still settling, otherwise the compact terminal result. Receipt failures collect as outcome_unknown.",
+    description: "Reconcile background children whose results a completion notice did not carry (it names them), or read one child now. Without executionId, collect all ready terminal children; repeat only for a reported budget-limited remainder. With one, return an immediate bounded snapshot if running or if a finished Worker receipt is still settling, otherwise the compact terminal result. Receipt failures collect as outcome_unknown.",
     promptSnippet: "Reconcile backgrounded child Pi results",
     parameters: CollectParams,
     async execute(_toolCallId, params, signal, onUpdate) {
@@ -447,11 +450,14 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "report_status",
     label: "Report status",
-    description: "Report your own current one-line status for the delegate roster the lead and owner see; a new report replaces your previous one. Call it when you start, then each time the answer to 'what are you doing now?' changes: reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, hitting a blocker. Keep it current: a line older than a few minutes of work is stale, so report again. Do not call it on every tool call.",
+    description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; one report covers a whole wait.",
     promptSnippet: "Report your current one-line status to the delegate roster",
     parameters: ReportStatusParams,
-    async execute(_toolCallId, params) {
-      return { content: [{ type: "text" as const, text: `Reported: ${params.status}` }], details: { outcome: "reported", status: params.status } };
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      // A lone report costs a whole model turn that re-reads the context; say so once it happens.
+      const alone = ctx?.sessionManager?.getBranch !== undefined && latestAssistantToolCallCount(ctx.sessionManager.getBranch()) === 1;
+      const text = alone ? `Reported: ${params.status}. Next time send report_status with a real tool call, never alone.` : `Reported: ${params.status}`;
+      return { content: [{ type: "text" as const, text }], details: { outcome: "reported", status: params.status } };
     },
   });
 
@@ -693,6 +699,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
             cognitiveRole: params.cognitiveRole,
             workerId: params.workerId,
             workerName: begin.name,
+            text: terminalText(final),
+            truncated: final.truncated === true,
           },
         });
       })();
@@ -801,20 +809,29 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
 
 function createSessionState(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, barrierFor: () => { defer(send: () => void, key?: string): boolean } | undefined) {
   const host = createSessionHost(pi);
+  const collected = new Set<string>();
+  const dismissedActivity = new Set<string>();
+  // A delivered completion notice showed the lead this child's result: that is its collection.
+  const delivered = (executionId: string) => {
+    collected.add(executionId);
+    try { host.appendEntry(CHILD_RECORD, { executionId, collected: true }); } catch {}
+    dismissedActivity.add(executionId);
+    removeActivity(host, `delegate:${executionId}`);
+  };
   return {
     host,
     adapters: [adapter],
     launched: new Map<string, LaunchMeta>(),
-    collected: new Set<string>(),
+    collected,
     foreground: new Map<string, ForegroundDispatch>(),
     workerExecutions: new Map<string, string>(),
     workerReceipts: new Map<string, WorkerReceipt>(),
     reconciling: new Set<string>(),
-    dismissedActivity: new Set<string>(),
+    dismissedActivity,
     pendingWorkerCompletions: new Set<Promise<unknown>>(),
     pendingSubagentCompletions: new Set<Promise<unknown>>(),
     nudged: new Set<string>(),
-    completionWakeup: createCheckpointAwareWakeup(host, barrierFor),
+    completionWakeup: createCheckpointAwareWakeup(host, barrierFor, delivered),
   };
 }
 type SessionState = ReturnType<typeof createSessionState>;
@@ -1070,6 +1087,15 @@ export async function streamToResult(
 
   const final = await result;
   await observing;
+  return {
+    content: [{ type: "text", text: terminalText(final) }],
+    details: { executionId, ...final, observations },
+    ...(final.outcome === "success" ? {} : { isError: true }),
+  };
+}
+
+/** The compact terminal result the lead sees, from a collect or a completion notice. */
+export function terminalText(final: any): string {
   const summary = final.outcome === "success"
     ? final.text || "Child completed without a text result."
     : `${final.outcome}: ${final.diagnostic ?? final.text ?? "No diagnostic was reported."}`;
@@ -1080,11 +1106,7 @@ export async function streamToResult(
     ? ` · family ${independence.selectedFamily}${independence.excludedFamilies?.length ? ` · excluded ${independence.excludedFamilies.join(",")}` : ""}`
     : "";
   const receiptLine = `\n\nCompletion receipt: ${final.provider}/${final.model}:${final.effort} · ${final.kind ?? "subagent"} · ${final.profile} · ${final.cognitiveRole} · outcome ${final.outcome}${familyReceipt}${final.truncated ? " · TRUNCATED, cannot satisfy verification" : ""}`;
-  return {
-    content: [{ type: "text", text: `${summary}${receiptLine}` }],
-    details: { executionId, ...final, observations },
-    ...(final.outcome === "success" ? {} : { isError: true }),
-  };
+  return `${summary}${receiptLine}`;
 }
 
 /**
@@ -1141,8 +1163,9 @@ export function reservePending(roster: { executionId: string; running: boolean }
  * A completion signal asks for a turn. While a context checkpoint is pending or compacting, the
  * session's barrier queues that signal instead and releases it exactly once after the checkpoint settles.
  */
-export function createCheckpointAwareWakeup(pi: any, barrierFor: () => { defer(send: () => void, key?: string): boolean } | undefined) {
+export function createCheckpointAwareWakeup(pi: any, barrierFor: () => { defer(send: () => void, key?: string): boolean } | undefined, onDelivered?: (executionId: string) => void) {
   return createCompletionWakeup({
+    onDelivered,
     sendMessage: (message: any, options: any) => {
       const send = () => pi.sendMessage(message, options);
       // The coalesced normal signal holds one stable key so a later one replaces it; a

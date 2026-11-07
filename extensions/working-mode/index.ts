@@ -1,5 +1,35 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { execFile } from "node:child_process";
+import { basename } from "node:path";
+
+/** True when macOS reports battery power; false on AC, other platforms, or any error. */
+export const onBattery = () => new Promise<boolean>((resolve) =>
+  execFile("pmset", ["-g", "batt"], (error, stdout) => resolve(!error && stdout.includes("'Battery Power'"))));
+
+export const AFK_BATTERY_WARNING = "AFK on battery power: plug in the Mac, or it may sleep or run out and stop this session.";
+const ALARM_TAG = "pi-workbench-afk-battery";
+
+/** Loud macOS alarm: sound and speech every call, plus one critical dialog per session until dismissed. */
+// ponytail: each AFK session sounds its own alarm; share one alarm process if several AFK sessions overlap.
+export function batteryAlarm(session: { id: string; label: string }) {
+  const ignore = () => {};
+  const tag = `${ALARM_TAG}-${session.id.replace(/[^\w-]/g, "")}`;
+  const label = session.label.replace(/["\\\n\r]/g, "");
+  execFile("afplay", ["-v", "8", "/System/Library/Sounds/Sosumi.aiff"], ignore);
+  execFile("say", ["Plug in the Mac. Pi is AFK on battery."], ignore);
+  // pgrep exits non-zero when this session has no dialog open yet.
+  execFile("pgrep", ["-f", tag], (noDialog) => {
+    if (noDialog) execFile("osascript", ["-e", `display alert "PLUG IN THE MAC" message "AFK session: ${label}\n\n${AFK_BATTERY_WARNING} Switch that session's Attention away from AFK to stop this alarm." as critical -- ${tag}`], ignore);
+  });
+}
+
+/** Session name and folder, so the alarm tells Thomas which session to switch. */
+export function alarmSession(ctx: ExtensionContext) {
+  const folder = basename(ctx.cwd ?? "");
+  const name = ctx.sessionManager.getSessionName?.();
+  return { id: ctx.sessionManager.getSessionId?.() ?? "", label: name ? `${name} (${folder})` : folder };
+}
 
 import {
   afkPending, ALIGNMENT_RESET_TOOL, ALIGNMENT_TOOL, alignmentReachedText, alignmentResetText, alignmentResetTool, alignmentTool,
@@ -38,6 +68,35 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   let aligned = false;
   // Block sent by `/mode send` that may still wait in the steer queue, outside the session branch.
   let queued: WorkingModeDetails | null = null;
+  let powerTimer: ReturnType<typeof setInterval> | undefined;
+  let warnedOnBattery = false;
+
+  // Once AFK has started and a turn runs under it, sound the alarm every minute on battery until it is
+  // plugged in; the in-app notification appears once per unplug. `arm` is set only where a turn runs, so
+  // an idle session restored with an old AFK selection stays quiet.
+  // ponytail: polls pmset every minute; subscribe to IOKit power notifications if latency matters.
+  const afkActive = () => selected.attention === "AFK" && !afkPending(selected, aligned);
+  function stopPower() {
+    clearInterval(powerTimer);
+    powerTimer = undefined;
+    warnedOnBattery = false;
+  }
+  function watchPower(ctx: ExtensionContext, arm: boolean) {
+    if (!afkActive()) return stopPower();
+    if (powerTimer || !arm) return;
+    const session = alarmSession(ctx);
+    const check = async () => {
+      // A session disposed without session_shutdown leaves a stale ctx whose getters throw: stop there.
+      try { void ctx.hasUI; } catch { return stopPower(); }
+      const battery = await onBattery() && afkActive();
+      if (battery) batteryAlarm(session);
+      if (battery && !warnedOnBattery && ctx.hasUI) ctx.ui.notify(AFK_BATTERY_WARNING, "error");
+      warnedOnBattery = battery;
+    };
+    void check();
+    powerTimer = setInterval(check, 60_000);
+    powerTimer.unref?.();
+  }
 
   /** Next block to deliver, or null when the model already sees (or will see) the selection. */
   function pendingBlock(ctx: ExtensionContext, sent: boolean) {
@@ -78,7 +137,10 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     applied = null;
     queued = null;
     publish(ctx, "selected");
+    watchPower(ctx, false);
   });
+
+  pi.on("session_shutdown", stopPower);
 
   // A run's end means a queued steer either landed in the branch or was dropped (abort, clearQueue).
   // ponytail: a steer queued after the loop's last queue check can survive into the next run and
@@ -97,6 +159,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         queued = message.details;
         applied = { ...selected };
         publish(ctx, "applied");
+        watchPower(ctx, true);
         // Idle: starts a turn. Streaming: steers the running turn after its current tool calls.
         pi.sendMessage(message, { triggerTurn: true, deliverAs: "steer" });
         return;
@@ -118,6 +181,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
         select(axis, value);
       }
       publish(ctx, "selected");
+      watchPower(ctx, false);
       if (ctx.mode === "tui") ctx.ui.notify("Working Mode applies with the next prompt.", "info");
     },
   });
@@ -125,6 +189,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", (_event, ctx) => {
     applied = { ...selected };
     publish(ctx, "applied");
+    watchPower(ctx, true);
     const message = pendingBlock(ctx, false);
     return message ? { message } : undefined;
   });
@@ -138,6 +203,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
       const wasPending = afkPending(selected, aligned);
       aligned = true;
       publish(ctx, "applied");
+      watchPower(ctx, true);
       const text = alignmentReachedText(wasPending);
       return { content: [{ type: "text", text }], details: { alignment: selected.alignment, agreement: params.agreement } };
     },
@@ -151,6 +217,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       aligned = false;
       publish(ctx, "applied");
+      watchPower(ctx, false);
       const text = alignmentResetText(selected);
       return { content: [{ type: "text", text }], details: { alignment: selected.alignment, reason: params.reason } };
     },

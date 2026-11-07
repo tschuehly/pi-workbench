@@ -325,7 +325,7 @@ test("per-id collect returns a settling Worker snapshot without consuming its la
     harness.releaseReceipt();
     await harness.wakeup;
     assert.equal(harness.sent.length, 1, "receipt settlement still emits the normal completion wakeup exactly once");
-    assert.deepEqual(harness.sent[0].message.details, { attention: "terminal-results" });
+    assert.deepEqual(harness.sent[0].message.details, { attention: "terminal-results", delivered: ["worker-execution"], collect: [] }, "the settled Worker result rides its wakeup");
   } finally {
     harness.releaseReceipt();
     await harness.cleanup();
@@ -427,9 +427,11 @@ test("bounds the hierarchy to lead → worker → leaf with a delegating coordin
 
   const delegation = ["subagent", "subagent_collect", "subagent_status", "subagent_cancel", "subagent_steer"];
   const web = ["web_enable", "web_search", "source_check", "fetch_content", "get_search_content"];
-  assert.deepEqual(PROFILES.coordinator.tools, ["read", "bash", "grep", "find", "ls", "report_status", ...web, ...delegation]);
+  assert.deepEqual(PROFILES.coordinator.tools, ["read", "bash", "grep", "find", "ls", "report_status", "compact_and_continue", ...web, ...delegation]);
+  assert.doesNotMatch(PROFILES.coordinator.instruction, /collect it exactly once/, "a leaf's result arrives in its completion notice");
   for (const profile of Object.values(PROFILES)) {
     assert.ok(profile.tools.includes("report_status"), "every child profile can report its own status");
+    assert.ok(profile.tools.includes("compact_and_continue"), "every child can checkpoint a long context");
     assert.deepEqual(profile.tools.filter((tool) => web.includes(tool)), web, "every child can activate and use web tools");
   }
   for (const worker of ["worker_create", "worker_dispatch", "worker_retire"]) {
@@ -441,6 +443,23 @@ test("bounds the hierarchy to lead → worker → leaf with a delegating coordin
   for (const leaf of leafProfiles) {
     assert.deepEqual(PROFILES[leaf].tools.filter((tool) => delegation.includes(tool)), [], `leaf profile ${leaf} must have no delegation tool`);
   }
+});
+
+test("report_status rides along with real work instead of costing a turn", async () => {
+  const tools = new Map();
+  subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} });
+  const tool = tools.get("report_status");
+  assert.doesNotMatch(tool.description, /few minutes|report again|stale/, "no wording that invites a report every few minutes");
+  assert.match(tool.description, /latest tool call/, "the roster already derives activity from the last tool call");
+  assert.match(tool.description, /same batch as your next real tool call, never alone/);
+
+  const batch = (calls) => ({ sessionManager: { getBranch: () => [{ type: "message", message: { role: "assistant", content: calls.map((name) => ({ type: "toolCall", name })) } }] } });
+  const lone = await tool.execute("call", { status: "Reading code" }, undefined, undefined, batch(["report_status"]));
+  assert.match(lone.content[0].text, /^Reported: Reading code\. .*never alone/);
+  const riding = await tool.execute("call", { status: "Reading code" }, undefined, undefined, batch(["report_status", "read"]));
+  assert.equal(riding.content[0].text, "Reported: Reading code");
+  const unknown = await tool.execute("call", { status: "Reading code" }, undefined, undefined, undefined);
+  assert.equal(unknown.content[0].text, "Reported: Reading code");
 });
 
 test("exposes no task timeout controls with bounded independence and status parameters", () => {
@@ -667,6 +686,9 @@ test("plain adds the shared status instruction without an empty profile preamble
   const { dispatched } = await dispatchSubagentWithName({ task: "Use only this contract.", profile: "plain" });
   assert.match(dispatched.task, /^Keep going while a step needs no input from the lead/);
   assert.match(dispatched.task, /Start your final report with anything you need from the lead/);
+  // Children keep native foreground bash; one blocking wait-until call replaces sleep and tail -f polls.
+  assert.match(dispatched.task, /wait-until --timeout SECONDS/);
+  assert.match(dispatched.task, /Never wait with sleep, tail -f, or repeated checks/);
   assert.match(dispatched.task, /Assignment:\nUse only this contract\.$/);
 });
 
@@ -1046,6 +1068,7 @@ test("subagent_steer forwards the message and wakes the lead with the child's ne
   assert.equal(result.details.mode, "steer");
   assert.equal(steered[0].mode, "steer");
   assert.match(steered[0].message, /^Focus on auth\n\n.*report_status/s);
+  assert.match(steered[0].message, /with your next tool call/, "an update request does not demand a lone status turn");
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(sent.length, 0, "a report from before the steer does not wake the lead");
   push({ sequence: 2, type: "tool_start", detail: { toolName: "report_status", action: "auth tests passing" } });

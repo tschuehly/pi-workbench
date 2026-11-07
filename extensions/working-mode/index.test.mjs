@@ -2,7 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
-import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL } from "./index.ts";
+import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING } from "./index.ts";
+
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+// Fake power and alarm binaries for the whole file, so AFK tests never sound the real alarm on battery.
+const bin = mkdtempSync(join(process.env.PI_TMP ?? tmpdir(), "pmset-"));
+const power = join(bin, "power");
+const calls = join(bin, "calls");
+const dialog = join(bin, "dialog");
+writeFileSync(power, "AC Power");
+writeFileSync(calls, "");
+writeFileSync(join(bin, "pmset"), `#!/bin/sh\necho "Now drawing from '$(cat ${power})'"\n`);
+for (const name of ["afplay", "say"]) writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> ${calls}\n`);
+writeFileSync(join(bin, "osascript"), `#!/bin/sh\necho osascript >> ${calls}\necho "$@" > ${dialog}\n`);
+writeFileSync(join(bin, "pgrep"), "#!/bin/sh\nexit 1\n");
+for (const name of ["pmset", "afplay", "say", "osascript", "pgrep"]) chmodSync(join(bin, name), 0o755);
+process.env.PATH = `${bin}:${process.env.PATH}`;
 
 const cwd = "/tmp/working-mode-test";
 const agentDir = `${cwd}/agent`;
@@ -42,6 +60,86 @@ async function session(entries, gate, { factories = [], tools } = {}) {
   const last = () => requests.at(-1);
   return { session, sessionManager, requests, snapshots, blocks, last, entries: () => [sessionManager.getHeader(), ...sessionManager.getEntries()] };
 }
+
+// Runs first: later tests leave real AFK sessions whose late turns would alarm under the fake battery.
+test("AFK on battery alarms once a turn runs; AC, preparing, restored, and non-AFK sessions stay quiet", async () => {
+  const alarms = () => readFileSync(calls, "utf8").split("\n").filter(Boolean).sort();
+  writeFileSync(calls, "");
+  try {
+    const handlers = new Map();
+    let command;
+    const warnings = [];
+    workingMode({ on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, registerTool() {}, events: { emit() {} } });
+    const ctx = {
+      mode: "rpc", hasUI: true, cwd: "/work/DataRecovery",
+      sessionManager: { getBranch: () => [], buildContextEntries: () => [], getSessionId: () => "s-1", getSessionName: () => 'Nightly "merge"' },
+      ui: { setStatus() {}, notify: (text, level) => warnings.push([level, text]) },
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 1000));
+    const turn = () => handlers.get("before_agent_start")({}, ctx);
+
+    // A session restored with an old AFK selection stays quiet until a turn runs.
+    writeFileSync(power, "Battery Power");
+    const afkBlock = { type: "custom_message", customType: "working-mode", details: { schemaVersion: 2, seq: 1, selection: { ...defaults, attention: "AFK" }, aligned: false } };
+    handlers.get("session_start")({ reason: "startup" }, { ...ctx, sessionManager: { getBranch: () => [afkBlock], buildContextEntries: () => [afkBlock] } });
+    await settle();
+    assert.deepEqual(alarms(), []);
+    await command.handler("attention default", ctx);
+
+    // Non-AFK turns and AFK still preparing alignment stay quiet.
+    turn();
+    await command.handler("alignment align", ctx);
+    await command.handler("attention afk", ctx);
+    turn();
+    await settle();
+    assert.deepEqual(alarms(), []);
+    await command.handler("alignment default", ctx);
+
+    writeFileSync(power, "AC Power");
+    turn();
+    await settle();
+    assert.deepEqual(warnings, []);
+    assert.deepEqual(alarms(), []);
+
+    await command.handler("attention default", ctx);
+    writeFileSync(power, "Battery Power");
+    await command.handler("attention afk", ctx);
+    turn();
+    await settle();
+    assert.deepEqual(warnings, [["error", AFK_BATTERY_WARNING]]);
+    assert.deepEqual(alarms(), ["afplay", "osascript", "say"]);
+    // The dialog names the session to switch, with quotes stripped so AppleScript stays valid.
+    assert.match(readFileSync(dialog, "utf8"), /AFK session: Nightly merge \(DataRecovery\)[\s\S]*-- pi-workbench-afk-battery-s-1/);
+
+    // Switching Attention away from AFK stops the repeating alarm, even mid-turn.
+    const cleared = [];
+    const realClear = globalThis.clearInterval;
+    globalThis.clearInterval = (timer) => { if (timer) cleared.push(timer); realClear(timer); };
+    try { await command.handler("attention switching", ctx); } finally { globalThis.clearInterval = realClear; }
+    assert.equal(cleared.length, 1);
+    assert.equal(cleared[0]._destroyed, true);
+
+    // A session disposed without session_shutdown leaves a stale ctx; the next check stops the alarm.
+    let stale = false;
+    const staleCtx = { ...ctx, get hasUI() { if (stale) throw new Error("stale"); return true; } };
+    const realSet = globalThis.setInterval;
+    let tick;
+    globalThis.setInterval = (fn, ms) => { tick = fn; return realSet(fn, ms); };
+    try {
+      await command.handler("attention afk", staleCtx);
+      handlers.get("before_agent_start")({}, staleCtx);
+    } finally { globalThis.setInterval = realSet; }
+    await settle();
+    stale = true;
+    const stopped = [];
+    globalThis.clearInterval = (timer) => { if (timer) stopped.push(timer); realClear(timer); };
+    try { await tick(); } finally { globalThis.clearInterval = realClear; }
+    assert.equal(stopped.length, 1);
+    handlers.get("session_shutdown")();
+  } finally {
+    writeFileSync(power, "AC Power");
+  }
+});
 
 test("a mode change reaches the model as one tagged message; the system prompt never changes", async () => {
   const s = await session();
@@ -350,3 +448,4 @@ test("ask_user stays offered to the model in every Attention value", async () =>
   assert.equal(offered(), true);
   s.session.dispose();
 });
+

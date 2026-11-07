@@ -34,6 +34,12 @@ When the model already sees the selection, it only notifies "Working Mode unchan
   the next block says alignment is reached. Changing the Alignment value clears it, and the agent
   calls `alignment_reset` when the work turns to a new task that needs a new agreement. With Alignment
   Default, AFK starts at once. The snapshot's `aligned` field reports the state.
+- **Battery alarm:** once AFK has started (alignment reached, or Alignment Default) and a turn runs
+  under it, while the Mac is on battery, every minute it plays a loud
+  sound, speaks "Plug in the Mac", and opens a critical macOS alert naming the session and folder
+  (one open per session), plus an error notification once per unplug. Sleep or a drained battery
+  would stop the session. Leaving AFK in that session stops it, as does a disposed session; an idle
+  session restored with an old AFK selection stays quiet.
 - Guidance only: the `alignment_reached` and `alignment_reset` tools record state; no permissions or skill catalog change.
 
 The behavioral contract is [Working Mode](../../docs/foundation/working-mode.md).

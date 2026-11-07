@@ -13,9 +13,12 @@ import atelierExtension from "./index.ts";
 import { checkPage, formatCheck, tagBalance } from "./check-page.mjs";
 
 const CHECK = fileURLToPath(new URL("./check-page.mjs", import.meta.url));
+// The tool writes check output to its session's PI_TMP folder; keep those folders out of the real root.
+const PI_TMP_ROOT = process.env.PI_TMP_ROOT = realpathSync(mkdtempSync(path.join(process.env.PI_TMP ?? tmpdir(), "atelier-pitmp-")));
+test.after(() => rmSync(PI_TMP_ROOT, { recursive: true, force: true }));
 const noBrowser = spawnSync("agent-browser", ["--version"]).status !== 0 && "agent-browser is not on PATH: Page check browser cases skipped";
 const sha = (b) => createHash("sha256").update(b).digest("hex").slice(0, 12);
-const HEAD = /^Page check \(revision [0-9a-f]{12}, test copy at 1512×900\): /;
+const HEAD = /^Page check \(revision [0-9a-f]{12}, test copy at 1512×900 and 900×900\): /;
 
 // A sidebar with tabs and the Kernel docked in it, and two tab panels.
 const page = ({ css = "", body = (inner) => `<div class="app">${inner}</div>`, panel2 = "<p>Second view.</p>", wire = "[role=tablist] button" } = {}) => `<!doctype html><html lang="en"><meta charset="utf-8"><title>Fixture</title>
@@ -74,6 +77,17 @@ const THIRD = {
   "throws-on-click": bare(`<button aria-controls="panel" onclick="throw new Error('render failed')">Broken</button><section id="panel" hidden><p>Never renders</p></section>`),
   // Finding 4: <main> is display:contents, so its children are the <body> grid's items.
   "contents-grid": bare("<aside>Sidebar</aside><article>Content</article>", "body{display:grid;grid-template-columns:250px 1fr}main{display:contents}"),
+};
+
+// A narrow desktop window (the 900px pass): a fixed decision bar over the last card, the same with its height reserved, a
+// row only the narrow window overflows, and Kernel controls pushed over each other.
+const cards = (css) => bare(`${Array.from({ length: 4 }, (_, i) => `<article class="card"><h3>Card ${i + 1}</h3><p>CARD TEXT ${i + 1}</p></article>`).join("")}<div class="bar" atl-key="d">Decide here</div>`,
+  `.card{min-height:240px;display:flex;flex-direction:column;justify-content:flex-end;border:1px solid #ddd;padding:8px}.bar{position:fixed;left:0;right:0;bottom:0;height:90px;background:#fff;border-top:1px solid #ddd}${css}`);
+const NARROW = {
+  "bar-covers": cards(""),
+  "bar-reserved": cards("main{padding-bottom:90px}"),
+  "narrow-overflow": bare('<div style="min-width:1100px">A row wider than a narrow window</div>'),
+  "kernel-squashed": bare('<p atl-key="a" atl-decide="Yes|No|Later">Decide</p>', "[atl-ui] button+button{margin-left:-40px}"),
 };
 
 function project(fixtures = FIXTURES) {
@@ -352,6 +366,37 @@ test("update shows the new revision at once and returns the check of exactly tha
   } finally { t.stop(); s.restore(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("the tool check writes screenshots and the full report to the calling session's PI_TMP folder, without setting PI_TMP", async () => {
+  // An attended process (PI WEB daemon) hosts several sessions and has no process-wide PI_TMP.
+  const saved = { PI_TMP: process.env.PI_TMP, PI_WORKBENCH_EXECUTION_KIND: process.env.PI_WORKBENCH_EXECUTION_KIND };
+  const root = project({ page: FIXTURES.good });
+  delete process.env.PI_TMP; delete process.env.PI_WORKBENCH_EXECUTION_KIND;
+  const s = shim(), runs = [];
+  try {
+    s.use();
+    for (const id of ["session-a", "session-b"]) {
+      const tools = new Map(), handlers = {};
+      atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: () => {} });
+      const ctx = { cwd: root, isIdle: () => true, sessionManager: { getSessionId: () => id } };
+      handlers.session_start({}, ctx);
+      try { runs.push([id, await withCheck(undefined, () => tools.get("atelier").execute("id", { action: "check", page: "page.html" }, undefined, undefined, ctx))]); }
+      finally { handlers.session_shutdown(); }
+    }
+    for (const [id, res] of runs) {
+      const report = res.details.check.report;
+      assert(report, res.content[0].text);
+      assert.equal(path.dirname(path.dirname(report)), path.join(PI_TMP_ROOT, path.basename(root), id), "in the session's own folder");
+      assert(existsSync(report));
+      assert.doesNotMatch(res.content[0].text, /PI_TMP is not set/);
+    }
+    assert.equal(process.env.PI_TMP, undefined, "no process-wide PI_TMP");
+  } finally {
+    s.restore();
+    for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the Page check flags each real defect by its measured check and passes the good Pages", { skip: noBrowser, timeout: 1_200_000 }, async () => {
   const root = project();
   try {
@@ -417,6 +462,23 @@ test("the Page check flags each real defect by its measured check and passes the
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a narrow window: a fixed bar over content WARNs until its height is reserved; narrow overflow FAILs; Kernel controls over each other WARN", { skip: noBrowser, timeout: 300_000 }, async () => {
+  const root = project(NARROW);
+  try {
+    const r = {};
+    for (const name of Object.keys(NARROW)) r[name] = await checkPage(path.join(root, `${name}.html`));
+    const why = (name) => formatCheck(r[name]);
+    assert.match(why("bar-covers"), HEAD);
+    assert.deepEqual(warned(r["bar-covers"]), ["view initial view"], why("bar-covers"));
+    assert.match(why("bar-covers"), /possible text overlap\(s\): \w+ under div\.bar.*; at 900px wide: WARN \d possible text overlap\(s\): \w+ under div\.bar/);
+    assert.equal(r["bar-reserved"].status, "pass", why("bar-reserved"));
+    assert.deepEqual(failing(r["narrow-overflow"]), ["view initial view"], why("narrow-overflow"));
+    assert.match(why("narrow-overflow"), /no overflow; no text overlap; at 900px wide: overflow 11\d\dpx > 900px/);
+    assert.match(why("kernel-squashed"), /possible text overlap\(s\): Kernel button\S* \u00d7 button/);
+    assert.deepEqual(leftovers(root), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 const checkThird = async (name) => {
   const root = project({ [name]: THIRD[name] });
   try {
@@ -474,11 +536,14 @@ test("open, update and check on the atelier tool append the Page check, served f
   try {
     await withCheck(undefined, async () => {
       const opened = await t.run({ action: "open", page: "broken-grid.html" });
-      assert.match(opened.content[0].text, /^Page open: .*\n[\s\S]*\n\nPage check \(revision [0-9a-f]{12}, test copy at 1512×900\): FAIL\n[\s\S]*- FAIL {2}Kernel layout: /);
+      assert.match(opened.content[0].text, /^Page open: .*\n[\s\S]*\n\nPage check \(revision [0-9a-f]{12}, test copy at 1512×900 and 900×900\): FAIL\n[\s\S]*- FAIL {2}Kernel layout: /);
       assert.equal(opened.details.check.status, "fail");
+      const shots = opened.details.check.views.map((v) => v.screenshot);
+      assert(shots.length && shots.every((s) => s?.startsWith(path.join(PI_TMP_ROOT, path.basename(root)) + path.sep) && existsSync(s)), "screenshots in the session's PI_TMP folder");
+      assert(existsSync(opened.details.check.report));
       assert.equal(existsSync(path.join(root, "broken-grid.html.events.jsonl")), false, "the Page's own Event Log is untouched");
       const updated = await t.run({ action: "update", page: "broken-grid.html", text: "x" });
-      assert.match(updated.content[0].text, /Page check \(revision [0-9a-f]{12}, test copy at 1512×900\): FAIL/);
+      assert.match(updated.content[0].text, /Page check \(revision [0-9a-f]{12}, test copy at 1512×900 and 900×900\): FAIL/);
       assert.equal(updated.details.check.revision, sha(readFileSync(path.join(root, "broken-grid.html"))));
       assert.match((await t.run({ action: "check", page: "good.html" })).content[0].text, new RegExp(`${HEAD.source}pass`));
       const data = await t.run({ action: "check", page: "pages/data.html" });

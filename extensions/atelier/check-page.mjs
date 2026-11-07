@@ -3,13 +3,14 @@
 //   node extensions/atelier/check-page.mjs <page.html>     (exit 1 on a FAIL; 0 on pass, WARN only, or unchecked)
 // It serves a test copy beside the Page (<name>.atelier-check-<id>.html, created exclusively for this run, with its own
 // Event Log; only those files are ever deleted) through the real host with the real project root, loads it in
-// agent-browser at 1512×900 and opens the view of every [aria-controls] control once, nested ones by their click path.
+// agent-browser at 1512×900 and opens the view of every [aria-controls] control once, nested ones by their click path;
+// each view is measured again at 900×900.
 // The Page's real Event Log is never read or touched.
 // FAIL (measured; must be fixed):
 // - Kernel version in the page equals the host's; Page state: the Kernel read its Event Log.
 // - Kernel layout: hiding the Kernel's own <body> children must not move the Page's first-level boxes (a <body> grid
 //   gives them grid cells; display:contents wrappers count as their children).
-// - Per view: console and page errors; horizontal overflow (and the element reaching furthest right). Errors of a click
+// - Per view: console and page errors; horizontal overflow at either width (and the element reaching furthest right). Errors of a click
 //   that shows no view fail as well ("Errors without a view").
 // The Kernel controls probe below rewrites Page selectors; it runs after a view's measured checks and leaves the Page as
 // it found it (same specificity, no transitions), so it never changes what a FAIL measures.
@@ -17,7 +18,8 @@
 // - HTML balance: unclosed or stray end tags in the source (hidden views leak below the visible one).
 // - Kernel controls: Page CSS that changes a Kernel control's box, sizing or visibility (`aside button` also hits the
 //   Kernel panel, itself an <aside>); a Page onclick on a Kernel control.
-// - Per view: text drawn over visible other text.
+// - Per view, at both widths: text drawn over visible other text; text no scroll position frees from under an opaque fixed or
+//   sticky layer; Kernel controls over each other.
 // One full-page screenshot per view in $PI_TMP. The returned result is capped; full values are only in report.json
 // beside the screenshots. A missing or failing agent-browser, a cancel or the deadline leaves the browser checks
 // "unchecked" (what was measured before stays); it never fails open or update. The check's agent-browser daemon and
@@ -32,6 +34,7 @@ import { fileURLToPath } from "node:url";
 import { KERNEL_VERSION, createHost, imagesDir, logPath } from "./host.ts";
 
 const WIDTH = 1512, HEIGHT = 900;
+const NARROW = 900; // each view is measured again NARROW px wide: a narrow desktop window
 const DEADLINE_MS = 120_000;
 const MAX_VIEWS = 40;
 const TEXT_MAX = 6_000; // characters of formatCheck output
@@ -277,6 +280,17 @@ function viewMeasure(d) {
   boxes.sort((a, b) => a.top - b.top);
   const PAD = 2; // ignore touching boxes and line-height overlap
   const ids = new Map(), id = (el) => ids.get(el) ?? ids.set(el, ids.size).get(el);
+  const pairs = new Map();
+  // Kernel controls over each other (a squashed panel): their shown boxes, clipped like text, meet.
+  const kernelBoxes = [...document.querySelectorAll("[atl-ui] button, [atl-ui] input, [atl-ui] select, [atl-ui] textarea, [atl-ui] a, button[atl-ui]")]
+    .filter((el) => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }))
+    .map((el) => { const r = el.getBoundingClientRect(), c = clipOf(el); return { el, left: Math.max(r.left, c.left), right: Math.min(r.right, c.right), top: Math.max(r.top, c.top), bottom: Math.min(r.bottom, c.bottom) }; })
+    .filter((k) => k.right - k.left > PAD && k.bottom - k.top > PAD);
+  kernelBoxes.forEach((a, i) => kernelBoxes.slice(i + 1).forEach((b) => {
+    if (a.el.contains(b.el) || b.el.contains(a.el) || pairs.size >= 100) return;
+    if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > PAD && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > PAD)
+      pairs.set(`k${id(a.el)}-${id(b.el)}`, `Kernel ${d(a.el)} × ${d(b.el)} at ${Math.round(Math.max(a.left, b.left) + scrollX)},${Math.round(Math.max(a.top, b.top) + scrollY)}`);
+  }));
   const candidates = [];
   for (let i = 0; i < boxes.length; i += 1) {
     const a = boxes[i];
@@ -342,13 +356,36 @@ function viewMeasure(d) {
     }
     return false;
   };
-  const pairs = new Map();
   try {
     for (const [a, b] of candidates) {
       const key = `${id(a.el)}-${id(b.el)}`;
       if (pairs.has(key)) continue;
       if (collides(a, b)) pairs.set(key, `${d(a.el)} × ${d(b.el)} at ${Math.round(Math.max(a.left, b.left))},${Math.round(Math.max(a.top, b.top))}`);
       if (pairs.size >= 100) break; // ponytail: a Page this broken needs no exact count
+    }
+    // Text under a layer: at the top and the bottom of the scroll range, text an opaque fixed or sticky layer it is not
+    // in covers, where no scroll position moves it clear of that layer (a bar with no space reserved, a rail over
+    // content). ponytail: only text on screen at either end is tried; a layer that covers text only mid-Page is missed.
+    const maxY = Math.max(0, root.scrollHeight - vh);
+    for (const end of [0, maxY]) {
+      scrollTo({ left: x0, top: end, behavior: "instant" });
+      const sy = scrollY, sx = scrollX;
+      for (const x of boxes) {
+        if (pairs.size >= 100) break;
+        const t = x.top - sy, h = x.bottom - x.top, py = t + h / 2, key = `h${id(x.el)}`;
+        if (pairs.has(key) || py < 0 || py > vh) continue;
+        for (const f of [0.2, 0.5, 0.8]) {
+          const px = x.left - sx + (x.right - x.left) * f;
+          if (px < 0 || px > vw) continue;
+          const stack = document.elementsFromPoint(px, py), el = hitEl(x.el);
+          const over = stack.slice(0, order(stack, el)).find((e) => { const L = layer(e); return L && !L.contains(el) && opaque(e); });
+          if (!over) continue;
+          // The text's viewport top can range over [lo, hi] by scrolling; it is free above or below the layer.
+          const r = over.getBoundingClientRect(), lo = t - (maxY - sy), hi = t + sy;
+          const free = (from, to) => from <= to && lo <= to && hi >= from;
+          if (!free(0, r.top - h) && !free(r.bottom, vh - h)) { pairs.set(key, `${d(x.el)} under ${d(over)} at ${Math.round(x.left)},${Math.round(x.top)}`); break; }
+        }
+      }
     }
   } finally {
     document.adoptedStyleSheets = adopted;
@@ -371,7 +408,7 @@ const MEASURE = `({ view: ${evalFn(viewMeasure)}, controls: ${evalFn(viewControl
  * Returns a capped summary; report.json beside the screenshots holds the full values.
  */
 export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "agent-browser", root, source, signal, deadlineMs = DEADLINE_MS, socketRoot = path.join(homedir(), ".pi-workbench", "run") } = {}) {
-  const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT}`, revision: null, checks: [], views: [], notReached: 0, coverage: null, unchecked: [], report: null };
+  const result = { status: "pass", viewport: `${WIDTH}×${HEIGHT} and ${NARROW}×${HEIGHT}`, revision: null, checks: [], views: [], notReached: 0, coverage: null, unchecked: [], report: null };
   const hard = (name, ok, detail) => result.checks.push({ name, status: ok ? "pass" : "fail", detail });
   let page, bytes;
   try { page = realpathSync(path.resolve(pageArg)); bytes = source === undefined ? readFileSync(page) : Buffer.from(source); }
@@ -485,8 +522,18 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
       let screenshot;
       if (shots) { screenshot = path.join(shots, `view-${String(result.views.length).padStart(2, "0")}.png`); await b("screenshot", "--full", screenshot); }
       const v = m.view, overflow = v.scrollWidth > v.innerWidth;
-      result.views.push({ label, controls: item?.controls ?? null, status: errors.length || overflow ? "fail" : v.overlaps ? "warn" : "pass", errorCount: errors.length, errors,
-        overflow: overflow ? { scrollWidth: v.scrollWidth, innerWidth: v.innerWidth, widest: v.widest } : null, overlaps: v.overlaps, overlapExamples: v.overlapExamples, screenshot });
+      // The same view in a narrow window; the wide viewport comes back before anything else runs.
+      await b("set", "viewport", String(NARROW), String(HEIGHT));
+      let n, narrowShot;
+      try {
+        await sleep(300, undefined, { signal: stop });
+        n = await js(evalFn(viewMeasure));
+        if (shots) { narrowShot = screenshot.replace(/\.png$/, `-${NARROW}.png`); await b("screenshot", "--full", narrowShot); }
+      } finally { await b("set", "viewport", String(WIDTH), String(HEIGHT)); await sleep(300, undefined, { signal: stop }); }
+      const nOverflow = n.scrollWidth > n.innerWidth;
+      result.views.push({ label, controls: item?.controls ?? null, status: errors.length || overflow || nOverflow ? "fail" : v.overlaps || n.overlaps ? "warn" : "pass", errorCount: errors.length, errors,
+        overflow: overflow ? { scrollWidth: v.scrollWidth, innerWidth: v.innerWidth, widest: v.widest } : null, overlaps: v.overlaps, overlapExamples: v.overlapExamples, screenshot,
+        narrow: { overflow: nOverflow ? { scrollWidth: n.scrollWidth, innerWidth: n.innerWidth, widest: n.widest } : null, overlaps: n.overlaps, overlapExamples: n.overlapExamples, screenshot: narrowShot } });
       const k = await js(evalFn(kernelControls)); // last: it changes the Page
       kc.of = Math.max(kc.of, k.of); kc.count = Math.max(kc.count, k.count);
       for (const h of k.hits) { h.props.forEach((p) => kc.props.add(p)); h.selectors.forEach((s) => kc.selectors.add(s)); kc.examples.add(h.el); }
@@ -562,7 +609,8 @@ function summarize(r) {
     ...r,
     checks: r.checks.map((c) => ({ ...c, detail: clip(c.detail, 600), ...(c.screenshots && { screenshots: c.screenshots.slice(0, 3) }) })),
     views: r.views.map((v) => ({ ...v, label: clip(v.label, 160), controls: v.controls && clip(v.controls, 80), errors: v.errors.slice(0, 3).map((e) => clip(e)),
-      overflow: v.overflow && { ...v.overflow, widest: v.overflow.widest && clip(v.overflow.widest, 160) }, overlapExamples: v.overlapExamples.slice(0, 3).map((e) => clip(e, 160)) })),
+      overflow: v.overflow && { ...v.overflow, widest: v.overflow.widest && clip(v.overflow.widest, 160) }, overlapExamples: v.overlapExamples.slice(0, 3).map((e) => clip(e, 160)),
+      ...(v.narrow && { narrow: { ...v.narrow, overflow: v.narrow.overflow && { ...v.narrow.overflow, widest: v.narrow.overflow.widest && clip(v.narrow.overflow.widest, 160) }, overlapExamples: v.narrow.overlapExamples.slice(0, 3).map((e) => clip(e, 160)) } }) })),
     unchecked: r.unchecked.slice(0, 10).map((u) => clip(u, 300)),
   };
   while (s.views.length && JSON.stringify(s).length > PAYLOAD_MAX) { s.views.pop(); s.viewsOmitted = r.views.length - s.views.length; }
@@ -578,12 +626,17 @@ export function formatCheck(r) {
   for (const c of r.checks) lines.push(`- ${MARK[c.status]}  ${c.name}: ${clip(c.detail, 600)}${c.status === "warn" && c.screenshots?.length ? ` Inspect: ${c.screenshots.join(", ")}` : ""}`);
   if (r.views.length) lines.push(`Views (${r.views.length}${r.viewsOmitted ? `, ${r.viewsOmitted} more in the full report` : ""}):`);
   for (const v of r.views) {
+    const overflow = (o) => `overflow ${o.scrollWidth}px > ${o.innerWidth}px, widest ${o.widest ?? "unknown"}`;
+    const overlaps = (x) => `WARN ${x.overlaps} possible text overlap(s): ${x.overlapExamples.join("; ")}`;
+    const n = v.narrow, narrow = n && (n.overflow || n.overlaps) ? [`at ${n.overflow?.innerWidth ?? NARROW}px wide: ${[n.overflow ? overflow(n.overflow) : "", n.overlaps ? overlaps(n) : ""].filter(Boolean).join("; ")}`] : [];
     const what = [
       v.errorCount ? `${v.errorCount} error(s): ${v.errors.slice(0, 2).join(" | ")}` : "no errors",
-      v.overflow ? `overflow ${v.overflow.scrollWidth}px > ${v.overflow.innerWidth}px, widest ${v.overflow.widest ?? "unknown"}` : "no overflow",
-      v.overlaps ? `WARN ${v.overlaps} possible text overlap(s): ${v.overlapExamples.join("; ")}` : "no text overlap",
+      v.overflow ? overflow(v.overflow) : "no overflow",
+      v.overlaps ? overlaps(v) : "no text overlap",
+      ...narrow,
     ].join("; ");
-    lines.push(`- ${MARK[v.status]}  ${v.label}${v.controls ? ` (#${clip(v.controls, 60)})` : ""}: ${what}${v.screenshot ? ` — ${v.screenshot}` : ""}`);
+    const shotsOf = [v.screenshot, n?.screenshot].filter(Boolean).join(", ");
+    lines.push(`- ${MARK[v.status]}  ${v.label}${v.controls ? ` (#${clip(v.controls, 60)})` : ""}: ${what}${shotsOf ? ` — ${shotsOf}` : ""}`);
   }
   if (r.coverage) lines.push(`Coverage: ${r.coverage}`);
   for (const u of r.unchecked) lines.push(`- unchecked: ${clip(u, 300)}`);

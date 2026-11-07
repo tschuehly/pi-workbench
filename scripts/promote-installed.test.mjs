@@ -65,6 +65,9 @@ test("--force skips the idle check", () => {
   // 01a11a8b and five other sessions hit `workstreams: command not found`; promotion links the CLI.
   assert.equal(readlinkSync(join(dir, ".pi/agent/bin/workstreams")),
     join(dir, "pi-workbench.installed/skills/workstreams/scripts/workstreams.mjs"));
+  // Children's assignment wrapper tells them to wait with `wait-until` on PATH.
+  assert.equal(readlinkSync(join(dir, ".pi/agent/bin/wait-until")),
+    join(dir, "pi-workbench.installed/extensions/subagent/wait-until.mjs"));
 });
 
 test("sessiond-unchanged follows the daemon's imports and the lock, ignoring web-only files", () => {

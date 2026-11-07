@@ -6,6 +6,10 @@ The tool must be the only tool call in its assistant tool batch. It returns a te
 
 This is a same-session, lossy context checkpoint. The focus directs Pi's summarizer; it is not the summary itself. The extension rejects oversized inputs with an actionable length diagnostic. It does not create a durable cross-session handoff, authoritative Workstream state, or a substitute for saving and verifying repository work before compaction.
 
+## Context ceiling
+
+When a session that can call `compact_and_continue` crosses 250,000 context tokens, the `turn_end` hook adds one visible `context-ceiling` entry to the context (a boundary entry, so it starts no turn) asking the model to finish the current step and checkpoint at the next phase boundary. It fires once per crossing and re-arms when the context drops back under the ceiling. Subagent and Worker children receive the tool too; `packages/pi-execution-adapter/` keeps a child running across the settle an accepted checkpoint causes.
+
 ## Checkpoint barrier
 
 `checkpoint-barrier.mjs` makes the checkpoint atomic against background children. A background Subagent or Worker can reach terminal completion after `compact_and_continue` is accepted but before `agent_settled` fires, and its wakeup asks for a turn. The barrier blocks turn-triggering child wakes from acceptance through compaction, delivers the checkpoint result first, then releases every queued wake exactly once at the resumed turn's first `agent_start` or `agent_settled`. Releasing in the same tick as the result would race its turn start: Pi marks the session streaming only after the async `before_agent_start`, so a second triggered send runs a concurrent prompt that throws and leaves the session wedged. A failed compaction still releases them; session shutdown drops them instead of delivering them late.

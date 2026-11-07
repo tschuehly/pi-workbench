@@ -186,6 +186,35 @@ test("a child that finishes while the session reloads is delivered once to the n
   }
 });
 
+test("a background child's result rides its completion notice, and delivery collects it", async () => {
+  const { directory, resolverPath } = await fakeResolver();
+  try {
+    const entries = [];
+    const adapter = fakeAdapter("carried");
+    const lead = leadInstance({ sessionId: "carried-result", entries, adapter, resolverPath });
+    await lead.fire("session_start", { reason: "startup" });
+    const { details: { executionId } } = await lead.run("subagent", { task: "Report back", profile: "scout", cognitiveRole: "routine", background: true });
+    adapter.finish(executionId, { outcome: "success", text: "CARRIED_OK", sessionId: "child-session" });
+    for (let i = 0; i < 5; i += 1) await tick();
+
+    assert.equal(lead.completions(), 1);
+    const notice = lead.sent.at(-1).message;
+    assert.match(notice.content, new RegExp(`${executionId} \\[success\\]\\nCARRIED_OK\\n\\nCompletion receipt: anthropic/claude-test:low \u00b7 subagent \u00b7 scout \u00b7 routine \u00b7 outcome success`));
+    assert.ok(lead.roster.has(`delegate:${executionId}`), "the row stays until the notice reaches the lead");
+
+    await lead.fire("message_start", { message: { role: "custom", ...notice } });
+    assert.equal(lead.roster.has(`delegate:${executionId}`), false, "a delivered result leaves the roster like a collected one");
+    assert.match((await lead.run("subagent_status", {})).content[0].text, /0 running, 0 terminal and uncollected/);
+    assert.deepEqual((await lead.run("subagent_collect", {})).details.collected, [], "nothing is left for a collect turn");
+    assert.ok(entries.some((entry) => entry.data.executionId === executionId && entry.data.collected === true), "a reloaded runtime also sees it collected");
+    await lead.fire("agent_settled", {});
+    assert.equal(lead.completions(), 1, "a delivered notice is not re-sent");
+    await lead.fire("session_shutdown", { reason: "quit" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("every other shutdown reason cancels children", async () => {
   const { directory, resolverPath } = await fakeResolver();
   try {
@@ -262,6 +291,7 @@ test("a background Worker keeps its dispatch lock across a reload and settles it
     adapter.finish(id, { outcome: "success", text: "WORKER_OK", sessionId: "worker-session" });
     for (let i = 0; i < 50 && second.completions() === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(second.completions(), 1);
+    assert.match(second.sent.at(-1).message.content, new RegExp(`${id} \\[success\\]\\nWORKER_OK\\n\\nCompletion receipt: anthropic/claude-test:low \u00b7 worker`), "the Worker notice carries its receipt-safe result");
     const idle = await second.run("worker_status", { workerId });
     assert.doesNotMatch(idle.content[0].text, /Locked by pid/);
     assert.match(idle.content[0].text, /Last dispatch: success/);

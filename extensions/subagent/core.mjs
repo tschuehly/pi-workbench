@@ -12,8 +12,8 @@ export const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_statu
 // The web tools are the ceiling web_enable activates within: Pi drops tools missing from --tools, so a
 // web_enable-only list would leave it nothing to enable. keepChildWebToolsLazy keeps them inactive until then.
 export const WEB_TOOLS = ["web_search", "source_check", "fetch_content", "get_search_content"];
-export const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "web_enable", ...WEB_TOOLS];
-export const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found.";
+export const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "compact_and_continue", "web_enable", ...WEB_TOOLS];
+export const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found. To wait for a job, log, check, or server, make one bash call to `wait-until --timeout SECONDS` with any of `--file PATH [--match REGEX]`, `--pid PID`, `--cmd 'SHELL'`, `--url URL`, and no shorter bash timeout; it stays silent and returns when the first condition holds (exit 0) or at the timeout (exit 124). Never wait with sleep, tail -f, or repeated checks.";
 export const PROFILES = {
   scout: {
     tools: [...CHILD_TOOLS],
@@ -40,7 +40,7 @@ export const PROFILES = {
   // hierarchy stays exactly lead → Worker → leaf.
   coordinator: {
     tools: [...CHILD_TOOLS, ...DELEGATION_TOOLS],
-    instruction: "Coordinate this scope (cognitive role: coordination). You do not edit files yourself: launch one fresh bounded leaf Subagent per phase, collect it exactly once, and keep only intent, decisions, and compact child evidence in your own context. Check each leaf's evidence before you accept its result. Run at most one writing leaf at a time. Leaves never commit or publish; after their evidence passes you may make one mechanical scope-only checkpoint commit with bash. You cannot create workers.",
+    instruction: "Coordinate this scope (cognitive role: coordination). You do not edit files yourself: launch one fresh bounded leaf Subagent per phase, take its result from the completion notice (collect only what the notice names), and keep only intent, decisions, and compact child evidence in your own context. Check each leaf's evidence before you accept its result. Run at most one writing leaf at a time. Leaves never commit or publish; after their evidence passes you may make one mechanical scope-only checkpoint commit with bash. You cannot create workers.",
   },
 };
 
@@ -56,7 +56,7 @@ export const ROLE_GUIDE = "How much the child must decide; picks the model tier 
 export const MODEL_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 export const INDEPENDENT_ROLES = new Set(["review", "light-review"]);
 export const WORKER_ROLES = COGNITIVE_ROLES.filter((role) => !INDEPENDENT_ROLES.has(role));
-export const UPDATE_REQUEST = "The lead asks for a progress update: call report_status now with where you stand, then continue your assignment.";
+export const UPDATE_REQUEST = "The lead asks for a progress update: call report_status with your next tool call, saying where you stand, then continue your assignment.";
 
 export function providerOf(qualifiedModel) {
   if (qualifiedModel === undefined) return undefined;

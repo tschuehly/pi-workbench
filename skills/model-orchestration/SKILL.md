@@ -45,8 +45,8 @@ and where they differed.
 
 ## 3. Review
 
-`review` routes to the other model family at the author's tier or above, at `xhigh`, and never below
-that floor. Pass the author as `independentOfModel` from its completion receipt. To review
+`review` routes to the other model family at the author's tier or above, at `high` by default, and
+never below `medium`. Pass the author as `independentOfModel` from its completion receipt. To review
 frontier work, name the other family's strong model as `modelOverride`; the family check still
 applies. Size how many reviewers a conclusion needs with [Checking](references/checking.md).
 

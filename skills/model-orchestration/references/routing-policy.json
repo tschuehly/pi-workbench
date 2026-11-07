@@ -1,8 +1,7 @@
 {
-  "version": 5,
+  "version": 6,
   "quotaProviders": {
     "openai-codex": "codex",
-    "github-copilot": "copilot",
     "anthropic": "claude"
   },
   "models": {
@@ -11,8 +10,7 @@
     "sonnet": { "provider": "anthropic", "quotaProvider": "claude", "model": "claude-sonnet-5-5" },
     "astra": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-astra" },
     "sol": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6.1-sol" },
-    "luna": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-luna" },
-    "grok": { "provider": "github-copilot", "quotaProvider": "copilot", "model": "grok-4.7" }
+    "luna": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-luna" }
   },
   "tiers": {
     "strong": ["astra", "opus"],
@@ -23,9 +21,9 @@
   "roles": {
     "routine": { "tier": "light", "effort": "medium" },
     "implementation": { "tier": "standard", "effort": "medium" },
-    "frontier": { "tier": "strong", "effort": "xhigh", "minEffort": "xhigh" },
+    "frontier": { "tier": "strong", "effort": "high", "minEffort": "medium" },
     "coordination": { "tier": "standard", "effort": "medium" },
-    "review": { "tier": "standard", "effort": "xhigh", "minEffort": "xhigh", "independent": true, "thirdFamily": "grok" },
-    "light-review": { "tier": "light", "effort": "high", "independent": true, "thirdFamily": "grok" }
+    "review": { "tier": "standard", "effort": "high", "minEffort": "medium", "independent": true },
+    "light-review": { "tier": "light", "effort": "high", "independent": true }
   }
 }

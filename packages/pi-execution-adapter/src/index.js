@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -18,7 +18,7 @@ export class PiRpcExecutionAdapter {
     // A loaded machine (parallel Maven builds, renders) can take well over 15 s to start a child Pi.
     this.defaultStartupTimeoutMs = options.startupTimeoutMs ?? ((value) => Number.isSafeInteger(value) && value > 0 ? value : 60_000)(Number(process.env.PI_WORKBENCH_STARTUP_TIMEOUT_MS));
     this.bindingMaxAgeMs = options.bindingMaxAgeMs ?? 10 * 60_000;
-    this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write", "report_status", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content", ...DELEGATION_TOOLS]);
+    this.hostTools = new Set(options.hostTools ?? ["read", "bash", "grep", "find", "ls", "edit", "write", "report_status", "compact_and_continue", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content", ...DELEGATION_TOOLS]);
     this.clock = options.clock ?? (() => new Date());
     this.spawn = options.spawn ?? nodeSpawn;
     this.killGraceMs = options.killGraceMs ?? 2_000;
@@ -245,6 +245,11 @@ export class PiRpcExecutionAdapter {
       else if (delta?.type === "thinking_start" || delta?.type === "thinking_delta") this.#emit(state, "thinking_progress", { characters: String(delta.delta ?? "").length });
       return;
     }
+    // The checkpoint's resume message (extensions/context-checkpoint, compacted or failed) starts the resumed run.
+    if (event.type === "message_end" && event.message?.role === "custom" && event.message.customType === "context-checkpoint") {
+      state.checkpointPending = false;
+      return;
+    }
     if (event.type === "message_end" && event.message?.role === "assistant") {
       state.finalText = assistantText(event.message);
       state.finalStopReason = event.message.stopReason;
@@ -264,9 +269,14 @@ export class PiRpcExecutionAdapter {
       const action = state.toolActions.get(event.toolCallId) ?? String(event.toolName ?? "tool");
       state.toolActions.delete(event.toolCallId);
       this.#emit(state, "tool_end", { toolCallId: event.toolCallId, toolName: event.toolName, action, isError: event.isError === true });
+      // An accepted checkpoint ends this run; Pi then compacts and resumes the child in a new run.
+      if (event.toolName === "compact_and_continue" && event.isError !== true && event.result?.details?.accepted === true) state.checkpointPending = true;
     }
     else if (event.type === "extension_error") this.#emit(state, "diagnostic", { message: bounded(String(event.error ?? "Extension error"), 2_000) });
-    else if (event.type === "agent_settled") void this.#completeSuccess(state);
+    else if (event.type === "agent_settled") {
+      if (state.checkpointPending) this.#emit(state, "checkpoint_pending");
+      else void this.#completeSuccess(state);
+    }
   }
 
   #scheduleSettlementProbe(state) {
@@ -279,6 +289,7 @@ export class PiRpcExecutionAdapter {
 
   async #probeSettlement(state) {
     if (state.done || state.completing || state.cancelKind !== undefined) return;
+    if (state.checkpointPending) return this.#scheduleSettlementProbe(state);
     state.completing = true;
     try {
       const current = await this.#command(state, "get_state", {}, this.controlTimeoutMs);
@@ -304,6 +315,13 @@ export class PiRpcExecutionAdapter {
     state.completing = true;
     try {
       const current = await this.#command(state, "get_state", {}, this.controlTimeoutMs);
+      // An extension may start a run from agent_settled (a completion notice, a checkpoint resume);
+      // Pi runs it after emitting the event. Wait for that run's own settle; the probe backs it up.
+      if (current?.isStreaming === true || current?.pendingMessageCount > 0) {
+        state.completing = false;
+        this.#scheduleSettlementProbe(state);
+        return;
+      }
       await this.#finishSuccess(state, current);
     } catch (error) {
       this.#settleFailure(state, "execution_failed", errorMessage(error));
@@ -538,12 +556,27 @@ function cleanText(value) {
   return stripVTControlCharacters(String(value ?? "")).replace(/\s+/g, " ").trim();
 }
 
+// Names a command only by an executable known to be safe to show: a fixed set of build tools (with a
+// safe first argument), or anything installed in Pi's own bin directory, such as `wait-until`. Every
+// command position is considered, so `cd repo && npm test` still names npm. Arguments show only for the
+// first command: a later "command" may be text inside quotes.
+const SAFE_EXECUTABLES = ["npm", "pnpm", "yarn", "git", "node", "python", "python3", "mvn", "gradle", "gradlew", "cargo", "go"];
 function safeCommandName(value) {
-  const parts = cleanText(value).split(" ");
-  const executable = parts[0]?.split(/[\\/]/).at(-1);
-  if (!["npm", "pnpm", "yarn", "git", "node", "python", "python3", "mvn", "gradle", "gradlew", "cargo", "go"].includes(executable)) return undefined;
-  const safe = parts.slice(1, executable === "npm" && parts[1] === "run" ? 3 : 2).filter((part) => /^[\w.:-]+$/.test(part) && !/(?:token|secret|password|key)/i.test(part));
-  return [executable, ...safe].join(" ");
+  for (const [index, segment] of String(value ?? "").split(/[;&|\n]+/).entries()) {
+    const parts = cleanText(segment).split(" ");
+    const executable = parts[0]?.split(/[\\/]/).at(-1);
+    if (piBinNames().has(executable)) return executable;
+    if (!SAFE_EXECUTABLES.includes(executable)) continue;
+    if (index > 0) return executable;
+    const safe = parts.slice(1, executable === "npm" && parts[1] === "run" ? 3 : 2).filter((part) => /^[\w.:-]+$/.test(part) && !/(?:token|secret|password|key)/i.test(part));
+    return [executable, ...safe].join(" ");
+  }
+  return undefined;
+}
+
+function piBinNames() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR?.replace(/^~(?=$|\/)/, homedir()) ?? join(homedir(), ".pi", "agent");
+  try { return new Set(readdirSync(join(agentDir, "bin"))); } catch { return new Set(); }
 }
 
 function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {

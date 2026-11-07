@@ -54,9 +54,9 @@ lead runs a **frontier panel**: the same frozen brief to Astra and to Fable, com
 | --- | --- | --- | --- | --- |
 | `routine` | `mechanics`, `investigation` | Light | GPT-6 Luna `xhigh` | Luna `max`; Sonnet 5 `high` |
 | `implementation` | `implementation`, `problem-solving` | Standard | Claude Opus 5.5 `high` | Sol `high`, to test whether Opus is worth its Claude quota; Luna `max` for AFK work with an accepted plan |
-| `frontier` | `design`, `escalation` | Strong | GPT-6 Astra `xhigh` | Fable 5.1 `xhigh`; the Astra + Fable panel |
+| `frontier` | `design`, `escalation` | Strong | GPT-6 Astra `high` | Fable 5.1 `xhigh`; the Astra + Fable panel |
 | `coordination` | `coordination` | Standard | Claude Opus 5.5 `high` | — |
-| `review` | `independent-review`, `challenge`, `independent-judgment` | Standard or above | Opus 5.5 or Sol `xhigh`, whichever family differs from the author; for frontier work, the other family's strong model by name | Sol vs Opus on the same review |
+| `review` | `independent-review`, `challenge`, `independent-judgment` | Standard or above | Opus 5.5 or Sol `high`, whichever family differs from the author; for frontier work, the other family's strong model by name | Sol vs Opus on the same review |
 
 The old role names are removed, not aliased.
 
@@ -80,7 +80,8 @@ still answers simple steps quickly. Choose effort by latency tolerance and remai
 - Avoid `low`: well-defined tasks still meet ambiguous context.
 - `max` may force thinking on every request. It is an evaluation arm, not a default.
 
-`frontier` and `review` have an `xhigh` floor: an effort override may raise it, never lower it.
+`frontier` and `review` default to `high` with a `medium` floor: an effort override may raise the
+default or lower it to `medium`, never below.
 
 ### Working Mode opens model slots
 
@@ -106,7 +107,7 @@ When the default model is unavailable, lacks the effort, or has fresh exhausted 
 selects the tier partner at the same effort. Routing never moves to another tier. The receipt and
 the launch message record the fallback and its reason. The author family is the model that actually
 ran, so later independence checks route away from it. A `review` fallback skips candidates from the
-author's family and ends at the third family (Grok through Copilot). An explicit model has no
+author's family; with that family's model unavailable, review blocks. An explicit model has no
 fallback. Unknown roles and both tier models unavailable fail closed.
 
 ### Panels
@@ -137,13 +138,12 @@ The guidance targets Opus 5.5. The evaluation compares each new profile sentence
 profile-free `plain` arm on every model, so its effect on Sol, Astra, and Luna is measured rather
 than assumed.
 
-### Checking panels and GitHub Copilot
+### Checking panels with two families
 
-For `high` and `critical` consequence, a checking panel needs two reviewers from distinct
-non-author families. With Anthropic and OpenAI only one non-author family exists, so GitHub
-Copilot `grok-4.7` supplies the second family when Copilot quota is fresh and not exhausted.
-Otherwise the panel runs two lenses from the one non-author family and reports itself as
-single-family. `critical` still requires the full panel and does not accept this degradation.
+Routing uses only Anthropic and OpenAI, so a change has one non-author family. A `high` panel
+runs as one reviewer and records itself as single-family. For `critical` work the author swaps to
+OpenAI: a Codex implementer writes the change, and Opus plus a different OpenAI model review it in
+fresh contexts with distinct lenses (see `skills/model-orchestration/references/checking.md`).
 
 ## Evaluation
 

@@ -495,7 +495,9 @@ async function caller(api: Api, c: Context) {
 function childTools(api: Api, names: readonly string[]) {
 	const byName = new Map<string, ToolRegistration>();
 	for (const { tool } of api.registry.tools()) if (!byName.has(tool.name)) byName.set(tool.name, tool);
-	const tools = names.flatMap((name) => byName.get(name) ?? []);
+	// ponytail: legacy children gained compact_and_continue (main 0bfd282); a Durable child settles when its run ends, so
+	// it would report before its continuation. Offer it once the reporter waits for the continuation's run.
+	const tools = names.flatMap((name) => (name === "compact_and_continue" ? [] : byName.get(name) ?? []));
 	const lazy = byName.has("web_enable") ? WEB_TOOLS : [];
 	return { tools, modelTools: tools.filter((tool) => !lazy.includes(tool.name)) };
 }
