@@ -240,6 +240,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
         ].filter(Boolean).join("\n"), { url: opened.url, kernel: opened.kernel, replayed: opened.replayed, generation: opened.generation });
       }
       if (!host!.isOpen(page)) throw new Error(`Open ${params.page} first (action open).`);
+      host.receiving(page); // after a takeover nothing here may write: no stored revision, no restore
       // Kernel 3.0 actions: refused on a Page that loads an older Kernel (2.x Pages stay as they are).
       const kernel = pageKernel(page), v3 = Number.parseInt(kernel) >= 3;
       const only3 = () => { if (!v3) throw new Error(`${params.action} needs Atelier Kernel 3.0; this Page loads Kernel ${kernel}.`); };
@@ -263,8 +264,8 @@ export default function atelierExtension(pi: ExtensionAPI) {
         const source = readFileSync(page);
         // Kernel 3.0: the Working copy becomes the next stored revision, which the Page serves from now on.
         const revision = v3 ? storeRevision(page) : undefined;
-        updated = true;
         const tabs = host.update(page, params.text, revision);
+        updated = true;
         const result = await checked(tabs ? `Update sent to ${tabs} connected tab(s); the owner sees this revision now.` : "No tab is connected; the Page shows this version when it is next opened.", { tabs, revision }, source);
         if (revision) result.content.push({ type: "text", text: `Stored as revision ${revision}; the Page shows it until the next update.` });
         return result;

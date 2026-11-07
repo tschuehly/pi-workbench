@@ -678,6 +678,8 @@ export function createHost(options: {
     async open(page: string) { return bind(page, (check) => claimPage(page, sessionId, label, undefined, check)); },
     /** Moves the Page's receiver here from a live session of this process, at the generation the caller was shown, once that session is idle; the URL and open tabs stay. */
     takeover,
+    /** Throws unless this session still receives the Page: every action that writes checks it first. */
+    receiving(page: string) { receiving(page); },
     agent(page: string, entry: Record<string, unknown>) { return receiving(page).ep.append(page, { ...entry, origin: "agent" }); },
     /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */
     update(page: string, note?: string, revision?: number) {

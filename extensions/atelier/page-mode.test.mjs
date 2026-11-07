@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -203,4 +203,42 @@ test("a run ending with text and no update gets one correction and records a sli
   assert.equal(report.slips.corrected, 1);
   assert.deepEqual(report.slips.bySession, { [id]: 2 });
   assert.deepEqual(Object.values(report.slips.byDay), [2]);
+});
+
+// Two sessions of one process share the Session Page: the second takes it over at the generation its lock names.
+async function takenOver() {
+  const a = await session(), b = await session();
+  await a.session.prompt("/mode surface page");
+  const { url, page } = await a.sessionPage();
+  const { generation } = JSON.parse(readFileSync(`${page}.events.jsonl.lock`, "utf8"));
+  b.reply(b.tool({ action: "takeover", page, generation }), fauxAssistantMessage(""));
+  await b.session.prompt("take it");
+  const [took] = b.results("atelier");
+  assert.equal(took.isError, false, b.text(took));
+  return { a, b, url, page };
+}
+const revisionsOf = (page) => { try { return readdirSync(`${page}.revisions`).sort(); } catch { return []; } };
+
+test("after a takeover the former receiver's update stores nothing and its restore changes nothing", async () => {
+  const { a, page } = await takenOver();
+  const edited = readFileSync(page, "utf8").replace('<main atl-key="main"></main>', '<main atl-key="main"><p atl-key="late">Late edit</p></main>');
+  writeFileSync(page, edited);
+  a.reply(a.tool({ action: "update", page, text: "Late" }), a.tool({ action: "restore", page, revision: 1 }), fauxAssistantMessage(""));
+  await a.session.prompt("keep going");
+  const [update, restore] = a.results("atelier");
+  assert.equal(update.isError, true, a.text(update));
+  assert.match(a.text(update), /handed over/);
+  assert.deepEqual(revisionsOf(page), ["1.html"], "no revision stored");
+  assert.equal(restore.isError, true, a.text(restore));
+  assert.equal(readFileSync(page, "utf8"), edited, "the Working copy is unchanged");
+});
+
+test("a rejected update leaves the served Page unchanged", async () => {
+  const { a, url, page } = await takenOver();
+  const before = await served(url);
+  writeFileSync(page, readFileSync(page, "utf8").replace('<main atl-key="main"></main>', '<main atl-key="main"><p atl-key="late">Late edit</p></main>'));
+  a.reply(a.tool({ action: "update", page, text: "Late" }), fauxAssistantMessage(""));
+  await a.session.prompt("keep going");
+  assert.equal(a.results("atelier")[0].isError, true);
+  assert.equal(await served(url), before);
 });
