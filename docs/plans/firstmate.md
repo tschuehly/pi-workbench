@@ -1,7 +1,9 @@
 # FirstMate: one coordinator for all sessions
 
-**Status: owner-approved design (2026-10-06), nothing implemented.** [Decision 127](../foundation/decisions.md)
-replaces Decision 103 and authorizes this plan. It supersedes the rejected
+**Status: deferred, not being built (2026-11-07).** Thomas closed the FirstMate Workstream without implementation:
+`ask_user` question chips in Chat and Atelier Decisions cover collecting decisions. The design below is kept as
+reference. [Decision 127](../foundation/decisions.md) (owner-approved 2026-10-06, deferred 2026-11-07) replaced
+Decision 103 and authorized this plan. It supersedes the rejected
 [coordination-mate plan](firstmate-coordination-mate.md); the [Chat trial](firstmate-workbench-chat-trial.md) and
 [PI WEB crew-backend audit](firstmate-pi-web-crew-backend.md) of the external tool remain evidence.
 

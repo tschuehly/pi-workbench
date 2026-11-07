@@ -1,147 +1,143 @@
 # Workbench UI plan
 
-**Current plan:** Checkpoint 1 (text input) shipped 2026-08-31. Thomas accepted on 2026-09-20 that
-the next slices are Workstream re-entry and direct Working Mode controls, built and reviewed through
-Workbench Chat, with the files pane after them. Evidence: the
-[session-interaction analysis](../research/reports/session-interactions-2026-09-20.md).
+**Current state:** the Workbench client in the PI WEB fork (`origin/pi-workbench`) is Thomas's daily
+Chat surface: several Chats per window in Tabs or Grid, a Workstream chooser, a Files pane and
+in-composer questions. Further work follows the owner direction of 2026-11-07 below and friction
+from real use.
 
 This plan replaces the archived PI WEB shell, plugin-customization, unified-navigation, and
 prototype-fidelity plans.
 
-## What we are building
+## What the client is
 
-One native macOS window represents one Pi Chat.
-
-A new window first asks for a workspace and an existing or new session. After selection, the window
-shows the Chat. A workspace-scoped file search opens a selected file on the right while Chat stays
-visible on the left.
+A native macOS window (`apps/pi-web-macos/`) hosts the Workbench web client, which owns a per-window
+working set of Chats. Each Chat is one PI WEB session.
 
 ```text
 Pi Workbench.app window
-  -> Workbench Chat and file client
+  -> Workbench client (Tabs or Grid of Chats, chooser, Files)
   -> PI WEB HTTP/WebSocket clients
   -> PI WEB server and session daemon
-  -> Pi session
+  -> Pi sessions
 ```
 
-## Build order
+## What shipped
 
-### Checkpoint 1: fix text input
+### Windows, tabs and Grid
 
-Mount PI WEB's existing `PromptEditor` with the selected Chat. The owner must be able to use normal
-macOS text editing instead of composing in the terminal.
+- A window holds several Chats. With one Chat it shows a slim bar (status, title, Workstream, tools,
+  Add); a second Chat turns it into a Grid. `⌃G` toggles Grid and Tabs.
+- **Tabs** use one tinted row: the Chat tabs share it with the Chat menu, Add and Grid/Tabs. A
+  Workstream row appears only when two or more Workstreams are open; Chats without a Workstream are
+  top-level tabs. Crowded rows scroll the tabs only.
+- **Grid** tiles are uniform, resizable by dragging dividers (kept per window), page when crowded,
+  and carry a tinted Workstream edge and title. Focus never reshapes tiles; each Chat stays mounted
+  with its transcript, draft, questions and scroll.
+- Each Chat is owned by exactly one window; Chats move between windows by menu or drag. A new window
+  starts empty. The macOS app restores windows, frames and working sets on relaunch. Native AppKit
+  tabbing stays disabled; tabs belong to the web client.
+- Files, session tree, session info, Workbench settings (scale, theme, density) and notifications
+  live in one Chat menu.
 
-This checkpoint is done when an attended real Chat proves:
+### Chooser and Workstreams
 
-- multiline editing, selection, copy and paste, undo and redo, and normal macOS navigation shortcuts;
-- durable drafts and attachments;
-- send, streaming, steer, stop, and inline question answers;
-- model and session status, formatted messages, tool results, live activity, transcript paging, and
-  correct scroll behavior; and
-- reopening an existing session after the app restarts.
+- The chooser lists open Workstreams as re-entry cards: goal, next action and actor, open-question
+  warnings, live-session dots, and a distinct colour per Workstream. Open Human Tasks are answerable
+  from the card and recorded in the Workstream store.
+- **Open session** resumes the session that wrote the newest checkpoint; a new Chat can start inside
+  a Workstream. New Chats remain standalone PI WEB sessions unless started from a Workstream.
 
-Use this checkpoint for real work before starting the file pane.
+### Transcript and composer
 
-### Checkpoint 2: add files beside Chat
+- Every transcript kind lines up on one left rail: no bubbles, a 3px bar whose colour names the kind
+  (you, assistant, technical step, failure, question, notice), and one fold chevron everywhere.
+  Tool usage folds; thinking stays visible; a single routine step is its own row.
+- Composer: PI WEB's Prompt Editor with Enter to steer, queue promotion, Stop returning queued text,
+  Working Mode controls in reach, and per-message Revert to here / Edit and resend.
 
-Add a toggleable right-hand file pane. Adapt useful viewing and safe editing behavior from PI WEB,
-but replace the persistent tree with workspace-scoped file search (Cmd+P or a button). Do not import
-the old plugin panel, upload controls, Git, or Terminal.
+### Questions
 
-This checkpoint is done when an attended Chat-and-file session proves:
+- `ask_user` posts asynchronous question sets. They appear as chips above the composer with a short
+  Markdown context drawer, and tabs show open-question counts. The chips replaced the earlier
+  per-Chat Questions pane.
+- `request_attention` marks a tab as needing Thomas until he views the Chat or sends it a message,
+  and raises a "Needs you" desktop notification routed to the window that owns the Chat.
 
-- opening and closing Files does not disturb Chat;
-- search finds files only within the selected workspace, including untracked files, with honest pagination;
-- text and supported images render correctly and unsupported files have a clear fallback;
-- text files can be edited, saved, and reloaded;
-- save failures remain visible;
-- switching files or closing the pane never silently discards unsaved edits; and
-- a stale editor cannot overwrite newer work.
+### Files
 
-For stale-save protection, the editor sends the version it loaded as a PI WEB runtime write
-precondition. If Pi or another process changed the file, save must fail without changing the newer
-content. The owner can then reload or explicitly choose to overwrite.
+- A toggleable right-hand pane with a lazy file tree and search-backed filter (`⌘P`), and one
+  CodeMirror live editor (Markdown Live/Raw, code with line numbers).
+- While a file is open, agent edits appear inline as reviewable hunks. `⌘S` saves against the loaded
+  version; a conflicting save or deleted file keeps Thomas's text. Switching files, Chats or machines
+  never drops unsaved edits.
+- Chat links with line ranges open the file at those lines. Images, PDFs and local videos (HTTP
+  Range) preview in the pane; other binaries offer Show in Finder or Download.
 
-## Behavior shared by both checkpoints
+### Activity and session lifetime
 
-- Keep the existing AppKit `WKWebView` wrapper and PI WEB lifecycle management.
-- A new Chat is a standalone PI WEB session; it does not create a Workstream.
-- Identify every Chat by machine, project, workspace, and session.
-- Make the Workbench client the default web root in the PI WEB fork.
-- `Command-N` opens another independent Chat window.
-- Remove native tabbing: New Tab, `Command-T`, tab navigation, Merge All Windows, and tab creation
-  from same-origin links.
-- Closing or reloading one window must not restart the session daemon or disturb another Chat.
-- Two windows must not share selection, drafts, scroll, files, or live events.
+- The Activity roster starts collapsed and shows one line per delegate: state, model nickname and
+  effort letter, its own `report_status` line, freshness, and elapsed time.
+- A session daemon restart records sessions interrupted mid-turn and resumes each with a quiet
+  restart notice. Sessions idle for two hours with no background work unload.
+- Model-callable bash runs in the background with Activity status and compact completion cards.
 
-## Not in this release
+## Owner direction (2026-11-07)
 
-- Workstreams or cross-Chat attention
-- File upload, Git, or Terminal
-- Message trees, child-execution inspectors, or editor tabs
-- Permanent project or session navigation panes
+Intended state, decided by Thomas on 2026-11-07 ([Decision 162](../foundation/decisions.md)):
+
+- **Base:** PI WEB plus Pi Durable stays the base; T3 is not adopted as a base. Borrow T3
+  mechanisms where they help: GitHub credential and API patterns, HTML render and preview, and
+  sidebar attention states. Keep T3's MIT notice with any copied code.
+- **Phone access:** after the Durable rebuild, PI WEB on the phone over Tailscale. No separate
+  pocket client.
+- **GitHub:** deferred inside Workbench; agents keep using the `gh` CLI.
+- **Teammate distribution (Embabel):** after the base settles.
+- **Learning loop:** Thomas's manual export, run on request only. No API source and no schedule.
+
+## Not built
+
+- GitHub review or PR views inside Workbench (deferred, above)
+- Phone client before the Durable rebuild
+- Terminal and editor tabs
+- Message trees or child-execution inspectors beyond the Activity roster
 - Shell profiles, plugin-composed layout, dashboards, or portfolio views
 - A native Swift Chat implementation
-- Mobile or coarse-pointer clients
 - A redesign of PI WEB authentication, persistence, server, or session daemon
-
-## How each checkpoint ships
-
-1. State the user-visible outcome and behavior that must remain unchanged.
-2. Implement the smallest complete path through real PI WEB runtime seams.
-3. Run the controlled no-model fixture.
-4. Pass the attended use described above.
-5. Use the result before adding more scope.
 
 Choose later work from friction observed in actual use, not from an archived backlog or prototype
 matrix. Historical designs may provide evidence; they do not create scope.
 
+## How each change ships
+
+1. State the user-visible outcome and behavior that must remain unchanged.
+2. Implement the smallest complete path through real PI WEB runtime seams.
+3. Run the controlled no-model fixture and the PI WEB e2e specs for the touched area
+   (`e2e/workbenchWindows.spec.ts`, `e2e/workbenchFiles.spec.ts`).
+4. Thomas accepts it in installed use.
+
 ## Automated verification
 
-Use `packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs` for the replacement
-client. Keep its isolated `HOME`, data, session, socket, port, and browser roots. The runner was
-renamed after the replacement scenario passed.
+Use `packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs` for the client. Keep
+its isolated `HOME`, data, session, socket, port, and browser roots.
 
 Run it from the Workbench repository:
 
 ```sh
-root="/tmp/workbench-chat-acceptance-$$"
+root="$PI_TMP/workbench-chat-acceptance-$$"
 test ! -e "$root"
 node packages/pi-web-integration/scripts/run-workbench-chat-acceptance.mjs \
   --pi-web-root ../pi-web \
   --root "$root"
 ```
 
-Acceptance requires a passing run and removal of the owned runtime root and processes. The final
-fixture must also prove:
+Acceptance requires a passing run and removal of the owned runtime root and processes. The fixture
+proves:
 
 - a fresh window shows the chooser, not the legacy PI WEB shell;
 - new and existing sessions use the correct complete identity;
 - two windows remain isolated;
 - stale file saves are rejected; and
 - closing, reloading, or replacing the client leaves other sessions and the session daemon running.
-
-## Accepted slices after Checkpoint 1
-
-Each slice is about 300 lines, ships alone, and is accepted by Thomas using it in Workbench Chat.
-
-| Slice | Outcome for Thomas | Status |
-| --- | --- | --- |
-| 2a | The chooser lists open Workstreams; each shows a re-entry card (stored goal, one next action with its actor, conflict and open-question warnings, folded Now / So far / About / Continue); **Open session** opens the session that wrote the newest checkpoint | shipped in the PI WEB fork (`7e783b1a`); store `overview.replaced` and `GET /sessions/locate/:sessionId` support it |
-| 2b | Answer open Human Tasks from the card; the answer is recorded in the store, not only in chat | shipped in the PI WEB fork (`2dff591a`); routed Chat reload recovery shipped in `76d859d3` |
-| 1a | `/mode alignment align` works in Chat and never voids an open `ask_user` question | implemented in Workbench (`b20a205`, `0ab9eab`) and PI WEB (`89c31764`); attended check pending |
-| 1b | Extensions publish a disposable per-session state snapshot that the client can read | implemented for Working Mode and child activity (`0ab9eab`, `f1f040c`, `89c31764`); attended check pending |
-| 1c | Segmented Alignment and Checking buttons in the Chat window | implemented in PI WEB (`89c31764`); attended check pending |
-| 3 | Running and uncollected child agents visible in the window | implemented in Workbench and PI WEB (`f1f040c`, `89c31764`); attended check pending |
-| 4 | Mode content that measurably changes behavior | after evidence from the weekly analysis names one change |
-
-Additional owner-requested interaction fixes shipped in the PI WEB fork: Workstream starts now record
-pending/confirmed association and preload the continuation draft; Enter steers while the secondary
-action queues; Stop restores queued text; queue rows can promote one or all messages (`32ed0ad4`).
-The transcript is flat and neutral, keeps thinking visible, and collapses only tool usage (`fe7fbbea`).
-Selected Chats can request desktop notifications for completion, questions, dialogs, and errors
-while the window is unfocused (`a27df255`). These runtime-backed changes need one session-daemon
-restart before attended verification.
 
 ## Chat stories from attended use
 
@@ -162,27 +158,22 @@ second entry for the same want.
 | 24 Fast, durable session entry | **closed** on 2026-09-21. Routed reload recovery shipped (`76d859d3`). Session-open latency was measured and not reproduced: click-to-first-message was 113–155 ms for 37-, 249-, and 509-message sessions, a deep-link reload rendered the full transcript in ~240 ms, and the API answered `messages` in 8–20 ms, so no optimisation was made and Thomas closed the story. Reopen only with a concrete slow case |
 | 25 Readable on every surface | the Workbench shell now applies the theme and follows `prefers-color-scheme` live (`ece7c4d1`); border-to-surface contrast raised from 1.4–1.8:1 to at least 3:1 in every theme, guarded by a WCAG test (`09a79b07`); `--pi-border-muted` now means hairline separators only, with 21 interactive boundaries moved to `--pi-border` (`828e182c`); the `index.html` inline fallback matches the default `github-dark` theme value for value, guarded by a test that parses the `:root` block (`04694c84`); the phone layout is verified and fixed (`83f249f3`): the workspace select no longer stretches the chooser card past the viewport and hides Settings, Working Mode's Checking options stay reachable, the shell honours safe-area insets, and nothing overflows at 320, 360, 390 or landscape |
 | 26 Live work visible from the overview | shipped in the PI WEB fork (`947ab6bf`): the Workbench shell now passes the per-session status and activity it already receives into the Workstream chooser and All sessions, showing a live dot and what each session is doing; a collapsed row now carries the same indicator (`cfdd5b53`), which needed no Workstream-store or protocol change: the client inverts the lookup and resolves each live session's Workstream through the existing `listWorkstreams({ sessionId })` query, once per session rather than per render, forgetting an unmatched or failed lookup so a session that joins a Workstream later still lights up |
-| 27 Workstream colour identity | source treatment under revision: the chooser/card still use an id-derived hue (`68ea8512`), while Chat replaces the unexplained initials and literal label with the title and stronger color border; installed visual acceptance pending |
+| 27 Workstream colour identity | shipped in the PI WEB fork: distinct colours in creation order with the Workstream title in Grid tile bars (`b98e8064`), tinted tab row and tiles (`617e64e9`, `a7752684`); installed acceptance not recorded |
 | 28 Automatic Workstream re-entry | source wiring under review: only a newly confirmed linked Chat after a three-hour `user`-role interval invokes full orientation; existing Chats and saved continuation drafts remain untouched; installed acceptance pending |
 | 29 Transcript role filter | owner revised the filter: Everything by default, filter-icon choices Human only, Assistant only, and Human + Assistant; the latter two exclude assistant thinking, tool calls and results. Source revision and installed acceptance pending |
+
+| 30 Responsive shell work | shipped in Workbench: model-callable bash runs in the background with Activity status (`b4cda2e`), foreground calls continue in the background after 30 seconds (`d5cde77`) |
 
 Decisions already taken: Resume opens the existing session; modes stay guidance only; the
 Workstream-level overview replaces the earlier `goal.set` idea; the ten-variant launcher prototype
 and the context-view prototypes are superseded by the shipped card and the `agent-audit` explorer.
 
-## Later, only if use demands it
-
-Files beside Chat (Checkpoint 2 above) now includes the owner-requested workspace file search.
-Terminal, Git, editor tabs, and history remain uncommitted until real use asks for them.
-
-Keep one window per Chat unless real use proves that model wrong.
-
 ## Ownership
 
 - **macOS wrapper:** native windows, application menus, same-origin hosting, lifecycle status, and
   window creation. It does not own session state.
-- **Workbench web client in the PI WEB fork:** Chat and file composition, then any later Workbench
-  navigation.
+- **Workbench web client in the PI WEB fork:** window working sets, Tabs and Grid, the chooser,
+  Chat, questions, and Files composition.
 - **PI WEB runtime:** projects, workspaces, sessions, transport, reconnect, authentication, files,
   Git, terminals, remote machines, packaging, and lifecycle.
 - **Pi Workbench protocols:** authoritative Workstream and future Run state. The client renders typed

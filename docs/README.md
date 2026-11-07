@@ -51,8 +51,8 @@ not in the authoritative decision record.
   direction with familiar Chat, Workstreams, delegation roster and Files; manual shell work stays in an
   external terminal. Delivery sequence remains proposed; implementation approval and independent review
   are pending.
-- [`plans/workbench-ui.md`](plans/workbench-ui.md) — current graphical-client plan: fix text input,
-  then add files beside Chat.
+- [`plans/workbench-ui.md`](plans/workbench-ui.md) — current graphical client: what shipped (Tabs and
+  Grid, chooser, questions, Files, Activity) and the 2026-11-07 owner direction.
 - [`integrations/pi-web/reuse-boundary.md`](integrations/pi-web/reuse-boundary.md) — what the new
   client reuses from PI WEB and what it replaces.
 - [`contracts/workstreams.md`](contracts/workstreams.md) and
