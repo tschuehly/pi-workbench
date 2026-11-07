@@ -487,6 +487,8 @@ function boot() {
       } catch { /* no server: fall through */ }
       conn = "no session";
     }
+    // A Seen counts only once the host saved it: kept here it would hide the mark and never reach the log.
+    if (body.type === "seen") { flash("Could not save Seen; the mark stays."); return; }
     // No session serves this Page: keep the event here and offer Copy (decision 131; pi-artifacts' 503 + Copy).
     if (body.type === "undo") { local = local.filter((e) => e.seq !== body.target); render(); return; }
     const e = { ...body, seq: -(local.length + 1), at: now(), origin: "human", local: true, delivery: body.delivery ?? CLASSES[body.type] };
@@ -790,7 +792,7 @@ function boot() {
 
     const onText = st.threads.filter((t) => placed.get(t.root.seq).where === "text");
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
-    const notDelivered = all().filter((e) => e.type !== "seen" && ["local", "unconfirmed"].includes(st.status(e)));
+    const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
     const open = st.openThreads.length + st.toAnswer.length;
     set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")} Test host, no Pi session</span>` : receiver ? `<span class="atl-dim atl-recv" title="Your input goes to this Pi session">→ ${esc(receiver.label)}</span>` : receiver === null ? `<span class="atl-tag atl-warn atl-recv" title="No Pi session receives your input now; it is kept until one opens this Page">no receiver</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
     renderUndo(undoable());
@@ -1105,7 +1107,8 @@ function boot() {
   }
   // Every render reconciles the Needs you marks with the Event Log: his answer, reply or close takes a mark away (one
   // that also shows a change keeps that), and each agent event that needs him gets one once its Key is on the Page,
-  // unless he cleared it here and its seen event is on its way.
+  // unless he cleared it here and its seen event is on its way. A Key gone from the Page drops its Needs you, so a
+  // removal notice on it stays.
   const dismissed = new Set();
   function syncNeeds(st) {
     if (!changesOn()) return;
@@ -1113,7 +1116,8 @@ function boot() {
     for (const [addr, t] of traces) {
       if (!t.seqs.size) continue;
       if (!t.fading) {
-        for (const s of t.seqs) if (!need.has(s)) t.seqs.delete(s);
+        const here = !!findKey(addr);
+        for (const s of t.seqs) if (!here || !need.has(s)) t.seqs.delete(s);
         if (!t.seqs.size) { t.kinds.delete("needs"); if (!t.kinds.size) { clearTrace(addr); continue; } t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0]; }
       }
       t.seqs.forEach((s) => marked.add(s));
@@ -1132,12 +1136,13 @@ function boot() {
     }
   }
   // Where a change shows on the Page: the Key itself, else the tab or summary that hides it, else a visible ancestor.
+  // The Key itself may be the hidden panel; visibility:hidden counts as hidden (2.13.0), like jumpTo's tabs.
   function visibleSpot(el) {
-    if (el.getClientRects().length) return el;
-    for (let p = el.parentElement; p; p = p.parentElement) {
-      if (p.id) { const tab = [...document.querySelectorAll(`[aria-controls="${CSS.escape(p.id)}"]`)].find((t) => t.getClientRects().length); if (tab) return tab; }
+    if (visible(el)) return el;
+    for (let p = el; p; p = p.parentElement) {
+      if (p.id) { const tab = [...document.querySelectorAll(`[aria-controls~="${CSS.escape(p.id)}"]`)].find((t) => !p.contains(t) && visible(t)); if (tab) return tab; }
       if (p.matches("details:not([open])")) { const s = p.querySelector(":scope > summary"); if (s) return s; }
-      if (p.getClientRects().length) return p;
+      if (p !== el && visible(p)) return p;
     }
     return el;
   }

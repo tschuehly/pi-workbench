@@ -1177,6 +1177,48 @@ requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classLis
     got.push(await seen([asked.seq]));
     assert.deepEqual(got, [400, 400, 400, 400, 200], "a future, negative, unsafe or human seq is refused; an agent ask is taken");
   });
+  // Second review of 2.13.0 (Sol).
+  // Finding 1: a Seen the host never confirmed (network failure) keeps its mark, and a later Seen saves it.
+  await fixCheck("2.13.0-review2-1-seen-needs-the-host", async () => {
+    const net = path.join(dir, "net.html");
+    await writeFile(net, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Net</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="n" id="n">One question.</div><script type="module" src="atelier.js"></script></body></html>`);
+    ask(net, "n-q", "n");
+    await openFresh(net);
+    await js(`(()=>{window.__fetch??=window.fetch;window.fetch=(u,o)=>o?.method==="POST"&&String(u).startsWith("/.atelier/events")?Promise.reject(new TypeError("Failed to fetch")):window.__fetch(u,o);return true})()`);
+    await js(`document.querySelector('[data-atl=chseen][data-addr="n"]').click(); true`); await sleep(1200);
+    await js("window.fetch=window.__fetch; true");
+    const saved = () => readLog(net).filter((e) => e.type === "seen").length;
+    assert.deepEqual([await needsAt("#n"), saved()], [1, 0], "a Seen that never reached the host keeps the mark");
+    await js(`document.querySelector('[data-atl=chseen][data-addr="n"]').click(); true`);
+    for (let i = 0; i < 20 && !saved(); i++) await sleep(250);
+    await openFresh(net);
+    assert.deepEqual([saved(), await needsAt("#n")], [1, 0], "the next Seen saves it and the reload brings no mark");
+  });
+  // Finding 2: an Update removing a Key with an open ask keeps its removal notice.
+  await fixCheck("2.13.0-review2-2-removed-key-keeps-its-notice", async () => {
+    const gone = path.join(dir, "gone.html");
+    const page2 = (withK) => writeFile(gone, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Gone</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}[atl-key]{border:1px solid #ccc;padding:8px;margin:16px 0}</style>
+<body><section atl-key="s" id="s">${withK ? `<div atl-key="k" id="k">Goes away.</div>` : ""}<div atl-key="sib" id="sib">Stays.</div></section><script>window.ups=0;document.addEventListener("atelier:update",()=>ups++);</script><script type="module" src="atelier.js"></script></body></html>`);
+    await page2(true);
+    ask(gone, "k-q", "s/k");
+    await openFresh(gone); await sleep(500);
+    assert.equal(await needsAt("#k"), 1, "the open ask marks k");
+    await page2(false); host.update(gone); await until("ups===1"); await sleep(300);
+    assert.equal(await js("document.querySelectorAll('[atl-ui=gone]').length"), 1, "the removal notice stays");
+  });
+  // Finding 3: a hidden panel that is itself the Key, and a Key in a visibility:hidden panel, mark their tab.
+  await fixCheck("2.13.0-review2-3-hidden-keys-mark-their-tab", async () => {
+    const hid = path.join(dir, "hidden.html");
+    await writeFile(hid, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Hidden</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><nav><button id="tF" aria-controls="pF">Front</button><button id="tK" aria-controls="pk">Keyed panel</button><button id="tV" aria-controls="pv">Invisible panel</button></nav>
+<section id="pF"><p>Front.</p></section><section id="pk" atl-key="pk" hidden><p>The panel is the Key.</p></section><section id="pv" style="visibility:hidden"><div atl-key="vk" id="vk">In an invisible panel.</div></section>
+<script type="module" src="atelier.js"></script></body></html>`);
+    ask(hid, "pk-q", "pk"); ask(hid, "vk-q", "vk");
+    await openFresh(hid);
+    const got = await js(`(()=>{const at=(sel)=>document.querySelectorAll(sel+' [atl-ui=mark].atl-k-needs.atl-mark-dot').length;return {tK:at('#tK'),tV:at('#tV'),onBody:[...document.body.children].filter(n=>n.getAttribute('atl-ui')==='mark').length,invisible:[...document.querySelectorAll('[atl-ui=mark]')].filter(m=>!m.checkVisibility({visibilityProperty:true})).length}})()`);
+    assert.deepEqual(got, { tK: 1, tV: 1, onBody: 0, invisible: 0 }, "each hidden Key's mark sits visibly on its tab");
+  });
   assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0 and 2.13.0 fix holds");
 
   console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen.");
