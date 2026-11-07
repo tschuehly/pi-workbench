@@ -138,8 +138,13 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
   image over prose.
 - **No provenance noise.** No Git SHAs, app ids, timestamps, viewport/pointer/scale lines or "evidence
   limit" boxes on the Page; keep them in `atl-ver` or data files.
-- **Use the full desktop width.** No narrow centred column with empty margins; use several columns, compact
-  padding, and one-line headers. Navigation has a collapse toggle and starts collapsed below ~1100px, so
+- **Layout follows the content and how he works through it.** Decide first whether he compares items, scans
+  them, or reads and decides them one after another. Compare or scan short, like items (screenshots, versions,
+  numbers): columns side by side. Read and decide in turn (issues, questions with explanation, long options):
+  one item per full-width row, its text at a readable line length (~75ch) with its evidence, Decision or
+  question beside it. Never tall narrow cards of uneven height in a grid for reading.
+- **Use the full desktop width.** No narrow centred column with empty margins; fill the width as the layout
+  rule says, with compact padding and one-line headers. Navigation has a collapse toggle and starts collapsed below ~1100px, so
   content takes the screen. Leave the Kernel panel room through `atl-dock`. Before handing a Page over,
   look at it at 860–1100px wide as well as at full width.
 - **Detail opens where it is clicked.** A box or stage that acts as navigation opens its content in place (tab
