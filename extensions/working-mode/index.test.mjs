@@ -164,8 +164,8 @@ test("a mode change reaches the model as one tagged message; the system prompt n
   assert.doesNotMatch(block, /ignore previous/i);
   assert.deepEqual(s.snapshots.at(-1), {
     schemaVersion: 2, phase: "applied",
-    selected: { alignment: "Align", attention: "Phone", checking: "Default", orchestration: "Main" },
-    applied: { alignment: "Align", attention: "Phone", checking: "Default", orchestration: "Main" },
+    selected: { alignment: "Align", attention: "Phone", checking: "Default", orchestration: "Main", surface: "Chat" },
+    applied: { alignment: "Align", attention: "Phone", checking: "Default", orchestration: "Main", surface: "Chat" },
     aligned: false,
   });
   s.session.dispose();
@@ -333,7 +333,7 @@ test("the terminal picker changes one axis; cancel changes nothing", async () =>
   await command.handler("", ctx);
   choices.push(undefined);
   await command.handler("", ctx);
-  assert.equal(statuses.at(-1), "Alignment: Default · Attention: Default · Checking: Challenge · Orchestration: Main");
+  assert.equal(statuses.at(-1), "Alignment: Default · Attention: Default · Checking: Challenge · Orchestration: Main · Surface: Chat");
   const result = handlers.get("before_agent_start")({}, ctx);
   assert.equal(result.message.customType, "working-mode");
   assert.deepEqual(result.message.details, { schemaVersion: 2, seq: 1, selection: { ...defaults, checking: "Challenge" }, aligned: false });

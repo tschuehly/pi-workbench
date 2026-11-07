@@ -68,6 +68,14 @@ export const axes = {
       Workers: "Organize multi-step work around durable workers; this overrides any general preference for fresh subagents. At the start, name the scopes that will receive repeated tasks, such as a module, repository area, or review lane, create one worker per scope, and route every task in that scope to its worker. Run workers for independent scopes in parallel. A worker may delegate only to a leaf subagent; continuity is not independent review. Keep the main session for steering, integration, and talking with Thomas.",
     },
   },
+  // Page mode (docs/plans/page-mode.md): the lead session talks to Thomas only through its Session Page.
+  surface: {
+    label: "Surface",
+    values: {
+      Chat: "",
+      Page: "Thomas reads this session only through its Session Page, an Atelier Page whose path arrives in an atelier:session-page message. Write no text to him: your final text reaches only the Log, the hidden transcript. The Page file is the Working copy: edit it freely; he sees nothing until you send an Update (`atelier` action update, with a one-line note), which stores it as the next revision. Run action check before an Update that changed the layout. Send few, meaningful Updates; replace status content in place; keep Decisions and Verdicts with their history. Ask open choices as Decisions (action ask) and answer Comments in their thread (action answer). When Thomas must act, call action attend on the one Key concerned with a one-line reason: it marks the Key and names the channel his Attention setting allows; call only that channel tool. Where other guidance tells you to write to him in the conversation or post with `ask_user`, use the Session Page and attend instead. Put a result he did not ask for on the Key it concerns; if nothing on the Page concerns it, leave it in the Log. His Comments, Decisions and composer messages arrive as atelier messages; answer a composer message on the Page next to it. Subagents and Workers are unaffected: their final text remains their result.",
+    },
+  },
 } as const;
 
 type Axes = typeof axes;
@@ -101,12 +109,13 @@ function afkPreparationText(selection: WorkingModeState) {
 }
 
 export const CUSTOM_TYPE = "working-mode";
-export const defaults: WorkingModeState = { alignment: "Default", attention: "Default", checking: "Default", orchestration: "Main" };
+export const defaults: WorkingModeState = { alignment: "Default", attention: "Default", checking: "Default", orchestration: "Main", surface: "Chat" };
 const axisNames = Object.keys(axes) as Axis[];
 const usage = `/mode send delivers the pending change now · /mode <axis> <value>: ${axisNames.map((axis) => `${axis} <${Object.keys(axes[axis].values).join("|").toLowerCase()}>`).join(" · ")}`;
 
 export function isSelection(value: any): value is WorkingModeState {
-  return !!value && axisNames.every((axis) => typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis]));
+  // A block written before Surface existed has none; it reads as Chat.
+  return !!value && axisNames.every((axis) => (axis === "surface" && value[axis] === undefined) || (typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis])));
 }
 
 /** Alignment state from whichever came last on the branch: a Working Mode block or an alignment tool result. */
@@ -129,7 +138,7 @@ const same = (a: WorkingModeState, b: WorkingModeState) => axisNames.every((axis
 function latestBlock(entries: readonly any[]): WorkingModeDetails | null {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry?.type === "custom_message" && entry.customType === CUSTOM_TYPE && isSelection(entry.details?.selection)) return entry.details;
+    if (entry?.type === "custom_message" && entry.customType === CUSTOM_TYPE && isSelection(entry.details?.selection)) return { ...entry.details, selection: { ...defaults, ...entry.details.selection } };
   }
   return null;
 }
