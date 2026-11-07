@@ -1211,13 +1211,13 @@ requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classLis
   await fixCheck("2.13.0-review2-3-hidden-keys-mark-their-tab", async () => {
     const hid = path.join(dir, "hidden.html");
     await writeFile(hid, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Hidden</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
-<body><nav><button id="tF" aria-controls="pF">Front</button><button id="tK" aria-controls="pk">Keyed panel</button><button id="tV" aria-controls="pv">Invisible panel</button></nav>
-<section id="pF"><p>Front.</p></section><section id="pk" atl-key="pk" hidden><p>The panel is the Key.</p></section><section id="pv" style="visibility:hidden"><div atl-key="vk" id="vk">In an invisible panel.</div></section>
+<body><nav><button id="tF" aria-controls="pF">Front</button><button id="tK" aria-controls="pk">Keyed panel</button><button id="tV" aria-controls="pv">Invisible panel</button><button id="tD" aria-controls="pd">Details panel</button></nav>
+<section id="pF"><p>Front.</p></section><section id="pk" atl-key="pk" hidden><p>The panel is the Key.</p></section><section id="pv" style="visibility:hidden"><div atl-key="vk" id="vk">In an invisible panel.</div></section><section id="pd" hidden><details id="details"><summary>Closed details</summary><p atl-key="dk" id="dk">Inside closed details.</p></details></section>
 <script type="module" src="atelier.js"></script></body></html>`);
-    ask(hid, "pk-q", "pk"); ask(hid, "vk-q", "vk");
+    ask(hid, "pk-q", "pk"); ask(hid, "vk-q", "vk"); ask(hid, "dk-q", "dk");
     await openFresh(hid);
-    const got = await js(`(()=>{const at=(sel)=>document.querySelectorAll(sel+' [atl-ui=mark].atl-k-needs.atl-mark-dot').length;return {tK:at('#tK'),tV:at('#tV'),onBody:[...document.body.children].filter(n=>n.getAttribute('atl-ui')==='mark').length,invisible:[...document.querySelectorAll('[atl-ui=mark]')].filter(m=>!m.checkVisibility({visibilityProperty:true})).length}})()`);
-    assert.deepEqual(got, { tK: 1, tV: 1, onBody: 0, invisible: 0 }, "each hidden Key's mark sits visibly on its tab");
+    const got = await js(`(()=>{const at=(sel)=>document.querySelectorAll(sel+' [atl-ui=mark].atl-k-needs.atl-mark-dot').length;return {tK:at('#tK'),tV:at('#tV'),tD:at('#tD'),onBody:[...document.body.children].filter(n=>n.getAttribute('atl-ui')==='mark').length,invisible:[...document.querySelectorAll('[atl-ui=mark]')].filter(m=>!m.checkVisibility({visibilityProperty:true})).length}})()`);
+    assert.deepEqual(got, { tK: 1, tV: 1, tD: 1, onBody: 0, invisible: 0 }, "each hidden Key, including one below closed details, marks its visible tab");
   });
   assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0 and 2.13.0 fix holds");
 

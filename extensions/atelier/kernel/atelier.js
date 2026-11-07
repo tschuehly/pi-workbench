@@ -1141,7 +1141,7 @@ function boot() {
     if (visible(el)) return el;
     for (let p = el; p; p = p.parentElement) {
       if (p.id) { const tab = [...document.querySelectorAll(`[aria-controls~="${CSS.escape(p.id)}"]`)].find((t) => !p.contains(t) && visible(t)); if (tab) return tab; }
-      if (p.matches("details:not([open])")) { const s = p.querySelector(":scope > summary"); if (s) return s; }
+      if (p.matches("details:not([open])")) { const s = p.querySelector(":scope > summary"); if (s && visible(s)) return s; }
       if (p !== el && visible(p)) return p;
     }
     return el;
