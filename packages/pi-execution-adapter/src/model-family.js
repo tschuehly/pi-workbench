@@ -5,6 +5,7 @@ export const knownModelFamilies = Object.freeze([
   "xai",
   "moonshot",
   "microsoft",
+  "meta",
 ]);
 
 const directProviders = {
@@ -17,6 +18,7 @@ const directProviders = {
   "xai-auth": "xai",
   moonshot: "moonshot",
   microsoft: "microsoft",
+  meta: "meta",
 };
 
 const copilotPrefixes = {

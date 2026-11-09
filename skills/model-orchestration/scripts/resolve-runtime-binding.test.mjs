@@ -185,7 +185,7 @@ try {
   assert.equal(unsupportedEffort.status, 3);
   assert.match(unsupportedEffort.stderr, /does not support Model Effort 'xhigh'/);
 
-  assert.deepEqual(knownModelFamilies, ["anthropic", "openai", "google", "xai", "moonshot", "microsoft"]);
+  assert.deepEqual(knownModelFamilies, ["anthropic", "openai", "google", "xai", "moonshot", "microsoft", "meta"]);
   assert.equal(modelFamily("anthropic"), "anthropic");
   assert.equal(modelFamily("openai-codex"), "openai");
   assert.equal(modelFamily("github-copilot", "claude-sonnet-5-5"), "anthropic");
@@ -507,6 +507,7 @@ try {
   assert.equal(gemini.modelBinding.model, "gemini-4-argon");
   assert.equal(gemini.modelBinding.independence.selectedFamily, "google");
   assert.equal(modelFamily("xai-auth", "grok-4.7"), "xai");
+  assert.equal(modelFamily("meta", "muse-spark-1.3"), "meta");
 
   console.log("resolve-runtime-binding: PASS");
 } finally {
