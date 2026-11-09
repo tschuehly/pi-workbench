@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -272,7 +273,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
 
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, independentOfModel, params.modelOverride, params.effort, params.excludeFamilies, options.resolverPath);
+        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, independentOfModel, params.modelOverride, params.effort, params.excludeFamilies, options.resolverPath, ctx.modelRegistry);
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
       }
@@ -633,7 +634,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, params.effort, undefined, options.resolverPath);
+        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, params.effort, undefined, options.resolverPath, ctx.modelRegistry);
       } catch (error) {
         await abandon(errorMessage(error));
         return failure("preflight_failed", errorMessage(error));
@@ -1286,9 +1287,23 @@ export function providerOf(qualifiedModel: string | undefined): string | undefin
   return slash > 0 && slash < qualifiedModel.length - 1 ? qualifiedModel.slice(0, slash) : undefined;
 }
 
-async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string, modelOverride?: string, effort?: string, excludeFamilies?: string[], resolverPath = resolver): Promise<any> {
+// The resolver otherwise reads models-store.json, which omits providers registered at runtime by
+// extensions (e.g. antigravity-acp); the live registry lists them with their effort metadata.
+function liveModelMetadata(modelRegistry?: { getAvailable(): Array<{ provider: string; id: string; reasoning?: boolean; thinkingLevelMap?: unknown }> }): string[] {
+  let models;
+  try { models = modelRegistry?.getAvailable(); } catch { return []; }
+  if (!Array.isArray(models) || models.length === 0) return [];
+  const doc: Record<string, { models: unknown[] }> = {};
+  for (const { provider, id, reasoning, thinkingLevelMap } of models) (doc[provider] ??= { models: [] }).models.push({ id, reasoning, thinkingLevelMap });
+  const file = path.join(mkdtempSync(path.join(process.env.PI_TMP ?? os.tmpdir(), "routing-")), "models.json");
+  writeFileSync(file, JSON.stringify(doc));
+  return ["--model-metadata", file];
+}
+
+async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string, modelOverride?: string, effort?: string, excludeFamilies?: string[], resolverPath = resolver, modelRegistry?: Parameters<typeof liveModelMetadata>[0]): Promise<any> {
   const args = [
     resolverPath, cognitiveRole,
+    ...liveModelMetadata(modelRegistry),
     ...(modelOverride === undefined ? [] : ["--model", modelOverride]),
     ...(effort === undefined ? [] : ["--effort", effort]),
     ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider]),

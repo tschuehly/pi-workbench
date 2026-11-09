@@ -499,6 +499,15 @@ try {
   assert.equal(passOverlay(["frontier"], withoutRoutine).modelBinding.model, "claude-opus-5-5", "every mapped role stays inside the two-model allowlist");
   badOverlay({ ...valid, independentReview: { "anthropic/claude-opus-5-5": { provider: "anthropic", model: "claude-opus-5-5", effort: "high", quotaProvider: "claude" } } }, /not a distinct model/, "same-model review mapping fails closed");
 
+  // Extension-registered providers (antigravity-acp) appear only in the live registry the subagent
+  // extension passes as --model-metadata; a Gemini override then routes as an independent Google reviewer.
+  const liveMetadata = path.join(temp, "live-models.json");
+  fs.writeFileSync(liveMetadata, JSON.stringify({ "antigravity-acp": { models: [{ id: "gemini-4-argon", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high" } }] } }));
+  const gemini = JSON.parse(execFileSync(process.execPath, [resolver, "review", "--quota", quotaPath, "--model-metadata", liveMetadata, "--independent-of-model", "anthropic/claude-opus-5-5", "--model", "antigravity-acp/gemini-4-argon"], { encoding: "utf8" }));
+  assert.equal(gemini.modelBinding.model, "gemini-4-argon");
+  assert.equal(gemini.modelBinding.independence.selectedFamily, "google");
+  assert.equal(modelFamily("xai", "grok-4.7"), "xai");
+
   console.log("resolve-runtime-binding: PASS");
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

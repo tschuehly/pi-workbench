@@ -12,6 +12,7 @@ const directProviders = {
   openai: "openai",
   "openai-codex": "openai",
   google: "google",
+  "antigravity-acp": "google",
   xai: "xai",
   moonshot: "moonshot",
   microsoft: "microsoft",
