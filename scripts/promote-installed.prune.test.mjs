@@ -52,3 +52,33 @@ test("prune keeps live, the last switched-away build, named and used builds, and
     worker.kill();
   }
 });
+
+test("prune keeps a build retired after the oldest running Pi process started, since open sessions still spawn from it", () => {
+  const home = mkdtempSync(join(tmpdir(), "promote-prune-"));
+  const repo = join(home, "pi-workbench"), store = join(home, ".pi-workbench/installed");
+  const git = (...args) => spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+  mkdirSync(repo, { recursive: true });
+  git("init", "-q", "-b", "main");
+  git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");
+  // retired ages in hours: g before the session daemon started, h after it, i is the rollback; j is live.
+  const [g, h, i, j] = [["1", 3], ["2", 1], ["3", 0.1], ["4"]].map(([x, retired]) => {
+    const dir = join(store, `pi-workbench-${x.repeat(12)}`);
+    git("worktree", "add", "-q", "--detach", dir);
+    writeFileSync(`${dir}.prepared`, "");
+    if (retired !== undefined) {
+      writeFileSync(`${dir}.retired`, "");
+      const when = new Date(Date.now() - retired * 3600e3);
+      utimesSync(`${dir}.retired`, when, when);
+    }
+    return dir;
+  });
+  symlinkSync(j, join(home, "pi-workbench.installed"));
+  const ps = join(home, "ps.txt");
+  writeFileSync(ps, "  02:00:00 node /x/pi-web/dist/server/sessiond.js\n5-00:00:00 /usr/sbin/syslogd\n     10:00 pi\n");
+  const run = spawnSync("bash", [script, "prune", "--apply"], { encoding: "utf8", env: { ...process.env, HOME: home, PI_WORKBENCH_PROJECTS: home, PI_PROMOTE_ETIME_PS: `cat ${ps}` } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /keep   pi-workbench-2{12}: retired after a running Pi session loaded it/);
+  assert.match(run.stdout, /removed pi-workbench-1{12}/);
+  for (const dir of [h, i, j]) assert.ok(existsSync(dir), dir);
+  assert.ok(!existsSync(g), g);
+});
