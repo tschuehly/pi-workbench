@@ -93,24 +93,31 @@ function prepareWorkspace(c, dir) {
 }
 
 // A candidate has shell access, so it could read the source repositories, the case checks, earlier trials,
-// or session logs that discuss the answers, and it could reach GitHub as the owner. macOS sandbox-exec
-// denies those reads; later rules win, so the trial directory and Pi's local packages stay readable.
-// Rules match real paths, so every path is resolved: the promoted checkout and its `*.installed` link
-// live under ~/.pi-workbench/installed, outside the projects folder.
-// It also denies the login keychain and the tools that hand out stored credentials (gh, security, git's
-// keychain helper); Pi's model logins live in ~/.pi/agent/auth.json. A provider that probes the keychain
-// (antigravity-acp) then falls back to its token file.
+// retained review evidence or session logs that discuss the answers, and it could reach GitHub as the owner.
+// macOS sandbox-exec denies those reads; later rules win, so the trial directory, Pi's local packages, the
+// promoted checkouts (~/.pi-workbench/installed) and run shims (~/.pi-workbench/run) stay readable.
+// All of ~/.pi-workbench is denied (scratch, workstreams, tmp, background-bash, reviews, ...); runPi points
+// Pi's tmp and background-bash roots into the trial directory.
+// Rules match real paths, so every path is resolved: the `*.installed` links point into ~/.pi-workbench/installed.
+// It also denies the login keychain, ~/.ssh, connecting to the SSH agent (launchd's socket is findable by
+// glob), and the tools that hand out stored credentials (gh, security, git's keychain helper); Pi's model
+// logins live in ~/.pi/agent/auth.json. A provider that probes the keychain (antigravity-acp) then falls
+// back to its token file.
 function sandboxProfile(trialDir) {
   const real = (p) => (existsSync(p) ? realpathSync(p) : p);
   const home = homedir();
   const projects = real(process.env.PI_EVAL_PROJECTS ?? path.join(home, "IdeaProjects"));
-  const deny = [projects, real(EVAL_HOME), real(path.join(home, ".pi/agent/sessions")), real(path.join(home, ".pi-web")), real(path.join(home, "Library/Keychains"))];
-  const allow = [...localPiPackages().map(real), real(trialDir)];
+  const workbench = path.join(home, ".pi-workbench");
+  const deny = [projects, real(EVAL_HOME), workbench, ".pi/agent/sessions", ".pi-web", "Library/Keychains", ".ssh", ".claude/projects", ".codex/sessions"]
+    .map((p) => real(path.resolve(home, p)));
+  const allow = [...localPiPackages(), path.join(workbench, "installed"), path.join(workbench, "run"), trialDir].map(real);
   const rule = (verb, p) => `(${verb} file-read-data (subpath ${JSON.stringify(p)}))`;
   const which = (cmd) => sh(`command -v ${cmd}`).stdout.trim();
   const noExec = ["/usr/bin/security", which("gh"), path.join(sh("git --exec-path").stdout.trim(), "git-credential-osxkeychain")].filter(Boolean).map(real);
+  const agent = process.env.SSH_AUTH_SOCK ? ` (remote unix-socket (path-literal ${JSON.stringify(real(process.env.SSH_AUTH_SOCK))}))` : "";
   return `(version 1)(allow default)${deny.map((p) => rule("deny", p)).join("")}${allow.map((p) => rule("allow", p)).join("")}`
-    + noExec.map((p) => `(deny process-exec (literal ${JSON.stringify(p)}))`).join("");
+    + noExec.map((p) => `(deny process-exec (literal ${JSON.stringify(p)}))`).join("")
+    + `(deny network-outbound (remote unix-socket (path-regex #"^/private/var/run/com\\.apple\\.launchd\\.[^/]+/"))${agent})`;
 }
 
 // Local-path packages from Pi's settings (the installed Workbench, development packages); Pi exits if it
@@ -123,9 +130,12 @@ function localPiPackages() {
 }
 
 // Credentials a trial must not inherit; git gets no global or system config (the Xcode system config
-// names the keychain helper) and cannot prompt.
-function trialEnv(base) {
-  const env = { ...base, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
+// names the keychain helper) and cannot prompt, so it gets an eval identity for commits.
+function trialEnv(base, trialDir) {
+  const id = { GIT_AUTHOR_NAME: "eval", GIT_AUTHOR_EMAIL: "eval@local", GIT_COMMITTER_NAME: "eval", GIT_COMMITTER_EMAIL: "eval@local" };
+  const tmp = path.join(trialDir, "pi-tmp");
+  const env = { ...base, ...id, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0",
+    PI_TMP_ROOT: tmp, PI_TMP: tmp, PI_BACKGROUND_BASH_ROOT: path.join(trialDir, "background-bash") };
   for (const k of Object.keys(env)) if (/^(GH_|GITHUB_|SSH_AUTH_SOCK$|GIT_ASKPASS$|SSH_ASKPASS$)|_GH_TOKEN$/.test(k)) delete env[k];
   return env;
 }
@@ -134,8 +144,9 @@ function runPi({ model, effort, prompt, cwd, sessionDir, timeoutMs, trialDir, to
   return new Promise((resolve) => {
     const started = Date.now();
     const args = ["-p", "--mode", "json", "--model", model, "--thinking", effort, "--session-dir", sessionDir, tools ? "--tools" : "--no-tools", ...(tools ? [tools] : []), prompt];
-    const env = trialEnv({ ...process.env, ...gradleEnv(path.join(trialDir, "gradle-agent")) });
+    const env = trialEnv({ ...process.env, ...gradleEnv(path.join(trialDir, "gradle-agent")) }, trialDir);
     delete env.PI_WORKBENCH_ROUTING_OVERLAY;
+    mkdirSync(env.PI_TMP, { recursive: true });
     const child = spawn("sandbox-exec", ["-p", sandboxProfile(trialDir), "pi", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let out = "", err = "", timedOut = false;
     child.stdout.on("data", (d) => (out += d));
@@ -299,4 +310,5 @@ const flags = { dryRun: rest.includes("--dry-run"), keep: rest.includes("--keep"
 if (cmd === "run" && target) await run(path.resolve(target), flags);
 else if (cmd === "report" && target) report(target);
 else if (cmd === "sandbox-profile" && target) console.log(sandboxProfile(path.resolve(target)));
-else { console.error("usage: pi-eval.mjs run <campaign.json> [--dry-run] [--only <case>] [--keep] | report <results.jsonl> | sandbox-profile <trial-dir>"); process.exit(2); }
+else if (cmd === "trial-env" && target) for (const [k, v] of Object.entries(trialEnv({}, path.resolve(target)))) console.log(`${k}=${v}`);
+else { console.error("usage: pi-eval.mjs run <campaign.json> [--dry-run] [--only <case>] [--keep] | report <results.jsonl> | sandbox-profile <trial-dir> | trial-env <trial-dir>"); process.exit(2); }
