@@ -68,6 +68,7 @@ function quota() {
 }
 
 // Built once per campaign: extension discovery can push \`pi --list-models\` past the resolver's deadline.
+// Extensions stay on so extension-registered providers (xai-auth, antigravity-acp) can be arms.
 let catalogFile;
 function admit(role, model, effort) {
   const r = spawnSync("node", [RESOLVER, ADMISSION_ROLE[role] ?? role, "--model", model, "--effort", effort, "--catalog", catalogFile], { encoding: "utf8", timeout: 60_000 });
@@ -213,7 +214,7 @@ async function run(campaignPath, flags) {
   if (flags.dryRun) { for (const t of plan) console.log(`  ${t.c.id} × ${t.arm.id} #${t.rep}`); return; }
   mkdirSync(outDir, { recursive: true });
   catalogFile = path.join(outDir, "catalog.txt");
-  writeFileSync(catalogFile, sh("pi --no-extensions --list-models", { timeout: 120_000 }).stdout);
+  writeFileSync(catalogFile, sh("pi --list-models", { timeout: 120_000 }).stdout);
   writeFileSync(path.join(outDir, "campaign.json"), JSON.stringify({ ...campaign, harness }, null, 2));
   for (const [i, { c, arm, rep }] of plan.entries()) {
     // The trial path is the model's working directory, so it must not name the case or arm.

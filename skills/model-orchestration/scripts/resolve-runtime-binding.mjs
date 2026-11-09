@@ -114,7 +114,8 @@ function effortProblem(binding, metadataInput, explicit) {
     return explicit ? `Pi model metadata is unavailable: ${error.message}` : undefined;
   }
   const model = doc?.[binding.provider]?.models?.find((candidate) => candidate.id === binding.model);
-  if (model === undefined) return explicit ? `Pi model metadata has no entry for '${modelKey(binding)}'` : undefined;
+  // Extension-registered providers are absent from models-store.json; they validate effort at launch.
+  if (model === undefined) return explicit && doc?.[binding.provider] !== undefined ? `Pi model metadata has no entry for '${modelKey(binding)}'` : undefined;
   const levelMap = isPlainObject(model.thinkingLevelMap) ? model.thinkingLevelMap : {};
   // Pi exposes only off for non-reasoning models, maps absent standard reasoning levels normally,
   // and requires xhigh/max to be explicitly mapped.
