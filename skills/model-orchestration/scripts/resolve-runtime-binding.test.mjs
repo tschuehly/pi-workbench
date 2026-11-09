@@ -506,7 +506,7 @@ try {
   const gemini = JSON.parse(execFileSync(process.execPath, [resolver, "review", "--quota", quotaPath, "--model-metadata", liveMetadata, "--independent-of-model", "anthropic/claude-opus-5-5", "--model", "antigravity-acp/gemini-4-argon"], { encoding: "utf8" }));
   assert.equal(gemini.modelBinding.model, "gemini-4-argon");
   assert.equal(gemini.modelBinding.independence.selectedFamily, "google");
-  assert.equal(modelFamily("xai", "grok-4.6"), "xai");
+  assert.equal(modelFamily("xai-auth", "grok-4.7"), "xai");
 
   console.log("resolve-runtime-binding: PASS");
 } finally {

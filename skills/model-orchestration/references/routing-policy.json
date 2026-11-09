@@ -3,7 +3,7 @@
   "quotaProviders": {
     "openai-codex": "codex",
     "anthropic": "claude",
-    "xai": "xai",
+    "xai-auth": "xai",
     "antigravity-acp": "antigravity"
   },
   "models": {
@@ -13,7 +13,7 @@
     "astra": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-astra" },
     "sol": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6.1-sol" },
     "luna": { "provider": "openai-codex", "quotaProvider": "codex", "model": "gpt-6-luna" },
-    "grok": { "provider": "xai", "quotaProvider": "xai", "model": "grok-4.6" },
+    "grok": { "provider": "xai-auth", "quotaProvider": "xai", "model": "grok-4.7" },
     "gemini": { "provider": "antigravity-acp", "quotaProvider": "antigravity", "model": "gemini-4-argon" }
   },
   "tiers": {

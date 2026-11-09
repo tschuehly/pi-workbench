@@ -14,6 +14,7 @@ const directProviders = {
   google: "google",
   "antigravity-acp": "google",
   xai: "xai",
+  "xai-auth": "xai",
   moonshot: "moonshot",
   microsoft: "microsoft",
 };
