@@ -1288,13 +1288,21 @@ export function providerOf(qualifiedModel: string | undefined): string | undefin
 }
 
 // The resolver otherwise reads models-store.json, which omits providers registered at runtime by
-// extensions (e.g. antigravity-acp); the live registry lists them with their effort metadata.
-function liveModelMetadata(modelRegistry?: { getAvailable(): Array<{ provider: string; id: string; reasoning?: boolean; thinkingLevelMap?: unknown }> }): string[] {
+// extensions (e.g. antigravity-acp); the live registry lists them with their effort metadata. A
+// long-running session's registry can predate a provider's login, so the store stays in the union.
+export function liveModelMetadata(modelRegistry?: { getAvailable(): Array<{ provider: string; id: string; reasoning?: boolean; thinkingLevelMap?: unknown }> }): string[] {
   let models;
   try { models = modelRegistry?.getAvailable(); } catch { return []; }
   if (!Array.isArray(models) || models.length === 0) return [];
-  const doc: Record<string, { models: unknown[] }> = {};
-  for (const { provider, id, reasoning, thinkingLevelMap } of models) (doc[provider] ??= { models: [] }).models.push({ id, reasoning, thinkingLevelMap });
+  let doc: Record<string, { models: Array<{ id: string }> }> = {};
+  try {
+    const store = JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"), "models-store.json"), "utf8"));
+    if (store !== null && typeof store === "object") doc = store;
+  } catch { /* no readable store: the live registry alone */ }
+  for (const { provider, id, reasoning, thinkingLevelMap } of models) {
+    const entry = doc[provider] = { ...doc[provider], models: Array.isArray(doc[provider]?.models) ? doc[provider].models.filter((model) => model?.id !== id) : [] };
+    entry.models.push({ id, reasoning, thinkingLevelMap } as { id: string });
+  }
   const file = path.join(mkdtempSync(path.join(process.env.PI_TMP ?? os.tmpdir(), "routing-")), "models.json");
   writeFileSync(file, JSON.stringify(doc));
   return ["--model-metadata", file];

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, providerOf, reservePending, streamToResult, taskGoal, watchActivity } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, liveModelMetadata, providerOf, reservePending, streamToResult, taskGoal, watchActivity } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -479,6 +479,31 @@ test("exposes no task timeout controls with bounded independence and status para
 
   assert.equal(providerOf("anthropic/claude-opus-5"), "anthropic");
   for (const invalid of [undefined, "claude-opus-5", "/claude-opus-5", "anthropic/"]) assert.equal(providerOf(invalid), undefined);
+});
+
+test("routing metadata unions models-store.json with the live registry, live entries winning", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "subagent-metadata-"));
+  const saved = { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, PI_TMP: process.env.PI_TMP };
+  try {
+    await writeFile(join(dir, "models-store.json"), JSON.stringify({
+      meta: { models: [{ id: "muse-ember-1.0", reasoning: true }] },
+      anthropic: { models: [{ id: "claude-opus-5-5", reasoning: false }] },
+    }));
+    process.env.PI_CODING_AGENT_DIR = dir;
+    process.env.PI_TMP = dir;
+    const args = liveModelMetadata({ getAvailable: () => [
+      { provider: "antigravity-acp", id: "gemini-4-argon", reasoning: true },
+      { provider: "anthropic", id: "claude-opus-5-5", reasoning: true },
+    ] });
+    assert.equal(args[0], "--model-metadata");
+    const doc = JSON.parse(await readFile(args[1], "utf8"));
+    assert.deepEqual(doc.meta.models.map((model) => model.id), ["muse-ember-1.0"], "a store-only provider stays routable");
+    assert.deepEqual(doc["antigravity-acp"].models.map((model) => model.id), ["gemini-4-argon"], "a runtime-registered provider stays routable");
+    assert.deepEqual(doc.anthropic.models, [{ id: "claude-opus-5-5", reasoning: true }], "the live entry replaces the stored one");
+  } finally {
+    for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("rejects family exclusions on non-independent roles before routing", async () => {
