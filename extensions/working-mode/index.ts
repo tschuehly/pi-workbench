@@ -103,7 +103,7 @@ function afkPreparationText(selection: WorkingModeState) {
 export const CUSTOM_TYPE = "working-mode";
 export const defaults: WorkingModeState = { alignment: "Default", attention: "Default", checking: "Default", orchestration: "Main" };
 const axisNames = Object.keys(axes) as Axis[];
-const usage = `/mode send delivers the pending change now · /mode <axis> <value>: ${axisNames.map((axis) => `${axis} <${Object.keys(axes[axis].values).join("|").toLowerCase()}>`).join(" · ")}`;
+const usage = `/mode send delivers the pending change now · /mode unalign clears the confirmed alignment now · /mode <axis> <value>: ${axisNames.map((axis) => `${axis} <${Object.keys(axes[axis].values).join("|").toLowerCase()}>`).join(" · ")}`;
 
 export function isSelection(value: any): value is WorkingModeState {
   return !!value && axisNames.every((axis) => typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis]));
@@ -190,11 +190,11 @@ export default function workingModeExtension(pi: ExtensionAPI) {
     powerTimer.unref?.();
   }
 
-  /** Next block to deliver, or null when the model already sees (or will see) the selection. */
-  function pendingBlock(ctx: ExtensionContext, sent: boolean) {
+  /** Next block to deliver, or null when the model already sees (or will see) the selection; `force` always delivers one. */
+  function pendingBlock(ctx: ExtensionContext, sent: boolean, force = false) {
     // Compare with the block the model can still see; compaction may have summarized it away.
     const seen = queued ?? latestBlock(ctx.sessionManager.buildContextEntries());
-    if (same(seen?.selection ?? defaults, selected) && !!seen?.aligned === aligned) return null;
+    if (!force && same(seen?.selection ?? defaults, selected) && !!seen?.aligned === aligned) return null;
     const seq = Math.max(queued?.seq ?? 0, latestBlock(ctx.sessionManager.getBranch())?.seq ?? 0) + 1;
     const details: WorkingModeDetails = { schemaVersion: 2, seq, selection: { ...selected }, aligned };
     return { customType: CUSTOM_TYPE, content: renderBlock(selected, seq, aligned, sent), display: true, details };
@@ -242,10 +242,14 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   pi.on("agent_end", () => { queued = null; });
 
   pi.registerCommand("mode", {
-    description: "Choose Working Mode guidance for the next prompt; /mode send delivers it now",
+    description: "Choose Working Mode guidance for the next prompt; /mode send delivers it now; /mode unalign clears the alignment",
     handler: async (args, ctx) => {
-      if (args.trim().toLowerCase() === "send") {
-        const message = pendingBlock(ctx, true);
+      const verb = args.trim().toLowerCase();
+      // Thomas withdraws the agreement himself; the model hears it at once, as with send.
+      if (verb === "unalign") aligned = false;
+      if (verb === "send" || verb === "unalign") {
+        // An agent-recorded alignment lives in a tool result, not a block, so unalign always delivers one.
+        const message = pendingBlock(ctx, true, verb === "unalign");
         if (!message) {
           if (ctx.hasUI) ctx.ui.notify("Working Mode unchanged", "info");
           return;
