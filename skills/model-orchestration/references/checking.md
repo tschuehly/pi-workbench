@@ -36,7 +36,9 @@ Ember (`meta/muse-ember-1.0`) as `modelOverride`. An OpenAI author gets Opus
 (`anthropic/claude-opus-5-5`) instead of Sol; a Meta author gets Opus instead of Ember. The pair
 also satisfies a `high` panel. Merge duplicate findings and note which reviewer found each.
 
-Muse quota floor is 35% left in either window. Read it from CodexBar before launching Ember:
+A Meta author's pair is Sol and Opus: it has no Ember, so skip the quota read and the fallback
+below. Otherwise the Muse quota floor is 35% left in either window. Read it from CodexBar before
+launching Ember:
 
 ```sh
 jq -r '[.entries[]? | select(.provider == "muse")][0] as $m
