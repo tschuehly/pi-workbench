@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, liveModelMetadata, providerOf, reservePending, streamToResult, taskGoal, watchActivity } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, liveModelMetadata, providerOf, reservePending, streamToResult, taskGoal, watchActivity, watchReportCadence } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -452,6 +452,7 @@ test("report_status rides along with real work instead of costing a turn", async
   assert.doesNotMatch(tool.description, /few minutes|report again|stale/, "no wording that invites a report every few minutes");
   assert.match(tool.description, /latest tool call/, "the roster already derives activity from the last tool call");
   assert.match(tool.description, /same batch as your next real tool call, never alone/);
+  assert.match(tool.description, /after each wait \(at most 55 min\)/);
 
   const batch = (calls) => ({ sessionManager: { getBranch: () => [{ type: "message", message: { role: "assistant", content: calls.map((name) => ({ type: "toolCall", name })) } }] } });
   const lone = await tool.execute("call", { status: "Reading code" }, undefined, undefined, batch(["report_status"]));
@@ -728,6 +729,7 @@ test("plain adds the shared status instruction without an empty profile preamble
   // Children keep native foreground bash; one blocking wait-until call replaces sleep and tail -f polls.
   assert.match(dispatched.task, /wait-until --timeout SECONDS/);
   assert.match(dispatched.task, /Never wait with sleep, tail -f, or repeated checks/);
+  assert.match(dispatched.task, /at most 55 min; call report_status/);
   assert.match(dispatched.task, /Assignment:\nUse only this contract\.$/);
 });
 
@@ -1135,4 +1137,60 @@ test("a Worker holds settlement for running leaves and continues once per uncoll
   finish();
   assert.deepEqual(await held, { continue: true });
   assert.equal(await holdForLeaves({ pending: new Set(), list: () => roster, collected, nudged }), undefined, "one continuation per leaf, never a loop");
+});
+
+// A child whose observations are pushed by the test, a steer log, and timers the test fires by hand.
+function cadenceHarness() {
+  const queue = [], steers = [], timers = new Map();
+  let wake, nextId = 0;
+  const adapter = {
+    async *observe() {
+      for (;;) {
+        while (queue.length > 0) yield queue.shift();
+        await new Promise((resolve) => { wake = resolve; });
+      }
+    },
+    async steer(executionId, message, mode) { steers.push({ executionId, message, mode }); return { sequence: 0, mode }; },
+  };
+  const push = async (observation) => { queue.push({ at: "2026-10-21T10:00:00.000Z", ...observation }); wake?.(); await new Promise((resolve) => setImmediate(resolve)); };
+  const fakeTimers = {
+    setTimeout: (fn, ms) => { const id = ++nextId; timers.set(id, { fn, ms }); return id; },
+    clearTimeout: (id) => { timers.delete(id); },
+  };
+  const fire = async () => { for (const [id, { fn }] of [...timers]) { timers.delete(id); fn(); } await new Promise((resolve) => setImmediate(resolve)); };
+  return { adapter, steers, timers, push, fire, fakeTimers };
+}
+const REPORT = { type: "tool_start", detail: { toolName: "report_status", action: "Running tests" } };
+
+test("the report cadence watchdog asks a quiet child once at 55 min, re-arms only after a report, and stops at terminal", async () => {
+  const h = cadenceHarness();
+  const watching = watchReportCadence(h.adapter, "child-1", () => false, { timers: h.fakeTimers });
+  await h.push({ type: "tool_start", detail: { toolName: "bash", action: "running tests" } });
+  assert.deepEqual([...h.timers.values()].map((t) => t.ms), [55 * 60_000], "armed from launch; other tool calls do not re-arm");
+  await h.fire();
+  assert.equal(h.steers.length, 1);
+  assert.equal(h.steers[0].mode, "steer");
+  assert.match(h.steers[0].message, /call report_status with your next tool call/);
+  assert.equal(h.timers.size, 0, "one pending automatic request at most");
+  await h.push({ type: "tool_progress", detail: { toolName: "bash" } });
+  assert.equal(h.timers.size, 0);
+  await h.push(REPORT);
+  await h.push({ ...REPORT, type: "tool_end" });
+  assert.equal(h.timers.size, 1, "the next report re-arms once");
+  await h.fire();
+  assert.equal(h.steers.length, 2);
+  await h.push(REPORT);
+  await h.push({ type: "terminal", detail: { outcome: "success" } });
+  await watching;
+  assert.equal(h.timers.size, 0, "a terminal child has no timer");
+  assert.equal(h.steers.length, 2);
+});
+
+test("the report cadence watchdog never steers after the session closes", async () => {
+  const h = cadenceHarness();
+  let closed = false;
+  void watchReportCadence(h.adapter, "child-2", () => closed, { timers: h.fakeTimers });
+  closed = true;
+  await h.fire();
+  assert.equal(h.steers.length, 0);
 });

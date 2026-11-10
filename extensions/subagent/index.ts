@@ -23,7 +23,7 @@ const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_status", "su
 // web_enable-only list would leave it nothing to enable. keepChildWebToolsLazy keeps them inactive until then.
 const WEB_TOOLS = ["web_search", "source_check", "fetch_content", "get_search_content"];
 const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "compact_and_continue", "web_enable", "web_search", "source_check", "fetch_content", "get_search_content"] as const;
-const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found. To wait for a job, log, check, or server, make one bash call to `wait-until --timeout SECONDS` with any of `--file PATH [--match REGEX]`, `--pid PID`, `--cmd 'SHELL'`, `--url URL`, and no shorter bash timeout; it stays silent and returns when the first condition holds (exit 0) or at the timeout (exit 124). Never wait with sleep, tail -f, or repeated checks.";
+const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found. To wait for a job, log, check, or server, make one bash call to `wait-until --timeout SECONDS` with any of `--file PATH [--match REGEX]`, `--pid PID`, `--cmd 'SHELL'`, `--url URL`, and no shorter bash timeout; it stays silent and returns when the first condition holds (exit 0) or at the timeout (exit 124), at most 55 min; call report_status with your next tool call after each wait returns. Run commands that may take more than a few minutes in the background (`cmd > log 2>&1 &`) and wait with `--pid`. Never wait with sleep, tail -f, or repeated checks.";
 export const PROFILES = {
   scout: {
     tools: [...CHILD_TOOLS],
@@ -330,6 +330,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       upsertActivity(host, activity);
       let backgrounded = params.background === true;
       void watchActivity(host, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
+      const childHost = host;
+      void watchReportCadence(adapter, receipt.executionId, () => childHost.closed);
 
       const detachController = new AbortController();
       if (!backgrounded) {
@@ -497,7 +499,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "report_status",
     label: "Report status",
-    description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; one report covers a whole wait.",
+    description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; after each wait (at most 55 min) send one with your next tool call.",
     promptSnippet: "Report your current one-line status to the delegate roster",
     parameters: ReportStatusParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -693,6 +695,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       upsertActivity(host, activity);
       let backgrounded = params.background === true;
       void watchActivity(host, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
+      const childHost = host;
+      void watchReportCadence(adapter, receipt.executionId, () => childHost.closed);
       const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
       heartbeat.unref();
       const detachController = new AbortController();
@@ -1043,6 +1047,37 @@ export async function watchActivity(
   } finally {
     if (!completed || !retainTerminal()) removeActivity(pi, `delegate:${executionId}`);
   }
+}
+
+export const REPORT_QUIET_MS = 55 * 60_000;
+/**
+ * Best effort: a child that has not called report_status for REPORT_QUIET_MS since launch or its last
+ * report gets the lead's UPDATE_REQUEST steer once; only its next report re-arms it. Unlike the lead's
+ * requestUpdate, the report wakes nobody. A running tool call or a hung model request delays it.
+ */
+export async function watchReportCadence(
+  adapter: Pick<PiRpcExecutionAdapter, "observe" | "steer">,
+  executionId: string,
+  stopped: () => boolean,
+  { quietMs = REPORT_QUIET_MS, timers = { setTimeout, clearTimeout } as { setTimeout: (fn: () => void, ms: number) => any; clearTimeout: (timer: any) => void } } = {},
+) {
+  let timer: any;
+  const disarm = () => { if (timer !== undefined) timers.clearTimeout(timer); timer = undefined; };
+  const arm = () => {
+    disarm();
+    timer = timers.setTimeout(() => {
+      timer = undefined;
+      if (!stopped()) void Promise.resolve().then(() => adapter.steer(executionId, UPDATE_REQUEST, "steer")).catch(() => {});
+    }, quietMs);
+    timer?.unref?.();
+  };
+  arm();
+  try {
+    for await (const observation of adapter.observe(executionId)) {
+      if (observation.type === "terminal") break;
+      if (observation.type === "tool_start" && reportedStatusText(observation) !== undefined) arm();
+    }
+  } catch {} finally { disarm(); }
 }
 
 /** Waits for running leaves; asks for one continuation per leaf that ended uncollected. */
