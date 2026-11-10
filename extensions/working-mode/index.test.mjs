@@ -307,6 +307,15 @@ test("invalid commands change nothing", async () => {
   s.session.dispose();
 });
 
+test("Challenge names the blind review pair, author swaps, and the Muse fallback", () => {
+  const text = axes.checking.values.Challenge;
+  assert.match(text, /two background `review` subagents with the same brief, blind to each other/);
+  assert.match(text, /`openai-codex\/gpt-6\.1-sol`[\s\S]*`meta\/muse-ember-1\.0`, both at high/);
+  assert.match(text, /OpenAI author use `anthropic\/claude-opus-5-5` instead of Sol; for a Meta author use Opus instead of Ember/);
+  assert.match(text, /run the other reviewer alone and say so in the report/);
+  assert.match(text, /note which reviewer found each/);
+});
+
 test("every non-starting value has guidance; starting values render none", () => {
   for (const [axis, { values }] of Object.entries(axes)) {
     for (const [value, text] of Object.entries(values)) {

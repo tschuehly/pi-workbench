@@ -27,7 +27,7 @@ The [Working Mode specification](../foundation/working-mode.md) owns the meaning
 - AFK advisors may help adapt the approach while preserving the accepted outcome. If advice
   fails, permit low-cost reversible local fallback; missing owner preferences pause affected work.
 - Test requires automated proof, including adding a relevant test when needed. Challenge adds
-  independent scrutiny rather than replacing that proof.
+  independent scrutiny from a two-model review pair rather than replacing that proof.
 - Orchestration guides primary execution: work in the main session, delegate bounded tasks to
   fresh subagents, or coordinate scope-owning workers that use subagents. It does not require teams
   for trivial work; Main still permits required advisors and independent checks.

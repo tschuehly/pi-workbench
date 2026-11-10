@@ -104,7 +104,7 @@ The confirmed values are `Exercise | Test | Challenge`.
 | `Default` | Add no Checking-specific requirement; existing required checks still apply. |
 | `Exercise` | Inspect or exercise the changed result directly and report the evidence. This selection alone does not require automated tests. |
 | `Test` | Produce automated proof of the changed behavior, adding a relevant test when needed, and report the exact result. |
-| `Challenge` | Meet Test, then obtain fresh independent scrutiny of the result. Report unresolved findings and evidence gaps. |
+| `Challenge` | Meet Test, then obtain fresh independent scrutiny of the result from a parallel, mutually blind review pair (Sol and Ember at high, swapped for Opus when one shares the author's family). Report unresolved findings and evidence gaps; a single reviewer, when Muse quota or launch fails, is reported as such. |
 
 Checking specifies the evidence needed before claiming completion. Attention or Alignment must
 not silently lower it. Owner direction, repository policy, or task consequences may require
