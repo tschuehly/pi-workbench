@@ -41,7 +41,7 @@ below. Otherwise the Muse quota floor is 35% left in either window. Read it from
 launching Ember:
 
 ```sh
-jq -r '[.entries[]? | select(.provider == "muse")][0] as $m
+jq -er '[.entries[]? | select(.provider == "muse")][0] as $m
   | [$m.primary.usedPercent, $m.secondary.usedPercent]
   | if all(type == "number") then "fiveHourUsed=\(.[0]) weekUsed=\(.[1])" else "unknown" end' \
   "$HOME/Library/Group Containers/Y5PE65HELJ.com.steipete.codexbar/widget-snapshot.json" 2>/dev/null || echo unknown
@@ -50,7 +50,7 @@ jq -r '[.entries[]? | select(.provider == "muse")][0] as $m
 Above 65% used in either window, or when Ember fails to launch or hits a rate limit, run the other
 reviewer alone and state "single reviewer: Ember skipped (reason)" in the report.
 
-It prints `unknown` when the snapshot is missing or unreadable, has no Muse entry, or lacks a
+It prints `unknown` when the snapshot is missing, empty or unreadable, has no Muse entry, or lacks a
 window reading. Then launch Ember anyway, since a rate-limit failure still triggers the fallback,
 and record "Muse quota unknown" in the report.
 
