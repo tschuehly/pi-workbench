@@ -355,10 +355,12 @@ function fakePi(branch = []) {
   let command;
   const tools = {};
   const snapshots = [];
+  const sent = [];
   workingMode({
     on: (name, handler) => handlers.set(name, handler),
     registerCommand: (_name, value) => { command = value; },
     registerTool: (value) => { tools[value.name] = value; },
+    sendMessage: (message) => sent.push(message),
     events: { emit: (_name, value) => snapshots.push(value) },
   });
   const context = [];
@@ -380,7 +382,7 @@ function fakePi(branch = []) {
   };
   const confirm = () => call(ALIGNMENT_TOOL, { agreement: "ship X; check Y" });
   const reset = () => call(ALIGNMENT_RESET_TOOL, { reason: "new task Z" });
-  return { mode: (args) => command.handler(args, ctx), prompt, confirm, reset, snapshots };
+  return { mode: (args) => command.handler(args, ctx), prompt, confirm, reset, snapshots, sent };
 }
 
 test("AFK with an Alignment value stays interactive until alignment is reached", async () => {
@@ -459,3 +461,16 @@ test("ask_user stays offered to the model in every Attention value", async () =>
   s.session.dispose();
 });
 
+
+test("Thomas can reset alignment himself with /mode unalign, and the agent hears it at once", async () => {
+  const s = fakePi();
+  await s.mode("alignment align");
+  s.prompt();
+  await s.confirm();
+  assert.equal(s.snapshots.at(-1).aligned, true);
+  await s.mode("unalign");
+  assert.equal(s.snapshots.at(-1).aligned, false);
+  const sent = s.sent.at(-1);
+  assert.doesNotMatch(sent.content, /Alignment is reached/);
+  assert.match(sent.content, /Acknowledge this change/);
+});
