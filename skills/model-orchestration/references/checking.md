@@ -39,12 +39,18 @@ also satisfies a `high` panel. Merge duplicate findings and note which reviewer 
 Muse quota floor is 35% left in either window. Read it from CodexBar before launching Ember:
 
 ```sh
-jq '.entries[]|select(.provider=="muse")|{fiveHourUsed:.primary.usedPercent,weekUsed:.secondary.usedPercent}' \
-  "$HOME/Library/Group Containers/Y5PE65HELJ.com.steipete.codexbar/widget-snapshot.json"
+jq -r '[.entries[]? | select(.provider == "muse")][0] as $m
+  | [$m.primary.usedPercent, $m.secondary.usedPercent]
+  | if all(type == "number") then "fiveHourUsed=\(.[0]) weekUsed=\(.[1])" else "unknown" end' \
+  "$HOME/Library/Group Containers/Y5PE65HELJ.com.steipete.codexbar/widget-snapshot.json" 2>/dev/null || echo unknown
 ```
 
 Above 65% used in either window, or when Ember fails to launch or hits a rate limit, run the other
 reviewer alone and state "single reviewer: Ember skipped (reason)" in the report.
+
+It prints `unknown` when the snapshot is missing or unreadable, has no Muse entry, or lacks a
+window reading. Then launch Ember anyway, since a rate-limit failure still triggers the fallback,
+and record "Muse quota unknown" in the report.
 
 **Complete when:** the checking plan names its consequence, each reviewer's family and lens, and
 any reviewer that could not be launched.
