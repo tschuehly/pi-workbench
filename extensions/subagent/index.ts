@@ -1288,20 +1288,24 @@ export function providerOf(qualifiedModel: string | undefined): string | undefin
 }
 
 // The resolver otherwise reads models-store.json, which omits providers registered at runtime by
-// extensions (e.g. antigravity-acp); the live registry lists them with their effort metadata. A
-// long-running session's registry can predate a provider's login, so the store stays in the union.
-export function liveModelMetadata(modelRegistry?: { getAvailable(): Array<{ provider: string; id: string; reasoning?: boolean; thinkingLevelMap?: unknown }> }): string[] {
+// extensions (e.g. antigravity-acp); the live registry lists them with their effort metadata and is
+// the only catalog for automatic routing, since the store also caches unauthenticated models. A
+// long-running session's registry can predate a provider's login, so an explicit modelOverride
+// absent from it is taken from the store; launch fails if it is not authenticated.
+export function liveModelMetadata(modelRegistry?: { getAvailable(): Array<{ provider: string; id: string; reasoning?: boolean; thinkingLevelMap?: unknown }> }, modelOverride?: string): string[] {
   let models;
   try { models = modelRegistry?.getAvailable(); } catch { return []; }
   if (!Array.isArray(models) || models.length === 0) return [];
-  let doc: Record<string, { models: Array<{ id: string }> }> = {};
-  try {
-    const store = JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"), "models-store.json"), "utf8"));
-    if (store !== null && typeof store === "object") doc = store;
-  } catch { /* no readable store: the live registry alone */ }
-  for (const { provider, id, reasoning, thinkingLevelMap } of models) {
-    const entry = doc[provider] = { ...doc[provider], models: Array.isArray(doc[provider]?.models) ? doc[provider].models.filter((model) => model?.id !== id) : [] };
-    entry.models.push({ id, reasoning, thinkingLevelMap } as { id: string });
+  const doc: Record<string, { models: unknown[] }> = {};
+  for (const { provider, id, reasoning, thinkingLevelMap } of models) (doc[provider] ??= { models: [] }).models.push({ id, reasoning, thinkingLevelMap });
+  const provider = providerOf(modelOverride);
+  const id = provider === undefined ? undefined : modelOverride!.slice(provider.length + 1);
+  if (provider !== undefined && !models.some((model) => model.provider === provider && model.id === id)) {
+    try {
+      const store = JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"), "models-store.json"), "utf8"));
+      const stored = (Array.isArray(store?.[provider]?.models) ? store[provider].models : []).find((model: { id?: unknown }) => model?.id === id);
+      if (stored !== undefined) (doc[provider] ??= { models: [] }).models.push(stored);
+    } catch { /* no readable store: the resolver reports the override as unavailable */ }
   }
   const file = path.join(mkdtempSync(path.join(process.env.PI_TMP ?? os.tmpdir(), "routing-")), "models.json");
   writeFileSync(file, JSON.stringify(doc));
@@ -1311,7 +1315,7 @@ export function liveModelMetadata(modelRegistry?: { getAvailable(): Array<{ prov
 async function resolveBinding(cognitiveRole: string, independentOfProvider?: string, independentOfModel?: string, modelOverride?: string, effort?: string, excludeFamilies?: string[], resolverPath = resolver, modelRegistry?: Parameters<typeof liveModelMetadata>[0]): Promise<any> {
   const args = [
     resolverPath, cognitiveRole,
-    ...liveModelMetadata(modelRegistry),
+    ...liveModelMetadata(modelRegistry, modelOverride),
     ...(modelOverride === undefined ? [] : ["--model", modelOverride]),
     ...(effort === undefined ? [] : ["--effort", effort]),
     ...(independentOfProvider === undefined ? [] : ["--independent-of", independentOfProvider]),

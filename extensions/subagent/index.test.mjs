@@ -481,25 +481,39 @@ test("exposes no task timeout controls with bounded independence and status para
   for (const invalid of [undefined, "claude-opus-5", "/claude-opus-5", "anthropic/"]) assert.equal(providerOf(invalid), undefined);
 });
 
-test("routing metadata unions models-store.json with the live registry, live entries winning", async () => {
+test("default routing uses the live registry only; an explicit override may come from models-store.json", async () => {
   const dir = await mkdtemp(join(tmpdir(), "subagent-metadata-"));
   const saved = { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, PI_TMP: process.env.PI_TMP };
+  const resolver = new URL("../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs", import.meta.url).pathname;
   try {
     await writeFile(join(dir, "models-store.json"), JSON.stringify({
       meta: { models: [{ id: "muse-ember-1.0", reasoning: true }] },
-      anthropic: { models: [{ id: "claude-opus-5-5", reasoning: false }] },
+      anthropic: { models: [{ id: "claude-opus-5-5", reasoning: true }] },
     }));
+    await writeFile(join(dir, "quota.json"), JSON.stringify({ providers: [] }));
     process.env.PI_CODING_AGENT_DIR = dir;
     process.env.PI_TMP = dir;
-    const args = liveModelMetadata({ getAvailable: () => [
+    const registry = { getAvailable: () => [
       { provider: "antigravity-acp", id: "gemini-4-argon", reasoning: true },
-      { provider: "anthropic", id: "claude-opus-5-5", reasoning: true },
-    ] });
-    assert.equal(args[0], "--model-metadata");
-    const doc = JSON.parse(await readFile(args[1], "utf8"));
-    assert.deepEqual(doc.meta.models.map((model) => model.id), ["muse-ember-1.0"], "a store-only provider stays routable");
+      { provider: "openai-codex", id: "gpt-6.1-sol", reasoning: true },
+    ] };
+    const resolve = (args, extra = []) => spawnSync(process.execPath, [resolver, "implementation", ...args, ...extra, "--quota", join(dir, "quota.json")], { encoding: "utf8" });
+
+    const defaults = liveModelMetadata(registry);
+    const doc = JSON.parse(await readFile(defaults[1], "utf8"));
+    assert.deepEqual(Object.keys(doc).sort(), ["antigravity-acp", "openai-codex"], "store-only providers stay out of automatic routing");
     assert.deepEqual(doc["antigravity-acp"].models.map((model) => model.id), ["gemini-4-argon"], "a runtime-registered provider stays routable");
-    assert.deepEqual(doc.anthropic.models, [{ id: "claude-opus-5-5", reasoning: true }], "the live entry replaces the stored one");
+    const auto = resolve(defaults);
+    assert.equal(auto.status, 0, auto.stderr);
+    assert.equal(JSON.parse(auto.stdout).modelBinding.model, "gpt-6.1-sol", "default routing skips the store-only Opus");
+
+    const override = liveModelMetadata(registry, "anthropic/claude-opus-5-5");
+    const overrideDoc = JSON.parse(await readFile(override[1], "utf8"));
+    assert.deepEqual(overrideDoc.anthropic.models, [{ id: "claude-opus-5-5", reasoning: true }], "only the named store entry is added");
+    assert.equal(overrideDoc.meta, undefined);
+    const explicit = resolve(override, ["--model", "anthropic/claude-opus-5-5"]);
+    assert.equal(explicit.status, 0, explicit.stderr);
+    assert.equal(JSON.parse(explicit.stdout).modelBinding.model, "claude-opus-5-5", "an explicit store-only override passes preflight");
   } finally {
     for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
     await rm(dir, { recursive: true, force: true });
