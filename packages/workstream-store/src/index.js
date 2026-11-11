@@ -9,6 +9,7 @@ export function createUserLocalWorkstreamStore(options = {}) {
     directory,
     eventRetention: options.eventRetention,
     lockTimeoutMs: options.lockTimeoutMs,
+    lockRetryIntervalMs: options.lockRetryIntervalMs,
   });
   return new WorkstreamStore({ adapter, clock: options.clock, limits: options.limits });
 }

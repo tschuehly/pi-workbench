@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Pi-only workbench harness capabilities",
+  "engines": { "node": ">=24.13.0" },
   "keywords": [
     "pi-package"
   ],
