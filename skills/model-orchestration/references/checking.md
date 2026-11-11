@@ -37,7 +37,7 @@ Ember (`meta/muse-ember-1.0`) as `modelOverride`. An OpenAI author gets Opus
 also satisfies a `high` panel. Merge duplicate findings and note which reviewer found each.
 
 A Meta author's pair is Sol and Opus: it has no Ember, so skip the quota read and the fallback
-below. Otherwise the Muse quota floor is 35% left in either window. Read it from CodexBar before
+below. Otherwise the Muse quota floor is 20% left in either window. Read it from CodexBar before
 launching Ember:
 
 ```sh
@@ -47,7 +47,7 @@ jq -er '[.entries[]? | select(.provider == "muse")][0] as $m
   "$HOME/Library/Group Containers/Y5PE65HELJ.com.steipete.codexbar/widget-snapshot.json" 2>/dev/null || echo unknown
 ```
 
-Above 65% used in either window, or when Ember fails to launch or hits a rate limit, run the other
+Above 80% used in either window, or when Ember fails to launch or hits a rate limit, run the other
 reviewer alone and state "single reviewer: Ember skipped (reason)" in the report.
 
 It prints `unknown` when the snapshot is missing, empty or unreadable, has no Muse entry, or lacks a
