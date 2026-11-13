@@ -81,7 +81,7 @@ test("settlement hook switches once, records one notice, and stops when fallback
   assert.equal(result.entries.length, 1);
   assert.equal(result.entries[0].display, true);
   assert.match(result.entries[0].content, /503 Service Unavailable/);
-  assert.match(result.entries[0].content, /openai-codex\/gpt-6.1-sol \(high\)/);
+  assert.match(result.entries[0].content, /openai\/gpt-6.1-sol \(high\)/);
   assert.match(result.entries[0].content, /Before repeating any side-effecting action, check/);
   assert.deepEqual(h.calls, [["model", FALLBACK], ["thinking", "high"]]);
   assert.equal(await h.settle(), undefined, "consume failure only once");

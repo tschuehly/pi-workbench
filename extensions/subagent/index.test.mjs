@@ -496,13 +496,13 @@ test("default routing uses the live registry only; an explicit override may come
     process.env.PI_TMP = dir;
     const registry = { getAvailable: () => [
       { provider: "antigravity-acp", id: "gemini-4-argon", reasoning: true },
-      { provider: "openai-codex", id: "gpt-6.1-sol", reasoning: true },
+      { provider: "openai", id: "gpt-6.1-sol", reasoning: true },
     ] };
     const resolve = (args, extra = []) => spawnSync(process.execPath, [resolver, "implementation", ...args, ...extra, "--quota", join(dir, "quota.json")], { encoding: "utf8" });
 
     const defaults = liveModelMetadata(registry);
     const doc = JSON.parse(await readFile(defaults[1], "utf8"));
-    assert.deepEqual(Object.keys(doc).sort(), ["antigravity-acp", "openai-codex"], "store-only providers stay out of automatic routing");
+    assert.deepEqual(Object.keys(doc).sort(), ["antigravity-acp", "openai"], "store-only providers stay out of automatic routing");
     assert.deepEqual(doc["antigravity-acp"].models.map((model) => model.id), ["gemini-4-argon"], "a runtime-registered provider stays routable");
     const auto = resolve(defaults);
     assert.equal(auto.status, 0, auto.stderr);

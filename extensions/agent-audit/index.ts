@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatSkillsForPrompt, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   AUDIT_FORMAT, AUDIT_SCHEMA_VERSION, createAuditStore, createTransportObserver, findExactSkillEvidence,
-  formatError, isInside, jsonValue, providerCoverage, snapshotFileVersion, snapshotSources,
+  formatError, isInside, jsonValue, openAiInstructionItems, providerCoverage, snapshotFileVersion, snapshotSources,
 } from "./audit.mjs";
 import { alignmentGuidance, checkingGuidance, renderWorkingModePrompt, visibleSkillsForMode } from "./legacy-working-mode.ts";
 import { isSelection, type WorkingModeState } from "../working-mode/index.ts";
@@ -320,6 +320,7 @@ function instructionFields(payload: any, api: string | null) {
   const fields = [];
   if (api === "anthropic-messages" && payload.system !== undefined) fields.push({ path: "system", value: payload.system });
   if (api === "openai-codex-responses" && payload.instructions !== undefined) fields.push({ path: "instructions", value: payload.instructions });
+  if (api === "openai-responses") for (const { item, index } of openAiInstructionItems(payload)) fields.push({ path: `input[${index}].content`, value: item.content });
   return fields;
 }
 

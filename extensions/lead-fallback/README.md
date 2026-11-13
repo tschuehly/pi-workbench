@@ -1,7 +1,7 @@
 # Lead service-failure recovery
 
 At `agent_before_settle`, a failed Anthropic lead request can switch to
-`openai-codex/gpt-6.1-sol` with high thinking and continue the same session.
+`openai/gpt-6.1-sol` with high thinking and continue the same session.
 Eligible failures: account limits, overloads, leading HTTP 429/5xx statuses, and timeouts.
 Other leading 4xx statuses, cancellations, refusals, ordinary successful replies, and child
 executions are excluded. A retry the user cancels during native backoff (Escape / RPC

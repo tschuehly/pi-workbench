@@ -13,6 +13,7 @@ Exact request bodies, logical hook evidence, source snapshots, and output refere
 Supported transport observations for installed Pi 0.84.3 are:
 
 - Anthropic Messages through the SDK's HTTP `fetch` path;
+- OpenAI Responses (`openai` provider) through the SDK's HTTP `fetch` path;
 - OpenAI Codex Responses through HTTP/SSE fallback, including exact compressed bytes and local zstd interpretation; and
 - OpenAI Codex Responses through Node's `WebSocket.prototype.send`, including cached-context delta messages on sockets opened before capture started.
 

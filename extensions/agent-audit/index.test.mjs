@@ -347,6 +347,8 @@ test("source snapshots remain immutable after disk drift and skill evidence requ
     const catalog=formatSkillsForPrompt(visible);
     const duplicate=findExactSkillEvidence({instructions:`${catalog}${catalog}`},skills,visible,formatSkillsForPrompt,{api:"openai-codex-responses"});
     assert.equal(duplicate.advertisedCatalog.status,"unknown"); assert.equal(duplicate.advertisedCatalog.matches,2);
+    const openAiCatalog=findExactSkillEvidence({input:[{role:"developer",content:catalog},{role:"user",content:[{type:"input_text",text:catalog}]}]},skills,visible,formatSkillsForPrompt,{api:"openai-responses"});
+    assert.equal(openAiCatalog.advertisedCatalog.status,"observed","only developer/system input items are OpenAI instruction fields");
     const wrapper=`<skill name="known" location="${path}">\nReferences are relative to ${dir}.\n\nbody loaded then retained\n</skill>`;
     const contextMessages=[
       {role:"assistant",content:[{type:"toolCall",id:"read-1",name:"read",arguments:{path}}]},
@@ -539,6 +541,8 @@ test("coverage and scope are conservative", () => {
   assert.equal(providerCoverage({api:"anthropic-messages",provider:"anthropic",baseUrl:"https://api.anthropic.com"}).httpUrl,"https://api.anthropic.com/v1/messages");
   const codex=providerCoverage({api:"openai-codex-responses",provider:"openai-codex",baseUrl:"https://chatgpt.com/backend-api"});
   assert.equal(codex.webSocketUrl,"wss://chatgpt.com/backend-api/codex/responses");
+  const openai=providerCoverage({api:"openai-responses",provider:"openai",baseUrl:"https://api.openai.com/v1/"});
+  assert.equal(openai.status,"supported"); assert.equal(openai.httpUrl,"https://api.openai.com/v1/responses"); assert.equal(openai.webSocketUrl,null);
   assert.equal(providerCoverage({api:"google-generative-ai",provider:"google"}).status,"unsupported");
   assert.equal(providerCoverage({api:"anthropic-messages",provider:"custom",baseUrl:"https://token@example.com?key=secret"}).status,"unsupported");
   const external=temp("agent-audit-outside-"); const escape=join(repo,"extensions","agent-audit",`.escape-${process.pid}`); symlinkSync(external,escape,"dir");

@@ -31,7 +31,7 @@ same-family, distinct-model.
 ## Challenge review pair
 
 Every `Challenge` review is two parallel `review` children on the same brief, blind to each other,
-both at `high` with the author as `independentOfModel`: Sol (`openai-codex/gpt-6.1-sol`) and
+both at `high` with the author as `independentOfModel`: Sol (`openai/gpt-6.1-sol`) and
 Ember (`meta/muse-ember-1.0`) as `modelOverride`. An OpenAI author gets Opus
 (`anthropic/claude-opus-5-5`) instead of Sol; a Meta author gets Opus instead of Ember. The pair
 also satisfies a `high` panel. Merge duplicate findings and note which reviewer found each.

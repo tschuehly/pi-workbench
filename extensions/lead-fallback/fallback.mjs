@@ -1,4 +1,4 @@
-export const FALLBACK = { provider: "openai-codex", id: "gpt-6.1-sol", thinking: "high" };
+export const FALLBACK = { provider: "openai", id: "gpt-6.1-sol", thinking: "high" };
 
 const RECOVERABLE_ERROR = /rate.?limit|usage.?limit|quota|^(?:HTTP )?(?:429|5\d{2})\b|overload|currently experiencing high demand|service.?unavailable|server.?error|internal.?error|timed? out|timeout|ETIMEDOUT/i;
 // Status numbers count only as the SDK's leading status; other 4xx responses are never transient.

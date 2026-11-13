@@ -136,7 +136,7 @@ function diskSnapshot(path) {
 export function providerCoverage(model) {
   const api = model?.api ?? null;
   const baseUrl = model?.baseUrl ?? "";
-  const rawBase = baseUrl.trim() || (api === "openai-codex-responses" ? "https://chatgpt.com/backend-api" : "https://api.anthropic.com");
+  const rawBase = baseUrl.trim() || (api === "openai-codex-responses" ? "https://chatgpt.com/backend-api" : api === "openai-responses" ? "https://api.openai.com/v1" : "https://api.anthropic.com");
   let parsedBase;
   try { parsedBase = new URL(rawBase); } catch { return { status:"unsupported", api, provider:model?.provider ?? null, httpUrl:null, webSocketUrl:null, limitations:"invalid provider base URL" }; }
   if (parsedBase.username || parsedBase.password || parsedBase.search || parsedBase.hash)
@@ -147,11 +147,15 @@ export function providerCoverage(model) {
     const ws = new URL(http); ws.protocol = ws.protocol === "http:" ? "ws:" : "wss:";
     return { status: "supported", api, provider: model.provider, httpUrl: new URL(http).toString(), webSocketUrl: ws.toString(), limitations: "HTTP fetch and Node global WebSocket send only" };
   }
+  if (api === "openai-responses") {
+    const base = rawBase.replace(/\/+$/, "");
+    return { status: "supported", api, provider: model.provider, httpUrl: new URL(`${base}/responses`).toString(), webSocketUrl: null, limitations: "OpenAI SDK fetch transport only" };
+  }
   if (api === "anthropic-messages") {
     const base = rawBase.replace(/\/+$/, "");
     return { status: "supported", api, provider: model.provider, httpUrl: new URL(`${base}/v1/messages`).toString(), webSocketUrl: null, limitations: "Anthropic SDK fetch transport only" };
   }
-  return { status: "unsupported", api, provider: model?.provider ?? null, httpUrl: null, webSocketUrl: null, limitations: "This audit slice supports Anthropic HTTP/SSE and Codex HTTP/SSE or Node WebSocket" };
+  return { status: "unsupported", api, provider: model?.provider ?? null, httpUrl: null, webSocketUrl: null, limitations: "This audit slice supports Anthropic HTTP/SSE, OpenAI Responses HTTP/SSE, and Codex HTTP/SSE or Node WebSocket" };
 }
 
 export function createTransportObserver({ current, capture, outcome, error, drainTimeoutMs = 1000 }) {
@@ -318,13 +322,21 @@ async function bodyEvidence(value, contentEncoding) {
   };
 }
 
+// OpenAI Responses carries Pi's system prompt as developer/system input items, not `instructions`.
+export function openAiInstructionItems(payload) {
+  return (Array.isArray(payload?.input) ? payload.input : []).map((item, index) => ({ item, index }))
+    .filter(({ item }) => (item?.role === "developer" || item?.role === "system") && typeof item.content === "string");
+}
+
 export function findExactSkillEvidence(payload, skills, visibleSkills, formatSkillsForPrompt, { api = null, contextMessages = [], cwd = process.cwd() } = {}) {
   const strings = [];
   walkStrings(payload, strings);
   const catalog = formatSkillsForPrompt(visibleSkills);
   const instructionText = api === "openai-codex-responses"
     ? [payload?.instructions].filter((value) => typeof value === "string")
-    : api === "anthropic-messages"
+    : api === "openai-responses"
+      ? openAiInstructionItems(payload).map(({ item }) => item.content)
+      : api === "anthropic-messages"
       ? (typeof payload?.system === "string" ? [payload.system] : (payload?.system ?? []).filter((part) => part?.type === "text").map((part) => part.text))
       : [];
   const matches = catalog ? instructionText.reduce((total, text) => total + countOccurrences(text, catalog), 0) : 0;
