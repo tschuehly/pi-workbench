@@ -193,7 +193,7 @@ test("nudges at the ceiling and every step above it, and re-arms after it drops"
   assert.equal(entry.customType, "context-ceiling");
   assert.equal(entry.display, true, "the owner sees the nudge");
   assert.match(entry.content, /212k tokens/);
-  assert.match(entry.content, /persist[\s\S]*compact_and_continue/);
+  assert.match(entry.content, /Compact reasonably soon[\s\S]*compact_and_continue/);
   assert.equal(nudge.continue, undefined, "the nudge never forces a continuation");
   assert.equal(turnEnd(249_999), undefined, "one nudge per step");
   assert.ok(turnEnd(250_000), "repeats at the next step");

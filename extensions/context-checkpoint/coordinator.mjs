@@ -90,7 +90,7 @@ export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = 
       type: "custom_message",
       customType: "context-ceiling",
       display: true,
-      content: `Context is at ${Math.round(tokens / 1000)}k tokens. Checkpoint reasonably soon: finish what is in flight, including running children; persist what must survive to files or commits; then call compact_and_continue alone. This reminder repeats every ${step / 1000}k tokens until you compact.`,
+      content: `Context is at ${Math.round(tokens / 1000)}k tokens. Compact reasonably soon: let in-flight work, including running children, land; save the work that must survive; then call compact_and_continue. This reminder repeats every ${step / 1000}k tokens until you compact.`,
       details: { tokens, threshold, step },
     };
   };
