@@ -12,6 +12,7 @@ import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/sr
 import { ACTIVITY_CHANNEL, removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
+import { nodeBin } from "../background-bash/node-bin.mjs";
 import { latestAssistantToolCallCount } from "../context-checkpoint/coordinator.mjs";
 import { createCompletionWakeup, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
@@ -1360,7 +1361,7 @@ async function resolveBinding(cognitiveRole: string, independentOfProvider?: str
   const innerTimeout = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
   const startedAt = Date.now();
   const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: innerTimeout * 2 + 5_000 }, (error, output, stderr) => {
+    execFile(nodeBin(), args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: innerTimeout * 2 + 5_000 }, (error, output, stderr) => {
       if (error !== null) {
         const stderrText = String(stderr).trim();
         const stages = [...stderrText.matchAll(/^STAGE=(\S+)$/gm)];

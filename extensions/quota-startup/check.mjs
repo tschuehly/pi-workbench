@@ -1,12 +1,13 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeBin } from "../background-bash/node-bin.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const QUOTA_CACHE_SCRIPT = path.resolve(here, "../../skills/model-orchestration/scripts/quota-snapshot-cache.mjs");
 const KEYCHAIN_REFRESH_ARGS = [QUOTA_CACHE_SCRIPT, "--refresh-keychain"];
 
 export async function checkClaudeQuota(run) {
-  return runAndClassify(run, process.execPath, [QUOTA_CACHE_SCRIPT]);
+  return runAndClassify(run, nodeBin(), [QUOTA_CACHE_SCRIPT]);
 }
 
 export function noticeForQuotaCheck(check, manual) {
@@ -43,7 +44,7 @@ export async function repairClaudeQuota(run, status) {
     return unavailable(`No automatic repair is available for quota status '${status}'.`);
   }
 
-  return runAndClassify(run, process.execPath, KEYCHAIN_REFRESH_ARGS);
+  return runAndClassify(run, nodeBin(), KEYCHAIN_REFRESH_ARGS);
 }
 
 async function runAndClassify(run, command, args) {
