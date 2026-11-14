@@ -74,25 +74,24 @@ export function latestAssistantToolCallCount(branch) {
 }
 
 // ponytail: one fixed ceiling for every model; derive it from the context window if windows diverge.
-export const CONTEXT_CEILING_TOKENS = 250_000;
+export const CONTEXT_CEILING_TOKENS = 200_000;
+export const CONTEXT_CEILING_STEP_TOKENS = 50_000;
 
-/** Once per crossing of the ceiling, a boundary entry that asks for a checkpoint at the next phase boundary. */
-export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS) {
-  let nudged = false;
+/** A boundary entry at the ceiling and every further step above it, until a compaction drops the context back. */
+export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = CONTEXT_CEILING_STEP_TOKENS) {
+  let lastLevel = -1;
   return (tokens) => {
     if (typeof tokens !== "number") return undefined;
-    if (tokens < threshold) {
-      nudged = false;
-      return undefined;
-    }
-    if (nudged) return undefined;
-    nudged = true;
+    const level = tokens < threshold ? -1 : Math.floor((tokens - threshold) / step);
+    const crossed = level > lastLevel;
+    lastLevel = level;
+    if (!crossed) return undefined;
     return {
       type: "custom_message",
       customType: "context-ceiling",
       display: true,
-      content: `Context is at ${Math.round(tokens / 1000)}k tokens, above the ${threshold / 1000}k ceiling. Finish the current step; at the next phase boundary, save and verify the work that must survive, then call compact_and_continue alone with a short summaryFocus and the concrete nextPhase.`,
-      details: { tokens, threshold },
+      content: `Context is at ${Math.round(tokens / 1000)}k tokens. Checkpoint reasonably soon: finish what is in flight, including running children; persist what must survive to files or commits; then call compact_and_continue alone. This reminder repeats every ${step / 1000}k tokens until you compact.`,
+      details: { tokens, threshold, step },
     };
   };
 }

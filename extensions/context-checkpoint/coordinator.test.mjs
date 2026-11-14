@@ -173,7 +173,7 @@ test("session shutdown during a checkpoint drops queued wakes with the pending c
   assert.equal(barrier.queuedCount, 0);
 });
 
-test("nudges once when context crosses the ceiling and re-arms after it drops", async () => {
+test("nudges at the ceiling and every step above it, and re-arms after it drops", async () => {
   const { default: contextCheckpointExtension } = await import("./index.ts");
   const handlers = new Map();
   let active = ["read", "compact_and_continue"];
@@ -185,21 +185,26 @@ test("nudges once when context crosses the ceiling and re-arms after it drops", 
   });
   const turnEnd = (tokens) => handlers.get("turn_end")({ type: "turn_end", toolResults: [] }, { getContextUsage: () => ({ tokens, contextWindow: 1_000_000, percent: null }) });
 
-  assert.equal(turnEnd(249_999), undefined);
-  const nudge = turnEnd(262_400);
+  assert.equal(turnEnd(199_999), undefined);
+  const nudge = turnEnd(212_400);
   assert.equal(nudge.entries.length, 1);
   const [entry] = nudge.entries;
   assert.equal(entry.type, "custom_message", "the nudge rides into the next request without triggering one");
   assert.equal(entry.customType, "context-ceiling");
   assert.equal(entry.display, true, "the owner sees the nudge");
-  assert.match(entry.content, /262k tokens/);
-  assert.match(entry.content, /next phase boundary[\s\S]*compact_and_continue/);
+  assert.match(entry.content, /212k tokens/);
+  assert.match(entry.content, /persist[\s\S]*compact_and_continue/);
   assert.equal(nudge.continue, undefined, "the nudge never forces a continuation");
-  assert.equal(turnEnd(300_000), undefined, "one nudge per crossing");
+  assert.equal(turnEnd(249_999), undefined, "one nudge per step");
+  assert.ok(turnEnd(250_000), "repeats at the next step");
   assert.equal(turnEnd(null), undefined, "unknown usage right after compaction changes nothing");
-  assert.equal(turnEnd(300_000), undefined);
+  assert.equal(turnEnd(260_000), undefined);
+  assert.ok(turnEnd(410_000), "a big jump nudges once");
+  assert.equal(turnEnd(449_000), undefined);
+  assert.equal(turnEnd(230_000), undefined, "a compaction that lands above the ceiling is not nudged at once");
+  assert.ok(turnEnd(250_000), "but is nudged at its next step");
   assert.equal(turnEnd(80_000), undefined);
-  assert.ok(turnEnd(251_000), "a compacted session that grows back is nudged again");
+  assert.ok(turnEnd(201_000), "a compacted session that grows back is nudged again");
 
   const earlier = { type: "custom", customType: "other-extension" };
   assert.equal(turnEnd(80_000), undefined);
