@@ -193,16 +193,16 @@ test("nudges at the ceiling and every step above it, and re-arms after it drops"
   assert.equal(entry.customType, "context-ceiling");
   assert.equal(entry.display, true, "the owner sees the nudge");
   assert.match(entry.content, /212k tokens/);
-  assert.match(entry.content, /Compact reasonably soon[\s\S]*compact_and_continue/);
+  assert.match(entry.content, /choose what the summary keeps/, "the first reminder gives the reason");
   assert.equal(nudge.continue, undefined, "the nudge never forces a continuation");
   assert.equal(turnEnd(249_999), undefined, "one nudge per step");
-  assert.ok(turnEnd(250_000), "repeats at the next step");
+  assert.match(turnEnd(250_000).entries[0].content, /^Context is now at 250k tokens\. A phase boundary/, "later reminders are short");
   assert.equal(turnEnd(null), undefined, "unknown usage right after compaction changes nothing");
   assert.equal(turnEnd(260_000), undefined);
   assert.ok(turnEnd(410_000), "a big jump nudges once");
   assert.equal(turnEnd(449_000), undefined);
   assert.equal(turnEnd(230_000), undefined, "a compaction that lands above the ceiling is not nudged at once");
-  assert.ok(turnEnd(250_000), "but is nudged at its next step");
+  assert.match(turnEnd(250_000).entries[0].content, /choose what the summary keeps/, "but is nudged in full at its next step, since compaction summarized the earlier reminders");
   assert.equal(turnEnd(80_000), undefined);
   assert.ok(turnEnd(201_000), "a compacted session that grows back is nudged again");
 

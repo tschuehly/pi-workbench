@@ -80,17 +80,25 @@ export const CONTEXT_CEILING_STEP_TOKENS = 50_000;
 /** A boundary entry at the ceiling and every further step above it, until a compaction drops the context back. */
 export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = CONTEXT_CEILING_STEP_TOKENS) {
   let lastLevel = -1;
+  let shown = false;
   return (tokens) => {
     if (typeof tokens !== "number") return undefined;
     const level = tokens < threshold ? -1 : Math.floor((tokens - threshold) / step);
+    // A drop means a compaction summarized the earlier reminders away, so the next one is full again.
+    if (level < lastLevel) shown = false;
     const crossed = level > lastLevel;
     lastLevel = level;
     if (!crossed) return undefined;
+    const k = Math.round(tokens / 1000);
+    const content = shown
+      ? `Context is now at ${k}k tokens. A phase boundary is still a good moment for compact_and_continue.`
+      : `Context is at ${k}k tokens. Older detail starts to crowd the current work. Compacting at a natural phase boundary with compact_and_continue lets you choose what the summary keeps; Pi's automatic compaction near the full window does not. Once running children are back is a good moment.`;
+    shown = true;
     return {
       type: "custom_message",
       customType: "context-ceiling",
       display: true,
-      content: `Context is at ${Math.round(tokens / 1000)}k tokens. Compact reasonably soon: let in-flight work, including running children, land; save the work that must survive; then call compact_and_continue. This reminder repeats every ${step / 1000}k tokens until you compact.`,
+      content,
       details: { tokens, threshold, step },
     };
   };
