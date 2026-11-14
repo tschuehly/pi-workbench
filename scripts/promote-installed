@@ -38,7 +38,7 @@
 #       after the oldest running session daemon or Pi process started. Every successful
 #       switch, switch-workbench and switch-web runs it with --apply.
 set -Eeuo pipefail
-export PATH=${PI_PROMOTE_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
+export PATH=${PI_PROMOTE_PATH:-$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
 STORE=$HOME/.pi-workbench/installed
 PORT=8505 # the Pi Workbench app's default ServerURL
