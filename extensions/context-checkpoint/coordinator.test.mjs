@@ -196,7 +196,7 @@ test("nudges at the ceiling and every step above it, and re-arms after it drops"
   assert.match(entry.content, /choose what the summary keeps/, "the first reminder gives the reason");
   assert.equal(nudge.continue, undefined, "the nudge never forces a continuation");
   assert.equal(turnEnd(249_999), undefined, "one nudge per step");
-  assert.match(turnEnd(250_000).entries[0].content, /^Context is now at 250k tokens\. A phase boundary/, "later reminders are short");
+  assert.match(turnEnd(250_000).entries[0].content, /^Context is now at 250k tokens\. Plan to compact when this phase ends\.$/, "later reminders are short");
   assert.equal(turnEnd(null), undefined, "unknown usage right after compaction changes nothing");
   assert.equal(turnEnd(260_000), undefined);
   assert.ok(turnEnd(410_000), "a big jump nudges once");

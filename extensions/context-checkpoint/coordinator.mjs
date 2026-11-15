@@ -91,8 +91,8 @@ export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = 
     if (!crossed) return undefined;
     const k = Math.round(tokens / 1000);
     const content = shown
-      ? `Context is now at ${k}k tokens. A phase boundary is still a good moment for compact_and_continue.`
-      : `Context is at ${k}k tokens. Older detail starts to crowd the current work. Compacting at a natural phase boundary with compact_and_continue lets you choose what the summary keeps; Pi's automatic compaction near the full window does not. Once running children are back is a good moment.`;
+      ? `Context is now at ${k}k tokens. Plan to compact when this phase ends.`
+      : `Context is at ${k}k tokens, with plenty of room left. Carry on with the current phase. Once it is done and your running children are back, compact_and_continue lets you choose what the summary keeps.`;
     shown = true;
     return {
       type: "custom_message",
