@@ -92,7 +92,7 @@ export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = 
     const k = Math.round(tokens / 1000);
     const content = shown
       ? `Context is now at ${k}k tokens. Plan to compact when this phase ends.`
-      : `Context is at ${k}k tokens, with plenty of room left. Carry on with the current phase. Once it is done and your running children are back, compact_and_continue lets you choose what the summary keeps.`;
+      : `Context is at ${k}k tokens, with plenty of room left. Carry on with the current phase. Once it is done and your running children are back, compact with compact_and_continue, naming what the summary must keep and the next phase.`;
     shown = true;
     return {
       type: "custom_message",
