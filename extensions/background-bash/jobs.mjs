@@ -9,6 +9,7 @@ import { removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { redact, redactDeep } from "../secret-redaction/redact.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { writeOnce } from "./runner.mjs";
+import { nodeBin } from "./node-bin.mjs";
 
 const MAX_TAIL = 12_000;
 const MAX_ACTIVE = 8;
@@ -165,7 +166,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     const startedAt = Date.now();
     const record = { id, command, description, cwd, sessionId, sessionFile, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000 };
     writeJson(join(dir, "job.json"), record);
-    const runner = spawn(process.execPath, [RUNNER, dir], { cwd: dir, detached: true, stdio: "ignore", env });
+    const runner = spawn(nodeBin(), [RUNNER, dir], { cwd: dir, detached: true, stdio: "ignore", env });
     runner.unref();
     const job = track({ ...record, pgid: runner.pid }, dir);
     writeJson(join(dir, "job.json"), { ...record, runnerPid: runner.pid, pgid: runner.pid });
