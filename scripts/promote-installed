@@ -170,6 +170,8 @@ prune_builds() { # [--apply]
     END { print (max ? now - max : now) }')
   refs=$(instance_refs 2>/dev/null || true)
   hostrevs=$(durable_hosts | cut -f2) || { echo "refusing to prune: cannot read $DATA/session-runtimes.json" >&2; return 1; }
+  # shortcut: a pinned family keeps its build (about 0.8 GB) until the owner upgrades its host; prune by hand lists them.
+  pins=$(durable_pins) || { echo "refusing to prune: cannot read $DATA/session-runtimes.json" >&2; return 1; }
   for product in pi-workbench pi-web; do
     live=$(cd "$PROJECTS/$product$SUFFIX" 2>/dev/null && pwd -P || true)
     # Rollback: the build most recently switched away from; before any .retired marker, the newest prepared.
@@ -181,6 +183,7 @@ prune_builds() { # [--apply]
       if [[ $real/${build##*/} == "$live" ]]; then reason=live
       elif [[ ${build##*/} == "$rollback" ]]; then reason=rollback
       elif grep -qx "$real/${build##*/}" <<<"$hostrevs"; then reason="a running Durable host runs from it"
+      elif grep -qF "$real/${build##*/}/" <<<"$pins"; then reason="a Durable Chat is pinned to it"
       elif grep -qx "${build##*/}" <<<"$used"; then reason="in use by a running process"
       elif [[ -e $build.retired ]] && (( $(stat -f %m "$build.retired") >= oldest )); then reason="retired after a running Pi session loaded it"
       elif grep -qF "/${build##*/}" <<<"$refs"; then reason="named by PI WEB services, Pi settings or a Workstream"
@@ -206,6 +209,11 @@ durable_hosts() { # running Durable hosts from the runtime locator: <label> TAB 
       let p; try { p = /export const PROTOCOL = (\d+);/.exec(fs.readFileSync(h.revision + "/packages/durable-pilot/src/chat-session.ts", "utf8"))?.[1]; } catch {}
       console.log([h.label, h.revision, p ?? "?"].join("\t"));
     }' "$DATA/session-runtimes.json" | sort -u
+}
+
+durable_pins() { # the host entries Durable families are pinned to (C3 hostEntry), running or not
+  [[ $instance == durable && -e $DATA/session-runtimes.json ]] || return 0
+  node -e 'for (const c of Object.values(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).chats)) if (typeof c.hostEntry === "string") console.log(c.hostEntry)' "$DATA/session-runtimes.json"
 }
 
 check_hosts() { # <pi-web-dir>: exit 7 unless that build's daemon runs launchd hosts and speaks every running host's protocol

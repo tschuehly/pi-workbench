@@ -342,6 +342,27 @@ test("a full Durable switch restarts only the two Durable services, never a host
   assert.ok(existsSync(build("pi-workbench", wbRev(5))));
 });
 
+test("prune keeps the build a stopped Durable Chat is pinned to (C3 hostEntry) and removes it once the pin goes", () => {
+  const h = harness();
+  const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
+  const pin = (entry) => put(join(h.data, "session-runtimes.json"), JSON.stringify({ version: 1, chats: { "fam-p": { id: "fam-p", cwd: h.root,
+    runtime: "durable", storeId: "fam-p", created: "", modified: "", firstMessage: "", messageCount: 0, ...(entry ? { hostEntry: entry } : {}) } } }));
+  for (const n of [1, 2]) assert.equal(h.switchDurable(wbRev(n), pwRev(n)).status, 0);
+  pin(join(realpathSync(build("pi-workbench", wbRev(1))), "packages/durable-pilot/src/chat-host-main.ts"));
+  // Build 1 is neither live nor the rollback after this switch; without the pin its own prune removes it.
+  assert.equal(h.switchDurable(wbRev(3), pwRev(3)).status, 0);
+  assert.ok(existsSync(build("pi-workbench", wbRev(1))));
+  for (const product of ["pi-workbench", "pi-web"]) {
+    const marker = `${build(product, product === "pi-web" ? pwRev(1) : wbRev(1))}.retired`, when = new Date(Date.now() - 3 * 3600e3);
+    if (existsSync(marker)) utimesSync(marker, when, when);
+  }
+  const dry = h.run(["--instance", "durable", "prune"]);
+  assert.match(dry.stdout, /keep   pi-workbench-aaaaaaaaaaa1: a Durable Chat is pinned to it/);
+  pin(undefined);
+  assert.equal(h.run(["--instance", "durable", "prune", "--apply"]).status, 0);
+  assert.ok(!existsSync(build("pi-workbench", wbRev(1))));
+});
+
 test("a Durable switch whose health check fails rolls back without touching any host", () => {
   const h = harness();
   assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
