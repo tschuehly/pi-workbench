@@ -159,6 +159,7 @@ test("a mode change reaches the model as one tagged message; the system prompt n
   assert.match(block, /Alignment — Align: Investigate freely, but before the first edit/);
   assert.match(block, /Attention — Phone: .*ask_human`, never in the session conversation/);
   assert.match(block, /When a milestone finishes or you stop to wait, send one `notify_human` update/);
+  assert.match(block, /When Thomas writes in the session conversation, he is temporarily at his computer: answer and ask there \(decisions via `ask_user`\) for as long as he replies there; only after a conversation question stays unanswered for 15 minutes do new questions and milestone updates go by phone again\./);
   assert.doesNotMatch(block, /Checking —|Orchestration —/);
   assert.match(block, /This block replaces every earlier <working-mode> block\.\n<\/working-mode>$/);
   assert.doesNotMatch(block, /ignore previous/i);
