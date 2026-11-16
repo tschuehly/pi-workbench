@@ -8,7 +8,9 @@ import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-
 import type { Provider } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
+import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { checkpointExtension } from "./checkpoint.ts";
@@ -24,6 +26,7 @@ import { builtinProviders, ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonB
 import { wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
+import { SessionSpawner } from "./spawn-session.ts";
 import { BackgroundBash } from "./background-bash.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
@@ -132,7 +135,19 @@ export type ChatHost = Host & {
 	readonly bash: BackgroundBash;
 	/** The atelier tool, its page server and the delivery of human input. */
 	readonly atelier: Atelier;
+	/** spawn_session's requests to PI WEB and their answers. */
+	readonly spawner: SessionSpawner;
 };
+
+/**
+ * Pi's codemode tool, offered to the lead as in a legacy Chat (where the MCP extension activates it), in Durable's
+ * restart-surviving form. Marked replay-unsafe all the same: a restart never reruns a script, whose nested calls may
+ * have had effects; the owner reconciles it. Its output goes behind the redacting wrapper like every tool's.
+ */
+function codemodeExtension(sandbox: CodemodeSandbox): Extension {
+	const extension = createCodemodeExtension({ sandbox });
+	return { ...extension, tools: extension.tools?.map((tool) => ({ ...tool, replay: "unsafe" as const })) };
+}
 
 /** pi-ai's per-API compat flags for adding tools mid-conversation without resending the transcript. */
 const DYNAMIC_TOOLS = { supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true, supportsMidConvoToolAdditions: true, supportsAdditionalTools: true };
@@ -179,6 +194,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id });
 	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id });
 	const workbenchBash = bash.extension();
+	const spawner = new SessionSpawner(chatId);
+	const sandbox = new CodemodeSandbox();
 	// Tool groups defer the group tools of every extension before them. The Workbench bash, installed after the core
 	// tools, replaces their bash.
 	const extensions: Extension[] = [
@@ -192,6 +209,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		defineExtension({ name: "workbench.native-bash", tools: [warningTool(createBashTool())] }),
 		workbenchBash,
 		atelier.extension(),
+		spawner.extension(),
+		codemodeExtension(sandbox),
 	];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
 	const aliases = claudeAliases("pi");
@@ -255,11 +274,18 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 			return model === undefined ? undefined : { ...model, compat: { ...model.compat, ...DYNAMIC_TOOLS } };
 		},
 	});
+	const closeHost = host.close.bind(host);
 	return Object.assign(host, {
+		// Stop running scripts first: closing the sandbox is no outcome, the store reopens with the call interrupted.
+		close: async () => {
+			await sandbox.close();
+			await closeHost();
+		},
 		workbench,
 		fast,
 		bash,
 		atelier,
+		spawner,
 		...(packages === undefined ? {} : { packages }),
 		listenPackages: (listener: (event: PackageEvent) => void) => {
 			chat.onPackageEvent = listener;

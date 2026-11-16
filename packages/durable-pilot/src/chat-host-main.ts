@@ -19,6 +19,7 @@ import { redact, sealed } from "./redact.ts";
 import { setDelegationHold } from "./delegation.ts";
 import { type Attachment, CAPABILITIES, ChatSession, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
+import type { SpawnResult } from "./spawn-session.ts";
 
 type Request = { id: number; method: string; params?: Record<string, unknown> };
 
@@ -117,7 +118,16 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	// Pi's compaction settings ({ enabled, reserveTokens, keepRecentTokens }, or Durable's full shape in tests).
 	configure: (params) => session.configure((params.resources ?? {}) as Resources, {
 		...(isObject(params.compaction) ? { compaction: params.compaction as CompactionSettings } : {}),
+		// PI WEB answers spawn_session requests (`durable.spawn` events) with `spawned`.
+		spawnSessions: params.spawnSessions === true,
 	}),
+	spawned: (params) => {
+		const { result, error } = params;
+		if (error !== undefined && typeof error !== "string") throw new Error("error must be a string");
+		if (result !== undefined && !(isObject(result) && typeof result.sessionId === "string" && typeof result.cwd === "string" && (result.model === undefined || typeof result.model === "string")))
+			throw new Error("result must name sessionId and cwd");
+		return session.spawned({ requestId: text(params, "requestId"), ...(result === undefined ? {} : { result: result as SpawnResult }), ...(error === undefined ? {} : { error }) });
+	},
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
 	// One command list and dispatcher: host commands (/quota-check) and the bound Pi packages' commands.
 	commands: () => session.commands(),
