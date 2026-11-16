@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
+import { openChatHost } from "../src/chat.ts";
+import { ChatSession } from "../src/chat-session.ts";
 import { fakeAgentDir } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
@@ -297,7 +299,7 @@ const idle = (host: ChatHost, count: number) => host.until(() => host.events.fil
 
 const ASK = {
 	context: "The deploy target is ambiguous.",
-	questions: [{ id: "target", question: "Which target?", options: [{ value: "prod", label: "Production", recommended: true }, { value: "staging", label: "Staging" }] }],
+	questions: [{ id: "target", question: "Which target?", detail: "Where this deploy lands.", options: [{ value: "prod", label: "Production", recommended: true }, { value: "staging", label: "Staging" }] }],
 };
 
 /** The outcome PI WEB's PendingAskStore computes for one answered question (the daemon sends it). */
@@ -395,6 +397,75 @@ test("Working Mode: a selection survives a restart, rides with the next prompt o
 	assert.equal(integrity(store), "ok");
 });
 
+test("/mode unalign after alignment_reached delivers one block with aligned false; alignment_reached works again afterwards", async () => {
+	const { store, cwd } = family("unalign");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: 'call:alignment_reached {"agreement":"ship it"}' });
+	await idle(host, 1);
+	assert.equal(mode(await host.call<Status>("status")).aligned, true);
+	assert.deepEqual(await host.call("mode", { args: "unalign" }), { type: "done" });
+	await idle(host, 2);
+	assert.equal(mode(await host.call<Status>("status")).aligned, false);
+	const transcript = await host.call<{ messages: { customType?: string; content: unknown; details?: { aligned?: boolean } }[] }>("transcript");
+	const blocks = transcript.messages.filter((m) => m.customType === "working-mode");
+	assert.equal(blocks.length, 1, "one Working Mode block reached the agent");
+	assert.equal(blocks[0]!.details?.aligned, false);
+	assert.equal(logged(store).at(-1)?.workingMode, 1, "the unalign block started a turn at once");
+	await host.call("prompt", { operationId: "op-2", text: 'call:alignment_reached {"agreement":"ship it again"}' });
+	await idle(host, 3);
+	assert.equal(mode(await host.call<Status>("status")).aligned, true);
+	await host.close();
+});
+
+test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm names the Chat every check; leaving AFK or closing the host stops it", async () => {
+	const { store, cwd } = family("afk-battery");
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: "chat-afk" });
+	const alarms: { id: string; label: string }[] = [];
+	const events: UiEvent[] = [];
+	let wake = () => {};
+	// Injected battery state and alarm: the test never sounds the real one.
+	const session = new ChatSession(h, (event) => (events.push(event), wake()), {
+		chatId: "chat-afk",
+		power: { onBattery: async () => true, alarm: (chat) => (alarms.push(chat), wake()), everyMs: 10 },
+	});
+	const until = async (done: () => boolean, what: string) => {
+		const deadline = Date.now() + 10_000;
+		while (!done()) {
+			assert.ok(Date.now() < deadline, `no ${what} within 10 s`);
+			await new Promise<void>((resolve) => ((wake = resolve), setTimeout(resolve, 100)));
+		}
+	};
+	const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+	const runs = () => events.filter((e) => e.type === "agent.end").length;
+	await session.start();
+	try {
+		await session.mode("attention afk");
+		await pause(100);
+		assert.equal(alarms.length, 0, "AFK selected but no turn yet: quiet");
+		await session.prompt({ operationId: "op-1", text: "hello" });
+		await until(() => alarms.length >= 3 && runs() >= 1, "repeated alarm after an AFK turn on battery");
+		assert.deepEqual(alarms[0], { id: "chat-afk", label: "workspace" }, "the alarm names the Chat");
+		assert.equal(events.filter((e) => e.type === "durable.notification" && e.severity === "error").length, 1, "one notification per unplug");
+
+		await session.mode("attention default");
+		await pause(50);
+		const left = alarms.length;
+		await pause(150);
+		assert.equal(alarms.length, left, "leaving AFK stops the alarm");
+
+		await session.mode("attention afk");
+		await session.prompt({ operationId: "op-2", text: "again" });
+		await until(() => alarms.length > left && runs() >= 2, "alarm after AFK is re-entered");
+	} finally {
+		await session.close();
+	}
+	await pause(50);
+	const closed = alarms.length;
+	await pause(150);
+	assert.equal(alarms.length, closed, "closing the host stops the alarm");
+});
+
 test("crash row question: an open set survives a kill, a stale answer is refused, one answer is delivered once, a retried answer returns the same outcome", async () => {
 	const { store, cwd } = family("question");
 	let host = new ChatHost(store, cwd);
@@ -431,6 +502,72 @@ test("crash row question: an open set survives a kill, a stale answer is refused
 	assert.equal(transcript.messages.filter((m) => m.customType === "pi-web.ask.answers").length, 1);
 	assert.equal(transcript.messages.find((m) => m.customType === "pi-web.ask.answers")?.details?.askId, opened.ask.askId);
 	assert.deepEqual((await host.call<Status>("status")).pendingAsks, undefined);
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+test("ask_user: a question without detail is refused; a 4000-character detail is accepted and numbering is stripped; the guidance is legacy's", async () => {
+	const { store, cwd } = family("ask-detail");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const { detail: _detail, ...bare } = ASK.questions[0]!;
+	await host.call("prompt", { operationId: "op-bare", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [bare] })}` });
+	await idle(host, 1);
+	const refused = (await host.call<Transcript>("transcript")).messages.find((m) => m.role === "toolResult");
+	assert.equal(refused?.isError, true, "a question without detail is refused");
+	assert.match(textOf(refused?.content), /detail/);
+	await host.call("prompt", { operationId: "op-long", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [{ ...ASK.questions[0]!, question: "1. Which target?", detail: "d".repeat(4000) }] })}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { questions: { question: string; detail: string }[] } };
+	assert.equal(opened.ask.questions[0]!.detail.length, 4000);
+	assert.equal(opened.ask.questions[0]!.question, "Which target?", "the panel numbers questions");
+	await idle(host, 2);
+	await host.close();
+	const { workbenchExtension } = await import("../src/workbench.ts");
+	const description = (workbenchExtension({ chatId: "x", signal: () => {} }) as unknown as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "ask_user")!.description;
+	assert.match(description, /The set carries all explanation; your Chat message only says that questions were posted\./);
+	assert.match(description, /Put all explanation into the ask_user set and none into your Chat message, which only says that questions were posted: the panel covers the Chat\. `context` holds what all questions share; each question's `detail` says what the item is, gives an example, and where it stands; each option's `detail` states its consequence, and the recommended option is marked\. Do not number the question text; the panel numbers it\./);
+	assert.doesNotMatch(description, /five short lines/);
+});
+
+test("ask_user partial send: one answer is delivered, the rest stays open at the new revision across a kill, and answering it closes the set", async () => {
+	const { store, cwd } = family("ask-partial");
+	const ask = { ...ASK, questions: [ASK.questions[0]!, { id: "when", question: "When?", detail: "The deploy window.", options: [{ value: "now", label: "Now" }] }] };
+	let host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-ask", text: `call:ask_user ${JSON.stringify(ask)}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string; revision: string } };
+	await idle(host, 1);
+	const { askId, revision } = opened.ask;
+	// PI WEB's PendingAskStore outcome for a partial send: only the answered question, and the revision the set continues under.
+	const partial = {
+		askId, reason: "submitted", askedAt: "", closedAt: "", context: ask.context,
+		questions: [{ question: ask.questions[0], answered: true, values: ["staging"] }],
+		answeredCount: 1, unansweredIds: [], summary: "Answered 1; still open: when", partial: true, revision: "r2",
+	};
+	const send = () => host.call<{ result: string; retried?: boolean }>("closeAsk", { askId, revision, operationId: "op-p1", outcome: partial, content: "Answer: target staging; when stays open" });
+	assert.equal((await send()).result, "closed");
+	assert.deepEqual((await host.call<Status>("status")).pendingAsks?.map((a) => [a.revision, a.questions.map((q) => q.id)]), [["r2", ["when"]]], "the unanswered question stays open at the new revision");
+	const reopened = await host.until((e) => e.type === "ask.opened" && (e.ask as { revision: string }).revision === "r2", "the set at its new revision") as UiEvent & { ask: { questions: { id: string }[] } };
+	assert.deepEqual(reopened.ask.questions.map((q) => q.id), ["when"]);
+	assert.equal(host.events.filter((e) => e.type === "ask.closed").length, 0, "the set is not closed");
+	await idle(host, 2);
+	assert.equal(logged(store).filter((l) => l.label.startsWith("Answer: target staging")).length, 1, "the one answer reached the model");
+	await host.kill();
+
+	host = new ChatHost(store, cwd);
+	await host.ready;
+	const status = await host.call<Status>("status");
+	assert.deepEqual(status.pendingAsks?.map((a) => [a.askId, a.revision, a.questions.map((q) => q.id)]), [[askId, "r2", ["when"]]], "the remaining question survives the restart");
+	assert.deepEqual(await send().then((r) => [r.result, r.retried]), ["closed", true], "a retried partial send gets its outcome back");
+	const rest = { ...partial, questions: [{ question: ask.questions[1], answered: true, values: ["now"] }], summary: "Answered 1 of 1; none left unanswered", partial: undefined, revision: undefined };
+	assert.equal((await host.call<{ result: string }>("closeAsk", { askId, revision, operationId: "op-p2", outcome: rest, content: "Answer: when now" })).result, "stale", "the old revision is stale");
+	assert.equal((await host.call<{ result: string }>("closeAsk", { askId, revision: "r2", operationId: "op-p2", outcome: rest, content: "Answer: when now" })).result, "closed");
+	await host.until((e) => e.type === "ask.closed", "the set closed");
+	await host.until((e) => e.type === "agent.end", "the second delivery");
+	assert.equal((await host.call<Status>("status")).pendingAsks, undefined);
+	assert.equal(logged(store).filter((l) => l.label.startsWith("Answer:")).length, 2, "each send reached the model once");
+	const transcript = await host.call<{ messages: { customType?: string }[] }>("transcript");
+	assert.equal(transcript.messages.filter((m) => m.customType === "pi-web.ask.answers").length, 2);
 	await host.close();
 	assert.equal(integrity(store), "ok");
 });

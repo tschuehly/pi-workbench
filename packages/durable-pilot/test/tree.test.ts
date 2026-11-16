@@ -171,7 +171,7 @@ test("tree: a running background bash job and an Atelier Page move with the acti
 
 const ASK = {
 	context: "The deploy target is ambiguous.",
-	questions: [{ id: "target", question: "Which target?", options: [{ value: "prod", label: "Production" }, { value: "staging", label: "Staging" }] }],
+	questions: [{ id: "target", question: "Which target?", detail: "Where this deploy lands.", options: [{ value: "prod", label: "Production" }, { value: "staging", label: "Staging" }] }],
 };
 const answered = (askId: string) => ({
 	askId, reason: "submitted", askedAt: "", closedAt: "", context: ASK.context,

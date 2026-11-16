@@ -10,7 +10,7 @@ import { WorkersDoc } from "./delegation.ts";
 import { BranchesDoc, context } from "./host.ts";
 import { redact, sanitizeDeep, sealed } from "./redact.ts";
 import { ToolGroupsDoc } from "./tool-groups.ts";
-import { ANSWERS_ENTRY, type PendingAsk, QuestionsDoc, WorkingModeDoc } from "./workbench.ts";
+import { ANSWERS_ENTRY, type PendingAsk, QuestionsDoc, remainingAsk, WorkingModeDoc } from "./workbench.ts";
 
 /** A visible history entry, shaped as Pi's session entry so PI WEB's tree projection reads it. */
 export type TreeEntry = { id: string; parentId: string | null; timestamp: string; type: string } & Record<string, unknown>;
@@ -179,7 +179,12 @@ export function branchQuestions(history: readonly EntryRecord[]): Record<string,
 			const ask = message.details?.ask;
 			if (ask !== undefined) open[ask.askId] = { ...structuredClone(ask), turnsSinceUpdate: 0 };
 			if (message.details?.withdrawn?.askId !== undefined) delete open[message.details.withdrawn.askId];
-		} else if (entry.kind === ANSWERS_ENTRY) delete open[(entry.data as { askId?: string } | null)?.askId ?? ""];
+		} else if (entry.kind === ANSWERS_ENTRY) {
+			const askId = (entry.data as { askId?: string } | null)?.askId ?? "";
+			const rest = open[askId] === undefined ? undefined : remainingAsk(open[askId], entry.data);
+			if (rest === undefined) delete open[askId];
+			else open[askId] = rest;
+		}
 	}
 	return open;
 }

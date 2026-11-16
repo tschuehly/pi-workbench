@@ -67,6 +67,12 @@ export async function workingModeSnapshot(harness: Harness, conversation: Conver
 	return { schemaVersion: 2, phase: doc.phase, selected: doc.selected, applied: doc.applied, aligned: doc.aligned };
 }
 
+/** AFK has started: Attention is AFK and no alignment is pending (the legacy battery alarm's condition). */
+export async function afkActive(harness: Harness, conversation: Conversation): Promise<boolean> {
+	const mode = await workingModeSnapshot(harness, conversation);
+	return mode.selected.attention === "AFK" && !afkPending(mode.selected, mode.aligned);
+}
+
 /** The Working Mode block an entry delivered to the model, if any. */
 export function entryWorkingMode(entry: EntryRecord): WorkingModeDetails | undefined {
 	const data = entry.data as { workingMode?: WorkingModeDetails } | undefined;
@@ -76,9 +82,10 @@ export function entryWorkingMode(entry: EntryRecord): WorkingModeDetails | undef
 /**
  * The block to deliver now, or undefined when the model still sees the selection: compared with the latest block in the
  * active context, so a block compaction summarized away is attached again. Commits the next sequence number and marks
- * the selection applied.
+ * the selection applied. `force` always delivers one (`/mode unalign`: an agent-recorded alignment lives in a tool
+ * result, not a block, so the model's last block may already read unaligned).
  */
-export async function pendingBlock(harness: Harness, conversation: Conversation, sent: boolean): Promise<{ text: string; details: WorkingModeDetails } | undefined> {
+export async function pendingBlock(harness: Harness, conversation: Conversation, sent: boolean, force = false): Promise<{ text: string; details: WorkingModeDetails } | undefined> {
 	const view = await conversation.context(context);
 	let seen: WorkingModeDetails | undefined;
 	for (const entry of view.entries) seen = entryWorkingMode(entry) ?? seen;
@@ -86,7 +93,7 @@ export async function pendingBlock(harness: Harness, conversation: Conversation,
 		const doc = await tx.doc(WorkingModeDoc, conversation.id);
 		doc.applied = { ...doc.selected };
 		doc.phase = "applied";
-		if (same(seen?.selection ?? defaults, doc.selected) && (seen?.aligned ?? false) === doc.aligned) return undefined;
+		if (!force && same(seen?.selection ?? defaults, doc.selected) && (seen?.aligned ?? false) === doc.aligned) return undefined;
 		doc.seq = Math.max(doc.seq, seen?.seq ?? 0) + 1;
 		const details: WorkingModeDetails = { schemaVersion: 2, seq: doc.seq, selection: { ...doc.selected }, aligned: doc.aligned };
 		return { text: renderBlock(doc.selected, doc.seq, doc.aligned, sent), details: JSON.parse(JSON.stringify(details)) as WorkingModeDetails };
@@ -117,6 +124,13 @@ const reattachMode = hook(GenerationTask, {
 		return { messages: messages.map((m, i) => (i === at ? ({ ...summary, content: [...partsOf(summary.content), { type: "text", text: block }] } as typeof m) : m)) };
 	},
 });
+
+/** `/mode unalign`: Thomas withdraws the confirmed alignment himself; the caller delivers the block at once. */
+export async function unalign(conversation: Conversation): Promise<void> {
+	await conversation.commit(async (tx) => {
+		(await tx.doc(WorkingModeDoc, conversation.id)).aligned = false;
+	}, context);
+}
 
 /** `/mode <axis> <value>`: change the selection for the next prompt; a usage message for invalid arguments. */
 export async function selectMode(conversation: Conversation, args: string): Promise<{ ok: boolean; message: string }> {
@@ -172,6 +186,7 @@ const QUESTION_LIMIT = 20;
 const OPTION_LIMIT = 12;
 const ID_MAX = 128;
 const TEXT_MAX = 1_000;
+const DETAIL_MAX = 4_000;
 const CONTEXT_MAX = 4_000;
 
 type Option = { value: string; label: string; detail?: string; recommended?: boolean };
@@ -208,10 +223,16 @@ function requireId(value: string, field: string): string {
 	if (value.length > ID_MAX) throw new AskError(`${field} exceeds its length limit`);
 	return value;
 }
-function requireText(value: string, field: string): string {
+function requireText(value: string, field: string, max = TEXT_MAX): string {
 	if (value.trim() === "") throw new AskError(`${field} must not be empty`);
-	if (value.length > TEXT_MAX) throw new AskError(`${field} exceeds its length limit`);
+	if (value.length > max) throw new AskError(`${field} exceeds its length limit`);
 	return value;
+}
+
+/** PI WEB `stripNumbering`: the panel numbers questions, so a model's own "1. " / "1) " / "3–4. " prefix is dropped. */
+function stripNumbering(value: string): string {
+	const stripped = value.replace(/^\s*\d+(?:\s*[-–]\s*\d+)?[.)]\s+/u, "");
+	return stripped.trim() === "" ? value : stripped;
 }
 
 /** PI WEB `pendingAskStore.ts` validation of a question set (ids, duplicates, limits, required prose). */
@@ -238,8 +259,8 @@ function validateQuestions(questions: readonly Question[]): Question[] {
 		});
 		return {
 			id,
-			question: requireText(question.question, `text of question ${id}`),
-			...(question.detail === undefined ? {} : { detail: requireText(question.detail, `detail of question ${id}`) }),
+			question: stripNumbering(requireText(question.question, `text of question ${id}`)),
+			...(question.detail === undefined ? {} : { detail: requireText(question.detail, `detail of question ${id}`, DETAIL_MAX) }),
 			options,
 			...(question.multiple === true ? { multiple: true } : {}),
 		};
@@ -269,13 +290,13 @@ const OptionParams = Type.Object({
 });
 const QuestionParams = Type.Object({
 	id: Type.String({ maxLength: ID_MAX, description: "Unique within this call; used as the answer key reported back to you." }),
-	question: Type.String({ maxLength: TEXT_MAX, description: "The question itself, as one plain-text line." }),
-	detail: Type.Optional(Type.String({ maxLength: TEXT_MAX, description: "Optional supporting context shown under the question." })),
+	question: Type.String({ maxLength: TEXT_MAX, description: "The question itself, as one plain-text line. Do not number it; the panel numbers the questions." }),
+	detail: Type.String({ maxLength: DETAIL_MAX, description: "Markdown shown under the question: what the item is, an example, and where it stands, so the question is answerable from the set alone." }),
 	options: Type.Optional(Type.Array(OptionParams, { maxItems: OPTION_LIMIT, description: "Options to choose from. Omit when free text is the whole answer; the browser always adds a Custom choice." })),
 	multiple: Type.Optional(Type.Boolean({ description: "Allow several options at once. Default: one answer per question." })),
 });
 const AskParams = Type.Object({
-	context: Type.Optional(Type.String({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown shown above the questions, at most five short lines: only the finding the decision rests on, so the user can answer without reading the Chat. Put each option's consequence in its `detail` and mark the recommended option there; do not restate the options, the history, or check results here." })),
+	context: Type.Optional(Type.String({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown shown above the questions: what all the questions share, so the user can answer without reading the Chat. Put each question's specifics in its `detail` and each option's consequence in the option's `detail`." })),
 	questions: Type.Optional(Type.Array(QuestionParams, { minItems: 1, maxItems: QUESTION_LIMIT, description: "Required for a new set: the questions in reading order. Every question may be left unanswered." })),
 	update: Type.Optional(Type.String({ maxLength: ID_MAX, description: "askId of an open set to revise in place. Given context/questions replace the old ones; send neither to confirm the set is still current." })),
 	withdraw: Type.Optional(Type.String({ maxLength: ID_MAX, description: "askId of an open set to withdraw because it no longer matters. Send nothing else." })),
@@ -283,9 +304,9 @@ const AskParams = Type.Object({
 
 // PI WEB askUserTool.ts description and prompt guidelines (Durable tools carry no separate guideline field).
 const ASK_DESCRIPTION = [
-	"Post a self-contained question set, shown as question chips above the user's composer, and return immediately. Answers arrive later as a follow-up message; the user may leave any question unanswered. Pass update: <askId> to revise or confirm an open set, or withdraw: <askId> to drop one.",
+	"Post a self-contained question set, shown as question chips above the user's composer, and return immediately. The set carries all explanation; your Chat message only says that questions were posted. Answers arrive later as a follow-up message; the user may leave any question unanswered. Pass update: <askId> to revise or confirm an open set, or withdraw: <askId> to drop one.",
 	"Use ask_user to batch the decisions you need from the user into one question set rather than asking in prose. It returns immediately: keep working on anything that does not depend on the answers, and end your turn if nothing does. The answers come back as a follow-up message that wakes you; do not poll or repost.",
-	"Keep each ask_user set self-contained and short: context is at most five short lines with only the finding the decision rests on; each option states its own consequence in `detail`, and the recommended option is marked. The user must be able to answer without reading the Chat.",
+	"Put all explanation into the ask_user set and none into your Chat message, which only says that questions were posted: the panel covers the Chat. `context` holds what all questions share; each question's `detail` says what the item is, gives an example, and where it stands; each option's `detail` states its consequence, and the recommended option is marked. Do not number the question text; the panel numbers it.",
 	"Keep open ask_user sets current: when the facts change, call ask_user with update: <askId> (no other fields just confirms it) or withdraw: <askId>.",
 ].join("\n\n");
 
@@ -429,7 +450,10 @@ function unansweredOutcome(ask: PendingAsk, reason: string, closedAt: string): O
 	};
 }
 
-/** Delivers one closed set's answers to the model, once, as a follow-up keyed by the ask. */
+/**
+ * Delivers one closed set's answers to the model, once, as a follow-up keyed by the ask. `askId` is the key of its
+ * `closed` record: the ask ID, or `<askId>@<revision>` for a partial send (one ask may send several before it closes).
+ */
 export const AnswerDelivery = defineTask<{ askId: string; content: string }, { phase: "deliver" }, null>({
 	name: "workbench.answer-delivery",
 	version: 1,
@@ -469,22 +493,34 @@ export type CloseAsk = {
 	readonly content: string;
 };
 
+/** The set still open after a partial send (PI WEB `outcome.partial`, with the revision it continues under), else undefined. */
+export function remainingAsk(ask: PendingAsk, outcome: unknown): PendingAsk | undefined {
+	const { partial, revision, questions } = (outcome ?? {}) as { partial?: unknown; revision?: unknown; questions?: { question?: { id?: string } }[] };
+	if (partial !== true || typeof revision !== "string") return undefined;
+	const sent = new Set((questions ?? []).map((record) => record.question?.id));
+	return { ...ask, revision, questions: ask.questions.filter((question) => !sent.has(question.id)) };
+}
+
 /**
  * Close an open set with the user's answers (or a cancel) and commit its delivery in the same transaction, before the
  * browser hears it closed. A retry under the same operation ID returns the same outcome; any other close of a set that
- * is gone, or of an older revision, is stale.
+ * is gone, or of an older revision, is stale. A partial send (PI WEB's `outcome.partial`) removes only the questions it
+ * answered and keeps the set open under the revision the outcome names (`ask`).
  */
-export async function closeAsk(conversation: Conversation, request: CloseAsk): Promise<{ result: "closed"; outcome: Closed["outcome"]; retried: boolean } | { result: "stale" }> {
+export async function closeAsk(conversation: Conversation, request: CloseAsk): Promise<{ result: "closed"; outcome: Closed["outcome"]; retried: boolean; ask?: PendingAsk } | { result: "stale" }> {
 	return conversation.commit(async (tx) => {
 		const doc = await tx.doc(QuestionsDoc, conversation.id);
-		const closed = doc.closed[request.askId];
-		if (closed?.operationId === request.operationId) return { result: "closed" as const, outcome: JSON.parse(JSON.stringify(closed.outcome)), retried: true };
+		const closed = Object.values(doc.closed).find((c) => c.operationId === request.operationId && c.outcome.askId === request.askId);
+		if (closed !== undefined) return { result: "closed" as const, outcome: JSON.parse(JSON.stringify(closed.outcome)), retried: true };
 		const open = doc.open[request.askId];
 		if (open === undefined || (request.revision !== undefined && request.revision !== open.revision)) return { result: "stale" as const };
-		delete doc.open[request.askId];
-		doc.closed[request.askId] = { outcome: request.outcome, operationId: request.operationId, delivered: false };
-		await tx.createTask(AnswerDelivery, { askId: request.askId, content: request.content }, { ownership: { kind: "conversation" }, background: true });
-		return { result: "closed" as const, outcome: request.outcome, retried: false };
+		const ask = remainingAsk(open, request.outcome);
+		const key = ask === undefined ? request.askId : `${request.askId}@${ask.revision}`;
+		if (ask === undefined) delete doc.open[request.askId];
+		else doc.open[request.askId] = ask;
+		doc.closed[key] = { outcome: request.outcome, operationId: request.operationId, delivered: false };
+		await tx.createTask(AnswerDelivery, { askId: key, content: request.content }, { ownership: { kind: "conversation" }, background: true });
+		return { result: "closed" as const, outcome: request.outcome, retried: false, ...(ask === undefined ? {} : { ask: JSON.parse(JSON.stringify(ask)) as PendingAsk }) };
 	}, context);
 }
 

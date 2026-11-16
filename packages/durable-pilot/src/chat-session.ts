@@ -30,12 +30,22 @@ import { type ContributedResources, PACKAGE_MESSAGE_ENTRY } from "./packages.ts"
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BashJobsDoc } from "./background-bash.ts";
+import { basename } from "node:path";
 
 type WorkingModeDetailsLike = Record<string, unknown>;
+/** Battery state and alarm for the AFK battery alarm (`chat` names the Chat in the alert). */
+export type Power = { onBattery: () => Promise<boolean>; alarm: (chat: { id: string; label: string }) => void; everyMs: number };
+// Legacy Working Mode's own checks, loaded by URL as `atelier.ts` loads the kernel: tsc would check the extension's .ts as CommonJS.
+const { AFK_BATTERY_WARNING, batteryAlarm, onBattery } = (await import(new URL("../../../extensions/working-mode/index.ts", import.meta.url).href)) as {
+	AFK_BATTERY_WARNING: string;
+	batteryAlarm: Power["alarm"];
+	onBattery: Power["onBattery"];
+};
 import {
 	ANSWERS_ENTRY,
 	ASK_ANSWERS_CUSTOM_TYPE,
 	acknowledgeAttention,
+	afkActive,
 	type CloseAsk,
 	closeAsk,
 	countTurn,
@@ -49,6 +59,7 @@ import {
 	type Resources,
 	ResourcesDoc,
 	selectMode,
+	unalign,
 	WORKING_MODE_CUSTOM_TYPE,
 	type WorkbenchSignal,
 	workingModeSnapshot,
@@ -259,12 +270,20 @@ export class ChatSession {
 	#deliveries: (() => void)[] = [];
 	#afterNavigation: (() => void)[] = [];
 
-	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder } = {}) {
+	/** The AFK battery alarm: shared Working Mode checks by default; tests inject theirs. */
+	readonly #power: Power;
+	#powerTimer: ReturnType<typeof setInterval> | undefined;
+	#warnedOnBattery = false;
+	#closed = false;
+	#cwd = "";
+
+	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder; power?: Partial<Power> } = {}) {
 		this.#host = host;
 		this.#chat = "workbench" in host ? host : undefined;
 		this.#emit = emit;
 		this.#chatId = options.chatId ?? "durable";
 		this.#telemetry = options.telemetry;
+		this.#power = { onBattery, alarm: batteryAlarm, everyMs: 60_000, ...options.power };
 	}
 
 	async start(): Promise<void> {
@@ -302,6 +321,7 @@ export class ChatSession {
 		await this.#chat?.atelier?.start(lead, this.#host.harness, { deliver });
 		this.#chat?.packages?.attach({ deliver });
 		const agent = await this.#host.root.agent(context);
+		this.#cwd = agent.cwd ?? "";
 		this.#record("session.start", {
 			sessionFile: null, cwd: agent.cwd ?? null, mode: "durable", reason: "open",
 			provider: agent.model?.provider ?? null, model: agent.model?.modelId ?? null, effort: agent.thinkingLevel ?? null,
@@ -327,6 +347,8 @@ export class ChatSession {
 	}
 
 	async close(): Promise<void> {
+		this.#closed = true;
+		this.#stopPower();
 		this.#chat?.bash?.close();
 		this.#chat?.atelier?.close();
 		await this.#chat?.packages?.close();
@@ -354,6 +376,39 @@ export class ChatSession {
 
 	async #publishStatus(): Promise<void> {
 		this.#emit({ type: "status.update", status: await this.status() });
+	}
+
+	/**
+	 * Legacy Working Mode's AFK battery alarm: once AFK has started and a turn runs under it (`arm`), every minute on
+	 * battery the alarm names this Chat, plus one error notification per unplug. Leaving AFK or closing the host stops
+	 * it; a restored idle Chat with an old AFK selection stays quiet until a turn runs.
+	 */
+	async #watchPower(arm: boolean): Promise<void> {
+		if (this.#chat === undefined || this.#closed) return;
+		const afk = await afkActive(this.#host.harness, this.#host.root).catch(() => false);
+		if (!afk || this.#closed) return this.#stopPower();
+		if (this.#powerTimer !== undefined || !arm) return;
+		// shortcut: the host does not know PI WEB's Chat name, so the alert names the folder (as an unnamed legacy session); pass the name in when PI WEB sends it.
+		const chat = { id: this.#chatId, label: basename(this.#cwd) || this.#chatId };
+		const check = async () => {
+			try {
+				const battery = (await this.#power.onBattery()) && !this.#closed && (await afkActive(this.#host.harness, this.#host.root));
+				if (battery) this.#power.alarm(chat);
+				if (battery && !this.#warnedOnBattery) this.#emit({ type: "durable.notification", severity: "error", message: AFK_BATTERY_WARNING });
+				this.#warnedOnBattery = battery;
+			} catch {
+				this.#stopPower(); // the store is gone
+			}
+		};
+		this.#powerTimer = setInterval(() => void check(), this.#power.everyMs);
+		this.#powerTimer.unref?.();
+		void check();
+	}
+
+	#stopPower(): void {
+		clearInterval(this.#powerTimer);
+		this.#powerTimer = undefined;
+		this.#warnedOnBattery = false;
 	}
 
 	/**
@@ -401,6 +456,7 @@ export class ChatSession {
 				this.#record("agent.start", { sessionFile: null });
 				// Agent turns since an open set was posted drive the browser's "may be stale" mark.
 				void countTurn(this.#host.root).catch(() => {});
+				void this.#watchPower(true);
 				void this.#chat?.packages?.run("start");
 				return;
 			case "run_end":
@@ -733,12 +789,17 @@ export class ChatSession {
 		return { submissionId };
 	}
 
-	/** `/mode …`: select an axis value for the next prompt, or `/mode send` to deliver the pending block now. */
+	/**
+	 * `/mode …`: select an axis value for the next prompt, `/mode send` to deliver the pending block now, or `/mode unalign`
+	 * to clear the confirmed alignment and tell the model at once.
+	 */
 	async mode(args: string): Promise<{ type: "done"; message?: string } | { type: "unsupported"; message: string }> {
 		const { harness, root } = this.#host;
-		if (args.trim().toLowerCase() === "send") {
+		const verb = args.trim().toLowerCase();
+		if (verb === "send" || verb === "unalign") {
 			await this.#resume();
-			const block = await pendingBlock(harness, root, true);
+			if (verb === "unalign") await unalign(root);
+			const block = await pendingBlock(harness, root, true, verb === "unalign");
 			if (block === undefined) return { type: "done", message: "Working Mode unchanged" };
 			// Idle: starts a turn. Running: steers it after the current tool calls.
 			await admit(root, {
@@ -752,6 +813,7 @@ export class ChatSession {
 		}
 		const result = await selectMode(root, args);
 		if (result.ok && this.#chat !== undefined) await syncWorkersGroup(harness, this.#host.registry, root, this.#chat.workbench.extensions);
+		await this.#watchPower(false);
 		await this.#publishStatus();
 		return result.ok ? { type: "done", message: result.message } : { type: "unsupported", message: result.message };
 	}
@@ -760,7 +822,8 @@ export class ChatSession {
 	async closeAsk(request: CloseAsk): Promise<Awaited<ReturnType<typeof closeAsk>>> {
 		await this.#resume();
 		const result = await closeAsk(this.#host.root, request);
-		if (result.result === "closed" && !result.retried) this.#emit({ type: "ask.closed", askId: request.askId, reason: result.outcome.reason });
+		// A partial send keeps the set open under a new revision: browsers replace its card, as on an update.
+		if (result.result === "closed" && !result.retried) this.#emit(result.ask === undefined ? { type: "ask.closed", askId: request.askId, reason: result.outcome.reason } : { type: "ask.opened", ask: result.ask });
 		await this.#publishStatus();
 		return result;
 	}
