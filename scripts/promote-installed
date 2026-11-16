@@ -161,7 +161,7 @@ prune_builds() { # [--apply]
       rm -f "$build.prepared" "$build.retired"
       echo "removed ${build##*/}"
     done
-    git -C "$PROJECTS/$product" worktree prune 2>/dev/null || true
+    [[ $apply != --apply ]] || git -C "$PROJECTS/$product" worktree prune 2>/dev/null || true
   done
   [[ $apply == --apply ]] || echo "dry run: nothing removed; rerun with --apply"
 }
