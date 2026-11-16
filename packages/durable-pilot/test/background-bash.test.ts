@@ -455,3 +455,39 @@ test("survival: a host shutdown during a foreground wait leaves the job running;
 	assert.equal(launches(cwd), 1);
 	await second.close();
 });
+
+test("an explicit end cancels the family's background jobs (the runner's whole process group); a lost transport leaves them running", async () => {
+	const { store, cwd } = family("end-vs-loss");
+	const ticks = join(cwd, "ticks.log");
+	const size = () => (existsSync(ticks) ? readFileSync(ticks).length : 0);
+	const writing = async () => {
+		const before = size();
+		await sleep(600);
+		return size() > before;
+	};
+	const first = new ChatHost(store, cwd);
+	await first.ready;
+	// The writer is a child of the job's shell, so only killing the runner's group stops it.
+	await first.call("prompt", { operationId: "op-1", text: call("bash", { description: "Writer", command: "echo x >> launches.log; (while true; do echo tick >> ticks.log; sleep 0.1; done) & wait" }) });
+	const id = jobId((await toolEnd(first)).text);
+	await first.idle(1);
+	await waitFor(() => size() > 0, "the writer");
+
+	// Transport loss: the daemon's channel goes away and the host closes, restart-oriented; the job writes on.
+	first.child.disconnect();
+	assert.equal(await first.exited, 0);
+	assert.equal(await writing(), true, "a lost transport keeps the job");
+	assert.equal(alive(claim(id).pid), true);
+	assert.equal(exitRecord(id), undefined);
+
+	// The owner ends the Chat: the host cancels the job before it closes; the group is gone and writing stops.
+	const second = new ChatHost(store, cwd);
+	await second.ready;
+	await second.call("close", { end: true });
+	assert.equal(await second.exited, 0);
+	assert.equal(alive(claim(id).pid), false, "the runner's group is gone");
+	assert.equal(exitRecord(id)?.cancelled, true);
+	await sleep(300);
+	assert.equal(await writing(), false, "the writer stopped");
+	assert.equal(launches(cwd), 1);
+});
