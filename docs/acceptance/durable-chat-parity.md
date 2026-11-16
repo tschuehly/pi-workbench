@@ -97,6 +97,8 @@ requirement. Round 2 applies **Scope by usage**: the features it defers, the unt
 and the pi-goal and pi-btw packages move to the deferred table below, which supersedes the
 earlier narrow BTW reading. P075, P102 and P108 keep their remaining scope. Zero-use P012 and
 P014 stay as core composer controls that are built and pass; P038 stays by decision.
+The cutover usage recheck (spec B2, 2026-10-23..11-16, threshold 3 lead sessions) moves P062
+(codemode) and P064 (spawn_session) into ACs; P025 and P042 stay deferred with the evidence in their rows.
 
 ## Criteria
 
@@ -609,6 +611,29 @@ Compound rows deliberately remain one AC, with all named variants required.
 - **Legacy equivalence:** Preserve the behavior in `PSS:3422; PWc/controllers/sessionController.ts:583-586`; the Survival step, when present, adds Durable recovery rather than copying legacy process lifetime.
 - **Negative control:** Include double-bang output in provider context.
 - **Spec:** `e2e/durable/bash-atelier-tree/bash.spec.ts` › "AC-P058 Durable: ! enters context, !! stays out, invalid and concurrent shell rejected"; `e2e/durable/bash-atelier-tree/bash.spec.ts` › "AC-P058 legacy: ! enters context, !! stays out, invalid and concurrent shell rejected"; `e2e/durable/composer-attention/daily-controls.spec.ts` › "AC-P058: ! is included in next model context; !! is excluded; host reopen never re-executes shell"; host: `packages/durable-pilot/test/composer.test.ts` › "shell: !cmd runs in the workspace, streams, is recorded redacted and reaches the model; !!cmd is recorded but excluded"; `packages/durable-pilot/test/composer.test.ts` › "shell: one command at a time, Stop cancels it, and a command during a run is recorded after the run"
+
+### AC-P062 — codemode tool
+
+- **Area:** Tools
+- **Fleet area:** context-tools
+- **Given:** a workspace file holding a fixture secret; the lead's default tools (legacy Chats get codemode active through the MCP extension's `autoEnableCodemode`; Durable leads get it without MCP).
+- **When:** the mock calls codemode with a script that calls `tools.read` (and `tools.bash` on the host).
+- **Then:** codemode is offered on the lead's first request; the script's nested calls run as the Chat's own tools and its output renders in the tool card; the output, nested results and every store copy are redacted before commit; the tool is marked replay-unsafe, so a restart never reruns a script (the owner reconciles it, AC-P051).
+- **Legacy equivalence:** Preserve the behavior in `PWs/builtinExtensionFactories.ts:12` and the coding agent's `dist/extensions/codemode`; Durable uses `@earendil-works/pi-durable/codemode` with its own `CodemodeSandbox`.
+- **Negative control:** Install the codemode tool without the redacting wrapper (the store scan finds the secret), or offer it replay-safe.
+- **Spec:** `e2e/durable/context-tools/codemode-spawn.spec.ts` › "AC-P062 codemode: the lead's script calls the Chat's tools, its result renders, and no secret it read is stored"; host: `packages/durable-pilot/test/codemode-spawn.test.ts` › "P062 codemode: offered to the lead by default; a script calls the Chat's tools; the output is redacted before commit; replay-unsafe"
+
+### AC-P064 — spawn_session
+
+- **Area:** Delegation
+- **Fleet area:** context-tools
+- **Given:** a Durable Chat in a registered project workspace, PI WEB's `spawnSessions` on (the default).
+- **When:** the mock calls spawn_session with a prompt (and, in separate cases, a cwd outside the project and an unknown model).
+- **Then:** PI WEB starts an independent Durable Chat in the resolved workspace with the requested or inherited model and thinking level, prompts it once, lists it (`session.created`), and the tool result names its ID, cwd and model; refusals (outside the project, unknown model, spawning off) are the tool's visible error and leave no Chat; a repeated request ID starts nothing new. Children never get the tool (allowlists).
+- **Legacy equivalence:** Preserve the behavior in `PWs/spawnSessionTool.ts:66` and `PSS:1931` (`spawnSession`). The host asks PI WEB with a `durable.spawn` event; PI WEB answers with the host method `spawned`, and tells the host at `configure` whether spawning is on.
+- **Survival:** Kill the host after the request reached PI WEB, then reopen: the call is an unresolved effect for the owner to reconcile and is never sent again.
+- **Negative control:** Rerun the interrupted call after reopen, or start the Chat outside the spawning Chat's project.
+- **Spec:** `e2e/durable/context-tools/codemode-spawn.spec.ts` › "AC-P064 spawn_session: the lead starts an independent Durable Chat that answers its prompt and shows in the Chat list"; host: `packages/durable-pilot/test/codemode-spawn.test.ts` › "P064 spawn_session: the host asks PI WEB for an independent Chat with the lead's model and thinking level, and reports the started Chat"; `packages/durable-pilot/test/codemode-spawn.test.ts` › "P064 spawn_session without PI WEB's spawn support fails visibly instead of waiting"; `packages/durable-pilot/test/codemode-spawn.test.ts` › "P064 survival: a host killed while PI WEB starts the Chat reopens with the call to reconcile, never asking again"; PI WEB unit tests: the "Durable Chats: spawn_session (P064)" block of `src/server/sessions/durableChatService.test.ts` (3 cases)
 
 ### AC-P068 — read
 
@@ -1219,11 +1244,11 @@ markers or tests for these rows; their results do not count toward parity.
 | P018 | Whole row | Scope by usage (zero use 2026-10-08..22): model cycle commands deferred. `context-tools/deferred.spec.ts` keeps a skip marker. | 2026-10-22 |
 | P021 | Whole row | Scope by usage (zero use 2026-10-08..22): session defaults deferred. `context-tools/deferred.spec.ts` keeps a skip marker. | 2026-10-22 |
 | P024 | Whole row | Scope by usage (zero use 2026-10-08..22): zero dismiss requests; session warnings deferred (lead, round 2). | 2026-10-22 |
-| P025 | Whole row | Scope by usage (zero use 2026-10-08..22): archive deferred; Durable Chats refuse archiving visibly (AC-P050). | 2026-10-22 |
+| P025 | Whole row | Scope by usage (zero use 2026-10-08..22): archive deferred; Durable Chats refuse archiving visibly (AC-P050). B2 recheck: still zero archive or bulk-archive requests 2026-10-23..11-16 (`~/.pi-web/logs/sessiond.log` holds three, dated 20 Jul and 25 Sep). | 2026-11-16 |
 | P026 | Whole row | Scope by usage (zero use 2026-10-08..22): bulk archive/cleanup deferred with archive. | 2026-10-22 |
 | P035 | Whole row | Scope by usage (zero use 2026-10-08..22): reload deferred. | 2026-10-22 |
 | P036 | Whole row | Scope by usage (zero use 2026-10-08..22): detach-parent deferred with the subsession family. | 2026-10-22 |
-| P042 | Whole row | Scope by usage (zero use 2026-10-08..22): extension dialogs deferred; unsupported dialogs must still be refused visibly (AC-P050). | 2026-10-22 |
+| P042 | Whole row | Scope by usage (zero use 2026-10-08..22): extension dialogs deferred; unsupported dialogs must still be refused visibly (AC-P050). B2 recheck: 3 answers in 2 sessions 2026-10-23..11-16, each the MCP extension's project-server approval (`mcp-project-approvals.json` `approvedAt` matches each answer to the second); Durable Chats do not load the MCP extension (P059/P060 deferred), so no ported extension raises a dialog. | 2026-11-16 |
 | P043 | Whole row | Scope by usage (zero use 2026-10-08..22): command select responses serve the deferred /fork picker. | 2026-10-22 |
 | P045 | Whole row | Scope by usage (zero use 2026-10-08..22): fork/clone deferred; unsupported fork stays hidden (AC-P050). | 2026-10-22 |
 | P052 | Whole row | /session is untraced in the usage window; deferred with the other untraced commands (fleet brief). `context-tools/deferred.spec.ts` keeps a skip marker. | 2026-10-22 |
@@ -1231,8 +1256,6 @@ markers or tests for these rows; their results do not count toward parity.
 | P059 | Whole row | Scope by usage (zero use 2026-10-08..22): MCP deferred (no configured servers). `context-tools/deferred.spec.ts` keeps a skip marker. | 2026-10-22 |
 | P060 | Whole row | Scope by usage (zero use 2026-10-08..22): MCP tools deferred (no configured servers). `context-tools/deferred.spec.ts` keeps a skip marker. | 2026-10-22 |
 | P061 | Whole row | tool_search is default-inactive; explicitly deferred. | 2026-10-22 |
-| P062 | Whole row | codemode is default-inactive; explicitly deferred. | 2026-10-22 |
-| P064 | Whole row | spawn_session deferred with the spawn_subsession family despite one use (fleet brief). | 2026-10-22 |
 | P065 | Whole row | Scope by usage (zero use 2026-10-08..22): spawn_subsession family deferred. | 2026-10-22 |
 | P066 | Whole row | Scope by usage (zero use 2026-10-08..22): subsession completion delivery deferred with the family. | 2026-10-22 |
 | P067 | Whole row | Scope by usage (zero use 2026-10-08..22): session dispatch channel only serves the deferred subsession family. | 2026-10-22 |
@@ -1284,15 +1307,15 @@ Counts are criteria, not test cases or passing results. Fleet areas are the PI W
 merged composer/queue with attention/catalog (`composer-attention`) and dropped MCP from
 `context-tools`.
 
-Reconciliation: **95 AC rows + 39 wholly deferred/out-of-scope rows + 7 n-a rows = 141**.
+Reconciliation: **97 AC rows + 37 wholly deferred/out-of-scope rows + 7 n-a rows = 141**.
 Partially excluded AC rows (P075, P102, P108) count once as ACs. P141 appears in
 both exclusion tables but counts once as n-a. Every AC names at least one runnable spec.
 
 | Fleet area | AC count | Survival count |
 | --- | ---: | ---: |
 | composer-attention | 32 | 16 |
-| context-tools | 20 | 15 |
+| context-tools | 22 | 16 |
 | subagents-workers | 11 | 11 |
 | bash-atelier-tree | 10 | 7 |
 | extensions-packages | 22 | 3 |
-| **Total** | **95** | **52** |
+| **Total** | **97** | **53** |

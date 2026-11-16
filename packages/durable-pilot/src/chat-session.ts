@@ -30,6 +30,7 @@ import { type ContributedResources, PACKAGE_MESSAGE_ENTRY } from "./packages.ts"
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BashJobsDoc } from "./background-bash.ts";
+import type { SpawnResult } from "./spawn-session.ts";
 import { basename } from "node:path";
 
 type WorkingModeDetailsLike = Record<string, unknown>;
@@ -290,6 +291,7 @@ export class ChatSession {
 	async start(): Promise<void> {
 		if (this.#chat !== undefined) {
 			this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
+			this.#chat.spawner?.attach((event) => this.#emit(event));
 			this.#chat.workbench.record = (type, data) => {
 				this.#record(type, data);
 				// A child is its own telemetry session, as a legacy child Pi process is: its start names the lead as its parent,
@@ -935,15 +937,21 @@ export class ChatSession {
 	}
 
 	/** Resources PI WEB resolved with Pi's loader; their sources are recorded when they change. Compaction: Pi's settings. */
-	async configure(resources: Resources, settings: { compaction?: CompactionSettings } = {}): Promise<void> {
+	async configure(resources: Resources, settings: { compaction?: CompactionSettings; spawnSessions?: boolean } = {}): Promise<void> {
 		if (this.#chat === undefined) return;
 		this.#chat.workbench.resources = resources;
+		if (this.#chat.spawner !== undefined) this.#chat.spawner.enabled = settings.spawnSessions === true;
 		if (settings.compaction !== undefined) this.#chat.workbench.compaction = { ...DEFAULT_COMPACTION, ...settings.compaction };
 		const sources = [...(resources.sources ?? [])].map((s) => ({ path: s.path, sha256: s.sha256 }));
 		await this.#host.harness.commit(async (tx) => {
 			const doc = await tx.doc(ResourcesDoc);
 			if (JSON.stringify(doc.sources) !== JSON.stringify(sources)) doc.sources = sources;
 		}, context);
+	}
+
+	/** PI WEB's answer to a spawn_session request: the started Chat, or why it refused. */
+	spawned(answer: { requestId: string; result?: SpawnResult; error?: string }): void {
+		this.#chat?.spawner?.settle(answer);
 	}
 
 	/**
