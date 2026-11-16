@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
@@ -24,7 +24,10 @@ function harness() {
   worktree) if [ "$4" = add ]; then mkdir -p "$6"; case "$6" in */pi-workbench-*) mkdir -p "$6/packages/durable-pilot/src";; esac; fi;; esac`);
   shim("npm", `echo "$1 $PWD" >> "$HOME/npm.log"
   case "$1" in ci) mkdir -p node_modules/node-pty/prebuilds/x && touch node_modules/node-pty/prebuilds/x/spawn-helper;;
-  run) mkdir -p dist/server && echo daemon > dist/server/sessiond.js && echo web > dist/server/index.js && echo lock > package-lock.json;; esac`);
+  run) mkdir -p dist/server/sessions && echo web > dist/server/index.js && echo lock > package-lock.json
+    # NO_LAUNCHD: a PI WEB build from before Phase C1; PROTOCOL: the Durable host protocol its daemon speaks.
+    if [ -n "$NO_LAUNCHD" ]; then echo daemon > dist/server/sessiond.js; else echo 'daemon env["PI_WEB_DURABLE_HOST_LAUNCHD"]' > dist/server/sessiond.js; fi
+    echo "export const DURABLE_HOST_PROTOCOL = \${PROTOCOL:-2};" > dist/server/sessions/durableChatService.js;; esac`);
   shim("launchctl", `echo "$*" >> "$HOME/launchctl.log"`);
   shim("lsof", `echo "$*" >> "$HOME/lsof.log"`);
   shim("sleep", "exit 0");
@@ -88,8 +91,32 @@ function harness() {
     const job = spawnSync("bash", [join(jobs, latest, "job.sh")], { env: { ...env, ...extra }, encoding: "utf8" });
     return { scheduled, status: job.status, log: readFileSync(join(jobs, latest, "job.log"), "utf8") };
   };
-  return { root, home, projects, la, store, legacyStore, data, run, legacy, durable, log, plist, switchDurable };
+  return { root, home, projects, la, store, legacyStore, data, env, run, legacy, durable, snapshot, log, plist, switchDurable };
 }
+
+/**
+ * Durable host families as Phase C1 leaves them: a launchd job plist and socket under `<data>/hosts`, and each Chat's
+ * `host` in the runtime locator. A family's host runs from `revision`, whose host speaks `protocol`.
+ */
+function hosts(h, families) {
+  const chats = {};
+  for (const { id, revision, protocol, pid } of families) {
+    put(join(revision, "packages/durable-pilot/src/chat-session.ts"), `export const PROTOCOL = ${protocol};\n`);
+    const label = `com.pi-workbench.durable-host.${id}`, socket = join(h.data, "hosts", `${id}.sock`);
+    put(join(h.data, "hosts", `${label}.plist`), `<string>${revision}/packages/durable-pilot/src/chat-host-main.ts</string>\n`);
+    put(socket, "");
+    chats[id] = { id, cwd: h.root, runtime: "durable", storeId: id, created: "", modified: "", firstMessage: "", messageCount: 0,
+      host: { label, socket, revision: realpathSync(revision), ownerEpoch: 1, pid } };
+  }
+  put(join(h.data, "session-runtimes.json"), JSON.stringify({ version: 1, chats }));
+}
+const deadPid = () => spawnSync("true").pid;
+/** What a promotion must never change: the Durable links, plists and data folder (with its hosts and locator). */
+const instanceState = (h) => h.snapshot([join(h.projects, "pi-workbench.durable-installed"), join(h.projects, "pi-web.durable-installed"),
+  join(h.la, "com.pi-web-durable.web.plist"), join(h.la, "com.pi-web-durable.sessiond.plist"), h.data]);
+const hostState = (h) => h.snapshot([join(h.data, "hosts"), join(h.data, "session-runtimes.json")]);
+/** Every label a launchctl call named; a promotion may name only the two Durable services and its own job. */
+const launchLabels = (h) => new Set([...h.log("launchctl.log").matchAll(/(com\.pi-[\w.-]+?)(?:\.plist)?(?:\s|$)/g)].map((m) => m[1]));
 
 const legacyLabels = /com\.pi-web\.(web|sessiond|ui-dev)\b/;
 
@@ -116,6 +143,7 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
       PI_WEB_DATA_DIR: h.data, PI_WEB_CONFIG: join(h.data, "config.json"), PI_WEB_PORT: "8506", PI_WEB_PI_PACKAGE_AUTO_INSTALL: "0",
       PI_WEB_PI_PACKAGE_DIR: `${build("pi-web", pwRev(1))}/node_modules/@earendil-works/pi-coding-agent`,
       PI_WEB_DURABLE_HOST: `${build("pi-workbench", wbRev(1))}/packages/durable-pilot/src/chat-host-main.ts`, PI_WEB_DURABLE_DEFAULT: "1",
+      PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-host",
     });
     assert.equal(p.StandardOutPath, join(h.data, "logs", `${s}.log`));
   }
@@ -215,6 +243,116 @@ test("the Durable check-idle counts only the Durable daemon's descendants and le
   assert.equal(busy.status, 3);
   assert.match(busy.stderr, /220 210 pi --mode rpc/);
   assert.doesNotMatch(busy.stderr, /chat-host-main/);
+});
+
+test("a Durable switch refuses a PI WEB build whose daemon would not run hosts as launchd jobs; nothing changes", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const before = instanceState(h), launches = h.log("launchctl.log");
+  const refused = h.run(["--instance", "durable", "switch", wbRev(2), pwRev(2), "0"], { NO_LAUNCHD: "1" });
+  assert.equal(refused.status, 7, refused.stderr);
+  assert.match(refused.stderr, /PI_WEB_DURABLE_HOST_LAUNCHD/);
+  assert.equal(readdirSync(join(h.store, "jobs")).length, 1);
+  assert.equal(h.log("launchctl.log"), launches);
+  assert.deepEqual(instanceState(h), before);
+});
+
+test("a Durable switch refuses while a running host speaks a protocol the new daemon does not, listing those families", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const wb1 = join(h.store, `pi-workbench-${short(wbRev(1))}`), old = join(h.store, "pi-workbench-ffffffffffff");
+  hosts(h, [{ id: "fam-current", revision: wb1, protocol: 2, pid: process.pid },
+    { id: "fam-old", revision: old, protocol: 1, pid: process.pid },
+    { id: "fam-gone", revision: old, protocol: 1, pid: deadPid() }]);
+  const before = instanceState(h), launches = h.log("launchctl.log");
+
+  // A protocol 3 daemon reattaches none of them; a host that no longer runs does not count.
+  const bumped = h.run(["--instance", "durable", "switch", wbRev(2), pwRev(2), "0"], { PROTOCOL: "3" });
+  assert.equal(bumped.status, 7, bumped.stderr);
+  assert.match(bumped.stderr, /refusing: .*protocol 3/);
+  assert.match(bumped.stderr, /com\.pi-workbench\.durable-host\.fam-current: protocol 2, revision /);
+  assert.match(bumped.stderr, /com\.pi-workbench\.durable-host\.fam-old: protocol 1, revision .*pi-workbench-ffffffffffff/);
+  assert.doesNotMatch(bumped.stderr, /fam-gone/);
+  // A protocol 2 daemon still cannot reattach the protocol 1 family.
+  const same = h.run(["--instance", "durable", "switch", wbRev(3), pwRev(3), "0"]);
+  assert.equal(same.status, 7, same.stderr);
+  assert.match(same.stderr, /fam-old/);
+  assert.doesNotMatch(same.stderr, /fam-current|fam-gone/);
+  assert.equal(readdirSync(join(h.store, "jobs")).length, 1);
+  assert.equal(h.log("launchctl.log"), launches);
+  assert.deepEqual(instanceState(h), before);
+
+  // Without the old family it schedules; a host started during the delay is checked again when the job starts.
+  hosts(h, [{ id: "fam-current", revision: wb1, protocol: 2, pid: process.pid }]);
+  const scheduled = h.run(["--instance", "durable", "switch", wbRev(3), pwRev(3), "0"]);
+  assert.equal(scheduled.status, 0, scheduled.stderr);
+  hosts(h, [{ id: "fam-current", revision: wb1, protocol: 2, pid: process.pid }, { id: "fam-late", revision: old, protocol: 1, pid: process.pid }]);
+  const late = instanceState(h);
+  const jobs = join(h.store, "jobs"), job = join(jobs, readdirSync(jobs).sort().at(-1));
+  const ran = spawnSync("bash", [join(job, "job.sh")], { env: h.env, encoding: "utf8" });
+  assert.equal(ran.status, 7, readFileSync(join(job, "job.log"), "utf8"));
+  assert.match(readFileSync(join(job, "job.log"), "utf8"), /fam-late[\s\S]*refused /);
+  assert.deepEqual(instanceState(h), late);
+});
+
+test("a full Durable switch restarts only the two Durable services, never a host, and prune keeps the builds running hosts use", () => {
+  const h = harness();
+  const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  assert.equal(h.run(["--instance", "durable", "prepare", wbRev(4), pwRev(4)]).status, 0);
+  hosts(h, [{ id: "fam-a", revision: build("pi-workbench", wbRev(1)), protocol: 2, pid: process.pid },
+    { id: "fam-b", revision: build("pi-workbench", wbRev(1)), protocol: 2, pid: process.pid }]);
+  // A family whose host died: its revision may go once nothing else names it.
+  const gone = JSON.parse(readFileSync(join(h.data, "session-runtimes.json"), "utf8"));
+  gone.chats["fam-gone"] = { ...gone.chats["fam-a"], id: "fam-gone", storeId: "fam-gone",
+    host: { ...gone.chats["fam-a"].host, label: "com.pi-workbench.durable-host.fam-gone", revision: realpathSync(build("pi-workbench", wbRev(4))), pid: deadPid() } };
+  put(join(h.data, "session-runtimes.json"), JSON.stringify(gone));
+  const hostsBefore = hostState(h);
+
+  for (const n of [2, 3]) {
+    const promoted = h.switchDurable(wbRev(n), pwRev(n));
+    assert.equal(promoted.status, 0, promoted.log);
+    assert.deepEqual(hostState(h), hostsBefore);
+  }
+  const labels = [...launchLabels(h)].filter((l) => !l.startsWith("com.pi-workbench.promote-installed-durable."));
+  assert.deepEqual(labels.sort(), ["com.pi-web-durable.sessiond", "com.pi-web-durable.web"]);
+  // The new daemon finds the hosts where they were: the same data dir, launchd hosts on.
+  assert.equal(h.plist("sessiond").EnvironmentVariables.PI_WEB_DATA_DIR, h.data);
+  assert.equal(h.plist("sessiond").EnvironmentVariables.PI_WEB_DURABLE_HOST_LAUNCHD, "com.pi-workbench.durable-host");
+
+  for (const product of ["pi-workbench", "pi-web"]) for (const n of [1, 2]) {
+    const marker = `${build(product, product === "pi-web" ? pwRev(n) : wbRev(n))}.retired`, when = new Date(Date.now() - (3 - n) * 3600e3);
+    if (existsSync(marker)) utimesSync(marker, when, when);
+  }
+  // The switches' own prunes may already have removed some; the end state counts.
+  const dry = h.run(["--instance", "durable", "prune"]);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /keep   pi-workbench-aaaaaaaaaaa1: a running Durable host runs from it/);
+  assert.equal(h.run(["--instance", "durable", "prune", "--apply"]).status, 0);
+  assert.ok(existsSync(build("pi-workbench", wbRev(1))));
+  assert.ok(!existsSync(build("pi-web", pwRev(1))));
+  assert.ok(!existsSync(build("pi-workbench", wbRev(4))));
+
+  // An unreadable locator removes nothing.
+  assert.equal(h.run(["--instance", "durable", "prepare", wbRev(5), pwRev(5)]).status, 0);
+  put(join(h.data, "session-runtimes.json"), "{");
+  const unreadable = h.run(["--instance", "durable", "prune", "--apply"]);
+  assert.notEqual(unreadable.status, 0);
+  assert.match(unreadable.stderr, /session-runtimes\.json/);
+  assert.ok(existsSync(build("pi-workbench", wbRev(5))));
+});
+
+test("a Durable switch whose health check fails rolls back without touching any host", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  hosts(h, [{ id: "fam-a", revision: join(h.store, `pi-workbench-${short(wbRev(1))}`), protocol: 2, pid: process.pid }]);
+  const before = instanceState(h);
+  const failed = h.switchDurable(wbRev(2), pwRev(2), { BAD: short(pwRev(2)) });
+  assert.equal(failed.status, 1, failed.log);
+  assert.match(failed.log, /rollback done/);
+  assert.deepEqual(instanceState(h), before);
+  const labels = [...launchLabels(h)].filter((l) => !l.startsWith("com.pi-workbench.promote-installed-durable."));
+  assert.deepEqual(labels.sort(), ["com.pi-web-durable.sessiond", "com.pi-web-durable.web"]);
 });
 
 test("--instance names only durable, which refuses the legacy-only commands", () => {

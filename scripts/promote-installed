@@ -37,15 +37,20 @@
 #       name, any build a running process has as working directory or open file, and any build retired
 #       after the oldest running session daemon or Pi process started. Every successful
 #       switch, switch-workbench and switch-web runs it with --apply.
-#   promote-installed --instance durable <prepare|switch|switch-workbench|switch-web|prune|check-idle> ...
+#   promote-installed --instance durable <prepare|switch|switch-workbench|switch-web|prune|check-idle|check-hosts> ...
 #       The same commands for the separate Durable instance (docs/plans/pi-durable-cutover-spec.md, B7):
 #       ~/IdeaProjects/*.durable-installed, builds under ~/.pi-workbench/installed-durable, PI_WEB_DATA_DIR
 #       ~/.pi-web-durable (its socket and config.json there), port 8506, launchd labels com.pi-web-durable.*,
 #       PI_WEB_PI_PACKAGE_AUTO_INSTALL=0, PI_WEB_DURABLE_DEFAULT=1 and PI_WEB_DURABLE_HOST in the build's
 #       packages/durable-pilot. It writes its own plists and never reads-modifies ~/.pi/agent, the legacy links,
 #       plists, ~/.pi-web, ~/.config/pi-web or ~/.pi-workbench/installed. Its check-idle counts only the Durable
-#       session daemon's descendants, except Durable hosts (their Chats reopen paused). switch-workbench repoints
-#       only the link; the running daemon keeps the Durable host it started with until the next switch.
+#       session daemon's descendants, except Durable hosts. switch-workbench repoints only the link; the running
+#       daemon keeps the Durable host it started with until the next switch.
+#       Durable hosts (Phase C1) are launchd jobs com.pi-workbench.durable-host.<family> that outlive every switch and
+#       rollback; the daemon plist sets PI_WEB_DURABLE_HOST_LAUNCHD so the new daemon reattaches them. switch refuses
+#       (exit 7, nothing changed) a PI WEB build whose daemon cannot: one that does not read PI_WEB_DURABLE_HOST_LAUNCHD,
+#       or whose host protocol differs from a running host's (runtime locator ~/.pi-web-durable/session-runtimes.json;
+#       the host's protocol in its revision folder). prune keeps every build a running host runs from.
 set -Eeuo pipefail
 export PATH=${PI_PROMOTE_PATH:-$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
@@ -151,7 +156,7 @@ JS
 
 prune_builds() { # [--apply]
   [[ -d $STORE ]] || return 0
-  local apply=${1:-} real used refs product build live rollback reason oldest
+  local apply=${1:-} real used refs hostrevs product build live rollback reason oldest
   real=$(cd "$STORE" && pwd -P)
   used=$(lsof -n -P -w -Fn 2>/dev/null | sed -n "s|^n$real/\([^/]*\).*|\1|p" | sort -u || true)
   # Pi reads a build's modules once and closes them, so lsof misses open sessions; their extensions
@@ -164,6 +169,7 @@ prune_builds() { # [--apply]
       if (s > max) max = s }
     END { print (max ? now - max : now) }')
   refs=$(instance_refs 2>/dev/null || true)
+  hostrevs=$(durable_hosts | cut -f2) || { echo "refusing to prune: cannot read $DATA/session-runtimes.json" >&2; return 1; }
   for product in pi-workbench pi-web; do
     live=$(cd "$PROJECTS/$product$SUFFIX" 2>/dev/null && pwd -P || true)
     # Rollback: the build most recently switched away from; before any .retired marker, the newest prepared.
@@ -174,6 +180,7 @@ prune_builds() { # [--apply]
       reason=
       if [[ $real/${build##*/} == "$live" ]]; then reason=live
       elif [[ ${build##*/} == "$rollback" ]]; then reason=rollback
+      elif grep -qx "$real/${build##*/}" <<<"$hostrevs"; then reason="a running Durable host runs from it"
       elif grep -qx "${build##*/}" <<<"$used"; then reason="in use by a running process"
       elif [[ -e $build.retired ]] && (( $(stat -f %m "$build.retired") >= oldest )); then reason="retired after a running Pi session loaded it"
       elif grep -qF "/${build##*/}" <<<"$refs"; then reason="named by PI WEB services, Pi settings or a Workstream"
@@ -190,14 +197,38 @@ prune_builds() { # [--apply]
   [[ $apply == --apply ]] || echo "dry run: nothing removed; rerun with --apply"
 }
 
+durable_hosts() { # running Durable hosts from the runtime locator: <label> TAB <revision folder> TAB <its protocol or ?>
+  [[ $instance == durable && -e $DATA/session-runtimes.json ]] || return 0
+  node -e '
+    const fs = require("fs"), live = (pid) => { try { return process.kill(pid, 0); } catch (e) { return e.code === "EPERM"; } };
+    for (const { host: h } of Object.values(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).chats)) {
+      if (!h || !Number.isInteger(h.pid) || h.pid <= 0 || !live(h.pid)) continue;
+      let p; try { p = /export const PROTOCOL = (\d+);/.exec(fs.readFileSync(h.revision + "/packages/durable-pilot/src/chat-session.ts", "utf8"))?.[1]; } catch {}
+      console.log([h.label, h.revision, p ?? "?"].join("\t"));
+    }' "$DATA/session-runtimes.json" | sort -u
+}
+
+check_hosts() { # <pi-web-dir>: exit 7 unless that build's daemon runs launchd hosts and speaks every running host's protocol
+  local proto bad hosts
+  grep -q PI_WEB_DURABLE_HOST_LAUNCHD "$1/dist/server/sessiond.js" 2>/dev/null ||
+    { echo "refusing: $1's session daemon does not read PI_WEB_DURABLE_HOST_LAUNCHD; its Durable hosts would die with every switch" >&2; return 7; }
+  hosts=$(durable_hosts) || { echo "refusing: cannot read $DATA/session-runtimes.json" >&2; return 7; }
+  proto=$(sed -n 's/.*DURABLE_HOST_PROTOCOL = \([0-9]*\);.*/\1/p' "$1/dist/server/sessions/durableChatService.js" 2>/dev/null | head -1)
+  bad=$(awk -F'\t' -v p="$proto" 'NF && $3 != p' <<<"$hosts")
+  [[ -z $bad ]] && return 0
+  echo "refusing: the new session daemon ($1, host protocol ${proto:-unknown}) cannot reattach these running Durable host families:" >&2
+  awk -F'\t' '{ printf "  %s: protocol %s, revision %s\n", $1, $3, $2 }' <<<"$bad" >&2
+  return 7
+}
+
 instance_refs() { # files whose text names the builds an instance's services, settings or Workstreams use
   cat "$HOME"/Library/LaunchAgents/com.pi-web.*.plist "$HOME/.pi/agent/settings.json" \
     "$HOME/.config/pi-web/config.json" "$HOME/.pi-workbench/workstreams/workstreams.json"
 }
 
 if [[ $instance == durable ]]; then
-  # C1 hook: Durable hosts get launchd jobs com.pi-workbench.durable-host.<family> naming the build they run from.
-  instance_refs() { cat "$HOME"/Library/LaunchAgents/{com.pi-web-durable,com.pi-workbench.durable-host}.*.plist "$DATA/config.json" \
+  # Durable hosts' launchd plists (Phase C1: in <data>/hosts, never in LaunchAgents) name the build they run from.
+  instance_refs() { cat "$HOME"/Library/LaunchAgents/com.pi-web-durable.*.plist "$DATA"/hosts/*.plist "$DATA/config.json" \
     "$HOME/.pi-workbench/workstreams/workstreams.json"; }
   check_idle() { # the Durable session daemon's descendants, except its Durable hosts and the legacy check's exceptions
     local busy self=" $$ " p=$$
@@ -214,12 +245,13 @@ if [[ $instance == durable ]]; then
     echo "$busy" | cut -c1-160 >&2
     return 3
   }
-  case ${1:-} in prepare|switch|switch-workbench|switch-web|prune|check-idle|sessiond-unchanged|--force) ;;
-    *) echo "--instance durable supports prepare, switch, switch-workbench, switch-web, prune, check-idle" >&2; exit 2;; esac
+  case ${1:-} in prepare|switch|switch-workbench|switch-web|prune|check-idle|check-hosts|sessiond-unchanged|--force) ;;
+    *) echo "--instance durable supports prepare, switch, switch-workbench, switch-web, prune, check-idle, check-hosts" >&2; exit 2;; esac
 fi
 
 force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
+[[ ${1:-} == check-hosts && $# -eq 2 && $instance == durable ]] && { check_hosts "$2"; exit $?; }
 [[ ${1:-} == prune && $# -le 2 ]] && { prune_builds "${2:-}"; exit $?; }
 [[ ${1:-} == check-settings && $# -le 2 ]] && { check_settings "${2:-}"; exit $?; }
 [[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
@@ -269,7 +301,7 @@ if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   prune_builds --apply || true
   exit 0
 fi
-[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,48p' "$0"; exit 2; }
+[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,53p' "$0"; exit 2; }
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
 [[ $instance == durable ]] || link_cli
@@ -278,6 +310,7 @@ pw=$(prepare_one pi-web "$3") || { echo "prepare pi-web failed" >&2; exit 1; }
 echo "prepared: $wb"
 echo "prepared: $pw"
 [[ $1 == switch ]] || exit 0
+if [[ $instance == durable ]]; then check_hosts "$pw" || exit 7; fi
 
 uid=$(id -u)
 self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
@@ -299,7 +332,8 @@ for s in sessiond web; do
     "$LABEL.$s" "${PI_PROMOTE_ZSH:-/bin/zsh}" "exec node '$pw/dist/server/$e'" "$DATA/logs/$s.log" \
     PI_WEB_DATA_DIR="$DATA" PI_WEB_CONFIG="$DATA/config.json" PI_WEB_PORT=$PORT PI_WEB_PI_PACKAGE_AUTO_INSTALL=0 \
     PI_WEB_PI_PACKAGE_DIR="$pw/node_modules/@earendil-works/pi-coding-agent" \
-    PI_WEB_DURABLE_HOST="$wb/packages/durable-pilot/src/chat-host-main.ts" PI_WEB_DURABLE_DEFAULT=1 |
+    PI_WEB_DURABLE_HOST="$wb/packages/durable-pilot/src/chat-host-main.ts" PI_WEB_DURABLE_DEFAULT=1 \
+    PI_WEB_DURABLE_HOST_LAUNCHD=com.pi-workbench.durable-host |
     plutil -convert xml1 -o "$job/new/$LABEL.$s.plist" - || { echo "writing $LABEL.$s.plist failed" >&2; exit 1; }
 done
 cat >"$job/job.sh" <<EOF
@@ -310,6 +344,7 @@ exec >>"$job/job.log" 2>&1
 trap 'launchctl bootout gui/$uid/$label' EXIT
 sleep ${4:-10}
 if [[ $force == 0 ]] && ! "$self" --instance durable check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
+if ! "$self" --instance durable check-hosts "$pw"; then echo "refused \$(date -u +%FT%TZ): a host started during the delay that the new daemon cannot reattach; nothing changed"; exit 7; fi
 echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"
 la=\$HOME/Library/LaunchAgents
 # This instance's state only: its plists (none before the first install), links and plugin link.
