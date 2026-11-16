@@ -3,6 +3,7 @@
 // Every iteration's evidence is appended to results/evidence/<window>.<mode>.jsonl.
 import { type ChildProcess, fork } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,11 @@ export const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Hermetic: every test file imports this module, and a Subagent or Worker environment running the tests (its execution
 // kind) must change nothing in the hosts they start.
 delete process.env.PI_WORKBENCH_EXECUTION_KIND;
+// And no real AFK battery alarm: the hosts they start see AC power, and the alarm's binaries do nothing.
+const POWER_BIN = mkdtempSync(join(process.env.PI_TMP ?? tmpdir(), "dp-power-"));
+writeFileSync(join(POWER_BIN, "pmset"), "#!/bin/sh\necho \"Now drawing from 'AC Power'\"\n", { mode: 0o755 });
+for (const name of ["afplay", "say", "osascript"]) writeFileSync(join(POWER_BIN, name), "#!/bin/sh\n", { mode: 0o755 });
+process.env.PATH = `${POWER_BIN}:${process.env.PATH ?? ""}`;
 export const ITERATIONS = Number(process.env.PILOT_ITERATIONS ?? 20);
 const CONCURRENCY = Number(process.env.PILOT_CONCURRENCY ?? 6);
 const TIMEOUT_MS = Number(process.env.PILOT_TIMEOUT_MS ?? 60_000);
