@@ -1,0 +1,132 @@
+// The Durable Chat host on its owner-only Unix socket (Phase C1): PI WEB's session daemon reaches a launchd-owned host
+// there instead of over a fork's IPC pipe. The handshake names protocol, host revision, store ID, owner epoch and PID;
+// a dropped connection leaves the host and its running turn alone, and the next connection reattaches to them.
+import assert from "node:assert/strict";
+import { type ChildProcess, spawn } from "node:child_process";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { connect, type Socket } from "node:net";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { after, test } from "node:test";
+import { readLog } from "../src/faux.ts";
+import { fakeAgentDir } from "./chat-proc.ts";
+import { cleanup, PACKAGE, scratch } from "./runner.ts";
+
+type UiEvent = { type: string; [key: string]: unknown };
+type Ready = { protocol: number; revision: string; storeId: string; ownerEpoch: number; pid: number };
+type Line = { id?: number; result?: unknown; error?: { message: string }; event?: UiEvent; ready?: Ready };
+
+process.env.PI_TELEMETRY_DIR = scratch("socket-telemetry");
+process.env.PI_STORAGE_GUARD_FREE_GB = "1000";
+process.env.PI_TMP_ROOT = scratch("socket-pi-tmp");
+process.env.PI_CODING_AGENT_DIR = fakeAgentDir("socket-agent");
+
+const live = new Set<ChildProcess>();
+// macOS caps a Unix socket path at 104 bytes; a session-scoped TMPDIR is longer, so sockets go to a short owner-only dir.
+const SOCKETS = mkdtempSync(join(tmpdir().length <= 60 ? tmpdir() : join(homedir(), ".pi-workbench", "tmp"), "dps-"));
+after(() => {
+	for (const child of live) child.kill("SIGKILL");
+	rmSync(SOCKETS, { recursive: true, force: true });
+	cleanup();
+});
+
+function start(label: string, socket: string, tps = 40): { child: ChildProcess; store: string; exited: Promise<number | null>; stderr: () => string } {
+	const dir = scratch(`socket-${label}`);
+	const cwd = join(dir, "workspace");
+	mkdirSync(cwd);
+	const store = join(dir, "family");
+	// No IPC channel: the host owns its life, as under launchd.
+	const child = spawn(process.execPath, [join(PACKAGE, "src", "chat-host-main.ts"), "--store", store, "--cwd", cwd, "--model", "faux", "--faux-tps", String(tps), "--socket", socket], { stdio: ["ignore", "ignore", "pipe"] });
+	live.add(child);
+	let stderr = "";
+	child.stderr!.on("data", (data) => (stderr += data.toString()));
+	const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => (live.delete(child), resolve(code))));
+	return { child, store, exited, stderr: () => stderr };
+}
+
+/** One daemon-side connection: newline-delimited JSON both ways. */
+class Client {
+	readonly lines: Line[] = [];
+	readonly ready: Promise<Ready>;
+	readonly socket: Socket;
+	#next = 1;
+	#wake: (() => void)[] = [];
+
+	constructor(path: string) {
+		this.socket = connect({ path });
+		let buffer = "";
+		this.socket.on("data", (chunk) => {
+			buffer += chunk.toString();
+			for (let end = buffer.indexOf("\n"); end !== -1; end = buffer.indexOf("\n")) {
+				this.lines.push(JSON.parse(buffer.slice(0, end)) as Line);
+				buffer = buffer.slice(end + 1);
+				for (const wake of this.#wake.splice(0)) wake();
+			}
+		});
+		this.socket.on("error", () => undefined);
+		this.ready = this.until((line) => line.ready !== undefined).then((line) => line.ready!);
+	}
+
+	async until(match: (line: Line) => boolean): Promise<Line> {
+		for (;;) {
+			const found = this.lines.find(match);
+			if (found !== undefined) return found;
+			await new Promise<void>((resolve) => this.#wake.push(resolve));
+		}
+	}
+
+	async call<T = unknown>(method: string, params?: object): Promise<T> {
+		const id = this.#next++;
+		this.socket.write(`${JSON.stringify({ id, method, ...(params === undefined ? {} : { params }) })}\n`);
+		const reply = await this.until((line) => line.id === id);
+		if (reply.error !== undefined) throw new Error(reply.error.message);
+		return reply.result as T;
+	}
+}
+
+async function connected(path: string, host: { child: ChildProcess; stderr: () => string }): Promise<Client> {
+	for (;;) {
+		if (existsSync(path)) return new Client(path);
+		if (host.child.exitCode !== null) throw new Error(`host exited: ${host.stderr()}`);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+}
+
+test("handshake names protocol, revision, store, owner epoch and PID; a dropped connection leaves the running turn alone", async () => {
+	const dir = mkdtempSync(join(SOCKETS, "h-"));
+	const path = join(dir, "host.sock");
+	const host = start("reattach", path);
+	const first = await connected(path, host);
+	const ready = await first.ready;
+	assert.equal(ready.protocol, 2);
+	assert.equal(ready.storeId, basename(host.store));
+	assert.equal(ready.revision, realpathSync(join(PACKAGE, "..", "..")), "the revision folder the host runs from");
+	assert.equal(ready.pid, host.child.pid);
+	assert.equal(typeof ready.ownerEpoch, "number");
+	assert.equal(lstatSync(path).mode & 0o777, 0o600, "owner-only socket");
+
+	await first.call("prompt", { operationId: "op-1", text: "gen" });
+	await first.until((line) => line.event?.type === "assistant.delta");
+	first.socket.destroy();
+
+	// The daemon is gone; the host streams on. A new daemon connects and gets the same host and owner.
+	const second = await connected(path, host);
+	const again = await second.ready;
+	assert.deepEqual(again, ready);
+	await second.until((line) => line.event?.type === "agent.end");
+	const transcript = await second.call<{ messages: { role: string }[] }>("transcript");
+	assert.deepEqual(transcript.messages.map((m) => m.role), ["user", "assistant"]);
+	assert.deepEqual(readLog<{ label: string }>(join(host.store, "requests.log")).map((l) => l.label), ["gen"], "one provider request, never resent");
+
+	await second.call("close");
+	assert.equal(await host.exited, 0, host.stderr());
+	assert.equal(existsSync(path), false, "the host removes its socket on an orderly exit");
+});
+
+test("refuses a socket folder others can reach", async () => {
+	const dir = mkdtempSync(join(SOCKETS, "o-"));
+	chmodSync(dir, 0o755);
+	const host = start("open-dir", join(dir, "host.sock"));
+	assert.notEqual(await host.exited, 0);
+	assert.match(host.stderr(), /owner-only/);
+});
