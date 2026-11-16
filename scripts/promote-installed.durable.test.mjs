@@ -34,7 +34,7 @@ function harness() {
   // Job folders are named by the second; give each switch its own.
   shim("date", `case "$*" in *%Y%m%dT*) n=$(cat "$HOME/dates" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$HOME/dates"; echo "20261117T0000\${n}Z";; *) exec /bin/date "$@";; esac`);
   // Healthy unless the Durable web service runs the build named by BAD.
-  shim("curl", `if [ -n "$BAD" ] && grep -q "$BAD" "$HOME/Library/LaunchAgents/com.pi-web-durable.web.plist" 2>/dev/null; then exit 1; fi
+  shim("curl", `if [ -n "$BAD" ] && grep -q "$BAD" "\${WEB_PLIST:-$HOME/Library/LaunchAgents/com.pi-web-durable.web.plist}" 2>/dev/null; then exit 1; fi
   echo '{"plugins":[{"id":"pi-workbench","server":{"state":"active","restartRequired":false}}]}'`);
   const ps = join(root, "ps.txt");
   put(ps, "");
@@ -374,6 +374,70 @@ test("a Durable switch whose health check fails rolls back without touching any 
   assert.deepEqual(instanceState(h), before);
   const labels = [...launchLabels(h)].filter((l) => !l.startsWith("com.pi-workbench.promote-installed-durable."));
   assert.deepEqual(labels.sort(), ["com.pi-web-durable.sessiond", "com.pi-web-durable.web"]);
+});
+
+test("a trial (PI_PROMOTE_DURABLE_TRIAL) promotes and rolls back only its own folder, port and com.pi-workbench.durable-trial.* labels", () => {
+  const h = harness();
+  const trial = join(h.root, "trial"), store = join(trial, "installed-durable"), data = join(trial, "data"), la = join(trial, "LaunchAgents");
+  const projects = join(trial, "projects");
+  for (const product of ["pi-workbench", "pi-web"]) mkdirSync(join(projects, product), { recursive: true });
+  const t = { PI_PROMOTE_DURABLE_TRIAL: trial, PI_PROMOTE_DURABLE_PORT: "8516", PI_WORKBENCH_PROJECTS: projects, WEB_PLIST: join(la, "com.pi-workbench.durable-trial.web.plist"),
+    PI_PROMOTE_DURABLE_ENV: "PI_WEB_DURABLE_AGENT_DIR=/trial/agent PI_OFFLINE=1" };
+  const before = h.legacy(), instance = h.durable();
+  const build = (product, rev) => join(store, `${product}-${short(rev)}`);
+  const plist = (s) => JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", join(la, `com.pi-workbench.durable-trial.${s}.plist`)], { encoding: "utf8" }).stdout);
+  // Like switchDurable, against the trial's store.
+  const promote = (n, extra = {}) => {
+    const scheduled = h.run(["--instance", "durable", "switch", wbRev(n), pwRev(n), "0"], { ...t, ...extra });
+    assert.equal(scheduled.status, 0, scheduled.stderr);
+    const job = join(store, "jobs", readdirSync(join(store, "jobs")).sort().at(-1));
+    // launchd starts the job without the caller's environment: only the shims' switches.
+    const ran = spawnSync("bash", [join(job, "job.sh")], { env: { ...h.env, WEB_PLIST: t.WEB_PLIST, ...extra }, encoding: "utf8" });
+    return { status: ran.status, log: readFileSync(join(job, "job.log"), "utf8"), job };
+  };
+
+  for (const n of [1, 2]) {
+    const promoted = promote(n);
+    assert.equal(promoted.status, 0, promoted.log);
+    const job = spawnSync("plutil", ["-convert", "json", "-o", "-", join(promoted.job, "job.plist")], { encoding: "utf8" }).stdout;
+    assert.match(JSON.parse(job).Label, /^com\.pi-workbench\.durable-trial\.promote\.\d/);
+    // The job's own checks and prune act on the trial, not on the real Durable instance.
+    assert.match(promoted.log, new RegExp(`promoted [\\s\\S]*\\nkeep   pi-workbench-${short(wbRev(n))}: live`));
+  }
+  for (const s of ["sessiond", "web"]) {
+    const p = plist(s);
+    assert.equal(p.Label, `com.pi-workbench.durable-trial.${s}`);
+    assert.equal(p.StandardOutPath, join(data, "logs", `${s}.log`));
+    assert.deepEqual(p.EnvironmentVariables, {
+      PI_WEB_DATA_DIR: data, PI_WEB_CONFIG: join(data, "config.json"), PI_WEB_PORT: "8516", PI_WEB_PI_PACKAGE_AUTO_INSTALL: "0",
+      PI_WEB_PI_PACKAGE_DIR: `${build("pi-web", pwRev(2))}/node_modules/@earendil-works/pi-coding-agent`,
+      PI_WEB_DURABLE_HOST: `${build("pi-workbench", wbRev(2))}/packages/durable-pilot/src/chat-host-main.ts`, PI_WEB_DURABLE_DEFAULT: "1",
+      PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-trial.host", PI_WEB_DURABLE_AGENT_DIR: "/trial/agent", PI_OFFLINE: "1",
+    });
+  }
+  assert.equal(readlinkSync(join(projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(2)));
+  assert.equal(readlinkSync(join(data, "plugins/pi-workbench")), join(projects, "pi-workbench.durable-installed/packages"));
+
+  // A forced failed health check restores the trial's previous services.
+  const failed = promote(3, { BAD: short(pwRev(3)) });
+  assert.equal(failed.status, 1, failed.log);
+  assert.match(failed.log, /FAILED; restoring previous services[\s\S]*rollback done/);
+  assert.equal(plist("web").ProgramArguments[3], `exec node '${build("pi-web", pwRev(2))}/dist/server/index.js'`);
+
+  // The trial's extra environment may turn launchd hosts off (forked hosts, the survival run's red check).
+  assert.equal(promote(4, { PI_PROMOTE_DURABLE_ENV: "PI_WEB_DURABLE_HOST_LAUNCHD=" }).status, 0);
+  assert.equal(plist("sessiond").EnvironmentVariables.PI_WEB_DURABLE_HOST_LAUNCHD, "");
+
+  // Only trial labels, port and socket; the real Durable instance and the legacy one never moved.
+  const labels = [...h.log("launchctl.log").matchAll(/(com\.pi-[\w.-]+?)(?:\.plist)?(?:\s|$)/g)].map((m) => m[1]);
+  assert.ok(labels.length > 0);
+  for (const label of labels) assert.match(label, /^com\.pi-workbench\.durable-trial\./);
+  for (const line of h.log("lsof.log").trim().split("\n").filter((l) => /tcp:|sock/.test(l))) assert.match(line, new RegExp(`tcp:8516|${data}/sessiond\.sock`), line);
+  assert.deepEqual(h.durable(), instance);
+  assert.deepEqual(h.legacy(), before);
+
+  // A trial needs its own port.
+  for (const port of ["", "8506", "8505"]) assert.equal(h.run(["--instance", "durable", "prune"], { ...t, PI_PROMOTE_DURABLE_PORT: port }).status, 2, port);
 });
 
 test("--instance names only durable, which refuses the legacy-only commands", () => {
