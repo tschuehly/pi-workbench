@@ -374,6 +374,8 @@ test("survival: a job that finishes while its host is gone delivers its completi
 	await first.call("prompt", { operationId: "op-1", text: call("bash", { description: "Outlives host", command: "echo x >> launches.log; sleep 1; echo survived" }) });
 	const id = jobId((await toolEnd(first)).text);
 	await first.idle(1);
+	// The detached runner claims the job when its process starts, after the tool returned; a loaded machine delays that.
+	await waitFor(() => existsSync(join(JOBS, id, "claim")), "the runner's claim");
 	await first.kill();
 	assert.equal(alive(claim(id).pid), true, "the runner outlives the host");
 	await waitFor(() => exitRecord(id) !== undefined, "the job finishing while the host is gone");

@@ -158,11 +158,14 @@ describe("ownership and storage", () => {
 function legacy(mode: "start" | "resume" | "open", dir: string) {
 	const child = fork(join(PACKAGE, "legacy-1.3", "host13.mjs"), [mode, dir], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
 	const messages: E[] = [];
+	let stderr = "";
+	child.stderr!.on("data", (chunk) => (stderr += chunk));
 	const exited = new Promise((resolve) => child.on("exit", resolve));
 	const next = (type: string) =>
 		new Promise<E>((resolve, reject) => {
 			child.on("message", (m: E) => (messages.push(m), m.type === type && resolve(m)));
-			child.on("exit", () => reject(new Error(`1.3 host exited before ${type}`)));
+			// "close" waits for stderr, so a missing legacy-1.3/node_modules (run `npm run setup`) shows up in the error.
+			child.on("close", () => reject(new Error(`1.3 host exited before ${type}: ${stderr.trim()}`)));
 		});
 	return { child, exited, next };
 }
