@@ -37,11 +37,28 @@
 #       name, any build a running process has as working directory or open file, and any build retired
 #       after the oldest running session daemon or Pi process started. Every successful
 #       switch, switch-workbench and switch-web runs it with --apply.
+#   promote-installed --instance durable <prepare|switch|switch-workbench|switch-web|prune|check-idle> ...
+#       The same commands for the separate Durable instance (docs/plans/pi-durable-cutover-spec.md, B7):
+#       ~/IdeaProjects/*.durable-installed, builds under ~/.pi-workbench/installed-durable, PI_WEB_DATA_DIR
+#       ~/.pi-web-durable (its socket and config.json there), port 8506, launchd labels com.pi-web-durable.*,
+#       PI_WEB_PI_PACKAGE_AUTO_INSTALL=0, PI_WEB_DURABLE_DEFAULT=1 and PI_WEB_DURABLE_HOST in the build's
+#       packages/durable-pilot. It writes its own plists and never reads-modifies ~/.pi/agent, the legacy links,
+#       plists, ~/.pi-web, ~/.config/pi-web or ~/.pi-workbench/installed. Its check-idle counts only the Durable
+#       session daemon's descendants, except Durable hosts (their Chats reopen paused). switch-workbench repoints
+#       only the link; the running daemon keeps the Durable host it started with until the next switch.
 set -Eeuo pipefail
 export PATH=${PI_PROMOTE_PATH:-$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
 STORE=$HOME/.pi-workbench/installed
 PORT=8505 # the Pi Workbench app's default ServerURL
+LABEL=com.pi-web SUFFIX=.installed ME=$0
+instance=legacy
+if [[ ${1:-} == --instance ]]; then
+  [[ ${2:-} == durable ]] || { echo "unknown instance: ${2:-} (only durable)" >&2; exit 2; }
+  instance=durable; shift 2
+  STORE=$HOME/.pi-workbench/installed-durable PORT=8506 LABEL=com.pi-web-durable SUFFIX=.durable-installed
+  DATA=$HOME/.pi-web-durable ME="$0 --instance durable"
+fi
 
 prepare_one() { # <repo-name> <rev> -> prints the prepared directory
   local name=$1 sha dir
@@ -52,6 +69,11 @@ prepare_one() { # <repo-name> <rev> -> prints the prepared directory
     # Pi supplies pi-workbench's peer packages at load time; only PI WEB needs installing and building.
     # npm 11 skips node-pty's unapproved install script, which makes spawn-helper executable (Terminal).
     if [[ $name == pi-web ]]; then (cd "$dir" && npm ci --no-audit --no-fund && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && npm run build) >&2 || return 1; fi
+    # The Durable instance's session daemon starts the Durable host from this build: it needs its dependencies and
+    # the peer packages of the Workbench extensions it imports (the root's).
+    if [[ $name == pi-workbench && $instance == durable ]]; then
+      (cd "$dir" && npm ci --no-audit --no-fund --ignore-scripts && cd packages/durable-pilot && npm ci --no-audit --no-fund --ignore-scripts) >&2 || return 1
+    fi
     touch "$dir.prepared" || return 1
   fi
   echo "$dir"
@@ -138,10 +160,9 @@ prune_builds() { # [--apply]
       n = split(t, p, ":"); s = 0; for (i = 1; i <= n; i++) s = s * 60 + p[i]; s += d * 86400
       if (s > max) max = s }
     END { print (max ? now - max : now) }')
-  refs=$(cat "$HOME"/Library/LaunchAgents/com.pi-web.*.plist "$HOME/.pi/agent/settings.json" \
-    "$HOME/.config/pi-web/config.json" "$HOME/.pi-workbench/workstreams/workstreams.json" 2>/dev/null || true)
+  refs=$(instance_refs 2>/dev/null || true)
   for product in pi-workbench pi-web; do
-    live=$(cd "$PROJECTS/$product.installed" 2>/dev/null && pwd -P || true)
+    live=$(cd "$PROJECTS/$product$SUFFIX" 2>/dev/null && pwd -P || true)
     # Rollback: the build most recently switched away from; before any .retired marker, the newest prepared.
     rollback=$(cd "$STORE" && ls -t $product-????????????.retired 2>/dev/null | sed 's/\.retired$//' | grep -vx "${live##*/}" | head -1 || true)
     [[ -n $rollback ]] || rollback=$(cd "$STORE" && ls -t $product-????????????.prepared 2>/dev/null | sed 's/\.prepared$//' | grep -vx "${live##*/}" | head -1 || true)
@@ -166,15 +187,43 @@ prune_builds() { # [--apply]
   [[ $apply == --apply ]] || echo "dry run: nothing removed; rerun with --apply"
 }
 
+instance_refs() { # files whose text names the builds an instance's services, settings or Workstreams use
+  cat "$HOME"/Library/LaunchAgents/com.pi-web.*.plist "$HOME/.pi/agent/settings.json" \
+    "$HOME/.config/pi-web/config.json" "$HOME/.pi-workbench/workstreams/workstreams.json"
+}
+
+if [[ $instance == durable ]]; then
+  # C1 hook: Durable hosts get launchd jobs com.pi-workbench.durable-host.<family> naming the build they run from.
+  instance_refs() { cat "$HOME"/Library/LaunchAgents/{com.pi-web-durable,com.pi-workbench.durable-host}.*.plist "$DATA/config.json" \
+    "$HOME/.pi-workbench/workstreams/workstreams.json"; }
+  check_idle() { # the Durable session daemon's descendants, except its Durable hosts and the legacy check's exceptions
+    local busy self=" $$ " p=$$
+    while p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ') && [[ -n $p && $p -gt 1 ]]; do self+="$p "; done
+    busy=$(${PI_PROMOTE_PS:-ps -axo pid=,ppid=,command=} | awk -v self="$self" -v store="$STORE/" '
+      { line[NR] = $0; pid[NR] = $1; parent[NR] = $2; cmd = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", cmd); command[NR] = cmd
+        if (cmd ~ /sessiond[.]js/ && index(cmd, store)) under[$1] = 1 }
+      END { do { n = 0; for (i = 1; i <= NR; i++) if (under[parent[i]] && !under[pid[i]]) { under[pid[i]] = 1; n++ } } while (n)
+        for (i = 1; i <= NR; i++) {
+          if (index(self, " " pid[i] " ") || !under[parent[i]]) continue
+          if (command[i] !~ /ping-a-human|<defunct>|^\(.*\)$|background-bash\/runner[.]mjs|chat-host-main[.]ts/) print line[i] } }')
+    [[ -z $busy ]] && return 0
+    echo "refusing: a restart would kill these subagents, workers, and commands:" >&2
+    echo "$busy" | cut -c1-160 >&2
+    return 3
+  }
+  case ${1:-} in prepare|switch|switch-workbench|switch-web|prune|check-idle|sessiond-unchanged|--force) ;;
+    *) echo "--instance durable supports prepare, switch, switch-workbench, switch-web, prune, check-idle" >&2; exit 2;; esac
+fi
+
 force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
 [[ ${1:-} == prune && $# -le 2 ]] && { prune_builds "${2:-}"; exit $?; }
 [[ ${1:-} == check-settings && $# -le 2 ]] && { check_settings "${2:-}"; exit $?; }
 [[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
 if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
-  la=$HOME/Library/LaunchAgents; web=$HOME/Library/LaunchAgents/com.pi-web.web.plist
+  la=$HOME/Library/LaunchAgents; web=$HOME/Library/LaunchAgents/$LABEL.web.plist
   entry() { sed -e "s/&apos;/'/g" "$1" | sed -n "s|.*exec node '\(.*\)/dist/server/$2'.*|\1|p"; }
-  running=$(entry "$la/com.pi-web.sessiond.plist" sessiond.js); old=$(entry "$web" index.js)
+  running=$(entry "$la/$LABEL.sessiond.plist" sessiond.js); old=$(entry "$web" index.js)
   [[ -n $running && -n $old ]] || { echo "cannot read the running PI WEB builds from $la" >&2; exit 1; }
   mkdir -p "$STORE"
   pw=$(prepare_one pi-web "$2") || { echo "prepare pi-web failed" >&2; exit 1; }
@@ -183,15 +232,15 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   fi
   swap() { # <from-dir> <to-dir>
     sed -i '' "s|$1/dist/server/index.js|$2/dist/server/index.js|" "$web"
-    ln -sfn "$2" "$PROJECTS/pi-web.installed"
-    launchctl bootout "gui/$(id -u)/com.pi-web.web" 2>/dev/null || true
+    ln -sfn "$2" "$PROJECTS/pi-web$SUFFIX"
+    launchctl bootout "gui/$(id -u)/$LABEL.web" 2>/dev/null || true
     sleep 1
     launchctl bootstrap "gui/$(id -u)" "$web"
   }
   up() { for _ in $(seq 60); do healthy && return 0; sleep 1; done; return 1; }
   swap "$old" "$pw"
   if up; then
-    echo "web: $old -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $0 switch-web ${old##*-}"
+    echo "web: $old -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $ME switch-web ${old##*-}"
     [[ $old == "$pw" ]] || touch "$old.retired"
     prune_builds --apply || true
     exit 0
@@ -202,23 +251,25 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   echo "ROLLBACK FAILED: web service unhealthy on $old" >&2; exit 4
 fi
 if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
-  check_settings || { echo "refusing: Pi would not load the promoted Pi Workbench; fix the paths above" >&2; exit 6; }
+  if [[ $instance == legacy ]]; then
+    check_settings || { echo "refusing: Pi would not load the promoted Pi Workbench; fix the paths above" >&2; exit 6; }
+  fi
   mkdir -p "$STORE"
-  link_cli
+  [[ $instance == durable ]] || link_cli
   wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
-  link=$PROJECTS/pi-workbench.installed
+  link=$PROJECTS/pi-workbench$SUFFIX
   previous=$(readlink "$link" || true)
   python3 -c 'import os,sys; t,l=sys.argv[1:]; os.symlink(t,l+".new"); os.replace(l+".new",l)' "$wb" "$link"
-  echo "pi-workbench.installed: ${previous:-none} -> $wb" | tee -a "$STORE/switch-workbench.log"
-  echo "roll back: $0 switch-workbench ${previous##*-}"
+  echo "pi-workbench$SUFFIX: ${previous:-none} -> $wb" | tee -a "$STORE/switch-workbench.log"
+  echo "roll back: $ME switch-workbench ${previous##*-}"
   [[ -z $previous || $previous == "$wb" ]] || touch "$previous.retired"
   prune_builds --apply || true
   exit 0
 fi
-[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,38p' "$0"; exit 2; }
+[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,48p' "$0"; exit 2; }
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
-link_cli
+[[ $instance == durable ]] || link_cli
 wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
 pw=$(prepare_one pi-web "$3") || { echo "prepare pi-web failed" >&2; exit 1; }
 echo "prepared: $wb"
@@ -230,6 +281,91 @@ self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
 job=$STORE/jobs/$(date -u +%Y%m%dT%H%M%SZ)
 label=com.pi-workbench.promote-installed.$(basename "$job")
 mkdir -p "$job/backup"
+if [[ $instance == durable ]]; then
+label=com.pi-workbench.promote-installed-durable.$(basename "$job")
+# The new services' plists, written now so a failure stops before anything changes. `pi-web install` cannot write them:
+# its labels and log folder are the legacy instance's (pi-web src/nativeServices/servicePlan.ts, src/cli.ts). Same keys.
+mkdir -p "$job/new"
+for s in sessiond web; do
+  e=sessiond.js; [[ $s == web ]] && e=index.js
+  node -e '
+    const [label, zsh, cmd, log, ...env] = process.argv.slice(1);
+    process.stdout.write(JSON.stringify({ Label: label, ProgramArguments: ["/usr/bin/env", zsh, "-lc", cmd],
+      EnvironmentVariables: Object.fromEntries(env.map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)])),
+      RunAtLoad: true, MaterializeDatalessFiles: true, KeepAlive: { SuccessfulExit: false }, StandardOutPath: log, StandardErrorPath: log }))' \
+    "$LABEL.$s" "${PI_PROMOTE_ZSH:-/bin/zsh}" "exec node '$pw/dist/server/$e'" "$DATA/logs/$s.log" \
+    PI_WEB_DATA_DIR="$DATA" PI_WEB_CONFIG="$DATA/config.json" PI_WEB_PORT=$PORT PI_WEB_PI_PACKAGE_AUTO_INSTALL=0 \
+    PI_WEB_PI_PACKAGE_DIR="$pw/node_modules/@earendil-works/pi-coding-agent" \
+    PI_WEB_DURABLE_HOST="$wb/packages/durable-pilot/src/chat-host-main.ts" PI_WEB_DURABLE_DEFAULT=1 |
+    plutil -convert xml1 -o "$job/new/$LABEL.$s.plist" - || { echo "writing $LABEL.$s.plist failed" >&2; exit 1; }
+done
+cat >"$job/job.sh" <<EOF
+#!/bin/bash
+set -Euo pipefail
+export PATH=$PATH
+exec >>"$job/job.log" 2>&1
+trap 'launchctl bootout gui/$uid/$label' EXIT
+sleep ${4:-10}
+if [[ $force == 0 ]] && ! "$self" --instance durable check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
+echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"
+la=\$HOME/Library/LaunchAgents
+# This instance's state only: its plists (none before the first install), links and plugin link.
+cp -p \$la/$LABEL.*.plist "$job/backup/" 2>/dev/null || true
+for l in pi-workbench$SUFFIX pi-web$SUFFIX; do readlink "$PROJECTS/\$l" >>"$job/backup/links" || echo >>"$job/backup/links"; done
+readlink "$DATA/plugins/pi-workbench" >"$job/backup/plugin-link" || true
+
+stop_all() {
+  # C1 hook: Durable hosts run as launchd jobs com.pi-workbench.durable-host.<family> and outlive this; never stop them here.
+  for s in web sessiond; do launchctl bootout gui/$uid/$LABEL.\$s 2>/dev/null || true; done
+  sleep 3
+  for p in \$(lsof -ti tcp:$PORT -sTCP:LISTEN; lsof -t "$DATA/sessiond.sock"); do
+    kill -TERM "\$p" 2>/dev/null || true
+  done 2>/dev/null
+  sleep 3
+}
+PORT=$PORT
+$(declare -f healthy)
+rollback() {
+  echo "FAILED; restoring previous services"
+  stop_all
+  rm -f \$la/$LABEL.*.plist || { echo "ROLLBACK FAILED: removing the new plists"; exit 4; }
+  if compgen -G "$job/backup/$LABEL.*.plist" >/dev/null; then
+    cp -p "$job"/backup/$LABEL.*.plist \$la/ || { echo "ROLLBACK FAILED: restoring saved plists"; exit 4; }
+  fi
+  t=\$(cat "$job/backup/plugin-link")
+  if [[ -n \$t ]]; then ln -sfn "\$t" "$DATA/plugins/pi-workbench"; else rm -f "$DATA/plugins/pi-workbench"; fi ||
+    { echo "ROLLBACK FAILED: restoring the plugin link"; exit 4; }
+  i=0; for l in pi-workbench$SUFFIX pi-web$SUFFIX; do
+    i=\$((i+1)); t=\$(sed -n "\${i}p" "$job/backup/links")
+    if [[ -n \$t ]]; then ln -sfn "\$t" "$PROJECTS/\$l" || { echo "ROLLBACK FAILED: restoring \$l"; exit 4; }
+    else rm -f "$PROJECTS/\$l" || { echo "ROLLBACK FAILED: removing \$l"; exit 4; }; fi
+  done
+  compgen -G "$job/backup/$LABEL.*.plist" >/dev/null || { echo "rollback done \$(date -u +%FT%TZ): no previous Durable instance"; exit 1; }
+  boot_failed=0
+  for f in \$la/$LABEL.*.plist; do launchctl bootstrap gui/$uid "\$f" || boot_failed=1; done
+  if [[ \$boot_failed == 1 ]]; then echo "ROLLBACK FAILED: old service bootstrap"; exit 4; fi
+  for i in \$(seq 90); do
+    if healthy; then echo "rollback done \$(date -u +%FT%TZ)"; exit 1; fi
+    sleep 1
+  done
+  echo "ROLLBACK FAILED: old service health check"
+  exit 4
+}
+
+for l in pi-workbench$SUFFIX pi-web$SUFFIX; do t=\$(readlink "$PROJECTS/\$l") && [[ -d \$t ]] && touch "\$t.retired"; done
+ln -sfn "$wb" "$PROJECTS/pi-workbench$SUFFIX"
+ln -sfn "$pw" "$PROJECTS/pi-web$SUFFIX"
+mkdir -p "$DATA/plugins" "$DATA/logs"
+ln -sfn "$PROJECTS/pi-workbench$SUFFIX/packages" "$DATA/plugins/pi-workbench"
+# Its own PI WEB settings, first copied from the legacy instance's (read only); PI_WEB_PORT overrides the port.
+[[ -e "$DATA/config.json" ]] || cp \$HOME/.config/pi-web/config.json "$DATA/config.json" 2>/dev/null || echo '{}' >"$DATA/config.json"
+stop_all
+cp -p "$job"/new/$LABEL.*.plist \$la/ || rollback
+for s in sessiond web; do launchctl bootstrap gui/$uid \$la/$LABEL.\$s.plist || rollback; done
+for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; "$self" --instance durable prune --apply || true; exit 0; }; sleep 1; done
+rollback
+EOF
+else
 cat >"$job/job.sh" <<EOF
 #!/bin/bash
 set -Euo pipefail
@@ -301,6 +437,7 @@ stop_all
 for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; "$self" prune --apply || true; exit 0; }; sleep 1; done
 rollback
 EOF
+fi
 chmod +x "$job/job.sh"
 plutil -create xml1 "$job/job.plist"
 plutil -insert Label -string "$label" "$job/job.plist"
