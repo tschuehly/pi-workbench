@@ -4,6 +4,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeBin } from "../background-bash/node-bin.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const RESOLVER = path.resolve(here, "../../skills/model-orchestration/scripts/resolve-runtime-binding.mjs");
@@ -13,7 +14,7 @@ export const DELEGATION_TOOLS = ["subagent", "subagent_collect", "subagent_statu
 // web_enable-only list would leave it nothing to enable. keepChildWebToolsLazy keeps them inactive until then.
 export const WEB_TOOLS = ["web_search", "source_check", "fetch_content", "get_search_content"];
 export const CHILD_TOOLS = ["read", "bash", "grep", "find", "ls", "report_status", "compact_and_continue", "web_enable", ...WEB_TOOLS];
-export const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found. To wait for a job, log, check, or server, make one bash call to `wait-until --timeout SECONDS` with any of `--file PATH [--match REGEX]`, `--pid PID`, `--cmd 'SHELL'`, `--url URL`, and no shorter bash timeout; it stays silent and returns when the first condition holds (exit 0) or at the timeout (exit 124). Never wait with sleep, tail -f, or repeated checks.";
+export const STATUS_INSTRUCTION = "Keep going while a step needs no input from the lead; stop early only when the assignment's stop condition applies or you cannot continue. Start your final report with anything you need from the lead, then what you changed and what you found. To wait for a job, log, check, or server, make one bash call to `wait-until --timeout SECONDS` with any of `--file PATH [--match REGEX]`, `--pid PID`, `--cmd 'SHELL'`, `--url URL`, and no shorter bash timeout; it stays silent and returns when the first condition holds (exit 0) or at the timeout (exit 124), at most 55 min; call report_status with your next tool call after each wait returns. Run commands that may take more than a few minutes in the background (`cmd > log 2>&1 &`) and wait with `--pid`. Never wait with sleep, tail -f, or repeated checks.";
 export const PROFILES = {
   scout: {
     tools: [...CHILD_TOOLS],
@@ -78,7 +79,7 @@ export async function resolveBinding(cognitiveRole, independentOfProvider, indep
   const innerTimeout = positiveTimeout(process.env.PI_WORKBENCH_ROUTING_TIMEOUT_MS, 15_000);
   const startedAt = Date.now();
   const stdout = await new Promise((resolve, reject) => {
-    execFile(process.execPath, args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: innerTimeout * 2 + 5_000 }, (error, output, stderr) => {
+    execFile(nodeBin(), args, { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: innerTimeout * 2 + 5_000 }, (error, output, stderr) => {
       if (error !== null) {
         const stderrText = String(stderr).trim();
         const stages = [...stderrText.matchAll(/^STAGE=(\S+)$/gm)];

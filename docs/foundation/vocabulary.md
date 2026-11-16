@@ -67,7 +67,7 @@ _Avoid_: Global coordinator, workflow controller, chat router
 **FirstMate:**
 The owner-facing coordinator across all sessions. It shows where each Workstream stands, collects
 decisions for the owner, and starts and steers sessions within code-enforced limits (Decision 127).
-It never edits projects and does not own Workstream storage or Run state.
+It never edits projects and does not own Workstream storage or Run state. Deferred; not being built.
 _Avoid_: Workstream controller, task database, session watcher
 
 ## Run and authority

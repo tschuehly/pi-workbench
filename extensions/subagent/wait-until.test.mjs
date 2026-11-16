@@ -10,9 +10,11 @@ const script = new URL("./wait-until.mjs", import.meta.url).pathname;
 const later = (ms, fn) => setTimeout(fn, ms);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-function waitUntil(...args) {
+function waitUntil(...args) { return waitUntilIn(process.env, ...args); }
+
+function waitUntilIn(env, ...args) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [script, "--every", "0.05", ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [script, "--every", "0.05", ...args], { stdio: ["ignore", "pipe", "pipe"], env });
     let out = "";
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { out += d; });
@@ -189,4 +191,20 @@ test("rejects a call without a condition or with an invalid one", async () => {
   assert.equal((await waitUntil("--timeout", "soon", "--pid", "1")).code, 2);
   assert.equal((await waitUntil("--pid", "abc")).code, 2);
   assert.equal((await waitUntil("--timeout", "Infinity", "--pid", "1")).code, 2, "a timer Node cannot represent");
+});
+
+test("inside a child, a longer timeout is capped and the exit-124 output says so; the lead is not capped", async () => {
+  const file = join(dir, "absent");
+  const { PI_WORKBENCH_EXECUTION_KIND: _, ...lead } = process.env;
+  const child = await waitUntilIn({ ...lead, PI_WORKBENCH_EXECUTION_KIND: "subagent", PI_WORKBENCH_WAIT_CAP_SECONDS: "0.3" }, "--timeout", "30", "--file", file);
+  assert.equal(child.code, 124);
+  assert.match(child.out, /timed out after 0\.3s \(capped from 30s inside a child: call report_status, then wait again\)/);
+  const short = await waitUntilIn({ ...lead, PI_WORKBENCH_EXECUTION_KIND: "worker", PI_WORKBENCH_WAIT_CAP_SECONDS: "5" }, "--timeout", "0.2", "--file", file);
+  assert.equal(short.code, 124);
+  assert.doesNotMatch(short.out, /capped/, "a timeout under the cap is untouched");
+  const started = Date.now();
+  const leadRun = await waitUntilIn({ ...lead, PI_WORKBENCH_WAIT_CAP_SECONDS: "0.3" }, "--timeout", "1", "--file", file);
+  assert.equal(leadRun.code, 124);
+  assert.ok(Date.now() - started >= 1000, "the lead waits its full timeout");
+  assert.match(leadRun.out, /timed out after 1s; nothing held/);
 });

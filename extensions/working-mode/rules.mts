@@ -26,7 +26,7 @@ export const axes = {
       Default: "",
       Exercise: "Inspect or exercise the changed result directly and report the evidence. Apply stronger checks required by Thomas, the repository, or the task; report any evidence gap.",
       Test: "Produce automated proof of the changed behavior, adding a relevant test when needed, and report the exact result. Apply stronger required checks; report any evidence gap.",
-      Challenge: "Prove the changed behavior with an automated check, adding a test when needed, and report its exact result. Then obtain fresh independent scrutiny and report unresolved findings and evidence gaps. Apply stronger required checks.",
+      Challenge: "Prove the changed behavior with an automated check, adding a test when needed, and report its exact result. Then obtain fresh independent scrutiny from a review pair: in the same turn, launch two background `review` subagents with the same brief, blind to each other, one with `modelOverride` `openai/gpt-6.1-sol` and one with `meta/muse-ember-1.0`, both at high with the author as `independentOfModel`. For an OpenAI author use `anthropic/claude-opus-5-5` instead of Sol; for a Meta author use Opus instead of Ember. When Ember is in the pair and Muse quota is below its floor or Ember fails to launch or is rate-limited, run the other reviewer alone and say so in the report (model-orchestration's Checking reference). Merge duplicate findings, note which reviewer found each, and report unresolved findings and evidence gaps. Apply stronger required checks.",
     },
   },
   orchestration: {
@@ -72,7 +72,7 @@ export function afkPreparationText(selection: WorkingModeState) {
 export const CUSTOM_TYPE = "working-mode";
 export const defaults: WorkingModeState = { alignment: "Default", attention: "Default", checking: "Default", orchestration: "Main" };
 export const axisNames = Object.keys(axes) as Axis[];
-export const usage = `/mode send delivers the pending change now · /mode <axis> <value>: ${axisNames.map((axis) => `${axis} <${Object.keys(axes[axis].values).join("|").toLowerCase()}>`).join(" · ")}`;
+export const usage = `/mode send delivers the pending change now · /mode unalign clears the confirmed alignment now · /mode <axis> <value>: ${axisNames.map((axis) => `${axis} <${Object.keys(axes[axis].values).join("|").toLowerCase()}>`).join(" · ")}`;
 
 export function isSelection(value: any): value is WorkingModeState {
   return !!value && axisNames.every((axis) => typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis]));

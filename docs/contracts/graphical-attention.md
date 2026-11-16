@@ -8,25 +8,25 @@ The [Attention and Interface Specification](interfaces.md) remains authoritative
 
 ## Scope
 
-V1 graphical attention does not include FirstMate, which has its own window and [plan](../plans/firstmate.md), and does not use another model to synthesize portfolio priorities, or mix future managed Run attention into Workstream views.
+V1 graphical attention does not include FirstMate, whose [plan](../plans/firstmate.md) is deferred, and does not use another model to synthesize portfolio priorities, or mix future managed Run attention into Workstream views.
 
 Chat consumes PI WEB runtime session state. A Workstream surface consumes canonical Workstream snapshots, revisions, and ordered watch results. The Workstream Store remains authoritative. The client does not infer Workstream state from Chat, terminal output, tool activity, or visual state.
 
 The Workbench client owns presentation and uses PI WEB transport where appropriate. Neither the client nor PI WEB owns Workstream semantics or persistence.
 
-## First Slice: One Chat per Window
+## Chat Windows
 
-A blank native window provides a small, explicit workspace and session chooser. After selection, one Chat owns the window. The window retains the transcript, draft, scroll position, live activity, status, asks, and dialogs for that complete session identity.
+A blank native window provides a small, explicit workspace and session chooser. A window holds a working set of Chats in Tabs or Grid, and each Chat belongs to exactly one window. Each Chat retains its transcript, draft, scroll position, live activity, status, asks, and dialogs for its complete session identity.
 
-The first delivery checkpoint provides a proper graphical composer. The second adds a toggleable right-hand viewer and editor for that Chat's workspace while Chat remains visible.
+Each Chat has a graphical composer and a toggleable right-hand Files pane for its workspace while Chat remains visible.
 
 File saves reject stale loaded content rather than silently overwriting newer agent or external changes. Separate windows do not share Chat, file, or presentation state. Closing or replacing a window leaves the PI WEB session daemon and unrelated sessions running.
 
-### First-slice acceptance
+### Acceptance
 
 The controlled session fixture and attended real passes must prove:
 
-- one-window/one-Chat isolation;
+- isolation of each Chat and its window;
 - explicit location;
 - complete graphical conversation controls;
 - workspace-scoped file viewing and editing;

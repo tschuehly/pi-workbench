@@ -79,11 +79,13 @@ test("P085 pi-tmp: writes into an OS temp folder are blocked, bash /tmp use is w
 	// Seven active days of one project, newest last; a session folder last used before them is swept, a current one kept.
 	const project = join(TMP_ROOT, "swept-project");
 	mkdirSync(join(project, ".days"), { recursive: true });
-	for (let day = 1; day <= 8; day++) writeFileSync(join(project, ".days", `2026-10-${String(day).padStart(2, "0")}`), "");
+	// Relative to today: a project with no active day for 21 days would also sweep the current folder (pitmp IDLE_DAYS).
+	const ago = (days: number) => new Date(Date.now() - days * 864e5);
+	for (let day = 1; day <= 8; day++) writeFileSync(join(project, ".days", ago(day).toLocaleDateString("sv")), "");
 	mkdirSync(join(project, "old-session"));
 	mkdirSync(join(project, "current-session"));
-	utimesSync(join(project, "old-session"), new Date("2026-09-01"), new Date("2026-09-01"));
-	utimesSync(join(project, "current-session"), new Date("2026-10-08T12:00:00"), new Date("2026-10-08T12:00:00"));
+	utimesSync(join(project, "old-session"), ago(30), ago(30));
+	utimesSync(join(project, "current-session"), ago(1), ago(1));
 	const host = new ChatHost(store, cwd);
 	await host.ready;
 	assert.equal(existsSync(join(project, "old-session")), false, "swept at open");

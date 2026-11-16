@@ -1,8 +1,10 @@
 # Seamless promotion
 
+**Status: superseded on 2026-11-07 by the Pi Durable rebuild; not being built.** Thomas closed this Workstream in favour of the rebuild plan `docs/plans/pi-durable-rebuild.md`, which lives on branch `plan/pi-durable-rebuild-20261022` and is not yet on `main`. The analysis below is kept as evidence.
+
 **Recommendation: preserve live agent runtimes in independent, revision-pinned session-host processes; restart only their replaceable sessiond connection.** Pi Durable is real and useful for crash recovery, but it does not preserve an ordinary in-flight model stream or arbitrary tool process. Adopting it is a harness migration, not a promotion fix.
 
-Status: proposed design, 2026-10-06. No implementation or runtime acceptance test performed.
+Original status: proposed design, 2026-10-06. No implementation or runtime acceptance test performed.
 Owner goal: “I want to be able to promote without stopping all sessions and stopping all workers and subagents. They should seamlessly continue.”
 
 ## Meaning and assumptions

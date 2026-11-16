@@ -307,6 +307,16 @@ test("invalid commands change nothing", async () => {
   s.session.dispose();
 });
 
+test("Challenge names the blind review pair, author swaps, and the Muse fallback", () => {
+  const text = axes.checking.values.Challenge;
+  assert.match(text, /two background `review` subagents with the same brief, blind to each other/);
+  assert.match(text, /`openai\/gpt-6\.1-sol`[\s\S]*`meta\/muse-ember-1\.0`, both at high/);
+  assert.match(text, /OpenAI author use `anthropic\/claude-opus-5-5` instead of Sol; for a Meta author use Opus instead of Ember/);
+  assert.match(text, /When Ember is in the pair and Muse quota is below its floor or Ember fails to launch or is rate-limited, run the other reviewer alone and say so in the report/);
+  assert.ok(text.indexOf("for a Meta author use Opus instead of Ember") < text.indexOf("When Ember is in the pair"), "the fallback follows the swap, so a Meta author's Sol+Opus pair has none");
+  assert.match(text, /note which reviewer found each/);
+});
+
 test("every non-starting value has guidance; starting values render none", () => {
   for (const [axis, { values }] of Object.entries(axes)) {
     for (const [value, text] of Object.entries(values)) {
@@ -345,10 +355,12 @@ function fakePi(branch = []) {
   let command;
   const tools = {};
   const snapshots = [];
+  const sent = [];
   workingMode({
     on: (name, handler) => handlers.set(name, handler),
     registerCommand: (_name, value) => { command = value; },
     registerTool: (value) => { tools[value.name] = value; },
+    sendMessage: (message) => sent.push(message),
     events: { emit: (_name, value) => snapshots.push(value) },
   });
   const context = [];
@@ -370,7 +382,7 @@ function fakePi(branch = []) {
   };
   const confirm = () => call(ALIGNMENT_TOOL, { agreement: "ship X; check Y" });
   const reset = () => call(ALIGNMENT_RESET_TOOL, { reason: "new task Z" });
-  return { mode: (args) => command.handler(args, ctx), prompt, confirm, reset, snapshots };
+  return { mode: (args) => command.handler(args, ctx), prompt, confirm, reset, snapshots, sent };
 }
 
 test("AFK with an Alignment value stays interactive until alignment is reached", async () => {
@@ -449,3 +461,16 @@ test("ask_user stays offered to the model in every Attention value", async () =>
   s.session.dispose();
 });
 
+
+test("Thomas can reset alignment himself with /mode unalign, and the agent hears it at once", async () => {
+  const s = fakePi();
+  await s.mode("alignment align");
+  s.prompt();
+  await s.confirm();
+  assert.equal(s.snapshots.at(-1).aligned, true);
+  await s.mode("unalign");
+  assert.equal(s.snapshots.at(-1).aligned, false);
+  const sent = s.sent.at(-1);
+  assert.doesNotMatch(sent.content, /Alignment is reached/);
+  assert.match(sent.content, /Acknowledge this change/);
+});

@@ -2,7 +2,7 @@
 // detached), so the job survives the Pi process or PI WEB session daemon that started it. The shell
 // shares that group; the runner writes `exit` once and kills the whole group at timeout/expiry.
 import { spawn } from "node:child_process";
-import { existsSync, linkSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,4 +34,5 @@ function run(dir) {
   }, Math.max(0, job.expiresAt - Date.now()));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run(process.argv[2]);
+// Node resolves symlinks in import.meta.url but not in argv[1]; compare real paths.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) run(process.argv[2]);

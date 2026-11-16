@@ -4,7 +4,7 @@
 //   node scripts/pi-eval.mjs run <campaign.json> [--dry-run] [--only <caseId>] [--keep]
 //   node scripts/pi-eval.mjs report <results.jsonl>
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,7 @@ function quota() {
 }
 
 // Built once per campaign: extension discovery can push \`pi --list-models\` past the resolver's deadline.
+// Extensions stay on so extension-registered providers (xai-auth, antigravity-acp) can be arms.
 let catalogFile;
 function admit(role, model, effort) {
   const r = spawnSync("node", [RESOLVER, ADMISSION_ROLE[role] ?? role, "--model", model, "--effort", effort, "--catalog", catalogFile], { encoding: "utf8", timeout: 60_000 });
@@ -91,25 +92,61 @@ function prepareWorkspace(c, dir) {
   if (!existsSync(path.join(dir, ".git"))) sh(`git init -q && git add -A && git -c user.name=eval -c user.email=eval@local commit -qm snapshot --allow-empty`, { cwd: dir });
 }
 
-// A candidate has shell access, so it could read the source repository, the case checks, earlier trials,
-// or session logs that discuss the answers. macOS sandbox-exec denies those reads; later rules win, so
-// the trial directory and the installed harness checkouts stay readable.
+// A candidate has shell access, so it could read the source repositories, the case checks, earlier trials,
+// retained review evidence or session logs that discuss the answers, and it could reach GitHub as the owner.
+// macOS sandbox-exec denies those reads; later rules win, so the trial directory, Pi's local packages, the
+// promoted checkouts (~/.pi-workbench/installed) and run shims (~/.pi-workbench/run) stay readable.
+// All of ~/.pi-workbench is denied (scratch, workstreams, tmp, background-bash, reviews, ...); runPi points
+// Pi's tmp and background-bash roots into the trial directory.
+// Rules match real paths, so every path is resolved: the `*.installed` links point into ~/.pi-workbench/installed.
+// It also denies the login keychain, ~/.ssh, connecting to the SSH agent (launchd's socket is findable by
+// glob), and the tools that hand out stored credentials (gh, security, git's keychain helper); Pi's model
+// logins live in ~/.pi/agent/auth.json. A provider that probes the keychain (antigravity-acp) then falls
+// back to its token file.
 function sandboxProfile(trialDir) {
   const real = (p) => (existsSync(p) ? realpathSync(p) : p);
   const home = homedir();
-  const projects = real(path.resolve(ROOT, ".."));
-  const deny = [projects, real(EVAL_HOME), real(path.join(home, ".pi/agent/sessions")), real(path.join(home, ".pi-web"))];
-  const allow = [...readdirSync(projects).filter((d) => d.endsWith(".installed")).map((d) => path.join(projects, d)), real(trialDir)];
+  const projects = real(process.env.PI_EVAL_PROJECTS ?? path.join(home, "IdeaProjects"));
+  const workbench = path.join(home, ".pi-workbench");
+  const deny = [projects, real(EVAL_HOME), workbench, ".pi/agent/sessions", ".pi-web", "Library/Keychains", ".ssh", ".claude/projects", ".codex/sessions"]
+    .map((p) => real(path.resolve(home, p)));
+  const allow = [...localPiPackages(), path.join(workbench, "installed"), path.join(workbench, "run"), trialDir].map(real);
   const rule = (verb, p) => `(${verb} file-read-data (subpath ${JSON.stringify(p)}))`;
-  return `(version 1)(allow default)${deny.map((p) => rule("deny", p)).join("")}${allow.map((p) => rule("allow", p)).join("")}`;
+  const which = (cmd) => sh(`command -v ${cmd}`).stdout.trim();
+  const noExec = ["/usr/bin/security", which("gh"), path.join(sh("git --exec-path").stdout.trim(), "git-credential-osxkeychain")].filter(Boolean).map(real);
+  const agent = process.env.SSH_AUTH_SOCK ? ` (remote unix-socket (path-literal ${JSON.stringify(real(process.env.SSH_AUTH_SOCK))}))` : "";
+  return `(version 1)(allow default)${deny.map((p) => rule("deny", p)).join("")}${allow.map((p) => rule("allow", p)).join("")}`
+    + noExec.map((p) => `(deny process-exec (literal ${JSON.stringify(p)}))`).join("")
+    + `(deny network-outbound (remote unix-socket (path-regex #"^/private/var/run/com\\.apple\\.launchd\\.[^/]+/"))${agent})`;
+}
+
+// Local-path packages from Pi's settings (the installed Workbench, development packages); Pi exits if it
+// cannot read one.
+function localPiPackages() {
+  try {
+    const { packages = [] } = JSON.parse(readFileSync(path.join(homedir(), ".pi/agent/settings.json"), "utf8"));
+    return packages.map((p) => (typeof p === "string" ? p : p.source)).filter((s) => s?.startsWith("/"));
+  } catch { return []; }
+}
+
+// Credentials a trial must not inherit; git gets no global or system config (the Xcode system config
+// names the keychain helper) and cannot prompt, so it gets an eval identity for commits.
+function trialEnv(base, trialDir) {
+  const id = { GIT_AUTHOR_NAME: "eval", GIT_AUTHOR_EMAIL: "eval@local", GIT_COMMITTER_NAME: "eval", GIT_COMMITTER_EMAIL: "eval@local" };
+  const tmp = path.join(trialDir, "pi-tmp");
+  const env = { ...base, ...id, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0",
+    PI_TMP_ROOT: tmp, PI_TMP: tmp, PI_BACKGROUND_BASH_ROOT: path.join(trialDir, "background-bash") };
+  for (const k of Object.keys(env)) if (/^(GH_|GITHUB_|SSH_AUTH_SOCK$|GIT_ASKPASS$|SSH_ASKPASS$)|_GH_TOKEN$/.test(k)) delete env[k];
+  return env;
 }
 
 function runPi({ model, effort, prompt, cwd, sessionDir, timeoutMs, trialDir, tools = TOOLS }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const args = ["-p", "--mode", "json", "--model", model, "--thinking", effort, "--session-dir", sessionDir, tools ? "--tools" : "--no-tools", ...(tools ? [tools] : []), prompt];
-    const env = { ...process.env, ...gradleEnv(path.join(trialDir, "gradle-agent")) };
+    const env = trialEnv({ ...process.env, ...gradleEnv(path.join(trialDir, "gradle-agent")) }, trialDir);
     delete env.PI_WORKBENCH_ROUTING_OVERLAY;
+    mkdirSync(env.PI_TMP, { recursive: true });
     const child = spawn("sandbox-exec", ["-p", sandboxProfile(trialDir), "pi", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let out = "", err = "", timedOut = false;
     child.stdout.on("data", (d) => (out += d));
@@ -213,7 +250,7 @@ async function run(campaignPath, flags) {
   if (flags.dryRun) { for (const t of plan) console.log(`  ${t.c.id} × ${t.arm.id} #${t.rep}`); return; }
   mkdirSync(outDir, { recursive: true });
   catalogFile = path.join(outDir, "catalog.txt");
-  writeFileSync(catalogFile, sh("pi --no-extensions --list-models", { timeout: 120_000 }).stdout);
+  writeFileSync(catalogFile, sh("pi --list-models", { timeout: 120_000 }).stdout);
   writeFileSync(path.join(outDir, "campaign.json"), JSON.stringify({ ...campaign, harness }, null, 2));
   for (const [i, { c, arm, rep }] of plan.entries()) {
     // The trial path is the model's working directory, so it must not name the case or arm.
@@ -272,4 +309,6 @@ const [cmd, target, ...rest] = process.argv.slice(2);
 const flags = { dryRun: rest.includes("--dry-run"), keep: rest.includes("--keep"), only: rest.includes("--only") ? rest[rest.indexOf("--only") + 1] : null };
 if (cmd === "run" && target) await run(path.resolve(target), flags);
 else if (cmd === "report" && target) report(target);
-else { console.error("usage: pi-eval.mjs run <campaign.json> [--dry-run] [--only <case>] [--keep] | report <results.jsonl>"); process.exit(2); }
+else if (cmd === "sandbox-profile" && target) console.log(sandboxProfile(path.resolve(target)));
+else if (cmd === "trial-env" && target) for (const [k, v] of Object.entries(trialEnv({}, path.resolve(target)))) console.log(`${k}=${v}`);
+else { console.error("usage: pi-eval.mjs run <campaign.json> [--dry-run] [--only <case>] [--keep] | report <results.jsonl> | sandbox-profile <trial-dir> | trial-env <trial-dir>"); process.exit(2); }

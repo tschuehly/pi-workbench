@@ -3,21 +3,16 @@
 Pi Workbench helps one developer work with Pi, leave, and resume without reconstructing the work
 from chat history. Pi is its only model runtime.
 
-**Current reality:** the attended terminal workflow works, but the graphical client does not. The
-next release replaces the unusable PI WEB/Workbench shell with one focused macOS Chat window.
+**Current reality:** the attended terminal workflow and the graphical Workbench client both work.
+The macOS app hosts the Workbench client from the PI WEB fork.
 
 ## What we are building now
 
-The first graphical release has two ordered checkpoints:
-
-1. **Fix text input.** Replace terminal composition with PI WEB's graphical Prompt Editor.
-2. **Add files beside Chat.** Add a toggleable viewer/editor for the selected workspace.
-
-Each native window owns one Chat. A small chooser opens an explicitly located existing session or
-starts a new one. The client reuses PI WEB runtime but not its legacy application shell.
-
-After these checkpoints are in daily use, the next feature must answer a problem observed in that
-use. See the [Workbench UI plan](docs/plans/workbench-ui.md).
+Each native window holds several Chats in Tabs or Grid, with a chooser that shows Workstream
+re-entry cards, in-composer questions, a Files pane with a live editor, and an Activity roster. The
+client reuses PI WEB runtime but not its legacy application shell. The base stays PI WEB plus Pi
+Durable; phone access follows the Durable rebuild. Each next feature must answer a problem observed
+in use. See the [Workbench UI plan](docs/plans/workbench-ui.md).
 
 ## What works today
 
@@ -27,8 +22,9 @@ A Workstream preserves attention across sessions and repositories. It records as
 the latest checkpoint for each, unresolved Human Tasks, and links. You can resume from this compact
 projection instead of rereading transcripts.
 
-Workstreams grant no execution authority and promise no recovery. Until their graphical surface is
-built, use the [`workstreams`](skills/workstreams/SKILL.md) skill.
+Workstreams grant no execution authority and promise no recovery. The Workbench chooser shows them
+as re-entry cards; to create, checkpoint or close them, use the
+[`workstreams`](skills/workstreams/SKILL.md) skill.
 
 ### Bounded child Pi processes
 
@@ -46,11 +42,6 @@ survives; its execution does not.
 Workbench classifies work by Cognitive Role and resolves each role to a model and thinking budget.
 
 ## What is not fully implemented
-
-### The replacement graphical client
-
-The native wrapper works, but it still loads the legacy PI WEB client. The focused Chat and file
-composition described above has not shipped.
 
 ### Working Mode
 

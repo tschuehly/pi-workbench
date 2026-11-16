@@ -29,19 +29,15 @@ Tasks, and references. It is not a Chat folder and grants no execution authority
 
 ## Current Product Direction
 
-The first release is one Chat per macOS window, delivered in this order:
+The graphical client is in daily use: each macOS window holds several Chats in Tabs or Grid, with
+a graphical composer, in-composer questions, a Files pane beside Chat, and an Activity roster. The
+chooser asks for an explicit workspace and an existing or new Pi session, and shows Workstream
+re-entry cards. Each Chat belongs to one window; Chats, drafts, files, and live events stay isolated
+between windows.
 
-1. **Fix text input.** Provide a proper graphical composer for drafting, editing, sending, steering,
-   stopping, attachments, and live questions.
-2. **Add files beside Chat.** Provide a toggleable right-hand pane for viewing and editing the
-   selected workspace while Chat stays visible.
-3. **Use it.** Add nothing else until daily use exposes the next concrete problem.
-
-A blank window asks for an explicit workspace and an existing or new Pi session. Separate windows
-must keep their Chats, drafts, files, and live events isolated.
-
-Workstreams remain available through their Store and terminal skill. They enter the graphical client
-only after the Chat window is useful in daily work.
+The base stays PI WEB plus Pi Durable, borrowing T3 mechanisms where useful. Phone access follows
+the Durable rebuild; GitHub inside Workbench is deferred. Add nothing else until daily use exposes
+the next concrete problem. See the [Workbench UI plan](docs/plans/workbench-ui.md).
 
 ## Capabilities and Constraints
 
@@ -55,8 +51,7 @@ only after the Chat window is useful in daily work.
 - Replacing or closing a client must not restart the session daemon or disturb another Chat.
 - File save must reject a stale editor version instead of silently overwriting newer agent or
   external changes.
-- File upload, Working Mode, Git, Terminal, graphical Workstreams, history, and child inspection are
-  not part of the first release.
+- File upload, Git, and Terminal are not part of the Workbench client; agents use the `gh` CLI.
 
 ## Evidence on Hand
 

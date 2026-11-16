@@ -13,8 +13,9 @@ This document defines product outcomes and system-level validation. The
 
 ### Graphical client
 
-1. **One Chat per window.** As a developer, I want one native macOS window to contain one complete
-   Pi Chat, so I can work graphically without navigating a portfolio shell.
+1. **Chats in windows.** As a developer, I want a native macOS window to hold my working set of
+   complete Pi Chats in Tabs or Grid, each Chat owned by one window, so I can work graphically
+   without navigating a portfolio shell.
 2. **Explicit location.** As a developer opening a window, I want to choose an explicitly located
    existing or new session, so hidden shell state cannot select the wrong workspace.
 3. **Window isolation.** As a developer using several Chats, I want each window's transcript,
@@ -25,7 +26,7 @@ This document defines product outcomes and system-level validation. The
 5. **Client replacement without session loss.** As an interruptible developer, I want closing,
    reloading, or replacing a client window to leave Pi sessions and the session daemon running.
 6. **Safe, bounded file editing.** As a developer, I want to search files in the selected workspace
-   by name or path, open them beside Chat without a persistent tree, and safely edit readable text
+   by name or path or browse a file tree, open them beside Chat, and safely edit readable text
    without silently overwriting newer agent or external changes. Unsupported files need a clear
    fallback; upload, Terminal, Git, and other surfaces wait for observed need.
 

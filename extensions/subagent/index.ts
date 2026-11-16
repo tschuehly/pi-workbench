@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -11,6 +12,7 @@ import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/sr
 import { ACTIVITY_CHANNEL, removeActivity, upsertActivity } from "../activity/activity.mjs";
 import { EXECUTION_CHANNEL } from "../telemetry/telemetry.mjs";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
+import { nodeBin } from "../background-bash/node-bin.mjs";
 import { latestAssistantToolCallCount } from "../context-checkpoint/coordinator.mjs";
 import { createCompletionWakeup, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
@@ -226,7 +228,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
 
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, independentOfModel, params.modelOverride, params.effort, params.excludeFamilies, options.resolverPath);
+        binding = await resolveBinding(params.cognitiveRole, independentOfProvider, independentOfModel, params.modelOverride, params.effort, params.excludeFamilies, options.resolverPath, liveModelMetadata(ctx.modelRegistry, params.modelOverride));
       } catch (error) {
         return failure("preflight_failed", errorMessage(error));
       }
@@ -283,6 +285,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       upsertActivity(host, activity);
       let backgrounded = params.background === true;
       void watchActivity(host, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
+      const childHost = host;
+      void watchReportCadence(adapter, receipt.executionId, () => childHost.closed);
 
       const detachController = new AbortController();
       if (!backgrounded) {
@@ -450,7 +454,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "report_status",
     label: "Report status",
-    description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; one report covers a whole wait.",
+    description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; after each wait (at most 55 min) send one with your next tool call.",
     promptSnippet: "Report your current one-line status to the delegate roster",
     parameters: ReportStatusParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -587,7 +591,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       let binding;
       try {
-        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, params.effort, undefined, options.resolverPath);
+        binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, params.effort, undefined, options.resolverPath, liveModelMetadata(ctx.modelRegistry, params.modelOverride));
       } catch (error) {
         await abandon(errorMessage(error));
         return failure("preflight_failed", errorMessage(error));
@@ -646,6 +650,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       upsertActivity(host, activity);
       let backgrounded = params.background === true;
       void watchActivity(host, adapter, receipt.executionId, activity, () => backgrounded && !dismissedActivity.has(receipt.executionId));
+      const childHost = host;
+      void watchReportCadence(adapter, receipt.executionId, () => childHost.closed);
       const heartbeat = setInterval(() => { void registry.heartbeat(params.workerId, begin.lockToken).catch(() => {}); }, 15_000);
       heartbeat.unref();
       const detachController = new AbortController();
@@ -998,6 +1004,37 @@ export async function watchActivity(
   }
 }
 
+export const REPORT_QUIET_MS = 55 * 60_000;
+/**
+ * Best effort: a child that has not called report_status for REPORT_QUIET_MS since launch or its last
+ * report gets the lead's UPDATE_REQUEST steer once; only its next report re-arms it. Unlike the lead's
+ * requestUpdate, the report wakes nobody. A running tool call or a hung model request delays it.
+ */
+export async function watchReportCadence(
+  adapter: Pick<PiRpcExecutionAdapter, "observe" | "steer">,
+  executionId: string,
+  stopped: () => boolean,
+  { quietMs = REPORT_QUIET_MS, timers = { setTimeout, clearTimeout } as { setTimeout: (fn: () => void, ms: number) => any; clearTimeout: (timer: any) => void } } = {},
+) {
+  let timer: any;
+  const disarm = () => { if (timer !== undefined) timers.clearTimeout(timer); timer = undefined; };
+  const arm = () => {
+    disarm();
+    timer = timers.setTimeout(() => {
+      timer = undefined;
+      if (!stopped()) void Promise.resolve().then(() => adapter.steer(executionId, UPDATE_REQUEST, "steer")).catch(() => {});
+    }, quietMs);
+    timer?.unref?.();
+  };
+  arm();
+  try {
+    for await (const observation of adapter.observe(executionId)) {
+      if (observation.type === "terminal") break;
+      if (observation.type === "tool_start" && reportedStatusText(observation) !== undefined) arm();
+    }
+  } catch {} finally { disarm(); }
+}
+
 /** Waits for running leaves; asks for one continuation per leaf that ended uncollected. */
 export async function holdForLeaves({ pending, list, collected, nudged }: { pending: Set<Promise<unknown>>; list: () => { executionId: string; kind: string }[]; collected: Set<string>; nudged: Set<string> }) {
   await Promise.allSettled([...pending]);
@@ -1182,6 +1219,31 @@ export function createCheckpointAwareWakeup(pi: any, barrierFor: () => { defer(s
 export function inheritedConcept(env: Record<string, string | undefined> = process.env): string | undefined {
   const value = env.PI_WORKBENCH_TELEMETRY_CONCEPT;
   return value === undefined || value.trim() === "" ? undefined : value;
+}
+
+// The resolver otherwise reads models-store.json, which omits providers registered at runtime by
+// extensions (e.g. antigravity-acp); the live registry lists them with their effort metadata and is
+// the only catalog for automatic routing, since the store also caches unauthenticated models. A
+// long-running session's registry can predate a provider's login, so an explicit modelOverride
+// absent from it is taken from the store; launch fails if it is not authenticated.
+export function liveModelMetadata(modelRegistry?: { getAvailable(): Array<{ provider: string; id: string; reasoning?: boolean; thinkingLevelMap?: unknown }> }, modelOverride?: string): string[] {
+  let models;
+  try { models = modelRegistry?.getAvailable(); } catch { return []; }
+  if (!Array.isArray(models) || models.length === 0) return [];
+  const doc: Record<string, { models: unknown[] }> = {};
+  for (const { provider, id, reasoning, thinkingLevelMap } of models) (doc[provider] ??= { models: [] }).models.push({ id, reasoning, thinkingLevelMap });
+  const provider = providerOf(modelOverride);
+  const id = provider === undefined ? undefined : modelOverride!.slice(provider.length + 1);
+  if (provider !== undefined && !models.some((model) => model.provider === provider && model.id === id)) {
+    try {
+      const store = JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"), "models-store.json"), "utf8"));
+      const stored = (Array.isArray(store?.[provider]?.models) ? store[provider].models : []).find((model: { id?: unknown }) => model?.id === id);
+      if (stored !== undefined) (doc[provider] ??= { models: [] }).models.push(stored);
+    } catch { /* no readable store: the resolver reports the override as unavailable */ }
+  }
+  const file = path.join(mkdtempSync(path.join(process.env.PI_TMP ?? os.tmpdir(), "routing-")), "models.json");
+  writeFileSync(file, JSON.stringify(doc));
+  return ["--model-metadata", file];
 }
 
 export function detachLatestForeground(foreground: Map<string, ForegroundDispatch>): string | undefined {

@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 export const KEEP_ACTIVE_DAYS = 7;
+export const IDLE_DAYS = 21;
 export const defaultRoot = () => process.env.PI_TMP_ROOT ?? join(homedir(), ".pi-workbench", "tmp");
 const day = (date = new Date()) => date.toLocaleDateString("sv"); // local YYYY-MM-DD
 const keys = new Map();
@@ -34,22 +35,79 @@ export function piTmpDir(cwd, sessionId, root = defaultRoot()) {
   return dir;
 }
 
-/** Delete session folders last used before the project's `keep` most recent active days. */
-export function sweep(root = defaultRoot(), keep = KEEP_ACTIVE_DAYS) {
+const agentDir = () => process.env.PI_CODING_AGENT_DIR?.replace(/^~(?=$|\/)/, homedir()) ?? join(homedir(), ".pi", "agent");
+const defaultPaths = () => ({
+  sessions: join(agentDir(), "sessions"),
+  store: join(process.env.PI_WORKBENCH_WORKSTREAM_DIR ?? join(homedir(), ".pi-workbench", "workstreams"), "workstreams.json"),
+});
+
+/**
+ * Delete session folders last used before the project's `keep` most recent active days. In a project
+ * with no active day for `idleDays`, also delete folders unused that long, unless their session wrote
+ * its log since then (live) or the Workstream Store names the folder. A folder holding a Git checkout
+ * with unsaved work always stays.
+ */
+export function sweep(root = defaultRoot(), keep = KEEP_ACTIVE_DAYS, idleDays = IDLE_DAYS, paths = defaultPaths()) {
   const removed = [];
+  const since = Date.now() - idleDays * 864e5, idleCutoff = day(new Date(since));
+  let live, store; // read once, only when an idle project has old folders
   for (const project of list(root)) {
     const daysDir = join(root, project, ".days");
     const days = list(daysDir).sort().reverse();
-    if (days.length < keep) continue;
-    const cutoff = days[keep - 1];
+    const idle = days.length > 0 && days[0] < idleCutoff;
+    if (days.length < keep && !idle) continue;
+    const cutoff = days.length >= keep ? days[keep - 1] : "";
     for (const old of days.slice(keep)) rmSync(join(daysDir, old), { force: true });
     for (const session of list(join(root, project))) {
       if (session.startsWith(".")) continue;
       const dir = join(root, project, session);
-      if (day(statSync(dir).mtime) < cutoff) { rmSync(dir, { recursive: true, force: true }); removed.push(dir); }
+      const used = day(statSync(dir).mtime);
+      if (used >= cutoff && !(idle && used < idleCutoff)) continue;
+      if (used >= cutoff) {
+        live ??= liveSessions(paths.sessions, since);
+        store ??= (() => { try { return readFileSync(paths.store, "utf8"); } catch { return ""; } })();
+        if (live.has(session) || store.includes(dir)) continue;
+      }
+      if (hasUnsavedGit(dir)) continue;
+      rmSync(dir, { recursive: true, force: true });
+      removed.push(dir);
     }
   }
   return removed;
+}
+
+const git = (dir, ...args) => {
+  try { return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; }
+};
+
+/**
+ * True when a Git checkout under `dir` has uncommitted changes, commits on no branch or remote, or,
+ * in its own clone (not a linked worktree), branch commits on no remote: deleting it would lose them.
+ */
+export function hasUnsavedGit(dir) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  const dotGit = entries.find((e) => e.name === ".git");
+  if (dotGit) {
+    const status = git(dir, "status", "--porcelain");
+    if (status !== "") return true; // dirty, or unreadable: keep
+    if (git(dir, "rev-list", "-n1", "HEAD", "--not", "--branches", "--remotes")) return true;
+    return dotGit.isDirectory() && !!git(dir, "rev-list", "-n1", "--branches", "--not", "--remotes");
+  }
+  // shortcut: repositories nested inside a checkout are not inspected; walk them too if that ever loses work.
+  return entries.some((e) => e.isDirectory() && e.name !== "node_modules" && hasUnsavedGit(join(dir, e.name)));
+}
+
+/** Ids of sessions whose log changed since `since` (ms). */
+function liveSessions(dir, since) {
+  const ids = new Set();
+  for (const cwd of list(dir)) {
+    for (const file of list(join(dir, cwd))) {
+      const id = file.match(/_([\w-]+)\.jsonl$/)?.[1];
+      try { if (id && statSync(join(dir, cwd, file)).mtimeMs >= since) ids.add(id); } catch { /* raced a delete */ }
+    }
+  }
+  return ids;
 }
 
 function list(dir) {

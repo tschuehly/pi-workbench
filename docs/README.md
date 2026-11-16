@@ -51,12 +51,14 @@ not in the authoritative decision record.
   direction with familiar Chat, Workstreams, delegation roster and Files; manual shell work stays in an
   external terminal. Delivery sequence remains proposed; implementation approval and independent review
   are pending.
-- [`plans/workbench-ui.md`](plans/workbench-ui.md) — current graphical-client plan: fix text input,
-  then add files beside Chat.
+- [`plans/workbench-ui.md`](plans/workbench-ui.md) — current graphical client: what shipped (Tabs and
+  Grid, chooser, questions, Files, Activity) and the 2026-11-07 owner direction.
 - [`integrations/pi-web/reuse-boundary.md`](integrations/pi-web/reuse-boundary.md) — what the new
   client reuses from PI WEB and what it replaces.
 - [`contracts/workstreams.md`](contracts/workstreams.md) and
   [`contracts/execution.md`](contracts/execution.md) — current attended workflow.
+- [`plans/dogfooding-rechecks.md`](plans/dogfooding-rechecks.md) — shipped guesses to re-evaluate at
+  the start of each dogfooding Workstream.
 - [`plans/working-mode.md`](plans/working-mode.md) — terminal `/mode` control, attended behavioral evaluation, and deferred persistence and enforcement.
 - [`plans/level-1-subagents.md`](plans/level-1-subagents.md) — implemented attended child execution.
 - [`plans/level-1-durable-workers.md`](plans/level-1-durable-workers.md) — implemented durable Worker

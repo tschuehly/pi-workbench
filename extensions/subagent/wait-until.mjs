@@ -11,7 +11,8 @@ const USAGE = `usage: wait-until [--timeout SECONDS] [--every SECONDS] CONDITION
   --pid PID                    process PID has exited
   --cmd 'SHELL'                SHELL exits 0 (rerun every --every seconds)
   --url URL                    URL answers 2xx
-Returns when the first condition holds: exit 0. At --timeout (default 600): exit 124. Bad arguments: exit 2.`;
+Returns when the first condition holds: exit 0. At --timeout (default 600): exit 124. Bad arguments: exit 2.
+Inside a child Pi, --timeout is capped at 3300 (55 min) so the child reports status between waits.`;
 
 function fail(message) { console.error(`wait-until: ${message}\n${USAGE}`); process.exit(2); }
 
@@ -25,7 +26,11 @@ try {
 if (values.help) { console.log(USAGE); process.exit(0); }
 // Node timers hold at most 2^31-1 ms (about 24 days); a larger value would fire at once.
 const seconds = (name) => { const n = Number(values[name]); if (!(n > 0 && n * 1000 <= 2 ** 31 - 1)) fail(`--${name} must be a positive number of seconds, at most 2147483`); return n; };
-const timeout = seconds("timeout");
+const requested = seconds("timeout");
+// A child reports status at least hourly, so one call never waits longer than 55 minutes.
+// PI_WORKBENCH_WAIT_CAP_SECONDS exists so tests can exercise the cap without a 55-minute wait.
+const cap = process.env.PI_WORKBENCH_EXECUTION_KIND ? Number(process.env.PI_WORKBENCH_WAIT_CAP_SECONDS) || 3300 : Infinity;
+const timeout = Math.min(requested, cap);
 const every = seconds("every");
 const started = Date.now();
 const deadline = started + timeout * 1000;
@@ -142,5 +147,6 @@ const met = await new Promise((resolve) => {
 });
 for (const pid of probes) killGroup(pid);
 if (met) { console.log(`waited ${Math.round((Date.now() - started) / 100) / 10}s: ${met}`); process.exit(0); }
-console.log(`wait-until: timed out after ${timeout}s; nothing held:\n${conditions.map((c) => `- ${c.pending()}`).join("\n")}`);
+const capped = timeout < requested ? ` (capped from ${requested}s inside a child: call report_status, then wait again)` : "";
+console.log(`wait-until: timed out after ${timeout}s${capped}; nothing held:\n${conditions.map((c) => `- ${c.pending()}`).join("\n")}`);
 process.exit(124);

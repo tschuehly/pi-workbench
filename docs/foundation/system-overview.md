@@ -77,8 +77,8 @@ owner may correct it afterwards; a later checkpoint supersedes an earlier one. C
 Workstream requires explicit human instruction and preserves unresolved context without deleting
 files.
 
-The owner currently inspects Workstream projections through the terminal skill. A later graphical
-slice will present the same canonical projection directly. [FirstMate](../plans/firstmate.md) (Decision 127, unbuilt) is the planned cross-session
+The owner inspects Workstream projections through the terminal skill and through the Workbench
+chooser's re-entry cards, which present the same canonical projection. [FirstMate](../plans/firstmate.md) (Decision 127, deferred) was the planned cross-session
 coordinator; no model broker performs portfolio synthesis today.
 
 ## Managed Run model (unbuilt)
@@ -198,7 +198,7 @@ correctable checkpoints, restart and resume, Human Tasks and links, and human-in
 The archived Level 1 plan preserves the earlier PI WEB-first sequence only as provenance.
 
 V1 does not include autonomous model-session replacement, a Run Controller, managed execution,
-unattended work, or FirstMate, which is approved but unbuilt (Decision 127). Browser or Workbench web-client replacement must preserve session
+unattended work, or FirstMate, which is deferred (Decision 127). Browser or Workbench web-client replacement must preserve session
 and Workstream state without restarting PI WEB's session daemon. Machine loss, multi-user control,
 and portable cross-machine handoff remain outside V1.
 

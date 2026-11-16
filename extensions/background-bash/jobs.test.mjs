@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -301,5 +301,22 @@ test("preview shows the redacted command and the redacted end of the output", as
   assert.equal(shown.output, "last line", "a cut tail starts at a line boundary");
   assert.equal(shown.logPath, job.logPath);
   jobs.cancel(job.id);
+  jobs.shutdown();
+});
+
+test("a removed runner fails the start with a reload hint instead of a silent runner exit", () => {
+  const { make } = fixture();
+  const jobs = make({ runner: join(mkdtempSync(join(tmpdir(), "pi-background-bash-gone-")), "runner.mjs") });
+  assert.throws(() => jobs.start("echo hi", cwd), /runner was removed .*\/reload/);
+});
+
+test("a runner reached through a symlink still runs the job", async () => {
+  const link = join(mkdtempSync(join(tmpdir(), "pi-background-bash-link-")), "runner.mjs");
+  symlinkSync(new URL("./runner.mjs", import.meta.url).pathname, link);
+  const { messages, make } = fixture();
+  const jobs = make({ runner: link });
+  jobs.start("echo linked", cwd, 30, undefined, { sessionId: "s1" });
+  await until(() => messages.length === 1);
+  assert.equal(jobs.list()[0].state, "complete");
   jobs.shutdown();
 });
