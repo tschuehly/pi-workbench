@@ -97,16 +97,16 @@ test("P089 background Subagent: routed fresh child with its allowlist and own id
 	await prompt(host, call("subagent", scout('calls:[{"name":"bash","arguments":{"command":"echo $PI_SESSION_ID > child-id.txt"}},{"name":"subagent","arguments":{"task":"nested","profile":"scout","cognitiveRole":"routine"}}]', { name: "Probe child" })));
 	const launched = await toolResult(host, "subagent");
 	const id = launchedId(launched);
-	assert.match(launched, /in the background on openai-codex\/gpt-6-luna:medium \(scout · routine\)/, "the launch names the routed model");
+	assert.match(launched, /in the background on openai\/gpt-6-luna:medium \(scout · routine\)/, "the launch names the routed model");
 	assert.ok(launched.includes(` in ${cwd}.`), `the launch receipt names the child's cwd: ${launched}`);
 	const collected = await toolResult(host, "subagent_collect");
-	assert.match(collected, /Completion receipt: openai-codex\/gpt-6-luna:medium · subagent · scout · routine · outcome success/);
+	assert.match(collected, /Completion receipt: openai\/gpt-6-luna:medium · subagent · scout · routine · outcome success/);
 	assert.match(collected, new RegExp(`${id} \\[success\\]`));
 	await quiet(host);
 	const transcript = await host.call<Transcript>("transcript");
 	assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 1, "one completion wake");
 
-	const child = logged(store).filter((l) => (l as { model?: string }).model === "openai-codex/gpt-6-luna");
+	const child = logged(store).filter((l) => (l as { model?: string }).model === "openai/gpt-6-luna");
 	assert.equal(child[0]!.messages, 1, "the child starts without the parent transcript");
 	assert.deepEqual(child[0]!.tools, ["bash", "find", "grep", "ls", "read", "report_status"], "scout allowlist: no write, edit or delegation tools");
 	await host.close();
@@ -132,7 +132,7 @@ test("P089 foreground Subagent: the tool returns the result and receipt itself, 
 	await host.ready;
 	await prompt(host, call("subagent", scout("hello child", { background: false, profile: "implementer" })));
 	const result = await toolResult(host, "subagent");
-	assert.match(result, /^ok: hello child\n\nCompletion receipt: openai-codex\/gpt-6-luna:medium · subagent · implementer · routine · outcome success$/);
+	assert.match(result, /^ok: hello child\n\nCompletion receipt: openai\/gpt-6-luna:medium · subagent · implementer · routine · outcome success$/);
 	await quiet(host);
 	await prompt(host, call("subagent_status", { all: true }));
 	assert.match(await toolResult(host, "subagent_status"), /\[success, collected\]/);
@@ -266,7 +266,7 @@ test("P092 report_status: a second report replaces the first in the one roster r
 	const first = await since(host, mark, (e) => e.type === "status.update" && rosterOf(e.status as Status).items[0]?.reportedStatus === "Reading the code", "the first report");
 	const [item, ...others] = rosterOf(first.status as Status).items;
 	assert.equal(others.length, 0);
-	assert.deepEqual({ id: item!.id, kind: item!.kind, name: item!.name, model: item!.model, effort: item!.effort, role: item!.role }, { id: `delegate:${id}`, kind: "subagent", name: "Reporter", model: "openai-codex/gpt-6-luna", effort: "medium", role: "routine" });
+	assert.deepEqual({ id: item!.id, kind: item!.kind, name: item!.name, model: item!.model, effort: item!.effort, role: item!.role }, { id: `delegate:${id}`, kind: "subagent", name: "Reporter", model: "openai/gpt-6-luna", effort: "medium", role: "routine" });
 	assert.ok(Date.parse(item!.startedAt!) > 0 && Date.parse(item!.reportedAt!) >= Date.parse(item!.startedAt!), "start and report times for elapsed and quiet time");
 	await prompt(host, call("subagent_steer", { executionId: id, message: call("report_status", { status: "Writing the fix" }) }));
 	const second = await since(host, mark, (e) => e.type === "status.update" && rosterOf(e.status as Status).items[0]?.reportedStatus === "Writing the fix", "the second report");
@@ -394,7 +394,7 @@ test("P095–P098 Workers: create starts nothing; busy dispatch fails preflight;
 	await quiet(host);
 
 	await prompt(host, call("worker_dispatch", { workerId, task: "follow-up", cognitiveRole: "routine", background: false }));
-	assert.match(await toolResult(host, "worker_dispatch", 3), /^ok: follow-up\n\nCompletion receipt: openai-codex\/gpt-6-luna:medium · worker · coordinator · routine · outcome success$/, "a fresh binding per dispatch");
+	assert.match(await toolResult(host, "worker_dispatch", 3), /^ok: follow-up\n\nCompletion receipt: openai\/gpt-6-luna:medium · worker · coordinator · routine · outcome success$/, "a fresh binding per dispatch");
 	const followUp = logged(store).find((l) => l.label === "follow-up")!;
 	assert.ok(followUp.messages! > 3, `the second dispatch sees its first dispatch's conversation (${String(followUp.messages)} messages)`);
 	await quiet(host);
@@ -415,7 +415,7 @@ test("P095–P098 Workers: create starts nothing; busy dispatch fails preflight;
 	const status = await toolResult(host, "worker_status");
 	assert.match(status, /\[retired\] retired \S+: scope done/);
 	assert.match(status, /3 recorded dispatch\(es\)/);
-	assert.match(status, /Last dispatch: success · openai-codex\/gpt-6-luna:medium/);
+	assert.match(status, /Last dispatch: success · openai\/gpt-6-luna:medium/);
 	await quiet(host);
 	await prompt(host, call("worker_status", {}));
 	assert.match(await toolResult(host, "worker_status", 2), /^No active durable workers are recorded for this Chat\./, "default status lists only active owned Workers");

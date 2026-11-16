@@ -1,5 +1,5 @@
-// Slice 4 group OpenAI: Durable Chats offer the legacy model set (Claude, ChatGPT subscription via openai-codex, GitHub
-// Copilot) from Pi's own auth.json, switch providers mid-Chat, map the thinking level per model, port
+// Slice 4 group OpenAI: Durable Chats offer the legacy model set (Claude, ChatGPT subscription via openai-codex and
+// openai, Meta's Muse, GitHub Copilot) from Pi's own auth.json, switch providers mid-Chat, map the thinking level per model, port
 // pi-openai-fast-mode, and redact every new provider stream before commit. Every provider request goes to a fake
 // `fetch` in this process (WebSocket disabled, so Codex takes its SSE path); nothing leaves the machine.
 import assert from "node:assert/strict";
@@ -20,6 +20,8 @@ const HOUR = 3_600_000;
 const LOGINS = {
 	anthropic: { type: "oauth", access: ["sk", "ant", "oat01", "fake-claude"].join("-"), refresh: "fake-ort", expires: Date.now() + HOUR },
 	"openai-codex": { type: "oauth", access: codexToken("live"), refresh: "fake-codex-refresh", expires: Date.now() + HOUR, accountId: "acct-live" },
+	openai: { type: "oauth", access: "fake-openai-chatgpt", refresh: "fake-openai-refresh", expires: Date.now() + HOUR },
+	meta: { type: "oauth", access: "fake-meta-muse", refresh: "fake-meta-refresh", expires: Date.now() + HOUR },
 	"github-copilot": { type: "oauth", access: "tid=fake;proxy-ep=proxy.individual.githubcopilot.com", refresh: "fake-gh", expires: Date.now() + HOUR },
 };
 
@@ -134,13 +136,13 @@ after(cleanup);
 // ─── P016: model list and switching ──────────────────────────────────────────
 
 describe("P016 models: the legacy provider set from Pi's auth.json", () => {
-	it("offers Claude, openai-codex and github-copilot models when their logins are stored", async () => {
+	it("offers Claude, openai-codex, openai, meta and github-copilot models when their logins are stored", async () => {
 		const chat = await openChat(agentDir(LOGINS));
 		try {
 			const ids = (await chat.session.models()).map((m) => `${m.provider}/${m.id}`);
-			for (const id of ["openai-codex/gpt-6-astra", "openai-codex/gpt-6.1-sol", "openai-codex/gpt-6-luna", "anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5", "anthropic/claude-fable-5-1", "github-copilot/grok-4.7", "github-copilot/gemini-3.8-flash", "github-copilot/mai-code-1.1-flash", "github-copilot/kimi-k3", "faux/faux-1"])
+			for (const id of ["openai-codex/gpt-6-astra", "openai-codex/gpt-6.1-sol", "openai-codex/gpt-6-luna", "openai/gpt-6-astra", "openai/gpt-6.1-sol", "openai/gpt-6-luna", "meta/muse-spark-1.3", "anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5", "anthropic/claude-fable-5-1", "github-copilot/grok-4.7", "github-copilot/gemini-3.8-flash", "github-copilot/mai-code-1.1-flash", "github-copilot/kimi-k3", "faux/faux-1"])
 				assert.ok(ids.includes(id), `${id} offered`);
-			assert.deepEqual([...new Set(ids.map((id) => id.split("/")[0]))], ["anthropic", "openai-codex", "github-copilot", "faux"], "only these providers");
+			assert.deepEqual([...new Set(ids.map((id) => id.split("/")[0]))], ["anthropic", "openai-codex", "openai", "meta", "github-copilot", "faux"], "only these providers");
 		} finally {
 			await chat.close();
 		}
@@ -151,6 +153,7 @@ describe("P016 models: the legacy provider set from Pi's auth.json", () => {
 		const stored = (provider: string, id: string, api: string) => ({ id, name: id, api, provider, baseUrl: "https://example.invalid", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 32000, type: "chat" });
 		writeFileSync(join(agent, "models-store.json"), JSON.stringify({
 			"openai-codex": { models: [stored("openai-codex", "gpt-5.3-codex-spark", "openai-codex-responses")], checkedAt: 1 },
+			meta: { models: [stored("meta", "muse-ember-1.0", "openai-responses")], checkedAt: 1 },
 			"github-copilot": { models: [stored("github-copilot", "gpt-9-stored", "openai-responses"), stored("github-copilot", "not-enabled", "openai-responses")], checkedAt: 1 },
 		}));
 		const before = readFileSync(join(agent, "models-store.json"), "utf8");
@@ -159,6 +162,7 @@ describe("P016 models: the legacy provider set from Pi's auth.json", () => {
 			const ids = (await chat.session.models()).map((m) => `${m.provider}/${m.id}`);
 			assert.ok(ids.includes("openai-codex/gpt-5.3-codex-spark"), "a stored Codex model is offered");
 			assert.ok(ids.includes("openai-codex/gpt-6-astra"), "next to the built-in ones");
+			assert.ok(ids.includes("meta/muse-ember-1.0"), "the Challenge pair's stored Muse model is offered");
 			assert.deepEqual(ids.filter((id) => id.startsWith("github-copilot/")), ["github-copilot/grok-4.7", "github-copilot/gpt-9-stored"], "Copilot keeps only the login's models");
 			await chat.session.setModel("openai-codex", "gpt-5.3-codex-spark");
 			assert.equal(readFileSync(join(agent, "models-store.json"), "utf8"), before, "Pi's catalog file is only read");
@@ -174,6 +178,8 @@ describe("P016 models: the legacy provider set from Pi's auth.json", () => {
 			assert.deepEqual([...providers], ["anthropic", "faux"]);
 			await assert.rejects(chat.session.setModel("openai-codex", "gpt-6-astra"), /No stored login for openai-codex/);
 			await assert.rejects(chat.session.setModel("github-copilot", "grok-4.7"), /No stored login for github-copilot/);
+			await assert.rejects(chat.session.setModel("openai", "gpt-6-luna"), /No stored login for openai/);
+			await assert.rejects(chat.session.setModel("meta", "muse-spark-1.3"), /No stored login for meta/);
 			assert.deepEqual((await chat.session.status()).model, { provider: "faux", id: "faux-1" }, "the Chat keeps its model");
 		} finally {
 			await chat.close();
