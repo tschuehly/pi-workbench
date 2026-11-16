@@ -19,6 +19,15 @@ const child = "4242 50696 node /opt/pi/dist/cli.js --mode rpc --provider openai-
 // A terminal `pi` (parent: a shell) survives the restart; only the daemon's children die.
 const quiet = ["1 0 /sbin/launchd", "50696 1 node /x/dist/server/sessiond.js", "900 1 -zsh", "39353 900 pi", "7 900 awk / --mode[ ]rpc( |$)/"];
 
+test("legacy check-idle ignores the separate Durable instance: its daemon, hosts and their subagents", () => {
+  const durable = ["300 1 node /h/.pi-workbench/installed-durable/pi-web-b1/dist/server/sessiond.js",
+    "310 300 node /h/.pi-workbench/installed-durable/pi-workbench-a1/packages/durable-pilot/src/chat-host-main.ts",
+    "320 310 pi --mode rpc --model x", "330 1 node /h/.pi-workbench/installed-durable/pi-workbench-a1/packages/durable-pilot/src/chat-host-main.ts",
+    "340 330 node /opt/pi/dist/cli.js --mode rpc"];
+  assert.equal(run([...quiet, ...durable], "check-idle").status, 0);
+  assert.equal(run([...quiet, ...durable, child], "check-idle").status, 3);
+});
+
 test("check-idle passes when no child Pi process runs", () => {
   assert.equal(run(quiet, "check-idle").status, 0);
 });

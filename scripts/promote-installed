@@ -86,10 +86,13 @@ check_idle() { # Everything a session starts (subagents, workers, foreground com
   local busy self=" $$ " p=$$
   while p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ') && [[ -n $p && $p -gt 1 ]]; do self+="$p "; done
   busy=$(${PI_PROMOTE_PS:-ps -axo pid=,ppid=,command=} | awk -v self="$self" '
-    { line[NR] = $0; pid[NR] = $1; parent[NR] = $2; cmd = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", cmd); command[NR] = cmd
-      if (cmd ~ /sessiond[.]js/) daemon[$1] = 1 }
+    { line[NR] = $0; pid[NR] = $1; parent[NR] = $2; ppid[$1] = $2; cmd = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", cmd); command[NR] = cmd
+      if (cmd ~ /installed-durable\//) durable[$1] = 1; else if (cmd ~ /sessiond[.]js/) daemon[$1] = 1 }
     END { for (i = 1; i <= NR; i++) {
       if (index(self, " " pid[i] " ")) continue
+      # The separate Durable instance (spec B7) restarts on its own; its processes never block a legacy switch.
+      q = pid[i]; d = 0; for (n = 0; q > 1 && n < 64; n++) { if (q in durable) { d = 1; break }; q = ppid[q] }
+      if (d) continue
       if (command[i] ~ / --mode[ ]rpc( |$)/ || (daemon[parent[i]] && command[i] !~ /ping-a-human|<defunct>|^\(.*\)$|background-bash\/runner[.]mjs/)) print line[i] } }')
   [[ -z $busy ]] && return 0
   echo "refusing: a restart would kill these subagents, workers, and commands:" >&2
