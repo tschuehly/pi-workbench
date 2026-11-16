@@ -50,7 +50,7 @@ function readTail(path, size) {
  * `delivered` is written only when Pi starts the completion message (`acknowledge`); until then
  * `attach` and `redeliver` (at agent_settled) resend it, so a dropped queue cannot lose it.
  */
-export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs = 5_000, lifetimeSeconds = MAX_LIFETIME_SECONDS, onChange = () => {} } = {}) {
+export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs = 5_000, lifetimeSeconds = MAX_LIFETIME_SECONDS, onChange = () => {}, runner: runnerPath = RUNNER } = {}) {
   const jobs = new Map();
   let closed = false;
   let timer;
@@ -157,6 +157,8 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     if (typeof command !== "string" || command.trim() === "") throw new Error("A non-empty bash command is required");
     if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0 || timeout * 1000 > 2_147_483_647)) throw new Error("Invalid timeout in seconds");
     if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
+    // A long-running daemon keeps this module loaded after promotion or cleanup removed its build.
+    if (!existsSync(runnerPath)) throw new Error(`This session's background bash runner was removed (${runnerPath}), likely by a Pi Workbench promotion or cleanup; run /reload`);
     if ([...jobs.values()].filter((job) => job.state === "running").length >= MAX_ACTIVE) throw new Error("Too many background bash jobs; wait or cancel one before starting another");
     mkdirSync(root, { recursive: true, mode: 0o700 });
     const id = randomUUID();
@@ -166,7 +168,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     const startedAt = Date.now();
     const record = { id, command, description, cwd, sessionId, sessionFile, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000 };
     writeJson(join(dir, "job.json"), record);
-    const runner = spawn(nodeBin(), [RUNNER, dir], { cwd: dir, detached: true, stdio: "ignore", env });
+    const runner = spawn(nodeBin(), [runnerPath, dir], { cwd: dir, detached: true, stdio: "ignore", env });
     runner.unref();
     const job = track({ ...record, pgid: runner.pid }, dir);
     writeJson(join(dir, "job.json"), { ...record, runnerPid: runner.pid, pgid: runner.pid });
