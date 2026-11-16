@@ -69,7 +69,11 @@ test("P075/P076 open links a served Page; a human Comment reaches the Chat once 
 	const { store, cwd, page } = family("round-trip");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
+	const serving = async () => (await host.call<{ extensionStatuses: Record<string, string> }>("status")).extensionStatuses["pi-workbench:atelier"];
+	assert.equal(await serving(), undefined, "no Page served yet");
 	const url = await open(host, 1);
+	// PI WEB keeps a host that serves Pages loaded (Phase C3 idle close).
+	assert.deepEqual(JSON.parse((await serving()) ?? "null"), { schemaVersion: 1, serving: true });
 	assert.match(readFileSync(join(cwd, "atelier.js"), "utf8"), /^\/\/ atelier-copy /, "the Kernel is copied beside the Page");
 	assert.equal((await fetch(url)).status, 200);
 	await host.idle(2);

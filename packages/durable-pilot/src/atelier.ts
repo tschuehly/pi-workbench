@@ -67,6 +67,7 @@ const { checkPage, formatCheck } = (await import(new URL("../../../extensions/at
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
 const pageHash = (page: string) => createHash("sha256").update(page).digest("hex").slice(0, 16);
+export const ATELIER_STATUS = "pi-workbench:atelier";
 export type AtelierOptions = { readonly chatId: string; readonly cwd: string; readonly rootId: () => ConversationId | undefined };
 
 export class Atelier {
@@ -180,6 +181,15 @@ export class Atelier {
 				// Another live receiver holds it now, or it is gone: the tool says why when the agent opens it again.
 			}
 		}
+	}
+
+	/**
+	 * While this host serves Pages, a status line PI WEB reads to keep the host loaded (its idle close would stop the Page
+	 * server under a human's open tab). shortcut: any served Page counts, so a Chat that opened one stays loaded until it
+	 * ends; narrow to connected tabs or pending Page input if idle hosts pile up.
+	 */
+	status(): Record<string, string> {
+		return this.#host === undefined || this.#closed ? {} : { [ATELIER_STATUS]: JSON.stringify({ schemaVersion: 1, serving: true }) };
 	}
 
 	close(): void {

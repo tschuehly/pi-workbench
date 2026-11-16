@@ -642,6 +642,7 @@ export class ChatSession {
 				...(delegates === undefined ? {} : { [ACTIVITY_STATUS_KEY]: delegates }),
 				...(this.#chat?.fast.active(agent.model && { provider: agent.model.provider, id: agent.model.modelId }) ? { [FAST_STATUS]: "fast" } : {}),
 				...(await this.#chat?.bash?.status()),
+				...this.#chat?.atelier?.status(),
 			},
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
