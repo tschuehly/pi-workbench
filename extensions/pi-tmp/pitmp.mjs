@@ -44,7 +44,8 @@ const defaultPaths = () => ({
 /**
  * Delete session folders last used before the project's `keep` most recent active days. In a project
  * with no active day for `idleDays`, also delete folders unused that long, unless their session wrote
- * its log since then (live) or the Workstream Store names the folder.
+ * its log since then (live) or the Workstream Store names the folder. A folder holding a Git checkout
+ * with unsaved work always stays.
  */
 export function sweep(root = defaultRoot(), keep = KEEP_ACTIVE_DAYS, idleDays = IDLE_DAYS, paths = defaultPaths()) {
   const removed = [];
@@ -67,11 +68,34 @@ export function sweep(root = defaultRoot(), keep = KEEP_ACTIVE_DAYS, idleDays = 
         store ??= (() => { try { return readFileSync(paths.store, "utf8"); } catch { return ""; } })();
         if (live.has(session) || store.includes(dir)) continue;
       }
+      if (hasUnsavedGit(dir)) continue;
       rmSync(dir, { recursive: true, force: true });
       removed.push(dir);
     }
   }
   return removed;
+}
+
+const git = (dir, ...args) => {
+  try { return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; }
+};
+
+/**
+ * True when a Git checkout under `dir` has uncommitted changes, commits on no branch or remote, or,
+ * in its own clone (not a linked worktree), branch commits on no remote: deleting it would lose them.
+ */
+export function hasUnsavedGit(dir) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  const dotGit = entries.find((e) => e.name === ".git");
+  if (dotGit) {
+    const status = git(dir, "status", "--porcelain");
+    if (status !== "") return true; // dirty, or unreadable: keep
+    if (git(dir, "rev-list", "-n1", "HEAD", "--not", "--branches", "--remotes")) return true;
+    return dotGit.isDirectory() && !!git(dir, "rev-list", "-n1", "--branches", "--not", "--remotes");
+  }
+  // shortcut: repositories nested inside a checkout are not inspected; walk them too if that ever loses work.
+  return entries.some((e) => e.isDirectory() && e.name !== "node_modules" && hasUnsavedGit(join(dir, e.name)));
 }
 
 /** Ids of sessions whose log changed since `since` (ms). */
