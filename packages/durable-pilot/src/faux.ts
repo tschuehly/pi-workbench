@@ -61,7 +61,8 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
  *   containing `slow` streams a long summary, one containing `fail` is a non-retryable error;
  * - a tool result → `done`, unless `repropose` and the result says the tool was interrupted: then call it again;
  * - a child's assignment (profile text, then `Assignment:\n<script>`) → the script after it; a completion wake or a
- *   Worker's settle reminder → `subagent_collect`; `long:<n>` → an answer of n characters; a summary focus with
+ *   Worker's settle reminder → `subagent_collect` (a notice only when it names results to collect); the lead's update
+ *   request alone (a quiet-report steer) → `report_status`, the first time with a 2.5 s `bash` after it; `long:<n>` → an answer of n characters; a summary focus with
  *   `gate:<file>` waits until that file exists;
  * - a request to a routed (non-faux) model is logged with its `model`;
  * - PI WEB's Chat title request → `Scripted title`, or the text after `echo-title:` in it (prompt `fail`: a provider error), not logged;
@@ -131,8 +132,16 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			return fauxAssistantMessage([fauxText(`done after ${last.toolName}`)]);
 		}
 		if (text === "gen") return fauxAssistantMessage([fauxText(LONG)]);
-		if (text.startsWith("Background children finished") || text.startsWith("Your background Subagent"))
+		// A completion notice carries the results it can; the lead collects only what it names.
+		if ((text.startsWith("Background children finished") && text.split("\n\n", 1)[0]!.includes("subagent_collect")) || text.startsWith("Your background Subagent"))
 			return fauxAssistantMessage([fauxToolCall("subagent_collect", {})], { stopReason: "toolUse" });
+		if (text.startsWith("The lead asks for a progress update")) {
+			// The first quiet-report steer of a child reports and keeps working (quiet again), a later one only reports.
+			const asked = messages.filter((m) => m.role === "user" && textOfMessage(m).startsWith("The lead asks for a progress update")).length;
+			return fauxAssistantMessage(asked === 1
+				? [fauxToolCall("report_status", { status: "update 1" }), fauxToolCall("bash", { command: "sleep 2.5" })]
+				: [fauxToolCall("report_status", { status: `update ${String(asked)}` })], { stopReason: "toolUse" });
+		}
 		if (text === "cancel:last") {
 			// Cancel the newest child this conversation launched, by the ID its launch result named.
 			const launched = messages.flatMap((m) => (m.role === "toolResult" ? [/Launched subagent (\S+)/.exec(textOfMessage(m))?.[1]] : [])).filter((id) => id !== undefined).at(-1);

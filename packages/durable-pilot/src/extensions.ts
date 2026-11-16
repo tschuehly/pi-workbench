@@ -23,7 +23,7 @@ const userMessage = (text: string): Message => ({ role: "user", content: [{ type
 // ─── Runtime identity environment (P034) and pi-tmp (P085) ──────────────────
 
 /** Identity variables a stale parent process may carry; every Durable tool call gets its own instead. */
-const IDENTITY = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL", "PI_TMP"] as const;
+const IDENTITY = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL", "PI_TMP", "PI_WORKBENCH_EXECUTION_KIND"] as const;
 
 /** Drop inherited identity from the host process, so a tool never sees another session's; call once at open. */
 export function clearInheritedIdentity(env: NodeJS.ProcessEnv = process.env): void {
@@ -32,10 +32,11 @@ export function clearInheritedIdentity(env: NodeJS.ProcessEnv = process.env): vo
 
 /**
  * The environment one conversation's shell commands run with, as Pi's bash tool and background-bash set it: the Chat's
- * ID (a child conversation gets its own), its PI_TMP folder, its model and effort, and the agent's `bin` first on PATH.
+ * ID (a child conversation gets its own), its PI_TMP folder, its model and effort, a Subagent's or Worker's execution
+ * kind (as the legacy adapter sets it for a child Pi), and the agent's `bin` first on PATH.
  * No PI_SESSION_FILE: a Durable Chat has no coding-agent session file. Never TMPDIR (Unix socket path limit).
  */
-export function toolEnv(identity: { chatId: string; conversationId: ConversationId; rootId: ConversationId | undefined; cwd: string; model?: { provider: string; modelId: string }; thinkingLevel?: string }): NodeJS.ProcessEnv {
+export function toolEnv(identity: { chatId: string; conversationId: ConversationId; rootId: ConversationId | undefined; cwd: string; model?: { provider: string; modelId: string }; thinkingLevel?: string; executionKind?: string }): NodeJS.ProcessEnv {
 	const sessionId = identity.rootId === undefined || identity.conversationId === identity.rootId ? identity.chatId : `${identity.chatId}:${String(identity.conversationId)}`;
 	const bin = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "bin");
 	const path = (process.env.PATH ?? "").split(delimiter).filter((entry) => entry !== "" && entry !== bin);
@@ -45,6 +46,7 @@ export function toolEnv(identity: { chatId: string; conversationId: Conversation
 		PATH: [bin, ...path].join(delimiter),
 		...(identity.model === undefined ? {} : { PI_PROVIDER: identity.model.provider, PI_MODEL: identity.model.modelId }),
 		...(identity.thinkingLevel === undefined ? {} : { PI_REASONING_LEVEL: identity.thinkingLevel }),
+		...(identity.executionKind === undefined ? {} : { PI_WORKBENCH_EXECUTION_KIND: identity.executionKind }),
 	};
 }
 

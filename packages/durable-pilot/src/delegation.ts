@@ -51,8 +51,8 @@ import {
 	WORKER_PROFILES,
 	WORKER_ROLES,
 } from "../../../extensions/subagent/core.mjs";
-import { CUSTOM_TYPE as COMPLETION_CUSTOM_TYPE, NORMAL_CONTENT } from "../../../extensions/subagent/completion-wakeup.mjs";
-import { CheckpointDoc } from "./checkpoint.ts";
+import { CUSTOM_TYPE as COMPLETION_CUSTOM_TYPE, composeNotice } from "../../../extensions/subagent/completion-wakeup.mjs";
+import { batchSize, CheckpointDoc, continuationRequestId } from "./checkpoint.ts";
 import { redact, sealed } from "./redact.ts";
 
 /** A completion wake as placed in the lead's transcript (legacy custom message `pi-workbench:child-completion`). */
@@ -68,6 +68,10 @@ export const ACTIVITY_STATUS_KEY = "pi-workbench:activity";
 const RESULT_MAX = 8_000;
 const CANCEL_TIMEOUT_MS = 15_000;
 const KEPT_COLLECTIONS = 20;
+/** A running child silent on report_status this long gets the lead's update request once (legacy REPORT_QUIET_MS). */
+export const REPORT_QUIET_MS = 55 * 60_000;
+// Tests shorten the quiet window, as legacy wait-until's PI_WORKBENCH_WAIT_CAP_SECONDS shortens its cap.
+const reportQuietMs = () => Number(process.env.PILOT_REPORT_QUIET_MS) || REPORT_QUIET_MS;
 
 const sanitize = sealed(redact);
 
@@ -110,6 +114,10 @@ export type Execution = {
 	steers: number;
 	/** A steer with requestUpdate: the next report_status from a later tool call wakes the lead once. */
 	updateAfterTask?: number;
+	/** The completion notice that carried this result (collected with it) or named it for subagent_collect. */
+	notice?: { seq: number; carried: boolean };
+	/** The quiet-report steer sent for the quiet span starting at `since` (its steer sequence); a later report re-arms it. */
+	quietSteer?: { since: string; seq: number };
 };
 
 type Result = { output: { type: "text"; text: string }[]; details: JsonObject; isError?: true };
@@ -124,8 +132,8 @@ type DelegationState = {
 	steerByTask: Record<string, number>;
 	updateByTask: Record<string, { executionId: string; seq: number; text: string }>;
 	cancelEpoch: number;
-	/** The last completion wake: a later completion adds none while it is still queued (coalescing). */
-	wake: { seq: number; pending: number | null };
+	/** Sequence of completion notices, for their request IDs. */
+	wake: { seq: number };
 };
 
 /** The children this conversation launched; a fork starts with none. */
@@ -135,7 +143,7 @@ export const DelegationDoc = defineDoc<DelegationState>({
 	scope: "conversation",
 	history: "latest",
 	fork: "initial",
-	initial: () => ({ executions: {}, byTask: {}, collections: {}, steerByTask: {}, updateByTask: {}, cancelEpoch: 0, wake: { seq: 0, pending: null } }),
+	initial: () => ({ executions: {}, byTask: {}, collections: {}, steerByTask: {}, updateByTask: {}, cancelEpoch: 0, wake: { seq: 0 } }),
 	checkpointWhen: () => false,
 });
 
@@ -238,7 +246,8 @@ const Anchor = defineTask<{ executionId: string }, { phase: "hold" }, null>({
 	abort: (_task, runtime, c) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c),
 });
 
-type ReporterState = { phase: "run" } | { phase: "wake"; deliver: boolean } | { phase: "deliver"; seq: number; followUp: boolean };
+type Notice = { content: string; details: { attention: string; delivered: string[]; collect: string[] } };
+type ReporterState = { phase: "run" } | { phase: "wake"; deliver: boolean } | { phase: "deliver"; seq: number; followUp: boolean; notice: Notice };
 
 function reporterTask(options: DelegationOptions) {
 	return defineTask<{ executionId: string; assignment: string }, ReporterState, null>({
@@ -256,6 +265,38 @@ function reporterTask(options: DelegationOptions) {
 				}
 				const conversation = before.conversationId as ConversationId;
 				const child = (await runtime.conversation(conversation, c))!;
+				// Best effort, as legacy watchReportCadence: a child quiet on report_status for the quiet window since its launch or
+				// last report gets the lead's update request once, waking nobody; its next report re-arms it. The span and its steer
+				// are in the record, so after a restart the same steer is re-sent under its request ID, never a second one.
+				let cadence: NodeJS.Timeout | undefined;
+				let cadenceStopped = false;
+				const tick = async (): Promise<void> => {
+					if (cadenceStopped || runtime.signal.aborted) return;
+					const quiet = reportQuietMs();
+					let next: number | undefined = quiet;
+					let send: number | undefined;
+					await runtime.commit(async (tx) => {
+						const e = (await tx.doc(DelegationDoc, runtime.conversationId)).executions[id];
+						if (e === undefined || e.outcome !== "running" || e.cancelEpoch !== undefined) next = undefined;
+						else {
+							const since = e.reportedAt ?? e.launchedAt;
+							const due = Date.parse(since) + quiet;
+							if (e.quietSteer?.since === since) send = e.quietSteer.seq;
+							else if (runtime.now() >= due) {
+								e.steers += 1;
+								e.quietSteer = { since, seq: e.steers };
+								send = e.steers;
+							} else next = due - runtime.now();
+						}
+						return undefined;
+					}, c);
+					if (send !== undefined) {
+						await holdFn("cadence:after-mark", runtime.signal);
+						await child.submit({ type: "input", content: UPDATE_REQUEST, whenBusy: "steer", requestId: `steer:${id}:${String(send)}` }, c);
+					}
+					if (next !== undefined && !cadenceStopped) cadence = setTimeout(() => void tick().catch(() => {}), next).unref();
+				};
+				void tick().catch(() => {});
 				const submission = await child.submit({ type: "input", content: task.input.assignment, whenBusy: "followUp", requestId: `assignment:${id}` }, c);
 				const settled = await submission.wait(c);
 				const done = settled.status === "done";
@@ -263,6 +304,18 @@ function reporterTask(options: DelegationOptions) {
 				// Steers and follow-ups the lead admitted run after the assignment answered: the child ends once they all have.
 				for (;;) {
 					if (done) await child.waitForIdle(c);
+					// The child's compact_and_continue ended its run: its answer is the continuation's (legacy adapter checkpoint_pending).
+					const checkpoint = done ? (await runtime.snapshot(CheckpointDoc, conversation, c))?.active : undefined;
+					if (checkpoint !== null && checkpoint !== undefined) {
+						await runtime.waitForTask(checkpoint.task as TaskId, c);
+						let continuation: number | undefined;
+						await runtime.commit(async (tx) => {
+							continuation = (await tx.submissionByRequest(conversation, continuationRequestId(checkpoint.task)))?.id;
+							return undefined;
+						}, c);
+						if (continuation !== undefined) await (await options.harness().submission(continuation as never, c))?.wait(c);
+						continue;
+					}
 					if (before.kind === "worker" && done) await settleLeaves(runtime, child, id, c);
 					await holdFn("child:after-result", runtime.signal);
 					const view = await runtime.context(conversation, c);
@@ -305,6 +358,8 @@ function reporterTask(options: DelegationOptions) {
 					// A steer admitted but not yet submitted to the child: wait for it to arrive and run.
 					await sleep(50, undefined, { signal: runtime.signal });
 				}
+				cadenceStopped = true;
+				clearTimeout(cadence);
 				const record = (await runtime.snapshot(DelegationDoc, runtime.conversationId, c))!.executions[id]!;
 				options.record("execution.settled", { executionId: id, kind: record.kind, outcome: record.outcome, childSessionId: `${options.chatId}:${String(conversation)}`, ...(record.workerId === undefined ? {} : { workerId: record.workerId }) });
 				for (const { entry, message } of answers)
@@ -330,32 +385,44 @@ function reporterTask(options: DelegationOptions) {
 					held = true;
 					await runtime.waitForTask(active.task as TaskId, c);
 				}
+				// The notice is composed in the commit that marks what it carries collected and what it names noticed, so every
+				// result reaches exactly one notice: a child already in an earlier one sends none; a late child sends the next.
 				await runtime.commit(async (tx) => {
 					const doc = await tx.doc(DelegationDoc, runtime.conversationId);
 					const e = doc.executions[task.input.executionId]!;
-					if (e.collected || e.cancelEpoch !== undefined) return { status: "terminal", outcome: { status: "completed", result: null } };
-					if (doc.wake.pending !== null) {
-						const pending = await tx.submissionByRequest(runtime.conversationId, `wake:${String(doc.wake.pending)}`);
-						// One wake per attention cycle: the lead collects every terminal child when the queued one arrives.
-						if (pending === undefined || pending.status === "queued") return { status: "terminal", outcome: { status: "completed", result: null } };
-					}
-					doc.wake.seq += 1;
-					doc.wake.pending = doc.wake.seq;
-					return { status: "running", checkpoint: { phase: "deliver", seq: doc.wake.seq, followUp: held } };
+					if (e.collected || e.notice !== undefined || e.cancelEpoch !== undefined) return { status: "terminal", outcome: { status: "completed", result: null } };
+					const ready = Object.values(doc.executions)
+						.filter((x) => x.background && x.outcome !== "running" && !x.collected && x.notice === undefined && x.cancelEpoch === undefined)
+						.sort((a, b) => (a.endedAt ?? "").localeCompare(b.endedAt ?? ""));
+					const notice = composeNotice(new Map(ready.map((x) => [x.executionId, { outcome: x.outcome, text: resultOf(x).output[0]!.text, truncated: x.truncated === true }]))) as Notice;
+					const seq = (doc.wake.seq += 1);
+					for (const id of notice.details.delivered) Object.assign(doc.executions[id]!, { collected: true, notice: { seq, carried: true } });
+					for (const id of notice.details.collect) doc.executions[id]!.notice = { seq, carried: false };
+					return { status: "running", checkpoint: { phase: "deliver", seq, followUp: held, notice: { content: sanitize(notice.content), details: notice.details } } };
 				}, c);
 			},
 			deliver: async (task, runtime, c) => {
-				const { seq, followUp } = task.state.checkpoint as Extract<ReporterState, { phase: "deliver" }>;
+				const { seq, followUp, notice } = task.state.checkpoint as Extract<ReporterState, { phase: "deliver" }>;
 				const lead = (await runtime.conversation(runtime.conversationId, c))!;
-				await lead.submit({
+				const submission = await lead.submit({
 					type: "input",
-					content: NORMAL_CONTENT,
+					content: notice.content,
 					whenBusy: followUp ? "followUp" : "steer",
 					requestId: `wake:${String(seq)}`,
-					entry: { kind: COMPLETION_ENTRY, data: { attention: "terminal-results" } },
+					entry: { kind: COMPLETION_ENTRY, data: notice.details },
 				}, c);
 				await holdFn("child:after-delivery", runtime.signal);
-				await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: null } }), c);
+				const settled = await submission.wait(c);
+				await runtime.commit(async (tx) => {
+					// Withdrawn before it was placed (Stop): the lead never read it, so its results wait for the next notice or a collect.
+					if (settled.status === "unanswered" && settled.entry === undefined)
+						for (const e of Object.values((await tx.doc(DelegationDoc, runtime.conversationId)).executions)) {
+							if (e.notice?.seq !== seq) continue;
+							if (e.notice.carried) e.collected = false;
+							delete e.notice;
+						}
+					return { status: "terminal", outcome: { status: "completed", result: null } };
+				}, c);
 			},
 		},
 		abort: (_task, runtime, c) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c),
@@ -495,9 +562,7 @@ async function caller(api: Api, c: Context) {
 function childTools(api: Api, names: readonly string[]) {
 	const byName = new Map<string, ToolRegistration>();
 	for (const { tool } of api.registry.tools()) if (!byName.has(tool.name)) byName.set(tool.name, tool);
-	// ponytail: legacy children gained compact_and_continue (main 0bfd282); a Durable child settles when its run ends, so
-	// it would report before its continuation. Offer it once the reporter waits for the continuation's run.
-	const tools = names.flatMap((name) => (name === "compact_and_continue" ? [] : byName.get(name) ?? []));
+	const tools = names.flatMap((name) => byName.get(name) ?? []);
 	const lazy = byName.has("web_enable") ? WEB_TOOLS : [];
 	return { tools, modelTools: tools.filter((tool) => !lazy.includes(tool.name)) };
 }
@@ -724,7 +789,7 @@ export function delegationExtension(options: DelegationOptions) {
 
 	const reportStatus = defineTool({
 		name: "report_status",
-		description: "Report your own current one-line status for the delegate roster the lead and owner see; a new report replaces your previous one. Call it when you start, then each time the answer to 'what are you doing now?' changes: reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, hitting a blocker. Keep it current: a line older than a few minutes of work is stale, so report again. Do not call it on every tool call.",
+		description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; after each wait (at most 55 min) send one with your next tool call.",
 		parameters: Type.Object({ status: Type.String({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }) }),
 		replay: "safe",
 		execute: async (params, api, c) => {
@@ -753,7 +818,9 @@ export function delegationExtension(options: DelegationOptions) {
 					await lead.submit({ type: "input", content: update.text, whenBusy: "steer", requestId: `update:${update.executionId}:${String(update.seq)}`, entry: { kind: UPDATE_ENTRY, data: { executionId: update.executionId, status } } }, c);
 				}
 			}
-			return { output: text(`Reported: ${status}`), details: { outcome: "reported", status } };
+			// A lone report costs a whole model turn that re-reads the context; say so once it happens.
+			const alone = (await batchSize(api, c)) === 1;
+			return { output: text(alone ? `Reported: ${status}. Next time send report_status with a real tool call, never alone.` : `Reported: ${status}`), details: { outcome: "reported", status } };
 		},
 	});
 

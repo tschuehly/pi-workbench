@@ -44,6 +44,13 @@ async function toolResult(host: ChatHost, name: string, nth = 1): Promise<string
 }
 const launchedId = (result: string) => /(?:Launched subagent|Dispatched worker) (\S+)/.exec(result)?.[1] ?? assert.fail(`no execution ID in: ${result}`);
 const customs = (messages: readonly Message[], type: string) => messages.filter((m) => m.customType === type);
+/** The nth completion notice placed in the lead's transcript, as the browser received it. */
+const isNotice = (e: { type: string; message?: unknown }) => e.type === "message.end" && (e.message as Message).customType === "pi-workbench:child-completion";
+async function notice(host: ChatHost, nth = 1): Promise<Message> {
+	await host.until(() => host.events.filter(isNotice).length >= nth, `completion notice #${String(nth)}`);
+	return host.events.filter(isNotice)[nth - 1]!.message as Message;
+}
+const UPDATE_REQUEST = "The lead asks for a progress update: call report_status with your next tool call, saying where you stand, then continue your assignment.";
 const said = (host: ChatHost, text: string) => host.until((e) => e.type === "message.end" && textOf((e.message as Message).content).includes(text), `"${text}"`);
 
 /** Wait until the Chat is idle with nothing queued, three reads in a row. */
@@ -99,16 +106,16 @@ test("P089 background Subagent: routed fresh child with its allowlist and own id
 	const id = launchedId(launched);
 	assert.match(launched, /in the background on openai-codex\/gpt-6-luna:medium \(scout · routine\)/, "the launch names the routed model");
 	assert.ok(launched.includes(` in ${cwd}.`), `the launch receipt names the child's cwd: ${launched}`);
-	const collected = await toolResult(host, "subagent_collect");
-	assert.match(collected, /Completion receipt: openai-codex\/gpt-6-luna:medium · subagent · scout · routine · outcome success/);
-	assert.match(collected, new RegExp(`${id} \\[success\\]`));
+	const carried = textOf((await notice(host)).content);
+	assert.match(carried, /Completion receipt: openai-codex\/gpt-6-luna:medium · subagent · scout · routine · outcome success/);
+	assert.match(carried, new RegExp(`${id} \\[success\\]`), "the wake carries the result");
 	await quiet(host);
 	const transcript = await host.call<Transcript>("transcript");
 	assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 1, "one completion wake");
 
 	const child = logged(store).filter((l) => (l as { model?: string }).model === "openai-codex/gpt-6-luna");
 	assert.equal(child[0]!.messages, 1, "the child starts without the parent transcript");
-	assert.deepEqual(child[0]!.tools, ["bash", "find", "grep", "ls", "read", "report_status"], "scout allowlist: no write, edit or delegation tools");
+	assert.deepEqual(child[0]!.tools, ["bash", "compact_and_continue", "find", "grep", "ls", "read", "report_status"], "scout allowlist: no write, edit or delegation tools");
 	await host.close();
 
 	await inspect(store, cwd, async (h) => {
@@ -140,7 +147,7 @@ test("P089 foreground Subagent: the tool returns the result and receipt itself, 
 	const transcript = await host.call<Transcript>("transcript");
 	assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 0, "a foreground child wakes nobody");
 	const child = logged(store).find((l) => l.label === "hello child")!;
-	assert.deepEqual(child.tools, ["bash", "edit", "find", "grep", "ls", "read", "report_status", "write"], "implementer allowlist adds edit and write");
+	assert.deepEqual(child.tools, ["bash", "compact_and_continue", "edit", "find", "grep", "ls", "read", "report_status", "write"], "implementer allowlist adds edit and write");
 	await host.close();
 });
 
@@ -193,23 +200,29 @@ test("P089 independent review: routed to another model family, the receipt names
 
 test("P090/P091 collect and status: running inspection returns at once; a long result is bounded and says so; a failed child is an error; status lists by default only what needs reconciling", async () => {
 	const { store, cwd } = family("collect");
-	const host = open(store, cwd);
+	// Notices are held, so subagent_collect alone reads the results.
+	const host = open(store, cwd, { PI_DURABLE_HOLD: "child:before-delivery" });
 	await host.ready;
 	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 2"}', { name: "Slow" })));
 	const slow = launchedId(await toolResult(host, "subagent"));
 	await quiet(host);
 	await prompt(host, call("subagent_collect", { executionId: slow }));
 	assert.match(await toolResult(host, "subagent_collect"), /\[running\][\s\S]*Still running; end this turn/, "a running child returns a snapshot at once");
-	assert.match(await toolResult(host, "subagent_collect", 2), new RegExp(`^Reconciled 1 of 1 terminal children\\.\\n\\n${slow} \\[success\\]`), "its wake collects it later");
+	await host.until((e) => e.type === "test.hold", "the slow child's result");
+	await quiet(host);
+	await prompt(host, call("subagent_collect", {}));
+	assert.match(await toolResult(host, "subagent_collect", 2), new RegExp(`^Reconciled 1 of 1 terminal children\\.\\n\\n${slow} \\[success\\]`), "a later collect reads it");
 	await quiet(host);
 
-	// Both end while the lead is busy: one wake, one bulk collect.
+	// Both end, then one bulk collect.
 	await prompt(host, calls(
 		{ name: "subagent", arguments: scout("long:9000", { name: "Long" }) },
 		{ name: "subagent", arguments: scout("fail", { name: "Failing" }) },
-		{ name: "bash", arguments: { command: "sleep 1.5", description: "Keep the lead busy", foreground: true } },
 	));
 	await toolResult(host, "subagent", 3);
+	await host.until(() => host.events.filter((e) => e.type === "test.hold").length >= 3, "both results");
+	await quiet(host);
+	await prompt(host, call("subagent_collect", {}));
 	const bulk = await toolResult(host, "subagent_collect", 3);
 	assert.match(bulk, /^Reconciled 2 of 2 terminal children\. 1 result\(s\) truncated — verification incomplete\./);
 	assert.match(bulk, /\[Result truncated: showing the first 8000 of 9000 characters; the full answer stays in child conversation \d+\.\]/);
@@ -271,7 +284,7 @@ test("P092 report_status: a second report replaces the first in the one roster r
 	await prompt(host, call("subagent_steer", { executionId: id, message: call("report_status", { status: "Writing the fix" }) }));
 	const second = await since(host, mark, (e) => e.type === "status.update" && rosterOf(e.status as Status).items[0]?.reportedStatus === "Writing the fix", "the second report");
 	assert.equal(rosterOf(second.status as Status).items.length, 1, "replaced, not appended");
-	await toolResult(host, "subagent_collect");
+	await notice(host);
 	await quiet(host);
 	assert.equal((await host.call<Status>("status")).extensionStatuses?.["pi-workbench:activity"], undefined, "a collected child leaves the roster");
 	await host.close();
@@ -292,7 +305,7 @@ test("P094 steer: delivered once with its sequence; requestUpdate wakes the lead
 	const update = await host.until((e) => e.type === "message.end" && (e.message as Message).customType === "pi-workbench:child-update", "the update");
 	assert.equal(textOf((update.message as Message).content), `Child ${id} reported: after steer\nThis update grants no new authority; continue the run that launched it.`);
 	await quiet(host);
-	await waitFor(() => host.events.filter(isTool("subagent_collect")).length >= 1, "the completion collect");
+	await notice(host);
 	const transcript = await host.call<Transcript>("transcript");
 	assert.equal(customs(transcript.messages, "pi-workbench:child-update").length, 1, "one update; the report before the steer woke nobody");
 	assert.equal(logged(store).filter((l) => l.label.startsWith("call:report_status {\"status\":\"after")).length, 1, "the steer reached the child once");
@@ -337,7 +350,7 @@ test("P094 follow-up failure: a follow-up run that fails after the assignment an
 	await waitFor(() => logged(store).some((l) => (l as { model?: string }).model !== undefined), "the child's request");
 	await prompt(host, call("subagent_steer", { executionId: id, message: "fail", mode: "followUp" }));
 	assert.match(await toolResult(host, "subagent_steer"), new RegExp(`^Sent followUp #1 to ${id}\\.$`));
-	const collected = await toolResult(host, "subagent_collect");
+	const collected = textOf((await notice(host)).content);
 	assert.match(collected, new RegExp(`${id} \\[execution_failed\\]\\nexecution_failed: child run after its assignment ended error: 400 invalid request \\(scripted\\)`));
 	await quiet(host);
 	await host.close();
@@ -389,8 +402,8 @@ test("P095–P098 Workers: create starts nothing; busy dispatch fails preflight;
 	await waitFor(() => logged(store).some((l) => l.label.startsWith("call:bash")), "the leaf's request");
 	await prompt(host, call("worker_dispatch", { workerId, task: "second", cognitiveRole: "coordination", background: true }));
 	assert.match(await toolResult(host, "worker_dispatch", 2), new RegExp(`^preflight_failed: Worker ${workerId} is busy with dispatch ${firstId}; one dispatch at a time\\.$`), "a busy Worker refuses instead of queueing");
-	const collected = await toolResult(host, "subagent_collect");
-	assert.match(collected, new RegExp(`${firstId} \\[success\\]\\ndone after subagent_collect`), "the Worker's answer came after it collected its leaf");
+	const collected = textOf((await notice(host)).content);
+	assert.match(collected, new RegExp(`${firstId} \\[success\\]\\nok: Background children finished; their results follow and are already collected\\.`), "the Worker's answer came after its leaf's notice");
 	await quiet(host);
 
 	await prompt(host, call("worker_dispatch", { workerId, task: "follow-up", cognitiveRole: "routine", background: false }));
@@ -431,7 +444,7 @@ test("P095–P098 Workers: create starts nothing; busy dispatch fails preflight;
 		assert.equal(leaves.length, 1);
 		assert.equal(leaves[0]!.collected, true);
 		assert.equal((await h.harness.snapshot(ChildDoc, leaves[0]!.conversationId as ConversationId, context))?.depth, 2, "lead → Worker → leaf");
-		assert.deepEqual(logged(store).find((l) => l.label.startsWith("call:bash"))?.tools, ["bash", "find", "grep", "ls", "read", "report_status"], "the leaf has no delegation tools");
+		assert.deepEqual(logged(store).find((l) => l.label.startsWith("call:bash"))?.tools, ["bash", "compact_and_continue", "find", "grep", "ls", "read", "report_status"], "the leaf has no delegation tools");
 	});
 });
 
@@ -453,7 +466,7 @@ test("P093 Worker cancel reaches its leaves; cancelling one leaf leaves its Work
 	await waitFor(() => logged(store).filter((l) => l.label.startsWith("call:bash")).length >= 1, "the leaf's request");
 	await prompt(host, call("subagent_steer", { executionId: firstWorker, message: "cancel:last", mode: "followUp" }));
 	await toolResult(host, "subagent_steer");
-	const collected = await toolResult(host, "subagent_collect");
+	const collected = textOf((await notice(host)).content);
 	assert.match(collected, new RegExp(`${firstWorker} \\[success\\]\\ndone after subagent_cancel`), "the Worker stayed alive and answered after its leaf was cancelled");
 	await quiet(host);
 
@@ -482,7 +495,7 @@ test("P093 Worker cancel reaches its leaves; cancelling one leaf leaves its Work
 
 // ─── P099 coalescing and the checkpoint barrier ──────────────────────────────
 
-test("P099 two children finishing together wake the lead once; one collect reads both", async () => {
+test("P099 two children finishing together: each result reaches exactly one notice, and nothing is left to collect", async () => {
 	const { store, cwd } = family("coalesce");
 	const host = open(store, cwd);
 	await host.ready;
@@ -491,11 +504,15 @@ test("P099 two children finishing together wake the lead once; one collect reads
 		{ name: "subagent", arguments: scout("b") },
 		{ name: "bash", arguments: { command: "sleep 1.5", description: "Keep the lead busy", foreground: true } },
 	));
-	const collected = await toolResult(host, "subagent_collect");
-	assert.match(collected, /^Reconciled 2 of 2 terminal children\./);
+	const ids = [launchedId(await toolResult(host, "subagent", 1)), launchedId(await toolResult(host, "subagent", 2))];
+	const carried = () => host.events.filter(isNotice).map((e) => textOf((e.message as Message).content)).join("\n");
+	await host.until(() => ids.every((id) => carried().includes(`${id} [success]`)), "both results");
 	await quiet(host);
-	const transcript = await host.call<Transcript>("transcript");
-	assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 1, "one coalesced wake for both results");
+	for (const part of [...ids.map((id) => `${id} [success]\nok: `), "\nok: a\n", "\nok: b\n"]) assert.equal(carried().split(part).length, 2, `${part} carried once`);
+	assert.equal(host.events.filter(isTool("subagent_collect")).length, 0, "the notices carried both: no collect");
+	await prompt(host, call("subagent_collect", {}));
+	assert.match(await toolResult(host, "subagent_collect"), /^Nothing terminal to reconcile\./);
+	await quiet(host);
 	await host.close();
 });
 
@@ -516,7 +533,7 @@ test("checkpoint barrier: a child finishing during compact_and_continue wakes th
 	// The child ends while the summary is held.
 	await host.until((e) => e.type === "status.update" && /"activity":"success"/.test((e.status as Status).extensionStatuses?.["pi-workbench:activity"] ?? ""), "the child's result");
 	writeFileSync(gate, "");
-	await toolResult(host, "subagent_collect");
+	await notice(host);
 	await quiet(host);
 	const transcript = await host.call<Transcript>("transcript");
 	const continuation = transcript.messages.findIndex((m) => m.customType === "context-checkpoint");
@@ -524,6 +541,142 @@ test("checkpoint barrier: a child finishing during compact_and_continue wakes th
 	assert.ok(continuation >= 0 && wake >= 0, "both placed");
 	assert.ok(continuation < wake, `the continuation (${String(continuation)}) is placed before the wake (${String(wake)})`);
 	await host.close();
+});
+
+// ─── Completion notices carry results (main 0bfd282, aedf57c, a2684e3) ──────
+
+test("a background child's completion notice carries its result and receipt, marks it collected; an over-budget child is named for subagent_collect; a late child rides the next notice", async () => {
+	const { store, cwd } = family("notice");
+	// Three results end held before their notice, so after a restart one notice composes all three (24k budget: two fit).
+	let host = open(store, cwd, { PI_DURABLE_HOLD: "child:before-delivery" });
+	await host.ready;
+	await prompt(host, calls(...["A", "B", "C"].map((name) => ({ name: "subagent", arguments: scout("long:8000", { name }) }))));
+	const ids = [launchedId(await toolResult(host, "subagent", 1)), launchedId(await toolResult(host, "subagent", 2)), launchedId(await toolResult(host, "subagent", 3))];
+	await host.until(() => host.events.filter((e) => e.type === "test.hold").length >= 3, "three results held");
+	await host.kill();
+	host = open(store, cwd);
+	await host.ready;
+	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 2"}', { name: "Late" })));
+	const late = launchedId(await toolResult(host, "subagent"));
+
+	const first = await notice(host, 1);
+	const body = textOf(first.content);
+	const carried = ids.filter((id) => body.includes(`${id} [success]\nxxxx`));
+	const named = ids.filter((id) => !carried.includes(id));
+	assert.equal(carried.length, 2, `two results fit the budget: ${body.slice(0, 400)}`);
+	assert.ok(body.startsWith("Background children finished; their results follow and are already collected."), body.slice(0, 300));
+	assert.ok(body.includes(`Call \`subagent_collect\` without an executionId once for the results this notice could not carry: ${named[0]!}.`), "the third is named for subagent_collect");
+	assert.equal(body.match(/Completion receipt: \S+ · subagent · scout · routine · outcome success/g)?.length, 2, "each carried result has its receipt");
+	const details = first.details as { attention: string; delivered: string[]; collect: string[] };
+	assert.deepEqual({ ...details, delivered: [...details.delivered].sort() }, { attention: "terminal-results", delivered: [...carried].sort(), collect: named });
+	assert.match(await toolResult(host, "subagent_collect"), new RegExp(`^Reconciled 1 of 1 terminal children\\.\\n\\n${named[0]!} \\[success\\]`), "the lead collects only the named one");
+
+	const second = textOf((await notice(host, 2)).content);
+	assert.match(second, new RegExp(`^Background children finished; their results follow and are already collected\\.[^\\n]*\\n\\n${late} \\[success\\]\\ndone after bash\\n\\nCompletion receipt: `), "the late child rides its own notice");
+	assert.ok(!second.split("\n\n", 1)[0]!.includes("subagent_collect"), "nothing left to collect");
+	await quiet(host);
+	assert.equal(host.events.filter(isTool("subagent_collect")).length, 1, "one collect: the notices carried the rest");
+	assert.equal(host.events.filter(isNotice).length, 2, "each result reached exactly one notice");
+	await prompt(host, call("subagent_status", { all: true }));
+	assert.equal((await toolResult(host, "subagent_status")).match(/, collected\]/g)?.length, 4, "all four are collected");
+	await quiet(host);
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+// ─── report_status reminder and quiet-report cadence (main 0bfd282, e46dc16) ─
+
+test("report_status alone in its batch returns the reminder; batched with another call it does not; the description asks for phase changes and a report after each wait", async () => {
+	const { store, cwd } = family("report-alone");
+	const host = open(store, cwd);
+	await host.ready;
+	await prompt(host, call("subagent", scout(call("report_status", { status: "alone" }), { background: false })));
+	await toolResult(host, "subagent");
+	await quiet(host);
+	await prompt(host, call("subagent", scout(calls({ name: "report_status", arguments: { status: "batched" } }, { name: "ls", arguments: {} }), { background: false })));
+	await toolResult(host, "subagent", 2);
+	await quiet(host);
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const reports: string[] = [];
+		for (const e of await executions(h))
+			for (const entry of await entries(h, e.conversationId)) {
+				const m = entry.model?.[0] as (Message & { toolName?: string }) | undefined;
+				if (m?.toolName === "report_status") reports.push(textOf(m.content));
+			}
+		assert.deepEqual(reports.sort(), ["Reported: alone. Next time send report_status with a real tool call, never alone.", "Reported: batched"]);
+		const [e] = await executions(h);
+		const tool = (await (await h.harness.conversation(e!.conversationId as ConversationId, context))!.agent(context)).tools.find((t) => t.name === "report_status")!;
+		assert.match(tool.description, /report only when your phase changes[\s\S]*never alone; after each wait \(at most 55 min\) send one with your next tool call\.$/);
+		assert.doesNotMatch(tool.description, /stale/);
+	});
+});
+
+test("quiet-report cadence: a child quiet for the window gets one update-request steer, waking nobody; its next report re-arms it; its commands are marked a child's", async () => {
+	const { store, cwd } = family("cadence");
+	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000" });
+	await host.ready;
+	await prompt(host, call("bash", { command: 'echo "lead=${PI_WORKBENCH_EXECUTION_KIND:-none}" > lead-kind.txt', description: "Lead kind", foreground: true }));
+	await quiet(host);
+	// Quiet 3 s (steer 1 at 1 s, placed at 3 s): reports, quiet 2.5 s again (steer 2), reports, ends.
+	await prompt(host, call("subagent", scout('call:bash {"command":"echo kind=$PI_WORKBENCH_EXECUTION_KIND > kind.txt; sleep 3"}', { background: false })));
+	assert.match(await toolResult(host, "subagent"), /^done after report_status\n/);
+	await quiet(host);
+	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-update").length, 0, "a quiet-report steer wakes nobody");
+	await host.close();
+	assert.equal(readFileSync(join(cwd, "kind.txt"), "utf8").trim(), "kind=subagent", "wait-until inside a child caps its wait");
+	assert.equal(readFileSync(join(cwd, "lead-kind.txt"), "utf8").trim(), "lead=none");
+	await inspect(store, cwd, async (h) => {
+		const [e] = await executions(h);
+		const asked = (await entries(h, e!.conversationId)).filter((entry) => { const m = entry.model?.[0] as Message | undefined; return m?.role === "user" && textOf(m.content) === UPDATE_REQUEST; });
+		assert.equal(asked.length, 2, "one steer per quiet span: none repeated while the first waited, a second after the report re-armed it");
+		assert.equal(e!.steers, 2);
+		assert.equal(e!.reportedStatus, "update 2");
+	});
+});
+
+test("quiet-report cadence: the steer committed before a host kill is sent once after reopen", async () => {
+	const { store, cwd } = family("cadence-kill");
+	let host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PI_DURABLE_HOLD: "cadence:after-mark" });
+	await host.ready;
+	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 3"}')));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await host.until((e) => e.type === "test.hold" && e.name === "cadence:after-mark", "the committed steer");
+	await host.kill();
+	// A long window after reopen: only the committed steer may reach the child.
+	host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "600000" });
+	await host.ready;
+	await prompt(host, "resume");
+	await host.until((e) => isNotice(e) && textOf((e.message as Message).content).includes(`${id} [success]`), "the child's notice");
+	await quiet(host);
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const [e] = await executions(h);
+		const asked = (await entries(h, e!.conversationId)).filter((entry) => { const m = entry.model?.[0] as Message | undefined; return m?.role === "user" && textOf(m.content) === UPDATE_REQUEST; });
+		assert.equal(asked.length, 1, "the steer reached the child once");
+		assert.deepEqual([e!.steers, e!.reportedStatus], [1, "update 1"]);
+	});
+});
+
+// ─── compact_and_continue in a child (main 0bfd282, a2684e3) ─────────────────
+
+test("a child that calls compact_and_continue settles with the continuation's answer and one receipt", async () => {
+	const { store, cwd } = family("child-checkpoint");
+	// Its own telemetry directory: execution IDs repeat across this file's Chats.
+	const dir = scratch("delegation-checkpoint-telemetry");
+	const host = open(store, cwd, { PI_TELEMETRY_DIR: dir });
+	await host.ready;
+	await host.call("configure", { resources: {}, compaction: { keepRecentTokens: 1 } });
+	await prompt(host, call("subagent", scout(call("compact_and_continue", { summaryFocus: "child focus", nextPhase: "phase two" }), { background: false, name: "Checkpointer" })));
+	const result = await toolResult(host, "subagent");
+	assert.match(result, /^ok: Context checkpoint completed\.\n\nContinue with the requested next phase: phase two\n/, result);
+	assert.equal(result.match(/Completion receipt: /g)?.length, 1, "one receipt");
+	await quiet(host);
+	await host.close();
+	assert.ok(logged(store).some((l) => l.label === "summarize"), "the child's context was compacted");
+	assert.ok(logged(store).find((l) => l.label.startsWith("call:compact_and_continue") && (l as { model?: string }).model !== undefined)?.tools?.includes("compact_and_continue"), "every child profile offers compact_and_continue");
+	const events = readdirSync(dir).flatMap((file) => readFileSync(join(dir, file), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>));
+	assert.deepEqual(events.filter((event) => String(event.type).startsWith("execution.")).map((event) => event.type), ["execution.launched", "execution.settled"], "settled once");
 });
 
 // ─── Survival ────────────────────────────────────────────────────────────────
@@ -544,19 +697,18 @@ for (const window of ["before-admission", "after-result", "before-delivery", "af
 		await host.call("transcript");
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		assert.equal(logged(store).length, requests, "reading a restored Chat sends nothing");
-		// Resume by asking to collect: the scripted lead answers the newest input only, so a plain prompt would hide a wake.
-		// A credential read the killed host was in holds Pi's auth.json lock until its 30 s stale period ends.
-		await prompt(host, call("subagent_collect", {}));
-		await host.until(() => host.events.some((e) => isTool("subagent_collect")(e) && /ok: survivor/.test(textOf((e.message as Message).content))), "the collected result");
+		// Any input resumes a paused restore. A credential read the killed host was in holds Pi's auth.json lock until its
+		// 30 s stale period ends.
+		await prompt(host, "resume");
+		await host.until((e) => isNotice(e) && /ok: survivor/.test(textOf((e.message as Message).content)), "the carried result");
 		await quiet(host, 90_000);
 		const transcript = await host.call<Transcript>("transcript");
 		assert.equal(childRequests(store, "survivor").length, 1, "the child was asked once");
-		assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 1, "one wake");
-		const collects = transcript.messages.filter((m) => (m as { toolName?: string }).toolName === "subagent_collect").map((m) => textOf(m.content));
-		assert.equal(collects.filter((t) => /Reconciled 1 of 1[\s\S]*ok: survivor/.test(t)).length, 1, "collected exactly once");
-		const before = host.events.filter(isTool("subagent_collect")).length;
+		const wakes = customs(transcript.messages, "pi-workbench:child-completion");
+		assert.equal(wakes.length, 1, "one wake");
+		assert.match(textOf(wakes[0]!.content), /^Background children finished; their results follow and are already collected\.[\s\S]*\[success\]\nok: survivor/, "it carries the result");
 		await prompt(host, call("subagent_collect", {}));
-		assert.match(await toolResult(host, "subagent_collect", before + 1), /^Nothing terminal to reconcile\./);
+		assert.match(await toolResult(host, "subagent_collect"), /^Nothing terminal to reconcile\./, "the notice collected it");
 		await quiet(host);
 		await host.close();
 		await inspect(store, cwd, async (h) => {
@@ -568,9 +720,13 @@ for (const window of ["before-admission", "after-result", "before-delivery", "af
 
 test("kill row collection: killed after collection committed, the rerun returns the same result once; nothing is lost or falsely read", async () => {
 	const { store, cwd } = family("kill-collect");
-	let host = open(store, cwd, { PI_DURABLE_HOLD: "collect:after-commit" });
+	// The notice is held, so the lead's own collect reads the result.
+	let host = open(store, cwd, { PI_DURABLE_HOLD: "child:before-delivery,collect:after-commit" });
 	await host.ready;
 	await prompt(host, call("subagent", scout("survivor")));
+	await host.until((e) => e.type === "test.hold" && e.name === "child:before-delivery", "the result");
+	await quiet(host);
+	await prompt(host, call("subagent_collect", {}));
 	await host.until((e) => e.type === "test.hold" && e.name === "collect:after-commit", "the barrier");
 	await host.kill();
 	host = open(store, cwd);
@@ -582,6 +738,7 @@ test("kill row collection: killed after collection committed, the rerun returns 
 	const collects = transcript.messages.filter((m) => (m as { toolName?: string }).toolName === "subagent_collect").map((m) => textOf(m.content));
 	assert.equal(collects.length, 1);
 	assert.match(collects[0]!, /Reconciled 1 of 1[\s\S]*ok: survivor/, "the rerun returned what the first attempt marked read");
+	assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 0, "a collected result sends no notice");
 	assert.equal(childRequests(store, "survivor").length, 1);
 	await host.close();
 });
@@ -665,7 +822,7 @@ test("redaction: secrets in an assignment, a steer, a status report and a Worker
 	await quiet(host);
 	await prompt(host, call("worker_create", { name: `w ${SECRET}`, scope: `scope ${SECRET}`, profile: "scout" }));
 	await toolResult(host, "worker_create");
-	await toolResult(host, "subagent_collect");
+	await notice(host);
 	await quiet(host);
 	await host.close();
 	await inspect(store, cwd, async (h) => {
@@ -792,7 +949,7 @@ test("navigation: refused while a background child runs, allowed once it is coll
 	const running = await host.call<HistoryTree | { type: "unsupported" }>("tree");
 	assert.equal(running.type, "unsupported", "/tree is refused while a child runs");
 	await assert.rejects(host.call("navigate", { targetId: "1", expectedLeafId: null }), BUSY, "navigation is refused while a background child runs");
-	await toolResult(host, "subagent_collect");
+	await notice(host);
 	await quiet(host);
 	const ready = await host.call<HistoryTree>("tree");
 	assert.equal(ready.type, "tree", "collected: the Chat is quiescent");
@@ -803,7 +960,7 @@ test("navigation: refused while a background child runs, allowed once it is coll
 	const mark = host.events.length;
 	await prompt(host, call("subagent", scout(calls({ name: "report_status", arguments: { status: "On the branch" } }, { name: "bash", arguments: { command: "sleep 1.5" } }), { name: "Brancher" })));
 	await since(host, mark, (e) => e.type === "status.update" && ((e.status as Status).extensionStatuses?.["pi-workbench:activity"] ?? "").includes("On the branch"), "the branch child's roster row");
-	await since(host, mark, isTool("subagent_collect"), "the branch child's collection");
+	await since(host, mark, isNotice, "the branch child's notice");
 	await quiet(host);
 	await host.close();
 	assert.equal(integrity(store), "ok");

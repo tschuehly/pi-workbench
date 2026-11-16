@@ -5,14 +5,13 @@ const NORMAL_ATTENTION = "terminal-results";
 // Matches subagent_collect's bulk budget: the notice replaces that collect turn.
 const NOTICE_MAX_CHARS = 24_000;
 const AUTHORITY = "This notice authorizes no retry, relaunch, publication, or acceptance beyond that run's existing authorization.";
-// Durable Chats (packages/durable-pilot/src/delegation.ts) still send this result-less notice; the lead collects.
-export const NORMAL_CONTENT = `Background children finished. Call \`subagent_collect\` without an executionId once (repeat only if it reports a budget-limited remainder), then resume the run that launched them at its next incomplete step. Use \`subagent_status\` only if collect reports children still running and you must decide something about them. ${AUTHORITY}`;
 
 /**
  * One notice carries every ready result that fits the budget, in completion order; the rest are
  * named for subagent_collect. The first result is always carried: the adapter already bounds it.
+ * Durable Chats (packages/durable-pilot/src/delegation.ts) compose theirs with it too.
  */
-function composeNotice(ready, maxChars) {
+export function composeNotice(ready, maxChars = NOTICE_MAX_CHARS) {
   const delivered = [];
   const collect = [];
   const sections = [];
