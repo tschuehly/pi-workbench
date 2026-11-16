@@ -67,6 +67,14 @@ restores the previous web service if the new one does not become healthy and pri
 that switches back. `switch` waits 10 seconds by default before restarting, enough for the calling
 session to finish its reply.
 
+The Durable instance (`docs/plans/pi-durable-cutover-spec.md`, B7) is a second installed PI WEB beside
+this one: `promote-installed --instance durable` runs `prepare`, `switch`, `switch-workbench`,
+`switch-web`, `prune` and `check-idle` on `~/IdeaProjects/*.durable-installed`, builds under
+`~/.pi-workbench/installed-durable/`, `PI_WEB_DATA_DIR` `~/.pi-web-durable`, port 8506 and launchd
+labels `com.pi-web-durable.*`, with `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_DURABLE_DEFAULT=1` and the
+build's own Durable host. It writes its own plists and never changes `~/.pi/agent`, the legacy links,
+plists, data or builds; the legacy prune never sees its builds.
+
 ## Skill Capability and Interface Layer
 
 Skills are self-contained agent capabilities with concise instructions and bundled scripts, references, and assets. The harness gives skills common ways to expose progress, decisions, artifacts, inputs, outputs, and relevant actions; each skill does not need a separate application.
