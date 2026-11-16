@@ -8,7 +8,7 @@ This is a same-session, lossy context checkpoint. The focus directs Pi's summari
 
 ## Context ceiling
 
-When a session that can call `compact_and_continue` crosses 200,000 context tokens, the `turn_end` hook adds one visible `context-ceiling` entry to the context (a boundary entry, so it starts no turn) that tells the model to carry on with the current phase and to compact once it is done and its running children are back with `compact_and_continue`, naming what the summary must keep and the next phase. Each further 50,000 tokens adds a one-line follow-up until a compaction drops the context; it fires again at the next step above wherever the context lands. Subagent and Worker children receive the tool too; `packages/pi-execution-adapter/` keeps a child running across the settle an accepted checkpoint causes.
+When a session that can call `compact_and_continue` crosses 200,000 context tokens, the `turn_end` hook adds one visible `context-ceiling` entry to the context (a boundary entry, so it starts no turn) that tells the model to carry on with the current phase and to compact once it is done with `compact_and_continue`, naming what the summary must keep and the next phase. Each further 50,000 tokens adds a one-line follow-up until a compaction drops the context; it fires again at the next step above wherever the context lands. Subagent and Worker children receive the tool too; `packages/pi-execution-adapter/` keeps a child running across the settle an accepted checkpoint causes.
 
 ## Checkpoint barrier
 
