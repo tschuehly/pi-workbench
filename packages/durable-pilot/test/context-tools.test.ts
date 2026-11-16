@@ -12,8 +12,9 @@ import { createReadTool } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition } from "@earendil-works/pi-coding-agent";
 import { fastMode } from "../src/providers.ts";
-import { chatTools } from "../src/chat.ts";
+import { chatTools, openChatHost } from "../src/chat.ts";
 import { searchTools } from "../src/search-tools.ts";
+import { wrapProvider } from "../src/redact.ts";
 import { readLog, router } from "../src/faux.ts";
 import { ToolGroupsDoc, toolGroupsExtension } from "../src/tool-groups.ts";
 import { ChatSession } from "../src/chat-session.ts";
@@ -215,6 +216,58 @@ test("a compaction summary and its /compact instructions are redacted before the
 	await session.close();
 	assert.match(String(events.find((e) => e.message?.source === "compaction")?.message?.content), /\[REDACTED:env:PILOT_CONTEXT_TOKEN\]/);
 	assert.deepEqual(scan([dir], [SECRET, SECRET.slice(0, 16)]), [], "store and work directory clean");
+});
+
+// ─── Context ceiling (legacy context-checkpoint turn_end nudge) ──────────────
+
+test("a turn ending at ≥200k tokens adds one ceiling note; another at +50k; none below or after compaction", async () => {
+	const dir = scratch("ceiling");
+	const cwd = join(dir, "workspace");
+	mkdirSync(cwd, { recursive: true });
+	const host = await openChatHost({ dir: join(dir, "family"), cwd, model: "faux", scripted: true });
+	const events: { type: string }[] = [];
+	const session = new ChatSession(host, (event) => events.push(event));
+	await session.start();
+	try {
+		// The scripted model's usage is the request's size (chars / 4): prompts set the context; answers stay short. Without
+		// a session ID it counts no prompt cache, which would count a request's new text twice.
+		const faux = host.faux.provider;
+		host.models.setProvider(wrapProvider({ ...faux, stream: (m, c, o) => faux.stream(m, c, { ...o, sessionId: undefined } as never), streamSimple: (m, c, o) => faux.streamSimple(m, c, { ...o, sessionId: undefined } as never) }));
+		const requests: string[][] = [];
+		host.faux.setResponses(Array.from({ length: 20 }, () => (ctx: { messages: readonly { role: string; content: unknown }[] }) => {
+			requests.push(ctx.messages.filter((m) => m.role === "user").map((m) => textOf(m.content as never).slice(0, 80)));
+			return fauxAssistantMessage([fauxText("fine")]);
+		}));
+		await session.configure({}, { compaction: { enabled: false, keepRecentTokens: 1 } });
+		let n = 0;
+		const turn = async (text: string) => {
+			const from = events.length;
+			await session.prompt({ operationId: `op-${String(++n)}`, text });
+			await waitFor(() => events.slice(from).some((e) => e.type === "agent.end"), `the turn after prompt ${String(n)}`);
+		};
+		const notes = () => (session.messages() as Message[]).filter((m) => m.customType === "context-ceiling").map((m) => textOf(m.content));
+
+		await turn("below the ceiling");
+		assert.deepEqual(notes(), [], "no note below 200k");
+		await turn(`a${"x".repeat(800_000)}`);
+		await waitFor(() => notes().length === 1, "the first ceiling note");
+		assert.match(notes()[0]!, /^Context is at 2\d\dk tokens, with plenty of room left\. Carry on with the current phase\. Once it is done, compact with compact_and_continue/);
+		await turn("small");
+		assert.match(requests.at(-1)!.join("\n"), /Context is at 2\d\dk tokens/, "the note rides into the next request");
+		assert.equal(notes().length, 1, "no second note within the same 50k step");
+		await turn(`b${"y".repeat(200_000)}`);
+		await waitFor(() => notes().length === 2, "the +50k note");
+		assert.match(notes()[1]!, /^Context is now at 2\d\dk tokens\. Plan to compact when this phase ends\.$/);
+
+		await session.compact();
+		await waitFor(() => (session.messages() as Message[]).some((m) => m.source === "compaction"), "the compaction summary");
+		while ((await session.status()).isCompacting) await new Promise((resolve) => setTimeout(resolve, 20));
+		await turn("after compaction");
+		await turn("again");
+		assert.equal(notes().length, 2, "no note after compaction dropped the context");
+	} finally {
+		await session.close();
+	}
 });
 
 // ─── compact_and_continue ────────────────────────────────────────────────────

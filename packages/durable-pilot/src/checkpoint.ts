@@ -12,7 +12,9 @@ import {
 	defineExtension,
 	defineTask,
 	defineTool,
+	GenerationTask,
 	type Harness,
+	hook,
 	type JsonObject,
 	LiveDoc,
 	type TaskId,
@@ -20,6 +22,7 @@ import {
 } from "@earendil-works/pi-durable";
 import {
 	compactionInstructions,
+	createContextCeiling,
 	MAX_NEXT_PHASE_CHARS,
 	MAX_SUMMARY_FOCUS_CHARS,
 	validateCheckpointRequest,
@@ -31,6 +34,9 @@ import { pendingBlock } from "./workbench.ts";
 export const CHECKPOINT_ENTRY = "workbench.context-checkpoint";
 /** PI WEB custom message type of the legacy extension. */
 export const CHECKPOINT_CUSTOM_TYPE = "context-checkpoint";
+/** The context-ceiling nudge as placed in the transcript; PI WEB shows it as the legacy `context-ceiling` message. */
+export const CEILING_ENTRY = "workbench.context-ceiling";
+export const CEILING_CUSTOM_TYPE = "context-ceiling";
 
 type Request = { summaryFocus: string; nextPhase: string };
 type Status = "compacted" | "failed" | "cancelled";
@@ -200,5 +206,26 @@ export function checkpointExtension(harness: () => Harness) {
 		},
 	});
 
-	return defineExtension({ name: "workbench.context-checkpoint", tools: [tool], tasks: [CheckpointTask] });
+	// The legacy turn_end nudge: from 200k context tokens, and every further 50k until a compaction drops it, a boundary
+	// entry the next request carries (a queued write while the run is busy). Context size as Pi's getContextUsage reads it.
+	// shortcut: the ceiling's level is per host process, so a restart above 200k repeats one note; persist it if that matters.
+	const ceilings = new Map<ConversationId, ReturnType<typeof createContextCeiling>>();
+	const ceilingNudge = hook(GenerationTask, {
+		afterResponse: async (message, api, c) => {
+			if (message.stopReason === "error" || message.stopReason === "aborted") return;
+			const { usage } = message;
+			const tokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+			if (tokens <= 0) return;
+			if (!ceilings.has(api.conversationId)) ceilings.set(api.conversationId, createContextCeiling());
+			const note = ceilings.get(api.conversationId)!(tokens);
+			if (note === undefined) return;
+			await (await conversation(api.conversationId, c)).submit({
+				type: "write",
+				requestId: `context-ceiling:${String(api.taskId)}:${String(message.timestamp)}`,
+				entry: { kind: CEILING_ENTRY, model: [{ role: "user", content: text(note.content), timestamp: Date.now() }], data: note.details },
+			}, c);
+		},
+	});
+
+	return defineExtension({ name: "workbench.context-checkpoint", tools: [tool], tasks: [CheckpointTask], hooks: [ceilingNudge] });
 }
