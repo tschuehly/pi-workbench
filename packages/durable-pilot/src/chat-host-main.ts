@@ -1,13 +1,20 @@
-// Durable Chat host process for PI WEB (session-host protocol v2). PI WEB's session daemon spawns one per Chat family
-// with an IPC channel; requests and replies are JSON messages on it, and the host pushes PI WEB session events.
+// Durable Chat host process for PI WEB (session-host protocol v2), one per Chat family.
 //   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model <provider>/<id>|faux
-//                              [--session-id <PI WEB Chat ID>] [--scripted] [--packages]
+//                              [--session-id <PI WEB Chat ID>] [--scripted] [--packages] [--socket <path>]
 // --packages runs the bound installed Pi packages from PI_CODING_AGENT_DIR's settings (src/packages.ts).
+// Transport: with --socket (Phase C1, a launchd job per family), an owner-only Unix socket that outlives any one session
+// daemon: newline-delimited JSON, one daemon connection at a time (a new one replaces the old), and the ready handshake
+// on every connection. Without it, the IPC channel of the daemon that forked the host (tests, the e2e fleet).
 // Messages in:  { id, method, params? }
-// Messages out: { ready: { protocol, durable, ownerEpoch, capabilities } } once open, { id, result } | { id, error }, { event }.
-// The host exits after `close`, when PI WEB goes away (IPC disconnect), or on SIGTERM/SIGINT, closing the store
-// gracefully first.
-// ponytail: the IPC channel ties the host's life to its session daemon; Phase C moves hosts to their own service owner.
+// Messages out: { ready: { protocol, durable, revision, storeId, ownerEpoch, pid, capabilities, resources } } once open,
+//               { id, result } | { id, error }, { event }. Events emitted while no daemon is connected are dropped: a
+//               reattaching daemon reads status and transcript afresh.
+// The host exits after `close` or on SIGTERM/SIGINT, and an IPC host also when its daemon goes away (disconnect),
+// closing the store gracefully first. A socket host stays when its daemon goes away.
+import { chmodSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { createServer, type Socket } from "node:net";
+import { basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { CompactionSettings } from "@earendil-works/pi-durable";
@@ -22,11 +29,6 @@ import type { CloseAsk, Resources } from "./workbench.ts";
 
 type Request = { id: number; method: string; params?: Record<string, unknown> };
 
-const send = (message: unknown) => {
-	if (process.connected) process.send?.(message);
-};
-if (process.send === undefined) throw new Error("chat-host-main must be started with an IPC channel");
-
 const { values } = parseArgs({
 	options: {
 		store: { type: "string" },
@@ -38,9 +40,27 @@ const { values } = parseArgs({
 		thinking: { type: "string" },
 		packages: { type: "boolean" },
 		"scripted-providers": { type: "boolean" },
+		socket: { type: "string" },
 	},
 });
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
+const socketPath = values.socket;
+if (socketPath === undefined && process.send === undefined) throw new Error("chat-host-main must be started with an IPC channel or --socket");
+if (socketPath !== undefined) {
+	// Only the owner may reach the host: its folder admits nobody else (the socket itself is 0600 too).
+	const folder = lstatSync(dirname(socketPath));
+	if (!folder.isDirectory() || folder.uid !== process.getuid?.() || (folder.mode & 0o077) !== 0) throw new Error(`--socket must be in an owner-only folder: ${dirname(socketPath)}`);
+}
+/** The daemon connected over the socket, if any. */
+let peer: Socket | undefined;
+const write = (socket: Socket, message: unknown) => {
+	if (!socket.destroyed) socket.write(`${JSON.stringify(message)}\n`);
+};
+const send = (message: unknown) => {
+	if (socketPath !== undefined) {
+		if (peer !== undefined) write(peer, message);
+	} else if (process.connected) process.send?.(message);
+};
 
 const tps = values["faux-tps"] === undefined ? undefined : Number(values["faux-tps"]);
 const chatId = values["session-id"] ?? values.store;
@@ -163,19 +183,21 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 /** Operations that must not overlap history navigation (legacy `assertTreeNavigationInactive`). */
 const EXCLUSIVE = new Set(["prompt", "mode", "closeAsk", "setModel", "resolveEffect", "compact", "command", "mutateQueue", "setThinkingLevel", "cycleThinkingLevel", "shell"]);
 
-process.on("message", (message: Request) => {
-	void (async () => {
-		try {
-			const method = methods[message.method];
-			if (method === undefined) throw new Error(`Unknown method ${message.method}`);
-			const run = () => Promise.resolve(method(message.params ?? {}));
-			send({ id: message.id, result: (await (EXCLUSIVE.has(message.method) ? session.exclusive(run) : run())) ?? null });
-			if (message.method === "close" && process.connected) process.disconnect?.();
-		} catch (error) {
-			send({ id: message.id, error: { name: error instanceof Error ? error.name : "Error", message: error instanceof Error ? error.message : String(error) } });
-		}
-	})();
-});
+/** One request; the reply goes back the way it came (a socket request to the connection that sent it). */
+async function handle(message: Request, reply: (message: unknown) => void): Promise<void> {
+	try {
+		const method = methods[message.method];
+		if (method === undefined) throw new Error(`Unknown method ${message.method}`);
+		const run = () => Promise.resolve(method(message.params ?? {}));
+		reply({ id: message.id, result: (await (EXCLUSIVE.has(message.method) ? session.exclusive(run) : run())) ?? null });
+		if (message.method !== "close") return;
+		if (socketPath !== undefined) shutdown();
+		else if (process.connected) process.disconnect?.();
+	} catch (error) {
+		reply({ id: message.id, error: { name: error instanceof Error ? error.name : "Error", message: error instanceof Error ? error.message : String(error) } });
+	}
+}
+if (socketPath === undefined) process.on("message", (message: Request) => void handle(message, send));
 /** How long an orderly shutdown waits for its close; under PI WEB's 5 s SIGTERM-to-SIGKILL grace. */
 const CLOSE_DEADLINE_MS = 3000;
 /**
@@ -190,15 +212,77 @@ function shutdown(): void {
 		process.exit(1);
 	}, CLOSE_DEADLINE_MS);
 	close().then(
-		() => process.exit(0),
+		() => exit(0),
 		(error: unknown) => {
 			process.stderr.write(`Durable host: close failed: ${redact(error instanceof Error ? error.message : String(error))}\n`);
 			process.exit(1);
 		},
 	);
 }
+/** Exit once the daemon has every reply written so far (a socket host's `close` answer). */
+function exit(code: number): void {
+	if (peer === undefined || peer.destroyed) process.exit(code);
+	peer.end(() => process.exit(code));
+	setTimeout(() => process.exit(code), 500).unref();
+}
 process.on("disconnect", shutdown);
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, shutdown);
 
+/** The revision folder this host's code runs from (an installed `pi-workbench-<rev>` folder, never a `*.installed` link). */
+const REVISION = realpathSync(fileURLToPath(new URL("../../..", import.meta.url)));
 // `resources`: what the bound packages contributed (resources_discover), for PI WEB to load with the Chat's others.
-send({ ready: { protocol: PROTOCOL, durable: "1.4.0", ownerEpoch: host.store.owner.epoch, capabilities: CAPABILITIES, resources: session.resources() } });
+const ready = () => ({
+	ready: {
+		protocol: PROTOCOL, durable: "1.4.0", revision: REVISION, storeId: basename(values.store!), ownerEpoch: host.store.owner.epoch, pid: process.pid,
+		capabilities: CAPABILITIES, resources: session.resources(),
+	},
+});
+if (socketPath === undefined) send(ready());
+else {
+	const server = createServer((socket) => {
+		peer?.destroy();
+		peer = socket;
+		socket.setEncoding("utf8");
+		socket.on("error", () => undefined);
+		socket.on("close", () => {
+			if (peer === socket) peer = undefined;
+		});
+		let buffer = "";
+		socket.on("data", (chunk: string) => {
+			buffer += chunk;
+			for (let end = buffer.indexOf("\n"); end !== -1; end = buffer.indexOf("\n")) {
+				const line = buffer.slice(0, end);
+				buffer = buffer.slice(end + 1);
+				let message: Request;
+				try {
+					message = JSON.parse(line) as Request;
+				} catch {
+					socket.destroy();
+					return;
+				}
+				void handle(message, (answer) => write(socket, answer));
+			}
+		});
+		write(socket, ready());
+	});
+	rmSync(socketPath, { force: true });
+	// Created 0600 (bind is synchronous inside listen), then the umask goes back for everything the host's tools create.
+	const umask = process.umask(0o077);
+	try {
+		server.listen(socketPath);
+	} finally {
+		process.umask(umask);
+	}
+	await new Promise<void>((resolve, reject) => server.once("listening", resolve).once("error", reject));
+	chmodSync(socketPath, 0o600);
+	const bound = lstatSync(socketPath);
+	// Remove the socket on exit only while it is still this host's (a replacement host may have bound the path).
+	process.on("exit", () => {
+		try {
+			const current = lstatSync(socketPath);
+			if (current.ino === bound.ino && current.dev === bound.dev) rmSync(socketPath);
+		} catch {
+			// Already gone.
+		}
+	});
+}
