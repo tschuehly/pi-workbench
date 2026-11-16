@@ -1,5 +1,5 @@
-// The non-Claude providers of a legacy Chat on Durable: the ChatGPT subscription (`openai-codex`) and GitHub Copilot,
-// pi-ai 1.4.0's own providers. Their logins come from Pi's auth.json through PiAuthStore (Pi's lock, Pi's format), so
+// The non-Claude providers of a legacy Chat on Durable: the ChatGPT subscription (`openai-codex`, and `openai` signed
+// in with ChatGPT), the Muse subscription (`meta`) and GitHub Copilot, pi-ai 1.4.0's own providers. Their logins come from Pi's auth.json through PiAuthStore (Pi's lock, Pi's format), so
 // a provider without a stored login is simply unavailable; nothing here logs in. Plus pi-openai-fast-mode 0.5.0
 // (`/fast`, the `service_tier` payload hook), ported from its source because the package binds to Pi's extension API.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -7,19 +7,25 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
+import { metaProvider } from "@earendil-works/pi-ai/providers/meta";
+import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { wrapProvider } from "./redact.ts";
 
 /** Credential paths other than Pi's auth.json that these providers would read: removed, as ANTHROPIC_* for Claude. */
-export const ENV_CREDENTIALS = ["COPILOT_GITHUB_TOKEN"];
+export const ENV_CREDENTIALS = ["COPILOT_GITHUB_TOKEN", "OPENAI_API_KEY", "META_API_KEY"];
+
+/** The built-in non-Claude providers, before models.json, models-store.json and the redacting wrapper. */
+export const builtinProviders = (): Provider[] => [openaiCodexProvider(), openaiProvider(), metaProvider(), githubCopilotProvider()];
 
 /**
- * Both providers behind the redacting wrapper; Codex at models.json's baseUrl when set (Copilot's endpoint comes from
- * its login's proxy-ep, which pi-ai applies over any model baseUrl), and its requests carry Fast Mode's service tier.
+ * Every provider behind the redacting wrapper, at models.json's baseUrl when set (Copilot's endpoint comes from its
+ * login's proxy-ep, which pi-ai applies over any model baseUrl); requests carry Fast Mode's service tier for its targets.
  */
 export function subscriptionProviders(fast: FastMode): Provider[] {
-	const codex = withBaseUrl(withStoredModels(openaiCodexProvider()), modelsJsonBaseUrl("openai-codex"));
-	return [wrapProvider(codex, { onPayload: fast.payload }), wrapProvider(withStoredModels(githubCopilotProvider()))];
+	return builtinProviders().map((provider) =>
+		wrapProvider(provider.id === "github-copilot" ? withStoredModels(provider) : withBaseUrl(withStoredModels(provider), modelsJsonBaseUrl(provider.id)), { onPayload: fast.payload }),
+	);
 }
 
 export const agentDir = () => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");

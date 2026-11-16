@@ -1,13 +1,12 @@
 // One Durable Chat on the pilot host: the core coding tools (read, write, edit, bash) in the Chat's workspace, every
 // tool and the model behind the pre-persistence redaction wrappers, the Workbench behaviors (Working Mode, ask_user,
 // request_attention), and the legacy Chat's providers from Pi's auth.json: the Claude subscription (pi-claude-code-use
-// 2.2.1 payload rules), the ChatGPT subscription (openai-codex, with pi-openai-fast-mode) and GitHub Copilot; plus, for
+// 2.2.1 payload rules), the ChatGPT subscription (openai-codex and openai, with pi-openai-fast-mode), Meta's Muse and
+// GitHub Copilot; plus, for
 // tests and trials, the scripted faux model. The Chat's model is stored per conversation and can be switched.
 import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { Provider } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
-import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
@@ -21,7 +20,7 @@ import { clearInheritedIdentity, storedAgent, sweepPiTmp, toolEnv, warningTool, 
 import { context, type Host, MODEL, openHost } from "./host.ts";
 import { toolGroupsExtension } from "./tool-groups.ts";
 import { type PackageEvent, PiPackages } from "./packages.ts";
-import { ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
+import { builtinProviders, ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
 import { wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
@@ -236,7 +235,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	}
 	if (options.scriptedProviders === true) {
 		const scriptedAs = (provider: Provider): Provider => ({ ...withStoredModels(provider), stream: host.faux.provider.stream, streamSimple: host.faux.provider.streamSimple });
-		for (const provider of [anthropicProvider(), openaiCodexProvider(), githubCopilotProvider()]) host.models.setProvider(wrapProvider(scriptedAs(provider)));
+		for (const provider of [anthropicProvider(), ...builtinProviders()]) host.models.setProvider(wrapProvider(scriptedAs(provider)));
 	}
 	// As Pi does on load: a stored level the model does not support is clamped (before anything is scheduled).
 	await applyModel(host);

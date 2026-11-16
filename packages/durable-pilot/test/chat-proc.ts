@@ -9,12 +9,14 @@ import { readLog } from "../src/faux.ts";
 import { codexToken } from "./refresh-race.ts";
 import { PACKAGE, scratch } from "./runner.ts";
 
-/** Fake stored logins for Claude, ChatGPT and Copilot in a Pi agent dir, so hosts never read or lock the owner's auth.json. */
+/** Fake stored logins for Claude, ChatGPT (Codex and OpenAI), Muse and Copilot in a Pi agent dir, so hosts never read or lock the owner's auth.json. */
 export function writeFakeLogins(agentDir: string, tag = "chat"): void {
 	mkdirSync(agentDir, { recursive: true });
 	writeFileSync(join(agentDir, "auth.json"), JSON.stringify({
 		anthropic: { type: "oauth", access: "fake-oat", refresh: "fake-ort", expires: Date.now() + 3_600_000 },
 		"openai-codex": { type: "oauth", access: codexToken(tag), refresh: "fake-codex", expires: Date.now() + 3_600_000, accountId: `acct-${tag}` },
+		openai: { type: "oauth", access: `fake-openai-${tag}`, refresh: "fake-openai", expires: Date.now() + 3_600_000 },
+		meta: { type: "oauth", access: `fake-meta-${tag}`, refresh: "fake-meta", expires: Date.now() + 3_600_000 },
 		"github-copilot": { type: "oauth", access: "tid=fake;proxy-ep=proxy.individual.githubcopilot.com", refresh: "fake-gh", expires: Date.now() + 3_600_000 },
 	}), { mode: 0o600 });
 }
