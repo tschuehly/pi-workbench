@@ -18,8 +18,10 @@ import {
 	type JsonObject,
 	LiveDoc,
 	type TaskId,
+	type ToolExecutionApi,
 	type ToolTaskInput,
 } from "@earendil-works/pi-durable";
+import type { Context } from "@earendil-works/chord";
 import {
 	compactionInstructions,
 	createContextCeiling,
@@ -67,6 +69,16 @@ type Checkpoint =
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
 const sanitize = sealed(redact);
+
+/** The request ID of the continuation a checkpoint task submits; a child's reporter waits for its answer. */
+export const continuationRequestId = (task: number) => `checkpoint:${String(task)}`;
+
+/** How many tool calls the assistant message that made this call holds (0 for a call no model made). */
+export async function batchSize(api: Pick<ToolExecutionApi, "taskId" | "getTask" | "commit">, c: Context): Promise<number> {
+	const input = (await api.getTask(api.taskId, c))?.input as ToolTaskInput | undefined;
+	const assistant = input?.kind === "model" ? await api.commit((tx) => tx.entry(input.assistant), c) : undefined;
+	return ((assistant?.model?.[0] as { content?: { type: string }[] } | undefined)?.content ?? []).filter((block) => block.type === "toolCall").length;
+}
 
 /** Extension of the checkpoint tool and task; `harness` is the host's, for the conversation-level operations. */
 export function checkpointExtension(harness: () => Harness) {
@@ -116,7 +128,7 @@ export function checkpointExtension(harness: () => Harness) {
 				const { status, diagnostic } = task.state.checkpoint as Extract<Checkpoint, { phase: "continue" }>;
 				const { nextPhase } = task.input.request;
 				const main = await conversation(runtime.conversationId, c);
-				const requestId = `checkpoint:${String(runtime.taskId)}`;
+				const requestId = continuationRequestId(runtime.taskId);
 				if (status === "cancelled") {
 					// Explicit cancellation stays cancellation: recorded for the transcript, no new turn.
 					const data: CheckpointData = { status, nextPhase, text: "Context checkpoint cancelled; the next phase was not started." };
@@ -178,10 +190,7 @@ export function checkpointExtension(harness: () => Harness) {
 			// The request is copied into the checkpoint task, the summarizer's instructions, this result and the
 			// continuation: only its tool-call arguments keep it verbatim. A sanitizer throw fails the call.
 			const request: Request = { summaryFocus: sanitize(raw.summaryFocus), nextPhase: sanitize(raw.nextPhase) };
-			const input = (await api.getTask(api.taskId, c))?.input as ToolTaskInput | undefined;
-			const assistant = input?.kind === "model" ? await api.commit((tx) => tx.entry(input.assistant), c) : undefined;
-			const calls = ((assistant?.model?.[0] as { content?: { type: string }[] } | undefined)?.content ?? []).filter((block) => block.type === "toolCall").length;
-			if (calls > 1)
+			if ((await batchSize(api, c)) > 1)
 				return {
 					output: text("Checkpoint not scheduled: compact_and_continue must be called alone in its assistant tool batch. Finish the current work, then call it as the sole final action."),
 					details: { accepted: false, state: "batched", ...request },

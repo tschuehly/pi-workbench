@@ -12,7 +12,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { checkpointExtension } from "./checkpoint.ts";
-import { delegationExtension } from "./delegation.ts";
+import { ChildDoc, delegationExtension } from "./delegation.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { router } from "./faux.ts";
@@ -217,8 +217,10 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		env: async (target, c) => {
 			const cwd = target.cwd ?? options.cwd;
 			const agent = await storedAgent(target.read, target.conversationId, c);
+			// A Subagent's or Worker's calls are marked as a child's (wait-until caps its wait there); a lead's are not.
+			const kind = (await target.read.snapshot(ChildDoc, target.conversationId, c))?.kind;
 			// The Chat's active branch is the Chat: its calls carry the Chat's own ID.
-			const identity = { chatId, conversationId: target.conversationId, rootId: opened?.root.id, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
+			const identity = { chatId, conversationId: target.conversationId, rootId: opened?.root.id, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }), ...(kind === undefined || kind === "lead" ? {} : { executionKind: kind }) };
 			return new NodeExecutionEnv({ cwd, shellEnv: toolEnv(identity) });
 		},
 		// Package tools keep their own deferral (web_enable); tool groups also gate the package groups (monitor), as in

@@ -71,6 +71,10 @@ test("P034/P085 a child conversation gets its own identity and PI_TMP; the host 
 	assert.deepEqual([child.PI_PROVIDER, child.PI_MODEL, child.PI_REASONING_LEVEL], ["faux", "faux-2", "high"]);
 	assert.equal(root.PI_PROVIDER, undefined);
 	assert.equal(root.TMPDIR, undefined);
+	// wait-until caps its wait inside a child (main e46dc16); a lead's commands are not marked.
+	assert.equal(root.PI_WORKBENCH_EXECUTION_KIND, undefined);
+	const worker = toolEnv({ chatId: "chat-x", conversationId: 8 as ConversationId, rootId: 1 as ConversationId, cwd: ROOT, executionKind: "worker" } as Parameters<typeof toolEnv>[0]);
+	assert.equal(worker.PI_WORKBENCH_EXECUTION_KIND, "worker");
 	assert.equal(process.env.PI_TMP, before);
 });
 
