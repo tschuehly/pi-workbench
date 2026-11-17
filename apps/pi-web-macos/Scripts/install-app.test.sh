@@ -115,6 +115,16 @@ PI_WEB_TEST_DIR="${test_root}/pi-web.installed" PI_WEB_TEST_CLI="${test_root}/bi
 check_equal "linked checkout is recorded unresolved so promotions carry over" "${test_root}/pi-web.installed" "$(/usr/libexec/PlistBuddy -c 'Print :CheckoutPath' "${bundle_config}")"
 check_equal "linked CLI is recorded unresolved" "${test_root}/bin.installed/pi-web" "$(/usr/libexec/PlistBuddy -c 'Print :CLIPath' "${bundle_config}")"
 
+info_plist="${app_path}/Contents/Info.plist"
+check_equal "default display name" "Pi Workbench" "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${info_plist}")"
+PI_WEB_APP_NAME="Pi Durable" PI_WEB_APP_ID="works.pi.workbench.durable" run_installer --app-only
+check_equal "PI_WEB_APP_NAME sets the display name" "Pi Durable" "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${info_plist}")"
+check_equal "PI_WEB_APP_ID sets the bundle identifier" "works.pi.workbench.durable" "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${info_plist}")"
+run_installer --app-only
+check_equal "app-only refresh keeps the display name" "Pi Durable" "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "${info_plist}")"
+check_equal "app-only refresh keeps the bundle identifier" "works.pi.workbench.durable" "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${info_plist}")"
+PI_WEB_APP_NAME="Pi Workbench" PI_WEB_APP_ID="works.pi.workbench" run_installer --app-only
+
 printf 'preserve-existing-app\n' >"${app_path}/atomic-marker"
 if PI_WEB_FAKE_FAIL_INSTALL=1 run_installer 2>/dev/null; then
   printf 'not ok - installer should fail when lifecycle install preflight fails\n' >&2
