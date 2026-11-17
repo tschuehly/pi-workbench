@@ -23,7 +23,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { type Conversation, type Cursor, defineDoc, defineExtension, type DocumentReader, type ToolRegistration } from "@earendil-works/pi-durable";
 import { fileRevision } from "./claude.ts";

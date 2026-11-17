@@ -3,7 +3,7 @@
 // extension's summarizer instructions, waits until the summary is actually placed, and then submits exactly one
 // continuation (stable request ID). A failed compaction still continues with the diagnostic, as the legacy extension
 // does; an explicit cancellation (Esc) is recorded visibly and starts nothing. Every step survives a restart.
-import { Type } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import {
 	CompactionTask,
 	type Conversation,
@@ -21,7 +21,7 @@ import {
 	type ToolExecutionApi,
 	type ToolTaskInput,
 } from "@earendil-works/pi-durable";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
 	compactionInstructions,
 	createContextCeiling,
@@ -100,7 +100,7 @@ export function checkpointExtension(harness: () => Harness) {
 					// Pushed through the draft (as Durable's addCompactionStatus): `(x ??= []).push` would mutate an untracked array,
 					// leaving the status (and so isCompacting and Stop) empty while the summary runs.
 					live.compactions ??= [];
-					live.compactions.push({ taskId: compaction, reason: "manual", blocking: false, attempt: 1 });
+					live.compactions.push({ taskId: compaction, trigger: "manual", blocking: false, attempt: 1 });
 					const doc = await tx.doc(CheckpointDoc, runtime.conversationId);
 					if (doc.active !== null) doc.active.state = "compacting";
 					return { status: "running", checkpoint: { phase: "compacting", compaction } };
@@ -174,10 +174,10 @@ export function checkpointExtension(harness: () => Harness) {
 			"Keep compact_and_continue summaryFocus at 1200 characters or fewer; use it as a short summarizer directive and reference existing evidence paths instead of restating session history.",
 			"Do not create a progress file solely for compact_and_continue or call generated notes authoritative, durable checkpoints, Continuation Artifacts, or cross-session handoffs.",
 		].join("\n\n"),
-		parameters: Type.Object({
-			summaryFocus: Type.String({ minLength: 1, description: `Brief directive to Pi's summarizer, not a handoff summary; at most ${MAX_SUMMARY_FOCUS_CHARS} characters` }),
-			nextPhase: Type.String({ minLength: 1, description: `One concrete next phase to begin automatically after compaction; at most ${MAX_NEXT_PHASE_CHARS} characters` }),
-		}),
+		parameters: obj({
+			summaryFocus: str({ minLength: 1, description: `Brief directive to Pi's summarizer, not a handoff summary; at most ${MAX_SUMMARY_FOCUS_CHARS} characters` }),
+			nextPhase: str({ minLength: 1, description: `One concrete next phase to begin automatically after compaction; at most ${MAX_NEXT_PHASE_CHARS} characters` }),
+		}, { open: true }),
 		// Scripts cannot schedule a checkpoint: it must be the model's sole call of its round.
 		callers: ["model"],
 		executionMode: "sequential",

@@ -53,7 +53,15 @@ function releaseWrite(cwd: string): () => string {
 	};
 }
 /** The held write is running: its tool task committed its intent (the live slot reads running). */
-const writing = (host: ChatHost) => host.until((e) => e.type === "tool.start" && e.toolName === "write", "the held write");
+/**
+ * The held write has its durable intent. Durable 1.5 shows the slot running (a deferred commit) just before it stores the
+ * intent, so a kill right at `tool.start` can still find the call unstarted; the pause covers that one commit.
+ */
+const writing = async (host: ChatHost) => {
+	await host.until((e) => e.type === "tool.start" && e.toolName === "write", "the held write");
+	// shortcut: a fixed pause for one SQLite commit; replace with a durable-intent signal if it ever flakes under load.
+	await new Promise((resolve) => setTimeout(resolve, 500));
+};
 
 class ChatHost {
 	readonly child: ChildProcess;
@@ -201,7 +209,10 @@ test("crash row generation: a committed partial survives a kill, restore stays p
 	const first = new ChatHost(store, cwd, 40);
 	await first.ready;
 	await first.call("prompt", { operationId: "op-gen", text: "gen" });
-	await first.until((e) => e.type === "assistant.delta", "a committed partial");
+	// Durable 1.5 shows a partial before storing it (right after, with persistWithinMs 0; partials are 100 ms apart): two
+	// more partials after the one with word0 mean word0 is stored.
+	const deltas = () => first.events.filter((e) => e.type === "assistant.delta").map((e) => String(e.text));
+	await first.until(() => deltas().length - deltas().findIndex((text) => text.includes("word0")) > 2 && deltas().some((text) => text.includes("word0")), "a committed partial");
 	await first.kill();
 	const second = new ChatHost(store, cwd);
 	const ready = await second.ready;

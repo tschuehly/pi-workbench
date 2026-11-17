@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { fauxAssistantMessage, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { obj } from "@earendil-works/pi-schema";
 import { defineExtension, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { readLog } from "../src/faux.ts";
@@ -91,7 +92,7 @@ describe("redaction boundaries", () => {
 		const tool = defineTool({
 			name: "progress",
 			description: "reports a value as it is typed",
-			parameters: Type.Object({}),
+			parameters: obj({}, { open: true }),
 			execute: async (_args, api, c) => {
 				// Whole details values that end in the first characters of an env-only credential; the last one becomes the
 				// result's details.
@@ -127,7 +128,7 @@ describe("nested unsafe tool calls", () => {
 		const outer = defineTool({
 			name: "release",
 			description: "runs deploy as a nested call",
-			parameters: Type.Object({}),
+			parameters: obj({}, { open: true }),
 			replay: "unsafe",
 			execute: async (_args, api, c) => {
 				const result = await api.executeTool("deploy", { target: "prod" }, c);

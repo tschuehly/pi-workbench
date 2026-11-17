@@ -3,7 +3,8 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { type Context, copyJson, type JsonRepresentation } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
+import { copyJson, type JsonRepresentation } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	createModels,
@@ -31,7 +32,7 @@ import {
 	InboxDoc,
 	LiveDoc,
 	type Registry,
-	type ReportInfo,
+	type Report,
 	type SubmissionId,
 	type TaskId,
 	type ToolTaskCheckpoint,
@@ -480,15 +481,18 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 			models,
 			registry,
 			// Copies the descriptors, not the values: settings are read at every use, so a getter stays live.
-			settings: Object.defineProperties({ afterFailedRun: "keep" }, Object.getOwnPropertyDescriptors(options.settings ?? {})),
+			// `persistWithinMs: 0` keeps Durable 1.4's crash durability for streamed answers and tool output: stored right after
+			// each progress commit, not batched for up to 1 s (1.5's default), so a kill loses at most the newest partial.
+			settings: Object.defineProperties({ afterFailedRun: "keep", progress: { persistWithinMs: 0 } }, Object.getOwnPropertyDescriptors(options.settings ?? {})),
 			env: options.env ?? (() => new NodeExecutionEnv({ cwd: work })),
 			...(options.now === undefined ? {} : { now: options.now }),
-			onReport: (error: unknown, info: ReportInfo) =>
+			onReport: (report: Report) => {
 				reports.push({
-					type: info.type,
-					message: error instanceof Error ? error.message : String(error),
-					...("task" in info && info.task !== undefined ? { task: info.task.id } : {}),
-				}),
+					type: report.kind,
+					message: report.error instanceof Error ? report.error.message : String(report.error),
+					...("task" in report && report.task !== undefined ? { task: report.task.id } : {}),
+				});
+			},
 		},
 		context,
 	);

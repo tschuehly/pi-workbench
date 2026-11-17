@@ -1,7 +1,7 @@
-// Minimal child, question, attention and effect fixtures the crash matrix needs, written against the pinned 1.4.0
+// Minimal child, question, attention and effect fixtures the crash matrix needs, written against the pinned 1.5.2
 // types. Later phases repeat the same fixtures against production bindings.
 import { join } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { lit, obj, opt, str } from "@earendil-works/pi-schema";
 import {
 	type AssistantMessage,
 } from "@earendil-works/pi-ai";
@@ -44,7 +44,7 @@ export function effectTool(dir: string, name: string, replay: "safe" | "unsafe")
 		defineTool({
 			name,
 			description: `${name} (effect)`,
-			parameters: Type.Object({ target: Type.Optional(Type.String()) }),
+			parameters: obj({ target: opt(str()) }, { open: true }),
 			replay,
 			execute: async (args, api, callContext) => {
 				const file = join(dir, "effects.log");
@@ -64,7 +64,7 @@ export function crasherTool(dir: string): ToolRegistration {
 	return defineTool({
 		name: "crasher",
 		description: "crashes the host",
-		parameters: Type.Object({}),
+		parameters: obj({}, { open: true }),
 		replay: "safe",
 		execute: async (_args, api) => {
 			logLine(join(dir, "effects.log"), { tool: "crasher", task: api.taskId });
@@ -150,7 +150,7 @@ export const Reporter = defineTask<ReporterInput, ReporterState, null>({
 const subagentTool: ToolRegistration = defineTool({
 	name: "subagent",
 	description: "Start a background child with one bounded assignment; its answer is reported back once.",
-	parameters: Type.Object({ action: Type.Literal("spawn"), name: Type.String(), message: Type.String() }),
+	parameters: obj({ action: lit("spawn"), name: str(), message: str() }, { open: true }),
 	replay: "unsafe",
 	execute: async (args, api, callContext) => {
 		const result = await api.commit(async (tx) => {
@@ -177,7 +177,7 @@ const subagentTool: ToolRegistration = defineTool({
 const leafTool: ToolRegistration = defineTool({
 	name: "leaf",
 	description: "Delegate to a leaf and wait for its answer.",
-	parameters: Type.Object({ task: Type.String() }),
+	parameters: obj({ task: str() }, { open: true }),
 	replay: "safe",
 	execute: async (args, api, callContext) => {
 		const child = await api.commit(async (tx) => {
@@ -231,7 +231,7 @@ export const Questions = defineDoc<{ questions: Record<string, Question> }>({
 const askTool: ToolRegistration = defineTool({
 	name: "ask_user",
 	description: "Ask the owner a question without waiting; the answer arrives later as input.",
-	parameters: Type.Object({ question: Type.String() }),
+	parameters: obj({ question: str() }, { open: true }),
 	replay: "safe",
 	execute: async (args, api, callContext) => {
 		const id = `q-${api.taskId}`;

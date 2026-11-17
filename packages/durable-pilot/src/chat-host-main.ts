@@ -16,6 +16,7 @@
 // signals or a lost daemon) they keep running. The host exits after `close` or on SIGTERM/SIGINT, and an IPC host also when its daemon goes away (disconnect),
 // closing the store gracefully first. A socket host stays when its daemon goes away.
 import { chmodSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createServer, type Socket } from "node:net";
 import { basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -255,10 +256,12 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, shutdown
 
 /** The revision folder this host's code runs from (an installed `pi-workbench-<rev>` folder, never a `*.installed` link). */
 const REVISION = realpathSync(fileURLToPath(new URL("../../..", import.meta.url)));
+/** The installed pi-durable version, as the handshake reports it. */
+const DURABLE_VERSION = (createRequire(import.meta.url)("@earendil-works/pi-durable/package.json") as { version: string }).version;
 // `resources`: what the bound packages contributed (resources_discover), for PI WEB to load with the Chat's others.
 const ready = () => ({
 	ready: {
-		protocol: PROTOCOL, durable: "1.4.0", revision: REVISION, storeId: basename(values.store!), ownerEpoch: host.store.owner.epoch, pid: process.pid,
+		protocol: PROTOCOL, durable: DURABLE_VERSION, revision: REVISION, storeId: basename(values.store!), ownerEpoch: host.store.owner.epoch, pid: process.pid,
 		capabilities: CAPABILITIES, resources: session.resources(),
 	},
 });

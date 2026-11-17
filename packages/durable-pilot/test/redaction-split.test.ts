@@ -16,8 +16,8 @@ import {
 	fauxThinking,
 	fauxToolCall,
 	type Provider,
-	Type,
 } from "@earendil-works/pi-ai";
+import { bool, obj } from "@earendil-works/pi-schema";
 import { defineExtension, defineTool, LiveDoc } from "@earendil-works/pi-durable";
 import { textOfMessage } from "../src/faux.ts";
 import { admit, context, type Host, openHost } from "../src/host.ts";
@@ -113,7 +113,7 @@ async function streamed(parts: readonly string[]): Promise<string[][]> {
 
 /** What a registered tool returning `parts` as text blocks hands Durable. */
 async function toolResult(parts: readonly string[]): Promise<string[]> {
-	const tool = redactingTool(defineTool({ name: "t", description: "t", parameters: Type.Object({}), execute: async () => ({ output: parts.map((text) => ({ type: "text" as const, text })) }) }));
+	const tool = redactingTool(defineTool({ name: "t", description: "t", parameters: obj({}, { open: true }), execute: async () => ({ output: parts.map((text) => ({ type: "text" as const, text })) }) }));
 	const result = (await tool.execute({} as never, {} as never, context as never)) as { output: { type: string; text: string }[] };
 	return result.output.map((block) => block.text);
 }
@@ -139,7 +139,8 @@ async function turn(h: Host, operationId: string): Promise<void> {
 async function watched(h: Host, run: () => Promise<void>): Promise<string[]> {
 	const seen: string[] = [];
 	const watch = (await h.harness.watchDoc(LiveDoc, h.root.id, context))!;
-	watch.start(async (value) => {
+	watch.start(async (call) => {
+		const value = call.kind === "value" ? call.value : undefined;
 		for (const block of (value?.generation?.message?.content ?? []) as { type: string; text?: string }[]) if (block.type === "text") seen.push(block.text ?? "");
 		for (const tool of value?.tools ?? []) if (tool.output !== undefined) seen.push(tool.output);
 	});
@@ -180,7 +181,7 @@ describe("secrets split across content blocks", () => {
 		const leaky = defineTool({
 			name: "leaky",
 			description: "returns a credential in pieces",
-			parameters: Type.Object({ whole: Type.Boolean() }),
+			parameters: obj({ whole: bool() }, { open: true }),
 			execute: async ({ whole }) => ({
 				output: whole
 					? [{ type: "text" as const, text: `${LEAD}${ENV_SECRET}${TRAIL}` }]
@@ -241,7 +242,7 @@ describe("secrets split across content blocks", () => {
 		const dir = scratch("split-host");
 		const two = cases(2);
 		const blocks = (separator: string) => two.flatMap(({ parts }) => [...parts, separator]);
-		const tool = defineTool({ name: "splits", description: "returns every split", parameters: Type.Object({}), execute: async () => ({ output: blocks("\n\n").map((text) => ({ type: "text" as const, text })) }) });
+		const tool = defineTool({ name: "splits", description: "returns every split", parameters: obj({}, { open: true }), execute: async () => ({ output: blocks("\n\n").map((text) => ({ type: "text" as const, text })) }) });
 		const h = await openHost(dir, {
 			faux: { tokensPerSecond: 100_000, tokenSize: { min: 3, max: 40 } },
 			settings: { progress: { partialIntervalMs: 1, outputIntervalMs: 1 } },

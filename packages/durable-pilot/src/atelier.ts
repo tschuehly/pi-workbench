@@ -12,8 +12,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
-import type { Context } from "@earendil-works/chord";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/chord/context";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { arr, bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { type Conversation, type ConversationId, defineDoc, defineExtension, defineTool, type DocumentReader, type Harness } from "@earendil-works/pi-durable";
 import { DESCRIPTION } from "../../../extensions/atelier/description.mjs";
 import { derive, REQUEST_STATES } from "../../../extensions/atelier/kernel/atelier.js";
@@ -201,23 +202,23 @@ export class Atelier {
 		const atelier = defineTool({
 			name: "atelier",
 			description: DESCRIPTION,
-			parameters: Type.Object({
+			parameters: obj({
 				action: StringEnum(["open", "takeover", "update", "ask", "answer", "status", "check"]),
-				page: Type.String({ description: "Page path, relative to the project or absolute" }),
-				decision: Type.Optional(Type.Object({
-					id: Type.String(),
-					question: Type.String(),
-					options: Type.Array(Type.Object({ label: Type.String(), consequence: Type.String(), recommended: Type.Optional(Type.Boolean()) }), { minItems: 2 }),
-					key: Type.Optional(Type.String({ description: "Key it sits on" })),
-					material: Type.Optional(Type.String({ description: "Key whose opening counts as opened" })),
-					detail: Type.Optional(Type.String()),
-				})),
-				comment: Type.Optional(Type.Number({ description: "answer: Comment #" })),
-				request: Type.Optional(Type.Number({ description: "status: Request #" })),
-				state: Type.Optional(StringEnum(REQUEST_STATES as string[])),
-				text: Type.Optional(Type.String({ description: "answer text, status note, or update note" })),
-				generation: Type.Optional(Type.Number({ description: "takeover: receiver generation" })),
-			}),
+				page: str({ description: "Page path, relative to the project or absolute" }),
+				decision: opt(obj({
+					id: str(),
+					question: str(),
+					options: arr(obj({ label: str(), consequence: str(), recommended: opt(bool()) }, { open: true }), { minItems: 2 }),
+					key: opt(str({ description: "Key it sits on" })),
+					material: opt(str({ description: "Key whose opening counts as opened" })),
+					detail: opt(str()),
+				}, { open: true })),
+				comment: opt(num({ description: "answer: Comment #" })),
+				request: opt(num({ description: "status: Request #" })),
+				state: opt(StringEnum(REQUEST_STATES as string[])),
+				text: opt(str({ description: "answer text, status note, or update note" })),
+				generation: opt(num({ description: "takeover: receiver generation" })),
+			}, { open: true }),
 			executionMode: "sequential",
 			// Agent events carry the tool task as `op`, so a rerun after a kill finds its event instead of appending again.
 			replay: "safe",

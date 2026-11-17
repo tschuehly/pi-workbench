@@ -14,7 +14,8 @@ import { writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as BACKGROUND, withCancel } from "@earendil-works/chord/context";
-import { type AssistantMessage, clampThinkingLevel, type ModelThinkingLevel, StringEnum, Type } from "@earendil-works/pi-ai";
+import { type AssistantMessage, clampThinkingLevel, type ModelThinkingLevel, StringEnum } from "@earendil-works/pi-ai";
+import { arr, bool, obj, opt, str } from "@earendil-works/pi-schema";
 import {
 	configure,
 	type ConversationHandle,
@@ -32,7 +33,7 @@ import {
 	type ToolRegistration,
 	type Tx,
 } from "@earendil-works/pi-durable";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { taskLabel } from "../../../packages/pi-execution-adapter/src/index.js";
 import {
 	COGNITIVE_ROLES,
@@ -687,18 +688,18 @@ export function delegationExtension(options: DelegationOptions) {
 	const subagent = defineTool({
 		name: "subagent",
 		description: "Launch one fresh attended child for one bounded assignment. Prefer background:true, finish genuinely independent work, then end the turn; the completion signal starts the next turn. Never sleep, poll, or collect to wait. Omit background only when the result is the immediate next input and nothing useful can happen first.",
-		parameters: Type.Object({
-			task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …' (a checkable finish line), 'Stop and ask only if …', and the expected output with the evidence to show" }),
-			name: Type.Optional(Type.String({ minLength: 1, description: "Short human-readable label for this child, a few words not a sentence. Names the delegate roster row; falls back to a label derived from task when omitted." })),
+		parameters: obj({
+			task: str({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …' (a checkable finish line), 'Stop and ask only if …', and the expected output with the evidence to show" }),
+			name: opt(str({ minLength: 1, description: "Short human-readable label for this child, a few words not a sentence. Names the delegate roster row; falls back to a label derived from task when omitted." })),
 			profile: StringEnum(LEAF_PROFILES as [string, ...string[]], { description: "Bundled Level 1 child behavior profile" }),
 			cognitiveRole: StringEnum(COGNITIVE_ROLES as [string, ...string[]], { description: ROLE_GUIDE }),
-			modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Exact '<provider>/<model>': an owner request, the reserve model as second frontier panel member, or the other family's strong model for review of frontier work; review still checks the family" })),
-			effort: Type.Optional(StringEnum(MODEL_EFFORTS as [string, ...string[]], { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
-			independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for review, when the exact author model is unavailable." })),
-			independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Independent roles default to this Chat's model." })),
-			excludeFamilies: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Additional model families to reject during cross-family independent routing" })),
-			background: Type.Optional(Type.Boolean({ description: "Return immediately; a completion signal arrives later." })),
-		}),
+			modelOverride: opt(str({ minLength: 3, description: "Exact '<provider>/<model>': an owner request, the reserve model as second frontier panel member, or the other family's strong model for review of frontier work; review still checks the family" })),
+			effort: opt(StringEnum(MODEL_EFFORTS as [string, ...string[]], { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
+			independentOfProvider: opt(str({ minLength: 1, description: "Author provider to route away from for review, when the exact author model is unavailable." })),
+			independentOfModel: opt(str({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Independent roles default to this Chat's model." })),
+			excludeFamilies: opt(arr(str({ minLength: 1 }), { minItems: 1, description: "Additional model families to reject during cross-family independent routing" })),
+			background: opt(bool({ description: "Return immediately; a completion signal arrives later." })),
+		}, { open: true }),
 		// Keyed by the tool call: a rerun after a restart finds the child it launched instead of launching another.
 		replay: "safe",
 		execute: async (params, api, c) => {
@@ -754,7 +755,7 @@ export function delegationExtension(options: DelegationOptions) {
 	const collectTool = defineTool({
 		name: "subagent_collect",
 		description: "Reconcile background children. Without executionId, collect all ready terminal children; repeat only for a reported budget-limited remainder. With one, return an immediate bounded snapshot if running, otherwise the compact terminal result.",
-		parameters: Type.Object({ executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect or collect; omit to reconcile every terminal child that is not yet collected" })) }),
+		parameters: obj({ executionId: opt(str({ minLength: 1, description: "One execution to inspect or collect; omit to reconcile every terminal child that is not yet collected" })) }, { open: true }),
 		replay: "safe",
 		execute: async ({ executionId }, api, c) => collect(api, executionId, c),
 	});
@@ -762,10 +763,10 @@ export function delegationExtension(options: DelegationOptions) {
 	const statusTool = defineTool({
 		name: "subagent_status",
 		description: "Diagnostic, non-blocking snapshot of one child, or the running and terminal-but-uncollected direct children. Pass all:true for the full roster. Reading collects nothing.",
-		parameters: Type.Object({
-			executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect; omit to list running and terminal-but-uncollected direct children" })),
-			all: Type.Optional(Type.Boolean({ description: "Include already-collected children for bounded diagnostics" })),
-		}),
+		parameters: obj({
+			executionId: opt(str({ minLength: 1, description: "One execution to inspect; omit to list running and terminal-but-uncollected direct children" })),
+			all: opt(bool({ description: "Include already-collected children for bounded diagnostics" })),
+		}, { open: true }),
 		replay: "safe",
 		execute: async ({ executionId, all }, api, c) => {
 			const doc = (await api.snapshot(DelegationDoc, api.conversationId, c)) ?? DelegationDoc.definition.initial();
@@ -790,7 +791,7 @@ export function delegationExtension(options: DelegationOptions) {
 	const reportStatus = defineTool({
 		name: "report_status",
 		description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; after each wait (at most 55 min) send one with your next tool call.",
-		parameters: Type.Object({ status: Type.String({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }) }),
+		parameters: obj({ status: str({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }) }, { open: true }),
 		replay: "safe",
 		execute: async (params, api, c) => {
 			const status = sanitize(params.status);
@@ -827,7 +828,7 @@ export function delegationExtension(options: DelegationOptions) {
 	const cancelTool = defineTool({
 		name: "subagent_cancel",
 		description: "Cancel a running child and confirm its termination. Cancelling a Worker reaches its leaves; cancelling one leaf leaves its Worker running.",
-		parameters: Type.Object({ executionId: Type.String({ minLength: 1 }), reason: Type.Optional(Type.String({ description: "Why the child is being cancelled" })) }),
+		parameters: obj({ executionId: str({ minLength: 1 }), reason: opt(str({ description: "Why the child is being cancelled" })) }, { open: true }),
 		replay: "safe",
 		execute: async ({ executionId, reason }, api) => {
 			const result = await cancelExecution(options.harness(), api.conversationId, executionId, reason ?? "Cancelled by the attended lead.");
@@ -840,12 +841,12 @@ export function delegationExtension(options: DelegationOptions) {
 	const steerTool = defineTool({
 		name: "subagent_steer",
 		description: "Send a steering message to a running Subagent or Worker, or ask it for an update. With requestUpdate, its next report_status wakes you; end the turn instead of waiting.",
-		parameters: Type.Object({
-			executionId: Type.String({ minLength: 1 }),
-			message: Type.String({ minLength: 1, description: "Steering instruction for the running child" }),
-			mode: Type.Optional(Type.Union([Type.Literal("steer"), Type.Literal("followUp")], { description: "steer: after its current tool calls (default); followUp: once it would otherwise stop" })),
-			requestUpdate: Type.Optional(Type.Boolean({ description: "Ask the child to report_status; its next report wakes you" })),
-		}),
+		parameters: obj({
+			executionId: str({ minLength: 1 }),
+			message: str({ minLength: 1, description: "Steering instruction for the running child" }),
+			mode: opt(StringEnum(["steer", "followUp"] as const, { description: "steer: after its current tool calls (default); followUp: once it would otherwise stop" })),
+			requestUpdate: opt(bool({ description: "Ask the child to report_status; its next report wakes you" })),
+		}, { open: true }),
 		replay: "safe",
 		execute: async (params, api, c) => {
 			const key = String(api.taskId);
@@ -881,11 +882,11 @@ export function delegationExtension(options: DelegationOptions) {
 	const workerCreate = defineTool({
 		name: "worker_create",
 		description: "Create one durable attended worker: an identity owned by this lead Chat and bound to one semantic scope and repository root. Creation writes a record and starts nothing. Prefer fresh subagents; create a worker only when repeated bounded actions in one scope benefit from preserved context.",
-		parameters: Type.Object({
-			name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),
-			scope: Type.String({ minLength: 1, description: "One semantic scope statement this worker retains context for" }),
+		parameters: obj({
+			name: str({ minLength: 1, description: "Short human-readable worker name" }),
+			scope: str({ minLength: 1, description: "One semantic scope statement this worker retains context for" }),
 			profile: StringEnum(WORKER_PROFILES as [string, ...string[]], { description: "Bundled Level 1 child behavior profile. Use 'coordinator' for a worker that owns one scope and delegates its work to fresh leaf Subagents." }),
-		}),
+		}, { open: true }),
 		replay: "safe",
 		execute: async (params, api, c) => {
 			const nested = await nestedWorkers(api, c);
@@ -915,15 +916,15 @@ export function delegationExtension(options: DelegationOptions) {
 	const workerDispatch = defineTool({
 		name: "worker_dispatch",
 		description: "Dispatch one bounded assignment to a durable worker with scoped continuity. background works as in subagent. Owner-requested modelOverride changes the model; effort may be set independently. One dispatch at a time.",
-		parameters: Type.Object({
-			workerId: Type.String({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
-			task: Type.String({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …', 'Stop and ask only if …', and the expected output with the evidence to show. Continuity supplements explicit tasking; it never replaces it." }),
+		parameters: obj({
+			workerId: str({ minLength: 1, description: "Durable worker identifier returned by worker_create or worker_status" }),
+			task: str({ minLength: 1, description: "Self-contained bounded assignment: the task, relevant paths and constraints, 'Done means …', 'Stop and ask only if …', and the expected output with the evidence to show. Continuity supplements explicit tasking; it never replaces it." }),
 			cognitiveRole: StringEnum(WORKER_ROLES as [string, ...string[]], { description: `${ROLE_GUIDE}\nreview roles are subagent-only here: independence requires fresh context` }),
-			modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'" })),
-			effort: Type.Optional(StringEnum(MODEL_EFFORTS as [string, ...string[]], { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
-			background: Type.Optional(Type.Boolean({ description: "Return immediately; a completion signal arrives later." })),
-			acknowledgeInspection: Type.Optional(Type.Boolean({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
-		}),
+			modelOverride: opt(str({ minLength: 3, description: "Owner-requested exception selecting one exact '<provider>/<model>'" })),
+			effort: opt(StringEnum(MODEL_EFFORTS as [string, ...string[]], { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
+			background: opt(bool({ description: "Return immediately; a completion signal arrives later." })),
+			acknowledgeInspection: opt(bool({ description: "Confirm the lead inspected a previous outcome_unknown dispatch before dispatching this worker again" })),
+		}, { open: true }),
 		replay: "safe",
 		execute: async (params, api, c) => {
 			const nested = await nestedWorkers(api, c);
@@ -989,10 +990,10 @@ export function delegationExtension(options: DelegationOptions) {
 	const workerStatus = defineTool({
 		name: "worker_status",
 		description: "Inspect this Chat's durable workers by default. Pass all:true only for diagnostics across the Chat family, including workers of other lead Chats and retired records; it grants no control.",
-		parameters: Type.Object({
-			workerId: Type.Optional(Type.String({ minLength: 1, description: "One worker to inspect; omit to list active workers owned by this Chat" })),
-			all: Type.Optional(Type.Boolean({ description: "Show every worker of this Chat family, including retired records and those of other lead Chats, for diagnostics" })),
-		}),
+		parameters: obj({
+			workerId: opt(str({ minLength: 1, description: "One worker to inspect; omit to list active workers owned by this Chat" })),
+			all: opt(bool({ description: "Show every worker of this Chat family, including retired records and those of other lead Chats, for diagnostics" })),
+		}, { open: true }),
 		replay: "safe",
 		execute: async ({ workerId, all }, api, c) => {
 			const nested = await nestedWorkers(api, c);
@@ -1026,10 +1027,10 @@ export function delegationExtension(options: DelegationOptions) {
 	const workerRetire = defineTool({
 		name: "worker_retire",
 		description: "Retire a durable worker whose scope is finished or whose accumulated context is no longer trustworthy. A retired worker cannot be dispatched again; start a fresh worker or subagent instead.",
-		parameters: Type.Object({
-			workerId: Type.String({ minLength: 1 }),
-			reason: Type.String({ minLength: 1, description: "Why the worker's scope is finished or its context is no longer trustworthy" }),
-		}),
+		parameters: obj({
+			workerId: str({ minLength: 1 }),
+			reason: str({ minLength: 1, description: "Why the worker's scope is finished or its context is no longer trustworthy" }),
+		}, { open: true }),
 		replay: "safe",
 		execute: async ({ workerId, reason }, api, c) => {
 			const nested = await nestedWorkers(api, c);

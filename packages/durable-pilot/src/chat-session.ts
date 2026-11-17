@@ -1,21 +1,21 @@
-// PI WEB session-host protocol v2 for one Durable Chat: committed Durable state (watchEvents) projected into PI WEB's
+// PI WEB session-host protocol v2 for one Durable Chat: committed Durable state (the conversation view) projected into PI WEB's
 // browser session events, and the operations PI WEB routes to a Durable Chat. Durable IDs, Chord operations and task
 // internals stay here; PI WEB sees only its own event and message shapes.
 import { OutputBuffer, sanitizeOutput } from "@earendil-works/chord/output";
 import { withCancel } from "@earendil-works/chord/context";
 import { type AssistantMessage, clampThinkingLevel, getSupportedThinkingLevels, type ImageContent, type Message, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
-	type AgentEvent,
 	CompactionEntry,
 	type CompactionSettings,
+	type ConversationView,
 	type EntryRecord,
 	InboxDoc,
 	LiveDoc,
-	type SnapshotEvent,
+	type LiveState,
 	type SubmissionId,
 	type TaskId,
+	type ToolSlot,
 	UsageDoc,
-	watchEvents,
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
 import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
@@ -254,7 +254,6 @@ export class ChatSession {
 	#streamId: string | undefined;
 	#streams = 0;
 	#running = false;
-	#toolOutput = new Map<string, string>();
 	/** Running bash calls of the current round (activity), from committed tool events. */
 	#shells = new Map<string, string>();
 	#stop: (() => Promise<unknown>) | undefined;
@@ -307,15 +306,19 @@ export class ChatSession {
 		// The delegate roster changes with this Chat's children (launch, status report, result, collection).
 		// Filtered on the active branch at commit time, so it follows navigation without resubscribing.
 		let rosterQueued = false;
-		this.#unsubscribe = this.#host.harness.subscribeCommits((publication) => {
-			const changed = publication.changes.some((change) => change.type === "document" && change.record.kind === DelegationDoc.definition.kind && change.conversationId === this.#host.root.id);
-			if (!changed || rosterQueued) return;
-			rosterQueued = true;
-			setTimeout(() => {
-				rosterQueued = false;
-				void this.#publishStatus().catch(() => {});
-			}, 0);
+		const commits = this.#host.harness.observeCommits({
+			advance: (publication) => {
+				const changed = publication.changes.some((change) => change.type === "document" && change.record.kind === DelegationDoc.definition.kind && change.conversationId === this.#host.root.id);
+				if (!changed || rosterQueued) return;
+				rosterQueued = true;
+				setTimeout(() => {
+					rosterQueued = false;
+					void this.#publishStatus().catch(() => {});
+				}, 0);
+			},
+			end: () => {},
 		});
+		this.#unsubscribe = () => commits.detach();
 		this.#chat?.listenPackages((event) => (event.type === "extension.status" ? void this.#publishStatus().catch(() => {}) : this.#emit(event)));
 		await this.#watch();
 		const lead = () => this.#host.root;
@@ -332,21 +335,33 @@ export class ChatSession {
 		});
 	}
 
-	/** Project the active branch's committed events, from its current snapshot on. */
+	/**
+	 * Project the active branch's view, from its current value on: each revision (one per commit, as memory adopts it)
+	 * becomes the events it implies, handled in order after the reset to the first value.
+	 */
 	async #watch(): Promise<void> {
-		const stream = await watchEvents(this.#host.harness, this.#host.root.id, context);
-		await this.#reset(stream.snapshot);
-		stream.start(async (events) => {
-			for (const event of events) {
-				if (event.type !== "snapshot") this.#apply(event);
-				else {
-					await this.#reset(event);
-					this.#emit({ type: "session.tree.changed" });
-				}
-			}
-			if (events.some((event) => STATUS_EVENTS.has(event.type))) this.#emit({ type: "status.update", status: await this.status() });
-		});
-		this.#stop = () => stream.stop();
+		let last: ConversationView | undefined;
+		const early: ConversationView[] = [];
+		let queue = Promise.resolve();
+		const handle = (events: ViewEvent[]) => {
+			queue = queue.then(async () => {
+				for (const event of events) this.#apply(event);
+				if (events.some((event) => STATUS_EVENTS.has(event.type))) this.#emit({ type: "status.update", status: await this.status() });
+			}).catch((error: unknown) => this.#emit({ type: "session.diagnostic", message: `Durable view failed: ${error instanceof Error ? error.message : String(error)}` }));
+		};
+		const advance = (next: ConversationView) => {
+			if (last === undefined) return void early.push(next);
+			const events = viewEvents(last, next);
+			last = next;
+			if (events.length > 0) handle(events);
+		};
+		// The observer must only record: no awaits or Session calls. A revision can arrive before the attachment resolves.
+		const observation = await this.#host.harness.observeConversation(this.#host.root.id, { advance: (call) => call.kind === "value" && advance(call.value), end: () => {} }, context);
+		last = observation.value;
+		queue = this.#reset(observation.value);
+		for (const next of early.splice(0)) advance(next);
+		await queue;
+		this.#stop = async () => observation.detach();
 	}
 
 	/** `end`: the owner ends the Chat, so its background jobs are cancelled first; any other close (a restart) keeps them. */
@@ -420,15 +435,16 @@ export class ChatSession {
 	 * The snapshot's state, with the whole history up to its newest entry: the snapshot holds only the active context,
 	 * which after a compaction starts at the summary, while PI WEB shows every message as a legacy Chat does.
 	 */
-	async #reset(snapshot: SnapshotEvent): Promise<void> {
-		this.#entries = await this.#history(snapshot.entries.reduce((max, entry) => Math.max(max, entry.id), 0));
-		this.#running = snapshot.run !== undefined;
+	async #reset(view: ConversationView): Promise<void> {
+		const live = liveOf(view);
+		this.#entries = await this.#history(view.entries.at(-1)?.id ?? view.before ?? 0);
+		this.#running = live.run !== undefined;
 		this.#partial = undefined;
 		this.#shells.clear();
 		// A restored store stays paused: its running slots are interrupted, not running, until work resumes.
-		if (this.#resumed) for (const slot of snapshot.tools) if (slot.name === "bash" && slot.status === "running") this.#shells.set(slot.callId, new Date().toISOString());
+		if (this.#resumed) for (const slot of live.tools ?? []) if (slot.name === "bash" && slot.status === "running") this.#shells.set(slot.callId, new Date().toISOString());
 		this.#emitted = [];
-		const partial = snapshot.generation?.message;
+		const partial = live.generation?.message as AssistantMessage | undefined;
 		// A paused restore's partial was cut off by the host's death: shown as aborted, as resuming commits it.
 		if (partial !== undefined) this.#startPartial(this.#resumed ? partial : { ...partial, stopReason: "aborted", errorMessage: INTERRUPTED });
 	}
@@ -451,9 +467,7 @@ export class ChatSession {
 		this.#emitted = partial.content.map((block) => blockText(block)?.text ?? "");
 	}
 
-	#apply(event: AgentEvent): void {
-		// Nested calls belong to their parent tool's result; slice 1 shows only model-issued calls.
-		if ("parentToolCallId" in event && event.parentToolCallId !== undefined) return;
+	#apply(event: ViewEvent): void {
 		switch (event.type) {
 			case "run_start":
 				this.#running = true;
@@ -478,7 +492,7 @@ export class ChatSession {
 				this.#emit({ type: "assistant.start", message: { ...event.message, streamId: this.#streamId } });
 				return;
 			case "message_update":
-				this.#update(event.changes);
+				this.#update(event.message);
 				return;
 			case "message_end": {
 				this.#entries.push(event.entry);
@@ -503,22 +517,13 @@ export class ChatSession {
 				if (event.entry.kind !== BASH_ENTRY) for (const message of browserMessages(event.entry)) this.#emit({ type: "message.end", message });
 				return;
 			case "tool_execution_start":
-				this.#toolOutput.set(event.toolCallId, "");
 				if (event.toolName === "bash") this.#shells.set(event.toolCallId, new Date().toISOString());
 				this.#emit({ type: "tool.start", toolName: event.toolName, toolCallId: event.toolCallId, summary: "", args: event.args });
 				return;
-			case "tool_execution_update": {
-				let text = this.#toolOutput.get(event.toolCallId) ?? "";
-				if (event.output !== undefined) {
-					if ("set" in event.output) text = event.output.set;
-					else text = text.slice(event.output.trimStart ?? 0) + (event.output.append ?? "");
-				}
-				this.#toolOutput.set(event.toolCallId, text);
-				this.#emit({ type: "tool.update", toolName: event.toolName, toolCallId: event.toolCallId, text, ...(event.details === undefined ? {} : { details: event.details }) });
+			case "tool_execution_update":
+				this.#emit({ type: "tool.update", toolName: event.toolName, toolCallId: event.toolCallId, text: event.text, ...(event.details === undefined ? {} : { details: event.details }) });
 				return;
-			}
 			case "tool_execution_end": {
-				this.#toolOutput.delete(event.toolCallId);
 				this.#shells.delete(event.toolCallId);
 				const stored = event.entry?.model?.[0] as { content?: unknown; isError?: boolean; details?: unknown } | undefined;
 				const result = stored === undefined ? undefined : { ...stored, content: browserToolContent(stored.content) };
@@ -535,7 +540,7 @@ export class ChatSession {
 			}
 			case "compaction_end":
 				// A manual compaction reports through `compact()`; an automatic one that failed is reported here, as Pi does.
-				if (event.error !== undefined && event.reason !== "manual") this.#compactionFailed(event.error);
+				if (event.error !== undefined && event.trigger !== "manual") this.#compactionFailed(event.error);
 				return;
 			case "task_failed":
 				this.#emit({ type: "session.diagnostic", message: `Durable task ${event.kind} failed: ${event.message}` });
@@ -545,22 +550,9 @@ export class ChatSession {
 		}
 	}
 
-	#update(changes: Extract<AgentEvent, { type: "message_update" }>["changes"]): void {
+	#update(message: AssistantMessage): void {
 		if (this.#partial === undefined) return;
-		for (const change of changes) {
-			if (change.type === "message") this.#partial = change.message;
-			else if (change.type === "block" || change.type.endsWith("_start")) {
-				const content: Block[] = [...this.#partial.content];
-				content[change.contentIndex] = (change as { block: Block }).block;
-				this.#partial = { ...this.#partial, content };
-			} else if (change.type === "text_delta" || change.type === "thinking_delta") {
-				const content: Block[] = [...this.#partial.content];
-				const block = content[change.contentIndex];
-				if (block?.type === "text") content[change.contentIndex] = { ...block, text: block.text + change.delta };
-				if (block?.type === "thinking") content[change.contentIndex] = { ...block, thinking: block.thinking + change.delta };
-				this.#partial = { ...this.#partial, content };
-			}
-		}
+		this.#partial = message;
 		// Emit what each text block gained since the last emission; the redacting provider only ever appends.
 		for (const [index, block] of this.#partial.content.entries()) {
 			const current = blockText(block);
@@ -1224,4 +1216,103 @@ function stopReaches(task: { conversationId: unknown; owner?: unknown; backgroun
 	return task.conversationId === lead && task.owner === undefined && !task.background;
 }
 
-const STATUS_EVENTS = new Set<AgentEvent["type"]>(["run_start", "run_end", "inbox_update", "usage_changed", "agent_changed", "snapshot", "message_end", "tool_execution_start", "tool_execution_end", "compaction_start", "compaction_end"]);
+/** What one view revision changed, as the events of Durable 1.4's `watchEvents` this projection was built on. */
+type ViewEvent =
+	| { type: "run_start" | "run_end" | "docs_changed" | "compaction_start" }
+	| { type: "message_start"; message: Message }
+	| { type: "message_update"; message: AssistantMessage }
+	| { type: "message_end" | "entry_appended"; entry: EntryRecord }
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
+	| { type: "tool_execution_update"; toolCallId: string; toolName: string; text: string; details?: unknown }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; entry?: EntryRecord }
+	| { type: "compaction_end"; trigger: string; error?: string }
+	| { type: "task_failed"; kind: string; message: string };
+
+const STATUS_EVENTS = new Set<ViewEvent["type"]>(["run_start", "run_end", "docs_changed", "message_end", "tool_execution_start", "tool_execution_end", "compaction_start", "compaction_end"]);
+
+function liveOf(view: ConversationView): LiveState {
+	return (view.docs["pi.live"] ?? {}) as LiveState;
+}
+
+/** The arguments of a model-issued call, from the answer that made it (the newest in the window). */
+function callArguments(entries: readonly EntryRecord[], callId: string): unknown {
+	for (const entry of entries.toReversed()) {
+		const message = entry.model?.[0] as Message | undefined;
+		if (message?.role !== "assistant") continue;
+		const call = message.content.find((block) => block.type === "toolCall" && block.id === callId);
+		if (call?.type === "toolCall") return call.arguments;
+	}
+	return {};
+}
+
+/**
+ * The events between two revisions of one view, in Durable 1.4's `watchEvents` order: tool starts, the in-flight
+ * message, tool output, then committed entries (each tool's end right before its result), ends without a result,
+ * compaction ends, a failed run, run end, document changes, compaction starts and run start. Nested calls belong to
+ * their parent tool's result and are not shown.
+ */
+export function viewEvents(before: ConversationView, after: ConversationView): ViewEvent[] {
+	const was = liveOf(before);
+	const now = liveOf(after);
+	const newest = before.entries.at(-1)?.id ?? before.before ?? 0;
+	const entries = after.entries.filter((entry) => entry.id > newest);
+	const events: ViewEvent[] = [];
+	const slotsBefore = new Map((was.tools ?? []).map((slot) => [slot.callId, slot]));
+	const slots = now.tools ?? [];
+	for (const slot of slots)
+		if (slot.status === "running" && slotsBefore.get(slot.callId)?.status !== "running")
+			events.push({ type: "tool_execution_start", toolCallId: slot.callId, toolName: slot.name, args: callArguments(after.entries, slot.callId) });
+	const partialBefore = was.generation?.message;
+	const partial = now.generation?.message as AssistantMessage | undefined;
+	if (partial !== undefined && partialBefore === undefined) events.push({ type: "message_start", message: partial });
+	else if (partial !== undefined && partial !== partialBefore) events.push({ type: "message_update", message: partial });
+	for (const slot of slots) {
+		const previous = slotsBefore.get(slot.callId);
+		if (slot.status !== "running" || previous?.status !== "running") continue;
+		if (slot.output === previous.output && slot.details === previous.details) continue;
+		events.push({ type: "tool_execution_update", toolCallId: slot.callId, toolName: slot.name, text: slot.output ?? "", ...(slot.details === previous.details ? {} : { details: slot.details ?? null }) });
+	}
+	// Tools that end here: a slot that becomes done, one created done, or an unfinished one gone with its run.
+	const known = [...before.entries, ...entries];
+	const ends: Extract<ViewEvent, { type: "tool_execution_end" }>[] = [];
+	const end = (slot: ToolSlot, entry: EntryRecord | undefined) => ends.push({ type: "tool_execution_end", toolCallId: slot.callId, toolName: slot.name, ...(entry === undefined ? {} : { entry }) });
+	const resultOf = (callId: string) => known.find((entry) => { const m = entry.model?.[0] as Message | undefined; return m?.role === "toolResult" && m.toolCallId === callId; });
+	for (const previous of slotsBefore.values()) {
+		if (previous.status === "done") continue;
+		const slot = slots.find((candidate) => candidate.callId === previous.callId);
+		if (slot?.status === "done") end(slot, known.find((entry) => entry.id === slot.entry));
+		else if (slot === undefined) end(previous, resultOf(previous.callId));
+	}
+	for (const slot of slots) if (slot.status === "done" && !slotsBefore.has(slot.callId)) end(slot, known.find((entry) => entry.id === slot.entry));
+	let assistantAppended = false;
+	for (const entry of entries) {
+		events.push(...ends.filter((candidate) => candidate.entry === entry));
+		const message = entry.model?.[0] as Message | undefined;
+		if (message === undefined) {
+			events.push({ type: "entry_appended", entry });
+			continue;
+		}
+		// A streamed answer already started with its first partial.
+		const streamed = message.role === "assistant" && partialBefore !== undefined && !assistantAppended;
+		if (message.role === "assistant") assistantAppended = true;
+		if (!streamed) events.push({ type: "message_start", message });
+		events.push({ type: "message_end", entry });
+	}
+	events.push(...ends.filter((candidate) => candidate.entry === undefined || !entries.includes(candidate.entry)));
+	const compactions = now.compactions ?? [];
+	for (const { taskId, trigger } of was.compactions ?? [])
+		if (!compactions.some((status) => status.taskId === taskId)) {
+			const error = now.compactionFailure?.taskId === taskId ? now.compactionFailure.error : undefined;
+			events.push({ type: "compaction_end", trigger, ...(error === undefined ? {} : { error }) });
+		}
+	// A run whose task faulted or was orphaned (Durable 1.4 reported every such task; 1.5 keeps only the run's).
+	const failure = now.runFailure;
+	if (failure !== undefined && failure !== was.runFailure && (failure.reason === "faulted" || failure.reason === "orphaned"))
+		events.push({ type: "task_failed", kind: "pi.generation", message: failure.detail ?? failure.reason });
+	const runChanged = now.run?.inputs[0] !== was.run?.inputs[0];
+	if (was.run !== undefined && runChanged) events.push({ type: "run_end" });
+	if (["pi.inbox", "pi.agent", "pi.usage"].some((kind) => after.docs[kind] !== before.docs[kind])) events.push({ type: "docs_changed" });
+	if (compactions.some(({ taskId }) => !(was.compactions ?? []).some((status) => status.taskId === taskId))) events.push({ type: "compaction_start" });
+	if (now.run !== undefined && runChanged) events.push({ type: "run_start" });
+	return events;
+}

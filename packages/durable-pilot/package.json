@@ -7,12 +7,13 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.4.0",
-    "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-codemode": "1.4.0",
-    "@earendil-works/pi-coding-agent": "1.4.0",
-    "@earendil-works/pi-durable": "1.4.0",
-    "@earendil-works/pi-telemetry": "1.4.0",
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-codemode": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/pi-schema": "1.5.2",
+    "@earendil-works/pi-telemetry": "1.5.2",
     "proper-lockfile": "4.1.2"
   },
   "devDependencies": {

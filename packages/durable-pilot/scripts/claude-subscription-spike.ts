@@ -4,7 +4,8 @@
 // headers' secret values, or the payload. Run with PILOT_LIVE_CLAUDE=1.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { createRegistry, defineExtension, defineTool, Harness, UsageDoc } from "@earendil-works/pi-durable";
 import { claudeAliases, claudePayload, PiAuthStore } from "../src/claude.ts";
@@ -58,7 +59,7 @@ let executed = 0;
 const echo = defineTool({
 	name: "pilot_echo",
 	description: "Echo a short text back. Call it exactly once.",
-	parameters: Type.Object({ text: Type.String() }),
+	parameters: obj({ text: str() }, { open: true }),
 	execute: async (args) => {
 		executed++;
 		return { output: [{ type: "text", text: `echo: ${args.text}` }], control: { terminate: true } };
@@ -83,7 +84,7 @@ const stored = readFileSync(join(dir, "session.sqlite"));
 const assistant = entries.find((e) => e.kind === "pi.assistant")?.model?.[0] as { content: { type: string; name?: string }[]; stopReason: string; errorMessage?: string } | undefined;
 const result = {
 	measuredAt: new Date().toISOString(),
-	versions: { "pi-durable": "1.4.0", "pi-ai": "1.4.0", model: MODEL, piClaudeCodeUseRulesFrom: "2.2.1" },
+	versions: { "pi-durable": "1.5.2", "pi-ai": "1.5.2", model: MODEL, piClaudeCodeUseRulesFrom: "2.2.1" },
 	credential: { source: "Pi auth.json", type: credential.type, subscriptionTokenShape: tokenPrefixOk, minutesLeftAtStart: minutesLeft, anthropicEnvVarsRemoved: envCredentialNames.length },
 	wire,
 	response,

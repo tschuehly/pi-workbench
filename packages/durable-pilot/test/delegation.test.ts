@@ -416,7 +416,7 @@ test("P095–P098 Workers: create starts nothing; busy dispatch fails preflight;
 	assert.match(await toolResult(host, "worker_dispatch", 4), /^done after worker_create/);
 	await quiet(host);
 	await prompt(host, call("worker_dispatch", { workerId, task: "x", cognitiveRole: "review" }));
-	assert.match(await toolResult(host, "worker_dispatch", 5), /cognitiveRole: must be equal to one of the allowed values/, "review roles are subagent-only: the Worker schema refuses them");
+	assert.match(await toolResult(host, "worker_dispatch", 5), /cognitiveRole: expected one of \["routine","implementation","frontier","coordination"\]/, "review roles are subagent-only: the Worker schema refuses them");
 	await quiet(host);
 	await prompt(host, call("worker_retire", { workerId, reason: "scope done" }));
 	assert.match(await toolResult(host, "worker_retire"), new RegExp(`^Retired worker ${workerId} at \\S+: scope done$`));

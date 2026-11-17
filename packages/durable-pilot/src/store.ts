@@ -83,6 +83,7 @@ function faulty(inner: NodeSqliteDatabase, faults: Faults): SqliteDatabase {
 	return {
 		exec: (sql) => inner.exec(sql),
 		run: (sql, ...params) => inner.run(sql, ...params),
+		runCounted: (sql, ...params) => inner.runCounted(sql, ...params),
 		get: (sql, ...params) => inner.get(sql, ...params),
 		all: (sql, ...params) => inner.all(sql, ...params),
 		close: () => inner.close(),
@@ -92,6 +93,7 @@ function faulty(inner: NodeSqliteDatabase, faults: Faults): SqliteDatabase {
 				const tracked: SqliteExecutor = {
 					exec: (sql) => (tablesOf(sql, tables), transaction.exec(sql)),
 					run: (sql, ...params) => (tablesOf(sql, tables), transaction.run(sql, ...params)),
+					runCounted: (sql, ...params) => (tablesOf(sql, tables), transaction.runCounted(sql, ...params)),
 					get: (sql, ...params) => transaction.get(sql, ...params),
 					all: (sql, ...params) => transaction.all(sql, ...params),
 				};
