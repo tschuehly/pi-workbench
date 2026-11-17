@@ -9,8 +9,9 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 export type SpawnRequest = { requestId: string; spawningCwd: string; prompt: string; cwd?: string; model?: string; thinkingLevel?: string };
 export type SpawnResult = { sessionId: string; cwd: string; model?: string };
 type Settle = { requestId: string; result?: SpawnResult; error?: string };
+type Pending = { request: SpawnRequest; resolve: (result: SpawnResult) => void; reject: (error: Error) => void; timer?: NodeJS.Timeout };
 
-/** PI WEB answers in seconds (one Chat created and prompted); this bounds a daemon that went away meanwhile. */
+/** PI WEB answers in seconds (one Chat created and prompted); this bounds a connected daemon that never answers. */
 const ANSWER_TIMEOUT_MS = 120_000;
 
 // PI WEB `KNOWN_THINKING_LEVELS`.
@@ -29,7 +30,9 @@ export class SessionSpawner {
 	/** Set by PI WEB's `configure` when its spawn support is on (legacy `spawnSessions`). */
 	enabled = false;
 	#emit: ((event: { type: "durable.spawn" } & SpawnRequest) => void) | undefined;
-	readonly #pending = new Map<string, { request: SpawnRequest; resolve: (result: SpawnResult) => void; reject: (error: Error) => void }>();
+	readonly #pending = new Map<string, Pending>();
+	/** Whether a daemon can hear requests: the answer timeout runs only then, so a request outlives any daemon outage. */
+	#connected = true;
 
 	readonly #chatId: string;
 
@@ -46,7 +49,22 @@ export class SessionSpawner {
 	 * none was connected) or may have died before answering. PI WEB answers a repeated request with the Chat it started.
 	 */
 	resend(): void {
-		for (const { request } of this.#pending.values()) this.#emit?.({ type: "durable.spawn", ...request });
+		this.#connected = true;
+		for (const pending of this.#pending.values()) {
+			this.#arm(pending);
+			this.#emit?.({ type: "durable.spawn", ...pending.request });
+		}
+	}
+
+	/** No daemon is connected: pause every answer timeout until one connects (`resend`). */
+	disconnected(): void {
+		this.#connected = false;
+		for (const pending of this.#pending.values()) clearTimeout(pending.timer);
+	}
+
+	#arm(pending: Pending): void {
+		clearTimeout(pending.timer);
+		if (this.#connected) pending.timer = setTimeout(() => pending.reject(new Error("PI WEB did not answer the spawn request")), ANSWER_TIMEOUT_MS);
 	}
 
 	/** PI WEB's answer to a request; one for a request nobody waits for (timed out, host restarted) is dropped. */
@@ -63,14 +81,15 @@ export class SessionSpawner {
 		if (!this.enabled || emit === undefined) return Promise.reject(new Error("Spawning sessions is disabled"));
 		return new Promise<SpawnResult>((resolve, reject) => {
 			const done = () => {
-				clearTimeout(timer);
+				clearTimeout(pending.timer);
 				signal?.removeEventListener("abort", aborted);
 				this.#pending.delete(request.requestId);
 			};
 			const aborted = () => (done(), reject(new Error("spawn_session was cancelled")));
-			const timer = setTimeout(() => (done(), reject(new Error("PI WEB did not answer the spawn request"))), ANSWER_TIMEOUT_MS);
+			const pending: Pending = { request, resolve: (result) => (done(), resolve(result)), reject: (error) => (done(), reject(error)) };
 			signal?.addEventListener("abort", aborted, { once: true });
-			this.#pending.set(request.requestId, { request, resolve: (result) => (done(), resolve(result)), reject: (error) => (done(), reject(error)) });
+			this.#pending.set(request.requestId, pending);
+			this.#arm(pending);
 			emit({ type: "durable.spawn", ...request });
 		});
 	}
