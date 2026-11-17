@@ -99,6 +99,7 @@ Each successful command prunes `~/.pi-workbench/installed-durable/` (keeps live,
   `launchctl bootout gui/$(id -u)/com.pi-web-durable.web; launchctl bootout gui/$(id -u)/com.pi-web-durable.sessiond`
   Its hosts keep running (and keep working) until stopped one by one, which interrupts that family's Chats: `launchctl bootout gui/$(id -u)/com.pi-workbench.durable-host.<family>` for each label from `launchctl list` above.
   Start it again: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pi-web-durable.sessiond.plist; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pi-web-durable.web.plist`
+- **Pi Durable 1.5.2 → 1.4.0 is one-way for every Chat 1.5.2 has opened.** 1.5.2 upgrades the Chat's store (`pi.live` v3), and a 1.4.0 host refuses to open it ("has newer version 3 than 1"). After rolling the instance back to a 1.4.0 build, such a Chat stays on its pinned 1.5.2 host: it shows "Host `<sha>` (new Chats run `<sha>`)", and **Upgrade host** refuses ("This Chat was opened by a newer Pi Durable (1.5.2); the current host is 1.4.0") and leaves it running and readable. Do not delete the 1.5.2 build while such Chats exist (prune keeps it while a Chat is pinned to it; never remove it by hand): without it, the Chat falls back to the 1.4.0 host and cannot be opened until that build is reinstalled. The store itself stays intact.
 
 ## Prune by hand
 
