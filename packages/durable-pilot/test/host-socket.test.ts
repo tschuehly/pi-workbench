@@ -123,6 +123,43 @@ test("handshake names protocol, revision, store, owner epoch and PID; a dropped 
 	assert.equal(existsSync(path), false, "the host removes its socket on an orderly exit");
 });
 
+test("P064 a spawn_session request made while no daemon is connected is re-sent to the next daemon: one Chat, one result", async () => {
+	const dir = mkdtempSync(join(SOCKETS, "s-"));
+	const path = join(dir, "host.sock");
+	const host = start("spawn-reconnect", path, 10_000);
+	const first = await connected(path, host);
+	await first.ready;
+	await first.call("configure", { resources: {}, spawnSessions: true });
+	// The daemon goes away (promotion, kill) right as the lead asks for the Chat: the request has nobody to reach.
+	first.socket.end(`${JSON.stringify({ id: 99, method: "prompt", params: { operationId: "op-1", text: `call:spawn_session ${JSON.stringify({ prompt: "Fix the build" })}` } })}\n`);
+	const log = join(host.store, "requests.log");
+	while (!existsSync(log) || readLog(log).length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	assert.ok(!first.lines.some((line) => line.event?.type === "durable.spawn"), "the request was emitted while disconnected");
+
+	const second = await connected(path, host);
+	await second.ready;
+	const request = (await second.until((line) => line.event?.type === "durable.spawn")).event!;
+	assert.equal(request.prompt, "Fix the build");
+	await second.call("spawned", { requestId: request.requestId, result: { sessionId: "chat-2", cwd: "/repo" } });
+	const isResult = (line: Line) => line.event?.type === "message.end" && (line.event.message as { role?: string }).role === "toolResult";
+	const result = (await second.until(isResult)).event!.message as { isError?: boolean; content: { text: string }[] };
+	assert.notEqual(result.isError, true);
+	assert.equal(result.content[0]?.text, "Started independent session chat-2 in /repo.");
+	await second.until((line) => line.event?.type === "agent.end");
+	assert.equal(second.lines.filter((line) => line.event?.type === "durable.spawn").length, 1, "asked once per connection");
+	assert.equal(second.lines.filter(isResult).length, 1);
+
+	// A third daemon hears nothing more: the answered request is no longer pending.
+	second.socket.destroy();
+	const third = await connected(path, host);
+	await third.ready;
+	await third.call("status");
+	assert.ok(!third.lines.some((line) => line.event?.type === "durable.spawn"));
+	await third.call("close");
+	assert.equal(await host.exited, 0, host.stderr());
+});
+
 test("refuses a socket folder others can reach", async () => {
 	const dir = mkdtempSync(join(SOCKETS, "o-"));
 	chmodSync(dir, 0o755);

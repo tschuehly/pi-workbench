@@ -274,6 +274,8 @@ else {
 			}
 		});
 		write(socket, ready());
+		// spawn_session requests the previous daemon may have missed or left unanswered.
+		host.spawner.resend();
 	});
 	rmSync(socketPath, { force: true });
 	// Created 0600 (bind is synchronous inside listen), then the umask goes back for everything the host's tools create.
