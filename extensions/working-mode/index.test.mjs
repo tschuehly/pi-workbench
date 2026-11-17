@@ -105,7 +105,8 @@ test("AFK on battery alarms once a turn runs; AC, preparing, restored, and non-A
     writeFileSync(power, "Battery Power");
     await command.handler("attention afk", ctx);
     turn();
-    await settle();
+    // The dialog spawns only after pgrep finds none: wait for all three, not a fixed second.
+    for (const until = Date.now() + 10_000; alarms().length < 3 && Date.now() < until;) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.deepEqual(warnings, [["error", AFK_BATTERY_WARNING]]);
     assert.deepEqual(alarms(), ["afplay", "osascript", "say"]);
     // The dialog names the session to switch, with quotes stripped so AppleScript stays valid.
