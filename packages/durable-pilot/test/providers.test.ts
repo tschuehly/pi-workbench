@@ -500,6 +500,8 @@ describe("P016b providers registered by Pi packages: pi-xai-oauth (xai-auth) and
 			assert.equal(meta[0]!.authorization, `Bearer ${LOGINS.meta.access}`);
 			const names = (meta[0]!.body.tools as { name: string }[]).map((t) => t.name);
 			assert.ok(names.includes("execute_command") && !names.includes("bash"), `bash goes out under Meta's alias: ${names.join(",")}`);
+			// Meta answers 403 client_attestation_denied to a Muse Code key while either of these names is offered (live, 18 Nov).
+			assert.ok(names.includes("delegate_collect") && names.includes("delegate_status") && !names.some((n) => n === "subagent_collect" || n === "subagent_status"), `subagent_collect and subagent_status go out aliased: ${names.join(",")}`);
 			const call = (chat.session.messages() as { role: string; content: { type: string; name?: string }[] }[]).flatMap((m) => (m.role === "assistant" ? m.content : [])).find((c) => c.type === "toolCall");
 			assert.equal(call?.name, "bash", "the aliased call comes back as bash");
 			assert.ok(JSON.stringify(meta[1]!.body).includes("ember-tool"), "bash ran and its output went back");

@@ -29,6 +29,19 @@ export function subscriptionProviders(fast: FastMode): Provider[] {
 	);
 }
 
+/**
+ * Tool names Meta answers with 403 client_attestation_denied for a Muse Code key (live, 18 Nov: either one in the tools
+ * list), sent under pi-meta-oauth's documented `META_TOOL_ALIASES`; the package restores the names on the way back.
+ */
+export const META_TOOL_ALIASES = "subagent_collect=delegate_collect,subagent_status=delegate_status";
+
+/** Ours first: an entry the owner set in META_TOOL_ALIASES for the same name wins (the package lets a later entry win). */
+export function applyMetaToolAliases(env: NodeJS.ProcessEnv = process.env): void {
+	const own = env.META_TOOL_ALIASES;
+	if (own?.startsWith(META_TOOL_ALIASES)) return;
+	env.META_TOOL_ALIASES = own?.trim() ? `${META_TOOL_ALIASES},${own}` : META_TOOL_ALIASES;
+}
+
 /** Composition only: a store that holds nothing, so composing never reads or locks auth.json. */
 const NO_CREDENTIALS: CredentialStore = { read: async () => undefined, list: async () => [], modify: async () => undefined, delete: async () => {} };
 
@@ -39,6 +52,7 @@ const NO_CREDENTIALS: CredentialStore = { read: async () => undefined, list: asy
  */
 export async function registeredProviders(registrations: readonly ProviderRegistration[], fast: FastMode, failed: (message: string) => void): Promise<Provider[]> {
 	if (registrations.length === 0) return [];
+	applyMetaToolAliases();
 	const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
 	const runtime = await ModelRuntime.create({ credentials: NO_CREDENTIALS, modelsPath: null, refreshOnCreate: false });
 	const ids = new Set<string>();
