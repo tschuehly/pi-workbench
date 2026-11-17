@@ -119,14 +119,14 @@ describe("ownership and storage", () => {
 			assert.equal(e.barrierData.admitted, null, "no success acknowledgement");
 			assert.match(e.barrierData.error, /full/i, "real SQLITE_FULL");
 			assert.equal(e.barrierData.end, "failed", "a storage error ends the Harness");
-			assert.ok(e.barrierData.reports.includes("session_failed"));
+			assert.ok(e.barrierData.reports.includes("storage_failed"));
 			assert.equal(e.settled.status, "done", "retry with the same ID after reopen is admitted");
 			assert.equal(e.bigInputs, 1, "exactly once");
 		},
 	};
 	for (const mode of ["kill", "close"] as Mode[]) it(`disk full / ${mode}`, () => runWindow(diskFull, mode));
 
-	it("crash-loop parking is visible and stops reruns", () =>
+	it("a crash-looping tool call ends visibly at the restart limit and is not rerun", () =>
 		repeat("ownership.crash-loop-parking", async () => {
 			const dir = scratch("parking");
 			let parked: E | undefined;
@@ -136,19 +136,20 @@ describe("ownership and storage", () => {
 				const p = new HostProcess("parking", "crash", dir, { first: spawns === 1 });
 				const outcome = await Promise.race([
 					p.exited.then((exit) => ({ exit })),
-					p.waitFor((m) => m.type === "barrier" && m.name === "parked", "parked").then((m) => ({ parked: m.data as E })),
+					p.waitFor((m) => m.type === "barrier" && m.name === "ended", "ended").then((m) => ({ parked: m.data as E })),
 				]);
 				if ("parked" in outcome) {
 					parked = outcome.parked;
 					await p.kill();
 				} else assert.equal(outcome.exit.signal, "SIGKILL", "the crasher killed its own process");
 			}
-			assert.ok(parked !== undefined, "parked within 10 opens");
-			assert.equal(parked.parked.length, 1);
-			assert.equal(parked.parked[0].kind, "pi.tool");
+			assert.ok(parked !== undefined, "ended within 10 opens");
+			assert.equal(parked.settled.status, "done", "the run went on past the ended call");
+			assert.deepEqual(parked.live, [], "nothing left running");
 			assert.equal(parked.runs, 3, "ran restartLimit times, then never again");
-			assert.equal(parked.wake.active, false, "a parked task is not counted as active");
-			assert.ok(parked.reports.includes("task_parked"), "host is told once");
+			assert.equal(parked.wake.active, false, "an ended task is not counted as active");
+			assert.ok(parked.reports.includes("task_interrupted"), "host is told");
+			assert.ok(parked.results.some((r: E) => r.tool === "crasher" && r.isError === true), "the call ended with an error result");
 			const evidence = { spawns, ...parked, integrity: integrity(dir) };
 			assert.equal(evidence.integrity, "ok");
 			return evidence;

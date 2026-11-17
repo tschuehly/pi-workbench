@@ -14,7 +14,7 @@ import { context, MODEL, openHost } from "../src/host.ts";
 import { toolGroupsExtension } from "../src/tool-groups.ts";
 import { QuestionsDoc } from "../src/workbench.ts";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { Type } from "@earendil-works/pi-ai";
+import { obj } from "@earendil-works/pi-schema";
 import { ChatHost, family, idle, integrity, live, logged, type Message, type Status, textOf, type Transcript } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
@@ -258,7 +258,7 @@ test("redaction: questions a branch reopens are committed sanitized, though the 
 
 const groupExtensions = [defineExtension({
 	name: "workbench.workers",
-	tools: ["worker_create", "worker_status"].map((name) => defineTool({ name, description: name, parameters: Type.Object({}), execute: async () => ({ output: [{ type: "text" as const, text: name }] }) })),
+	tools: ["worker_create", "worker_status"].map((name) => defineTool({ name, description: name, parameters: obj({}, { open: true }), execute: async () => ({ output: [{ type: "text" as const, text: name }] }) })),
 })];
 
 test("tree: tool-group exposure is that of the branch point", async () => {

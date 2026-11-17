@@ -6,7 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
-import { fauxAssistantMessage, fauxText, Type } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
+import { obj } from "@earendil-works/pi-schema";
 import { CompactionEntry, type Conversation, defineExtension, defineTool, type SubmissionId } from "@earendil-works/pi-durable";
 import { createReadTool } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -433,7 +434,7 @@ for (const window of ["after the tool result", "while summarizing", "after the c
 // ─── Tool groups ─────────────────────────────────────────────────────────────
 
 const done = (text: string) => [{ type: "text" as const, text }];
-const fakeTool = (name: string) => defineTool({ name, description: name, parameters: Type.Object({}), replay: "safe", execute: async () => ({ output: done(`${name} ran`) }) });
+const fakeTool = (name: string) => defineTool({ name, description: name, parameters: obj({}, { open: true }), replay: "safe", execute: async () => ({ output: done(`${name} ran`) }) });
 /** Stand-ins for the slice-4 Worker tools, and a script-like tool that calls worker_create as a nested call. */
 const Workers = defineExtension({ name: "fixture.workers", tools: [fakeTool("worker_create"), fakeTool("worker_status")] });
 const Script = defineExtension({
@@ -441,7 +442,7 @@ const Script = defineExtension({
 	tools: [defineTool({
 		name: "script",
 		description: "calls worker_create",
-		parameters: Type.Object({}),
+		parameters: obj({}, { open: true }),
 		replay: "safe",
 		execute: async (_args, api, c) => {
 			const nested = await api.executeTool("worker_create", {}, c);

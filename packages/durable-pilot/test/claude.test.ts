@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { createModels, fauxAssistantMessage, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { createRegistry, defineExtension, defineTool, Harness } from "@earendil-works/pi-durable";
 import { modelsJsonBaseUrl, withBaseUrl } from "../src/providers.ts";
@@ -18,7 +19,7 @@ import { cleanup, scratch } from "./runner.ts";
 const echo = defineTool({
 	name: "pilot_echo",
 	description: "Echo text back",
-	parameters: Type.Object({ text: Type.String() }),
+	parameters: obj({ text: str() }, { open: true }),
 	execute: async (args) => ({ output: [{ type: "text", text: `echo: ${args.text}` }], control: { terminate: true } }),
 });
 
@@ -89,7 +90,7 @@ describe("claude subscription adapter (offline)", () => {
 		const dir = scratch("claude-collide");
 		const ran: string[] = [];
 		const tool = (name: string) =>
-			defineTool({ name, description: name, parameters: Type.Object({}), execute: async () => (ran.push(name), { output: [{ type: "text", text: `ran ${name}` }], control: { terminate: true } }) });
+			defineTool({ name, description: name, parameters: obj({}, { open: true }), execute: async () => (ran.push(name), { output: [{ type: "text", text: `ran ${name}` }], control: { terminate: true } }) });
 		const aliases = claudeAliases();
 		const wire = (claudePayload(aliases)({ tools: [{ name: "review-deploy" }, { name: "review_deploy" }, { name: "__pi_deferred_placeholder__" }] }) as any).tools.map((t: any) => t.name);
 		const host = await openHost(dir, {

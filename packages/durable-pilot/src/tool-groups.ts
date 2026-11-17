@@ -4,7 +4,8 @@
 // entry). An enabled-group document records the choice; Orchestration "Workers" shows the workers group as legacy does.
 // Exposure never widens an allowlist: `modelTools` only filters a conversation's enabled `tools`, and nested calls of a
 // group tool that is not exposed in the calling conversation are blocked.
-import { Type } from "@earendil-works/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { obj } from "@earendil-works/pi-schema";
 import {
 	AgentDoc,
 	type Conversation,
@@ -64,7 +65,7 @@ export function toolGroupsExtension(extensions: readonly Provider[]) {
 			"Enable a tool group. workers: worker_create/dispatch/status/retire. monitor: monitor* tools for background processes and logs. atelier: the atelier tool for Pages.",
 			"Call tools_enable first when you need durable workers, the background process monitor, or Atelier Pages (interactive HTML the human comments on and decides in); the tools appear on the next model request.",
 		].join("\n\n"),
-		parameters: Type.Object({ group: Type.Union(GROUP_IDS.map((id) => Type.Literal(id))) }, { additionalProperties: false }),
+		parameters: obj({ group: StringEnum(GROUP_IDS) }),
 		callers: ["model"],
 		replay: "safe",
 		execute: async ({ group }, api, c) => {

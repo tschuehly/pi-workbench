@@ -13,8 +13,8 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { Context } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/chord/context";
+import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { AgentDoc, type Conversation, type ConversationId, defineDoc, defineExtension, defineTool, type DocumentReader, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail } from "../../../extensions/background-bash/jobs.mjs";
@@ -130,12 +130,12 @@ export class BackgroundBash {
 			name: "bash",
 			description:
 				"Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait up to 30 seconds for the output; a command still running then continues in the background and delivers its completion like any job. Background jobs survive host restarts; they stop at their timeout or a 12-hour maximum lifetime.\n\nRun long checks and builds in the background. Continue independent work, then wait for their completion message before dependent actions; never infer success from a job ID. Use foreground=true for short commands whose output is needed now. If it returns a job ID instead, the command is still running: continue independent work or end the turn. Do not launch conflicting writes while a background command is running. Use bash_status for elapsed time and output bytes; use bash_cancel to stop a job. A completed job reports its exit status and bounded output in a new message; do not claim success from its initial job ID.",
-			parameters: Type.Object({
-				description: Type.String({ description: "Short description of what this command does, 3-10 words, in plain words (e.g. 'Check installed app build date'). Shown to the user instead of the command." }),
-				command: Type.String({ description: "Shell command to execute" }),
-				timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional; background jobs otherwise stop after 12 hours)" })),
-				foreground: Type.Optional(Type.Boolean({ description: "Wait up to 30 seconds for output and exit status, then continue in the background; default false" })),
-			}),
+			parameters: obj({
+				description: str({ description: "Short description of what this command does, 3-10 words, in plain words (e.g. 'Check installed app build date'). Shown to the user instead of the command." }),
+				command: str({ description: "Shell command to execute" }),
+				timeout: opt(num({ description: "Timeout in seconds (optional; background jobs otherwise stop after 12 hours)" })),
+				foreground: opt(bool({ description: "Wait up to 30 seconds for output and exit status, then continue in the background; default false" })),
+			}, { open: true }),
 			// The job ID and the runner's claim make a rerun reattach to the job it launched, never launch another.
 			replay: "safe",
 			execute: async (args, api, c) => {
@@ -178,7 +178,7 @@ export class BackgroundBash {
 		const status = defineTool({
 			name: "bash_status",
 			description: "Diagnostic snapshot of background bash job state, elapsed time, output byte count, and log path. Do not use to poll for completion; it arrives automatically. Omit id to list all jobs in this session.",
-			parameters: Type.Object({ id: Type.Optional(Type.String()) }),
+			parameters: obj({ id: opt(str()) }, { open: true }),
 			replay: "safe",
 			execute: async (args, api, c) => {
 				const ids = Object.keys((await api.snapshot(BashJobsDoc, api.conversationId, c))?.jobs ?? {}).filter((id) => args.id === undefined || id === args.id);
@@ -192,7 +192,7 @@ export class BackgroundBash {
 		const cancel = defineTool({
 			name: "bash_cancel",
 			description: "Stop one session-owned background bash job by ID. Does not affect unrelated processes.",
-			parameters: Type.Object({ id: Type.String() }),
+			parameters: obj({ id: str() }, { open: true }),
 			replay: "safe",
 			execute: async (args, api, c) => {
 				const owned = (await api.snapshot(BashJobsDoc, api.conversationId, c))?.jobs[args.id] !== undefined;

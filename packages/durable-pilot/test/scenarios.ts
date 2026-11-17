@@ -2,7 +2,7 @@
 // resumes explicitly and returns evidence. Assertions live in the *.test.ts files.
 import { join } from "node:path";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
-import { defineDoc, defineExtension, defineTask, type HarnessSettings, LiveDoc, type SubmissionId } from "@earendil-works/pi-durable";
+import { defineDoc, defineExtension, defineTask, type HarnessSettings, LiveDoc, type LiveState, type SubmissionId } from "@earendil-works/pi-durable";
 import { fileDeferred, readLog, router } from "../src/faux.ts";
 import { admit, context, editQueued, Edits, type Host, type HostOptions, openHost, Reconcile } from "../src/host.ts";
 import {
@@ -146,15 +146,21 @@ const generation: Scenario = {
 				? { provider: (faux) => fileDeferred(faux, dir), settings: { stream: { deferred: true } } }
 				: { faux: { tokensPerSecond: 200, tokenSize: { min: 1, max: 1 } } }),
 		});
-		const watch = (await host.harness.watchDoc(LiveDoc, host.root.id, context))!;
+		// The barrier is on stored state: Durable 1.5 shows progress to watches before it stores it (deferred commits).
 		let sent = false;
-		watch.start(async (value) => {
-			if (sent) return;
-			const message = value?.generation?.message as AssistantMessage | undefined;
-			if (deferred ? value?.generation?.deferred !== undefined : textOf(message) !== "") {
-				sent = true;
-				await io.barrier(deferred ? "deferred" : "partial", { text: textOf(message) });
-			}
+		host.harness.observeCommits({
+			advance: (publication) => {
+				for (const change of publication.changes) {
+					if (sent || change.type !== "document" || change.kind !== "change" || change.record.kind !== LiveDoc.definition.kind || change.conversationId !== host.root.id) continue;
+					const value = change.value as LiveState;
+					const message = value.generation?.message as AssistantMessage | undefined;
+					if (deferred ? value.generation?.deferred !== undefined : textOf(message) !== "") {
+						sent = true;
+						void io.barrier(deferred ? "deferred" : "partial", { text: textOf(message) });
+					}
+				}
+			},
+			end: () => {},
 		});
 		await admit(host.root, { operationId: "op-1", text: "gen" });
 		return host;
@@ -549,7 +555,7 @@ const diskFull: Scenario = {
 			error = [String((failure as Error).message ?? failure), ...inner.map((e) => String((e as Error).message ?? e))].join(" | ");
 		}
 		// A storage error ends the Harness; wait for that end only when the admission failed.
-		const end = error === null ? "open" : (await host.harness.closed).reason;
+		const end = error === null ? "open" : (await host.harness.closed).kind;
 		await io.barrier("rejected", { admitted, error, end, reports: host.reports.map((r) => r.type) });
 		return { ...host, close: async () => {} };
 	},
@@ -566,23 +572,23 @@ const diskFull: Scenario = {
 	},
 };
 
-/** Each spawn opens; a crash-looping task kills the process until the restart limit parks it. */
+/** Each spawn opens; a crash-looping task kills the process until the restart limit ends it (Durable 1.5: no parking). */
 const parking: Scenario = {
 	async crash(dir, options, io) {
 		const host = await pilotHost(dir, { settings: { restartLimit: 3 } });
 		if (options.first === true) await admit(host.root, { operationId: "op-1", text: "call:crasher" });
-		const inspection = await host.harness.inspect(context);
-		const parked = inspection.tasks.filter((t) => t.state.kind === "blocked" && t.state.reason === "restart_limit");
 		await host.resume();
-		if (parked.length > 0) {
-			await host.harness.inspect(context);
-			await io.barrier("parked", {
-				parked: parked.map((t) => ({ id: t.record.id, kind: t.record.kind })),
-				wake: host.harness.wake(),
-				reports: host.reports.map((r) => r.type),
-				runs: readLog(join(dir, "effects.log")).length,
-			});
-		}
+		// Below the limit the crasher kills this process; at it, the call ends with an error result and the run goes on.
+		const settled = await waitRequest(host, "op-1");
+		const inspection = await host.harness.inspect(context);
+		await io.barrier("ended", {
+			settled,
+			live: inspection.tasks.map((t) => ({ id: t.record.id, kind: t.record.kind })),
+			wake: host.harness.wake(),
+			reports: host.reports.map((r) => r.type),
+			runs: readLog(join(dir, "effects.log")).length,
+			results: (await transcript(host)).results,
+		});
 		return host;
 	},
 	async verify() {

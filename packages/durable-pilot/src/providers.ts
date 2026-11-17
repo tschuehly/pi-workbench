@@ -1,5 +1,5 @@
 // The non-Claude providers of a legacy Chat on Durable: the ChatGPT subscription (`openai-codex`, and `openai` signed
-// in with ChatGPT), the Muse subscription (`meta`) and GitHub Copilot, pi-ai 1.4.0's own providers. Their logins come from Pi's auth.json through PiAuthStore (Pi's lock, Pi's format), so
+// in with ChatGPT), the Muse subscription (`meta`) and GitHub Copilot, pi-ai 1.5.2's own providers. Their logins come from Pi's auth.json through PiAuthStore (Pi's lock, Pi's format), so
 // a provider without a stored login is simply unavailable; nothing here logs in. Plus pi-openai-fast-mode 0.5.0
 // (`/fast`, the `service_tier` payload hook), ported from its source because the package binds to Pi's extension API.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";

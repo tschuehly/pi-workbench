@@ -6,7 +6,7 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { Message } from "@earendil-works/pi-ai";
 import { AgentDoc, type Conversation, type ConversationId, defineDoc, defineExtension, type DocumentReader, hook, type ToolRegistration, ToolTask } from "@earendil-works/pi-durable";
 import { blockTmpWrite, piTmpDir, sweep, warnTmpBash } from "../../../extensions/pi-tmp/pitmp.mjs";

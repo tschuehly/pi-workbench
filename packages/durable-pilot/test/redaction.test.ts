@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { fauxAssistantMessage, fauxText, fauxToolCall, Type } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { obj } from "@earendil-works/pi-schema";
 import { defineExtension, defineTool, hook, LiveDoc, type ToolRegistration, ToolTask } from "@earendil-works/pi-durable";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { textOfMessage } from "../src/faux.ts";
@@ -83,7 +84,8 @@ async function watchPartials(h: Host, until?: (seen: readonly string[]) => boole
 	let reach!: () => void;
 	const reached = new Promise<void>((resolve) => (reach = resolve));
 	const watch = (await h.harness.watchDoc(LiveDoc, h.root.id, context))!;
-	watch.start(async (value) => {
+	watch.start(async (call) => {
+		const value = call.kind === "value" ? call.value : undefined;
 		const text = textOfMessage(value?.generation?.message as never);
 		if (text !== "") seen.push(text);
 		for (const tool of value?.tools ?? []) if (tool.output !== undefined) seen.push(tool.output);
@@ -161,7 +163,7 @@ describe("pre-persistence redaction", () => {
 			defineTool({
 				name: "splitter",
 				description: "emits a secret in pieces",
-				parameters: Type.Object({}),
+				parameters: obj({}, { open: true }),
 				execute: async (_args, api, c) => {
 					let sofar = "";
 					for (const piece of ["start\nkey: sk-ant-api03-", BODY.slice(0, 10), BODY.slice(10, 20), `${BODY.slice(20)} tail\n`, `env ${ENV_SECRET.slice(0, 9)}`, `${ENV_SECRET.slice(9)}\n`]) {
@@ -232,7 +234,7 @@ describe("pre-persistence redaction", () => {
 					defineTool({
 						name: "pem",
 						description: "prints keys in pieces",
-						parameters: Type.Object({}),
+						parameters: obj({}, { open: true }),
 						execute: async (_args, api) => {
 							for (const piece of ["cert follows\n-----BEGIN RSA ", "PRIVATE KEY-----\n", `${PEM_BODY}\n`, `${PEM_BODY}\n`, "-----END RSA PRIVATE KEY-----\nnext ", "-----BEGIN EC ", "PRIVATE KEY-----\n", `${PEM_TAIL}\n`]) {
 								api.output(piece);
@@ -247,7 +249,7 @@ describe("pre-persistence redaction", () => {
 					defineTool({
 						name: "peek",
 						description: "reads retained output mid-token",
-						parameters: Type.Object({}),
+						parameters: obj({}, { open: true }),
 						execute: async (_args, api) => {
 							api.output(`token sk-ant-api03-${BODY.slice(0, 10)}`);
 							peeked.push(api.retainedOutput().text);
@@ -304,7 +306,7 @@ describe("pre-persistence redaction", () => {
 			return redact(text);
 		};
 		const tool = redactingTool(
-			defineTool({ name: "leaky", description: "leaks", parameters: Type.Object({}), execute: async (_a, api) => (api.output(`secret ${KEY}\n`), {}) }),
+			defineTool({ name: "leaky", description: "leaks", parameters: obj({}, { open: true }), execute: async (_a, api) => (api.output(`secret ${KEY}\n`), {}) }),
 			() => {
 				throw new Error("sanitizer exploded");
 			},
@@ -349,7 +351,7 @@ describe("pre-persistence redaction", () => {
 
 	it("why not hooks: Durable skips a throwing afterTool hook and commits the raw result", async () => {
 		const dir = scratch("redact-hook");
-		const tool = defineTool({ name: "leaky", description: "leaks", parameters: Type.Object({}), execute: async () => ({ output: [{ type: "text", text: `secret ${KEY}` }] }) });
+		const tool = defineTool({ name: "leaky", description: "leaks", parameters: obj({}, { open: true }), execute: async () => ({ output: [{ type: "text", text: `secret ${KEY}` }] }) });
 		const h = await host(dir, { tools: [tool], hooks: true, raw: true });
 		h.faux.setResponses([fauxAssistantMessage([fauxToolCall("leaky", {})], { stopReason: "toolUse" }), fauxAssistantMessage([fauxText("ok")])]);
 		await admit(h.root, { operationId: "op-1", text: "go" });

@@ -49,8 +49,9 @@ export class ChatHost {
 	#waiters: (() => void)[] = [];
 	ready: Promise<NonNullable<Reply["ready"]>>;
 
-	constructor(store: string, cwd: string, options: { tps?: number; env?: NodeJS.ProcessEnv; args?: string[] } = {}) {
-		this.child = fork(join(PACKAGE, "src", "chat-host-main.ts"), ["--store", store, "--cwd", cwd, "--model", "faux", "--faux-tps", String(options.tps ?? 400), ...(options.args ?? [])], {
+	/** `main`: another build's host entry, for store compatibility across versions (scripts/store-compat.ts). */
+	constructor(store: string, cwd: string, options: { tps?: number; env?: NodeJS.ProcessEnv; args?: string[]; main?: string } = {}) {
+		this.child = fork(options.main ?? join(PACKAGE, "src", "chat-host-main.ts"), ["--store", store, "--cwd", cwd, "--model", "faux", "--faux-tps", String(options.tps ?? 400), ...(options.args ?? [])], {
 			stdio: ["ignore", "ignore", "pipe", "ipc"],
 			// The host's real free disk must not add storage-guard notices to transcripts; tests pass their own reading.
 			env: { ...process.env, PI_STORAGE_GUARD_FREE_GB: "1000", ...options.env },

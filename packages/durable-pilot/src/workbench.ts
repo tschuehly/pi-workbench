@@ -4,8 +4,8 @@
 // delivered once as a follow-up), and the resources PI WEB resolves with Pi's own loader (AGENTS.md, APPEND_SYSTEM.md,
 // the skill catalog) as system-prompt sections in Pi's order.
 import { createHash } from "node:crypto";
-import { Type } from "@earendil-works/pi-ai";
-import type { Context } from "@earendil-works/chord";
+import { arr, bool, obj, opt, str } from "@earendil-works/pi-schema";
+import type { Context } from "@earendil-works/chord/context";
 import { type Conversation, type JsonObject, defineDoc, defineExtension, defineTask, defineTool, type EntryRecord, GenerationTask, type Harness, hook, type ToolRegistration } from "@earendil-works/pi-durable";
 import {
 	ALIGNMENT_RESET_TOOL,
@@ -151,7 +151,7 @@ const alignmentTools: ToolRegistration[] = [
 	defineTool({
 		name: ALIGNMENT_TOOL,
 		description: alignmentTool.description,
-		parameters: Type.Object({ agreement: Type.String({ minLength: 1, description: alignmentTool.agreement }) }),
+		parameters: obj({ agreement: str({ minLength: 1, description: alignmentTool.agreement }) }, { open: true }),
 		replay: "safe",
 		execute: async (args, api, c) => {
 			const result = await api.commit(async (tx) => {
@@ -166,7 +166,7 @@ const alignmentTools: ToolRegistration[] = [
 	defineTool({
 		name: ALIGNMENT_RESET_TOOL,
 		description: alignmentResetTool.description,
-		parameters: Type.Object({ reason: Type.String({ minLength: 1, description: alignmentResetTool.reason }) }),
+		parameters: obj({ reason: str({ minLength: 1, description: alignmentResetTool.reason }) }, { open: true }),
 		replay: "safe",
 		execute: async (args, api, c) => {
 			const result = await api.commit(async (tx) => {
@@ -282,25 +282,25 @@ function stableId(...parts: string[]): string {
 const questionRef = (askId: string, questionId: string) => `${askId.slice(0, 3)}.${questionId}`;
 const refs = (ask: PendingAsk) => ask.questions.map((q) => questionRef(ask.askId, q.id)).join(", ");
 
-const OptionParams = Type.Object({
-	value: Type.String({ maxLength: ID_MAX, description: "Stable machine value reported back to you when the user picks this option." }),
-	label: Type.String({ maxLength: TEXT_MAX, description: "Short label the user reads, ideally a few words." }),
-	detail: Type.Optional(Type.String({ maxLength: TEXT_MAX, description: "Optional clarification shown under the label." })),
-	recommended: Type.Optional(Type.Boolean({ description: "Mark the option you recommend." })),
-});
-const QuestionParams = Type.Object({
-	id: Type.String({ maxLength: ID_MAX, description: "Unique within this call; used as the answer key reported back to you." }),
-	question: Type.String({ maxLength: TEXT_MAX, description: "The question itself, as one plain-text line. Do not number it; the panel numbers the questions." }),
-	detail: Type.String({ maxLength: DETAIL_MAX, description: "Markdown shown under the question: what the item is, an example, and where it stands, so the question is answerable from the set alone." }),
-	options: Type.Optional(Type.Array(OptionParams, { maxItems: OPTION_LIMIT, description: "Options to choose from. Omit when free text is the whole answer; the browser always adds a Custom choice." })),
-	multiple: Type.Optional(Type.Boolean({ description: "Allow several options at once. Default: one answer per question." })),
-});
-const AskParams = Type.Object({
-	context: Type.Optional(Type.String({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown shown above the questions: what all the questions share, so the user can answer without reading the Chat. Put each question's specifics in its `detail` and each option's consequence in the option's `detail`." })),
-	questions: Type.Optional(Type.Array(QuestionParams, { minItems: 1, maxItems: QUESTION_LIMIT, description: "Required for a new set: the questions in reading order. Every question may be left unanswered." })),
-	update: Type.Optional(Type.String({ maxLength: ID_MAX, description: "askId of an open set to revise in place. Given context/questions replace the old ones; send neither to confirm the set is still current." })),
-	withdraw: Type.Optional(Type.String({ maxLength: ID_MAX, description: "askId of an open set to withdraw because it no longer matters. Send nothing else." })),
-});
+const OptionParams = obj({
+	value: str({ maxLength: ID_MAX, description: "Stable machine value reported back to you when the user picks this option." }),
+	label: str({ maxLength: TEXT_MAX, description: "Short label the user reads, ideally a few words." }),
+	detail: opt(str({ maxLength: TEXT_MAX, description: "Optional clarification shown under the label." })),
+	recommended: opt(bool({ description: "Mark the option you recommend." })),
+}, { open: true });
+const QuestionParams = obj({
+	id: str({ maxLength: ID_MAX, description: "Unique within this call; used as the answer key reported back to you." }),
+	question: str({ maxLength: TEXT_MAX, description: "The question itself, as one plain-text line. Do not number it; the panel numbers the questions." }),
+	detail: str({ maxLength: DETAIL_MAX, description: "Markdown shown under the question: what the item is, an example, and where it stands, so the question is answerable from the set alone." }),
+	options: opt(arr(OptionParams, { maxItems: OPTION_LIMIT, description: "Options to choose from. Omit when free text is the whole answer; the browser always adds a Custom choice." })),
+	multiple: opt(bool({ description: "Allow several options at once. Default: one answer per question." })),
+}, { open: true });
+const AskParams = obj({
+	context: opt(str({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown shown above the questions: what all the questions share, so the user can answer without reading the Chat. Put each question's specifics in its `detail` and each option's consequence in the option's `detail`." })),
+	questions: opt(arr(QuestionParams, { minItems: 1, maxItems: QUESTION_LIMIT, description: "Required for a new set: the questions in reading order. Every question may be left unanswered." })),
+	update: opt(str({ maxLength: ID_MAX, description: "askId of an open set to revise in place. Given context/questions replace the old ones; send neither to confirm the set is still current." })),
+	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to withdraw because it no longer matters. Send nothing else." })),
+}, { open: true });
 
 // PI WEB askUserTool.ts description and prompt guidelines (Durable tools carry no separate guideline field).
 const ASK_DESCRIPTION = [
@@ -410,7 +410,7 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 	const attention = defineTool({
 		name: "request_attention",
 		description: ATTENTION_DESCRIPTION,
-		parameters: Type.Object({ reason: Type.String({ description: "One short, self-contained line: what you need from the user and why, readable without the Chat." }) }),
+		parameters: obj({ reason: str({ description: "One short, self-contained line: what you need from the user and why, readable without the Chat." }) }, { open: true }),
 		replay: "safe",
 		execute: async (args, api, c) => {
 			// Bounded after sanitizing: a cut through a secret leaves a fragment no later redaction recognizes.

@@ -1,4 +1,4 @@
-// Claude subscription access on Durable through public seams only: pi-ai 1.4.0's own Anthropic OAuth path (Claude
+// Claude subscription access on Durable through public seams only: pi-ai 1.5.2's own Anthropic OAuth path (Claude
 // Code identity headers and system block for sk-ant-oat tokens), plus the pi-claude-code-use 2.2.1 payload rules
 // re-expressed at pi-ai's `onPayload` hook — flat custom tool names go out as mcp__ aliases and come back canonical
 // before Durable executes or stores them. Credentials live in Pi's auth.json and are refreshed under Pi's own file lock,

@@ -93,12 +93,14 @@ Each successful command prunes `~/.pi-workbench/installed-durable/` (keeps live,
 ## Roll back
 
 - Automatic: a `switch` whose services do not become healthy in 90 s restores the previous Durable plists, links and plugin link, boots them and checks health (`rollback done` in the job log, exit 1; `ROLLBACK FAILED` means exit 4: check `~/.pi-web-durable/logs/`). It never touches a host: the restored daemon reattaches them.
-- To the previous revision: each command prints its `roll back:` line; for `switch`, use the `wb=` and `pw=` of the earlier `start` line in `~/.pi-workbench/installed-durable/jobs/*/job.log`:
+- To the previous revision (after 1.5.2, see the two-step rule below): each command prints its `roll back:` line; for `switch`, use the `wb=` and `pw=` of the earlier `start` line in `~/.pi-workbench/installed-durable/jobs/*/job.log`:
   `$P --instance durable switch <previous-wb-sha> <previous-pw-sha>`
 - Back to the legacy instance: open http://127.0.0.1:8505/. Nothing to switch; Durable Chats stay readable on :8506. To stop the Durable instance:
   `launchctl bootout gui/$(id -u)/com.pi-web-durable.web; launchctl bootout gui/$(id -u)/com.pi-web-durable.sessiond`
   Its hosts keep running (and keep working) until stopped one by one, which interrupts that family's Chats: `launchctl bootout gui/$(id -u)/com.pi-workbench.durable-host.<family>` for each label from `launchctl list` above.
   Start it again: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pi-web-durable.sessiond.plist; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pi-web-durable.web.plist`
+- **Pi Durable 1.5.2 → 1.4.0 is one-way for every Chat 1.5.2 has opened.** 1.5.2 upgrades the Chat's store (`pi.live` v3), and a 1.4.0 host refuses to open it ("has newer version 3 than 1"). After rolling the instance back to a 1.4.0 build, such a Chat stays on its pinned 1.5.2 host: it shows "Host `<sha>` (new Chats run `<sha>`)", and **Upgrade host** refuses ("This Chat was opened by a newer Pi Durable (1.5.2); the current host is 1.4.0") and leaves it running and readable. Do not delete the 1.5.2 build while such Chats exist (prune keeps it while a Chat is pinned to it; never remove it by hand): without it, the Chat falls back to the 1.4.0 host and cannot be opened until that build is reinstalled. The store itself stays intact.
+- **Promote 1.5.2 in two steps, so every rollback keeps the guard.** The refusal above lives in PI WEB, not in the host. Step 1: promote the PI WEB build that has the guard (pi-web `cbcddf45` or later) with the 1.4.0 host. Step 2: promote the 1.5.2 host with that same PI WEB build. Rolling back step 2 then restores the guarded PI WEB with the 1.4.0 host. Never roll PI WEB back past step 1 while a Chat 1.5.2 has opened exists: an older PI WEB's Upgrade host closes the 1.5.2 host, drops the pin and opens the Chat under 1.4.0, which refuses it; the Chat is unreadable until it is upgraded again.
 
 ## Prune by hand
 
