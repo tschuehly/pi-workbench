@@ -440,6 +440,25 @@ test("a trial (PI_PROMOTE_DURABLE_TRIAL) promotes and rolls back only its own fo
   for (const port of ["", "8506", "8505"]) assert.equal(h.run(["--instance", "durable", "prune"], { ...t, PI_PROMOTE_DURABLE_PORT: port }).status, 2, port);
 });
 
+test("a trial refuses a port that is the legacy or Durable one in disguise, and projects outside the trial, before touching anything", () => {
+  const h = harness();
+  const trial = join(h.root, "trial"), projects = join(trial, "projects");
+  for (const product of ["pi-workbench", "pi-web"]) mkdirSync(join(projects, product), { recursive: true });
+  const before = h.legacy(), instance = h.durable();
+  const refused = (env) => {
+    const r = h.run(["--instance", "durable", "switch", wbRev(1), pwRev(1), "0"], { PI_PROMOTE_DURABLE_TRIAL: trial, ...env });
+    assert.equal(r.status, 2, r.stdout + r.stderr);
+  };
+  for (const port of ["08505", "008506", "8505", "80", "70000", ""]) refused({ PI_PROMOTE_DURABLE_PORT: port, PI_WORKBENCH_PROJECTS: projects });
+  // Without its own projects folder a trial switch would repoint the real *.durable-installed links.
+  refused({ PI_PROMOTE_DURABLE_PORT: "8516" });
+  refused({ PI_PROMOTE_DURABLE_PORT: "8516", PI_WORKBENCH_PROJECTS: h.projects });
+  assert.equal(launchLabels(h).size, 0);
+  assert.ok(!existsSync(join(trial, "installed-durable")));
+  assert.deepEqual(h.legacy(), before);
+  assert.deepEqual(h.durable(), instance);
+});
+
 test("--instance names only durable, which refuses the legacy-only commands", () => {
   const h = harness();
   assert.equal(h.run(["--instance", "other", "prune"]).status, 2);

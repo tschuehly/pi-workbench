@@ -69,7 +69,12 @@ if [[ ${1:-} == --instance ]]; then
   T= LA=$HOME/Library/LaunchAgents HOSTLABEL=com.pi-workbench.durable-host JOBLABEL=com.pi-workbench.promote-installed-durable EXTRA=
   if [[ -n ${PI_PROMOTE_DURABLE_TRIAL:-} ]]; then
     T=$PI_PROMOTE_DURABLE_TRIAL PORT=${PI_PROMOTE_DURABLE_PORT:-}
-    [[ $PORT =~ ^[0-9]+$ && $PORT != 8505 && $PORT != 8506 ]] || { echo "a trial needs its own PI_PROMOTE_DURABLE_PORT" >&2; exit 2; }
+    # Compare numbers, not strings: lsof treats 08505 as 8505.
+    [[ $PORT =~ ^[0-9]{1,5}$ ]] && PORT=$((10#$PORT)) && (( PORT >= 1024 && PORT <= 65535 && PORT != 8505 && PORT != 8506 )) ||
+      { echo "a trial needs its own PI_PROMOTE_DURABLE_PORT (1024-65535, not 8505 or 8506)" >&2; exit 2; }
+    # The trial's links must live inside the trial, or a switch would repoint the real *.durable-installed links.
+    tr=$(cd "$T" 2>/dev/null && pwd -P) && pr=$(cd "${PI_WORKBENCH_PROJECTS:-/nonexistent}" 2>/dev/null && pwd -P) && [[ $pr == "$tr"/* ]] ||
+      { echo "a trial needs its own PI_WORKBENCH_PROJECTS inside PI_PROMOTE_DURABLE_TRIAL" >&2; exit 2; }
     STORE=$T/installed-durable DATA=$T/data LA=$T/LaunchAgents LABEL=com.pi-workbench.durable-trial
     HOSTLABEL=$LABEL.host JOBLABEL=$LABEL.promote EXTRA=${PI_PROMOTE_DURABLE_ENV:-}
   fi
