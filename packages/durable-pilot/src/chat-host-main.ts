@@ -13,7 +13,9 @@
 //               { id, result } | { id, error }, { event }. Events emitted while no daemon is connected are dropped: a
 //               reattaching daemon reads status and transcript afresh.
 // `close` with `{ end: true }` is the owner ending the Chat: its background jobs are cancelled first; without it (and on
-// signals or a lost daemon) they keep running. The host exits after `close` or on SIGTERM/SIGINT, and an IPC host also when its daemon goes away (disconnect),
+// signals or a lost daemon) they keep running. `close` with `{ reason: "upgrade" }` is PI WEB's Upgrade now: an ordinary
+// close, recorded as an `upgrade-restart`; `resume` with `{ reason: "upgrade-restart" }` then makes the next host resume
+// at once instead of staying paused (the owner asked for the restart). The host exits after `close` or on SIGTERM/SIGINT, and an IPC host also when its daemon goes away (disconnect),
 // closing the store gracefully first. A socket host stays when its daemon goes away.
 import { chmodSync, lstatSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -105,7 +107,7 @@ await session.start();
 
 let closing: Promise<void> | undefined;
 /** `end` (optional on `close`): an explicit end of the Chat, which cancels its background jobs; restarts omit it. */
-const close = (end = false) => (closing ??= session.close({ end }));
+const close = (end = false, upgrade = false) => (closing ??= session.close({ end, ...(upgrade ? { reason: "upgrade" as const } : {}) }));
 
 const text = (params: Record<string, unknown>, name: string): string => {
 	const value = params[name];
@@ -203,11 +205,16 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		if (expectedLeafId !== null && typeof expectedLeafId !== "string") throw new Error("expectedLeafId must be an entry ID or null");
 		return session.navigate({ targetId, expectedLeafId, ...(retainCheckpoint === true ? { retainCheckpoint } : {}) });
 	},
-	close: (params) => close(params.end === true),
+	close: (params) => close(params.end === true, params.reason === "upgrade"),
+	// The host after an Upgrade now: restored work resumes at once (recovery as after any restart), not paused.
+	resume: (params) => {
+		if (params.reason !== "upgrade-restart") throw new Error("resume needs reason upgrade-restart");
+		return session.resume("upgrade-restart");
+	},
 };
 
 /** Operations that must not overlap history navigation (legacy `assertTreeNavigationInactive`). */
-const EXCLUSIVE = new Set(["prompt", "mode", "closeAsk", "setModel", "resolveEffect", "compact", "command", "mutateQueue", "setThinkingLevel", "cycleThinkingLevel", "shell"]);
+const EXCLUSIVE = new Set(["prompt", "resume", "mode", "closeAsk", "setModel", "resolveEffect", "compact", "command", "mutateQueue", "setThinkingLevel", "cycleThinkingLevel", "shell"]);
 
 /** One request; the reply goes back the way it came (a socket request to the connection that sent it). */
 async function handle(message: Request, reply: (message: unknown) => void): Promise<void> {

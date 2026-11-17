@@ -184,3 +184,30 @@ export async function runWindow(window: Window, mode: Mode, iterations = ITERATI
 	await Promise.all(Array.from({ length: Math.min(CONCURRENCY, iterations) }, worker));
 	if (failures.length > 0) throw new Error(`${window.id}/${mode}: ${failures.length}/${iterations} failed\n${failures.slice(0, 5).join("\n")}`);
 }
+
+/**
+ * ITERATIONS runs of one upgrade-trigger row (PI WEB's Upgrade now against the real Chat host), CONCURRENCY at a time;
+ * each iteration's evidence goes to results/evidence/upgrade.<row>.jsonl. Rejects with every failure.
+ */
+export async function runRow(row: string, iteration: (index: number) => Promise<Record<string, unknown>>, iterations = ITERATIONS): Promise<void> {
+	const file = join(PACKAGE, "results", "evidence", `upgrade.${row}.jsonl`);
+	mkdirSync(dirname(file), { recursive: true });
+	writeFileSync(file, "");
+	const failures: string[] = [];
+	let next = 0;
+	const worker = async () => {
+		while (next < iterations) {
+			const index = next++;
+			const started = Date.now();
+			try {
+				const evidence = await iteration(index);
+				appendFileSync(file, `${JSON.stringify({ iteration: index, mode: "upgrade", ...evidence, ms: Date.now() - started, pass: true })}\n`);
+			} catch (error) {
+				appendFileSync(file, `${JSON.stringify({ iteration: index, mode: "upgrade", pass: false, failure: String(error), ms: Date.now() - started })}\n`);
+				failures.push(`#${index}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(CONCURRENCY, iterations) }, worker));
+	if (failures.length > 0) throw new Error(`upgrade.${row}: ${failures.length}/${iterations} failed\n${failures.slice(0, 5).join("\n")}`);
+}
