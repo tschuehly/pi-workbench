@@ -8,6 +8,8 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { AgentDoc } from "@earendil-works/pi-durable";
+import { BackgroundBash, BashJobsDoc } from "../src/background-bash.ts";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
@@ -490,4 +492,36 @@ test("an explicit end cancels the family's background jobs (the runner's whole p
 	await sleep(300);
 	assert.equal(await writing(), false, "the writer stopped");
 	assert.equal(launches(cwd), 1);
+});
+
+test("an explicit end refuses a bash call already past its intent commit: the late job is cancelled and never runs", async () => {
+	const { cwd } = family("end-race");
+	const bash = new BackgroundBash({ chatId: "chat-end-race", cwd, rootId: () => "lead" as never, root: JOBS });
+	const tool = bash.extension().tools!.find((t) => t.name === "bash")!;
+	const doc = { jobs: {} as Record<string, unknown> };
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => (release = resolve));
+	let atIntent!: () => void;
+	const reachedIntent = new Promise<void>((resolve) => (atIntent = resolve));
+	const api = {
+		taskId: "task-1", callId: "call-1", conversationId: "lead", now: () => Date.now(),
+		snapshot: async (kind: unknown) => (kind === AgentDoc ? { cwd } : kind === BashJobsDoc ? doc : undefined),
+		// The intent commit lands, then the call is held before it launches.
+		commit: async (fn: (tx: unknown) => Promise<unknown>) => {
+			const result = await fn({ doc: async () => doc });
+			atIntent();
+			await held;
+			return result;
+		},
+		retainedOutput: () => ({ text: "" }),
+	};
+	const call = (tool.execute as (...args: unknown[]) => Promise<{ output: { text: string }[] }>)({ description: "Late", command: "echo x >> launches.log" }, api, { abortSignal: new AbortController().signal });
+	await reachedIntent;
+	bash.cancelAll(); // close({ end: true }) sweeps the family's jobs first.
+	release();
+	const id = jobId((await call).output[0]!.text);
+	assert.equal(exitRecord(id)?.cancelled, true, "the late job has a cancelled exit record");
+	await sleep(1000);
+	assert.equal(launches(cwd), 0, "the command never ran");
+	bash.close();
 });

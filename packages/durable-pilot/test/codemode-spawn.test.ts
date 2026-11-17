@@ -4,8 +4,9 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { after, test } from "node:test";
+import { after, mock, test } from "node:test";
 import { openChatHost } from "../src/chat.ts";
+import { SessionSpawner } from "../src/spawn-session.ts";
 import { ChatHost, family, live, logged, type Message, textOf, type UiEvent } from "./chat-proc.ts";
 import { cleanup } from "./runner.ts";
 
@@ -75,6 +76,45 @@ test("P064 spawn_session: the host asks PI WEB for an independent Chat with the 
 	assert.equal(failed.isError, true);
 	assert.match(textOf(failed.content), /Unknown model nope\/none/);
 	await host.close();
+});
+
+test("P064 spawn_session: the answer timeout only runs while a daemon is connected; a request outlives any outage and is resent", async () => {
+	mock.timers.enable({ apis: ["setTimeout"] });
+	try {
+		const sent: { requestId: string }[] = [];
+		const spawner = new SessionSpawner("chat-1");
+		spawner.enabled = true;
+		spawner.attach((event) => sent.push(event));
+		const api = { taskId: 7, agent: async () => ({ cwd: "/repo", model: undefined, thinkingLevel: undefined }) };
+		const tool = spawner.extension().tools![0]!;
+		let settled: unknown;
+		const call = (tool.execute as (...args: unknown[]) => Promise<{ details: unknown }>)({ prompt: "Fix the build" }, api, { abortSignal: new AbortController().signal })
+			.then((r) => (settled = r.details), (e: Error) => (settled = e));
+		for (let i = 0; i < 5 && sent.length === 0; i++) await Promise.resolve();
+		assert.equal(sent.length, 1, "asked while connected");
+		spawner.disconnected();
+		mock.timers.tick(121_000);
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(settled, undefined, "a daemon outage longer than the answer timeout keeps the request pending");
+		spawner.resend();
+		assert.equal(sent.length, 2, "resent once to the daemon that came back");
+		assert.equal(sent[1]!.requestId, sent[0]!.requestId);
+		spawner.settle({ requestId: sent[0]!.requestId, result: { sessionId: "chat-2", cwd: "/repo" } });
+		await call;
+		assert.deepEqual(settled, { sessionId: "chat-2", cwd: "/repo" });
+
+		// While connected the timeout still runs: a daemon that never answers fails the call.
+		let failed: unknown;
+		const api2 = { ...api, taskId: 8 };
+		const stuck = (tool.execute as (...args: unknown[]) => Promise<unknown>)({ prompt: "again" }, api2, { abortSignal: new AbortController().signal }).catch((e: Error) => (failed = e));
+		for (let i = 0; i < 5 && sent.length === 2; i++) await Promise.resolve();
+		assert.equal(sent.length, 3);
+		mock.timers.tick(121_000);
+		await stuck;
+		assert.match(String(failed), /did not answer/);
+	} finally {
+		mock.timers.reset();
+	}
 });
 
 test("P064 spawn_session without PI WEB's spawn support fails visibly instead of waiting", async () => {

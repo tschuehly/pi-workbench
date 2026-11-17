@@ -86,6 +86,8 @@ if (holds.length > 0)
 		send({ event: { type: "test.hold", name } });
 		return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new Error(`hold ${name} aborted`)), { once: true }));
 	});
+// A socket host has no daemon until one connects: spawn_session answer timeouts wait for it.
+if (socketPath !== undefined) host.spawner.disconnected();
 const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder });
 await session.start();
 
@@ -257,7 +259,9 @@ else {
 		socket.setEncoding("utf8");
 		socket.on("error", () => undefined);
 		socket.on("close", () => {
-			if (peer === socket) peer = undefined;
+			if (peer !== socket) return;
+			peer = undefined;
+			host.spawner.disconnected();
 		});
 		let buffer = "";
 		socket.on("data", (chunk: string) => {

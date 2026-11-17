@@ -111,6 +111,8 @@ export class BackgroundBash {
 	readonly #root: string;
 	/** Set before the harness closes: a wait it interrupts is a host restart, never a cancel. */
 	#closing = false;
+	/** Set by `cancelAll`: the owner ended the Chat, so a launch that lands after the sweep is cancelled at once. */
+	#ending = false;
 	#timer: ReturnType<typeof setInterval> | undefined;
 	#reporting = false;
 	#signature = "";
@@ -164,6 +166,8 @@ export class BackgroundBash {
 					root: this.#root, id, command: args.command, description: args.description, cwd, timeout: args.timeout,
 					env: { ...process.env, ...toolEnv(identity) }, sessionId: this.#options.chatId, shell, args: shellArgs, startedAt: ref.startedAt,
 				});
+				// A call past its intent commit when the Chat ended: its job is still pending, so its runner never starts the command.
+				if (this.#ending) cancelJob(this.#root, id);
 				crashPoint("bash.spawned");
 				const logPath = readJob(this.#root, id)!.logPath;
 				if (ref.background) return { output: text(started(id, logPath)), details: describeJob(readJob(this.#root, id)) };
@@ -274,6 +278,7 @@ export class BackgroundBash {
 	 * shortcut: scans the whole registry (pruned weekly); keep a per-Chat index if it grows large.
 	 */
 	cancelAll(): void {
+		this.#ending = true;
 		for (const id of existsSync(this.#root) ? readdirSync(this.#root) : []) {
 			let sessionId: unknown;
 			try {
