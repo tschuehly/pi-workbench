@@ -68,6 +68,27 @@ export async function registeredProviders(registrations: readonly ProviderRegist
 	return [...ids].map((id) => wrapProvider(withBaseUrl(withStoredModels(runtime.getProvider(id)!), modelsJsonBaseUrl(id)), { onPayload: fast.payload }));
 }
 
+/**
+ * Refresh, through the host's models and credential store (Pi's lock), the stored OAuth logins of `ids` that expired.
+ * True when one was refreshed: a package that picked its catalog without it (pi-xai-oauth falls back to its curated
+ * models and leaves the refresh to its session_start hook, which Durable does not bind) must be loaded again.
+ */
+export async function refreshExpiredLogins(models: { getAuth(providerId: string): Promise<unknown> }, store: CredentialStore, ids: readonly string[], failed: (message: string) => void): Promise<boolean> {
+	let refreshed = false;
+	for (const id of new Set(ids)) {
+		const stored = await store.read(id);
+		if (stored?.type !== "oauth" || stored.expires > Date.now()) continue;
+		try {
+			await models.getAuth(id);
+			refreshed = true;
+		} catch (error) {
+			// The request path reports it again (re-login fixes it); the package keeps the catalog it picked.
+			failed(`The ${id} login could not be refreshed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	return refreshed;
+}
+
 export const agentDir = () => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 
 /**

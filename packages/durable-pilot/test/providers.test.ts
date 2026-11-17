@@ -416,14 +416,15 @@ describe("P016b providers registered by Pi packages: pi-xai-oauth (xai-auth) and
 	};
 
 	/** A Chat with both packages installed, their logins stored, and every request recorded and answered here. */
-	async function packagedChat() {
+	/** `xai`: the stored login, the cache's age and other answers (the token endpoint, the catalog) for the expired-login case. */
+	async function packagedChat(xai: { login?: typeof XAI_LOGIN & { tokenEndpoint?: string }; cacheAge?: number; answer?: (url: URL, request: Request) => Response | undefined } = {}) {
 		for (const path of [XAI, META]) assert.ok(existsSync(join(path, "package.json")), `package at ${path}`);
-		const agent = agentDir({ ...LOGINS, ["xai-auth" as "meta"]: XAI_LOGIN });
+		const agent = agentDir({ ...LOGINS, ["xai-auth" as "meta"]: xai.login ?? XAI_LOGIN });
 		writeFileSync(join(agent, "settings.json"), JSON.stringify({ packages: [XAI, META] }));
 		writeFileSync(join(agent, "models-store.json"), JSON.stringify({ meta: { models: [EMBER], checkedAt: Date.now() } }));
 		// The package's account catalog, fresh: it lists grok-4.7 (its curated offline fallback is grok-4.6 only).
 		mkdirSync(join(agent, "cache", "pi-xai-oauth"), { recursive: true, mode: 0o700 });
-		writeFileSync(join(agent, "cache", "pi-xai-oauth", "models-v2.json"), JSON.stringify({ schemaVersion: 2, fetchedAt: Date.now() + 1_000, models: [GROK] }), { mode: 0o600 });
+		writeFileSync(join(agent, "cache", "pi-xai-oauth", "models-v2.json"), JSON.stringify({ schemaVersion: 2, fetchedAt: xai.cacheAge === undefined ? Date.now() + 1_000 : Date.now() - xai.cacheAge, models: [GROK] }), { mode: 0o600 });
 		// pi-xai-oauth also reads the Grok CLI's login from HOME: an empty one.
 		const home = join(agent, "..", "home");
 		mkdirSync(home, { recursive: true });
@@ -436,7 +437,9 @@ describe("P016b providers registered by Pi packages: pi-xai-oauth (xai-auth) and
 			const request = new Request(input, init);
 			const url = new URL(request.url);
 			const raw = await request.text();
-			sent.push({ host: url.host, path: url.pathname, authorization: request.headers.get("authorization"), body: raw === "" ? {} : JSON.parse(raw) });
+			sent.push({ host: url.host, path: url.pathname, authorization: request.headers.get("authorization"), body: raw === "" ? {} : raw.startsWith("{") ? JSON.parse(raw) : { form: raw } });
+			const answer = xai.answer?.(url, request);
+			if (answer !== undefined) return answer;
 			// Anything but a model request (a catalog refresh) is refused.
 			if (!url.pathname.endsWith("/responses")) return new Response("{}", { status: 401 });
 			const body = url.host === "api.meta.ai" ? (metaCalls++ === 0 ? functionCall("execute_command", { command: "echo ember-tool" }) : responses("ember answered")) : responses("grok answered");
@@ -486,6 +489,35 @@ describe("P016b providers registered by Pi packages: pi-xai-oauth (xai-auth) and
 			assert.deepEqual(assistantTexts(chat), ["grok answered"]);
 		} finally {
 			delete process.env.PI_WORKBENCH_QUOTA_CACHE;
+			await chat.close();
+		}
+	});
+
+	it("Grok after a restart with an expired login and an hour-old catalog: the host refreshes the login, the package's catalog is published again (grok-4.7, not the 4.6 fallback)", async () => {
+		const REFRESHED = "fake-xai-refreshed";
+		const json = (body: Json) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+		let refreshes = 0;
+		const { chat, sent } = await packagedChat({
+			login: { ...XAI_LOGIN, expires: Date.now() - HOUR, tokenEndpoint: "https://auth.x.ai/oauth2/token" },
+			cacheAge: HOUR,
+			answer: (url, request) => {
+				if (url.href === "https://auth.x.ai/oauth2/token") return (refreshes++, json({ access_token: REFRESHED, refresh_token: "fake-xai-refresh-2", expires_in: 3600, token_type: "Bearer" }));
+				// The entitled catalog, for the refreshed login only.
+				if (url.href === "https://cli-chat-proxy.grok.com/v1/models-v2")
+					return request.headers.get("authorization") === `Bearer ${REFRESHED}` ? json({ data: [{ model: "grok-4.7", name: "Grok 4.7", apiBackend: "responses", contextWindow: 256000 }] }) : new Response("{}", { status: 401 });
+				return undefined;
+			},
+		});
+		try {
+			assert.equal(refreshes, 1, "the expired login was refreshed once, by the host");
+			const available = (await chat.host.models.getAvailable()).map((m) => `${m.provider}/${m.id}`);
+			assert.ok(available.includes("xai-auth/grok-4.7"), `xai-auth/grok-4.7 available: ${available.filter((id) => id.startsWith("xai")).join(",")}`);
+			await chat.session.setModel("xai-auth", "grok-4.7");
+			await turn(chat, "to grok");
+			const grok = sent.filter((s) => s.path.endsWith("/responses"));
+			assert.equal(grok[0]!.authorization, `Bearer ${REFRESHED}`);
+			assert.deepEqual(assistantTexts(chat), ["grok answered"]);
+		} finally {
 			await chat.close();
 		}
 	});

@@ -36,7 +36,9 @@ export const BOUND_PACKAGES = ["pi-web-access", "ping-a-human-pi", "pi-process-m
 /**
  * Packages whose extension code runs only for the model providers it registers (`pi.registerProvider`, Pi's pre-bind
  * queue after load); their tools, commands and hooks stay unbound. The host composes and serves the providers.
- * ponytail: providers registered after load (a package's own /login refresh) are not picked up; bind runtime.registerProvider if one needs it.
+ * A package that picks its catalog by the stored login at load is loaded again once the host refreshed an expired one
+ * (`reloadProviders`), as legacy Pi's session_start refresh would re-register it.
+ * ponytail: other registrations after load (a package's own /login refresh) are not picked up; bind runtime.registerProvider if one needs it.
  */
 export const PROVIDER_PACKAGES = ["pi-xai-oauth", "pi-meta-oauth"];
 
@@ -198,7 +200,8 @@ export type PackageOptions = {
 export class PiPackages {
 	readonly #options: PackageOptions;
 	readonly #extensions: PiExtension[];
-	readonly #providers: ProviderRegistration[];
+	#providers: ProviderRegistration[];
+	#loadProviders: () => Promise<ProviderRegistration[]> = async () => this.#providers;
 	/** Tools the packages keep active; the rest are deferred. */
 	#active: Set<string>;
 	#host: PackageHost | undefined;
@@ -240,16 +243,30 @@ export class PiPackages {
 		// The scratch directory as cwd and agent dir: only the given paths load, no project or global extensions. Provider
 		// packages load apart, so nothing of theirs but the providers reaches the Chat.
 		const loaded = await pi.discoverAndLoadExtensions(of(BOUND_PACKAGES), options.scratch, options.scratch);
-		const providerLoad = await pi.discoverAndLoadExtensions(of(PROVIDER_PACKAGES), options.scratch, options.scratch);
-		for (const failure of [...loaded.errors, ...providerLoad.errors]) options.emit({ type: "session.diagnostic", message: `Package extension ${failure.path} failed to load: ${redact(failure.error)}` });
-		const pending = (load: typeof loaded) => (load.runtime as unknown as { pendingProviderRegistrations: ProviderRegistration[] }).pendingProviderRegistrations;
-		const packages = new PiPackages(options, loaded.extensions as unknown as PiExtension[], [...pending(loaded), ...pending(providerLoad)].map(({ name, config }) => ({ name, config })));
+		const failed = (load: typeof loaded) => {
+			for (const failure of load.errors) options.emit({ type: "session.diagnostic", message: `Package extension ${failure.path} failed to load: ${redact(failure.error)}` });
+		};
+		const pending = (load: typeof loaded) => (load.runtime as unknown as { pendingProviderRegistrations: ProviderRegistration[] }).pendingProviderRegistrations.map(({ name, config }) => ({ name, config }));
+		const loadProviders = async () => {
+			const load = await pi.discoverAndLoadExtensions(of(PROVIDER_PACKAGES), options.scratch, options.scratch);
+			failed(load);
+			return pending(load);
+		};
+		failed(loaded);
+		const packages = new PiPackages(options, loaded.extensions as unknown as PiExtension[], [...pending(loaded), ...(await loadProviders())]);
+		packages.#loadProviders = async () => [...pending(loaded), ...(await loadProviders())];
 		packages.#bind(loaded.runtime as unknown as Record<string, unknown>);
 		return packages;
 	}
 
 	/** The providers the packages registered at load, in order (a later registration of an ID wins). */
 	providers(): readonly ProviderRegistration[] {
+		return this.#providers;
+	}
+
+	/** Load the provider packages again (their factories pick their catalogs by the logins stored now); the new registrations. */
+	async reloadProviders(): Promise<readonly ProviderRegistration[]> {
+		this.#providers = await this.#loadProviders();
 		return this.#providers;
 	}
 

@@ -22,7 +22,7 @@ import { clearInheritedIdentity, storedAgent, sweepPiTmp, toolEnv, warningTool, 
 import { context, type Host, MODEL, openHost } from "./host.ts";
 import { toolGroupsExtension } from "./tool-groups.ts";
 import { type PackageEvent, PiPackages } from "./packages.ts";
-import { builtinProviders, ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, registeredProviders, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
+import { builtinProviders, ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, refreshExpiredLogins, registeredProviders, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
 import { redact, wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
@@ -226,12 +226,13 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 				scratch: join(options.dir, "pi-packages"),
 				emit: emitPackage,
 			});
+	const credentials = new PiAuthStore();
 	const host = await openHost(options.dir, {
 		// The scripted model reasons, so thinking levels apply to it as to Claude.
 		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200, models: [{ id: MODEL.modelId, reasoning: true }] },
 		provider: () => withBaseUrl(withStoredModels(anthropicProvider()), modelsJsonBaseUrl("anthropic")),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
-		credentials: new PiAuthStore(),
+		credentials,
 		settings: { get compaction() { return workbench.compaction; } },
 		rootAgent: { model: parseModel(options.model), cwd: options.cwd, thinkingLevel: (options.thinkingLevel ?? "medium") as ModelThinkingLevel },
 		env: async (target, c) => {
@@ -249,7 +250,11 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	});
 	opened = host;
 	// Package-registered providers last: a package's provider replaces the built-in of its ID, as in legacy Pi.
-	for (const provider of [...subscriptionProviders(fast), ...(await registeredProviders(packages?.providers() ?? [], fast, (message) => emitPackage({ type: "session.diagnostic", message: redact(message) })))]) host.models.setProvider(provider);
+	const diagnostic = (message: string) => emitPackage({ type: "session.diagnostic", message: redact(message) });
+	for (const provider of [...subscriptionProviders(fast), ...(await registeredProviders(packages?.providers() ?? [], fast, diagnostic))]) host.models.setProvider(provider);
+	// Before any model is configured: a package that picked its catalog without an expired login picks again with it.
+	if (packages !== undefined && (await refreshExpiredLogins(host.models, credentials, packages.providers().map((r) => r.name), diagnostic)))
+		for (const provider of await registeredProviders(await packages.reloadProviders(), fast, diagnostic)) host.models.setProvider(provider);
 	if (scripted) {
 		// The scripted model takes no Claude payload rules: it is answered locally by the router.
 		host.models.setProvider(wrapProvider(host.faux.provider));
