@@ -622,7 +622,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         configuration.userContentController = userContentController
         webView = WKWebView(frame: .zero, configuration: configuration)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = windowTitle(nil)
+        window.title = appWindowTitle(nil)
         window.tabbingMode = .disallowed
         // New windows open on the desktop the owner is looking at and may become their own full-screen Space.
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
@@ -723,7 +723,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let current = webView.url { remember(current) }
-        window?.title = windowTitle(webView.title)
+        window?.title = appWindowTitle(webView.title)
         if nativeProbeEnabled, isOwnedProbePage { probeOwnedPage() }
     }
 
@@ -940,7 +940,7 @@ application.setActivationPolicy(.regular)
 /// The bundle's display name, so a second install (e.g. "Pi Durable") is told apart by its window titles.
 let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Pi Workbench"
 
-func windowTitle(_ page: String?) -> String {
+func appWindowTitle(_ page: String?) -> String {
     guard let page, !page.isEmpty, page != appName, page != "Pi Workbench" else { return appName }
     return appName == "Pi Workbench" ? page : "\(appName) — \(page)"
 }
