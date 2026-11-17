@@ -2,6 +2,9 @@
 //   node src/chat-host-main.ts --store <family dir> --cwd <workspace> --model <provider>/<id>|faux
 //                              [--session-id <PI WEB Chat ID>] [--scripted] [--packages] [--socket <path>]
 // --packages runs the bound installed Pi packages from PI_CODING_AGENT_DIR's settings (src/packages.ts).
+// --end-jobs (with --store and --session-id): the owner ends a Chat whose host is gone. Cancel the family's unfinished
+// background jobs and exit, without opening the store: no completion is delivered and no model request starts.
+// Exit 0 once cancelled.
 // Transport: with --socket (Phase C1, a launchd job per family), an owner-only Unix socket that outlives any one session
 // daemon: newline-delimited JSON, one daemon connection at a time (a new one replaces the old), and the ready handshake
 // on every connection. Without it, the IPC channel of the daemon that forked the host (tests, the e2e fleet).
@@ -24,6 +27,7 @@ import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
 import { openChatHost } from "./chat.ts";
 import { COMMANDS } from "./extensions.ts";
 import { redact, sealed } from "./redact.ts";
+import { BackgroundBash } from "./background-bash.ts";
 import { setDelegationHold } from "./delegation.ts";
 import { type Attachment, CAPABILITIES, ChatSession, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
@@ -43,8 +47,15 @@ const { values } = parseArgs({
 		packages: { type: "boolean" },
 		"scripted-providers": { type: "boolean" },
 		socket: { type: "string" },
+		"end-jobs": { type: "boolean" },
 	},
 });
+if (values["end-jobs"] === true) {
+	if (values.store === undefined) throw new Error("--store is required");
+	// The same Chat ID the host would use; the daemon passes its usual host arguments, the rest are ignored here.
+	new BackgroundBash({ chatId: values["session-id"] ?? values.store, cwd: values.store, rootId: () => undefined }).cancelAll();
+	process.exit(0);
+}
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
 const socketPath = values.socket;
 if (socketPath === undefined && process.send === undefined) throw new Error("chat-host-main must be started with an IPC channel or --socket");

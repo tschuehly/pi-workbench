@@ -111,7 +111,7 @@ export class BackgroundBash {
 	readonly #root: string;
 	/** Set before the harness closes: a wait it interrupts is a host restart, never a cancel. */
 	#closing = false;
-	/** Set by `cancelAll`: the owner ended the Chat, so a launch that lands after the sweep is cancelled at once. */
+	/** Set by `cancelAll`: the owner ended the Chat, so a launch that lands after the sweep never starts its runner. */
 	#ending = false;
 	#timer: ReturnType<typeof setInterval> | undefined;
 	#reporting = false;
@@ -162,12 +162,13 @@ export class BackgroundBash {
 				crashPoint("bash.intent");
 				const { shell, args: shellArgs } = getShellConfig();
 				const identity = { chatId: this.#options.chatId, conversationId: api.conversationId, rootId: this.#options.rootId(), cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
+				// Decided and launched in one synchronous step: after `cancelAll` no runner starts (the job is recorded cancelled);
+				// a launch before it is in the registry, where its sweep cancels it.
 				launchJob({
 					root: this.#root, id, command: args.command, description: args.description, cwd, timeout: args.timeout,
 					env: { ...process.env, ...toolEnv(identity) }, sessionId: this.#options.chatId, shell, args: shellArgs, startedAt: ref.startedAt,
+					cancelled: this.#ending,
 				});
-				// A call past its intent commit when the Chat ended: its job is still pending, so its runner never starts the command.
-				if (this.#ending) cancelJob(this.#root, id);
 				crashPoint("bash.spawned");
 				const logPath = readJob(this.#root, id)!.logPath;
 				if (ref.background) return { output: text(started(id, logPath)), details: describeJob(readJob(this.#root, id)) };

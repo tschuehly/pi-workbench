@@ -85,15 +85,20 @@ const VANISHED = "The job runner ended without recording an exit status";
 /**
  * Launch a job under a caller-chosen ID (a host that persisted its launch intent first), idempotently: a job whose
  * runner already claimed it is never started again, and of two runners started for one job only the one that claims
- * it runs the command (runner.mjs). Returns whether a runner was started.
+ * it runs the command (runner.mjs). Returns whether a runner was started. `cancelled`: record the job as cancelled
+ * without starting a runner (its owner ended meanwhile).
  */
-export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, lifetimeSeconds = MAX_LIFETIME_SECONDS }) {
+export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false }) {
   if (!/^[\w-]+$/.test(id)) throw new Error(`Invalid job ID ${id}`);
   const dir = join(root, id);
   if (existsSync(join(dir, "claim")) || existsSync(join(dir, "exit"))) return false;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   closeSync(openSync(join(dir, "output.log"), "a", 0o600));
   writeJson(join(dir, "job.json"), { id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000 });
+  if (cancelled) {
+    writeOnce(join(dir, "exit"), JSON.stringify({ cancelled: true, finishedAt: Date.now() }));
+    return false;
+  }
   const runner = spawn(process.execPath, [RUNNER, dir], { cwd: dir, detached: true, stdio: "ignore", env });
   runner.once("error", () => {});
   runner.unref();

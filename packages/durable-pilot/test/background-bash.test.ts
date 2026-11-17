@@ -4,8 +4,9 @@
 // intent, after spawn and after completion admission never launches twice or delivers twice, a host-only loss
 // reattaches to the live runner, a machine restart (runner gone) reports an unknown exit and never reruns.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import cp, { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { AgentDoc } from "@earendil-works/pi-durable";
@@ -494,6 +495,30 @@ test("an explicit end cancels the family's background jobs (the runner's whole p
 	assert.equal(launches(cwd), 1);
 });
 
+test("--end-jobs ends a Chat whose host is gone: its unfinished jobs are cancelled, the store is not opened, so a finished-undelivered completion wakes no model", async () => {
+	const { store, cwd } = family("end-gone");
+	const first = new ChatHost(store, cwd);
+	await first.ready;
+	await first.call("prompt", { operationId: "op-1", text: call("bash", { description: "Writer", command: "(while true; do echo tick >> ticks.log; sleep 0.1; done) & wait" }) });
+	const running = jobId((await toolEnd(first)).text);
+	await first.idle(1);
+	await first.call("prompt", { operationId: "op-2", text: call("bash", { description: "Short", command: "sleep 1; echo done" }) });
+	const finished = jobId((await toolEnd(first, 2)).text);
+	await first.idle(2);
+	await waitFor(() => existsSync(join(JOBS, running, "claim")) && existsSync(join(JOBS, finished, "claim")), "both runners' claims");
+	await first.kill();
+	await waitFor(() => exitRecord(finished) !== undefined, "the short job finishing while the host is gone");
+	const requests = logged(store).length;
+
+	const ended = spawnSync(process.execPath, [join(import.meta.dirname, "..", "src", "chat-host-main.ts"), "--store", store, "--cwd", cwd, "--model", "faux", "--end-jobs"], { encoding: "utf8", timeout: 30_000 });
+	assert.equal(ended.status, 0, ended.stderr);
+	assert.equal(exitRecord(running)?.cancelled, true, "the unfinished job is cancelled");
+	assert.equal(alive(claim(running).pid), false, "its runner's group is gone");
+	assert.equal(exitRecord(finished)?.exitCode, 0, "a finished job keeps its outcome");
+	assert.equal(logged(store).length, requests, "no model request");
+	assert.equal(completionRequests(store), 0, "no completion delivered");
+});
+
 test("an explicit end refuses a bash call already past its intent commit: the late job is cancelled and never runs", async () => {
 	const { cwd } = family("end-race");
 	const bash = new BackgroundBash({ chatId: "chat-end-race", cwd, rootId: () => "lead" as never, root: JOBS });
@@ -515,13 +540,27 @@ test("an explicit end refuses a bash call already past its intent commit: the la
 		},
 		retainedOutput: () => ({ text: "" }),
 	};
-	const call = (tool.execute as (...args: unknown[]) => Promise<{ output: { text: string }[] }>)({ description: "Late", command: "echo x >> launches.log" }, api, { abortSignal: new AbortController().signal });
-	await reachedIntent;
-	bash.cancelAll(); // close({ end: true }) sweeps the family's jobs first.
-	release();
-	const id = jobId((await call).output[0]!.text);
-	assert.equal(exitRecord(id)?.cancelled, true, "the late job has a cancelled exit record");
-	await sleep(1000);
-	assert.equal(launches(cwd), 0, "the command never ran");
-	bash.close();
+	// The worst legal interleaving (independent review): a spawned runner runs its command before the parent continues.
+	const original = cp.spawn;
+	cp.spawn = ((...args: Parameters<typeof cp.spawn>) => {
+		const child = original(...args);
+		if (Array.isArray(args[1]) && args[1].some((arg) => String(arg).endsWith("runner.mjs")))
+			cp.execFileSync(process.execPath, ["-e", "const fs=require('fs');const t=Date.now()+5000;while(!fs.existsSync(process.argv[1])&&Date.now()<t);", join(cwd, "launches.log")]);
+		return child;
+	}) as typeof cp.spawn;
+	syncBuiltinESMExports();
+	try {
+		const call = (tool.execute as (...args: unknown[]) => Promise<{ output: { text: string }[] }>)({ description: "Late", command: "echo x >> launches.log" }, api, { abortSignal: new AbortController().signal });
+		await reachedIntent;
+		bash.cancelAll(); // close({ end: true }) sweeps the family's jobs first.
+		release();
+		const id = jobId((await call).output[0]!.text);
+		assert.equal(exitRecord(id)?.cancelled, true, "the late job has a cancelled exit record");
+		await sleep(1000);
+		assert.equal(launches(cwd), 0, "the command never ran");
+	} finally {
+		cp.spawn = original;
+		syncBuiltinESMExports();
+		bash.close();
+	}
 });
