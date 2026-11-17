@@ -393,3 +393,119 @@ describe("redaction of OpenAI and Copilot streams before commit", () => {
 			assert.equal(db.some((b) => b.includes(SECRET)), false, "the store files never held it");
 		});
 });
+
+// ─── Providers Pi packages register (pi.registerProvider) ────────────────────
+
+describe("P016b providers registered by Pi packages: pi-xai-oauth (xai-auth) and pi-meta-oauth (meta)", () => {
+	const XAI = process.env.PILOT_XAI_PACKAGE ?? join(process.env.HOME ?? "", "IdeaProjects", "pi-xai-oauth");
+	const META = join(process.env.PILOT_PI_PACKAGES ?? join(process.env.HOME ?? "", ".pi", "agent", "npm", "node_modules"), "pi-meta-oauth");
+	const XAI_LOGIN = { type: "oauth", access: "fake-xai-grok", refresh: "fake-xai-refresh", expires: Date.now() + HOUR };
+	const GROK = { id: "grok-4.7", name: "Grok 4.7", apiBackend: "responses", reasoning: true, input: ["text", "image"], inputProvenance: "known-model-metadata", cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 }, contextWindow: 256000, maxTokens: 131072 };
+	const EMBER = { id: "muse-ember-1.0", name: "Muse Ember 1.0", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1048576, maxTokens: 256000, api: "openai-responses", provider: "meta", baseUrl: "https://api.meta.ai/v1" };
+
+	/** A Responses stream whose only output is one function call. */
+	const functionCall = (name: string, args: Json) => {
+		const item = { type: "function_call", id: "fc_1", call_id: "call_1", name, arguments: JSON.stringify(args), status: "completed" };
+		return sse([
+			{ type: "response.created", response: { id: "resp_1", status: "in_progress" } },
+			{ type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "", status: "in_progress" } },
+			{ type: "response.function_call_arguments.delta", output_index: 0, item_id: "fc_1", delta: item.arguments },
+			{ type: "response.output_item.done", output_index: 0, item },
+			{ type: "response.completed", response: { id: "resp_1", status: "completed", usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14, input_tokens_details: { cached_tokens: 0 } } } },
+		]);
+	};
+
+	/** A Chat with both packages installed, their logins stored, and every request recorded and answered here. */
+	async function packagedChat() {
+		for (const path of [XAI, META]) assert.ok(existsSync(join(path, "package.json")), `package at ${path}`);
+		const agent = agentDir({ ...LOGINS, ["xai-auth" as "meta"]: XAI_LOGIN });
+		writeFileSync(join(agent, "settings.json"), JSON.stringify({ packages: [XAI, META] }));
+		writeFileSync(join(agent, "models-store.json"), JSON.stringify({ meta: { models: [EMBER], checkedAt: Date.now() } }));
+		// The package's account catalog, fresh: it lists grok-4.7 (its curated offline fallback is grok-4.6 only).
+		mkdirSync(join(agent, "cache", "pi-xai-oauth"), { recursive: true, mode: 0o700 });
+		writeFileSync(join(agent, "cache", "pi-xai-oauth", "models-v2.json"), JSON.stringify({ schemaVersion: 2, fetchedAt: Date.now() + 1_000, models: [GROK] }), { mode: 0o600 });
+		// pi-xai-oauth also reads the Grok CLI's login from HOME: an empty one.
+		const home = join(agent, "..", "home");
+		mkdirSync(home, { recursive: true });
+		const savedHome = process.env.HOME;
+		process.env.HOME = home;
+		const sent: Sent[] = [];
+		let metaCalls = 0;
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const request = new Request(input, init);
+			const url = new URL(request.url);
+			const raw = await request.text();
+			sent.push({ host: url.host, path: url.pathname, authorization: request.headers.get("authorization"), body: raw === "" ? {} : JSON.parse(raw) });
+			// Anything but a model request (a catalog refresh) is refused.
+			if (!url.pathname.endsWith("/responses")) return new Response("{}", { status: 401 });
+			const body = url.host === "api.meta.ai" ? (metaCalls++ === 0 ? functionCall("execute_command", { command: "echo ember-tool" }) : responses("ember answered")) : responses("grok answered");
+			return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+		}) as typeof fetch;
+		process.env.PI_CODING_AGENT_DIR = agent;
+		const dir = scratch("ext-provider-chat");
+		const cwd = join(dir, "workspace");
+		mkdirSync(cwd, { recursive: true });
+		const restore = () => {
+			globalThis.fetch = realFetch;
+			process.env.HOME = savedHome;
+		};
+		try {
+			const host = await openChatHost({ dir: join(dir, "family"), cwd, model: "faux", scripted: true, packages: { agentDir: agent } });
+			const events: UiEvent[] = [];
+			const session = new ChatSession(host, (event) => events.push(event));
+			await session.start();
+			const chat: Chat = { session, host, events, dir, cwd, close: async () => (await session.close(), restore()) };
+			return { chat, sent };
+		} catch (error) {
+			restore();
+			throw error;
+		}
+	}
+
+	it("Grok: xai-auth/grok-4.7 is available, routable by delegation's resolver, and answers through the package's client with the stored login", async () => {
+		const { chat, sent } = await packagedChat();
+		try {
+			const available = (await chat.host.models.getAvailable()).map((m) => `${m.provider}/${m.id}`);
+			assert.ok(available.includes("xai-auth/grok-4.7"), "xai-auth/grok-4.7 available (the routing catalog)");
+			// Delegation writes exactly this catalog for the resolver (delegation.ts `route`).
+			const catalog = join(chat.dir, "catalog.txt");
+			writeFileSync(catalog, available.map((id) => id.replace("/", " ")).join("\n"));
+			process.env.PI_WORKBENCH_QUOTA_CACHE = join(chat.dir, "quota.json");
+			writeFileSync(process.env.PI_WORKBENCH_QUOTA_CACHE, JSON.stringify({ version: 1, checkedAt: Date.now(), status: 0, stdout: JSON.stringify({ providers: [] }), stderr: "" }));
+			const { resolveBinding } = (await import("../../../extensions/subagent/core.mjs")) as { resolveBinding: (...args: unknown[]) => Promise<Json> };
+			const binding = await resolveBinding("routine", undefined, undefined, "xai-auth/grok-4.7", "medium", undefined, undefined, ["--catalog", catalog]);
+			assert.deepEqual([binding.provider, binding.model], ["xai-auth", "grok-4.7"]);
+
+			await chat.session.setModel("xai-auth", "grok-4.7");
+			await turn(chat, "to grok");
+			const grok = sent.filter((s) => s.path.endsWith("/responses"));
+			assert.deepEqual(grok.map((s) => `${s.host}${s.path}`), ["cli-chat-proxy.grok.com/v1/responses"]);
+			assert.equal(grok[0]!.authorization, `Bearer ${XAI_LOGIN.access}`);
+			assert.equal(grok[0]!.body.model, "grok-4.7");
+			assert.deepEqual(assistantTexts(chat), ["grok answered"]);
+		} finally {
+			delete process.env.PI_WORKBENCH_QUOTA_CACHE;
+			await chat.close();
+		}
+	});
+
+	it("Ember: meta/muse-ember-1.0 goes out through pi-meta-oauth's client, tools under Meta's aliases (bash as execute_command), calls restored to Pi's names", async () => {
+		const { chat, sent } = await packagedChat();
+		try {
+			await chat.session.setModel("meta", "muse-ember-1.0");
+			await turn(chat, "to ember");
+			const meta = sent.filter((s) => s.host === "api.meta.ai");
+			assert.deepEqual(meta.map((s) => s.path), ["/v1/responses", "/v1/responses"], "the tool call, then the answer");
+			assert.equal(meta[0]!.authorization, `Bearer ${LOGINS.meta.access}`);
+			const names = (meta[0]!.body.tools as { name: string }[]).map((t) => t.name);
+			assert.ok(names.includes("execute_command") && !names.includes("bash"), `bash goes out under Meta's alias: ${names.join(",")}`);
+			const call = (chat.session.messages() as { role: string; content: { type: string; name?: string }[] }[]).flatMap((m) => (m.role === "assistant" ? m.content : [])).find((c) => c.type === "toolCall");
+			assert.equal(call?.name, "bash", "the aliased call comes back as bash");
+			assert.ok(JSON.stringify(meta[1]!.body).includes("ember-tool"), "bash ran and its output went back");
+			assert.deepEqual(assistantTexts(chat).at(-1), "ember answered");
+		} finally {
+			await chat.close();
+		}
+	});
+});

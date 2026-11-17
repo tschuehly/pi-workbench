@@ -34,6 +34,16 @@ import { redact, sanitizeDeep } from "./redact.ts";
 export const BOUND_PACKAGES = ["pi-web-access", "ping-a-human-pi", "pi-process-monitor"];
 
 /**
+ * Packages whose extension code runs only for the model providers it registers (`pi.registerProvider`, Pi's pre-bind
+ * queue after load); their tools, commands and hooks stay unbound. The host composes and serves the providers.
+ * ponytail: providers registered after load (a package's own /login refresh) are not picked up; bind runtime.registerProvider if one needs it.
+ */
+export const PROVIDER_PACKAGES = ["pi-xai-oauth", "pi-meta-oauth"];
+
+/** A provider a package registered: Pi's `ProviderConfig` under its provider ID. */
+export type ProviderRegistration = { readonly name: string; readonly config: Record<string, unknown> };
+
+/**
  * Tools whose interrupted call may rerun after a crash: no external effect beyond reading (a rerun repeats a search or
  * fetch, or reads stored results or watcher state). Every other package tool, ask_human and notify_human included, is
  * unsafe: a kill after it started never sends it again.
@@ -188,6 +198,7 @@ export type PackageOptions = {
 export class PiPackages {
 	readonly #options: PackageOptions;
 	readonly #extensions: PiExtension[];
+	readonly #providers: ProviderRegistration[];
 	/** Tools the packages keep active; the rest are deferred. */
 	#active: Set<string>;
 	#host: PackageHost | undefined;
@@ -208,9 +219,10 @@ export class PiPackages {
 	readonly #attached = Promise.withResolvers<void>();
 	readonly #calls = new AsyncLocalStorage<{ offered: Set<string>; added: string[] }>();
 
-	private constructor(options: PackageOptions, extensions: PiExtension[]) {
+	private constructor(options: PackageOptions, extensions: PiExtension[], providers: ProviderRegistration[]) {
 		this.#options = options;
 		this.#extensions = extensions;
+		this.#providers = providers;
 		this.#active = new Set(this.#tools().map((tool) => tool.name));
 	}
 
@@ -220,16 +232,25 @@ export class PiPackages {
 		const settingsManager = pi.SettingsManager.create(options.cwd, options.agentDir, { projectTrusted: false });
 		const manager = new pi.DefaultPackageManager({ cwd: options.cwd, agentDir: options.agentDir, settingsManager });
 		const resolved = await manager.resolve(async () => "skip");
-		const paths = resolved.extensions
-			.filter((resource) => resource.enabled && resource.metadata.scope === "user" && BOUND_PACKAGES.includes(packageName(resource.metadata.packageRoot) ?? ""))
-			.map((resource) => resource.path);
+		const of = (names: string[]) =>
+			resolved.extensions
+				.filter((resource) => resource.enabled && resource.metadata.scope === "user" && names.includes(packageName(resource.metadata.packageRoot) ?? ""))
+				.map((resource) => resource.path);
 		mkdirSync(options.scratch, { recursive: true, mode: 0o700 });
-		// The scratch directory as cwd and agent dir: only the given paths load, no project or global extensions.
-		const loaded = await pi.discoverAndLoadExtensions(paths, options.scratch, options.scratch);
-		for (const failure of loaded.errors) options.emit({ type: "session.diagnostic", message: `Package extension ${failure.path} failed to load: ${redact(failure.error)}` });
-		const packages = new PiPackages(options, loaded.extensions as unknown as PiExtension[]);
+		// The scratch directory as cwd and agent dir: only the given paths load, no project or global extensions. Provider
+		// packages load apart, so nothing of theirs but the providers reaches the Chat.
+		const loaded = await pi.discoverAndLoadExtensions(of(BOUND_PACKAGES), options.scratch, options.scratch);
+		const providerLoad = await pi.discoverAndLoadExtensions(of(PROVIDER_PACKAGES), options.scratch, options.scratch);
+		for (const failure of [...loaded.errors, ...providerLoad.errors]) options.emit({ type: "session.diagnostic", message: `Package extension ${failure.path} failed to load: ${redact(failure.error)}` });
+		const pending = (load: typeof loaded) => (load.runtime as unknown as { pendingProviderRegistrations: ProviderRegistration[] }).pendingProviderRegistrations;
+		const packages = new PiPackages(options, loaded.extensions as unknown as PiExtension[], [...pending(loaded), ...pending(providerLoad)].map(({ name, config }) => ({ name, config })));
 		packages.#bind(loaded.runtime as unknown as Record<string, unknown>);
 		return packages;
+	}
+
+	/** The providers the packages registered at load, in order (a later registration of an ID wins). */
+	providers(): readonly ProviderRegistration[] {
+		return this.#providers;
 	}
 
 	#tools(): PiTool[] {

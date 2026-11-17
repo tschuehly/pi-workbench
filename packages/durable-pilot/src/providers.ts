@@ -5,15 +5,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { Api, Model, Provider } from "@earendil-works/pi-ai";
+import type { Api, CredentialStore, Model, Provider } from "@earendil-works/pi-ai";
 import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
 import { metaProvider } from "@earendil-works/pi-ai/providers/meta";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import type { ProviderRegistration } from "./packages.ts";
 import { wrapProvider } from "./redact.ts";
 
 /** Credential paths other than Pi's auth.json that these providers would read: removed, as ANTHROPIC_* for Claude. */
-export const ENV_CREDENTIALS = ["COPILOT_GITHUB_TOKEN", "OPENAI_API_KEY", "META_API_KEY"];
+export const ENV_CREDENTIALS = ["COPILOT_GITHUB_TOKEN", "OPENAI_API_KEY", "META_API_KEY", "MODEL_API_KEY"];
 
 /** The built-in non-Claude providers, before models.json, models-store.json and the redacting wrapper. */
 export const builtinProviders = (): Provider[] => [openaiCodexProvider(), openaiProvider(), metaProvider(), githubCopilotProvider()];
@@ -26,6 +27,31 @@ export function subscriptionProviders(fast: FastMode): Provider[] {
 	return builtinProviders().map((provider) =>
 		wrapProvider(provider.id === "github-copilot" ? withStoredModels(provider) : withBaseUrl(withStoredModels(provider), modelsJsonBaseUrl(provider.id)), { onPayload: fast.payload }),
 	);
+}
+
+/** Composition only: a store that holds nothing, so composing never reads or locks auth.json. */
+const NO_CREDENTIALS: CredentialStore = { read: async () => undefined, list: async () => [], modify: async () => undefined, delete: async () => {} };
+
+/**
+ * The providers Pi packages registered, as legacy Pi composes them (Pi's own `ModelRuntime.registerProvider`: the
+ * package's config over the built-in provider of that ID, if any), then as every host provider: Pi's stored models,
+ * models.json's baseUrl, the redacting wrapper. Logins come from the host's credential store as for the built-ins.
+ */
+export async function registeredProviders(registrations: readonly ProviderRegistration[], fast: FastMode, failed: (message: string) => void): Promise<Provider[]> {
+	if (registrations.length === 0) return [];
+	const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+	const runtime = await ModelRuntime.create({ credentials: NO_CREDENTIALS, modelsPath: null, refreshOnCreate: false });
+	const ids = new Set<string>();
+	for (const { name, config } of registrations) {
+		try {
+			runtime.registerProvider(name, config as never);
+			ids.add(name);
+		} catch (error) {
+			// A broken registration costs its provider, not the Chat (Pi reports it the same way and keeps going).
+			failed(`Package provider ${name} was not registered: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	return [...ids].map((id) => wrapProvider(withBaseUrl(withStoredModels(runtime.getProvider(id)!), modelsJsonBaseUrl(id)), { onPayload: fast.payload }));
 }
 
 export const agentDir = () => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");

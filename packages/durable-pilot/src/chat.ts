@@ -22,8 +22,8 @@ import { clearInheritedIdentity, storedAgent, sweepPiTmp, toolEnv, warningTool, 
 import { context, type Host, MODEL, openHost } from "./host.ts";
 import { toolGroupsExtension } from "./tool-groups.ts";
 import { type PackageEvent, PiPackages } from "./packages.ts";
-import { builtinProviders, ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
-import { wrapProvider } from "./redact.ts";
+import { builtinProviders, ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, registeredProviders, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
+import { redact, wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
@@ -216,6 +216,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const aliases = claudeAliases("pi");
 	const early: PackageEvent[] = [];
 	const chat: { onPackageEvent?: (event: PackageEvent) => void } = {};
+	const emitPackage = (event: PackageEvent) => (chat.onPackageEvent === undefined ? early.push(event) : chat.onPackageEvent(event));
 	const packages = options.packages === undefined
 		? undefined
 		: await PiPackages.load({
@@ -223,7 +224,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 				chatId,
 				agentDir: options.packages.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
 				scratch: join(options.dir, "pi-packages"),
-				emit: (event) => (chat.onPackageEvent === undefined ? early.push(event) : chat.onPackageEvent(event)),
+				emit: emitPackage,
 			});
 	const host = await openHost(options.dir, {
 		// The scripted model reasons, so thinking levels apply to it as to Claude.
@@ -247,7 +248,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		extensions: [...extensions, toolGroupsExtension([...extensions, ...(packages?.sources() ?? [])]), ...(packages === undefined ? [] : [packages.extension()])],
 	});
 	opened = host;
-	for (const provider of subscriptionProviders(fast)) host.models.setProvider(provider);
+	// Package-registered providers last: a package's provider replaces the built-in of its ID, as in legacy Pi.
+	for (const provider of [...subscriptionProviders(fast), ...(await registeredProviders(packages?.providers() ?? [], fast, (message) => emitPackage({ type: "session.diagnostic", message: redact(message) })))]) host.models.setProvider(provider);
 	if (scripted) {
 		// The scripted model takes no Claude payload rules: it is answered locally by the router.
 		host.models.setProvider(wrapProvider(host.faux.provider));
