@@ -9,7 +9,8 @@
 // Messages out: { ready: { protocol, durable, revision, storeId, ownerEpoch, pid, capabilities, resources } } once open,
 //               { id, result } | { id, error }, { event }. Events emitted while no daemon is connected are dropped: a
 //               reattaching daemon reads status and transcript afresh.
-// The host exits after `close` or on SIGTERM/SIGINT, and an IPC host also when its daemon goes away (disconnect),
+// `close` with `{ end: true }` is the owner ending the Chat: its background jobs are cancelled first; without it (and on
+// signals or a lost daemon) they keep running. The host exits after `close` or on SIGTERM/SIGINT, and an IPC host also when its daemon goes away (disconnect),
 // closing the store gracefully first. A socket host stays when its daemon goes away.
 import { chmodSync, lstatSync, realpathSync, rmSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
@@ -89,7 +90,8 @@ const session = new ChatSession(host, (event: UiEvent) => send({ event }), { cha
 await session.start();
 
 let closing: Promise<void> | undefined;
-const close = () => (closing ??= session.close());
+/** `end` (optional on `close`): an explicit end of the Chat, which cancels its background jobs; restarts omit it. */
+const close = (end = false) => (closing ??= session.close({ end }));
 
 const text = (params: Record<string, unknown>, name: string): string => {
 	const value = params[name];
@@ -187,7 +189,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		if (expectedLeafId !== null && typeof expectedLeafId !== "string") throw new Error("expectedLeafId must be an entry ID or null");
 		return session.navigate({ targetId, expectedLeafId, ...(retainCheckpoint === true ? { retainCheckpoint } : {}) });
 	},
-	close: () => close(),
+	close: (params) => close(params.end === true),
 };
 
 /** Operations that must not overlap history navigation (legacy `assertTreeNavigationInactive`). */

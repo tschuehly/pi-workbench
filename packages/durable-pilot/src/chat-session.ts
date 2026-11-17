@@ -349,7 +349,9 @@ export class ChatSession {
 		this.#stop = () => stream.stop();
 	}
 
-	async close(): Promise<void> {
+	/** `end`: the owner ends the Chat, so its background jobs are cancelled first; any other close (a restart) keeps them. */
+	async close(options: { end?: boolean } = {}): Promise<void> {
+		if (options.end === true) this.#chat?.bash?.cancelAll();
 		this.#closed = true;
 		this.#stopPower();
 		this.#chat?.bash?.close();

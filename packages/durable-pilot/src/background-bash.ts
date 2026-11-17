@@ -10,7 +10,8 @@
 // Completions are delivered by a host-side reporter, not a Durable task, so a reopened idle Chat delivers them at once
 // while a restore with interrupted work stays paused until the user resumes it (owner decision 2).
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
+import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Context } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
@@ -266,6 +267,23 @@ export class BackgroundBash {
 	}
 
 	#hooks: Hooks = { deliver: (work) => work(), changed: () => {} };
+
+	/**
+	 * The owner ends the Chat (not a restart): cancel every unsettled job this family launched, in any of its conversations;
+	 * each runner's process group is killed. Their completions are delivered, as context, when the Chat reopens.
+	 * shortcut: scans the whole registry (pruned weekly); keep a per-Chat index if it grows large.
+	 */
+	cancelAll(): void {
+		for (const id of existsSync(this.#root) ? readdirSync(this.#root) : []) {
+			let sessionId: unknown;
+			try {
+				sessionId = (JSON.parse(readFileSync(join(this.#root, id, "job.json"), "utf8")) as { sessionId?: unknown }).sessionId;
+			} catch {
+				continue;
+			}
+			if (sessionId === this.#options.chatId) cancelJob(this.#root, id);
+		}
+	}
 
 	/** Before the harness closes: stop reporting; a running foreground wait ends without cancelling its job. */
 	close(): void {
