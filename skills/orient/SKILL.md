@@ -5,7 +5,7 @@ description: "Orient an owner returning to a current or previous Chat or Workstr
 
 # Orient
 
-Restore shared understanding before the next move. `/skill:orient` defaults to the current session's associated Workstream, then the current Chat if unassociated. `/skill:orient this Chat` or `/skill:orient <session or Workstream>` uses the explicit source. This skill reads and reports; it does not authorize execution, checkpoint writes, task changes, account connections, or unrelated scans. A fresh-session launch may ask for **brief** or **full** orientation; the launcher, not this skill, decides when elapsed time requires full orientation. An explicit request for full orientation always wins.
+Restore shared understanding before the next move. `/skill:orient` defaults to the current session's associated Workstream, then the current Chat if unassociated. `/skill:orient this Chat` or `/skill:orient <session or Workstream>` uses the explicit source. This skill reads and reports; it does not authorize execution, task changes, account connections, or unrelated scans; its one write is the checkpoint in step 2 when the orientation finds the record out of date. A fresh-session launch may ask for **brief** or **full** orientation; the launcher, not this skill, decides when elapsed time requires full orientation. An explicit request for full orientation always wins.
 
 ## 1. Choose the source
 
@@ -29,9 +29,11 @@ Reconstruct the causal sequence before writing: what the owner originally wanted
 
 **Check overlap.** When the next move depends on unmerged repository changes, inspect live target-branch commits absent from the working branch (this includes other people's merged pull requests) and open pull/merge requests touching the affected files, including those opened before the last checkpoint. Treat same-file changes as candidates; report only those that could change the next move, with their integration or coordination consequence. Keep the compared revisions and search coverage in the underlying evidence. Mark incomplete or unavailable checks **unchecked**.
 
-**Check storage.** For a Workstream, run `mac-storage-workspaces --workstream <id>` and note what looks deletable: owned items the current position no longer needs, and unlinked worktrees in the same repositories without recent activity. Do not delete anything here; the next checkpoint's storage step does that.
+**Check storage.** For a Workstream, run `mac-storage-workspaces --workstream <id>` and note what looks deletable: owned items the current position no longer needs, and unlinked worktrees in the same repositories without recent activity. Do not delete anything here; the storage step of the checkpoint below does that.
 
-Note any stored state this evidence contradicts—an overview that describes a superseded position, a pending Human Task the owner already answered or deferred, or a `waitingOn` that no longer holds—so the owner or the next checkpoint can correct it. Do not edit it here.
+Note any stored state this evidence contradicts—an overview that describes a superseded position, a pending Human Task the owner already answered or deferred, or a `waitingOn` that no longer holds—and correct it in the checkpoint below.
+
+**Checkpoint what changed.** For a selected Workstream, when this reconciliation shows a fact the latest checkpoint and overview do not carry (a remote object that merged, closed, or got a review or failing check; a decision or result newer than the checkpoint; stale stored state), write it yourself with the Workstreams skill's section 3: `workstreams checkpoint <id>` carrying what the evidence now shows, with its storage cleanup, then the overview and Human Task corrections it names. Do not write one when nothing changed, for a Chat without a Workstream, or for a closed Workstream. Record only verified facts, never a guess or an owner decision the owner did not make; mark unchecked items unchecked. Say in one clause at the end of "Where we are now" that you wrote it.
 
 **Complete when:** the proposed next move does not repeat a resolved request or silently ignore a newer correction, every named remote object reflects live state or is marked **unchecked**, every question or request in their threads is answered or listed as an open item, and each applicable overlap check records consequential findings, confirms no relevant overlap within its checked scope, or is marked **unchecked**.
 
@@ -52,6 +54,6 @@ Outside that open-items list, use at most one or two anchors to let the owner in
 
 Otherwise give a **brief** re-entry: goal, current position, the open-items list, one next move, and any decision that blocks it. Brief still refreshes remote state. For a manually invoked `/skill:orient`, default to full for a selected Workstream (including the current session's association) and brief for the current Chat unless the owner asks otherwise. If nothing is verified, say so and ask for one useful source. Mark source gaps **unchecked**. Orienting alone does not impose an approval gate.
 
-Stop after the orientation. If the owner's reply is a question or a request to check something, answer it before starting any longer work. A separate, already-authorized continuation may proceed after presenting it; this skill supplies context, not permission. Do not write a new plan, mutate the Workstream, or automatically follow up.
+Stop after the orientation. If the owner's reply is a question or a request to check something, answer it before starting any longer work. A separate, already-authorized continuation may proceed after presenting it; this skill supplies context, not permission. Beyond that checkpoint, do not write a new plan, mutate the Workstream, or automatically follow up.
 
 **Complete when:** the owner can retell the original and current goals, the few meaningful turns in the work, the current position, and what happens next without looking up jargon or raw checkpoints.
