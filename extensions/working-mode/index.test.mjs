@@ -221,10 +221,20 @@ test("Cockpit sets where questions live; Attention alone decides whether and how
   assert.doesNotMatch(cockpit, /post one line in Chat/);
   assert.match(cockpit, /follows your Attention setting/);
   assert.match(cockpit, /send nothing when it says not to contact him/);
+  // Every Attention value leaves a named channel (or a named silence) for the tab-changed line.
+  const channel = {
+    Default: /the conversation, when Attention names none/,
+    Focused: /this conversation/,
+    Switching: /request_attention/,
+    Phone: /notify_human/,
+    AFK: /Do not contact Thomas/,
+  };
+  assert.deepEqual(Object.keys(axes.attention.values), Object.keys(channel), "every Attention value is covered");
   for (const attention of Object.keys(axes.attention.values)) {
     const block = renderBlock({ ...defaults, attention, orchestration: "Cockpit" }, 1, true);
     assert.ok(block.includes(cockpit), attention);
-    if (attention !== "Default") assert.ok(block.includes(axes.attention.values[attention]), attention);
+    assert.ok(block.includes(axes.attention.values[attention]), attention);
+    assert.match(block, channel[attention], attention);
     // Attention's own question channel (ask_user, ask_human, Chat) yields to the Page explicitly, not silently.
     if (/ask_user|ask_human/.test(axes.attention.values[attention])) assert.match(cockpit, /instead of the question channel your Attention setting names/, attention);
   }
