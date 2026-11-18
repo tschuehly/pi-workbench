@@ -244,7 +244,7 @@ test("collecting a running child by identifier returns a snapshot without waitin
   assert.deepEqual(roster.details.children.map((child) => child.executionId), ["child-running"], "the child remains terminal-uncollected");
 });
 
-async function settlingWorkerHarness() {
+async function settlingWorkerHarness({ outcome = "success", report } = {}) {
   const previousHome = process.env.HOME;
   const temporary = await mkdtemp(join(tmpdir(), "subagent-settling-worker-"));
   process.env.HOME = temporary;
@@ -262,13 +262,14 @@ async function settlingWorkerHarness() {
   let resultCalls = 0;
   const dispatchedSpecs = [];
   const execution = {
-    executionId: "worker-execution", running: false, outcome: "success", kind: "worker",
+    executionId: "worker-execution", running: false, outcome, kind: "worker",
     profile: "implementer", cognitiveRole: "implementation", provider: "anthropic", model: "claude-test", effort: "low",
     acceptedAt: "2026-09-22T00:00:00Z",
   };
   const final = { ...execution, text: "Worker done.", sessionId: "worker-session", truncated: false };
   const adapter = {
-    dispatch: async (spec) => { dispatchedSpecs.push(spec); return { executionId: execution.executionId, acceptedAt: execution.acceptedAt }; },
+    // `report` stands in for the Worker's own report_status during its run.
+    dispatch: async (spec) => { dispatchedSpecs.push(spec); if (report) writeStatusFile(spec.statusFile, report, undefined); return { executionId: execution.executionId, acceptedAt: execution.acceptedAt }; },
     result: () => { resultCalls += 1; return Promise.resolve(final); },
     status: () => execution,
     list: () => [execution],
@@ -294,7 +295,7 @@ async function settlingWorkerHarness() {
   }, undefined, undefined, ctx);
 
   return {
-    tools, sent, wakeup, releaseReceipt, dispatchedSpecs,
+    tools, sent, wakeup, releaseReceipt, dispatchedSpecs, ctx, workerId: created.details.workerId,
     resultCalls: () => resultCalls,
     cleanup: async () => {
       await handlers.get("session_shutdown")();
@@ -506,6 +507,44 @@ test("a Worker's report_status rewrites its status file atomically with state an
     await rm(temporary, { recursive: true, force: true });
   }
 });
+
+test("writeStatusFile rejects a state outside the known states and leaves the file unchanged", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-status-state-"));
+  const file = workerStatusFile("worker-1", temporary);
+  try {
+    writeStatusFile(file, "Reading code", "working");
+    assert.throws(() => writeStatusFile(file, "Bogus", "sleeping"), /Unknown status state 'sleeping'/);
+    const body = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(body.state, "working");
+    assert.equal(body.line, "Reading code");
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+for (const [outcome, state] of [["success", "done"], ["execution_failed", "failed"]]) {
+  test(`a Worker dispatch that ends in ${outcome} marks its status file ${state}, keeping the last line; retire marks it retired`, async () => {
+    const harness = await settlingWorkerHarness({ outcome, report: "Running tests" });
+    try {
+      const file = harness.dispatchedSpecs[0].statusFile;
+      harness.releaseReceipt();
+      await harness.wakeup;
+      let body = JSON.parse(await readFile(file, "utf8"));
+      assert.equal(body.state, state);
+      assert.equal(body.line, "Running tests", "the Worker's last line stays");
+      assert.deepEqual(body.log.map((entry) => entry.text), ["Running tests", `Dispatch ended: ${outcome}`]);
+
+      await harness.tools.get("worker_retire").execute("retire", { workerId: harness.workerId, reason: "scope finished" }, undefined, undefined, harness.ctx);
+      body = JSON.parse(await readFile(file, "utf8"));
+      assert.equal(body.state, "retired");
+      assert.equal(body.line, "Running tests");
+      assert.equal(body.log.at(-1).text, "Retired: scope finished");
+    } finally {
+      harness.releaseReceipt();
+      await harness.cleanup();
+    }
+  });
+}
 
 test("exposes no task timeout controls with bounded independence and status parameters", () => {
   const tools = new Map();

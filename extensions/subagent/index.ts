@@ -124,13 +124,21 @@ const STATUS_LOG_MAX = 20;
 /** Where a Worker's latest report_status lands, so a Cockpit lead can read it by workerId. */
 export const workerStatusFile = (workerId: string, home = os.homedir()) => path.join(home, ".pi-workbench", "workers", "status", `${workerId}.json`);
 
-/** Atomically rewrite the status file: latest state and line, plus the last STATUS_LOG_MAX lines. */
-export function writeStatusFile(file: string, line: string, state: string | undefined, now = new Date()) {
-  let previous: { state?: string; log?: { t: string; text: string }[] } = {};
+/** States a Worker reports plus `retired`, which only worker_retire writes. */
+const STATUS_FILE_STATES: readonly string[] = [...STATUS_STATES, "retired"];
+
+/**
+ * Atomically rewrite the status file: latest state and line, plus the last STATUS_LOG_MAX lines.
+ * An undefined line keeps the previous one and logs `logText` (the lead's end-of-dispatch and retire notes).
+ */
+export function writeStatusFile(file: string, line: string | undefined, state: string | undefined, now = new Date(), logText = line) {
+  if (state !== undefined && !STATUS_FILE_STATES.includes(state)) throw new Error(`Unknown status state '${state}'`);
+  let previous: { state?: string; line?: string; log?: { t: string; text: string }[] } = {};
   try { previous = JSON.parse(readFileSync(file, "utf8")); } catch {}
   const updated = now.toISOString();
-  const log = [...(Array.isArray(previous.log) ? previous.log : []), { t: updated, text: line }].slice(-STATUS_LOG_MAX);
-  const body = { state: state ?? previous.state ?? "working", line, updated, log };
+  const text = logText ?? line ?? "";
+  const log = [...(Array.isArray(previous.log) ? previous.log : []), { t: updated, text }].slice(-STATUS_LOG_MAX);
+  const body = { state: state ?? previous.state ?? "working", line: line ?? previous.line ?? text, updated, log };
   mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(body, null, 2)}\n`);
@@ -741,6 +749,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
         const final = await adapter.result(receipt.executionId);
         foreground.delete(receipt.executionId);
+        // The Worker cannot report its own end; the lead marks it so the Cockpit tab stops saying working.
+        try { writeStatusFile(workerStatusFile(params.workerId), undefined, final.outcome === "success" ? "done" : "failed", new Date(), `Dispatch ended: ${final.outcome}`); } catch {}
         emitExecutionEvent(host, {
           type: "execution.settled", at: new Date().toISOString(), sessionId: parentSessionId,
           executionId: receipt.executionId, kind: "worker", workerId: params.workerId,
@@ -878,6 +888,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       try {
         const retired = await registry.retire(params.workerId, params.reason, { ownerSessionId: ctx.sessionManager.getSessionId() });
+        try { writeStatusFile(workerStatusFile(params.workerId), undefined, "retired", new Date(), `Retired: ${params.reason}`); } catch {}
         return { content: [{ type: "text", text: `Retired worker ${params.workerId} at ${retired.at}: ${retired.reason}` }], details: { workerId: params.workerId, ...retired } };
       } catch (error) {
         return registryFailure(error);
