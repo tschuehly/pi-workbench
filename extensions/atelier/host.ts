@@ -207,7 +207,7 @@ const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   decide: { decision: str, option: str, ask: opt(seqNo), custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str), images },
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
-  close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str }, send: { key: opt(str) },
+  close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str, ask: opt(seqNo) }, send: { key: opt(str) },
   // seen: the agent events (asks, replies) whose Needs you mark the human cleared, so a reload marks them no more (2.13.0).
   seen: { of: (v) => Array.isArray(v) && v.length > 0 && v.length <= 1000 && v.every((s) => Number.isSafeInteger(s) && s > 0) },
 };
@@ -396,6 +396,8 @@ export function createHost(options: {
     }
     if (body.type === "decide" && body.custom && !body.option.trim()) return { status: 400, json: { error: "An own answer needs its text." } };
     const asked = body.delivery;
+    // An answer or an opened names an ask of its own Decision on this Page, or none (older Pages: the id's latest ask).
+    if (event.ask !== undefined && !readLog(page).some((e) => e.seq === event.ask && e.type === "ask" && e.decision?.id === event.decision)) return { status: 400, json: { error: `No ask #${event.ask} for Decision ${event.decision} on this Page.` } };
     if (body.type === "comment" && body.thread !== undefined && !readLog(page).some((e) => e.seq === body.thread && e.type === "comment")) return { status: 400, json: { error: `No Comment #${body.thread} to reply to.` } };
     // Seen names only agent asks and replies already in the log, so it never acknowledges one still to come.
     if (body.type === "seen") {

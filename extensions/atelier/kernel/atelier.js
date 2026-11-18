@@ -99,6 +99,8 @@ export function derive(entries, currentVer = () => null, declared = []) {
 
   // withdrawn: each ask the agent retracted or asked anew, by its seq, so a late answer naming it lands there (2.14.2).
   const threads = new Map(), decisions = new Map(), requests = new Map(), withdrawn = new Map(), lastAsk = new Map();
+  // The ask an answer or an opened names (2.14.2); one without (older Event Logs) names the id's latest ask.
+  const askOf = (e) => { const cur = decisions.get(e.decision); return cur && (e.ask == null || cur.askSeq === e.ask) ? cur : withdrawn.get(e.ask ?? lastAsk.get(e.decision)); };
   for (const d of declared) if (!decisions.has(d.id)) decisions.set(d.id, { ...d, answer: null, opened: false });
   for (const [i, e] of live.entries()) {
     if (e.type === "comment") {
@@ -118,15 +120,14 @@ export function derive(entries, currentVer = () => null, declared = []) {
       const d = decisions.get(e.decision);
       if (d && !d.declared && d.answer === null) { decisions.delete(e.decision); withdrawn.set(d.askSeq, { ...d, retracted: e.reason ?? "" }); }
     }
-    else if (e.type === "opened") { const d = decisions.get(e.decision); if (d) d.opened = true; }
+    // An opened names the ask its tab showed (2.14.2); one without marks the id's current ask, as before.
+    else if (e.type === "opened") { const d = e.ask == null ? decisions.get(e.decision) : askOf(e); if (d) d.opened = true; }
     else if (e.type === "decide") {
       // A Page-declared answer carries its options, so the Decision replays even where the Page is not loaded.
       if (!decisions.has(e.decision) && e.options) decisions.set(e.decision, { ...declaredDecision(e.decision, e.options, e.rec), answer: null, opened: false });
-      // An answer names the ask it answered (2.14.2); one without (older Event Logs) answers the id's latest ask.
-      const cur = decisions.get(e.decision), askSeq = e.ask ?? lastAsk.get(e.decision);
       // An answer that crossed a retract lands on the withdrawn question with the reason it is no longer asked (2.14.1);
       // its card returns unless the id is asked anew, then only the agent hears it (ponytail: one card per id on the Page).
-      const d = cur && (e.ask == null || cur.askSeq === e.ask) ? cur : withdrawn.get(askSeq);
+      const cur = decisions.get(e.decision), d = askOf(e);
       if (d && !cur) decisions.set(e.decision, d);
       if (d) d.answer = e; // the newest answer counts; the human may change it any time (155)
     }
@@ -158,11 +159,13 @@ export function derive(entries, currentVer = () => null, declared = []) {
     // A withdrawn question keeps its late answer on any version: nothing asks it again (2.14.2).
     if ((!d.declared && !d.material) || d.retracted != null || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
     // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
-    const first = live.findIndex((e, i) => i > (d.askAt ?? -1) && e.type === "decide" && e.decision === d.id), vers = [], last = new Map();
+    // Only answers to this ask count: a late one to a withdrawn ask with the same id is not its history (2.14.2).
+    const mine = (e) => e.type === "decide" && e.decision === d.id && (e.ask == null || e.ask === d.askSeq);
+    const first = live.findIndex((e, i) => i > (d.askAt ?? -1) && mine(e)), vers = [], last = new Map();
     for (const e of live.slice(first)) {
-      if (e.ver == null || (e.decision !== d.id && keyOfEvent(e) !== key)) continue;
+      if (e.ver == null || (!mine(e) && (e.decision === d.id || keyOfEvent(e) !== key))) continue;
       if (!vers.includes(e.ver)) vers.push(e.ver);
-      if (e.type === "decide" && e.decision === d.id) last.set(e.ver, e);
+      if (mine(e)) last.set(e.ver, e);
     }
     if (!vers.includes(now)) vers.push(now);
     return {
@@ -1379,6 +1382,7 @@ function boot() {
   async function decide(b) {
     let st = state(), d = st.decisions.find((x) => x.id === b.dataset.id);
     if (!d || b.disabled) return; // locked by atl-wip, also against Enter in a required note
+    const ask = d.askSeq; // the ask the click saw, also when the id is asked anew while its images upload (2.14.2)
     const extra = b.closest(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra"), note = extra?.querySelector(".atl-note"), own = extra?.querySelector(".atl-ownans");
     // "Other…": the human's own text is the answer; one that equals an option is that option.
     const label = b.dataset.atl === "decideown" ? own?.value.trim() : b.dataset.label, custom = b.dataset.atl === "decideown" && !d.options.some((o) => o.label === label);
@@ -1397,7 +1401,7 @@ function boot() {
     // Images upload first: a refused one leaves the current answer and the Event Log as they are.
     const names = images.length ? await upload(images) : [];
     if (!names) return false;
-    st = state(); d = st.decisions.find((x) => x.id === b.dataset.id); // the log may have moved during the upload
+    st = state(); d = st.decisions.find((x) => x.id === b.dataset.id && x.askSeq === ask) ?? st.withdrawn.get(ask); // the log may have moved during the upload
     if (!d) return;
     // Always editable (155): a change is a new answer that names the one it replaces.
     let previous = d.answer && !d.stale && d.answer.option !== label ? d.answer.option : undefined, replaced; // a new round replaces nothing
@@ -1620,7 +1624,7 @@ function boot() {
   function markOpened(d) {
     if (opening.has(d.id)) return;
     opening.add(d.id);
-    post({ type: "opened", decision: d.id }).finally(() => opening.delete(d.id));
+    post({ type: "opened", decision: d.id, ask: d.askSeq }).finally(() => opening.delete(d.id));
   }
   const opened = (ev) => {
     if (!ev.isTrusted || isUi(ev.target) || (ev.type === "keydown" && ev.key !== "Enter" && ev.key !== " ")) return;

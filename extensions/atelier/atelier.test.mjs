@@ -518,6 +518,53 @@ test("an Event Log without the ask field replays as before: the answer goes to t
   assert.deepEqual(shown([ask(1, "A?"), retract(2, "r1"), decide(3)]), ["A?", "Wait", "r1", "done"]);
 });
 
+test("the host refuses an answer or an opened naming an ask that is not this Decision's (2.14.2)", async () => {
+  const p = project();
+  const { host, page, human } = await hostOn(p);
+  try {
+    const options = [{ label: "Yes", consequence: "" }, { label: "No", consequence: "" }];
+    const a = host.agent(page, { type: "ask", decision: { id: "approval", question: "Publish?", options } });
+    const other = host.agent(page, { type: "ask", decision: { id: "other", question: "Other?", options } });
+    const before = readLog(page).length;
+    for (const body of [
+      { type: "decide", decision: "approval", option: "Yes", ask: 9999 },
+      { type: "decide", decision: "approval", option: "Yes", ask: other.seq },
+      { type: "opened", decision: "approval", ask: other.seq },
+    ]) {
+      const r = human(body);
+      assert.deepEqual([r.status, r.json.error], [400, `No ask #${body.ask} for Decision approval on this Page.`], JSON.stringify(body));
+    }
+    assert.equal(readLog(page).length, before, "nothing is appended");
+    assert.equal(human({ type: "decide", decision: "approval", option: "Yes" }).status, 200, "an answer without ask is accepted as before");
+    assert.equal(human({ type: "decide", decision: "approval", option: "No", ask: a.seq }).status, 200);
+  } finally { host.stop(); p.done(); }
+});
+
+test("opened binds to the ask its tab showed; one without ask marks the id's current ask (2.14.2)", async () => {
+  const p = project();
+  const { host, page, human } = await hostOn(p);
+  try {
+    const options = [{ label: "Yes", consequence: "" }, { label: "No", consequence: "" }];
+    const first = host.agent(page, { type: "ask", decision: { id: "m", question: "Publish?", material: "a", options } });
+    host.agent(page, { type: "retract", decision: "m", reason: "moved" });
+    host.agent(page, { type: "ask", decision: { id: "m", question: "Delete?", material: "a", options } });
+    assert.equal(human({ type: "opened", decision: "m", ask: first.seq }).status, 200);
+    assert.equal(readLog(page).at(-1).ask, first.seq, "the host records the ask opened names");
+    const opened = () => derive(readLog(page)).decisions.find((x) => x.id === "m").opened;
+    assert.equal(opened(), false, "opening the withdrawn question's material does not open the new one");
+    human({ type: "opened", decision: "m" });
+    assert.equal(opened(), true, "an opened without ask marks the current ask, as before");
+  } finally { host.stop(); p.done(); }
+});
+
+test("version history counts only answers to this ask: a delayed answer to a withdrawn one never shows (2.14.2)", () => {
+  const q = (seq, question) => ({ seq, at: 0, origin: "agent", type: "ask", decision: { id: "x", key: "doc", material: "doc", question, options: [{ label: "Yes" }, { label: "No" }] } });
+  const decide = (seq, option, ver, ask) => ({ seq, at: 0, origin: "human", type: "decide", decision: "x", option, key: "doc", ver, ask, delivery: "immediate" });
+  const log = [q(1, "Publish?"), { seq: 2, at: 0, origin: "agent", type: "retract", decision: "x", reason: "r" }, q(3, "Delete?"), decide(4, "No", "v2", 3), decide(5, "Yes", "v1", 1)];
+  const d = derive(log, () => "v3").decisions.find((x) => x.id === "x");
+  assert.deepEqual([d.question, d.answer.option, d.round, d.history.map((h) => [h.ver, h.answer])], ["Delete?", "No", 2, [["v2", "No"]]]);
+});
+
 test("a late answer on another material version keeps the question withdrawn (2.14.2)", () => {
   const log = [
     { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "x", key: "doc", material: "doc", question: "Approve?", options: [{ label: "Yes" }, { label: "No" }] } },
