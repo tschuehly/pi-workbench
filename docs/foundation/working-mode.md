@@ -125,7 +125,7 @@ axis after the grill: `Main | Subagents | Workers`; `Cockpit` runs FirstMate v1.
 | `Main` | Pia performs the primary work in the main session. |
 | `Subagents` | Pia parallelizes by default: splits each task into independent parts, launches them as parallel background subagents, delegates mechanical volume, and keeps the main session for steering and integration. |
 | `Workers` | Pia names the scopes that receive repeated tasks, creates one worker per scope, routes every task in that scope to it, and runs independent workers in parallel. |
-| `Cockpit` | Pia runs one durable worker per Workstream in parallel and shows each worker's living report as one tab on a single Atelier Page for the Chat, rewritten in place and written by a fresh subagent from the report and the worker's status file (`~/.pi-workbench/workers/status/<workerId>.json`). Every question is a standalone Page Decision, not a Chat ask; workers never post, and Pia posts each Send after Thomas approves it. |
+| `Cockpit` | Pia runs one durable worker per Workstream in parallel and shows each worker's living report as one tab on a single Atelier Page for the Chat, rewritten in place and written by a fresh subagent from the report and the worker's status file (`~/.pi-workbench/workers/status/<workerId>.json`). Every question is a standalone Page Decision, not a Chat ask; whether and how Pia tells Thomas that a tab changed follows Attention, so AFK sends nothing; workers never post, and Pia posts each Send after Thomas approves it. |
 
 This is guidance, not mandatory team creation for trivial work. Workers are useful when repeated
 bounded actions in one scope benefit from retained context. The existing supported hierarchy is
