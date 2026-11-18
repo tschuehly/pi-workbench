@@ -1,4 +1,4 @@
-// Atelier Kernel 2.13.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.14.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -108,6 +108,7 @@ export function derive(entries, currentVer = () => null, declared = []) {
     else if (e.type === "close") { const t = threads.get(rootOf(e.target)); if (t) { t.closed = true; t.closedAt = e.seq; if (e.ver !== undefined) t.ver = e.ver; } } // closed on the version the human saw
     else if (e.type === "still") { const t = threads.get(rootOf(e.target)); if (t) { t.ver = e.ver ?? null; t.closed = false; } }
     else if (e.type === "ask") decisions.set(e.decision.id, { ...e.decision, askSeq: e.seq, answer: null, opened: false });
+    else if (e.type === "retract") decisions.delete(e.decision); // the agent settled it; its card leaves the Page (2.14.0)
     else if (e.type === "opened") { const d = decisions.get(e.decision); if (d) d.opened = true; }
     else if (e.type === "decide") {
       // A Page-declared answer carries its options, so the Decision replays even where the Page is not loaded.

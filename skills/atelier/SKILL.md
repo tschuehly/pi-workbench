@@ -64,6 +64,8 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   answers that fit no option), never numbered options in a reply. The human may change any answer later; a
   change arrives as "X → Y". Once its undo window closes, an answered `ask` folds to one line (question and
   answer) that opens the full Decision, so answered questions take little room under their Key.
+  When an asked Decision no longer needs the human (someone else settled it, or the work moved on),
+  `retract` it with its `id` and `text` saying why: its card leaves the Page and the Event Log keeps the reason.
 - `atl-wip="Reworking scene 3"` on a Key or any element containing Keys marks it under construction
   while you rework it: the Kernel dims it, labels it with the text and locks its Decisions (answers stay
   shown; Comments stay open). Remove it in the Update that delivers the rework; `atelier.state().wip`

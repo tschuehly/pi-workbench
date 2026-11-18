@@ -306,7 +306,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.13\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.14\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -386,6 +386,33 @@ test("the extension delivers as an atelier follow-up message and records the rec
     assert.match((await run({ action: "update" })).content[0].text, /No tab is connected/);
     await assert.rejects(run({ action: "answer", comment: 1, text: "x" }), /Comment/);
     await assert.rejects(run({ action: "open", page: "../outside.html" }), /No Page file/);
+  } finally { handlers.session_shutdown(); p.done(); }
+});
+
+test("retract withdraws an asked Decision: it no longer asks, and the Event Log keeps the reason (2.14.0)", async () => {
+  const p = project();
+  const tools = new Map(), handlers = {};
+  atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: () => {} });
+  const ctx = { cwd: p.root, isIdle: () => true, sessionManager: { getSessionId: () => `s-retract-${process.pid}` } };
+  handlers.session_start({}, ctx);
+  const run = (params) => tools.get("atelier").execute("id", { page: "page.html", ...params }, undefined, undefined, ctx);
+  const page = path.join(realpathSync(p.root), "page.html");
+  try {
+    await run({ action: "open" });
+    await run({ action: "ask", decision: { id: "merge", question: "Merge agent#2243 now?", options: [{ label: "Merge", consequence: "ships" }, { label: "Wait", consequence: "waits" }] } });
+    await run({ action: "ask", decision: { id: "keep", question: "Keep?", options: [{ label: "Yes", consequence: "" }, { label: "No", consequence: "" }] } });
+    assert.deepEqual(derive(readLog(page)).toAnswer.map((d) => d.id), ["merge", "keep"]);
+    await assert.rejects(run({ action: "retract", id: "merge" }), /text: why/);
+    await assert.rejects(run({ action: "retract", id: "nope", text: "x" }), /Decision you asked/);
+    const retracted = await run({ action: "retract", id: "merge", text: "no longer needed: Igor merged it" });
+    assert.match(retracted.content[0].text, /Decision merge retracted .*no longer asks/);
+    const st = derive(readLog(page));
+    assert.deepEqual(st.decisions.map((d) => d.id), ["keep"], "the retracted card leaves the Page");
+    assert.deepEqual(st.toAnswer.map((d) => d.id), ["keep"]);
+    assert.deepEqual(readLog(page).filter((e) => e.type === "retract").map(({ origin, decision, reason }) => ({ origin, decision, reason })),
+      [{ origin: "agent", decision: "merge", reason: "no longer needed: Igor merged it" }]);
+    await run({ action: "ask", decision: { id: "merge", question: "Merge agent#2250 now?", options: [{ label: "Merge", consequence: "" }, { label: "Wait", consequence: "" }] } });
+    assert.ok(derive(readLog(page)).toAnswer.some((d) => d.id === "merge"), "asking the same id again asks anew");
   } finally { handlers.session_shutdown(); p.done(); }
 });
 
