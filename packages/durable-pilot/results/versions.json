@@ -1,12 +1,17 @@
 {
-  "node": "v26.7.0",
-  "sqlite": "3.53.4",
+  "node": "v26.13.1",
+  "sqlite": "3.54.1",
   "pilot": {
-    "@earendil-works/chord": "1.4.0",
-    "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-codemode": "1.4.0",
-    "@earendil-works/pi-durable": "1.4.0",
-    "@earendil-works/pi-telemetry": "1.4.0"
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-agent-core": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-codemode": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/pi-mcp": "1.5.2",
+    "@earendil-works/pi-schema": "1.5.2",
+    "@earendil-works/pi-telemetry": "1.5.2",
+    "@earendil-works/pi-tui": "1.5.2"
   },
   "legacy": {
     "@earendil-works/chord": "1.3.0",
@@ -16,5 +21,5 @@
     "@earendil-works/pi-telemetry": "1.3.0"
   },
   "piClaudeCodeUseRules": "2.2.1 (re-expressed in src/claude.ts)",
-  "commit": "060db04"
+  "commit": "08d3c6a"
 }
