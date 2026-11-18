@@ -209,10 +209,25 @@ test("Orchestration Cockpit posts the Cockpit guidance: one worker per Workstrea
   assert.match(block, /one tab per worker/);
   assert.match(block, /~\/\.pi-workbench\/workers\/status\/<workerId>\.json/);
   assert.match(block, /Every Decision stands alone/);
-  assert.match(block, /never with `ask_user` or in Chat/);
+  assert.match(block, /as a Page Decision/);
   assert.match(block, /Workers never post/);
   assert.deepEqual(s.snapshots.at(-1).selected, { ...defaults, orchestration: "Cockpit" });
   s.session.dispose();
+});
+
+test("Cockpit sets where questions live; Attention alone decides whether and how Thomas is contacted", () => {
+  const cockpit = axes.orchestration.values.Cockpit;
+  // No unconditional ping: every outward contact line defers to the Attention axis.
+  assert.doesNotMatch(cockpit, /post one line in Chat/);
+  assert.match(cockpit, /follows your Attention setting/);
+  assert.match(cockpit, /send nothing when it says not to contact him/);
+  for (const attention of Object.keys(axes.attention.values)) {
+    const block = renderBlock({ ...defaults, attention, orchestration: "Cockpit" }, 1, true);
+    assert.ok(block.includes(cockpit), attention);
+    if (attention !== "Default") assert.ok(block.includes(axes.attention.values[attention]), attention);
+    // Attention's own question channel (ask_user, ask_human, Chat) yields to the Page explicitly, not silently.
+    if (/ask_user|ask_human/.test(axes.attention.values[attention])) assert.match(cockpit, /instead of the question channel your Attention setting names/, attention);
+  }
 });
 
 test("after compaction summarizes the block away, the next prompt attaches it again", async () => {
