@@ -1,4 +1,4 @@
-// Atelier Kernel 2.14.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.14.2: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -97,7 +97,8 @@ export function derive(entries, currentVer = () => null, declared = []) {
   const rootOf = (seq) => { let e = bySeq.get(seq); while (e?.thread < e?.seq && bySeq.has(e.thread)) e = bySeq.get(e.thread); return e?.seq; };
   const stale = (key, ver) => { const now = key ? currentVer(key) : null; return ver != null && now != null && ver !== now; };
 
-  const threads = new Map(), decisions = new Map(), requests = new Map(), retracted = new Map();
+  // withdrawn: each ask the agent retracted or asked anew, by its seq, so a late answer naming it lands there (2.14.2).
+  const threads = new Map(), decisions = new Map(), requests = new Map(), withdrawn = new Map(), lastAsk = new Map();
   for (const d of declared) if (!decisions.has(d.id)) decisions.set(d.id, { ...d, answer: null, opened: false });
   for (const [i, e] of live.entries()) {
     if (e.type === "comment") {
@@ -108,19 +109,26 @@ export function derive(entries, currentVer = () => null, declared = []) {
     else if (e.type === "close") { const t = threads.get(rootOf(e.target)); if (t) { t.closed = true; t.closedAt = e.seq; if (e.ver !== undefined) t.ver = e.ver; } } // closed on the version the human saw
     else if (e.type === "still") { const t = threads.get(rootOf(e.target)); if (t) { t.ver = e.ver ?? null; t.closed = false; } }
     // askAt: where this ask starts in the log; answers before it belong to an earlier question with the same id (2.14.1).
-    else if (e.type === "ask") { retracted.delete(e.decision.id); decisions.set(e.decision.id, { ...e.decision, askSeq: e.seq, askAt: i, answer: null, opened: false }); }
-    else if (e.type === "retract") {
+    else if (e.type === "ask") {
+      const old = decisions.get(e.decision.id);
+      if (old?.askSeq && !withdrawn.has(old.askSeq)) withdrawn.set(old.askSeq, { ...old, retracted: "asked again" });
+      decisions.set(e.decision.id, { ...e.decision, askSeq: e.seq, askAt: i, answer: null, opened: false }); lastAsk.set(e.decision.id, e.seq);
+    } else if (e.type === "retract") {
       // The agent settled an unanswered ask; its card leaves the Page (2.14.0). An answered one keeps the human's answer (2.14.1).
       const d = decisions.get(e.decision);
-      if (d && !d.declared && d.answer === null) { decisions.delete(e.decision); retracted.set(e.decision, { ...d, retracted: e.reason ?? "" }); }
+      if (d && !d.declared && d.answer === null) { decisions.delete(e.decision); withdrawn.set(d.askSeq, { ...d, retracted: e.reason ?? "" }); }
     }
     else if (e.type === "opened") { const d = decisions.get(e.decision); if (d) d.opened = true; }
     else if (e.type === "decide") {
       // A Page-declared answer carries its options, so the Decision replays even where the Page is not loaded.
       if (!decisions.has(e.decision) && e.options) decisions.set(e.decision, { ...declaredDecision(e.decision, e.options, e.rec), answer: null, opened: false });
-      // An answer that crossed a retract lands: the Decision returns, answered, with the reason it is no longer asked (2.14.1).
-      if (!decisions.has(e.decision) && retracted.has(e.decision)) { decisions.set(e.decision, retracted.get(e.decision)); retracted.delete(e.decision); }
-      const d = decisions.get(e.decision); if (d) d.answer = e; // the newest answer counts; the human may change it any time (155)
+      // An answer names the ask it answered (2.14.2); one without (older Event Logs) answers the id's latest ask.
+      const cur = decisions.get(e.decision), askSeq = e.ask ?? lastAsk.get(e.decision);
+      // An answer that crossed a retract lands on the withdrawn question with the reason it is no longer asked (2.14.1);
+      // its card returns unless the id is asked anew, then only the agent hears it (ponytail: one card per id on the Page).
+      const d = cur && (e.ask == null || cur.askSeq === e.ask) ? cur : withdrawn.get(askSeq);
+      if (d && !cur) decisions.set(e.decision, d);
+      if (d) d.answer = e; // the newest answer counts; the human may change it any time (155)
     }
     else if (e.type === "request") requests.set(e.seq, { req: e, state: null, revision: 1, note: null, cancel: false, accepted: false, rework: null });
     else if (e.type === "status") {
@@ -147,7 +155,8 @@ export function derive(entries, currentVer = () => null, declared = []) {
   const keyOfEvent = (e) => e.key ?? (e.type === "close" || e.type === "still" ? threads.get(rootOf(e.target))?.key : undefined);
   const rounds = (d, key) => {
     const now = key ? currentVer(key) : null;
-    if ((!d.declared && !d.material) || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
+    // A withdrawn question keeps its late answer on any version: nothing asks it again (2.14.2).
+    if ((!d.declared && !d.material) || d.retracted != null || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
     // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
     const first = live.findIndex((e, i) => i > (d.askAt ?? -1) && e.type === "decide" && e.decision === d.id), vers = [], last = new Map();
     for (const e of live.slice(first)) {
@@ -170,7 +179,7 @@ export function derive(entries, currentVer = () => null, declared = []) {
   const drafts = live.filter((e) => status(e) === "draft");
   return {
     threads: [...threads.values()], decisions: [...decisions.values()],
-    requests: [...requests.values()], drafts, status,
+    requests: [...requests.values()], drafts, status, withdrawn,
     openThreads: [...threads.values()].filter((t) => !t.closed && status(t.root) !== "draft"),
     toAnswer: [...decisions.values()].filter((d) => d.state !== "done"),
   };
@@ -200,7 +209,7 @@ function keyCounts(st) {
  * Each Decision's `state` is "new", "changed" (answered on an earlier version; `answer` is what the human said) or "done";
  * `toAnswer` lists the ones not done. `round` is the number of the version the Key shows ("Version 2"), counted from the
  * first answer in the order the Event Log saw them; `history` keeps the last answer on each other version as
- * {round, ver, answer, custom, note}. `retracted` is the agent's reason when an answer crossed its retract (2.14.1), else null. `keys` maps each Key address holding Decisions or open threads, and every Key
+ * {round, ver, answer, custom, note}. `retracted` is the agent's reason when an answer crossed its retract (2.14.1) or answered an ask asked anew ("asked again", 2.14.2), else null. `keys` maps each Key address holding Decisions or open threads, and every Key
  * around it, to {new, changed, done, threads}.
  */
 export function publicState(st, { conn = "no session", loaded = false, wip = [] } = {}) {
@@ -267,7 +276,7 @@ export function threadLayout(msgs, expanded = false, closed = false) {
 // Images name the files the host stored, so the agent can read them; one only a browser holds says so.
 const imagesText = (e, file) => e.images?.length ? `image${e.images.length > 1 ? "s" : ""} ${e.images.map((x) => x.startsWith("data:") ? "(kept in the browser only)" : quote(file ? file(x) : x)).join(", ")}` : "";
 export function describe(e, entries, excerpt, file) {
-  const ask = (id) => [...entries].reverse().find((x) => x.type === "ask" && x.decision.id === id)?.decision;
+  const ask = (id) => [...entries].reverse().find((x) => x.type === "ask" && (e.ask != null ? x.seq === e.ask : x.decision.id === id))?.decision;
   const withImages = (line) => e.images?.length ? `${line}; ${imagesText(e, file)}` : line;
   switch (e.type) {
     case "comment": {
@@ -288,8 +297,10 @@ export function describe(e, entries, excerpt, file) {
       const option = e.custom ? `own answer: ${quote(e.option)}` : e.option;
       const choice = e.previous != null ? `${e.previous} → ${option}` : option;
       // An answer that crossed a retract names the reason, so the agent can acknowledge it (2.14.1).
-      const gone = derive(entries.slice(0, entries.findIndex((x) => x.seq === e.seq) + 1)).decisions.find((x) => x.id === e.decision)?.retracted;
-      return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", imagesText(e, file), gone != null ? `no longer asked: ${quote(gone)}` : ""].filter(Boolean).join("; ")}`;
+      const upTo = derive(entries.slice(0, entries.findIndex((x) => x.seq === e.seq) + 1));
+      const answered = [...upTo.decisions, ...upTo.withdrawn.values()].find((x) => x.answer === e);
+      const gone = answered?.retracted != null ? `no longer asked: ${quote(answered.retracted)}${answered.question ? ` (question ${quote(answered.question)})` : ""}` : "";
+      return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", imagesText(e, file), gone].filter(Boolean).join("; ")}`;
     }
     case "retract": return `#${e.seq} Retracted Decision ${e.decision}: ${quote(e.reason)}`;
     case "request": return `#${e.seq} Request ${quote(e.job)} ${at(e, excerpt)}${e.input && Object.keys(e.input).length ? ` with input ${JSON.stringify(e.input)}` : ""}`;
@@ -1400,7 +1411,7 @@ function boot() {
     }
     const page = d.declared ? { options: d.options.map((o) => o.label).join("|"), rec: d.options.find((o) => o.recommended)?.label, delivery: d.delivery } : {};
     // The replaced answer was never delivered, so its note and images stay with the Decision unless new ones replace them.
-    const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, key: d.key, ver: d.key ? currentVer(d.key) : undefined, ...page });
+    const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, ask: d.askSeq, key: d.key, ver: d.key ? currentVer(d.key) : undefined, ...page });
     if (!posted) return false; // refused: the note and images stay for another try
     if (extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
   }

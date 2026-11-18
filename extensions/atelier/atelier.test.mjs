@@ -306,7 +306,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.14\.1 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.14\.2 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -467,6 +467,67 @@ test("a re-asked id starts fresh: no answer from an earlier ask shows under the 
   assert.deepEqual(shown(retracted), ["No", 1, []]);
   // Asked again without a retract after an answer on v1.
   assert.deepEqual(shown([ask(1, "Approve draft?"), decide(2, "Yes", "v1"), ask(3, "Delete draft?"), decide(4, "No", "v2")]), ["No", 1, []]);
+});
+
+test("an answer names the ask it answered: a delayed answer to a withdrawn question never answers the re-asked one (2.14.2)", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const options = [{ label: "Yes", consequence: "" }, { label: "No", consequence: "" }];
+    const first = host.agent(page, { type: "ask", decision: { id: "approval", question: "Publish draft?", options } });
+    host.agent(page, { type: "retract", decision: "approval", reason: "publishing moved to CI" });
+    const second = host.agent(page, { type: "ask", decision: { id: "approval", question: "Delete draft?", options } });
+    // The original tab's "Yes" to "Publish draft?" arrives late.
+    assert.equal(human({ type: "decide", decision: "approval", option: "Yes", ask: first.seq }).status, 200);
+    assert.equal(readLog(page).at(-1).ask, first.seq, "the host records which ask the answer names");
+    const d = derive(readLog(page)).decisions.find((x) => x.id === "approval");
+    assert.deepEqual([d.question, d.answer, d.state], ["Delete draft?", null, "new"], "the new question stays unanswered");
+    tick(UNDO + 100);
+    host.deliverDue(page);
+    assert.match(sent.at(-1).message.content, /Decision approval: Yes; no longer asked: "publishing moved to CI" \(question "Publish draft\?"\)/, "delivered as a late answer naming the old question");
+    // An answer naming the current ask answers it.
+    human({ type: "decide", decision: "approval", option: "No", ask: second.seq });
+    const now = derive(readLog(page)).decisions.find((x) => x.id === "approval");
+    assert.deepEqual([now.question, now.answer?.option, now.state, now.retracted ?? null], ["Delete draft?", "No", "done", null]);
+  } finally { host.stop(); p.done(); }
+  // With the id not asked anew, the late answer shows folded with its reason, as before.
+  const q = { id: "m", question: "Merge?", options: [{ label: "Merge" }, { label: "Wait" }] };
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: q },
+    { seq: 2, at: 0, origin: "agent", type: "retract", decision: "m", reason: "r1" },
+    { seq: 3, at: 0, origin: "agent", type: "ask", decision: { ...q, question: "Merge now?" } },
+    { seq: 4, at: 0, origin: "agent", type: "retract", decision: "m", reason: "r2" },
+    { seq: 5, at: 0, origin: "human", type: "decide", decision: "m", option: "Wait", ask: 1, delivery: "immediate" },
+  ];
+  const late = derive(log).decisions.find((x) => x.id === "m");
+  assert.deepEqual([late.question, late.answer.option, late.retracted, late.state], ["Merge?", "Wait", "r1", "done"], "it lands on the ask it names");
+  // Asked anew without a retract: a late answer to the first ask leaves the new one open and says so.
+  const reasked = [log[0], log[2], { ...log[4], seq: 6 }];
+  assert.deepEqual(derive(reasked).toAnswer.map((x) => [x.question, x.answer]), [["Merge now?", null]]);
+  assert.match(compose("page.html", "", [reasked[2]], reasked), /#6 Decision m: Wait; no longer asked: "asked again" \(question "Merge\?"\)/);
+});
+
+test("an Event Log without the ask field replays as before: the answer goes to the id's latest ask (2.14.2)", () => {
+  const q = (question) => ({ id: "m", question, options: [{ label: "Merge" }, { label: "Wait" }] });
+  const decide = (seq) => ({ seq, at: 0, origin: "human", type: "decide", decision: "m", option: "Wait", delivery: "immediate" });
+  const ask = (seq, question) => ({ seq, at: 0, origin: "agent", type: "ask", decision: q(question) });
+  const retract = (seq, reason) => ({ seq, at: 0, origin: "agent", type: "retract", decision: "m", reason });
+  const shown = (log) => { const d = derive(log).decisions.find((x) => x.id === "m"); return [d.question, d.answer?.option ?? null, d.retracted ?? null, d.state]; };
+  assert.deepEqual(shown([ask(1, "A?"), retract(2, "r1"), ask(3, "B?"), decide(4)]), ["B?", "Wait", null, "done"]);
+  assert.deepEqual(shown([ask(1, "A?"), retract(2, "r1"), ask(3, "B?"), retract(4, "r2"), decide(5)]), ["B?", "Wait", "r2", "done"], "the latest withdrawn ask takes it, with its own reason");
+  assert.deepEqual(shown([ask(1, "A?"), retract(2, "r1"), decide(3)]), ["A?", "Wait", "r1", "done"]);
+});
+
+test("a late answer on another material version keeps the question withdrawn (2.14.2)", () => {
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "x", key: "doc", material: "doc", question: "Approve?", options: [{ label: "Yes" }, { label: "No" }] } },
+    { seq: 2, at: 0, origin: "agent", type: "retract", decision: "x", reason: "superseded" },
+    { seq: 3, at: 0, origin: "human", type: "decide", decision: "x", option: "Yes", key: "doc", ver: "v1", delivery: "immediate" },
+  ];
+  const st = derive(log, () => "v2");
+  const d = st.decisions.find((x) => x.id === "x");
+  assert.deepEqual([d.answer.option, d.retracted, d.state, d.stale], ["Yes", "superseded", "done", false]);
+  assert.deepEqual(st.toAnswer.map((x) => x.id), [], "a withdrawn question never asks again");
 });
 
 test("describe names a retract with its Decision and reason", async () => {

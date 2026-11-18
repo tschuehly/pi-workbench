@@ -67,7 +67,8 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   When an asked Decision no longer needs the human (someone else settled it, or the work moved on),
   `retract` it with its `id` and `text` saying why: its card leaves the Page and the Event Log keeps the reason.
   An answered Decision cannot be retracted: keep its answer and say in the Page prose why it is overtaken. An answer
-  that crosses your retract still arrives, marked `no longer asked`; acknowledge it.
+  that crosses your retract still arrives, marked `no longer asked` with the question it answered, even after you
+  ask the same `id` again; it never answers the new question. Acknowledge it.
 - `atl-wip="Reworking scene 3"` on a Key or any element containing Keys marks it under construction
   while you rework it: the Kernel dims it, labels it with the text and locks its Decisions (answers stay
   shown; Comments stay open). Remove it in the Update that delivers the rework; `atelier.state().wip`
@@ -182,7 +183,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.14.1 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.14.2 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of

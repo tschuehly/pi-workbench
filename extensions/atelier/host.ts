@@ -12,7 +12,7 @@ import { CLASSES, UNDO_MS, compose, derive, inGroup, keyTexts } from "./kernel/a
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-export const KERNEL_VERSION = "2.14.1";
+export const KERNEL_VERSION = "2.14.2";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
@@ -203,8 +203,8 @@ const images = opt((v) => Array.isArray(v) && v.length <= IMAGES_MAX && v.every(
 const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   comment: { ...ANCHOR, text: str, thread: opt(seqNo), images },
   // previous: the answer this one changes (155); options and rec: a Page-declared Decision's atl-decide and atl-rec;
-  // custom: the human wrote his own answer ("Other…") instead of picking an option.
-  decide: { decision: str, option: str, custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str), images },
+  // custom: the human wrote his own answer ("Other…") instead of picking an option; ask: the seq of the ask it answers (2.14.2).
+  decide: { decision: str, option: str, ask: opt(seqNo), custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str), images },
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
   close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str }, send: { key: opt(str) },
