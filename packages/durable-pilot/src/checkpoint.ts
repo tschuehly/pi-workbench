@@ -8,9 +8,7 @@ import {
 	CompactionTask,
 	type Conversation,
 	type ConversationId,
-	defineDoc,
 	defineExtension,
-	defineTask,
 	defineTool,
 	GenerationTask,
 	type Harness,
@@ -21,6 +19,7 @@ import {
 	type ToolExecutionApi,
 	type ToolTaskInput,
 } from "@earendil-works/pi-durable";
+import { defineDoc, defineTask } from "./store-schema.ts";
 import type { Context } from "@earendil-works/chord/context";
 import {
 	compactionInstructions,

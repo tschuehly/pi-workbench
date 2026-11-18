@@ -9,7 +9,6 @@ import { obj } from "@earendil-works/pi-schema";
 import {
 	AgentDoc,
 	type Conversation,
-	defineDoc,
 	defineExtension,
 	defineTool,
 	type Extension,
@@ -20,6 +19,7 @@ import {
 	type ToolRegistration,
 	wrapTool,
 } from "@earendil-works/pi-durable";
+import { defineDoc } from "./store-schema.ts";
 import { GROUPS, inGroup } from "../../../extensions/tool-groups/groups.mjs";
 import { context } from "./host.ts";
 import { WorkingModeDoc } from "./workbench.ts";

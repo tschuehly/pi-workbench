@@ -421,3 +421,24 @@ describe("B conditional close (close only if still restart-safe)", () => {
 		assert.equal(await session.exclusive(async () => "admitted"), "admitted");
 	});
 });
+
+// The store schema (pi-web durableChatService `restartRefusal`): Upgrade now and B restart a family only onto code that
+// writes the same store, so a failed start can roll back to the old code. Same Pi Durable is not enough: a Workbench
+// document or task at a new version is migrated by the new host, and the old one then refuses the store.
+describe("store schema (store-schema.json: every document and task version the host writes)", () => {
+	it("declares each Workbench document and task the host defines; an undeclared kind or version fails at definition", async () => {
+		const declared = JSON.parse(readFileSync(join(import.meta.dirname, "..", "store-schema.json"), "utf8")) as { documents: Record<string, number>; tasks: Record<string, number> };
+		const { defineDoc, defineTask } = await import("../src/store-schema.ts");
+		// A full host defines every one (its factories run as it opens): it starts, so none is undeclared.
+		const { store, cwd } = family("schema-declared");
+		const started = host(store, cwd, "schema-declared");
+		await started.ready;
+		await started.close();
+		for (const kind of ["workbench.delegation", "workbench.questions", "workbench.tool-groups"]) assert.equal(declared.documents[kind], 1, kind);
+		for (const name of ["workbench.child-reporter", "workbench.context-checkpoint", "workbench.answer-delivery"]) assert.equal(declared.tasks[name], 1, name);
+		const doc = { scope: "conversation" as const, initial: () => ({}), checkpointWhen: () => false };
+		assert.throws(() => defineDoc({ ...doc, kind: "workbench.undeclared", version: 1 } as never), /store-schema\.json/);
+		assert.throws(() => defineDoc({ ...doc, kind: "workbench.delegation", version: 2 } as never), /store-schema\.json/);
+		assert.throws(() => defineTask({ name: "workbench.child-reporter", version: 2, initial: () => ({ phase: "run" }), phases: {} } as never), /store-schema\.json/);
+	});
+});

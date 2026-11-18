@@ -6,7 +6,8 @@
 import { createHash } from "node:crypto";
 import { arr, bool, obj, opt, str } from "@earendil-works/pi-schema";
 import type { Context } from "@earendil-works/chord/context";
-import { type Conversation, type JsonObject, defineDoc, defineExtension, defineTask, defineTool, type EntryRecord, GenerationTask, type Harness, hook, type ToolRegistration } from "@earendil-works/pi-durable";
+import { type Conversation, type JsonObject, defineExtension, defineTool, type EntryRecord, GenerationTask, type Harness, hook, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineDoc, defineTask } from "./store-schema.ts";
 import {
 	ALIGNMENT_RESET_TOOL,
 	ALIGNMENT_TOOL,

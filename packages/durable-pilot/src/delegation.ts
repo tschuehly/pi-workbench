@@ -21,9 +21,7 @@ import {
 	type ConversationHandle,
 	type ConversationId,
 	type DocumentReader,
-	defineDoc,
 	defineExtension,
-	defineTask,
 	defineTool,
 	type Extension,
 	type Harness,
@@ -33,6 +31,7 @@ import {
 	type ToolRegistration,
 	type Tx,
 } from "@earendil-works/pi-durable";
+import { defineDoc, defineTask } from "./store-schema.ts";
 import type { Context } from "@earendil-works/chord/context";
 import { taskLabel } from "../../../packages/pi-execution-adapter/src/index.js";
 import {

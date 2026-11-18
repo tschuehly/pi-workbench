@@ -1,0 +1,26 @@
+{
+  "documents": {
+    "pilot.admissions": 1,
+    "pilot.edits": 1,
+    "pilot.reconcile": 1,
+    "workbench.atelier": 1,
+    "workbench.background-bash": 1,
+    "workbench.branches": 1,
+    "workbench.child": 1,
+    "workbench.context-checkpoint": 1,
+    "workbench.delegation": 1,
+    "workbench.package-outbox": 1,
+    "workbench.questions": 1,
+    "workbench.resources": 1,
+    "workbench.storage-guard": 1,
+    "workbench.tool-groups": 1,
+    "workbench.workers": 1,
+    "workbench.working-mode": 1
+  },
+  "tasks": {
+    "workbench.answer-delivery": 1,
+    "workbench.child-anchor": 1,
+    "workbench.child-reporter": 1,
+    "workbench.context-checkpoint": 1
+  }
+}

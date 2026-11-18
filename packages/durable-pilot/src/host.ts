@@ -21,7 +21,6 @@ import {
 	type ConversationId,
 	type EnvTarget,
 	createRegistry,
-	defineDoc,
 	defineExtension,
 	type Harness,
 	Harness as HarnessFactory,
@@ -39,6 +38,7 @@ import {
 	type ToolTaskInput,
 	ToolTask,
 } from "@earendil-works/pi-durable";
+import { defineDoc } from "./store-schema.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { redactingRegistry, wrapProvider } from "./redact.ts";
 import { type Faults, type OpenedStore, openStore, type Synchronous } from "./store.ts";
