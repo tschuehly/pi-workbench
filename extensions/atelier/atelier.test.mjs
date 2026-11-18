@@ -306,7 +306,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.14\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.14\.1 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -414,6 +414,65 @@ test("retract withdraws an asked Decision: it no longer asks, and the Event Log 
     await run({ action: "ask", decision: { id: "merge", question: "Merge agent#2250 now?", options: [{ label: "Merge", consequence: "" }, { label: "Wait", consequence: "" }] } });
     assert.ok(derive(readLog(page)).toAnswer.some((d) => d.id === "merge"), "asking the same id again asks anew");
   } finally { handlers.session_shutdown(); p.done(); }
+});
+
+test("retract refuses an answered Decision: the human's answer stays, in the tool and in the Kernel (2.14.1)", async () => {
+  const p = project();
+  const tools = new Map(), handlers = {};
+  atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: () => {} });
+  const ctx = { cwd: p.root, isIdle: () => true, sessionManager: { getSessionId: () => `s-retract-answered-${process.pid}` } };
+  handlers.session_start({}, ctx);
+  const run = (params) => tools.get("atelier").execute("id", { page: "page.html", ...params }, undefined, undefined, ctx);
+  const page = path.join(realpathSync(p.root), "page.html");
+  try {
+    await run({ action: "open" });
+    await run({ action: "ask", decision: { id: "merge", question: "Merge?", options: [{ label: "Merge", consequence: "" }, { label: "Wait", consequence: "" }] } });
+    appendLog(page, { origin: "human", type: "decide", decision: "merge", option: "Wait", delivery: "record" });
+    await assert.rejects(run({ action: "retract", id: "merge", text: "moot" }), /Decision merge is answered; keep its answer and say in the Page prose why it is overtaken/);
+    assert.equal(readLog(page).filter((e) => e.type === "retract").length, 0, "a refused retract writes nothing");
+  } finally { handlers.session_shutdown(); p.done(); }
+  // The Kernel ignores a retract that reaches an answered Decision anyway (an older tool, a hand-written log).
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "m", question: "Merge?", options: [{ label: "Merge" }, { label: "Wait" }] } },
+    { seq: 2, at: 0, origin: "human", type: "decide", decision: "m", option: "Wait", delivery: "immediate" },
+    { seq: 3, at: 0, origin: "agent", type: "retract", decision: "m", reason: "moot" },
+  ];
+  assert.deepEqual(derive(log).decisions.map((d) => [d.id, d.answer?.option]), [["m", "Wait"]]);
+});
+
+test("an answer after a retract lands: it is recorded, shown with the reason, and delivered (2.14.1)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const q = { id: "m", question: "Merge?", options: [{ label: "Merge" }, { label: "Wait" }] };
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: q },
+    { seq: 2, at: 0, origin: "agent", type: "retract", decision: "m", reason: "Igor merged it" },
+    { seq: 3, at: 0, origin: "human", type: "decide", decision: "m", option: "Wait", delivery: "immediate" },
+  ];
+  const d = derive(log).decisions.find((x) => x.id === "m");
+  assert.deepEqual([d?.answer?.option, d?.retracted, d?.state], ["Wait", "Igor merged it", "done"], "the late answer is kept with the reason");
+  assert.deepEqual(publicState(derive(log)).toAnswer, [], "it asks nothing");
+  assert.equal(publicState(derive(log)).decisions[0].retracted, "Igor merged it");
+  assert.match(compose("page.html", "http://x", [log[2]], log), /#3 Decision m: Wait; no longer asked: "Igor merged it"/);
+  assert.deepEqual(dueMessages(log, 60_000).map((m) => m.seqs), [[3]], "it is delivered like any answer");
+  assert.deepEqual(derive(log.slice(0, 2)).decisions, [], "before a late answer the retracted card is gone");
+});
+
+test("a re-asked id starts fresh: no answer from an earlier ask shows under the new question (2.14.1)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const ask = (seq, question) => ({ seq, at: 0, origin: "agent", type: "ask", decision: { id: "draft", key: "doc", material: "doc", question, options: [{ label: "Yes" }, { label: "No" }] } });
+  const decide = (seq, option, ver) => ({ seq, at: 0, origin: "human", type: "decide", decision: "draft", option, key: "doc", ver, delivery: "immediate" });
+  const shown = (log) => { const d = publicState(derive(log, () => "v2")).decisions.find((x) => x.id === "draft"); return [d.answer, d.round, d.history]; };
+  // Retracted unanswered, a late answer on v1, then asked anew on v2 and answered No.
+  const retracted = [ask(1, "Approve draft?"), { seq: 2, at: 0, origin: "agent", type: "retract", decision: "draft", reason: "v2 replaces it" }, decide(3, "Yes", "v1"), ask(4, "Delete draft?"), decide(5, "No", "v2")];
+  assert.deepEqual(shown(retracted), ["No", 1, []]);
+  // Asked again without a retract after an answer on v1.
+  assert.deepEqual(shown([ask(1, "Approve draft?"), decide(2, "Yes", "v1"), ask(3, "Delete draft?"), decide(4, "No", "v2")]), ["No", 1, []]);
+});
+
+test("describe names a retract with its Decision and reason", async () => {
+  const { describe } = await import("./kernel/atelier.js");
+  const e = { seq: 7, at: 0, origin: "agent", type: "retract", decision: "merge", reason: "Igor merged it" };
+  assert.equal(describe(e, [e]), `#7 Retracted Decision merge: "Igor merged it"`);
 });
 
 test("a second send waits until the first one's run has started", async () => {

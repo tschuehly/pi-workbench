@@ -35,7 +35,8 @@ some options. Any answer may carry a note and images, which the Event Log keeps 
 The human can change the answer at any time; the answer records what it replaced and whether the
 human opened the material first. An answered Decision the agent asked folds to one line, its question and
 answer, which opens the full Decision. The agent may retract a Decision it asked once it no longer needs the
-human; it leaves the Page, and the Event Log keeps the reason.
+human; it leaves the Page, and the Event Log keeps the reason. An answered Decision cannot be retracted; an answer given after
+the retract still lands, folded with the reason it is no longer asked.
 _Avoid_: grade, score, proposal, approval
 
 **Request**:

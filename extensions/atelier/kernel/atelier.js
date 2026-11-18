@@ -1,4 +1,4 @@
-// Atelier Kernel 2.14.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.14.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -97,9 +97,9 @@ export function derive(entries, currentVer = () => null, declared = []) {
   const rootOf = (seq) => { let e = bySeq.get(seq); while (e?.thread < e?.seq && bySeq.has(e.thread)) e = bySeq.get(e.thread); return e?.seq; };
   const stale = (key, ver) => { const now = key ? currentVer(key) : null; return ver != null && now != null && ver !== now; };
 
-  const threads = new Map(), decisions = new Map(), requests = new Map();
+  const threads = new Map(), decisions = new Map(), requests = new Map(), retracted = new Map();
   for (const d of declared) if (!decisions.has(d.id)) decisions.set(d.id, { ...d, answer: null, opened: false });
-  for (const e of live) {
+  for (const [i, e] of live.entries()) {
     if (e.type === "comment") {
       const root = e.thread < e.seq ? threads.get(rootOf(e.thread)) : undefined;
       if (root) { root.msgs.push(e); root.closed = false; }
@@ -107,12 +107,19 @@ export function derive(entries, currentVer = () => null, declared = []) {
     } else if (e.type === "answer") threads.get(rootOf(e.target))?.msgs.push(e);
     else if (e.type === "close") { const t = threads.get(rootOf(e.target)); if (t) { t.closed = true; t.closedAt = e.seq; if (e.ver !== undefined) t.ver = e.ver; } } // closed on the version the human saw
     else if (e.type === "still") { const t = threads.get(rootOf(e.target)); if (t) { t.ver = e.ver ?? null; t.closed = false; } }
-    else if (e.type === "ask") decisions.set(e.decision.id, { ...e.decision, askSeq: e.seq, answer: null, opened: false });
-    else if (e.type === "retract") decisions.delete(e.decision); // the agent settled it; its card leaves the Page (2.14.0)
+    // askAt: where this ask starts in the log; answers before it belong to an earlier question with the same id (2.14.1).
+    else if (e.type === "ask") { retracted.delete(e.decision.id); decisions.set(e.decision.id, { ...e.decision, askSeq: e.seq, askAt: i, answer: null, opened: false }); }
+    else if (e.type === "retract") {
+      // The agent settled an unanswered ask; its card leaves the Page (2.14.0). An answered one keeps the human's answer (2.14.1).
+      const d = decisions.get(e.decision);
+      if (d && !d.declared && d.answer === null) { decisions.delete(e.decision); retracted.set(e.decision, { ...d, retracted: e.reason ?? "" }); }
+    }
     else if (e.type === "opened") { const d = decisions.get(e.decision); if (d) d.opened = true; }
     else if (e.type === "decide") {
       // A Page-declared answer carries its options, so the Decision replays even where the Page is not loaded.
       if (!decisions.has(e.decision) && e.options) decisions.set(e.decision, { ...declaredDecision(e.decision, e.options, e.rec), answer: null, opened: false });
+      // An answer that crossed a retract lands: the Decision returns, answered, with the reason it is no longer asked (2.14.1).
+      if (!decisions.has(e.decision) && retracted.has(e.decision)) { decisions.set(e.decision, retracted.get(e.decision)); retracted.delete(e.decision); }
       const d = decisions.get(e.decision); if (d) d.answer = e; // the newest answer counts; the human may change it any time (155)
     }
     else if (e.type === "request") requests.set(e.seq, { req: e, state: null, revision: 1, note: null, cancel: false, accepted: false, rework: null });
@@ -142,7 +149,7 @@ export function derive(entries, currentVer = () => null, declared = []) {
     const now = key ? currentVer(key) : null;
     if ((!d.declared && !d.material) || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
     // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
-    const first = live.findIndex((e) => e.type === "decide" && e.decision === d.id), vers = [], last = new Map();
+    const first = live.findIndex((e, i) => i > (d.askAt ?? -1) && e.type === "decide" && e.decision === d.id), vers = [], last = new Map();
     for (const e of live.slice(first)) {
       if (e.ver == null || (e.decision !== d.id && keyOfEvent(e) !== key)) continue;
       if (!vers.includes(e.ver)) vers.push(e.ver);
@@ -193,7 +200,7 @@ function keyCounts(st) {
  * Each Decision's `state` is "new", "changed" (answered on an earlier version; `answer` is what the human said) or "done";
  * `toAnswer` lists the ones not done. `round` is the number of the version the Key shows ("Version 2"), counted from the
  * first answer in the order the Event Log saw them; `history` keeps the last answer on each other version as
- * {round, ver, answer, custom, note}. `keys` maps each Key address holding Decisions or open threads, and every Key
+ * {round, ver, answer, custom, note}. `retracted` is the agent's reason when an answer crossed its retract (2.14.1), else null. `keys` maps each Key address holding Decisions or open threads, and every Key
  * around it, to {new, changed, done, threads}.
  */
 export function publicState(st, { conn = "no session", loaded = false, wip = [] } = {}) {
@@ -202,7 +209,7 @@ export function publicState(st, { conn = "no session", loaded = false, wip = [] 
     conn, loaded, wip, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
     decisions: st.decisions.map((d) => ({
       id: d.id, key: d.key ?? null, declared: !!d.declared, options: d.options.map((o) => o.label), recommended: d.options.find((o) => o.recommended)?.label ?? null,
-      answer: d.answer?.option ?? null, custom: !!d.answer?.custom, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, state: d.state, round: d.round, history: d.history, opened: !!d.opened,
+      answer: d.answer?.option ?? null, custom: !!d.answer?.custom, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, state: d.state, round: d.round, history: d.history, opened: !!d.opened, retracted: d.retracted ?? null,
     })),
     keys: keyCounts(st),
     threads: st.threads.map((t) => ({ seq: t.root.seq, key: t.root.key ?? null, closed: t.closed, stale: !!t.stale, messages: t.msgs.length, status: status(t.root) })),
@@ -280,8 +287,11 @@ export function describe(e, entries, excerpt, file) {
       // "Other…": none of the options; the human wrote his own answer.
       const option = e.custom ? `own answer: ${quote(e.option)}` : e.option;
       const choice = e.previous != null ? `${e.previous} → ${option}` : option;
-      return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", imagesText(e, file)].filter(Boolean).join("; ")}`;
+      // An answer that crossed a retract names the reason, so the agent can acknowledge it (2.14.1).
+      const gone = derive(entries.slice(0, entries.findIndex((x) => x.seq === e.seq) + 1)).decisions.find((x) => x.id === e.decision)?.retracted;
+      return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", imagesText(e, file), gone != null ? `no longer asked: ${quote(gone)}` : ""].filter(Boolean).join("; ")}`;
     }
+    case "retract": return `#${e.seq} Retracted Decision ${e.decision}: ${quote(e.reason)}`;
     case "request": return `#${e.seq} Request ${quote(e.job)} ${at(e, excerpt)}${e.input && Object.keys(e.input).length ? ` with input ${JSON.stringify(e.input)}` : ""}`;
     case "rework": return `#${e.seq} Rework requested for Request #${e.target}${e.note ? `: ${quote(e.note)}` : ""}`;
     case "cancel": return `#${e.seq} Cancel requested for Request #${e.target}`;
@@ -664,10 +674,12 @@ function boot() {
   const folded = (d) => foldable(d) && !unfolded.has(d.id) && !noting(d);
   function decisionHtml(d, st, lock = null) {
     const a = current(d);
-    const line = foldable(d) ? `<button type="button" data-atl="fold" data-id="${esc(d.id)}" class="atl-fold" aria-expanded="${!folded(d)}" title="${esc(d.question)}">${icon("chevron")}<span class="atl-tag">answered</span><span class="atl-fq">${esc(d.question)}</span><b>${esc(clip(a.option, 60))}</b></button>` : "";
+    // An answer that crossed a retract shows why the agent no longer asks (2.14.1).
+    const gone = d.retracted != null ? `<span class="atl-tag atl-gone">no longer asked: ${esc(clip(d.retracted, 80))}</span>` : "";
+    const line = foldable(d) ? `<button type="button" data-atl="fold" data-id="${esc(d.id)}" class="atl-fold" aria-expanded="${!folded(d)}" title="${esc(d.question)}">${icon("chevron")}<span class="atl-tag">answered</span><span class="atl-fq">${esc(d.question)}</span><b>${esc(clip(a.option, 60))}</b>${gone}</button>` : "";
     if (line && folded(d)) return line;
     const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}"${locked(lock)} class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
-    return `<div class="atl-head">${line || `<span class="atl-tag">${a ? "answered" : "to answer"}</span>`}${roundTag(d)}</div>
+    return `<div class="atl-head">${line || `<span class="atl-tag">${a ? "answered" : "to answer"}</span>${gone}`}${roundTag(d)}</div>
       <div class="atl-q">${esc(d.question)}</div>${d.detail ? `<div class="atl-dim">${esc(d.detail)}</div>` : ""}
       ${materialHtml(d)}<div class="atl-opts">${opts}${otherHtml(d, lock)}</div>${receiptHtml(d, st)}`;
   }
@@ -1647,7 +1659,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-card.atl-open-item{border-left:3px solid var(--atl-accent)}
 .atl-card.atl-folded{padding:2px 6px}.atl-card.atl-folded>.atl-dextra{display:none}
 [atl-ui] button.atl-fold{display:flex;width:100%;min-width:0;min-height:24px;padding:0 4px;border-color:transparent;background:none;text-align:left}
-.atl-fold .atl-fq{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--atl-muted)}.atl-fold>b{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.atl-fold .atl-fq{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--atl-muted)}.atl-fold>b{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.atl-fold .atl-gone{flex:0 1 auto;min-width:0;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .atl-fold .atl-i{flex:none;transition:transform .15s}.atl-fold[aria-expanded=true] .atl-i{transform:rotate(90deg)}
 .atl-opts{display:grid;gap:4px}[atl-ui] button.atl-opt{display:grid;justify-items:start;text-align:left;padding:4px 10px}
 [atl-ui] button.atl-rec{border-color:var(--atl-accent);border-style:dashed}
