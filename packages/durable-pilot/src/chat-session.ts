@@ -267,6 +267,8 @@ export class ChatSession {
 	/** Tree navigation in progress, and operations in flight that it must not overlap (legacy tree-exclusive gate). */
 	#navigating = false;
 	#inFlight = 0;
+	/** B's close is deciding or under way: no input is admitted (see `quiesce`). */
+	#quiescing = false;
 	/** Deliveries (bash completions, Atelier input, package messages) waiting for a paused restore to be resumed, or for navigation to end. */
 	#deliveries: (() => void)[] = [];
 	#afterNavigation: (() => void)[] = [];
@@ -697,6 +699,31 @@ export class ChatSession {
 	 */
 	#paused(): boolean {
 		return !this.#resumed && this.#host.harness.wake().active;
+	}
+
+	/**
+	 * B's close (PI WEB's automatic upgrade), decided here so no input slips in after the daemon's own check: from now on
+	 * no input is admitted, then why the Chat may not restart, if anything: input in flight, a running turn, compaction
+	 * or `!` command, queued input, a running tool or a running child. Work that survives a restart (open questions,
+	 * background bash, watchers, Atelier Pages) does not count. Undefined: the caller closes at once; otherwise input is
+	 * admitted again.
+	 */
+	async quiesce(): Promise<string | undefined> {
+		if (this.#navigating) return "session tree navigation is running";
+		this.#quiescing = true;
+		const busy = this.#inFlight > 0 ? "input is arriving" : await this.#restartBusy();
+		if (busy !== undefined) this.#quiescing = false;
+		return busy;
+	}
+
+	async #restartBusy(): Promise<string | undefined> {
+		const status = await this.status();
+		if (status.isStreaming || status.isCompacting || status.isBashRunning) return "a turn is running";
+		if (status.pendingMessageCount > 0) return "input is queued";
+		if ((status.activeToolExecutions?.length ?? 0) > 0) return "a tool is running";
+		const delegation = await this.#host.harness.snapshot(DelegationDoc, this.#host.root.id, context);
+		if (Object.values(delegation?.executions ?? {}).some((e) => e.outcome === "running")) return "children are running";
+		return undefined;
 	}
 
 	/**
@@ -1148,6 +1175,7 @@ export class ChatSession {
 	 */
 	async exclusive<T>(work: () => Promise<T>): Promise<T> {
 		if (this.#navigating) throw new Error("Wait for session tree navigation to finish, then try again");
+		if (this.#quiescing) throw new Error("This Chat is restarting on new host code; send it again in a moment");
 		this.#inFlight += 1;
 		try {
 			return await work();
@@ -1159,7 +1187,7 @@ export class ChatSession {
 	/** Why the Chat is not quiescent: a run, queued input, any live task (a child, compaction, delivery), an uncollected child result or a `!` command. */
 	async #activity(): Promise<string | undefined> {
 		const busy = "Stop current session activity before navigating the session tree";
-		if (this.#navigating || this.#inFlight > 0 || this.#running || this.#shell !== undefined || this.#heldShell.length > 0) return busy;
+		if (this.#navigating || this.#quiescing || this.#inFlight > 0 || this.#running || this.#shell !== undefined || this.#heldShell.length > 0) return busy;
 		const inspection = await this.#host.harness.inspect(context);
 		if (inspection.tasks.length > 0 || inspection.submissions.length > 0) return busy;
 		// A branch starts without the source's children (`fork: initial`): their results must not be left behind.

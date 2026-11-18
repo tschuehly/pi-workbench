@@ -378,3 +378,35 @@ describe("upgrade-trigger rows (Upgrade now: ordered close, new host, resumed at
 	});
 	it("8 served Atelier Page: reopens on the same link, no event lost or doubled", () => runRow("atelier", atelierPage));
 });
+
+// The automatic upgrade's (B's) close: decided in the host with input held off, so the daemon's quiet check can never
+// be overtaken by input that arrives before the close. Daemon side: pi-web durableUpgrade.test.ts "finding 4".
+describe("B conditional close (close only if still restart-safe)", () => {
+	it("refuses while input is arriving or a turn runs, keeps running; once quiet it closes and admits nothing after", async () => {
+		const id = "up-conditional";
+		const { store, cwd } = family(id);
+		const first = host(store, cwd, id, 40);
+		assert.equal((await first.ready).closeIfRestartSafe, true, "the handshake says the host closes only if restart-safe");
+		const conditional = { reason: "upgrade", ifRestartSafe: true };
+		// A prompt and the close back to back: the prompt is in flight when the host decides.
+		const prompted = first.call("prompt", { operationId: "op-gen", text: "gen" });
+		assert.equal((await first.call<{ closed: boolean; busy?: string }>("close", conditional)).closed, false, "input in flight");
+		await prompted;
+		await first.until((e) => e.type === "assistant.delta" && String(e.text).includes("word2"), "the answer in flight");
+		assert.deepEqual(await first.call("close", conditional), { closed: false, busy: "a turn is running" });
+		await said(first, LONG);
+		await quiet(first);
+		// Quiet: it closes; a prompt sent right behind the close is refused, never admitted.
+		const closing = first.call("close", conditional);
+		const late = Promise.race([first.call("prompt", { operationId: "op-late", text: "late" }).then(() => "admitted", (error: unknown) => (error instanceof Error ? error.message : String(error))), first.exited.then(() => "no answer")]);
+		assert.deepEqual(await closing, { closed: true });
+		assert.match(await late, /restarting on new host code|no answer/);
+		assert.equal(await first.exited, 0, "closed in order");
+		const second = host(store, cwd, id);
+		await second.ready;
+		const transcript = await second.call<Transcript>("transcript");
+		assert.deepEqual(transcript.messages.filter((m) => m.role === "user").map((m) => textOf(m.content)), ["gen"], "the late input was never admitted");
+		await second.close();
+		assert.equal(integrity(store), "ok");
+	});
+});

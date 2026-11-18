@@ -35,7 +35,7 @@ process.env.PI_CODING_AGENT_DIR = fakeAgentDir("chat-proc-agent");
 process.env.PI_BACKGROUND_BASH_ROOT ??= join(scratch("chat-proc-jobs"), "jobs");
 
 export type UiEvent = { type: string; [key: string]: unknown };
-type Reply = { id?: number; result?: unknown; error?: { name: string; message: string }; event?: UiEvent; ready?: { protocol: number; ownerEpoch: number } };
+type Reply = { id?: number; result?: unknown; error?: { name: string; message: string }; event?: UiEvent; ready?: { protocol: number; ownerEpoch: number; closeIfRestartSafe?: boolean } };
 
 export const live = new Set<ChildProcess>();
 
