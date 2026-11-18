@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
+import { ChatSession } from "../src/chat-session.ts";
 import { ChatHost, family, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, runRow, scratch } from "./runner.ts";
 
@@ -408,5 +409,15 @@ describe("B conditional close (close only if still restart-safe)", () => {
 		assert.deepEqual(transcript.messages.filter((m) => m.role === "user").map((m) => textOf(m.content)), ["gen"], "the late input was never admitted");
 		await second.close();
 		assert.equal(integrity(store), "ok");
+	});
+
+	it("a quiet check that fails admits input again (the close is refused, the host keeps running)", async () => {
+		// The status snapshot may reject (store I/O); this needs neither a model nor an opened store.
+		const session = new ChatSession({} as never, () => undefined);
+		session.status = async () => {
+			throw new Error("injected snapshot I/O failure");
+		};
+		await assert.rejects(session.quiesce(), /snapshot I\/O/);
+		assert.equal(await session.exclusive(async () => "admitted"), "admitted");
 	});
 });

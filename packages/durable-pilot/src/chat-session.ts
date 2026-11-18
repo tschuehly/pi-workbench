@@ -705,15 +705,20 @@ export class ChatSession {
 	 * B's close (PI WEB's automatic upgrade), decided here so no input slips in after the daemon's own check: from now on
 	 * no input is admitted, then why the Chat may not restart, if anything: input in flight, a running turn, compaction
 	 * or `!` command, queued input, a running tool or a running child. Work that survives a restart (open questions,
-	 * background bash, watchers, Atelier Pages) does not count. Undefined: the caller closes at once; otherwise input is
-	 * admitted again.
+	 * background bash, watchers, Atelier Pages) does not count. Undefined: the caller closes at once; otherwise (or when
+	 * the check fails) input is admitted again.
 	 */
 	async quiesce(): Promise<string | undefined> {
 		if (this.#navigating) return "session tree navigation is running";
 		this.#quiescing = true;
-		const busy = this.#inFlight > 0 ? "input is arriving" : await this.#restartBusy();
-		if (busy !== undefined) this.#quiescing = false;
-		return busy;
+		try {
+			const busy = this.#inFlight > 0 ? "input is arriving" : await this.#restartBusy();
+			if (busy !== undefined) this.#quiescing = false;
+			return busy;
+		} catch (error) {
+			this.#quiescing = false;
+			throw error;
+		}
 	}
 
 	async #restartBusy(): Promise<string | undefined> {
