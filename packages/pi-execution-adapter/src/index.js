@@ -180,6 +180,9 @@ export class PiRpcExecutionAdapter {
     // telemetry keeps the nested work instead of attributing it to no concept at all.
     if (spec.telemetryConcept === undefined) delete env.PI_WORKBENCH_TELEMETRY_CONCEPT;
     else env.PI_WORKBENCH_TELEMETRY_CONCEPT = spec.telemetryConcept;
+    // Only the dispatched Worker writes its status file; its leaves inherit the env, so clear it for them.
+    if (spec.statusFile === undefined) delete env.PI_WORKBENCH_STATUS_FILE;
+    else env.PI_WORKBENCH_STATUS_FILE = spec.statusFile;
     if (this.routingOverlayPath === undefined || this.routingOverlayPath === "") delete env.PI_WORKBENCH_ROUTING_OVERLAY;
     else env.PI_WORKBENCH_ROUTING_OVERLAY = this.routingOverlayPath;
     let child;
@@ -595,6 +598,9 @@ function validateSpec(spec, hostTools, now, maxAgeMs, overlay) {
   }
   if (spec.telemetryConcept !== undefined && (typeof spec.telemetryConcept !== "string" || spec.telemetryConcept.trim() === "")) {
     throw typedError("INVALID_SPEC", "telemetryConcept must be a non-empty string when present.");
+  }
+  if (spec.statusFile !== undefined && (typeof spec.statusFile !== "string" || spec.statusFile.trim() === "")) {
+    throw typedError("INVALID_SPEC", "statusFile must be a non-empty string when present.");
   }
   if (spec.name !== undefined && (typeof spec.name !== "string" || spec.name.trim() === "")) {
     throw typedError("INVALID_SPEC", "name must be a non-empty string when present.");

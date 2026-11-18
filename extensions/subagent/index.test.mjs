@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, liveModelMetadata, providerOf, reservePending, streamToResult, taskGoal, watchActivity, watchReportCadence } from "./index.ts";
+import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, liveModelMetadata, providerOf, reservePending, streamToResult, taskGoal, watchActivity, watchReportCadence, workerStatusFile, writeStatusFile } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -319,6 +319,7 @@ test("per-id collect returns a settling Worker snapshot without consuming its la
     const snapshot = await mustResolveImmediately(harness.tools.get("subagent_collect").execute("collect", { executionId: "worker-execution" }, undefined, undefined));
     assert.equal(harness.resultCalls(), 1, "collect does not read the finished child while its Worker receipt is unsettled");
     assert.equal(harness.dispatchedSpecs[0].parentSessionFile, "/sessions/lead.jsonl", "a Worker session header names the dispatching lead");
+    assert.match(harness.dispatchedSpecs[0].statusFile, /\/\.pi-workbench\/workers\/status\/[0-9a-f-]+\.json$/, "a Worker gets its own status file by workerId");
     assert.equal(snapshot.details.receiptStatus, "settling");
     assert.match(snapshot.content[0].text, /worker-execution \[settling\] child finished; Worker receipt not yet settled/);
 
@@ -461,6 +462,49 @@ test("report_status rides along with real work instead of costing a turn", async
   assert.equal(riding.content[0].text, "Reported: Reading code");
   const unknown = await tool.execute("call", { status: "Reading code" }, undefined, undefined, undefined);
   assert.equal(unknown.content[0].text, "Reported: Reading code");
+});
+
+test("a Worker's report_status rewrites its status file atomically with state and a capped log", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-status-file-"));
+  const previous = process.env.PI_WORKBENCH_STATUS_FILE;
+  const file = workerStatusFile("worker-1", temporary);
+  assert.equal(file, join(temporary, ".pi-workbench", "workers", "status", "worker-1.json"));
+  const tools = new Map();
+  subagentExtension({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} });
+  const tool = tools.get("report_status");
+  assert.deepEqual(tool.parameters.properties.state.enum, ["working", "needs-you", "blocked", "waiting", "done", "failed"]);
+  try {
+    delete process.env.PI_WORKBENCH_STATUS_FILE;
+    await tool.execute("call", { status: "No file without a Worker" });
+    await assert.rejects(readFile(file, "utf8"), /ENOENT/);
+
+    process.env.PI_WORKBENCH_STATUS_FILE = file;
+    await tool.execute("call", { status: "Reading code" });
+    let body = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(body.state, "working", "state starts as working");
+    assert.equal(body.line, "Reading code");
+    assert.deepEqual(body.log.map((entry) => entry.text), ["Reading code"]);
+    const result = await tool.execute("call", { status: "Need a merge decision", state: "needs-you" });
+    assert.equal(result.details.state, "needs-you");
+    await tool.execute("call", { status: "Still waiting" });
+    body = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(body.state, "needs-you", "an omitted state keeps the previous one");
+    assert.equal(body.line, "Still waiting");
+    assert.ok(!Number.isNaN(Date.parse(body.updated)));
+    assert.deepEqual(Object.keys(body.log[0]), ["t", "text"]);
+
+    for (let i = 0; i < 25; i++) writeStatusFile(file, `step ${i}`, undefined);
+    body = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(body.log.length, 20);
+    assert.equal(body.log.at(-1).text, "step 24");
+    assert.equal(body.log[0].text, "step 5");
+    const { readdir } = await import("node:fs/promises");
+    assert.deepEqual(await readdir(join(temporary, ".pi-workbench", "workers", "status")), ["worker-1.json"], "no temp file is left behind");
+  } finally {
+    if (previous === undefined) delete process.env.PI_WORKBENCH_STATUS_FILE;
+    else process.env.PI_WORKBENCH_STATUS_FILE = previous;
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("exposes no task timeout controls with bounded independence and status parameters", () => {

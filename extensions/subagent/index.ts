@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,9 +114,29 @@ const SteerParams = Type.Object({
   requestUpdate: Type.Optional(Type.Boolean({ description: "Ask the child to report_status; its next report wakes you" })),
 });
 const UPDATE_REQUEST = "The lead asks for a progress update: call report_status with your next tool call, saying where you stand, then continue your assignment.";
+const STATUS_STATES = ["working", "needs-you", "blocked", "waiting", "done", "failed"] as const;
 const ReportStatusParams = Type.Object({
   status: Type.String({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
+  state: Type.Optional(StringEnum(STATUS_STATES, { description: "Your state for the lead's Cockpit tab; omit to keep the previous one (starts as working)" })),
 });
+const STATUS_LOG_MAX = 20;
+
+/** Where a Worker's latest report_status lands, so a Cockpit lead can read it by workerId. */
+export const workerStatusFile = (workerId: string, home = os.homedir()) => path.join(home, ".pi-workbench", "workers", "status", `${workerId}.json`);
+
+/** Atomically rewrite the status file: latest state and line, plus the last STATUS_LOG_MAX lines. */
+export function writeStatusFile(file: string, line: string, state: string | undefined, now = new Date()) {
+  let previous: { state?: string; log?: { t: string; text: string }[] } = {};
+  try { previous = JSON.parse(readFileSync(file, "utf8")); } catch {}
+  const updated = now.toISOString();
+  const log = [...(Array.isArray(previous.log) ? previous.log : []), { t: updated, text: line }].slice(-STATUS_LOG_MAX);
+  const body = { state: state ?? previous.state ?? "working", line, updated, log };
+  mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(body, null, 2)}\n`);
+  renameSync(temporary, file);
+  return body;
+}
 
 const WorkerCreateParams = Type.Object({
   name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),
@@ -506,8 +526,14 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       // A lone report costs a whole model turn that re-reads the context; say so once it happens.
       const alone = ctx?.sessionManager?.getBranch !== undefined && latestAssistantToolCallCount(ctx.sessionManager.getBranch()) === 1;
-      const text = alone ? `Reported: ${params.status}. Next time send report_status with a real tool call, never alone.` : `Reported: ${params.status}`;
-      return { content: [{ type: "text" as const, text }], details: { outcome: "reported", status: params.status } };
+      // worker_dispatch names the Worker's status file; plain Subagents and leaves have none.
+      const file = process.env.PI_WORKBENCH_STATUS_FILE;
+      let written = "";
+      if (file) {
+        try { writeStatusFile(file, params.status, params.state); } catch (error) { written = ` Status file not written: ${errorMessage(error)}`; }
+      }
+      const text = (alone ? `Reported: ${params.status}. Next time send report_status with a real tool call, never alone.` : `Reported: ${params.status}`) + written;
+      return { content: [{ type: "text" as const, text }], details: { outcome: "reported", status: params.status, ...(params.state === undefined ? {} : { state: params.state }) } };
     },
   });
 
@@ -657,6 +683,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           parentSessionId,
           ...parentSessionFile(ctx),
           kind: "worker",
+          statusFile: workerStatusFile(params.workerId),
           ...(params.telemetryConcept === undefined ? {} : { telemetryConcept: params.telemetryConcept }),
           ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
         });
