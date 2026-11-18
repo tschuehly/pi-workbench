@@ -146,6 +146,30 @@ export function writeStatusFile(file: string, line: string | undefined, state: s
   return body;
 }
 
+/** A lead-side status write: returns a note naming the failure instead of swallowing it. */
+function leadStatusWrite(file: string, state: string, logText: string): string {
+  try { writeStatusFile(file, undefined, state, new Date(), logText); return ""; } catch (error) { return `\n\nStatus file not written: ${errorMessage(error)}`; }
+}
+
+/**
+ * A lead that dies before its end-of-dispatch write leaves the file saying working. When the registry
+ * shows no live dispatch, rewrite it from the latest receipt (an interrupted dispatch reads failed).
+ */
+export async function reconcileStatusFile(registry: { inspect(id: string): Promise<any>; isProcessAlive(pid: number): boolean }, workerId: string, file = workerStatusFile(workerId)): Promise<string> {
+  let current: { state?: string };
+  try { current = JSON.parse(readFileSync(file, "utf8")); } catch { return ""; }
+  if (current.state !== "working") return "";
+  const record = await registry.inspect(workerId);
+  const interrupted = record.lock !== null && !registry.isProcessAlive(record.lock.pid);
+  if (record.lock !== null && !interrupted) return "";
+  const latest = record.receipts[record.receipts.length - 1];
+  if (!interrupted && latest === undefined) return "";
+  const state = !interrupted && latest.outcome === "success" ? "done" : "failed";
+  const why = interrupted ? `dispatch interrupted (lead process ${record.lock.pid} is gone)` : `last dispatch ended ${latest.outcome}`;
+  const note = leadStatusWrite(file, state, `Reconciled: ${why}`);
+  return note || `Status file reconciled: working → ${state} (${why}).`;
+}
+
 const WorkerCreateParams = Type.Object({
   name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),
   scope: Type.String({ minLength: 1, description: "One semantic scope statement this worker retains context for" }),
@@ -650,6 +674,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       const parentSessionId = ctx.sessionManager.getSessionId();
       sessionId = parentSessionId;
+      // Settle a stale working file from a crashed dispatch before this one can overwrite or refuse it.
+      try { await reconcileStatusFile(registry, params.workerId); } catch {}
       let begin;
       try {
         begin = await registry.beginDispatch(params.workerId, {
@@ -679,6 +705,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       const continuing = begin.continuationSessionId !== null;
       const preamble = `You are the durable attended worker \"${begin.name}\" with the semantic scope \"${begin.scope}\".${continuing ? " This dispatch resumes your persisted session; the earlier conversation above is your own prior work in this scope." : " This is your first dispatch in this scope."}`;
       const childTask = [profile.instruction, STATUS_INSTRUCTION, preamble, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
+      // A new job starts working, so the child's stateless reports never inherit the last job's done.
+      const startNote = leadStatusWrite(workerStatusFile(params.workerId), "working", "Dispatch accepted");
       let receipt;
       try {
         receipt = await adapter.dispatch({
@@ -744,13 +772,14 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       // Register terminal cleanup before waiting so it wins a same-tick detach race.
       let receiptSettled = false;
+      let statusNote = "";
       const completion = (async () => {
         let usage: unknown;
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
         const final = await adapter.result(receipt.executionId);
         foreground.delete(receipt.executionId);
         // The Worker cannot report its own end; the lead marks it so the Cockpit tab stops saying working.
-        try { writeStatusFile(workerStatusFile(params.workerId), undefined, final.outcome === "success" ? "done" : "failed", new Date(), `Dispatch ended: ${final.outcome}`); } catch {}
+        statusNote = startNote + leadStatusWrite(workerStatusFile(params.workerId), final.outcome === "success" ? "done" : "failed", `Dispatch ended: ${final.outcome}`);
         emitExecutionEvent(host, {
           type: "execution.settled", at: new Date().toISOString(), sessionId: parentSessionId,
           executionId: receipt.executionId, kind: "worker", workerId: params.workerId,
@@ -788,7 +817,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
             cognitiveRole: params.cognitiveRole,
             workerId: params.workerId,
             workerName: begin.name,
-            text: terminalText(final),
+            text: terminalText(final) + statusNote,
             truncated: final.truncated === true,
           },
         });
@@ -815,7 +844,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
         if ((result as { details?: { outcome?: unknown } }).details?.outcome === "detached") return backgroundResult("Moved");
         markCollected(receipt.executionId);
-        return receiptSafeResult({ result, executionId: receipt.executionId, terminal: true, receipt: workerReceipts.get(receipt.executionId) });
+        const safe = await receiptSafeResult({ result, executionId: receipt.executionId, terminal: true, receipt: workerReceipts.get(receipt.executionId) });
+        return statusNote === "" ? safe : { ...safe, content: [...(safe as { content: unknown[] }).content, { type: "text" as const, text: statusNote.trim() }] };
       } finally {
         foreground.delete(receipt.executionId);
       }
@@ -839,6 +869,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           if (params.all !== true && record.ownerSessionId !== ownerSessionId) {
             return failure("preflight_failed", `Worker ${params.workerId} belongs to another lead session; use all:true only for diagnostics.`);
           }
+          const reconciled = await reconcileStatusFile(registry, params.workerId).catch((error) => `Status file not reconciled: ${errorMessage(error)}`);
           const latest = record.receipts[record.receipts.length - 1];
           const lines = [
             `${record.workerId} \"${record.name}\" (${record.profile})${record.retired !== null ? ` [retired ${record.retired.at}: ${record.retired.reason}]` : ""}`,
@@ -856,6 +887,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
               if (status.running) { live = status; lines.push(`Live dispatch ${executionId}: ${status.latestObservation === undefined ? "no activity yet" : progressText(status.latestObservation)}`); }
             } catch {}
           }
+          if (reconciled !== "") lines.push(reconciled.trim());
           return { content: [{ type: "text", text: lines.join("\n") }], details: { record, live } };
         }
         const summaries = params.all === true
@@ -888,8 +920,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       try {
         const retired = await registry.retire(params.workerId, params.reason, { ownerSessionId: ctx.sessionManager.getSessionId() });
-        try { writeStatusFile(workerStatusFile(params.workerId), undefined, "retired", new Date(), `Retired: ${params.reason}`); } catch {}
-        return { content: [{ type: "text", text: `Retired worker ${params.workerId} at ${retired.at}: ${retired.reason}` }], details: { workerId: params.workerId, ...retired } };
+        const note = leadStatusWrite(workerStatusFile(params.workerId), "retired", `Retired: ${params.reason}`);
+        return { content: [{ type: "text", text: `Retired worker ${params.workerId} at ${retired.at}: ${retired.reason}${note}` }], details: { workerId: params.workerId, ...retired } };
       } catch (error) {
         return registryFailure(error);
       }

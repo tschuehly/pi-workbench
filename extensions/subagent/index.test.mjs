@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, liveModelMetadata, providerOf, reservePending, streamToResult, taskGoal, watchActivity, watchReportCadence, workerStatusFile, writeStatusFile } from "./index.ts";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
@@ -244,7 +245,7 @@ test("collecting a running child by identifier returns a snapshot without waitin
   assert.deepEqual(roster.details.children.map((child) => child.executionId), ["child-running"], "the child remains terminal-uncollected");
 });
 
-async function settlingWorkerHarness({ outcome = "success", report } = {}) {
+async function settlingWorkerHarness({ outcome = "success", report, readOnlyStatus = false } = {}) {
   const previousHome = process.env.HOME;
   const temporary = await mkdtemp(join(tmpdir(), "subagent-settling-worker-"));
   process.env.HOME = temporary;
@@ -261,6 +262,8 @@ async function settlingWorkerHarness({ outcome = "success", report } = {}) {
   const receiptGate = new Promise((resolve) => { releaseReceipt = resolve; });
   let resultCalls = 0;
   const dispatchedSpecs = [];
+  // The state the Worker's file holds right after its own stateless report, per dispatch.
+  const reportedStates = [];
   const execution = {
     executionId: "worker-execution", running: false, outcome, kind: "worker",
     profile: "implementer", cognitiveRole: "implementation", provider: "anthropic", model: "claude-test", effort: "low",
@@ -269,7 +272,7 @@ async function settlingWorkerHarness({ outcome = "success", report } = {}) {
   const final = { ...execution, text: "Worker done.", sessionId: "worker-session", truncated: false };
   const adapter = {
     // `report` stands in for the Worker's own report_status during its run.
-    dispatch: async (spec) => { dispatchedSpecs.push(spec); if (report) writeStatusFile(spec.statusFile, report, undefined); return { executionId: execution.executionId, acceptedAt: execution.acceptedAt }; },
+    dispatch: async (spec) => { dispatchedSpecs.push(spec); if (report) { writeStatusFile(spec.statusFile, report, undefined); reportedStates.push(JSON.parse(readFileSync(spec.statusFile, "utf8")).state); } return { executionId: execution.executionId, acceptedAt: execution.acceptedAt }; },
     result: () => { resultCalls += 1; return Promise.resolve(final); },
     status: () => execution,
     list: () => [execution],
@@ -290,12 +293,14 @@ async function settlingWorkerHarness({ outcome = "success", report } = {}) {
   }, { adapter, resolverPath });
   const ctx = { cwd: "/repo", sessionManager: { getSessionId: () => "lead", getSessionFile: () => "/sessions/lead.jsonl" } };
   const created = await tools.get("worker_create").execute("create", { name: "Worker", scope: "Test settling receipts", profile: "implementer" }, undefined, undefined, ctx);
+  // An unwritable status directory makes every lead-side status write fail.
+  if (readOnlyStatus) await mkdir(dirname(workerStatusFile(created.details.workerId)), { recursive: true, mode: 0o500 });
   await tools.get("worker_dispatch").execute("dispatch", {
     workerId: created.details.workerId, task: "Finish, then wait for the receipt gate.", cognitiveRole: "implementation", background: true,
   }, undefined, undefined, ctx);
 
   return {
-    tools, sent, wakeup, releaseReceipt, dispatchedSpecs, ctx, workerId: created.details.workerId,
+    tools, sent, wakeup, releaseReceipt, dispatchedSpecs, reportedStates, ctx, workerId: created.details.workerId, home: temporary,
     resultCalls: () => resultCalls,
     cleanup: async () => {
       await handlers.get("session_shutdown")();
@@ -532,7 +537,7 @@ for (const [outcome, state] of [["success", "done"], ["execution_failed", "faile
       let body = JSON.parse(await readFile(file, "utf8"));
       assert.equal(body.state, state);
       assert.equal(body.line, "Running tests", "the Worker's last line stays");
-      assert.deepEqual(body.log.map((entry) => entry.text), ["Running tests", `Dispatch ended: ${outcome}`]);
+      assert.deepEqual(body.log.map((entry) => entry.text), ["Dispatch accepted", "Running tests", `Dispatch ended: ${outcome}`]);
 
       await harness.tools.get("worker_retire").execute("retire", { workerId: harness.workerId, reason: "scope finished" }, undefined, undefined, harness.ctx);
       body = JSON.parse(await readFile(file, "utf8"));
@@ -545,6 +550,91 @@ for (const [outcome, state] of [["success", "done"], ["execution_failed", "faile
     }
   });
 }
+
+test("a Worker sent a new job reads working before it reports, even after a finished job", async () => {
+  const harness = await settlingWorkerHarness({ report: "Running tests" });
+  try {
+    const file = harness.dispatchedSpecs[0].statusFile;
+    harness.releaseReceipt();
+    await harness.wakeup;
+    assert.equal(JSON.parse(await readFile(file, "utf8")).state, "done");
+    await harness.tools.get("worker_dispatch").execute("dispatch", {
+      workerId: harness.workerId, task: "Second job.", cognitiveRole: "implementation", background: true,
+    }, undefined, undefined, harness.ctx);
+    assert.equal(harness.reportedStates[1], "working", "a stateless report in a new job does not inherit the last job's done");
+    const body = JSON.parse(await readFile(file, "utf8"));
+    assert.ok(body.log.some((entry) => entry.text === "Dispatch accepted"), "accepting a dispatch logs a line");
+  } finally {
+    harness.releaseReceipt();
+    await harness.cleanup();
+  }
+});
+
+test("worker_status reconciles a working status file against a terminal registry receipt", async () => {
+  const harness = await settlingWorkerHarness({ report: "Running tests" });
+  try {
+    const file = harness.dispatchedSpecs[0].statusFile;
+    harness.releaseReceipt();
+    await harness.wakeup;
+    writeStatusFile(file, "Running tests", "working");
+    const status = await harness.tools.get("worker_status").execute("status", { workerId: harness.workerId }, undefined, undefined, harness.ctx);
+    const body = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(body.state, "done");
+    assert.match(body.log.at(-1).text, /^Reconciled: .*success/);
+    assert.match(status.content[0].text, /Status file reconciled: working → done/);
+  } finally {
+    harness.releaseReceipt();
+    await harness.cleanup();
+  }
+});
+
+test("an interrupted dispatch (dead lead) turns a working status file failed on worker_status and on the next worker_dispatch", async () => {
+  const harness = await settlingWorkerHarness({ report: "Running tests" });
+  try {
+    const file = harness.dispatchedSpecs[0].statusFile;
+    harness.releaseReceipt();
+    await harness.wakeup;
+    const crash = async () => {
+      writeStatusFile(file, "Running tests", "working");
+      const store = join(harness.home, ".pi-workbench", "workers", "workers.json");
+      const database = JSON.parse(await readFile(store, "utf8"));
+      const at = new Date().toISOString();
+      database.workers[harness.workerId].lock = { token: "dead-token", pid: 2_147_483_646, acquiredAt: at, heartbeatAt: at };
+      await writeFile(store, JSON.stringify(database));
+    };
+    await crash();
+    await harness.tools.get("worker_status").execute("status", { workerId: harness.workerId }, undefined, undefined, harness.ctx);
+    let body = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(body.state, "failed", "worker_status reconciles an interrupted dispatch to failed");
+    assert.match(body.log.at(-1).text, /^Reconciled: .*interrupted/);
+
+    await crash();
+    const dispatch = await harness.tools.get("worker_dispatch").execute("dispatch", {
+      workerId: harness.workerId, task: "Retry.", cognitiveRole: "implementation", background: true,
+    }, undefined, undefined, harness.ctx);
+    assert.equal(dispatch.details.code, "WORKER_INSPECTION_REQUIRED");
+    body = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(body.state, "failed", "the next worker_dispatch reconciles an interrupted dispatch to failed");
+    assert.match(body.log.at(-1).text, /^Reconciled: .*interrupted/);
+  } finally {
+    harness.releaseReceipt();
+    await harness.cleanup();
+  }
+});
+
+test("a lead-side status write failure is reported, not swallowed", async () => {
+  const harness = await settlingWorkerHarness({ readOnlyStatus: true });
+  try {
+    harness.releaseReceipt();
+    await harness.wakeup;
+    assert.match(harness.sent[0].message.content, /Status file not written: EACCES/, "the completion notice names the failed lead-side writes");
+    const retired = await harness.tools.get("worker_retire").execute("retire", { workerId: harness.workerId, reason: "done" }, undefined, undefined, harness.ctx);
+    assert.match(retired.content[0].text, /Status file not written: EACCES/, "worker_retire names the failed write");
+  } finally {
+    harness.releaseReceipt();
+    await harness.cleanup();
+  }
+});
 
 test("exposes no task timeout controls with bounded independence and status parameters", () => {
   const tools = new Map();
