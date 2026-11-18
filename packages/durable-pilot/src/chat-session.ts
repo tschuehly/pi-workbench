@@ -1206,9 +1206,8 @@ export class ChatSession {
 		return undefined;
 	}
 
-	/** `/tree`: every retained branch's history and the active leaf, as Pi-shaped entries; refused while active (legacy). */
+	/** `/tree`: every retained branch's history and the active leaf, as Pi-shaped entries. Read-only, so allowed while active; `navigate` refuses. */
 	async tree(): Promise<{ type: "tree"; nodes: TreeEntry[]; activeLeafId: string | null } | { type: "unsupported"; message: string }> {
-		if ((await this.#activity()) !== undefined) return { type: "unsupported", message: "Cannot open the session tree while the session is active. Stop current activity and try /tree again." };
 		return { type: "tree", ...(await historyTree(this.#host.harness, this.#host.root)) };
 	}
 

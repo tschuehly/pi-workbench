@@ -106,7 +106,7 @@ test("tree: going back keeps later history, forks once, reselects a retained bra
 	assert.equal(integrity(store), "ok");
 });
 
-test("tree: navigation is refused visibly while a turn, queued input or interrupted work is pending", async () => {
+test("tree: reading is allowed and navigation is refused visibly while a turn, queued input or interrupted work is pending", async () => {
 	const { store, cwd } = family("tree-quiet");
 	let host = new ChatHost(store, cwd);
 	await host.ready;
@@ -118,7 +118,7 @@ test("tree: navigation is refused visibly while a turn, queued input or interrup
 	await host.call("prompt", { operationId: "op-run", text: 'call:write {"path":"effect.fifo","content":"x"}' });
 	await host.until((e) => e.type === "tool.start" && e.toolName === "write", "the held write");
 	await host.call("prompt", { operationId: "op-q", text: "queued" });
-	assert.deepEqual(await host.call("tree"), { type: "unsupported", message: "Cannot open the session tree while the session is active. Stop current activity and try /tree again." });
+	assert.equal(((await host.call("tree")) as { type: string }).type, "tree", "reading the tree is allowed while active");
 	await assert.rejects(navigate(host, t, node(t, "user", "first").id), /Stop current session activity before navigating the session tree/);
 	await host.kill();
 
