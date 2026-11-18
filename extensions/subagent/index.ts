@@ -151,25 +151,6 @@ function leadStatusWrite(file: string, state: string, logText: string): string {
   try { writeStatusFile(file, undefined, state, new Date(), logText); return ""; } catch (error) { return `\n\nStatus file not written: ${errorMessage(error)}`; }
 }
 
-/**
- * A lead that dies before its end-of-dispatch write leaves the file saying working. When the registry
- * shows no live dispatch, rewrite it from the latest receipt (an interrupted dispatch reads failed).
- */
-export async function reconcileStatusFile(registry: { inspect(id: string): Promise<any>; isProcessAlive(pid: number): boolean }, workerId: string, file = workerStatusFile(workerId)): Promise<string> {
-  let current: { state?: string };
-  try { current = JSON.parse(readFileSync(file, "utf8")); } catch { return ""; }
-  if (current.state !== "working") return "";
-  const record = await registry.inspect(workerId);
-  const interrupted = record.lock !== null && !registry.isProcessAlive(record.lock.pid);
-  if (record.lock !== null && !interrupted) return "";
-  const latest = record.receipts[record.receipts.length - 1];
-  if (!interrupted && latest === undefined) return "";
-  const state = !interrupted && latest.outcome === "success" ? "done" : "failed";
-  const why = interrupted ? `dispatch interrupted (lead process ${record.lock.pid} is gone)` : `last dispatch ended ${latest.outcome}`;
-  const note = leadStatusWrite(file, state, `Reconciled: ${why}`);
-  return note || `Status file reconciled: working → ${state} (${why}).`;
-}
-
 const WorkerCreateParams = Type.Object({
   name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),
   scope: Type.String({ minLength: 1, description: "One semantic scope statement this worker retains context for" }),
@@ -674,8 +655,6 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       const parentSessionId = ctx.sessionManager.getSessionId();
       sessionId = parentSessionId;
-      // Settle a stale working file from a crashed dispatch before this one can overwrite or refuse it.
-      try { await reconcileStatusFile(registry, params.workerId); } catch {}
       let begin;
       try {
         begin = await registry.beginDispatch(params.workerId, {
@@ -725,7 +704,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         });
       } catch (error) {
         await abandon(errorMessage(error));
-        return failure("preflight_failed", errorMessage(error));
+        const failedNote = leadStatusWrite(workerStatusFile(params.workerId), "failed", `Dispatch failed to start: ${errorMessage(error)}`);
+        return failure("preflight_failed", errorMessage(error) + startNote + failedNote);
       }
       emitExecutionEvent(host, {
         type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
@@ -869,7 +849,6 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           if (params.all !== true && record.ownerSessionId !== ownerSessionId) {
             return failure("preflight_failed", `Worker ${params.workerId} belongs to another lead session; use all:true only for diagnostics.`);
           }
-          const reconciled = await reconcileStatusFile(registry, params.workerId).catch((error) => `Status file not reconciled: ${errorMessage(error)}`);
           const latest = record.receipts[record.receipts.length - 1];
           const lines = [
             `${record.workerId} \"${record.name}\" (${record.profile})${record.retired !== null ? ` [retired ${record.retired.at}: ${record.retired.reason}]` : ""}`,
@@ -887,7 +866,6 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
               if (status.running) { live = status; lines.push(`Live dispatch ${executionId}: ${status.latestObservation === undefined ? "no activity yet" : progressText(status.latestObservation)}`); }
             } catch {}
           }
-          if (reconciled !== "") lines.push(reconciled.trim());
           return { content: [{ type: "text", text: lines.join("\n") }], details: { record, live } };
         }
         const summaries = params.all === true

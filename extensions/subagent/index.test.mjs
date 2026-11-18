@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, liveModelMetadata, providerOf, reservePending, streamToResult, taskGoal, watchActivity, watchReportCadence, workerStatusFile, writeStatusFile } from "./index.ts";
+import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -300,7 +301,7 @@ async function settlingWorkerHarness({ outcome = "success", report, readOnlyStat
   }, undefined, undefined, ctx);
 
   return {
-    tools, sent, wakeup, releaseReceipt, dispatchedSpecs, reportedStates, ctx, workerId: created.details.workerId, home: temporary,
+    tools, sent, wakeup, releaseReceipt, dispatchedSpecs, reportedStates, ctx, workerId: created.details.workerId,
     resultCalls: () => resultCalls,
     cleanup: async () => {
       await handlers.get("session_shutdown")();
@@ -570,55 +571,30 @@ test("a Worker sent a new job reads working before it reports, even after a fini
   }
 });
 
-test("worker_status reconciles a working status file against a terminal registry receipt", async () => {
-  const harness = await settlingWorkerHarness({ report: "Running tests" });
+test("a Worker dispatch that fails to start marks its status file failed", async () => {
+  const previousHome = process.env.HOME;
+  const temporary = await mkdtemp(join(tmpdir(), "subagent-failed-start-"));
+  process.env.HOME = temporary;
+  const resolverPath = join(temporary, "resolver.mjs");
+  await writeFile(resolverPath, `console.log(JSON.stringify({ status: "pass", modelBinding: { cognitiveRole: process.argv[2], provider: "anthropic", model: "claude-test", effort: "low", admission: "degraded-quota-telemetry", quotaSnapshot: { generatedAt: null, telemetryStatus: "unavailable", relevantWindows: [], stale: false, refreshedAt: null, error: "test" } }}));`);
+  const tools = new Map();
+  const handlers = new Map();
+  // The real adapter with no host tools refuses the implementer's tools before any child starts.
+  subagentExtension({ events: { emit: () => {} }, on: (event, handler) => handlers.set(event, handler), registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} },
+    { adapter: new PiRpcExecutionAdapter({ hostTools: [] }), resolverPath });
+  const ctx = { cwd: "/repo", sessionManager: { getSessionId: () => "lead", getSessionFile: () => "/sessions/lead.jsonl" } };
   try {
-    const file = harness.dispatchedSpecs[0].statusFile;
-    harness.releaseReceipt();
-    await harness.wakeup;
-    writeStatusFile(file, "Running tests", "working");
-    const status = await harness.tools.get("worker_status").execute("status", { workerId: harness.workerId }, undefined, undefined, harness.ctx);
-    const body = JSON.parse(await readFile(file, "utf8"));
-    assert.equal(body.state, "done");
-    assert.match(body.log.at(-1).text, /^Reconciled: .*success/);
-    assert.match(status.content[0].text, /Status file reconciled: working → done/);
+    const created = await tools.get("worker_create").execute("create", { name: "Worker", scope: "Test failed start", profile: "implementer" }, undefined, undefined, ctx);
+    const result = await tools.get("worker_dispatch").execute("dispatch", { workerId: created.details.workerId, task: "Never starts.", cognitiveRole: "implementation", background: true }, undefined, undefined, ctx);
+    assert.equal(result.details.outcome, "preflight_failed");
+    const body = JSON.parse(await readFile(workerStatusFile(created.details.workerId), "utf8"));
+    assert.equal(body.state, "failed", "a dispatch that never started does not leave working");
+    assert.match(body.log.at(-1).text, /^Dispatch failed to start: .*not available on this host/);
   } finally {
-    harness.releaseReceipt();
-    await harness.cleanup();
-  }
-});
-
-test("an interrupted dispatch (dead lead) turns a working status file failed on worker_status and on the next worker_dispatch", async () => {
-  const harness = await settlingWorkerHarness({ report: "Running tests" });
-  try {
-    const file = harness.dispatchedSpecs[0].statusFile;
-    harness.releaseReceipt();
-    await harness.wakeup;
-    const crash = async () => {
-      writeStatusFile(file, "Running tests", "working");
-      const store = join(harness.home, ".pi-workbench", "workers", "workers.json");
-      const database = JSON.parse(await readFile(store, "utf8"));
-      const at = new Date().toISOString();
-      database.workers[harness.workerId].lock = { token: "dead-token", pid: 2_147_483_646, acquiredAt: at, heartbeatAt: at };
-      await writeFile(store, JSON.stringify(database));
-    };
-    await crash();
-    await harness.tools.get("worker_status").execute("status", { workerId: harness.workerId }, undefined, undefined, harness.ctx);
-    let body = JSON.parse(await readFile(file, "utf8"));
-    assert.equal(body.state, "failed", "worker_status reconciles an interrupted dispatch to failed");
-    assert.match(body.log.at(-1).text, /^Reconciled: .*interrupted/);
-
-    await crash();
-    const dispatch = await harness.tools.get("worker_dispatch").execute("dispatch", {
-      workerId: harness.workerId, task: "Retry.", cognitiveRole: "implementation", background: true,
-    }, undefined, undefined, harness.ctx);
-    assert.equal(dispatch.details.code, "WORKER_INSPECTION_REQUIRED");
-    body = JSON.parse(await readFile(file, "utf8"));
-    assert.equal(body.state, "failed", "the next worker_dispatch reconciles an interrupted dispatch to failed");
-    assert.match(body.log.at(-1).text, /^Reconciled: .*interrupted/);
-  } finally {
-    harness.releaseReceipt();
-    await harness.cleanup();
+    await handlers.get("session_shutdown")?.();
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    await rm(temporary, { recursive: true, force: true });
   }
 });
 
