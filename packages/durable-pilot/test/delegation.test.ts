@@ -947,7 +947,7 @@ test("navigation: refused while a background child runs, allowed once it is coll
 	await host.until((e) => e.type === "agent.end", "the launching turn");
 	await quiet(host);
 	const running = await host.call<HistoryTree | { type: "unsupported" }>("tree");
-	assert.equal(running.type, "unsupported", "/tree is refused while a child runs");
+	assert.equal(running.type, "tree", "/tree reads the tree while a child runs");
 	await assert.rejects(host.call("navigate", { targetId: "1", expectedLeafId: null }), BUSY, "navigation is refused while a background child runs");
 	await notice(host);
 	await quiet(host);
