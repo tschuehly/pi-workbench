@@ -7,12 +7,12 @@
     ]
   },
   "model": {
-    "partialsObserved": 9,
+    "partialsObserved": 8,
     "observedLeaks": 0,
     "midStream": [],
     "final": [],
     "settled": "done",
-    "redactedSample": "Here is the key [REDACTED:anthropic-key] and the token [REDACTED:env:PILOT_FAKE_API_TOKEN] done. filler filler "
+    "redactedSample": "Here is the key [REDACTED:anthropic-key] and the token [REDACTED:env:PILOT_FAKE_API_TOKEN] done. filler filler filler "
   },
   "tool": {
     "received": [
@@ -34,7 +34,7 @@
     ],
     "found": [],
     "settled": "done",
-    "partialsObserved": 9
+    "partialsObserved": 11
   },
   "splitStreams": {
     "control": {
