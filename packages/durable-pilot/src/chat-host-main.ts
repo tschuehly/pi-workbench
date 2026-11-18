@@ -110,11 +110,26 @@ await session.start();
 let closing: Promise<void> | undefined;
 /** `end` (optional on `close`): an explicit end of the Chat, which cancels its background jobs; restarts omit it. */
 const close = (end = false, upgrade = false) => (closing ??= session.close({ end, ...(upgrade ? { reason: "upgrade" as const } : {}) }));
-/** B's close: only if the Chat may restart now, decided with input held off (`ChatSession.quiesce`); else a refusal. */
+/**
+ * B's close: only if the Chat may restart now, decided with input held off (`ChatSession.quiesce`); else a refusal.
+ * Past the quiet check the session admits nothing, so a close that fails or outlives its deadline must not leave a host
+ * that runs on admitting nothing: it exits non-zero, its work interrupted as after a crash, as `shutdown` does.
+ */
 const closeIfRestartSafe = async (): Promise<{ closed: boolean; busy?: string }> => {
 	const busy = closing === undefined ? await session.quiesce() : undefined;
 	if (busy !== undefined) return { closed: false, busy };
-	await close(false, true);
+	const deadline = setTimeout(() => {
+		process.stderr.write(`Durable host: close did not finish within ${CLOSE_DEADLINE_MS} ms; exiting with running work interrupted\n`);
+		process.exit(1);
+	}, CLOSE_DEADLINE_MS);
+	try {
+		await close(false, true);
+	} catch (error) {
+		process.stderr.write(`Durable host: close failed: ${redact(error instanceof Error ? error.message : String(error))}\n`);
+		process.exit(1);
+	} finally {
+		clearTimeout(deadline);
+	}
 	return { closed: true };
 };
 

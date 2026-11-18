@@ -342,6 +342,23 @@ test("a SIGTERM close is bounded: a package tool that ignores cancellation canno
 	assert.equal(await reopened.exited, 0, "with nothing running, the orderly close ends cleanly");
 });
 
+test("B's safe close that does not finish leaves no gated host: past the quiet check the host exits non-zero, the store reopens", async () => {
+	const f = family("stuck-shutdown");
+	writeFileSync(join(f.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ packages: [join(PACKAGE, "test", "fixtures", "stuck-package")] }));
+	const host = new ChatHost({ ...f, env: { ...f.env, STUCK_SHUTDOWN: "1" } as Family["env"] });
+	await host.ready;
+	// Nothing runs: the quiet check passes and input is held off; the close then hangs in the package's shutdown.
+	void host.call("close", { reason: "upgrade", ifRestartSafe: true }).catch(() => undefined);
+	const code = await Promise.race([host.exited, new Promise<"gated">((resolve) => setTimeout(() => resolve("gated"), 15_000).unref())]);
+	assert.notEqual(code, "gated", "the host did not stay alive admitting nothing");
+	assert.notEqual(code, 0, "a close cut short is not a clean exit");
+	assert.match(host.stderr, /close did not finish/);
+	const reopened = new ChatHost(f);
+	await reopened.ready;
+	await reopened.close();
+	assert.equal(await reopened.exited, 0);
+});
+
 test("the package login snapshot: a stale auth.json lock (a host killed holding it) does not stall opening a Chat", async () => {
 	const f = family("stale-lock");
 	// proper-lockfile's lock: a fresh directory beside auth.json, held as by a host SIGKILLed mid-read (stale after 30 s).
