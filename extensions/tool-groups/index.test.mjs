@@ -9,7 +9,7 @@ import { enabledGroups, goalActive, hiddenNames } from "./groups.mjs";
 
 const cwd = "/tmp/tool-groups-test";
 const agentDir = `${cwd}/agent`;
-const FAKE_TOOLS = ["report_status", "worker_create", "worker_status", "goal_complete", "goal_blocked", "goal_wait", "mcp__subagent__worker_status"];
+const FAKE_TOOLS = ["report_status", "worker_create", "worker_status", "goal_complete", "goal_blocked", "goal_wait", "mcp__subagent__worker_status", "atelier"];
 
 // A real Pi session with a scripted model. `replies` answer requests in order, then "ok".
 async function session({ replies = [], entries } = {}) {
@@ -94,6 +94,15 @@ test("Orchestration Workers activates worker tools; resume keeps the enabled gro
   await resumed.session.prompt("two");
   assert.ok(resumed.tools(resumed.requests[0]).includes("worker_create"), "resumed transcript had workers enabled");
   resumed.session.dispose();
+});
+
+test("Orchestration Cockpit activates worker and Atelier tools", async () => {
+  const s = await session();
+  await s.session.prompt("/mode orchestration cockpit");
+  await s.session.prompt("one");
+  const tools = s.tools(s.requests[0]);
+  assert.ok(tools.includes("worker_create") && tools.includes("atelier"));
+  s.session.dispose();
 });
 
 test("groups match by package source and cover claude-code-use aliases", () => {

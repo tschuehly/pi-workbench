@@ -51,7 +51,7 @@ Workbench classifies work by Cognitive Role and resolves each role to a model an
 Alignment:      Default | Align | Plan | Spec
 Attention:      Default | Focused | Switching | Phone | AFK
 Checking:       Default | Exercise | Test | Challenge
-Orchestration:  Main | Subagents | Workers
+Orchestration:  Main | Subagents | Workers | Cockpit
 ```
 
 Alignment sets how shared understanding is established, Attention how and whether Pia contacts

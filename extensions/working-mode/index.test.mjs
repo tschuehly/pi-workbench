@@ -199,6 +199,22 @@ test("resume restores the selection from the session without posting again", asy
   resumed.session.dispose();
 });
 
+test("Orchestration Cockpit posts the Cockpit guidance: one worker per Workstream, questions on the Page", async () => {
+  const s = await session();
+  await s.session.prompt("/mode orchestration cockpit");
+  await s.session.prompt("one");
+  const [block] = s.blocks(s.last());
+  assert.match(block, /Orchestration: Cockpit/);
+  assert.match(block, /Orchestration — Cockpit: .*one durable worker/);
+  assert.match(block, /one tab per worker/);
+  assert.match(block, /~\/\.pi-workbench\/workers\/status\/<workerId>\.json/);
+  assert.match(block, /Every Decision stands alone/);
+  assert.match(block, /never with `ask_user` or in Chat/);
+  assert.match(block, /Workers never post/);
+  assert.deepEqual(s.snapshots.at(-1).selected, { ...defaults, orchestration: "Cockpit" });
+  s.session.dispose();
+});
+
 test("after compaction summarizes the block away, the next prompt attaches it again", async () => {
   const s = await session();
   await s.session.prompt("/mode attention afk");

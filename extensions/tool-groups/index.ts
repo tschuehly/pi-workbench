@@ -10,8 +10,9 @@ const GROUP_IDS = Object.keys(GROUPS) as Group[];
 // model as deferred additions, so enabling a group later keeps the cached prompt prefix.
 export default function toolGroups(pi: ExtensionAPI) {
   let enabled = new Set<string>();
-  let workersMode = false;
-  const isEnabled = (id: string) => enabled.has(id) || (id === "workers" && workersMode);
+  // Groups the selected Orchestration value turns on: Workers needs worker tools, Cockpit also needs Atelier.
+  let modeGroups: string[] = [];
+  const isEnabled = (id: string) => enabled.has(id) || modeGroups.includes(id);
 
   function activate(names: string[]) {
     const active = pi.getActiveTools();
@@ -54,8 +55,9 @@ export default function toolGroups(pi: ExtensionAPI) {
   });
 
   pi.events.on("pi-workbench:working-mode", (value: any) => {
-    workersMode = value?.selected?.orchestration === "Workers";
-    if (workersMode) activate(pi.getAllTools().filter((tool) => inGroup("workers", tool)).map((tool) => tool.name));
+    const orchestration = value?.selected?.orchestration;
+    modeGroups = orchestration === "Workers" ? ["workers"] : orchestration === "Cockpit" ? ["workers", "atelier"] : [];
+    activate(pi.getAllTools().filter((tool) => modeGroups.some((id) => inGroup(id as Group, tool))).map((tool) => tool.name));
   });
 
   const restore = (_event: unknown, ctx: ExtensionContext) => {
