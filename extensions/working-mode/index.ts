@@ -66,7 +66,7 @@ export const axes = {
       Main: "Perform the primary work in the main session. Required advisors and independent checks remain available.",
       Subagents: "Parallelize by default; this overrides any general preference to work inline. Before each task, split it into independent parts such as research questions, files, modules, or checks. When two or more exist, launch them as parallel background subagents in the same turn. Also delegate mechanical volume such as bulk reading, scans, and broad edits. Keep the main session for steering, integration, and talking with Thomas; do inline only what is smaller than writing its brief.",
       Workers: "Organize multi-step work around durable workers; this overrides any general preference for fresh subagents. At the start, name the scopes that will receive repeated tasks, such as a module, repository area, or review lane, create one worker per scope, and route every task in that scope to its worker. Run workers for independent scopes in parallel. A worker may delegate only to a leaf subagent; continuity is not independent review. Keep the main session for steering, integration, and talking with Thomas.",
-      Cockpit: "Run the work as a Cockpit; this overrides any general preference for fresh subagents. Give each Workstream one durable worker (create the Workstream if it is missing) and dispatch workers in the background, in parallel. Keep one Atelier Page for this Chat with one tab per worker, titled with its Workstream title; you are its Receiver. A fresh subagent writes the Page HTML from each worker's report and its status file `~/.pi-workbench/workers/status/<workerId>.json`; you write no HTML. Each worker report, and its tab, has these sections: For, Now, Needs you, Your choices, To send, Where it stands, If you say nothing. Each report rewrites its tab in place; never append older reports. Every Decision stands alone: it names its subject, options, and their consequences so Thomas can answer without the rest of the tab; the Page writer sends unclear ones back to the worker. Ask every question as a Page Decision, instead of the question channel your Attention setting names, unless the Page is unreachable. Whether, when, and how you tell Thomas that a tab changed follows your Attention setting: send one line with the tab link through the channel it names (the conversation, when Attention names none), and send nothing when it says not to contact him. Workers never post or send anything outward; they draft Sends, and you post a Send only after Thomas approves it. Relay a tab's answers to its worker in one `worker_dispatch`. Open each Comment reply with one line on what changed since the Comment, and put anything that changes a Decision into its card. When a worker retires or the day ends, write a Workstream checkpoint from its tab.",
+      Crew: "Run the work as a Crew; this overrides any general preference for fresh subagents. Give each Workstream one durable worker (create the Workstream if it is missing) and dispatch workers in the background, in parallel. Keep one Atelier Page for this Chat with one tab per worker, titled with its Workstream title; you are its Receiver. A fresh subagent writes the Page HTML from each worker's report and its status file `~/.pi-workbench/workers/status/<workerId>.json`; you write no HTML. Each worker report, and its tab, has these sections: For, Now, Needs you, Your choices, To send, Where it stands, If you say nothing. Each report rewrites its tab in place; never append older reports. Every Decision stands alone: it names its subject, options, and their consequences so Thomas can answer without the rest of the tab; the Page writer sends unclear ones back to the worker. An answered Decision folds to one line, then becomes a Where it stands line at the next rewrite. Each tab opens with a New row of at most 3 lines on what changed since Thomas last saw it; clear it once Thomas marks the tab Seen. Ask every question as a Page Decision, instead of the question channel your Attention setting names, unless the Page is unreachable. Whether, when, and how you tell Thomas that a tab changed follows your Attention setting: send one line with the tab link through the channel it names (the conversation, when Attention names none), and send nothing when it says not to contact him. Workers never post or send anything outward; they draft Sends, and you post a Send only after Thomas approves it. Relay a tab's answers to its worker in one `worker_dispatch`. Open each Comment reply with one line on what changed since the Comment, and put anything that changes a Decision into its card. When a worker retires, write a Workstream checkpoint from its tab. When the day ends, write one Workstream checkpoint per worker; the next lead rebuilds the tabs from the checkpoints and asks the open questions again.",
     },
   },
 } as const;
@@ -110,11 +110,19 @@ export function isSelection(value: any): value is WorkingModeState {
   return !!value && axisNames.every((axis) => typeof value[axis] === "string" && Object.hasOwn(axes[axis].values, value[axis]));
 }
 
+/** A Working Mode block's details, or undefined; sessions saved before Thomas renamed Cockpit to Crew resume as Crew. */
+function blockDetails(entry: any): WorkingModeDetails | undefined {
+  if (entry?.type !== "custom_message" || entry.customType !== CUSTOM_TYPE) return undefined;
+  const details = entry.details?.selection?.orchestration === "Cockpit" ? { ...entry.details, selection: { ...entry.details.selection, orchestration: "Crew" } } : entry.details;
+  return isSelection(details?.selection) ? details : undefined;
+}
+
 /** Alignment state from whichever came last on the branch: a Working Mode block or an alignment tool result. */
 function latestAligned(entries: readonly any[]): boolean {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry?.type === "custom_message" && entry.customType === CUSTOM_TYPE && isSelection(entry.details?.selection)) return !!entry.details.aligned;
+    const details = blockDetails(entry);
+    if (details) return !!details.aligned;
     const message = entry?.type === "message" ? entry.message : undefined;
     if (message?.role === "toolResult" && !message.isError) {
       if (message.toolName === ALIGNMENT_TOOL) return true;
@@ -129,8 +137,8 @@ const same = (a: WorkingModeState, b: WorkingModeState) => axisNames.every((axis
 /** Latest Working Mode block among the given entries, or null. */
 function latestBlock(entries: readonly any[]): WorkingModeDetails | null {
   for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
-    if (entry?.type === "custom_message" && entry.customType === CUSTOM_TYPE && isSelection(entry.details?.selection)) return entry.details;
+    const details = blockDetails(entries[i]);
+    if (details) return details;
   }
   return null;
 }

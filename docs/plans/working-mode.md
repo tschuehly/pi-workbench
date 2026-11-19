@@ -16,7 +16,7 @@ Make the controls change useful behavior while preserving a neutral Alignment ba
 | Alignment | Default / Align / Plan / Spec |
 | Attention | Focused / Switching / Phone / AFK |
 | Checking | Exercise / Test / Challenge |
-| Orchestration | Main / Subagents / Workers / Cockpit |
+| Orchestration | Main / Subagents / Workers / Crew |
 
 The [Working Mode specification](../foundation/working-mode.md) owns the meanings. In particular:
 

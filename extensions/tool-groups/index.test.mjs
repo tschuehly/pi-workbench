@@ -96,9 +96,9 @@ test("Orchestration Workers activates worker tools; resume keeps the enabled gro
   resumed.session.dispose();
 });
 
-test("Orchestration Cockpit activates worker and Atelier tools", async () => {
+test("Orchestration Crew activates worker and Atelier tools", async () => {
   const s = await session();
-  await s.session.prompt("/mode orchestration cockpit");
+  await s.session.prompt("/mode orchestration crew");
   await s.session.prompt("one");
   const tools = s.tools(s.requests[0]);
   assert.ok(tools.includes("worker_create") && tools.includes("atelier"));

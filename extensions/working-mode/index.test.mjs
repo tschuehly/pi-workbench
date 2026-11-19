@@ -199,28 +199,28 @@ test("resume restores the selection from the session without posting again", asy
   resumed.session.dispose();
 });
 
-test("Orchestration Cockpit posts the Cockpit guidance: one worker per Workstream, questions on the Page", async () => {
+test("Orchestration Crew posts the Crew guidance: one worker per Workstream, questions on the Page", async () => {
   const s = await session();
-  await s.session.prompt("/mode orchestration cockpit");
+  await s.session.prompt("/mode orchestration crew");
   await s.session.prompt("one");
   const [block] = s.blocks(s.last());
-  assert.match(block, /Orchestration: Cockpit/);
-  assert.match(block, /Orchestration — Cockpit: .*one durable worker/);
+  assert.match(block, /Orchestration: Crew/);
+  assert.match(block, /Orchestration — Crew: .*one durable worker/);
   assert.match(block, /one tab per worker/);
   assert.match(block, /~\/\.pi-workbench\/workers\/status\/<workerId>\.json/);
   assert.match(block, /Every Decision stands alone/);
   assert.match(block, /as a Page Decision/);
   assert.match(block, /Workers never post/);
-  assert.deepEqual(s.snapshots.at(-1).selected, { ...defaults, orchestration: "Cockpit" });
+  assert.deepEqual(s.snapshots.at(-1).selected, { ...defaults, orchestration: "Crew" });
   s.session.dispose();
 });
 
-test("Cockpit sets where questions live; Attention alone decides whether and how Thomas is contacted", () => {
-  const cockpit = axes.orchestration.values.Cockpit;
+test("Crew sets where questions live; Attention alone decides whether and how Thomas is contacted", () => {
+  const crew = axes.orchestration.values.Crew;
   // No unconditional ping: every outward contact line defers to the Attention axis.
-  assert.doesNotMatch(cockpit, /post one line in Chat/);
-  assert.match(cockpit, /follows your Attention setting/);
-  assert.match(cockpit, /send nothing when it says not to contact him/);
+  assert.doesNotMatch(crew, /post one line in Chat/);
+  assert.match(crew, /follows your Attention setting/);
+  assert.match(crew, /send nothing when it says not to contact him/);
   // Every Attention value leaves a named channel (or a named silence) for the tab-changed line.
   const channel = {
     Default: /the conversation, when Attention names none/,
@@ -231,13 +231,33 @@ test("Cockpit sets where questions live; Attention alone decides whether and how
   };
   assert.deepEqual(Object.keys(axes.attention.values), Object.keys(channel), "every Attention value is covered");
   for (const attention of Object.keys(axes.attention.values)) {
-    const block = renderBlock({ ...defaults, attention, orchestration: "Cockpit" }, 1, true);
-    assert.ok(block.includes(cockpit), attention);
+    const block = renderBlock({ ...defaults, attention, orchestration: "Crew" }, 1, true);
+    assert.ok(block.includes(crew), attention);
     assert.ok(block.includes(axes.attention.values[attention]), attention);
     assert.match(block, channel[attention], attention);
     // Attention's own question channel (ask_user, ask_human, Chat) yields to the Page explicitly, not silently.
-    if (/ask_user|ask_human/.test(axes.attention.values[attention])) assert.match(cockpit, /instead of the question channel your Attention setting names/, attention);
+    if (/ask_user|ask_human/.test(axes.attention.values[attention])) assert.match(crew, /instead of the question channel your Attention setting names/, attention);
   }
+});
+
+test("Crew carries Thomas's tab rules: folded answers, one-line ping, a New row, a next-day save point", () => {
+  const crew = axes.orchestration.values.Crew;
+  // 1. An answered question folds to one line, then moves to Where it stands at the next rewrite.
+  assert.match(crew, /answered Decision folds to one line/);
+  assert.match(crew, /becomes a Where it stands line at the next rewrite/);
+  // 2. The tab-changed line is one line with the tab link, still through Attention's channel.
+  assert.match(crew, /follows your Attention setting: send one line with the tab link/);
+  // 4. A New row of at most 3 lines, cleared once Thomas marks the tab seen.
+  assert.match(crew, /New row of at most 3 lines/);
+  assert.match(crew, /clear it once Thomas marks the tab Seen/);
+  // 5. Next day: one checkpoint per Worker; the next lead rebuilds the tabs and asks the open questions again.
+  assert.match(crew, /one Workstream checkpoint per worker/);
+  assert.match(crew, /next lead rebuilds the tabs from the checkpoints and asks the open questions again/);
+});
+
+test("a session saved under the old Cockpit name resumes as Crew", () => {
+  const branch = [{ type: "custom_message", customType: "working-mode", details: { schemaVersion: 2, seq: 1, selection: { ...defaults, attention: "Phone", orchestration: "Cockpit" }, aligned: false } }];
+  assert.deepEqual(fakePi(branch).snapshots.at(-1).selected, { ...defaults, attention: "Phone", orchestration: "Crew" });
 });
 
 test("after compaction summarizes the block away, the next prompt attaches it again", async () => {

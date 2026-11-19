@@ -14,7 +14,7 @@ When the model already sees the selection, it only notifies "Working Mode unchan
 | Alignment | **Default**, Align, Plan, Spec |
 | Attention | **Default**, Focused, Switching, Phone, AFK |
 | Checking | **Default**, Exercise, Test, Challenge |
-| Orchestration | **Main**, Subagents, Workers, Cockpit |
+| Orchestration | **Main**, Subagents, Workers, Crew |
 
 - **Delivery:** when the selection differs from the last block the model can still see, the next
   prompt carries one `<working-mode seq="N">` message with the full selection and the guidance for

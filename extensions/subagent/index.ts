@@ -117,11 +117,11 @@ const UPDATE_REQUEST = "The lead asks for a progress update: call report_status 
 const STATUS_STATES = ["working", "needs-you", "blocked", "waiting", "done", "failed"] as const;
 const ReportStatusParams = Type.Object({
   status: Type.String({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
-  state: Type.Optional(StringEnum(STATUS_STATES, { description: "Your state for the lead's Cockpit tab; omit to keep the previous one (starts as working)" })),
+  state: Type.Optional(StringEnum(STATUS_STATES, { description: "Your state for the lead's Crew tab; omit to keep the previous one (starts as working)" })),
 });
 const STATUS_LOG_MAX = 20;
 
-/** Where a Worker's latest report_status lands, so a Cockpit lead can read it by workerId. */
+/** Where a Worker's latest report_status lands, so a Crew lead can read it by workerId. */
 export const workerStatusFile = (workerId: string, home = os.homedir()) => path.join(home, ".pi-workbench", "workers", "status", `${workerId}.json`);
 
 /** States a Worker reports plus `retired`, which only worker_retire writes. */
@@ -756,7 +756,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
         const final = await adapter.result(receipt.executionId);
         foreground.delete(receipt.executionId);
-        // The Worker cannot report its own end; the lead marks it so the Cockpit tab stops saying working.
+        // The Worker cannot report its own end; the lead marks it so the Crew tab stops saying working.
         statusNote = startNote + leadStatusWrite(workerStatusFile(params.workerId), final.outcome === "success" ? "done" : "failed", `Dispatch ended: ${final.outcome}`);
         emitExecutionEvent(host, {
           type: "execution.settled", at: new Date().toISOString(), sessionId: parentSessionId,

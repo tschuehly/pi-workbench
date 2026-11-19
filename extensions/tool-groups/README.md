@@ -5,9 +5,9 @@ Keeps rarely used tool groups out of the lead's startup context. A new session s
 
 | Group | Tools | Also active when |
 | --- | --- | --- |
-| `workers` | `worker_create`, `worker_dispatch`, `worker_status`, `worker_retire` | Orchestration is Workers or Cockpit |
+| `workers` | `worker_create`, `worker_dispatch`, `worker_status`, `worker_retire` | Orchestration is Workers or Crew |
 | `monitor` | every tool from pi-process-monitor | — |
-| `atelier` | `atelier` (extensions/atelier) | Orchestration is Cockpit |
+| `atelier` | `atelier` (extensions/atelier) | Orchestration is Crew |
 | goal | `goal_complete`, `goal_blocked`, `goal_wait` | a `/goal` is active (not enableable) |
 
 - **Cache:** tools added mid-session are declared as a transcript delta, which Pi sends to Anthropic
