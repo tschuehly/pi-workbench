@@ -143,7 +143,7 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
       PI_WEB_DATA_DIR: h.data, PI_WEB_CONFIG: join(h.data, "config.json"), PI_WEB_PORT: "8506", PI_WEB_PI_PACKAGE_AUTO_INSTALL: "0",
       PI_WEB_PI_PACKAGE_DIR: `${build("pi-web", pwRev(1))}/node_modules/@earendil-works/pi-coding-agent`,
       PI_WEB_DURABLE_HOST: `${build("pi-workbench", wbRev(1))}/packages/durable-pilot/src/chat-host-main.ts`, PI_WEB_DURABLE_DEFAULT: "1",
-      PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-host",
+      PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-host", PI_WEB_DURABLE_AUTO_UPGRADE: "1",
     });
     assert.equal(p.StandardOutPath, join(h.data, "logs", `${s}.log`));
   }
@@ -207,7 +207,7 @@ test("a legacy prune keeps the Durable instance's builds, and a Durable prune ke
 
   // Legacy: removes its own stale builds and never looks at installed-durable.
   const durableBefore = h.durable();
-  const legacy = h.run(["prune", "--apply"]);
+  const legacy = h.run(["--instance", "legacy", "prune", "--apply"]);
   assert.equal(legacy.status, 0, legacy.stderr);
   assert.match(legacy.stdout, /removed pi-workbench-eeeeeeeeeeee/);
   assert.match(legacy.stdout, /keep   pi-workbench-cccccccccccc: rollback/);
@@ -412,7 +412,7 @@ test("a trial (PI_PROMOTE_DURABLE_TRIAL) promotes and rolls back only its own fo
       PI_WEB_DATA_DIR: data, PI_WEB_CONFIG: join(data, "config.json"), PI_WEB_PORT: "8516", PI_WEB_PI_PACKAGE_AUTO_INSTALL: "0",
       PI_WEB_PI_PACKAGE_DIR: `${build("pi-web", pwRev(2))}/node_modules/@earendil-works/pi-coding-agent`,
       PI_WEB_DURABLE_HOST: `${build("pi-workbench", wbRev(2))}/packages/durable-pilot/src/chat-host-main.ts`, PI_WEB_DURABLE_DEFAULT: "1",
-      PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-trial.host", PI_WEB_DURABLE_AGENT_DIR: "/trial/agent", PI_OFFLINE: "1",
+      PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-trial.host", PI_WEB_DURABLE_AUTO_UPGRADE: "1", PI_WEB_DURABLE_AGENT_DIR: "/trial/agent", PI_OFFLINE: "1",
     });
   }
   assert.equal(readlinkSync(join(projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(2)));

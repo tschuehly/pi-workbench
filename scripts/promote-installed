@@ -2,6 +2,9 @@
 # Run Pi Workbench and PI WEB from pinned, immutable builds (docs/contracts/harness.md,
 # "Installed and Development Checkouts").
 #
+#   Without --instance every command acts on the Durable instance (:8506, the one in use since 19 Nov); the
+#   commands below that name ~/.pi-workbench/installed, *.installed or :8505 need --instance legacy.
+#
 #   promote-installed prepare <workbench-rev> <pi-web-rev>
 #       Build immutable copies under ~/.pi-workbench/installed. Touches nothing running.
 #   promote-installed switch <workbench-rev> <pi-web-rev> [delay-seconds, default 10]
@@ -60,11 +63,13 @@ export PATH=${PI_PROMOTE_PATH:-$HOME/.local/share/mise/shims:/opt/homebrew/bin:/
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
 STORE=$HOME/.pi-workbench/installed
 PORT=8505 # the Pi Workbench app's default ServerURL
-LABEL=com.pi-web SUFFIX=.installed ME=$0
-instance=legacy
+LABEL=com.pi-web SUFFIX=.installed ME="$0 --instance legacy"
+instance=durable # the Durable instance is the one Thomas runs (19 Nov); the stopped :8505 one needs --instance legacy
 if [[ ${1:-} == --instance ]]; then
-  [[ ${2:-} == durable ]] || { echo "unknown instance: ${2:-} (only durable)" >&2; exit 2; }
-  instance=durable; shift 2
+  [[ ${2:-} == durable || ${2:-} == legacy ]] || { echo "unknown instance: ${2:-} (durable or legacy)" >&2; exit 2; }
+  instance=$2; shift 2
+fi
+if [[ $instance == durable ]]; then
   STORE=$HOME/.pi-workbench/installed-durable PORT=8506 LABEL=com.pi-web-durable SUFFIX=.durable-installed
   DATA=$HOME/.pi-web-durable ME="$0 --instance durable"
   T= LA=$HOME/Library/LaunchAgents HOSTLABEL=com.pi-workbench.durable-host JOBLABEL=com.pi-workbench.promote-installed-durable EXTRA=
@@ -325,7 +330,7 @@ if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   prune_builds --apply || true
   exit 0
 fi
-[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,56p' "$0"; exit 2; }
+[[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '2,60p' "$0"; exit 2; }
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
 [[ $instance == durable ]] || link_cli
@@ -438,7 +443,7 @@ export PATH=$PATH
 exec >>"$job/job.log" 2>&1
 trap 'launchctl bootout gui/$uid/$label' EXIT
 sleep ${4:-10}
-if [[ $force == 0 ]] && ! "$self" check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
+if [[ $force == 0 ]] && ! "$self" --instance legacy check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
 echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"
 la=\$HOME/Library/LaunchAgents
 cp -p \$la/com.pi-web.*.plist \$HOME/.pi/agent/settings.json \$HOME/.config/pi-web/config.json "$job/backup/" || { echo "backup failed"; exit 1; }
@@ -493,13 +498,13 @@ node -e '
     :p.replace(/^.*\/pi-web[^/]*\/dist\/pi-packages\//,pw+"/dist/pi-packages/"));
   fs.writeFileSync(f,JSON.stringify(s,null,2)+"\n")' \
   \$HOME/.pi/agent/settings.json "$PROJECTS/pi-workbench" "$PROJECTS/pi-workbench.installed" "$PROJECTS/pi-web.installed"
-"$self" check-settings || rollback
+"$self" --instance legacy check-settings || rollback
 node -e '
   const fs=require("fs"),f=process.argv[1],c=JSON.parse(fs.readFileSync(f,"utf8"));
   c.port=$PORT; fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' \$HOME/.config/pi-web/config.json
 stop_all
 (cd "$pw" && "${PI_PROMOTE_ZSH:-/bin/zsh}" -lc 'node dist/cli.js install') || rollback
-for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; "$self" prune --apply || true; exit 0; }; sleep 1; done
+for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; "$self" --instance legacy prune --apply || true; exit 0; }; sleep 1; done
 rollback
 EOF
 fi

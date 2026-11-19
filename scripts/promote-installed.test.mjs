@@ -10,7 +10,7 @@ const dir = mkdtempSync(join(tmpdir(), "promote-guard-"));
 const run = (psLines, ...args) => {
   const ps = join(dir, "ps.txt");
   writeFileSync(ps, psLines.join("\n") + "\n");
-  return spawnSync("bash", [script, ...args], {
+  return spawnSync("bash", [script, "--instance", "legacy", ...args], {
     encoding: "utf8",
     env: { ...process.env, HOME: dir, PI_WORKBENCH_PROJECTS: dir, PI_PROMOTE_PS: `cat ${ps}` },
   });

@@ -67,8 +67,14 @@ restores the previous web service if the new one does not become healthy and pri
 that switches back. `switch` waits 10 seconds by default before restarting, enough for the calling
 session to finish its reply.
 
+Since 19 Nov 2026 the Durable instance is the one in use: `promote-installed` without `--instance` acts on
+it, and the commands above, which name `~/.pi-workbench/installed`, `*.installed` and :8505, need
+`promote-installed --instance legacy`. The legacy services are stopped and launchctl-disabled; to read old
+Chats, `launchctl enable gui/$(id -u)/com.pi-web.sessiond` (and `com.pi-web.web`), bootstrap both plists from
+`~/Library/LaunchAgents` and open http://127.0.0.1:8505/.
+
 The Durable instance (`docs/plans/pi-durable-cutover-spec.md`, B7) is a second installed PI WEB beside
-this one: `promote-installed --instance durable` runs `prepare`, `switch`, `switch-workbench`,
+the legacy one: `promote-installed` (or `--instance durable`) runs `prepare`, `switch`, `switch-workbench`,
 `switch-web`, `prune` and `check-idle` on `~/IdeaProjects/*.durable-installed`, builds under
 `~/.pi-workbench/installed-durable/`, `PI_WEB_DATA_DIR` `~/.pi-web-durable`, port 8506 and launchd
 labels `com.pi-web-durable.*`, with `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_DURABLE_DEFAULT=1`, `PI_WEB_DURABLE_AUTO_UPGRADE=1` and the

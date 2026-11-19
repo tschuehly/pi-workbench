@@ -3,6 +3,8 @@
 
 Spec: [pi-durable-cutover-spec.md](pi-durable-cutover-spec.md). First installed 17 Nov 2026 from pi-workbench `4fa8282` and pi-web `a43ca38c` (branches `feat/durable-host-slice1-20261022` and `feat/durable-chat-slice1-20261022` on the tschuehly forks).
 
+Since 19 Nov 2026 Durable is used full time: "Pi Workbench.app" opens :8506, the legacy services `com.pi-web.{sessiond,web}` are stopped and launchctl-disabled, and `promote-installed` without `--instance` acts on the Durable instance (`--instance legacy` for the old one). The `--instance durable` below still works.
+
 ## What the Durable instance is
 
 | | Legacy instance | Durable instance |
@@ -99,7 +101,7 @@ Each successful command prunes `~/.pi-workbench/installed-durable/` (keeps live,
 - Automatic: a `switch` whose services do not become healthy in 90 s restores the previous Durable plists, links and plugin link, boots them and checks health (`rollback done` in the job log, exit 1; `ROLLBACK FAILED` means exit 4: check `~/.pi-web-durable/logs/`). It never touches a host: the restored daemon reattaches them.
 - To the previous revision (after 1.5.2, see the two-step rule below): each command prints its `roll back:` line; for `switch`, use the `wb=` and `pw=` of the earlier `start` line in `~/.pi-workbench/installed-durable/jobs/*/job.log`:
   `$P --instance durable switch <previous-wb-sha> <previous-pw-sha>`
-- Back to the legacy instance: open http://127.0.0.1:8505/. Nothing to switch; Durable Chats stay readable on :8506. To stop the Durable instance:
+- Back to the legacy instance: `launchctl enable gui/$(id -u)/com.pi-web.sessiond; launchctl enable gui/$(id -u)/com.pi-web.web`, bootstrap both `~/Library/LaunchAgents/com.pi-web.*.plist`, then open http://127.0.0.1:8505/; Durable Chats stay readable on :8506. To stop the Durable instance:
   `launchctl bootout gui/$(id -u)/com.pi-web-durable.web; launchctl bootout gui/$(id -u)/com.pi-web-durable.sessiond`
   Its hosts keep running (and keep working) until stopped one by one, which interrupts that family's Chats: `launchctl bootout gui/$(id -u)/com.pi-workbench.durable-host.<family>` for each label from `launchctl list` above.
   Start it again: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pi-web-durable.sessiond.plist; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pi-web-durable.web.plist`

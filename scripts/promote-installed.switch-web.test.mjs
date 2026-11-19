@@ -34,7 +34,7 @@ function scenario({ healthy, daemonChanged = false }) {
   shim("launchctl", `echo "$*" >> "$HOME/launchctl.log"`);
   // Healthy only while the web plist points at the build that works.
   shim("curl", `grep -q "${healthy ? next : old}" "$HOME/Library/LaunchAgents/com.pi-web.web.plist" || exit 1\necho '{"plugins":[{"id":"pi-workbench","server":{"state":"active","restartRequired":false}}]}'`);
-  const result = spawnSync("bash", [script, "switch-web", "HEAD"], {
+  const result = spawnSync("bash", [script, "--instance", "legacy", "switch-web", "HEAD"], {
     encoding: "utf8",
     env: { ...process.env, HOME: home, PI_WORKBENCH_PROJECTS: projects, PI_PROMOTE_PATH: `${bin}:${process.env.PATH}` },
   });

@@ -43,7 +43,7 @@ function scenario(mode, bootstrapFails = false) {
   shim(bin, "zsh", "node dist/cli.js install");
   const env = { ...process.env, HOME: home, PI_WORKBENCH_PROJECTS: projects, PI_PROMOTE_PATH: `${bin}:/usr/bin:/bin`, PI_PROMOTE_ZSH: join(bin, "zsh"), REAL_NODE: process.execPath };
   try {
-    const schedule = spawnSync("bash", [script, "--force", "switch", "HEAD", "HEAD", "0"], { env, encoding: "utf8" });
+    const schedule = spawnSync("bash", [script, "--instance", "legacy", "--force", "switch", "HEAD", "HEAD", "0"], { env, encoding: "utf8" });
     assert.equal(schedule.status, 0, schedule.stderr);
     const job = join(store, "jobs", readdirSync(join(store, "jobs"))[0], "job.sh");
     const result = spawnSync("bash", [job], { env, encoding: "utf8" });
