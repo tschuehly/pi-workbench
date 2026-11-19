@@ -15,13 +15,19 @@ attended dispatch that resumes the worker's persisted Pi session, streams progre
 cancellation, and returns a compact result — the same lifecycle as an ephemeral child, plus
 continuity within the worker's scope.
 
-After a lead crash, the Worker's durable identity, scope, and child session lineage survive, so its
-memory resumes on the next dispatch; the running execution and the lead's in-memory roster do not
-survive. No child process outlives its attended parent, and no unattended activity occurs between
-dispatches. The one bounded exception is a lead's background `bash` job (`extensions/background-bash/`):
-it is owned by one Pi session, stops at its timeout or a 12-hour maximum lifetime, stays cancellable
-after reattachment, and is swept from its registry a week after finishing. An interrupted dispatch is recorded with an unknown outcome and requires inspection before
-reuse. An idle worker is a record plus a persisted child Pi session file, never a waiting subprocess.
+After a lead crash in the legacy RPC adapter, the Worker's durable identity, scope, and child session
+lineage survive, so its memory resumes on the next dispatch; the running execution and the lead's
+in-memory roster do not survive. No child process outlives its attended parent, and no unattended
+activity occurs between dispatches. The bounded exception is a lead's background `bash` job
+(`extensions/background-bash/`): it is owned by one Pi session, stops at its timeout or a 12-hour
+maximum lifetime, stays cancellable after reattachment, and is swept from its registry a week after
+finishing. An interrupted dispatch is recorded with an unknown outcome and requires inspection
+before reuse. An idle worker is a record plus a persisted child Pi session file, never a waiting subprocess.
+
+Durable child conversations have the separate [blocking-command restart exception](../contracts/harness.md#durable-child-command-restart-exception):
+one admitted command can survive host restart until its unchanged deadline (20 minutes by default).
+Restoration reattaches under paused-restore rules without renewing that deadline; cancellation,
+explicit end and settlement require owned-process cleanup.
 
 This realizes the canonical Worker meaning — "a Pi actor that retains useful continuity across
 bounded actions within one semantic scope" — in the Level 1 posture. It is not a managed Level 4

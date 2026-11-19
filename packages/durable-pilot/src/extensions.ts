@@ -38,6 +38,7 @@ export function clearInheritedIdentity(env: NodeJS.ProcessEnv = process.env): vo
  * No PI_SESSION_FILE: a Durable Chat has no coding-agent session file. Never TMPDIR (Unix socket path limit).
  */
 export function toolEnv(identity: { chatId: string; conversationId: ConversationId; rootId: ConversationId | undefined; cwd: string; model?: { provider: string; modelId: string }; thinkingLevel?: string; executionKind?: string }): NodeJS.ProcessEnv {
+	const waitCap = Number(process.env.PI_WORKBENCH_WAIT_CAP_SECONDS);
 	const sessionId = identity.rootId === undefined || identity.conversationId === identity.rootId ? identity.chatId : `${identity.chatId}:${String(identity.conversationId)}`;
 	const bin = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "bin");
 	const path = (process.env.PATH ?? "").split(delimiter).filter((entry) => entry !== "" && entry !== bin);
@@ -47,9 +48,9 @@ export function toolEnv(identity: { chatId: string; conversationId: Conversation
 		PATH: [bin, ...path].join(delimiter),
 		...(identity.model === undefined ? {} : { PI_PROVIDER: identity.model.provider, PI_MODEL: identity.model.modelId }),
 		...(identity.thinkingLevel === undefined ? {} : { PI_REASONING_LEVEL: identity.thinkingLevel }),
-		// A child's wait-until ends (25 min) inside its bash default (chat.ts CHILD_BASH_TIMEOUT_S) and its quiet window, so
-		// a long wait is never cut off or reported as stuck.
-		...(identity.executionKind === undefined ? {} : { PI_WORKBENCH_EXECUTION_KIND: identity.executionKind, PI_WORKBENCH_WAIT_CAP_SECONDS: process.env.PI_WORKBENCH_WAIT_CAP_SECONDS ?? "1500" }),
+		// A child's wait-until ends (15 min) inside its 20 min command default. A silent wait may get a
+		// no-observed-progress notice after 10 min; that is suspicion only, never cancellation.
+		...(identity.executionKind === undefined ? {} : { PI_WORKBENCH_EXECUTION_KIND: identity.executionKind, PI_WORKBENCH_WAIT_CAP_SECONDS: String(Number.isFinite(waitCap) && waitCap > 0 ? Math.min(waitCap, 900) : 900) }),
 	};
 }
 

@@ -48,7 +48,7 @@ import {
 	providerOf,
 	resolveBinding,
 	ROLE_GUIDE,
-	STATUS_INSTRUCTION,
+	DURABLE_STATUS_INSTRUCTION as STATUS_INSTRUCTION,
 	UPDATE_REQUEST,
 	WEB_TOOLS,
 	WORKER_PROFILES,
@@ -58,6 +58,8 @@ import { CUSTOM_TYPE as COMPLETION_CUSTOM_TYPE, composeNotice } from "../../../e
 import { leadStatusWrite, STATUS_STATES, workerStatusFile, writeStatusFile } from "../../../extensions/subagent/status-file.mjs";
 import { batchSize, CheckpointDoc, continuationRequestId } from "./checkpoint.ts";
 import { BranchesDoc } from "./host.ts";
+import { BashJobsDoc, childCommand, commandQuietMs, stopChildCommands } from "./background-bash.ts";
+import { previewJob } from "../../../extensions/background-bash/jobs.mjs";
 import { redact, sanitizeDeep, sealed } from "./redact.ts";
 
 /** A completion wake as placed in the lead's transcript (legacy custom message `pi-workbench:child-completion`). */
@@ -136,6 +138,8 @@ export type Execution = {
 	stuckNotice?: { since: string; seq: number; text: string; data: JsonObject; sent?: true };
 	/** The conversation that launched it (its tasks' conversation), once history navigation carried it elsewhere. */
 	origin?: number;
+	/** One command-scoped no-output notice; admission commits with its submission on the child's current branch. */
+	progressNotice?: { jobId: string; text: string; data: JsonObject; admitted?: boolean };
 };
 
 type Result = { output: { type: "text"; text: string }[]; details: JsonObject; isError?: true };
@@ -403,14 +407,16 @@ function reporterTask(options: DelegationOptions) {
 					return steer === undefined || steer.status === "queued";
 				};
 				/** A background child still running uncancelled in the span whose steer `seq` is still unread. */
-				const stuckEligible = async (tx: Tx, e: Execution | undefined, seq: number): Promise<boolean> =>
-					e !== undefined && e.background && e.outcome === "running" && e.cancelEpoch === undefined
+				const stuckEligible = async (tx: Tx, e: Execution | undefined, seq: number, managed = false): Promise<boolean> =>
+					!managed && e !== undefined && e.background && e.outcome === "running" && e.cancelEpoch === undefined
 					&& e.quietSteer?.since === (e.reportedAt ?? e.launchedAt) && e.quietSteer.seq === seq && (await unread(tx, seq));
 				const tick = async (): Promise<void> => {
 					if (cadenceStopped || runtime.signal.aborted) return;
 					const quiet = reportQuietMs();
 					const grace = stuckGraceMs();
-					let next: number | undefined = quiet;
+					let next: number | undefined = Math.min(quiet, 500);
+					const command = await childCommand(runtime, conversation, c);
+					let progress: Execution["progressNotice"];
 					let send: number | undefined;
 					let stuck: Execution["stuckNotice"] | "due" | undefined;
 					await runtime.commit(async (tx) => {
@@ -419,10 +425,19 @@ function reporterTask(options: DelegationOptions) {
 						else {
 							const since = e.reportedAt ?? e.launchedAt;
 							const due = Date.parse(since) + quiet;
+							if (command !== undefined && runtime.now() - command.lastOutputAt >= commandQuietMs()) {
+								if (e.progressNotice?.jobId !== command.id || (e.progressNotice.admitted !== true && e.progressNotice.data.lastOutputAt !== iso(command.lastOutputAt))) {
+									const ageSeconds = Math.floor((runtime.now() - command.startedAt) / 1000);
+									const preview = previewJob(command, 1200);
+									const text = sanitize(`Child ${id} "${e.name}": no observed progress from bash ${command.id}. Command owner ${command.executionId ?? id}; command age ${ageSeconds}s; deadline ${iso(command.expiresAt)}; last captured output ${iso(command.lastOutputAt)}.\n${preview.command}\n${preview.output || "(no captured output)"}\nSilence is not proof of deadlock and does not cancel or extend this command. Check subagent_status; subagent_cancel stops its owned processes. This notice authorizes nothing else.`);
+									e.progressNotice = { jobId: command.id, text, data: { executionId: id, name: e.name, reason: "no-progress", jobId: command.id, commandExecutionId: command.executionId ?? id, ageSeconds, deadline: iso(command.expiresAt), lastOutputAt: iso(command.lastOutputAt), preview: sanitize(preview.command), tail: sanitize(preview.output) } };
+								}
+								if (e.progressNotice.admitted !== true) progress = copy(e.progressNotice);
+							}
 							if (e.quietSteer?.since === since) {
 								send = e.quietSteer.seq;
-								if (e.stuckNotice?.since === since) stuck = e.stuckNotice.sent === true ? undefined : copy(e.stuckNotice);
-								else if (e.background && (await unread(tx, send))) {
+								if (command === undefined && e.stuckNotice?.since === since) stuck = e.stuckNotice.sent === true ? undefined : copy(e.stuckNotice);
+								else if (command === undefined && e.background && (await unread(tx, send))) {
 									const stuckDue = Date.parse(e.quietSteer.at ?? iso(due)) + grace;
 									if (runtime.now() >= stuckDue) stuck = "due";
 									else next = Math.min(quiet, stuckDue - runtime.now());
@@ -440,20 +455,26 @@ function reporterTask(options: DelegationOptions) {
 						await holdFn("cadence:after-mark", runtime.signal);
 						await child.submit({ type: "input", content: UPDATE_REQUEST, whenBusy: "steer", requestId: `steer:${id}:${String(send)}` }, c);
 					}
+					if (progress !== undefined) {
+						await holdFn("progress:after-mark", runtime.signal);
+						await deliverStuck(progress);
+					}
 					if (stuck === "due") stuck = await markStuck(send!);
 					if (stuck !== undefined) {
 						await holdFn("stuck:after-mark", runtime.signal);
 						await deliverStuck(stuck);
 					}
-					if (next !== undefined && !cadenceStopped) cadence = setTimeout(() => void tick().catch(() => {}), next).unref();
+					if (next !== undefined && !cadenceStopped) cadence = setTimeout(() => void tick().catch(() => {}), Math.min(next, 500)).unref();
 				};
 				/** Compose the notice from the child's open tool call, then record it if the steer is still unread. */
 				const markStuck = async (seq: number): Promise<Execution["stuckNotice"]> => {
+					const managed = await childCommand(runtime, conversation, c);
 					const on = await stuckOn(runtime, conversation, c);
+					if (on.data.managed === true) return undefined;
 					let marked: Execution["stuckNotice"];
 					await runtime.commit(async (tx) => {
 						const e = (await tx.doc(DelegationDoc, await homeIn(tx, origin, id))).executions[id];
-						if (e === undefined || !(await stuckEligible(tx, e, seq))) return undefined;
+						if (e === undefined || !(await stuckEligible(tx, e, seq, managed !== undefined))) return undefined;
 						const since = e.reportedAt ?? e.launchedAt;
 						if (e.stuckNotice?.since === since) {
 							marked = copy(e.stuckNotice);
@@ -471,7 +492,7 @@ function reporterTask(options: DelegationOptions) {
 					return marked;
 				};
 				/** To the lead as a completion wake goes: behind an active compact_and_continue, else a steer. */
-				const deliverStuck = async (notice: NonNullable<Execution["stuckNotice"]>) => {
+				const deliverStuck = async (notice: NonNullable<Execution["stuckNotice"] | Execution["progressNotice"]>) => {
 					let held = false;
 					for (;;) {
 						const active = (await runtime.snapshot(CheckpointDoc, (await located(runtime, origin, id, c)).home, c))?.active;
@@ -479,23 +500,30 @@ function reporterTask(options: DelegationOptions) {
 						held = true;
 						await runtime.waitForTask(active.task as TaskId, c);
 					}
-					// Revalidated and admitted in one commit, on the branch the record is on (navigation commits are ordered against
-					// it): a notice marked before a cancellation, a report or the child's read is dropped. An older record without
-					// `sent` that went out did so to the launching conversation.
-					const requestId = `stuck:${id}:${String(notice.seq)}`;
+					// Admission and its mark commit together on the current branch, ordered against navigation.
+					const requestId = `stuck:${id}:${"jobId" in notice ? `command:${notice.jobId}` : String(notice.seq)}`;
 					for (let moved = true; moved;) {
 						const home = (await located(runtime, origin, id, c)).home;
 						const lead = (await runtime.conversation(home, c))!;
+						const managed = await childCommand(runtime, conversation, c);
 						moved = false;
 						await runtime.commit(async (tx) => {
 							if ((await homeIn(tx, origin, id)) !== home) return void (moved = true);
 							const e = (await tx.doc(DelegationDoc, home)).executions[id];
-							if (e?.stuckNotice?.since !== notice.since || e.stuckNotice.sent === true) return undefined;
-							if ((await tx.submissionByRequest(origin, requestId)) === undefined) {
-								if (!(await stuckEligible(tx, e, notice.seq))) return undefined;
+							if ("jobId" in notice) {
+								if (e?.outcome !== "running" || e.cancelEpoch !== undefined || e.progressNotice?.jobId !== notice.jobId || e.progressNotice.admitted === true
+									|| managed?.id !== notice.jobId || notice.data.lastOutputAt !== iso(managed.lastOutputAt) || runtime.now() - managed.lastOutputAt < commandQuietMs()) return undefined;
 								await lead.submit(tx, { type: "input", content: notice.text, whenBusy: held ? "followUp" : "steer", requestId, entry: { kind: STUCK_ENTRY, data: notice.data } });
+								e.progressNotice.admitted = true;
+							} else {
+								if (e?.stuckNotice?.since !== notice.since || e.stuckNotice.sent === true) return undefined;
+								// An unmarked notice in an older store may already have reached the launching branch.
+								if ((await tx.submissionByRequest(origin, requestId)) === undefined) {
+									if (!(await stuckEligible(tx, e, notice.seq, managed !== undefined))) return undefined;
+									await lead.submit(tx, { type: "input", content: notice.text, whenBusy: held ? "followUp" : "steer", requestId, entry: { kind: STUCK_ENTRY, data: notice.data } });
+								}
+								e.stuckNotice.sent = true;
 							}
-							e.stuckNotice.sent = true;
 							return undefined;
 						}, c);
 					}
@@ -539,6 +567,7 @@ function reporterTask(options: DelegationOptions) {
 						: done ? "success" : settled.reason === "aborted" ? "cancelled" : "execution_failed";
 					const diagnostic = lateEnd !== undefined ? `child run after its assignment ended ${lateEnd.stopReason}${lateEnd.errorMessage === undefined ? "" : `: ${sanitize(lateEnd.errorMessage)}`}`
 						: settled.status === "unanswered" ? `child input ended unanswered (${settled.reason})` : "child failed";
+					const cleaned = await stopChildCommands(runtime, conversation, c);
 					const endedAt = iso(runtime.now());
 					let pending = false;
 					await runtime.commit(async (tx) => {
@@ -551,12 +580,13 @@ function reporterTask(options: DelegationOptions) {
 								pending = true;
 								return undefined;
 							}
-							e.outcome = outcome;
+							e.outcome = cleaned ? outcome : "execution_failed";
+							if (!cleaned) e.diagnostic = "Owned command cleanup could not be confirmed; not a clean completion";
 							e.endedAt = endedAt;
 							e.length = answer.length;
 							e.text = answer.slice(0, RESULT_MAX);
 							if (answer.length > RESULT_MAX) e.truncated = true;
-							if (outcome !== "success") e.diagnostic = diagnostic;
+							if (cleaned && outcome !== "success") e.diagnostic = diagnostic;
 							if (e.workerId !== undefined) settleWorker(await tx.doc(WorkersDoc), e);
 						}
 						return { status: "running", checkpoint: { phase: "wake", deliver: e.background && !cancelled && !e.collected } };
@@ -692,6 +722,9 @@ async function stuckOn(runtime: ContextReader, conversation: ConversationId, c: 
 	const at = last?.timestamp === undefined ? undefined : iso(last.timestamp);
 	let text = `${call.name ?? "a tool"} \`${preview}\`${at === undefined ? "" : ` since ${at}`}`;
 	const data: JsonObject = { tool: call.name ?? "", preview, ...(at === undefined ? {} : { since: at }) };
+	// The runner may have just settled while bash is still committing its result. That is still the same
+	// managed call, not a second reason to alarm; an interrupted old native call has no managed ref.
+	if (call.name === "bash" && Object.values((await runtime.snapshot(BashJobsDoc, conversation, c))?.jobs ?? {}).some((ref) => ref.callId === call.id)) data.managed = true;
 	if (call.name === "subagent") {
 		const leaf = Object.values((await runtime.snapshot(DelegationDoc, conversation, c))?.executions ?? {}).find((l) => l.outcome === "running" && !l.background);
 		if (leaf !== undefined) {
@@ -779,14 +812,15 @@ export async function cancelExecution(harness: Harness, parent: ConversationId, 
 	const timer = setTimeout(cancel, CANCEL_TIMEOUT_MS);
 	const confirmed = await harness.waitForTask(e.anchor as TaskId, waiting).then(() => true, () => false);
 	clearTimeout(timer);
-	const outcome: Outcome = confirmed ? "cancelled" : "outcome_unknown";
+	const cleaned = await stopChildCommands(harness, e.conversationId as ConversationId, BACKGROUND);
+	const outcome: Outcome = confirmed && cleaned ? "cancelled" : "outcome_unknown";
 	await conversation.commit(async (tx) => {
 		const doc = await tx.doc(DelegationDoc, parent);
 		const current = doc.executions[executionId]!;
 		if (current.outcome !== "running") return;
 		current.outcome = outcome;
 		current.endedAt = new Date().toISOString();
-		current.diagnostic = confirmed ? sanitize(reason) : `termination was not confirmed within ${String(CANCEL_TIMEOUT_MS / 1000)}s: ${sanitize(reason)}`;
+		current.diagnostic = confirmed && cleaned ? sanitize(reason) : `termination was not confirmed within ${String(CANCEL_TIMEOUT_MS / 1000)}s: ${sanitize(reason)}`;
 		if (current.workerId !== undefined) settleWorker(await tx.doc(WorkersDoc), current);
 	}, BACKGROUND);
 	if (e.workerId !== undefined) leadStatusWrite(workerStatusFile(e.workerId), "failed", `Dispatch ended: ${outcome}`);
@@ -1054,7 +1088,7 @@ export function delegationExtension(options: DelegationOptions) {
 
 	const reportStatus = defineTool({
 		name: "report_status",
-		description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; after each wait (at most 55 min) send one with your next tool call.",
+		description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; after each wait (at most 15 min) send one with your next tool call.",
 		parameters: obj({
 			status: str({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
 			state: opt(StringEnum(STATUS_STATES as unknown as [string, ...string[]], { description: "Your state for the lead's Cockpit tab; omit to keep the previous one (starts as working)" })),

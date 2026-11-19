@@ -81,6 +81,33 @@ labels `com.pi-web-durable.*`, with `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_
 build's own Durable host. It writes its own plists and never changes `~/.pi/agent`, the legacy links,
 plists, data or builds; the legacy prune never sees its builds.
 
+### Durable child command restart exception
+
+Durable Subagents and Workers run **blocking** `bash` tools through the managed runner. This is a
+bounded exception for one admitted command, not unattended work between dispatches. Legacy
+children retain native bash; an interrupted old native call still requires uncertain-effect reconciliation.
+
+- **Deadline:** 20 minutes by default; a positive finite per-call `timeout` override is accepted up to
+  the platform timer limit (2,147,483.647 seconds). Start and expiry commit before launch. Restore
+  stays paused until resumed, reattaches the same claimed job, never replays possible writes, and
+  never renews expiry. An expired unlaunched intent cannot start writes.
+- **Progress notice:** after 10 minutes without captured output, the existing child-stuck channel
+  delivers one redacted, command-scoped “no observed progress” notice, deduplicated across restart
+  and revalidated before admission. A Worker's foreground leaf is also observed by its lead; the
+  notice need not wait for the blocked Worker. An optional `progressLog` explicitly names redirected
+  output; the host never guesses log paths. Silence neither cancels nor extends the command.
+- **Other limits:** `wait-until` observes independently owned work, capped at 15 minutes (tests may
+  shorten it). The separate 30-minute quiet-report request plus 10-minute unread-request alarm still
+  covers non-command waits, but never adds a second alarm for that managed command.
+- **Cleanup:** timeout, cancellation, explicit Chat end, settlement and early shell exit require
+  owned-process cleanup: TERM, a 1-second grace, then KILL and a bounded check. Results and child
+  settlement cannot claim clean completion when cleanup is unconfirmed. Temporary servers share
+  the command lifetime; persistent servers need an explicit lead/Monitor owner. Run the actual
+  work in `bash`, never `cmd &`.
+
+Local ownership is trusted-process supervision, not a sandbox against a daemon deliberately
+clearing its inherited marker and escaping the process group. Remote work needs remote deadlines.
+
 ## Skill Capability and Interface Layer
 
 Skills are self-contained agent capabilities with concise instructions and bundled scripts, references, and assets. The harness gives skills common ways to expose progress, decisions, artifacts, inputs, outputs, and relevant actions; each skill does not need a separate application.

@@ -10,19 +10,25 @@
 // Completions are delivered by a host-side reporter, not a Durable task, so a reopened idle Chat delivers them at once
 // while a restore with interrupted work stays paused until the user resumes it (owner decision 2).
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
+import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Context } from "@earendil-works/chord/context";
 import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
+import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { AgentDoc, type Conversation, type ConversationId, defineExtension, defineTool, type DocumentReader, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { defineDoc } from "./store-schema.ts";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail } from "../../../extensions/background-bash/jobs.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
+import { ChildDoc, DelegationDoc } from "./delegation.ts";
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
-import { redact, sanitizeDeep } from "./redact.ts";
+import { completePrefix, redact, sanitizeDeep, sealed } from "./redact.ts";
+
+export const CHILD_BASH_TIMEOUT_S = 1200;
+export const COMMAND_QUIET_MS = 10 * 60_000;
+export const commandQuietMs = () => Number(process.env.PILOT_COMMAND_QUIET_MS) || COMMAND_QUIET_MS;
 
 export const FOREGROUND_WAIT_MS = 30_000;
 const MAX_ACTIVE = 8;
@@ -38,7 +44,7 @@ export function crashPoint(name: string): void {
  * A job this conversation launched: its tool task and call, whether it runs in the background, and its delivery receipt.
  * `callId` is absent on refs committed before it was recorded.
  */
-type JobRef = { taskId: string; callId?: string; startedAt: number; background: boolean; delivery?: "foreground" | "completion"; admitted?: boolean };
+type JobRef = { taskId: string; callId?: string; startedAt: number; expiresAt?: number; timeout?: number; background: boolean; delivery?: "foreground" | "completion"; admitted?: boolean };
 /**
  * A fork starts without the source's jobs, as a new legacy session does.
  * ponytail: refs are never pruned (the registry prunes week-old jobs); drop settled, admitted refs if Chats grow huge.
@@ -54,11 +60,12 @@ export const BashJobsDoc = defineDoc<{ jobs: Record<string, JobRef> }>({
 });
 
 /** A job as the registry (jobs.mjs `readJob`) reports it. */
-type Job = {
+export type Job = {
 	id: string; command: string; description?: string; startedAt: number; logPath: string; dir: string; bytes: number;
-	state: "pending" | "running" | "complete" | "failed" | "cancelled"; pid?: number; exitCode?: number; error?: string; finishedAt?: number;
+	executionId?: string;
+	state: "pending" | "running" | "complete" | "failed" | "cancelled"; pid?: number; exitCode?: number; error?: string; finishedAt?: number; expiresAt: number; lastOutputAt: number; owned?: boolean; cleanup?: { survivors: number[]; error?: string };
 };
-const readJob = (root: string, id: string) => readRecord(root, id) as Job | undefined;
+export const readJob = (root: string, id: string) => readRecord(root, id) as Job | undefined;
 const cancelJob = (root: string, id: string) => cancelRecord(root, id) as Job | undefined;
 const settled = (job: Job | undefined) => job !== undefined && job.state !== "running" && job.state !== "pending";
 
@@ -81,6 +88,28 @@ function readFrom(path: string, offset: number, limit: number): Buffer {
 	} finally {
 		closeSync(fd);
 	}
+}
+
+/** Preserve native bash's complete-output file without exposing the runner's raw log to programmatic callers. */
+async function spillOutput(job: Job): Promise<string> {
+	// ponytail: reread only truncated, settled logs; tee sanitized output if large-output I/O becomes costly.
+	const path = join(job.dir, "output.sanitized.log");
+	const fd = openSync(path, "w", 0o600);
+	const decoder = new StringDecoder("utf8");
+	const sanitize = sealed(redact);
+	let pending = "";
+	try {
+		for await (const chunk of createReadStream(job.logPath)) {
+			pending += cleanOutput(decoder.write(chunk as Buffer));
+			const ready = completePrefix(pending);
+			pending = pending.slice(ready.length);
+			writeFileSync(fd, sanitize(ready));
+		}
+		writeFileSync(fd, sanitize(pending + cleanOutput(decoder.end())));
+	} finally {
+		closeSync(fd);
+	}
+	return path;
 }
 
 function sleep(ms: number, c: Context): Promise<void> {
@@ -126,16 +155,20 @@ export class BackgroundBash {
 		this.#root = options.root ?? defaultRoot();
 	}
 
-	extension() {
+	extension(child = false) {
+		const native = createBashTool();
 		const bash = defineTool({
+			...(child ? { structuredOutputSchema: native.structuredOutputSchema, outputLimits: native.outputLimits } : {}),
 			name: "bash",
-			description:
-				"Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait up to 30 seconds for the output; a command still running then continues in the background and delivers its completion like any job. Background jobs survive host restarts; they stop at their timeout or a 12-hour maximum lifetime.\n\nRun long checks and builds in the background. Continue independent work, then wait for their completion message before dependent actions; never infer success from a job ID. Use foreground=true for short commands whose output is needed now. If it returns a job ID instead, the command is still running: continue independent work or end the turn. Do not launch conflicting writes while a background command is running. Use bash_status for elapsed time and output bytes; use bash_cancel to stop a job. A completed job reports its exit status and bounded output in a new message; do not claim success from its initial job ID.",
+			description: child
+				? `Execute a bash command and wait for combined stdout/stderr and its exit status. Retains the native bash output tail and structured result; complete sanitized output is saved when truncated. Without a timeout the command times out after ${CHILD_BASH_TIMEOUT_S} seconds (20 minutes); a finite positive override is allowed. Output never extends the absolute deadline. Run the actual work here, never with cmd & or nohup. Owned descendants, including detached browsers, are stopped before the command completes. Temporary servers share this lifetime; persistent servers need an explicit lead/Monitor owner. wait-until only observes independently owned work and is capped at 15 minutes. After 10 minutes without captured output the lead gets one no observed progress notice, not a deadlock diagnosis. Use progressLog to explicitly observe a redirected log; silence alone never kills the command.`
+				: "Run a bash command in an attended Pi session. Background by default: return a job ID immediately, keep elapsed time and output size visible in Activity, and deliver exit status and output when done. Set foreground=true to wait up to 30 seconds for the output; a command still running then continues in the background and delivers its completion like any job. Background jobs survive host restarts; they stop at their timeout or a 12-hour maximum lifetime.\n\nRun long checks and builds in the background. Continue independent work, then wait for their completion message before dependent actions; never infer success from a job ID. Use foreground=true for short commands whose output is needed now. If it returns a job ID instead, the command is still running: continue independent work or end the turn. Do not launch conflicting writes while a background command is running. Use bash_status for elapsed time and output bytes; use bash_cancel to stop a job. A completed job reports its exit status and bounded output in a new message; do not claim success from its initial job ID.",
 			parameters: obj({
-				description: str({ description: "Short description of what this command does, 3-10 words, in plain words (e.g. 'Check installed app build date'). Shown to the user instead of the command." }),
+				description: child ? opt(str({ description: "Short description of the command" })) : str({ description: "Short description of what this command does, 3-10 words, in plain words (e.g. 'Check installed app build date'). Shown to the user instead of the command." }),
 				command: str({ description: "Shell command to execute" }),
-				timeout: opt(num({ description: "Timeout in seconds (optional; background jobs otherwise stop after 12 hours)" })),
-				foreground: opt(bool({ description: "Wait up to 30 seconds for output and exit status, then continue in the background; default false" })),
+				timeout: opt(num({ description: child ? "Finite positive timeout in seconds (optional, default 1200)" : "Timeout in seconds (optional; background jobs otherwise stop after 12 hours)" })),
+				...(child ? { progressLog: opt(str({ description: "Explicit redirected output log to observe for progress (relative to cwd or absolute)" })) } : {}),
+				...(!child ? { foreground: opt(bool({ description: "Wait up to 30 seconds for output and exit status, then continue in the background; default false" })) } : {}),
 			}, { open: true }),
 			// The job ID and the runner's claim make a rerun reattach to the job it launched, never launch another.
 			replay: "safe",
@@ -149,26 +182,32 @@ export class BackgroundBash {
 				if (ref === undefined) {
 					if (args.command.trim() === "") throw new Error("A non-empty bash command is required");
 					if (args.timeout !== undefined && (!Number.isFinite(args.timeout) || args.timeout <= 0 || args.timeout * 1000 > 2_147_483_647)) throw new Error("Invalid timeout in seconds");
+					if (lead && args.description === undefined) throw new Error("A short description is required");
 					if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
 					const owned = Object.keys((await api.snapshot(BashJobsDoc, api.conversationId, c))?.jobs ?? {});
 					if (owned.filter((other) => !settled(readJob(this.#root, other))).length >= MAX_ACTIVE)
 						throw new Error("Too many background bash jobs; wait or cancel one before starting another");
 					const startedAt = api.now();
+					const timeout = args.timeout ?? (lead ? undefined : Number(process.env.PILOT_CHILD_BASH_TIMEOUT_S) || CHILD_BASH_TIMEOUT_S);
+					if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0 || timeout * 1000 > 2_147_483_647)) throw new Error("Invalid timeout in seconds");
+					const expiresAt = startedAt + (timeout ?? 43_200) * 1000;
 					ref = await api.commit(async (tx) => {
 						const doc = await tx.doc(BashJobsDoc, api.conversationId);
-						doc.jobs[id] ??= { taskId: String(api.taskId), callId: api.callId, startedAt, background: !foreground };
+						doc.jobs[id] ??= { taskId: String(api.taskId), callId: api.callId, startedAt, expiresAt, ...(timeout === undefined ? {} : { timeout }), background: !foreground };
 						return { ...doc.jobs[id]! };
 					}, c);
 				}
 				crashPoint("bash.intent");
 				const { shell, args: shellArgs } = getShellConfig();
-				const identity = { chatId: this.#options.chatId, conversationId: api.conversationId, rootId: this.#options.rootId(), cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
+				const child = await api.snapshot(ChildDoc, api.conversationId, c);
+				const kind = child?.kind;
+				const identity = { ...(kind === undefined || kind === "lead" ? {} : { executionKind: kind }), chatId: this.#options.chatId, conversationId: api.conversationId, rootId: this.#options.rootId(), cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }) };
 				// Decided and launched in one synchronous step: after `cancelAll` no runner starts (the job is recorded cancelled);
 				// a launch before it is in the registry, where its sweep cancels it.
 				launchJob({
-					root: this.#root, id, command: args.command, description: args.description, cwd, timeout: args.timeout,
+					root: this.#root, id, command: args.command, description: args.description, cwd, timeout: ref.timeout ?? args.timeout, expiresAt: ref.expiresAt ?? NaN, owned: !lead, ownerExecutionId: child?.executionId ?? "", progressLog: typeof args.progressLog === "string" ? args.progressLog : "",
 					env: { ...process.env, ...toolEnv(identity) }, sessionId: this.#options.chatId, shell, args: shellArgs, startedAt: ref.startedAt,
-					cancelled: this.#ending,
+					cancelled: this.#ending || (!this.#closing && c.abortSignal?.aborted === true),
 				});
 				crashPoint("bash.spawned");
 				const logPath = readJob(this.#root, id)!.logPath;
@@ -203,7 +242,7 @@ export class BackgroundBash {
 				return { output: text(`Cancellation requested for ${args.id} (state=${job.state}).`), details: describeJob(job) };
 			},
 		});
-		return defineExtension({ name: "workbench.background-bash", tools: [bash, status, cancel].map((tool) => warningTool(tool)) });
+		return defineExtension({ name: child ? "workbench.native-bash" : "workbench.background-bash", tools: (child ? [bash] : [bash, status, cancel]).map((tool) => warningTool(tool)) });
 	}
 
 	/**
@@ -244,6 +283,17 @@ export class BackgroundBash {
 				if (outcome === "delivered") return { output: text(`Background bash ${id} ${job.state}; its completion was delivered as a message.`), details };
 				if (outcome === "background")
 					return { output: text(`Still running after 30s; continued as background bash ${id}. Continue independent work or end the turn; completion arrives automatically. Output log: ${job.logPath}`), details };
+				if (job.owned) {
+					api.output(cleanOutput(decoder.end()));
+					const retained = api.retainedOutput();
+					const fullOutputPath = retained.truncated ? await spillOutput(job) : undefined;
+					if (fullOutputPath !== undefined) api.diagnostic({ severity: "info", code: "full_output", message: `Full output: ${fullOutputPath}` });
+					if (job.state === "cancelled") throw new Error("Command aborted");
+					if (job.error !== undefined) throw new Error(cleanOutput(job.error));
+					const exitCode = job.exitCode ?? -1;
+					const structuredOutput = { output: retained.text, truncated: retained.truncated, ...(fullOutputPath === undefined ? {} : { fullOutputPath }), exitCode };
+					return { structuredOutput, details, ...(exitCode === 0 ? {} : { isError: true, diagnostics: [{ severity: "error" as const, code: "exit_code", message: `Command exited with code ${exitCode}` }] }) };
+				}
 				const truncated = job.bytes > MAX_TAIL;
 				const out = `${truncated ? `[showing recent output only; full output: ${job.logPath}]\n` : ""}${cleanOutput(readTail(job.logPath, job.bytes)) || "(no output)"}`;
 				// As the legacy tool: a failure is an error result that still carries the output.
@@ -279,7 +329,8 @@ export class BackgroundBash {
 	 * each runner's process group is killed. Their completions are delivered, as context, when the Chat reopens.
 	 * shortcut: scans the whole registry (pruned weekly); keep a per-Chat index if it grows large.
 	 */
-	cancelAll(): void {
+	async cancelAll(): Promise<void> {
+		const owned: string[] = [];
 		this.#ending = true;
 		for (const id of existsSync(this.#root) ? readdirSync(this.#root) : []) {
 			let sessionId: unknown;
@@ -288,8 +339,13 @@ export class BackgroundBash {
 			} catch {
 				continue;
 			}
-			if (sessionId === this.#options.chatId) cancelJob(this.#root, id);
+			if (sessionId === this.#options.chatId) {
+				const job = cancelJob(this.#root, id);
+				if (job?.owned) owned.push(id);
+			}
 		}
+		if (!(await Promise.all(owned.map((id) => waitForCleanup(this.#root, id)))).every(Boolean))
+			throw new Error("Owned command cleanup could not be confirmed; the Chat has not ended cleanly");
 	}
 
 	/** Before the harness closes: stop reporting; a running foreground wait ends without cancelling its job. */
@@ -373,4 +429,31 @@ export class BackgroundBash {
 		}, context);
 		this.#hooks.changed();
 	}
+}
+
+/** Command holding this child, including a Worker's foreground leaf: notify its lead, not only the blocked Worker. */
+export async function childCommand(reader: DocumentReader, conversation: ConversationId, c: Context): Promise<Job | undefined> {
+	const leaves = Object.values((await reader.snapshot(DelegationDoc, conversation, c))?.executions ?? {})
+		.filter((e) => !e.background && e.outcome === "running" && e.cancelEpoch === undefined);
+	for (const target of [conversation, ...leaves.map((e) => e.conversationId as ConversationId)]) {
+		const refs = (await reader.snapshot(BashJobsDoc, target, c))?.jobs ?? {};
+		const job = Object.keys(refs).map((id) => readJob(defaultRoot(), id)).find((job) => job?.owned && !settled(job));
+		if (job !== undefined) return { ...job, executionId: (await reader.snapshot(ChildDoc, target, c))?.executionId };
+	}
+	return undefined;
+}
+
+async function waitForCleanup(root: string, id: string): Promise<boolean> {
+	const end = Date.now() + 10_000;
+	while (!settled(readJob(root, id)) && Date.now() < end) await sleep(50, {} as Context);
+	const job = readJob(root, id);
+	return settled(job) && job?.cleanup !== undefined && job.cleanup.survivors.length === 0 && job.cleanup.error === undefined;
+}
+
+/** Cancellation/settlement is not confirmed until the runner recorded its owned-process cleanup. */
+export async function stopChildCommands(reader: DocumentReader, conversation: ConversationId, c: Context): Promise<boolean> {
+	const refs = (await reader.snapshot(BashJobsDoc, conversation, c))?.jobs ?? {};
+	const ids = Object.keys(refs).filter((id) => readJob(defaultRoot(), id)?.owned);
+	for (const id of ids) cancelJob(defaultRoot(), id);
+	return (await Promise.all(ids.map((id) => waitForCleanup(defaultRoot(), id)))).every(Boolean);
 }
