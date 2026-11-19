@@ -930,11 +930,12 @@ export function delegationExtension(options: DelegationOptions) {
 				let workerId: string | undefined;
 				const update = await api.commit(async (tx) => {
 					const doc = await tx.doc(DelegationDoc, parent);
+					const e = doc.executions[self.executionId];
+					// Read before the replay return: a host killed after this commit still rewrites the status file on replay.
+					workerId = e?.workerId;
 					const prior = doc.updateByTask[key];
 					if (prior !== undefined) return copy(prior);
-					const e = doc.executions[self.executionId];
 					if (e === undefined) return undefined;
-					workerId = e.workerId;
 					e.reportedStatus = status;
 					e.reportedAt = iso(api.now());
 					// Only a report from a call made after the steer that asked for it wakes the lead, once.
@@ -944,6 +945,7 @@ export function delegationExtension(options: DelegationOptions) {
 					doc.updateByTask[key] = pending;
 					return copy(pending);
 				}, c);
+				await holdFn("report:after-commit", c.abortSignal);
 				// A dispatched Worker's report also rewrites its status file (legacy PI_WORKBENCH_STATUS_FILE); leaves have none.
 				if (workerId !== undefined) {
 					try {

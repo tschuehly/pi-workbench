@@ -903,6 +903,34 @@ test("kill row collection: killed after collection committed, the rerun returns 
 	await host.close();
 });
 
+test("kill row report: killed after a Worker's needs-you report committed, the replay still writes its status file", async () => {
+	const { store, cwd } = family("kill-report");
+	let host = open(store, cwd, { PI_DURABLE_HOLD: "report:after-commit" });
+	await host.ready;
+	await prompt(host, call("tools_enable", { group: "workers" }));
+	await quiet(host);
+	await prompt(host, call("worker_create", { name: "Asker", scope: "the parser", profile: "coordinator" }));
+	const workerId = /Created worker (\S+)/.exec(await toolResult(host, "worker_create"))![1]!;
+	await quiet(host);
+	await prompt(host, call("worker_dispatch", { workerId, task: 'call:bash {"command":"sleep 3"}', cognitiveRole: "coordination", background: true }));
+	const id = launchedId(await toolResult(host, "worker_dispatch"));
+	await quiet(host);
+	await waitFor(() => logged(store).some((l) => l.label.startsWith("call:bash")), "the Worker's request");
+	await prompt(host, call("subagent_steer", { executionId: id, message: call("report_status", { status: "Need owner decision", state: "needs-you" }), requestUpdate: true }));
+	await host.until((e) => e.type === "test.hold" && e.name === "report:after-commit", "the barrier");
+	await host.kill();
+	host = open(store, cwd);
+	await host.ready;
+	// Any input resumes a paused restore.
+	await prompt(host, "resume");
+	await host.until((e) => e.type === "message.end" && (e.message as Message).customType === "pi-workbench:child-update", "the update");
+	const statusFile = JSON.parse(readFileSync(join(process.env.HOME!, ".pi-workbench", "workers", "status", `${workerId}.json`), "utf8")) as { state: string; log: { text: string }[] };
+	assert.equal(statusFile.state, "needs-you", "the replayed report rewrote the status file");
+	assert.ok(statusFile.log.some((l) => l.text === "Need owner decision"), "the report is in the log");
+	await quiet(host);
+	await host.close();
+});
+
 test("kill row cancellation: a cancelled child's held reporter cannot revive it after reopen", async () => {
 	const { store, cwd } = family("kill-cancel");
 	let host = open(store, cwd, { PI_DURABLE_HOLD: "child:after-result" });
