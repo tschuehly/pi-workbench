@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import type { ConversationId, EntryRecord } from "@earendil-works/pi-durable";
+import { type ConversationId, type EntryRecord, InboxDoc } from "@earendil-works/pi-durable";
 import { openChatHost } from "../src/chat.ts";
 import { ChildDoc, DelegationDoc, type Execution, setDelegationHold, WorkersDoc } from "../src/delegation.ts";
 import { BranchesDoc, context } from "../src/host.ts";
@@ -1643,6 +1643,54 @@ test("rollback: delegation documents this code writes keep updateByTask, which t
 			assert.doesNotThrow(() => legacyRead(doc));
 		}
 	} finally {
+		await session.close();
+		await h.close();
+	}
+});
+
+test("navigation: a completion notice Stop withdraws while navigation commits leaves no unread result on the branch left behind; it reaches the new branch", async () => {
+	const { store, cwd } = family("nav-withdrawn");
+	writeFileSync(QUOTA, JSON.stringify({ version: 1, checkedAt: Date.now(), status: 0, stdout: JSON.stringify({ providers: [] }), stderr: "" }));
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT, scriptedProviders: true });
+	const { ChatSession } = await import("../src/chat-session.ts");
+	const session = new ChatSession(h, () => {});
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	let held = 0;
+	// The reporter's cleanup after its notice settles, held.
+	setDelegationHold(async (name) => {
+		if (name !== "child:after-delivery") return;
+		held += 1;
+		await gate;
+	});
+	await session.start();
+	try {
+		for (const text of ["first", "second"]) await (await h.root.submit({ type: "input", content: text, requestId: text }, context)).wait(context);
+		const root = h.root.id;
+		await (await h.root.submit({ type: "input", content: call("subagent", scout(call("bash", { command: "sleep 2" }), { name: "Soon" })), requestId: "launch" }, context)).wait(context);
+		// The lead is busy when the child finishes, so its notice queues.
+		const busy = await h.root.submit({ type: "input", content: call("bash", { command: "sleep 8", description: "busy", foreground: true }), requestId: "busy" }, context);
+		await eventually(async () => held > 0, "the queued notice, its reporter held");
+		const [{ executionId: id }] = (await executions(h)) as [Execution];
+		assert.equal((await h.harness.snapshot(InboxDoc, root, context))?.items.length, 1, "the notice is queued");
+		await session.abort();
+		await busy.wait(context);
+		await eventually(async () => (await h.root.commit((tx) => tx.submissionByRequest(root, "wake:1"), context))?.status === "unanswered", "the notice withdrawn");
+		// Navigation commits after its check passed, before the reporter's cleanup.
+		const { commitNavigation, planNavigation } = await import("../src/tree.ts");
+		const now = (await session.tree()) as HistoryTree;
+		const branch = (await commitNavigation(h.harness, h.root, await planNavigation(h.harness, h.root, { targetId: treeNode(now, "assistant", "ok: first").id, expectedLeafId: now.activeLeafId }))).id;
+		release();
+		const notices = async (conversation: number) => (await entries(h, conversation)).filter((entry) => entry.kind === "workbench.child-completion" && (entry.data as { delivered: string[] }).delivered.includes(id));
+		await eventually(async () => (await notices(branch)).length > 0, "the result's notice on the new branch");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		const left = (await h.harness.snapshot(DelegationDoc, root, context))!.executions[id];
+		assert.ok(left === undefined || left.collected, `nothing unread left behind: ${JSON.stringify(left)}`);
+		assert.equal((await notices(branch)).length, 1, "one notice on the new branch");
+		assert.equal((await h.harness.snapshot(DelegationDoc, branch, context))!.executions[id]!.collected, true);
+	} finally {
+		release();
+		setDelegationHold(async () => {});
 		await session.close();
 		await h.close();
 	}

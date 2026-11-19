@@ -57,6 +57,7 @@ import {
 import { CUSTOM_TYPE as COMPLETION_CUSTOM_TYPE, composeNotice } from "../../../extensions/subagent/completion-wakeup.mjs";
 import { leadStatusWrite, STATUS_STATES, workerStatusFile, writeStatusFile } from "../../../extensions/subagent/status-file.mjs";
 import { batchSize, CheckpointDoc, continuationRequestId } from "./checkpoint.ts";
+import { BranchesDoc } from "./host.ts";
 import { redact, sanitizeDeep, sealed } from "./redact.ts";
 
 /** A completion wake as placed in the lead's transcript (legacy custom message `pi-workbench:child-completion`). */
@@ -307,18 +308,31 @@ export async function navigationCarries(reader: DocumentReader, lead: Conversati
  */
 export async function carryChildren(tx: Tx, from: ConversationId, to: ConversationId, busy: string): Promise<void> {
 	if ((await tx.doc(LiveDoc, from)).run !== undefined || (await tx.doc(InboxDoc, from)).items.length > 0) throw new Error(busy);
+	const moving: string[] = [];
+	for (const [id, e] of Object.entries((await tx.doc(DelegationDoc, from)).executions)) {
+		if (carried(e)) moving.push(id);
+		else if (e.outcome === "running") throw new Error(busy);
+	}
+	// A result a settled notice named for collection: the reporter that would wake the lead for it has ended.
+	await moveRecords(tx, from, to, moving, (e) => e.outcome !== "running" && e.notice !== undefined);
+}
+
+/**
+ * Move records from `from` to `to`, dropping the notice `from` had for them, and point their launching conversations at
+ * `to`. Each `rewake` picks gets a durable wake in its launching conversation, as reporters run: the first composes `to`'s
+ * notice for every moved result without one, and one still uncollected after another was collected keeps its own. Each
+ * becomes its record's reporter, so navigation carries it and a cancellation reaches it.
+ */
+async function moveRecords(tx: Tx, from: ConversationId, to: ConversationId, ids: readonly string[], rewake: (e: Execution) => boolean): Promise<void> {
 	const source = await tx.doc(DelegationDoc, from);
 	const target = await tx.doc(DelegationDoc, to);
-	const rewake: { id: string; origin: ConversationId }[] = [];
-	for (const [id, e] of Object.entries(source.executions)) {
-		const moving = carried(e);
-		if (!moving && e.outcome === "running") throw new Error(busy);
-		if (!moving) continue;
+	const wakes: { id: string; origin: ConversationId }[] = [];
+	for (const id of ids) {
+		const e = source.executions[id]!;
 		const origin = (e.origin ?? from) as ConversationId;
+		if (rewake(e)) wakes.push({ id, origin });
 		const record = copy(e);
 		record.origin = origin;
-		// A result a settled notice named for collection: the reporter that would wake the lead for it has ended.
-		if (e.outcome !== "running" && e.notice !== undefined) rewake.push({ id, origin });
 		delete record.notice;
 		target.executions[id] = record;
 		delete source.executions[id];
@@ -327,11 +341,8 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 		if (origin === to) delete launcher.moved[id];
 		else launcher.moved[id] = to;
 	}
-	// A durable wake per such result, in the launching conversation as their reporters run: the first composes `to`'s
-	// notice for every moved result without one, and one still uncollected after another was collected keeps its own. Each
-	// becomes its record's reporter, so navigation carries it and a cancellation reaches it.
-	if (rewake.length > 0 && reporterDefinition === undefined) throw new Error("No delegation extension is loaded to deliver the carried results' notice");
-	for (const { id, origin } of rewake)
+	if (wakes.length > 0 && reporterDefinition === undefined) throw new Error("No delegation extension is loaded to deliver the carried results' notice");
+	for (const { id, origin } of wakes)
 		target.executions[id]!.reporter = await tx.createTask(reporterDefinition!, { executionId: id, assignment: "", rewake: true }, { ownership: { kind: "conversation" as const }, background: true, conversationId: origin });
 }
 
@@ -620,12 +631,18 @@ function reporterTask(options: DelegationOptions) {
 				await runtime.commit(async (tx) => {
 					const doc = await tx.doc(DelegationDoc, home as ConversationId);
 					// Withdrawn before it was placed (Stop): the lead never read it, so its results wait for the next notice or a collect.
+					const unread: string[] = [];
 					if (settled.status === "unanswered" && settled.entry === undefined)
 						for (const e of Object.values(doc.executions)) {
 							if (e.notice?.seq !== seq) continue;
 							if (e.notice.carried) e.collected = false;
 							delete e.notice;
+							if (carried(e)) unread.push(e.executionId);
 						}
+					// A navigation that committed meanwhile left them behind as collected: they follow the Chat to its branch, woken there.
+					const active = (await tx.doc(BranchesDoc)).active;
+					if (unread.length > 0 && active !== null && active !== home && (await tx.doc(ChildDoc, home as ConversationId)).executionId === "")
+						await moveRecords(tx, home as ConversationId, active, unread, () => true);
 					return { status: "terminal", outcome: { status: "completed", result: null } };
 				}, c);
 			},
