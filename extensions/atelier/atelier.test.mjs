@@ -557,7 +557,7 @@ test("opened binds to the ask its tab showed; one without ask marks the id's cur
   } finally { host.stop(); p.done(); }
 });
 
-test("version history counts only answers to this ask: a delayed answer to a withdrawn one never shows (2.14.2)", () => {
+test("version history leaves out answers naming a withdrawn ask; answers without ask still count toward the current one (2.14.2)", () => {
   const q = (seq, question) => ({ seq, at: 0, origin: "agent", type: "ask", decision: { id: "x", key: "doc", material: "doc", question, options: [{ label: "Yes" }, { label: "No" }] } });
   const decide = (seq, option, ver, ask) => ({ seq, at: 0, origin: "human", type: "decide", decision: "x", option, key: "doc", ver, ask, delivery: "immediate" });
   const log = [q(1, "Publish?"), { seq: 2, at: 0, origin: "agent", type: "retract", decision: "x", reason: "r" }, q(3, "Delete?"), decide(4, "No", "v2", 3), decide(5, "Yes", "v1", 1)];
@@ -600,6 +600,15 @@ test("a second send waits until the first one's run has started", async () => {
     handlers.agent_start();
     assert.deepEqual(messages.map((m) => m.customType), ["atelier:immediate", "atelier:send"]);
   } finally { handlers.session_shutdown(); p.done(); }
+});
+
+test("a replacement posted before the undo of the answer it replaces: only the replacement counts and is delivered (2.14.2)", () => {
+  const q = { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "x", question: "Publish?", options: [{ label: "Yes" }, { label: "No" }] } };
+  const decide = (seq, option) => ({ seq, at: 0, origin: "human", type: "decide", decision: "x", option, ask: 1, delivery: "immediate" });
+  const log = [q, decide(2, "Yes"), decide(3, "No"), { seq: 4, at: 0, origin: "human", type: "undo", target: 2, delivery: "control" }];
+  assert.equal(derive(log).decisions[0].answer.option, "No");
+  assert.deepEqual(dueMessages(log, UNDO).map((m) => m.seqs), [[3]], "the undone Yes is never delivered");
+  assert.equal(derive(log.slice(0, 2)).decisions[0].answer.option, "Yes", "until the replacement is accepted, the answer is Yes");
 });
 
 test("dueMessages skips in-flight events and covers only drafts before the Send", () => {

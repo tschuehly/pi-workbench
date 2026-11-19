@@ -1288,9 +1288,71 @@ requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classLis
     assert.deepEqual([answer?.option, answer?.ask, answer?.images?.length], ["Yes", first.seq, 1], "the answer names the ask the click saw");
     assert.deepEqual(await js("atelier.state().decisions.find((x)=>x.id==='im').answer"), null, "the new question stays unanswered");
   });
+  // 2.14.2 review 4 R1: an answer names the material version its click saw, also when the material changes while its image uploads.
+  await fixCheck("2.14.2-review4-1-an-answer-with-an-image-keeps-its-version", async () => {
+    const vp = path.join(dir, "version-img.html");
+    await writeFile(vp, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Version image</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="p" atl-ver="v1" id="p">The draft.</div><script type="module" src="atelier.js"></script></body></html>`);
+    await openFresh(vp);
+    host.agent(vp, { type: "ask", decision: { id: "vi", key: "p", material: "p", question: "Publish draft?", options: [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }] } });
+    const card = '[data-id="d:vi"]';
+    await until(`!!document.querySelector('${card} [data-atl=decide][data-label="Yes"]')`);
+    await click(`${card} [data-atl=addnote]`);
+    await b("upload", `${card} .atl-file`, racePng);
+    await until(`document.querySelectorAll('${card} .atl-attached img').length===1`);
+    await js("(()=>{let release;window.__gate=new Promise((r)=>release=r);window.__release=release;window.__fetch??=window.fetch;window.fetch=async(u,o)=>{if(String(u).includes('/.atelier/image'))await window.__gate;return window.__fetch(u,o)};return true})()");
+    await click(`${card} [data-atl=decide][data-label="Yes"]`); await sleep(200);
+    await js("(()=>{document.querySelector('#p').setAttribute('atl-ver','v2');window.__release();return true})()");
+    for (let i = 0; i < 50 && !readLog(vp).some((e) => e.type === "decide"); i++) await sleep(100);
+    await sleep(300);
+    await js("(()=>{window.fetch=window.__fetch;return true})()");
+    const answer = readLog(vp).filter((e) => e.type === "decide").at(-1);
+    assert.deepEqual([answer?.option, answer?.ver], ["Yes", "v1"], "the answer names the version the click saw");
+    assert.equal(await js("atelier.state().decisions.find((x)=>x.id==='vi').state"), "changed", "the material changed since, so it asks again");
+  });
+  // 2.14.2 review 4 R2: a replacement inside the undo window the host refuses leaves the answer it would replace.
+  await fixCheck("2.14.2-review4-2-a-refused-replacement-keeps-the-answer", async () => {
+    const rp = path.join(dir, "refused-replace.html");
+    await writeFile(rp, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Refused replacement</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="p" id="p">The draft.</div><script type="module" src="atelier.js"></script></body></html>`);
+    await openFresh(rp);
+    host.agent(rp, { type: "ask", decision: { id: "rr", key: "p", question: "Publish draft?", options: [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }] } });
+    const card = '[data-id="d:rr"]';
+    await until(`!!document.querySelector('${card} [data-atl=decide][data-label="Yes"]')`);
+    await click(`${card} [data-atl=decide][data-label="Yes"]`);
+    await until("atelier.state().decisions.find((x)=>x.id==='rr').answer==='Yes'");
+    await js(`(()=>{window.__fetch??=window.fetch;window.fetch=(u,o)=>o?.method==="POST"&&String(u).startsWith("/.atelier/events")&&JSON.parse(o.body).type==="decide"?Promise.resolve(new Response(JSON.stringify({error:"Refused for the check."}),{status:400,headers:{"content-type":"application/json"}})):window.__fetch(u,o);document.querySelector('${card} [data-atl=decide][data-label="No"]').click();return true})()`);
+    await until("[...document.querySelectorAll('.atl-toast')].some((t)=>/Refused for the check/.test(t.textContent))");
+    await sleep(300);
+    await js("(()=>{window.fetch=window.__fetch;return true})()");
+    assert.deepEqual(readLog(rp).filter((e) => e.origin === "human").map((e) => [e.type, e.option]), [["decide", "Yes"]], "no undo after the refused No");
+    assert.equal(await js("atelier.state().decisions.find((x)=>x.id==='rr').answer"), "Yes", "the accepted answer stays");
+  });
+  // 2.14.2 review 4 R4: an opened still in flight for a withdrawn ask does not swallow a real click on the re-asked one.
+  await fixCheck("2.14.2-review4-4-opened-in-flight-per-ask", async () => {
+    const op = path.join(dir, "opened-reask.html");
+    await writeFile(op, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Opened re-ask</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="p" id="p">The draft material, long enough to click on.</div><script type="module" src="atelier.js"></script></body></html>`);
+    await openFresh(op);
+    const options = [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }];
+    const first = host.agent(op, { type: "ask", decision: { id: "oa", key: "p", material: "p", question: "Publish draft?", options } });
+    await until(`!!document.querySelector('[data-atl=decide][data-id="oa"][data-label="Yes"]')`);
+    // Hold only the first opened POST, for ask A.
+    await js(`(()=>{window.__fetch??=window.fetch;window.__held=[];window.fetch=(u,o)=>o?.method==="POST"&&String(u).startsWith("/.atelier/events")&&JSON.parse(o.body).type==="opened"&&!window.__held.length?new Promise((r)=>window.__held.push(()=>r(window.__fetch(u,o)))):window.__fetch(u,o);return true})()`);
+    await click('[data-atl=material][data-id="oa"]');
+    await until("window.__held.length===1");
+    host.agent(op, { type: "retract", decision: "oa", reason: "moved" });
+    const second = host.agent(op, { type: "ask", decision: { id: "oa", key: "p", material: "p", question: "Delete draft?", options } });
+    await until(`!!document.querySelector('[data-id="d:oa"]')?.textContent.includes("Delete draft?")`);
+    await click('[data-atl=material][data-id="oa"]');
+    await sleep(300);
+    await js("(()=>{window.fetch=window.__fetch;window.__held.splice(0).forEach((f)=>f());return true})()");
+    for (let i = 0; i < 30 && readLog(op).filter((e) => e.type === "opened").length < 2; i++) await sleep(100);
+    assert.deepEqual(readLog(op).filter((e) => e.type === "opened").map((e) => e.ask).sort(), [first.seq, second.seq].sort(), "each ask gets its own opened");
+  });
   assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0, 2.13.0, 2.14.0, 2.14.1 and 2.14.2 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen; 2.14.0: a retracted ask leaves the live Page; 2.14.1: an answer that crossed the retract shows folded with the reason; 2.14.2: a delayed answer to a withdrawn question never answers the re-asked one, also when its image was still uploading.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen; 2.14.0: a retracted ask leaves the live Page; 2.14.1: an answer that crossed the retract shows folded with the reason; 2.14.2: a delayed answer to a withdrawn question never answers the re-asked one, also when its image was still uploading; such an answer keeps the material version its click saw, a refused replacement keeps the answer it would replace, and an opened in flight for a withdrawn ask leaves the re-asked one its own.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

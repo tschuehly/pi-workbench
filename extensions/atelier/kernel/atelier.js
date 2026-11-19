@@ -159,7 +159,8 @@ export function derive(entries, currentVer = () => null, declared = []) {
     // A withdrawn question keeps its late answer on any version: nothing asks it again (2.14.2).
     if ((!d.declared && !d.material) || d.retracted != null || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
     // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
-    // Only answers to this ask count: a late one to a withdrawn ask with the same id is not its history (2.14.2).
+    // Answers naming another ask are left out: a late one to a withdrawn ask with the same id is not its history;
+    // one naming no ask (older Event Logs) counts here (2.14.2).
     const mine = (e) => e.type === "decide" && e.decision === d.id && (e.ask == null || e.ask === d.askSeq);
     const first = live.findIndex((e, i) => i > (d.askAt ?? -1) && mine(e)), vers = [], last = new Map();
     for (const e of live.slice(first)) {
@@ -516,7 +517,7 @@ function boot() {
     if (body.type === "seen") { flash("Could not save Seen; the mark stays."); return; }
     // No session serves this Page: keep the event here and offer Copy (decision 131; pi-artifacts' 503 + Copy).
     if (body.type === "undo") { local = local.filter((e) => e.seq !== body.target); render(); return; }
-    const e = { ...body, seq: -(local.length + 1), at: now(), origin: "human", local: true, delivery: body.delivery ?? CLASSES[body.type] };
+    const e = { ...body, seq: Math.min(0, ...local.map((x) => x.seq)) - 1, at: now(), origin: "human", local: true, delivery: body.delivery ?? CLASSES[body.type] };
     local.push(e); render(); return e;
   }
 
@@ -1382,7 +1383,8 @@ function boot() {
   async function decide(b) {
     let st = state(), d = st.decisions.find((x) => x.id === b.dataset.id);
     if (!d || b.disabled) return; // locked by atl-wip, also against Enter in a required note
-    const ask = d.askSeq; // the ask the click saw, also when the id is asked anew while its images upload (2.14.2)
+    // The ask and the material version the click saw, also when either changes while its images upload (2.14.2).
+    const ask = d.askSeq, ver = d.key ? currentVer(d.key) : undefined;
     const extra = b.closest(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra"), note = extra?.querySelector(".atl-note"), own = extra?.querySelector(".atl-ownans");
     // "Other…": the human's own text is the answer; one that equals an option is that option.
     const label = b.dataset.atl === "decideown" ? own?.value.trim() : b.dataset.label, custom = b.dataset.atl === "decideown" && !d.options.some((o) => o.label === label);
@@ -1405,18 +1407,21 @@ function boot() {
     if (!d) return;
     // Always editable (155): a change is a new answer that names the one it replaces.
     let previous = d.answer && !d.stale && d.answer.option !== label ? d.answer.option : undefined, replaced; // a new round replaces nothing
-    // A change inside the undo window replaces the unsent answer, so only the last one is delivered (156).
+    // A change inside the undo window replaces the unsent answer, so only the last one is delivered (156). The
+    // replacement posts first and the undo only once it is accepted, so a refused one leaves the answer as it was.
     const a = current(d);
     if (a?.origin === "human" && left(a) > 0 && ["pending", "local"].includes(st.status(a))) {
-      if (await post({ type: "undo", target: a.seq }) !== undefined || a.local) { // the server may have closed the window
-        previous = a.previous; replaced = a;
-        if (previous === label && !text && !images.length) return; // back to the delivered answer: nothing new to send
-      }
+      if (a.previous === label && !text && !images.length) { // back to the delivered answer: nothing new to send
+        if (await post({ type: "undo", target: a.seq }) !== undefined || a.local) return; // else the window closed: post the change
+      } else { previous = a.previous; replaced = a; }
     }
     const page = d.declared ? { options: d.options.map((o) => o.label).join("|"), rec: d.options.find((o) => o.recommended)?.label, delivery: d.delivery } : {};
     // The replaced answer was never delivered, so its note and images stay with the Decision unless new ones replace them.
-    const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, ask: d.askSeq, key: d.key, ver: d.key ? currentVer(d.key) : undefined, ...page });
+    const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, ask: d.askSeq, key: d.key, ver, ...page });
     if (!posted) return false; // refused: the note and images stay for another try
+    // ponytail: should the window close between the two posts, both answers are delivered and this one names the
+    // answer before the replaced one as previous; one request carrying both would close that gap.
+    if (replaced) await post({ type: "undo", target: replaced.seq });
     if (extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
   }
 
@@ -1620,11 +1625,12 @@ function boot() {
 
   // Decision 135: only the human's own click or key on the material counts as opened (expanding and playing start
   // with one). toggle and play also fire for the Page's own <details open>, Updates and autoplay, so they never count.
-  const opening = new Set(); // one POST in flight per Decision; after it, the log says whether it is opened
+  const opening = new Set(); // one POST in flight per ask of a Decision; after it, the log says whether it is opened
   function markOpened(d) {
-    if (opening.has(d.id)) return;
-    opening.add(d.id);
-    post({ type: "opened", decision: d.id, ask: d.askSeq }).finally(() => opening.delete(d.id));
+    const k = `${d.id}\n${d.askSeq}`;
+    if (opening.has(k)) return;
+    opening.add(k);
+    post({ type: "opened", decision: d.id, ask: d.askSeq }).finally(() => opening.delete(k));
   }
   const opened = (ev) => {
     if (!ev.isTrusted || isUi(ev.target) || (ev.type === "keydown" && ev.key !== "Enter" && ev.key !== " ")) return;
