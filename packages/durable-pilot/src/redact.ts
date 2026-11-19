@@ -47,16 +47,16 @@ const isText = (item: unknown): item is TextBlock =>
  * Deep-sanitize strings; throws if the sanitizer throws. The text blocks of a content array (a tool result, a package
  * message) are one text to their reader: a secret split across them is masked as a whole first (`acrossBlocks`).
  */
-export function sanitizeDeep<T>(value: T, sanitize: Sanitize): T {
+export function sanitizeDeep<T>(value: T, sanitize: Sanitize, skip: ReadonlySet<string> = SKIP): T {
 	if (typeof value === "string") return sanitize(value) as T;
 	if (value === null || typeof value !== "object") return value;
-	if (SKIP.has((value as { type?: string }).type ?? "")) return value;
+	if (skip.has((value as { type?: string }).type ?? "")) return value;
 	if (Array.isArray(value)) {
 		const texts = acrossBlocks(value.flatMap((item) => (isText(item) ? [item.text] : [])), sanitize);
 		let n = 0;
-		return value.map((item) => sanitizeDeep(isText(item) ? { ...item, text: texts[n++]! } : item, sanitize)) as T;
+		return value.map((item) => sanitizeDeep(isText(item) ? { ...item, text: texts[n++]! } : item, sanitize, skip)) as T;
 	}
-	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeDeep(item, sanitize)])) as T;
+	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeDeep(item, sanitize, skip)])) as T;
 }
 
 /** A private-key block, or one that never ends (it is masked to the end, as `sealed` does). */

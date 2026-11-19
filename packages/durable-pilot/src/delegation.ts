@@ -53,7 +53,7 @@ import {
 } from "../../../extensions/subagent/core.mjs";
 import { CUSTOM_TYPE as COMPLETION_CUSTOM_TYPE, composeNotice } from "../../../extensions/subagent/completion-wakeup.mjs";
 import { batchSize, CheckpointDoc, continuationRequestId } from "./checkpoint.ts";
-import { redact, sealed } from "./redact.ts";
+import { redact, sanitizeDeep, sealed } from "./redact.ts";
 
 /** A completion wake as placed in the lead's transcript (legacy custom message `pi-workbench:child-completion`). */
 export const COMPLETION_ENTRY = "workbench.child-completion";
@@ -538,8 +538,10 @@ async function stuckOn(runtime: ContextReader, conversation: ConversationId, c: 
 	if (call === undefined) return { text: "no tool call is open, so it may be waiting on its model", data: {} };
 	const args = call.arguments ?? {};
 	// Plain text, never JSON: escaping would hide a secret holding a quote or backslash (in a key or a value) from the redactor.
+	// sanitizeDeep first masks a secret split across text blocks, which the flattened text separates; tool arguments are
+	// untrusted, so no image-typed object is skipped.
 	const flat = (v: unknown): string => typeof v === "string" ? v : Array.isArray(v) ? v.map(flat).join(" ") : v !== null && typeof v === "object" ? Object.entries(v).map(([k, x]) => `${k}: ${flat(x)}`).join(", ") : String(v);
-	const preview = sanitize(bounded(sanitize(typeof args.command === "string" ? args.command : flat(args)), 200));
+	const preview = sanitize(bounded(sanitize(typeof args.command === "string" ? args.command : flat(sanitizeDeep(args, sanitize, new Set()))), 200));
 	const at = last?.timestamp === undefined ? undefined : iso(last.timestamp);
 	let text = `${call.name ?? "a tool"} \`${preview}\`${at === undefined ? "" : ` since ${at}`}`;
 	const data: JsonObject = { tool: call.name ?? "", preview, ...(at === undefined ? {} : { since: at }) };
