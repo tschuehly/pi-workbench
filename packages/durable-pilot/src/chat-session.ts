@@ -21,14 +21,14 @@ import type { ChatHost } from "./chat.ts";
 import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
 import { CEILING_CUSTOM_TYPE, CEILING_ENTRY, CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData, CheckpointDoc } from "./checkpoint.ts";
 import { syncWorkersGroup } from "./tool-groups.ts";
-import { ACTIVITY_STATUS_KEY, COMPLETION_CUSTOM_TYPE, COMPLETION_ENTRY, DelegationDoc, finishCancellations, roster, STUCK_CUSTOM_TYPE, STUCK_ENTRY, UPDATE_CUSTOM_TYPE, UPDATE_ENTRY } from "./delegation.ts";
+import { ACTIVITY_STATUS_KEY, COMPLETION_CUSTOM_TYPE, COMPLETION_ENTRY, DelegationDoc, finishCancellations, navigationCarries, roster, STUCK_CUSTOM_TYPE, STUCK_ENTRY, UPDATE_CUSTOM_TYPE, UPDATE_ENTRY } from "./delegation.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Admissions, admit, changeQueued, context, Edits, type EditPlan, type Host, type QueuedInput, Reconcile, resolveUncertain } from "./host.ts";
 import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./redact.ts";
 import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
 import { type ContributedResources, PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
-import { commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
+import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BashJobsDoc } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
 import { basename } from "node:path";
@@ -1229,21 +1229,16 @@ export class ChatSession {
 		}
 	}
 
-	/** Why the Chat is not quiescent: a run, queued input, any live task (a child, compaction, delivery), an uncollected child result or a `!` command. */
+	/** Why the Chat is not quiescent: a run, queued input, a `!` command, or any live task (compaction, delivery) besides the background children navigation carries. */
 	async #activity(): Promise<string | undefined> {
-		const busy = "Stop current session activity before navigating the session tree";
-		if (this.#navigating || this.#quiescing || this.#inFlight > 0 || this.#running || this.#shell !== undefined || this.#heldShell.length > 0) return busy;
-		// A branch starts without the source's children (`fork: initial`): their results must not be left behind. Named
-		// first: a Chat whose turn ended looks idle while its background children still run as tasks.
-		const delegation = Object.values((await this.#host.harness.snapshot(DelegationDoc, this.#host.root.id, context))?.executions ?? {});
-		const running = delegation.filter((e) => e.outcome === "running").map((e) => e.name);
-		if (running.length > 0) return `${running.length === 1 ? "A Subagent or Worker is" : `${running.length} Subagents or Workers are`} still running in this Chat (${running.join(", ")}). Wait for their results, or cancel them, before navigating the session tree`;
+		if (this.#navigating || this.#quiescing || this.#inFlight > 0 || this.#running || this.#shell !== undefined || this.#heldShell.length > 0) return BUSY;
+		// Background Subagents and Workers move to the destination branch (`carryChildren`): their own work does not block.
+		const carries = await navigationCarries(this.#host.harness, this.#host.root.id, context);
 		const inspection = await this.#host.harness.inspect(context);
-		if (inspection.tasks.length > 0 || inspection.submissions.length > 0) return busy;
-		if (delegation.some((e) => e.background && !e.collected)) return "Collect the finished Subagents and Workers before navigating the session tree";
+		if (inspection.tasks.some((task) => !carries.task(task.record)) || inspection.submissions.some((submission) => !carries.submission(submission))) return BUSY;
 		// A completion admitted before a kill but not yet receipted is finished by the reporter on this branch first.
 		const jobs = await this.#host.harness.snapshot(BashJobsDoc, this.#host.root.id, context);
-		if (Object.values(jobs?.jobs ?? {}).some((ref) => ref.delivery === "completion" && ref.admitted !== true)) return busy;
+		if (Object.values(jobs?.jobs ?? {}).some((ref) => ref.delivery === "completion" && ref.admitted !== true)) return BUSY;
 		const reconcile = await this.#host.harness.snapshot(Reconcile, context);
 		if (Object.values(reconcile?.uncertain ?? {}).some((item) => item.resolved === undefined)) return "Resolve the interrupted tool call before navigating the session tree";
 		return undefined;
@@ -1263,7 +1258,7 @@ export class ChatSession {
 		const busy = await this.#activity();
 		if (busy !== undefined) throw new Error(busy);
 		// A delivery that began during the check is activity too; none can begin from here on.
-		if (this.#inFlight > 0) throw new Error("Stop current session activity before navigating the session tree");
+		if (this.#inFlight > 0) throw new Error(BUSY);
 		this.#navigating = true;
 		try {
 			const { harness } = this.#host;

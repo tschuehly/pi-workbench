@@ -6,7 +6,7 @@ import { AgentDoc, type Conversation, type ConversationId, type EntryId, type En
 import { browserMessages } from "./chat-session.ts";
 import { AtelierDoc } from "./atelier.ts";
 import { BashJobsDoc } from "./background-bash.ts";
-import { WorkersDoc } from "./delegation.ts";
+import { carryChildren, WorkersDoc } from "./delegation.ts";
 import { BranchesDoc, context } from "./host.ts";
 import { redact, sanitizeDeep, sealed } from "./redact.ts";
 import { ToolGroupsDoc } from "./tool-groups.ts";
@@ -25,6 +25,7 @@ type Branch = {
 };
 
 export const STALE = "The session changed since /tree was opened. Reopen /tree and try again.";
+export const BUSY = "Stop current session activity before navigating the session tree";
 
 /** The entry as Pi records it: the last browser message it shows (a prompt after its Working Mode block). */
 function piEntry(entry: EntryRecord, parentId: string | null): TreeEntry | undefined {
@@ -111,8 +112,8 @@ export async function planNavigation(harness: Harness, active: Conversation, req
 }
 
 /**
- * Commit the navigation: the branch map's new active branch, and for a fork the new conversation with the questions
- * open as of its fork point, in one commit. Revision-checked against the active branch the plan was made on.
+ * Commit the navigation: the branch map's new active branch, the background work carried to it, and for a fork the new
+ * conversation with the questions open as of its fork point, in one commit. Revision-checked against the active branch the plan was made on.
  */
 export async function commitNavigation(harness: Harness, active: Conversation, plan: Navigation): Promise<Conversation> {
 	const rootId = (await harness.root(context)).id;
@@ -132,6 +133,9 @@ export async function commitNavigation(harness: Harness, active: Conversation, p
 			carried.jobs[job] = { ...ref };
 			delete jobs.jobs[job];
 		}
+		// Background Subagents and Workers too, running or with a result not yet collected: their notice, steers,
+		// collection and roster are the new branch's (rechecked here, so no notice starts on the old branch meanwhile).
+		await carryChildren(tx, active.id, id, BUSY);
 		const pages = await tx.doc(AtelierDoc, active.id);
 		const target = await tx.doc(AtelierDoc, id);
 		for (const page of pages.pages) if (!target.pages.includes(page)) target.pages.push(page);

@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import type { ConversationId, EntryRecord } from "@earendil-works/pi-durable";
 import { openChatHost } from "../src/chat.ts";
 import { ChildDoc, DelegationDoc, type Execution, WorkersDoc } from "../src/delegation.ts";
-import { context } from "../src/host.ts";
+import { BranchesDoc, context } from "../src/host.ts";
 import { ChatHost, eventCopies, family, hideIn, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
@@ -1123,25 +1123,40 @@ type TreeNode = { id: string; message?: { role: string; content?: unknown } };
 type HistoryTree = { type: "tree"; nodes: TreeNode[]; activeLeafId: string | null };
 const treeNode = (t: HistoryTree, role: string, text: string) => t.nodes.find((n) => n.message?.role === role && textOf(n.message.content) === text) ?? assert.fail(`${role} node ${text}`);
 
-test("navigation: refused while a background child runs, allowed once it is collected; the branch gets its own roster", async () => {
+/** Read from the closed store: the active branch and the root, each with its children and the children its completion notices delivered. */
+async function branchState(store: string, cwd: string) {
+	return inspect(store, cwd, async (h) => {
+		const root = (await h.harness.root(context)).id;
+		const of = async (id: ConversationId) => ({
+			id,
+			children: (await executions(h, id)).map((e) => e.executionId),
+			delivered: (await entries(h, id)).filter((entry) => entry.kind === "workbench.child-completion").flatMap((entry) => (entry.data as { delivered: string[] }).delivered),
+		});
+		const branches = (await h.harness.snapshot(BranchesDoc, context))?.branches ?? [];
+		return { active: await of(h.root.id), root: await of(root), branches: await Promise.all(branches.map(of)) };
+	});
+}
+const rosterHas = async (host: ChatHost, id: string) => ((await host.call<Status>("status")).extensionStatuses?.["pi-workbench:activity"] ?? "").includes(`delegate:${id}`);
+
+test("navigation (fork): a running background child moves to the new branch; its roster row, notice and collection are there, the old branch gets nothing", async () => {
 	const { store, cwd } = family("nav-child");
 	const host = open(store, cwd);
 	await host.ready;
 	await prompt(host, "first");
 	await quiet(host);
 	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 3"}', { name: "Slow" })));
-	launchedId(await toolResult(host, "subagent"));
+	const id = launchedId(await toolResult(host, "subagent"));
 	await host.until((e) => e.type === "agent.end", "the launching turn");
 	await quiet(host);
-	const running = await host.call<HistoryTree | { type: "unsupported" }>("tree");
-	assert.equal(running.type, "tree", "/tree reads the tree while a child runs");
-	await assert.rejects(host.call("navigate", { targetId: "1", expectedLeafId: null }), /A Subagent or Worker is still running in this Chat \(Slow\)\. Wait for their results, or cancel them, before navigating the session tree/, "navigation is refused while a background child runs, and says so");
-	await notice(host);
-	await quiet(host);
-	const ready = await host.call<HistoryTree>("tree");
-	assert.equal(ready.type, "tree", "collected: the Chat is quiescent");
-	await host.call("navigate", { targetId: treeNode(ready, "assistant", "ok: first").id, expectedLeafId: ready.activeLeafId });
+	const t = await host.call<HistoryTree>("tree");
+	await host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
 	await host.until((e) => e.type === "session.tree.changed", "the branch switch");
+	assert.ok(await rosterHas(host, id), "the branch's roster shows the carried child");
+	assert.match(textOf((await notice(host)).content), new RegExp(`${id} \\[success\\]\\ndone after bash`), "the notice reaches the branch");
+	await quiet(host);
+	await prompt(host, call("subagent_collect", { executionId: id }));
+	assert.match(await toolResult(host, "subagent_collect"), /^done after bash\n\nCompletion receipt: \S+ · subagent · scout · routine · outcome success/, "collect on the branch returns the result");
+	await quiet(host);
 
 	// On the branch, a launch reaches the browser's roster through the new branch's watch.
 	const mark = host.events.length;
@@ -1150,26 +1165,144 @@ test("navigation: refused while a background child runs, allowed once it is coll
 	await since(host, mark, isNotice, "the branch child's notice");
 	await quiet(host);
 	await host.close();
+	const state = await branchState(store, cwd);
+	assert.notEqual(state.active.id, state.root.id);
+	assert.deepEqual(state.root, { id: state.root.id, children: [], delivered: [] }, "the old branch keeps no record and got no notice");
+	assert.ok(state.active.children.includes(id));
+	assert.equal(state.active.delivered.filter((x) => x === id).length, 1, "one notice on the branch carried it");
 	assert.equal(integrity(store), "ok");
 });
 
-test("navigation: refused while a finished background result waits to be collected", async () => {
+test("navigation (select a retained branch): a running background child moves there; its notice and collection are there, the branch it left gets nothing", async () => {
+	const { store, cwd } = family("nav-select");
+	const host = open(store, cwd);
+	await host.ready;
+	await prompt(host, "first");
+	await quiet(host);
+	await prompt(host, "second");
+	await quiet(host);
+	let t = await host.call<HistoryTree>("tree");
+	await host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+	await host.until((e) => e.type === "session.tree.changed", "the fork");
+	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 3"}', { name: "Slow" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await host.until((e) => e.type === "agent.end", "the launching turn");
+	await quiet(host);
+	t = await host.call<HistoryTree>("tree");
+	const mark = host.events.length;
+	await host.call("navigate", { targetId: treeNode(t, "assistant", "ok: second").id, expectedLeafId: t.activeLeafId });
+	await since(host, mark, (e) => e.type === "session.tree.changed", "back to the root");
+	assert.ok(await rosterHas(host, id), "the selected branch's roster shows the carried child");
+	const arrived = (await since(host, mark, isNotice, "the notice")).message as Message;
+	assert.match(textOf(arrived.content), new RegExp(`${id} \\[success\\]`), "the notice reaches the selected branch");
+	await quiet(host);
+	await prompt(host, call("subagent_collect", { executionId: id }));
+	assert.match(await toolResult(host, "subagent_collect"), /^done after bash\n\nCompletion receipt: /);
+	await quiet(host);
+	await host.close();
+	const state = await branchState(store, cwd);
+	assert.equal(state.active.id, state.root.id, "the root is active again");
+	assert.ok(state.active.children.includes(id));
+	assert.equal(state.active.delivered.filter((x) => x === id).length, 1, "one notice on the selected branch");
+	assert.deepEqual(state.branches.map((b) => [b.children, b.delivered]), [[[], []]], "the branch that launched it keeps no record and got no notice");
+});
+
+test("navigation: a finished, uncollected background result moves to the new branch; its notice, held until a restart, arrives there once", async () => {
 	const { store, cwd } = family("nav-uncollected");
-	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT });
+	let host = open(store, cwd, { PI_DURABLE_HOLD: "child:before-delivery" });
+	await host.ready;
+	await prompt(host, "first");
+	await quiet(host);
+	await prompt(host, call("subagent", scout("quick", { name: "Quick" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await host.until((e) => e.type === "test.hold", "the result, its notice held");
+	await quiet(host);
+	const t = await host.call<HistoryTree>("tree");
+	await host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+	await host.until((e) => e.type === "session.tree.changed", "the branch switch");
+	await prompt(host, call("subagent_status", {}));
+	assert.match(await toolResult(host, "subagent_status"), new RegExp(`^0 running, 1 terminal and uncollected, 1 launched from this conversation\\.\\n- ${id} \\[success, uncollected\\]`), "the branch lists the uncollected result");
+	await quiet(host);
+	await host.kill();
+	host = open(store, cwd);
+	await host.ready;
+	await prompt(host, "resume");
+	assert.match(textOf((await notice(host)).content), new RegExp(`${id} \\[success\\]\\nok: quick`), "after the restart the notice carries it on the branch");
+	await quiet(host);
+	await prompt(host, call("subagent_collect", {}));
+	assert.match(await toolResult(host, "subagent_collect"), /^Nothing terminal to reconcile\./, "the notice collected it");
+	await quiet(host);
+	assert.equal(host.events.filter(isNotice).length, 1);
+	await host.close();
+	const state = await branchState(store, cwd);
+	assert.deepEqual(state.root, { id: state.root.id, children: [], delivered: [] }, "the old branch keeps no record and got no notice");
+	assert.deepEqual(state.active.delivered, [id], "exactly one notice, on the branch");
+});
+
+test("navigation: a host restart after navigation, before the carried child finishes, delivers its result once on the new branch", async () => {
+	const { store, cwd } = family("nav-restart");
+	let host = open(store, cwd);
+	await host.ready;
+	await prompt(host, "first");
+	await quiet(host);
+	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 4"}', { name: "Slow" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await host.until((e) => e.type === "agent.end", "the launching turn");
+	await quiet(host);
+	const t = await host.call<HistoryTree>("tree");
+	await host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+	await host.until((e) => e.type === "session.tree.changed", "the branch switch");
+	assert.equal(host.events.filter(isNotice).length, 0, "killed before the child finished");
+	await host.kill();
+	host = open(store, cwd);
+	await host.ready;
+	await prompt(host, "resume");
+	assert.match(textOf((await notice(host)).content), new RegExp(`${id} \\[success\\]`), "the notice reaches the branch after the restart");
+	await quiet(host);
+	assert.equal(host.events.filter(isNotice).length, 1);
+	await host.close();
+	const state = await branchState(store, cwd);
+	assert.deepEqual(state.root, { id: state.root.id, children: [], delivered: [] }, "the old branch keeps no record and got no notice");
+	assert.deepEqual(state.active.delivered, [id], "exactly one notice, on the branch");
+	assert.equal(integrity(store), "ok");
+});
+
+test("navigation: still refused, in its commit, while a notice is being delivered or a child that stays runs; a named-for-collect result moves without its old notice", async () => {
+	const { store, cwd } = family("nav-guards");
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT, scriptedProviders: true });
 	const { ChatSession } = await import("../src/chat-session.ts");
 	const session = new ChatSession(h, () => {});
 	await session.start();
 	try {
-		await h.root.commit(async (tx) => {
-			(await tx.doc(DelegationDoc, h.root.id)).executions.x = { executionId: "x", outcome: "success", background: true, collected: false } as unknown as Execution;
-		}, context);
-		await assert.rejects(session.navigate({ targetId: "1", expectedLeafId: null }), /Collect the finished Subagents and Workers before navigating the session tree/);
-		await h.root.commit(async (tx) => {
-			(await tx.doc(DelegationDoc, h.root.id)).executions.x!.collected = true;
-		}, context);
-		await assert.rejects(session.navigate({ targetId: "1", expectedLeafId: null }), (error: Error) => !/Collect|Stop current/.test(error.message), "collected: quiescence no longer refuses");
+		for (const text of ["first", "second"]) await (await h.root.submit({ type: "input", content: text, requestId: text }, context)).wait(context);
+		const t = (await session.tree()) as HistoryTree;
+		const go = () => session.navigate({ targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+		const root = h.root.id;
+		const child = (await h.harness.createConversation({ ownership: { kind: "ownerless" } }, context)).id;
+		const set = (change: (doc: { executions: Record<string, Execution>; wake: { seq: number; delivering?: number[] } }) => void) =>
+			h.root.commit(async (tx) => void change(await tx.doc(DelegationDoc, root)), context);
+		const BUSY = /Stop current session activity before navigating the session tree/;
+		await set((doc) => void (doc.wake.delivering = [1]));
+		await assert.rejects(go(), BUSY, "a notice in flight finishes on its branch first");
+		await set((doc) => {
+			doc.wake.delivering = [];
+			doc.executions.c = { executionId: "c", conversationId: child, outcome: "running", background: true, cancelEpoch: 1, collected: true } as unknown as Execution;
+		});
+		await assert.rejects(go(), BUSY, "a child being cancelled stays and blocks");
+		await set((doc) => {
+			doc.executions.c!.outcome = "cancelled";
+			doc.executions.r = { executionId: "r", conversationId: child, name: "R", taskPreview: "r", launchedAt: new Date().toISOString(), outcome: "success", background: true, collected: false, notice: { seq: 1, carried: false } } as unknown as Execution;
+		});
+		await go();
+		const branch = h.root.id;
+		assert.notEqual(branch, root);
+		const left = (await h.harness.snapshot(DelegationDoc, root, context))!;
+		const carried = (await h.harness.snapshot(DelegationDoc, branch, context))!;
+		assert.deepEqual([Object.keys(left.executions), left.moved], [["c"], { r: branch }], "the cancelled child stays; the launcher points at the branch");
+		assert.deepEqual([Object.keys(carried.executions), carried.executions.r!.origin, carried.executions.r!.notice, carried.wake.seq], [["r"], root, undefined, 0], "the branch's next notice carries it, on its own sequence");
 	} finally {
 		await session.close();
+		await h.close();
 	}
 });
 
