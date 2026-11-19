@@ -9,6 +9,8 @@ import { closeSync, constants, existsSync, openSync, readdirSync, readFileSync, 
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { ChatSession } from "../src/chat-session.ts";
+import { MODEL, openHost } from "../src/host.ts";
+import { fastMode } from "../src/providers.ts";
 import { ChatHost, family, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, runRow, scratch } from "./runner.ts";
 
@@ -419,6 +421,50 @@ describe("B conditional close (close only if still restart-safe)", () => {
 		};
 		await assert.rejects(session.quiesce(), /snapshot I\/O/);
 		assert.equal(await session.exclusive(async () => "admitted"), "admitted");
+	});
+});
+
+// Round 5 P1-4: host-side deliveries (background bash completions, Atelier input, package messages) do not go through
+// `exclusive`, so they obey the quiet gate in `#deliver`: one arriving during the quiet check waits, and runs only if
+// the close is refused. Its durable record stays undelivered for the next host otherwise (each source redelivers on reopen).
+describe("B conditional close and host-side deliveries", () => {
+	it("a delivery arriving during the quiet check waits; it runs once the close is refused, never once it is accepted", async () => {
+		const dir = scratch("quiesce-deliveries");
+		const h = await openHost(join(dir, "family"), { rootAgent: { model: MODEL } });
+		let deliver: (<T>(work: () => Promise<T>) => Promise<T>) | undefined;
+		const bash = { start: (_lead: unknown, _harness: unknown, hooks: { deliver: <T>(work: () => Promise<T>) => Promise<T> }) => void (deliver = hooks.deliver), status: async () => ({}), close: () => {}, cancelAll: () => {} };
+		const chat = Object.assign(h, { workbench: { resources: {}, onSignal: () => {}, compaction: {}, extensions: [] }, listenPackages: () => {}, fast: fastMode(dir), bash });
+		const session = new ChatSession(chat as never, () => {});
+		await session.start();
+		assert.ok(deliver, "the session hands background bash its delivery hook");
+		const status = session.status.bind(session);
+		const delay = () => new Promise((resolve) => setTimeout(resolve, 30));
+		let ran = 0;
+		const arriving: Promise<unknown>[] = [];
+		/** The quiet check's status snapshot, with a delivery arriving while it is read; `busy`: a turn runs then. */
+		const checkWith = (busy: boolean) => {
+			let once = true;
+			session.status = async () => {
+				if (once) arriving.push(deliver!(async () => void ran++));
+				once = false;
+				await delay();
+				const snapshot = await status();
+				return busy ? { ...snapshot, isStreaming: true } : snapshot;
+			};
+		};
+		checkWith(true);
+		assert.equal(await session.quiesce(), "a turn is running");
+		await arriving[0];
+		assert.equal(ran, 1, "the close was refused: the delivery went through");
+		checkWith(false);
+		assert.equal(await session.quiesce(), undefined, "quiet: the close is accepted");
+		const late = deliver!(async () => void ran++);
+		await delay();
+		await delay();
+		assert.equal(ran, 1, "neither the delivery that arrived during the check nor a later one is admitted once the close is accepted");
+		void late;
+		session.status = status;
+		await h.close();
 	});
 });
 

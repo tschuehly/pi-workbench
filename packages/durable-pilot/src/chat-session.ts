@@ -272,6 +272,8 @@ export class ChatSession {
 	/** Deliveries (bash completions, Atelier input, package messages) waiting for a paused restore to be resumed, or for navigation to end. */
 	#deliveries: (() => void)[] = [];
 	#afterNavigation: (() => void)[] = [];
+	/** Deliveries held while B's close decides: let through only if it is refused (`#admit`). */
+	#afterQuiesce: (() => void)[] = [];
 
 	/** The AFK battery alarm: shared Working Mode checks by default; tests inject theirs. */
 	readonly #power: Power;
@@ -713,12 +715,18 @@ export class ChatSession {
 		this.#quiescing = true;
 		try {
 			const busy = this.#inFlight > 0 ? "input is arriving" : await this.#restartBusy();
-			if (busy !== undefined) this.#quiescing = false;
+			if (busy !== undefined) this.#admit();
 			return busy;
 		} catch (error) {
-			this.#quiescing = false;
+			this.#admit();
 			throw error;
 		}
+	}
+
+	/** B's close was refused: input is admitted again, the deliveries it held first. */
+	#admit(): void {
+		this.#quiescing = false;
+		for (const deliver of this.#afterQuiesce.splice(0)) deliver();
 	}
 
 	async #restartBusy(): Promise<string | undefined> {
@@ -774,11 +782,15 @@ export class ChatSession {
 
 	/**
 	 * Run one host-side delivery once it may submit (`#deliverable`), never during history navigation (which carries an
-	 * undelivered one to the new branch), and counted, so navigation refuses to start while it runs.
+	 * undelivered one to the new branch) nor once B's close is deciding (`quiesce`; a close it accepts leaves the delivery
+	 * to the next host, as any close does), and counted, so navigation and the quiet check refuse while it runs.
 	 */
 	async #deliver<T>(work: () => Promise<T>): Promise<T> {
 		for (;;) {
+			if (this.#quiescing) await new Promise<void>((resolve) => this.#afterQuiesce.push(resolve));
 			await this.#deliverable();
+			// Checked with the count below, without an await between: the quiet check sees either this delivery or none.
+			if (this.#quiescing) continue;
 			if (!this.#navigating) break;
 			await new Promise<void>((resolve) => this.#afterNavigation.push(resolve));
 		}
