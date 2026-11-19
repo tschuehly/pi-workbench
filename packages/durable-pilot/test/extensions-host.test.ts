@@ -75,6 +75,9 @@ test("P034/P085 a child conversation gets its own identity and PI_TMP; the host 
 	assert.equal(root.PI_WORKBENCH_EXECUTION_KIND, undefined);
 	const worker = toolEnv({ chatId: "chat-x", conversationId: 8 as ConversationId, rootId: 1 as ConversationId, cwd: ROOT, executionKind: "worker" } as Parameters<typeof toolEnv>[0]);
 	assert.equal(worker.PI_WORKBENCH_EXECUTION_KIND, "worker");
+	// Its wait-until ends inside the child's 30 min bash default and quiet window.
+	assert.equal(worker.PI_WORKBENCH_WAIT_CAP_SECONDS, process.env.PI_WORKBENCH_WAIT_CAP_SECONDS ?? "1500");
+	assert.equal(root.PI_WORKBENCH_WAIT_CAP_SECONDS, undefined);
 	assert.equal(process.env.PI_TMP, before);
 });
 

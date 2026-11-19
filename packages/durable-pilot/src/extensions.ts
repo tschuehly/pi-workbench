@@ -47,7 +47,9 @@ export function toolEnv(identity: { chatId: string; conversationId: Conversation
 		PATH: [bin, ...path].join(delimiter),
 		...(identity.model === undefined ? {} : { PI_PROVIDER: identity.model.provider, PI_MODEL: identity.model.modelId }),
 		...(identity.thinkingLevel === undefined ? {} : { PI_REASONING_LEVEL: identity.thinkingLevel }),
-		...(identity.executionKind === undefined ? {} : { PI_WORKBENCH_EXECUTION_KIND: identity.executionKind }),
+		// A child's wait-until ends (25 min) inside its bash default (chat.ts CHILD_BASH_TIMEOUT_S) and its quiet window, so
+		// a long wait is never cut off or reported as stuck.
+		...(identity.executionKind === undefined ? {} : { PI_WORKBENCH_EXECUTION_KIND: identity.executionKind, PI_WORKBENCH_WAIT_CAP_SECONDS: process.env.PI_WORKBENCH_WAIT_CAP_SECONDS ?? "1500" }),
 	};
 }
 
