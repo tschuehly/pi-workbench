@@ -1122,7 +1122,6 @@ test("fork rule: a fork of the lead gets no children and no control of the sourc
 type TreeNode = { id: string; message?: { role: string; content?: unknown } };
 type HistoryTree = { type: "tree"; nodes: TreeNode[]; activeLeafId: string | null };
 const treeNode = (t: HistoryTree, role: string, text: string) => t.nodes.find((n) => n.message?.role === role && textOf(n.message.content) === text) ?? assert.fail(`${role} node ${text}`);
-const BUSY = /Stop current session activity before navigating the session tree/;
 
 test("navigation: refused while a background child runs, allowed once it is collected; the branch gets its own roster", async () => {
 	const { store, cwd } = family("nav-child");
@@ -1136,7 +1135,7 @@ test("navigation: refused while a background child runs, allowed once it is coll
 	await quiet(host);
 	const running = await host.call<HistoryTree | { type: "unsupported" }>("tree");
 	assert.equal(running.type, "tree", "/tree reads the tree while a child runs");
-	await assert.rejects(host.call("navigate", { targetId: "1", expectedLeafId: null }), BUSY, "navigation is refused while a background child runs");
+	await assert.rejects(host.call("navigate", { targetId: "1", expectedLeafId: null }), /A Subagent or Worker is still running in this Chat \(Slow\)\. Wait for their results, or cancel them, before navigating the session tree/, "navigation is refused while a background child runs, and says so");
 	await notice(host);
 	await quiet(host);
 	const ready = await host.call<HistoryTree>("tree");

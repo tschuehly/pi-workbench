@@ -1233,11 +1233,14 @@ export class ChatSession {
 	async #activity(): Promise<string | undefined> {
 		const busy = "Stop current session activity before navigating the session tree";
 		if (this.#navigating || this.#quiescing || this.#inFlight > 0 || this.#running || this.#shell !== undefined || this.#heldShell.length > 0) return busy;
+		// A branch starts without the source's children (`fork: initial`): their results must not be left behind. Named
+		// first: a Chat whose turn ended looks idle while its background children still run as tasks.
+		const delegation = Object.values((await this.#host.harness.snapshot(DelegationDoc, this.#host.root.id, context))?.executions ?? {});
+		const running = delegation.filter((e) => e.outcome === "running").map((e) => e.name);
+		if (running.length > 0) return `${running.length === 1 ? "A Subagent or Worker is" : `${running.length} Subagents or Workers are`} still running in this Chat (${running.join(", ")}). Wait for their results, or cancel them, before navigating the session tree`;
 		const inspection = await this.#host.harness.inspect(context);
 		if (inspection.tasks.length > 0 || inspection.submissions.length > 0) return busy;
-		// A branch starts without the source's children (`fork: initial`): their results must not be left behind.
-		const delegation = await this.#host.harness.snapshot(DelegationDoc, this.#host.root.id, context);
-		if (Object.values(delegation?.executions ?? {}).some((e) => e.outcome === "running" || (e.background && !e.collected))) return "Collect the finished Subagents and Workers before navigating the session tree";
+		if (delegation.some((e) => e.background && !e.collected)) return "Collect the finished Subagents and Workers before navigating the session tree";
 		// A completion admitted before a kill but not yet receipted is finished by the reporter on this branch first.
 		const jobs = await this.#host.harness.snapshot(BashJobsDoc, this.#host.root.id, context);
 		if (Object.values(jobs?.jobs ?? {}).some((ref) => ref.delivery === "completion" && ref.admitted !== true)) return busy;
