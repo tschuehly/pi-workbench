@@ -182,6 +182,29 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	assert.equal(integrity(store), "ok");
 });
 
+test("--read-transcript reads a closed Chat's history without a host: the messages it would show, no package, no model request", async () => {
+	const { store, cwd } = family("read-transcript");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"echo hi","description":"Say hi","foreground":true}' });
+	await host.until((e) => e.type === "agent.end", "the run to end");
+	const { messages } = await host.call<Transcript>("transcript");
+	await host.close();
+	const sent = requests(store).length;
+
+	// As PI WEB launches it: the host's usual arguments, packages included, plus the read flag.
+	const reader = fork(join(PACKAGE, "src", "chat-host-main.ts"), ["--store", store, "--cwd", cwd, "--model", "faux", "--packages", "--read-transcript"], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+	let stderr = "";
+	reader.stderr!.on("data", (data) => (stderr += data.toString()));
+	const received: unknown[] = [];
+	reader.on("message", (message) => received.push(message));
+	const code = await new Promise((resolve) => reader.on("exit", resolve));
+	assert.equal(code, 0, stderr);
+	assert.deepEqual(received, [{ transcript: { messages } }], "only the transcript: no ready handshake, no events");
+	assert.equal(requests(store).length, sent, "no model request");
+	assert.equal(integrity(store), "ok");
+});
+
 test("Stop withdraws the queued follow-up and ends the running bash call", async () => {
 	const { store, cwd } = family("stop");
 	const host = new ChatHost(store, cwd);

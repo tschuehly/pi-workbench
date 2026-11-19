@@ -162,6 +162,30 @@ export function browserMessage(entry: EntryRecord, streamId?: string): Record<st
  * message (before the prompt it came with), delivered answers as `pi-web.ask.answers`, and every other model message
  * with its entry ID.
  */
+/** Every entry of the root conversation up to `newest`, oldest first. */
+async function history(root: Host["root"], newest: number): Promise<EntryRecord[]> {
+	if (newest === 0) return [];
+	const entries: EntryRecord[] = [];
+	let cursor: Parameters<Host["root"]["entries"]>[2];
+	do {
+		const page = await root.entries({ order: "ascending", maxEntryId: newest as EntryRecord["id"] }, 500, cursor, context);
+		entries.push(...page.items);
+		cursor = page.next;
+	} while (cursor !== undefined);
+	return entries;
+}
+
+/**
+ * The transcript a ChatSession on this store would show as it opens (`messages()`), read without starting one: no
+ * package, job, Page or delivery runs (`--read-transcript`, PI WEB's history read of a Chat with no host).
+ */
+export async function storedMessages(host: Pick<Host, "harness" | "root">): Promise<unknown[]> {
+	const observation = await host.harness.observeConversation(host.root.id, { advance: () => {}, end: () => {} }, context);
+	await observation.detach();
+	const view = observation.value;
+	return (await history(host.root, view.entries.at(-1)?.id ?? view.before ?? 0)).flatMap((entry) => browserMessages(entry));
+}
+
 export function browserMessages(entry: EntryRecord, streamId?: string): Record<string, unknown>[] {
 	if (entry.kind === BASH_ENTRY) return [bashMessage(entry)];
 	const message = entry.model?.[0] as Message | undefined;
@@ -468,16 +492,8 @@ export class ChatSession {
 		if (partial !== undefined) this.#startPartial(this.#resumed ? partial : { ...partial, stopReason: "aborted", errorMessage: INTERRUPTED });
 	}
 
-	async #history(newest: number): Promise<EntryRecord[]> {
-		if (newest === 0) return [];
-		const entries: EntryRecord[] = [];
-		let cursor: Parameters<Host["root"]["entries"]>[2];
-		do {
-			const page = await this.#host.root.entries({ order: "ascending", maxEntryId: newest as EntryRecord["id"] }, 500, cursor, context);
-			entries.push(...page.items);
-			cursor = page.next;
-		} while (cursor !== undefined);
-		return entries;
+	#history(newest: number): Promise<EntryRecord[]> {
+		return history(this.#host.root, newest);
 	}
 
 	#startPartial(partial: AssistantMessage): void {

@@ -5,6 +5,9 @@
 // --end-jobs (with --store and --session-id): the owner ends a Chat whose host is gone. Cancel the family's unfinished
 // background jobs and exit, without opening the store: no completion is delivered and no model request starts.
 // Exit 0 once cancelled.
+// --read-transcript: the history of a Chat whose host is gone, for PI WEB's history reads, without starting a host: open
+// the store paused, send { transcript: { messages } } over the IPC channel, close and exit 0. No package, job, Page,
+// delivery or model request runs.
 // Transport: with --socket (Phase C1, a launchd job per family), an owner-only Unix socket that outlives any one session
 // daemon: newline-delimited JSON, one daemon connection at a time (a new one replaces the old), and the ready handshake
 // on every connection. Without it, the IPC channel of the daemon that forked the host (tests, the e2e fleet).
@@ -34,7 +37,7 @@ import { COMMANDS } from "./extensions.ts";
 import { redact, sealed } from "./redact.ts";
 import { BackgroundBash } from "./background-bash.ts";
 import { setDelegationHold } from "./delegation.ts";
-import { type Attachment, CAPABILITIES, ChatSession, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
+import { type Attachment, CAPABILITIES, ChatSession, storedMessages, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
 import type { SpawnResult } from "./spawn-session.ts";
 
@@ -53,6 +56,7 @@ const { values } = parseArgs({
 		"scripted-providers": { type: "boolean" },
 		socket: { type: "string" },
 		"end-jobs": { type: "boolean" },
+		"read-transcript": { type: "boolean" },
 	},
 });
 if (values["end-jobs"] === true) {
@@ -90,10 +94,16 @@ const host = await openChatHost({
 	scripted: values.scripted === true,
 	...(tps === undefined ? {} : { fauxTokensPerSecond: tps }),
 	...(values.thinking === undefined ? {} : { thinkingLevel: values.thinking }),
-	...(values.packages === true ? { packages: {} } : {}),
+	...(values.packages === true && values["read-transcript"] !== true ? { packages: {} } : {}),
 	// Tests and trials: also by environment, so PI WEB's isolated e2e daemon can ask for it without a new host argument.
 	...(values["scripted-providers"] === true || process.env.PI_DURABLE_SCRIPTED_PROVIDERS === "1" ? { scriptedProviders: true } : {}),
 });
+if (values["read-transcript"] === true) {
+	const messages = await storedMessages(host);
+	await host.close();
+	await new Promise((resolve, reject) => process.send?.({ transcript: { messages } }, (error) => (error === null ? resolve(undefined) : reject(error))) ?? reject(new Error("--read-transcript needs an IPC channel")));
+	process.exit(0);
+}
 // Crash-matrix barriers (tests only): the named reporter fault windows announce themselves and stop until killed;
 // `name@ms` releases the window after that many milliseconds instead, so a race can be staged without a kill.
 const holds = new Map((process.env.PI_DURABLE_HOLD ?? "").split(",").filter(Boolean).map((hold) => {
