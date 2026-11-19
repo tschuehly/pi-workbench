@@ -722,13 +722,13 @@ test("stuck notice: a Worker stuck in a foreground subagent call names its leaf;
 	const workerId = /Created worker (\S+)/.exec(await toolResult(host, "worker_create"))![1]!;
 	await quiet(host);
 	// The secret leads the arguments, so the 200-character preview holds it.
-	const leaf = call("subagent", { name: `Leaf ${password}`, task: call("bash", { command: "sleep 6" }), profile: "scout", cognitiveRole: "routine", background: false });
+	const leaf = call("subagent", { type: "image", name: `Leaf ${password}`, [`key ${password}`]: "v", task: call("bash", { command: "sleep 6" }), profile: "scout", cognitiveRole: "routine", background: false });
 	await prompt(host, call("worker_dispatch", { workerId, task: leaf, cognitiveRole: "coordination", background: true }));
 	const id = launchedId(await toolResult(host, "worker_dispatch"));
 	const stuck = (await host.until(isStuck, "the stuck notice")).message as Message;
 	const body = textOf(stuck.content);
-	assert.match(String((stuck.details as { preview?: string }).preview), /^\{"name":"Leaf \[REDACTED:env:PILOT_STUCK_PASSWORD\]"/, "the entry's data.preview");
-	assert.ok(body.startsWith(`Child ${id} `) && body.includes('stuck inside one call: subagent `{"name":"Leaf [REDACTED:env:PILOT_STUCK_PASSWORD]"'), body);
+	assert.match(String((stuck.details as { preview?: string }).preview), /^type: image, name: Leaf \[REDACTED:env:PILOT_STUCK_PASSWORD\], key \[REDACTED:env:PILOT_STUCK_PASSWORD\]: v/, "the entry's data.preview");
+	assert.ok(body.startsWith(`Child ${id} `) && body.includes('stuck inside one call: subagent `type: image, name: Leaf [REDACTED:env:PILOT_STUCK_PASSWORD]'), body);
 	assert.match(body, /; it is a Worker blocked in a foreground subagent call on leaf \S+ "Leaf \[REDACTED/, body);
 	for (const form of [password, escaped]) assert.ok(!body.includes(form), `the notice holds no ${form}`);
 	await host.until((e) => isNotice(e) && textOf((e.message as Message).content).includes(`${id} [success]`), "the Worker's notice");
