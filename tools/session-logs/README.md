@@ -1,6 +1,6 @@
 # Read Pi session logs
 
-A read-only, dependency-free Python CLI for inventorying Pi sessions and extracting cited text.
+A read-only, dependency-free Python CLI for inventorying Pi and PI WEB sessions and extracting cited text.
 Run from the repository root:
 
 ```sh
@@ -9,6 +9,9 @@ python3 tools/session-logs/cli.py list --match workstream
 python3 tools/session-logs/cli.py read <session-id-or-file>
 python3 tools/session-logs/cli.py read <session-id> --roles user --match status
 python3 tools/session-logs/cli.py read <session-id> --tools --match workstream --format jsonl
+python3 tools/session-logs/cli.py --pi-web list --match workstream
+python3 tools/session-logs/cli.py --pi-web read <chat-uuid> --roles user
+python3 tools/session-logs/cli.py --pi-web-root /path/to/durable list --kind child
 python3 -m unittest discover -s tools/session-logs -p 'test_*.py'
 ```
 
@@ -34,9 +37,32 @@ Images, thinking blocks, and system prompts are omitted. Tool arguments and resu
 record and reports omitted characters; otherwise text is not truncated. `--match` filters
 whole records by a case-insensitive substring, not semantic intent.
 
-Malformed files produce path/line diagnostics and a nonzero exit. Inventory continues scanning
+Malformed files produce source diagnostics and a nonzero exit. Inventory continues scanning
 other files, so check its exit status before calling the output complete. An actively written
-partial line may require a later read. Reading never opens sessions through Pi's mutating SDK.
+JSONL partial line may require a later read. Reading never opens sessions through Pi's mutating SDK.
+
+## PI WEB durable chats
+
+Use `--pi-web` before the command for `~/.pi-web-durable/durable`, or `--pi-web-root DIR` for
+another directory containing `<chat-uuid>/session.sqlite`. This is opt-in, like choosing a
+separate `--root`: existing JSONL commands keep their scope and don't copy or scan private PI WEB stores.
+
+`read <chat-uuid>` includes all retained chat branches in entry ID order, without mixing in owned
+child conversations. `list` labels those as `child` using recorded ownership; use
+`read <chat-uuid>:<conversation-id>` for a child's own entries. Forks link back to the recorded
+fork point without repeating inherited entries. The `line` field is the SQLite entry ID, not a
+file line number. Timestamps are the stored message times (epoch milliseconds). Chat titles and
+working directories aren't stored in these rows, so their fields are blank or null.
+
+Compactions have role `compaction`, not `user`, even though PI WEB stores them as model-facing user
+messages. Workbench notices are custom records, not user messages. `--roles user` includes submitted
+prompt text, not proof of human authorship; for example, a child's dispatch can use the user role.
+
+The CLI supports durable schema v2. It copies SQLite and its write-ahead log (WAL) to a private,
+temporary directory (`$PI_TMP` when set), checks for concurrent changes and opens only the copy with
+`mode=ro`. This includes committed WAL entries without touching the live store or its sidecars.
+If all snapshot attempts race the host, retry when the chat is quieter. Temporary disk use is
+bounded by the largest database and WAL being read.
 
 **Private evidence:** output can contain secrets and personal information, even without tools.
 This CLI is not a redactor. Keep exports and analysis in user-local storage, outside Git, and
