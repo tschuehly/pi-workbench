@@ -598,6 +598,59 @@ test("a Worker dispatch that fails to start marks its status file failed", async
   }
 });
 
+for (const [cause, routingFails] of [["an unknown profile", false], ["a routing failure", true]]) {
+  for (const background of [false, true]) {
+    test(`a Worker dispatch that fails on ${cause} (${background ? "background" : "foreground"}) marks its status file failed`, async () => {
+      const previousHome = process.env.HOME;
+      const temporary = await mkdtemp(join(tmpdir(), "subagent-failed-preflight-"));
+      process.env.HOME = temporary;
+      const resolverPath = join(temporary, "resolver.mjs");
+      await writeFile(resolverPath, routingFails ? `process.exit(3);` : `console.log(JSON.stringify({ status: "pass", modelBinding: { cognitiveRole: process.argv[2], provider: "anthropic", model: "claude-test", effort: "low" } }));`);
+      const tools = new Map();
+      const handlers = new Map();
+      let dispatched = false;
+      subagentExtension({ events: { emit: () => {} }, on: (event, handler) => handlers.set(event, handler), registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} },
+        { adapter: { dispatch: async () => { dispatched = true; throw new Error("must not dispatch"); }, cancelAll: async () => [] }, resolverPath });
+      const ctx = { cwd: "/repo", sessionManager: { getSessionId: () => "lead", getSessionFile: () => "/sessions/lead.jsonl" } };
+      const implementer = PROFILES.implementer;
+      try {
+        const created = await tools.get("worker_create").execute("create", { name: "Worker", scope: "Test failed preflight", profile: "implementer" }, undefined, undefined, ctx);
+        if (!routingFails) delete PROFILES.implementer;
+        const result = await tools.get("worker_dispatch").execute("dispatch", { workerId: created.details.workerId, task: "Never starts.", cognitiveRole: "implementation", background }, undefined, undefined, ctx);
+        assert.equal(result.details.outcome, "preflight_failed");
+        assert.equal(dispatched, false);
+        const body = JSON.parse(await readFile(workerStatusFile(created.details.workerId), "utf8"));
+        assert.equal(body.state, "failed", "a dispatch that failed after beginDispatch does not leave the last state");
+        assert.match(body.log.at(-1).text, routingFails ? /^Dispatch failed to start: Routing resolver failed/ : /^Dispatch failed to start: Worker profile 'implementer' is not a bundled profile/);
+      } finally {
+        PROFILES.implementer = implementer;
+        await handlers.get("session_shutdown")?.();
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        await rm(temporary, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test("a busy or foreign Worker dispatch rejection leaves the status file untouched", async () => {
+  const harness = await settlingWorkerHarness();
+  try {
+    const file = harness.dispatchedSpecs[0].statusFile;
+    const before = await readFile(file, "utf8");
+    const busy = await harness.tools.get("worker_dispatch").execute("dispatch", { workerId: harness.workerId, task: "Second job.", cognitiveRole: "implementation", background: true }, undefined, undefined, harness.ctx);
+    assert.equal(busy.details.outcome, "preflight_failed");
+    assert.equal(await readFile(file, "utf8"), before, "a busy rejection does not write the status file");
+    const foreignCtx = { ...harness.ctx, sessionManager: { getSessionId: () => "other-lead", getSessionFile: () => "/sessions/other.jsonl" } };
+    const foreign = await harness.tools.get("worker_dispatch").execute("dispatch", { workerId: harness.workerId, task: "Foreign job.", cognitiveRole: "implementation", background: true }, undefined, undefined, foreignCtx);
+    assert.equal(foreign.details.outcome, "preflight_failed");
+    assert.equal(await readFile(file, "utf8"), before, "a foreign rejection does not write the status file");
+  } finally {
+    harness.releaseReceipt();
+    await harness.cleanup();
+  }
+});
+
 test("a lead-side status write failure is reported, not swallowed", async () => {
   const harness = await settlingWorkerHarness({ readOnlyStatus: true });
   try {

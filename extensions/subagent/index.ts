@@ -666,26 +666,26 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       } catch (error) {
         return registryFailure(error);
       }
+      // Every failure after beginDispatch releases the lock and marks the status file failed; rejections above leave it untouched.
+      let startNote = "";
       const abandon = async (diagnostic: string) => {
         try { await registry.completeDispatch(params.workerId, begin.lockToken, { outcome: "preflight_failed", cognitiveRole: params.cognitiveRole, diagnostic }); } catch {}
+        const failedNote = leadStatusWrite(workerStatusFile(params.workerId), "failed", `Dispatch failed to start: ${diagnostic}`);
+        return failure("preflight_failed", diagnostic + startNote + failedNote);
       };
       const profile = PROFILES[begin.profile as keyof typeof PROFILES];
-      if (profile === undefined) {
-        await abandon(`Worker profile '${begin.profile}' is not a bundled profile.`);
-        return failure("preflight_failed", `Worker profile '${begin.profile}' is not a bundled profile.`);
-      }
+      if (profile === undefined) return abandon(`Worker profile '${begin.profile}' is not a bundled profile.`);
       let binding;
       try {
         binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, params.effort, undefined, options.resolverPath, ctx.modelRegistry);
       } catch (error) {
-        await abandon(errorMessage(error));
-        return failure("preflight_failed", errorMessage(error));
+        return abandon(errorMessage(error));
       }
       const continuing = begin.continuationSessionId !== null;
       const preamble = `You are the durable attended worker \"${begin.name}\" with the semantic scope \"${begin.scope}\".${continuing ? " This dispatch resumes your persisted session; the earlier conversation above is your own prior work in this scope." : " This is your first dispatch in this scope."}`;
       const childTask = [profile.instruction, STATUS_INSTRUCTION, preamble, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
       // A new job starts working, so the child's stateless reports never inherit the last job's done.
-      const startNote = leadStatusWrite(workerStatusFile(params.workerId), "working", "Dispatch accepted");
+      startNote = leadStatusWrite(workerStatusFile(params.workerId), "working", "Dispatch accepted");
       let receipt;
       try {
         receipt = await adapter.dispatch({
@@ -703,9 +703,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
         });
       } catch (error) {
-        await abandon(errorMessage(error));
-        const failedNote = leadStatusWrite(workerStatusFile(params.workerId), "failed", `Dispatch failed to start: ${errorMessage(error)}`);
-        return failure("preflight_failed", errorMessage(error) + startNote + failedNote);
+        return abandon(errorMessage(error));
       }
       emitExecutionEvent(host, {
         type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
