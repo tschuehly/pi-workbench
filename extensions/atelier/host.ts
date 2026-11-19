@@ -33,7 +33,7 @@ export const logPath = (page: string) => `${page}.events.jsonl`;
 /** Images the human attaches to a Decision's answer or a Comment live beside the Event Log; the log names them relative to the Page's directory. */
 export const imagesDir = (page: string) => `${page}.images`;
 
-/** The Event Log (143): append-only JSON lines beside the Page. A torn last line is skipped, never fatal. */
+/** The Event Log (143): append-only JSON lines beside the Page. Any line that does not parse is skipped, never fatal. */
 export function readLog(page: string): Entry[] {
   let text: string;
   try { text = readFileSync(logPath(page), "utf8"); } catch { return []; }
@@ -53,7 +53,8 @@ export function appendLog(page: string, entry: Record<string, unknown>, now = Da
   return appendLogs(page, [entry], now)[0];
 }
 
-/** Appends entries in one write; a failed write is cut back off, so the log gains all of them or none. */
+/** Appends entries in one write; a failed write is cut back off. Known limit: if that
+ *  truncate fails too, a torn tail stays and readLog keeps only its whole lines. */
 export function appendLogs(page: string, entries: Record<string, unknown>[], now = Date.now()): Entry[] {
   const file = logPath(page);
   if (isLink(file)) throw new Error(`${file} is a symlink; Atelier writes its Event Log only beside the Page.`);

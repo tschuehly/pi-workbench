@@ -63,7 +63,7 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   Chat: a reply that offers choices, or free text you need settled, becomes an `ask` at its Key ("Other…" covers
   answers that fit no option), never numbered options in a reply. The human may change any answer later; a
   change arrives as "X → Y"; one inside the undo window replaces the unsent answer, so only the last reaches you
-  (the Event Log shows an `undo` then the new `decide`, written together; a refused or failed change keeps the earlier answer, which then reaches you). Once its undo window closes, an answered `ask` folds to one line (question and
+  (the Event Log shows an `undo` then the new `decide`, written together; a refused change, or a failed write the host rolls back, keeps the earlier answer, which then reaches you. Known limit: if that rollback fails too, the earlier answer can be left undone with no replacement). Once its undo window closes, an answered `ask` folds to one line (question and
   answer) that opens the full Decision, so answered questions take little room under their Key.
   When an asked Decision no longer needs the human (someone else settled it, or the work moved on),
   `retract` it with its `id` and `text` saying why: its card leaves the Page and the Event Log keeps the reason.

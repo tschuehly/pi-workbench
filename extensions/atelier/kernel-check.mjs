@@ -1347,6 +1347,28 @@ requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classLis
     await js("(()=>{window.fetch=window.__fetch;return true})()");
     assert.deepEqual(human(), [["decide", "Yes"], ["undo", yes], ["decide", "Later"], ["undo", later], ["decide", "No"]]);
   });
+  // 2.14.2 review 7: a failed replacement while the host still answers reads the log; only its own answer counts as saved.
+  await fixCheck("2.14.2-review7-a-failed-replacement-counts-only-its-own-answer", async () => {
+    const rp = path.join(dir, "lost-replace.html");
+    await writeFile(rp, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Lost replacement</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="p" id="p">The draft.</div><script type="module" src="atelier.js"></script></body></html>`);
+    await openFresh(rp);
+    host.agent(rp, { type: "ask", decision: { id: "lr", key: "p", question: "Publish draft?", options: [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }, { label: "Later", consequence: "l" }] } });
+    const card = '[data-id="d:lr"]';
+    await until(`!!document.querySelector('${card} [data-atl=decide][data-label="Yes"]')`);
+    await click(`${card} [data-atl=decide][data-label="Yes"]`);
+    await until("atelier.state().decisions.find((x)=>x.id==='lr').answer==='Yes'");
+    // "down": every POST is rejected while GET and the stream still answer (C1). "race": another tab saves Later
+    // first, so this tab's No gets a 409 whose response is lost (C2). One eval, inside Yes's 3-second window.
+    await js(`(()=>{window.__fetch??=window.fetch;window.fetch=(u,o)=>{if(o?.method!=="POST"||!String(u).startsWith("/.atelier/events"))return window.__fetch(u,o);if(window.__mode==="down")return Promise.reject(new TypeError("offline"));const other={...JSON.parse(o.body),option:"Later",note:undefined};return window.__fetch(u,{...o,body:JSON.stringify(other)}).then(()=>window.__fetch(u,o)).then(()=>Promise.reject(new TypeError("response lost")))};window.__mode="down";return true})()`);
+    const seen = await js(`(async()=>{const toast=async(re)=>{while(![...document.querySelectorAll('.atl-toast')].some((t)=>re.test(t.textContent)))await new Promise((r)=>setTimeout(r,20))};const no=()=>document.querySelector('${card} [data-atl=decide][data-label="No"]').click();document.querySelector('${card} [data-atl=addnote]').click();document.querySelector('${card} .atl-note').value="why not";no();await toast(/reach the host|took the change/);const c1={conn:atelier.state().conn,note:document.querySelector('${card} .atl-note').value};document.querySelectorAll('.atl-toast').forEach((t)=>t.remove());while(document.querySelector('${card}')?.closest('[data-busy]')||document.querySelector('${card}[data-busy]'))await new Promise((r)=>setTimeout(r,20));window.__mode="race";no();await toast(/saved first|Couldn't confirm/);await new Promise((r)=>setTimeout(r,500));return {c1,c2:{note:document.querySelector('${card} .atl-note').value,toasts:[...document.querySelectorAll('.atl-toast')].map((t)=>t.textContent).join(" | ")}}})()`);
+    await js("(()=>{window.fetch=window.__fetch;return true})()");
+    assert.notEqual(seen.c1.conn, "no session", `C1: a reachable host leaves the bar alone: ${JSON.stringify(seen.c1)}`);
+    assert.equal(seen.c1.note, "why not", "C1: the note stays");
+    assert.equal(seen.c2.note, "why not", `C2: another tab's answer does not clear this one's note: ${JSON.stringify(seen.c2)}`);
+    assert.match(seen.c2.toasts, /Another answer was saved first/, "C2: says another answer won");
+    assert.equal(await js("atelier.state().decisions.find((x)=>x.id==='lr').answer"), "Later", "C2: the Page shows the answer the host saved");
+  });
   // 2.14.2 review 4 R4: an opened still in flight for a withdrawn ask does not swallow a real click on the re-asked one.
   await fixCheck("2.14.2-review4-4-opened-in-flight-per-ask", async () => {
     const op = path.join(dir, "opened-reask.html");
