@@ -1267,7 +1267,7 @@ test("navigation: a host restart after navigation, before the carried child fini
 	assert.equal(integrity(store), "ok");
 });
 
-test("navigation: still refused, in its commit, while a notice is being delivered or a child that stays runs; a named-for-collect result moves without its old notice", async () => {
+test("navigation: still refused, in its commit, while a notice is being delivered or a child that stays runs; a named-for-collect result moves without its old notice, a fresh wake to send it", async () => {
 	const { store, cwd } = family("nav-guards");
 	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT, scriptedProviders: true });
 	const { ChatSession } = await import("../src/chat-session.ts");
@@ -1299,7 +1299,8 @@ test("navigation: still refused, in its commit, while a notice is being delivere
 		const left = (await h.harness.snapshot(DelegationDoc, root, context))!;
 		const carried = (await h.harness.snapshot(DelegationDoc, branch, context))!;
 		assert.deepEqual([Object.keys(left.executions), left.moved], [["c"], { r: branch }], "the cancelled child stays; the launcher points at the branch");
-		assert.deepEqual([Object.keys(carried.executions), carried.executions.r!.origin, carried.executions.r!.notice, carried.wake.seq], [["r"], root, undefined, 0], "the branch's next notice carries it, on its own sequence");
+		assert.deepEqual([Object.keys(carried.executions), carried.executions.r!.origin], [["r"], root], "it remembers its launching conversation");
+		assert.notEqual(carried.executions.r!.reporter, undefined, "a new reporter at its wake sends the branch's notice for it (the overflow test below)");
 	} finally {
 		await session.close();
 		await h.close();
@@ -1364,6 +1365,50 @@ test("navigation: a stuck notice delivered before navigation is not delivered ag
 	await host.close();
 	assert.deepEqual(await kindCounts(store, cwd, "workbench.child-stuck"), { activeIsRoot: false, active: 0, root: 1 }, "one stuck notice, on the branch it was delivered on");
 	assert.equal(integrity(store), "ok");
+});
+
+test("navigation: results an earlier notice named for collection, left uncollected, get one notice on the new branch and none on the old", async () => {
+	const { store, cwd } = family("nav-overflow");
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT, scriptedProviders: true });
+	const { ChatSession } = await import("../src/chat-session.ts");
+	const session = new ChatSession(h, () => {});
+	await session.start();
+	try {
+		for (const text of ["first", "second"]) await (await h.root.submit({ type: "input", content: text, requestId: text }, context)).wait(context);
+		const root = h.root.id;
+		const child = (await h.harness.createConversation({ ownership: { kind: "ownerless" } }, context)).id;
+		const now = new Date().toISOString();
+		// Their reporters ended after the notice named them; nothing live would wake the lead for them again.
+		const named = (id: string) => ({
+			executionId: id, kind: "subagent", name: id, profile: "scout", cognitiveRole: "routine", provider: "faux", model: "faux", effort: "off",
+			cwd, taskPreview: id, launchedAt: now, endedAt: now, conversationId: child, anchor: 0, reporter: 0, background: true,
+			outcome: "success", text: `result ${id}`, length: 9, collected: false, steers: 0, notice: { seq: 1, carried: false },
+		}) as unknown as Execution;
+		await h.root.commit(async (tx) => {
+			const doc = await tx.doc(DelegationDoc, root);
+			doc.executions.r1 = named("r1");
+			doc.executions.r2 = named("r2");
+			doc.wake.seq = 1;
+		}, context);
+		const t = (await session.tree()) as HistoryTree;
+		await session.navigate({ targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+		const branch = h.root.id;
+		assert.notEqual(branch, root);
+		const notices = async (id: number) => (await entries(h, id)).filter((entry) => entry.kind === "workbench.child-completion").map((entry) => (entry.data as { delivered: string[] }).delivered);
+		const deadline = Date.now() + 20_000;
+		while ((await notices(branch)).length === 0) {
+			if (Date.now() > deadline) assert.fail("no notice reached the branch for the moved results");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.deepEqual((await notices(branch)).map((d) => [...d].sort()), [["r1", "r2"]], "one notice on the branch carries both");
+		assert.deepEqual(await notices(root), [], "none on the branch left behind");
+		const carried = (await h.harness.snapshot(DelegationDoc, branch, context))!.executions;
+		assert.deepEqual([carried.r1!.collected, carried.r2!.collected], [true, true]);
+	} finally {
+		await session.close();
+		await h.close();
+	}
 });
 
 test("navigation: the Chat keeps control of its Workers on another branch (a fork outside the branch map gets none: the fork rule test above)", async () => {

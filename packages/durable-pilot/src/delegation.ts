@@ -301,7 +301,8 @@ export async function navigationCarries(reader: DocumentReader, lead: Conversati
 /**
  * In the navigation commit: move the lead's carried children from `from` to `to`, with their pending update wakes, and
  * point their launching conversation at `to`. A notice that named a result for collection was read on `from`, so it is
- * dropped: `to`'s next notice carries the result. Throws `busy` while a notice is being delivered on `from`, an update or stuck notice is bound for it, or a child
+ * dropped: `to`'s next notice carries the result, sent by a reporter restarted at its wake when the result's own has
+ * ended. Throws `busy` while a notice is being delivered on `from`, an update or stuck notice is bound for it, or a child
  * that stays runs (one being cancelled, a foreground one). Read from documents: a fork's commit cannot read tasks after
  * writing its conversation. The destination composes its own notices with its own `wake` sequence.
  */
@@ -311,6 +312,7 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 	if ((source.wake.delivering?.length ?? 0) > 0) throw new Error(busy);
 	// Bound after `settleBound` checked: still on its way to `from`.
 	if (Object.values(source.executions).some((e) => Object.keys(e.bound ?? {}).length > 0)) throw new Error(busy);
+	let rewake: { id: string; origin: ConversationId } | undefined;
 	for (const [id, e] of Object.entries(source.executions)) {
 		const moving = carried(e);
 		if (!moving && e.outcome === "running") throw new Error(busy);
@@ -318,6 +320,8 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 		const origin = (e.origin ?? from) as ConversationId;
 		const record = copy(e);
 		record.origin = origin;
+		// A result a settled notice named for collection: the reporter that would wake the lead for it has ended.
+		if (e.outcome !== "running" && e.notice !== undefined) rewake ??= { id, origin };
 		delete record.notice;
 		target.executions[id] = record;
 		delete source.executions[id];
@@ -330,6 +334,13 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 		launcher.moved ??= {};
 		if (origin === to) delete launcher.moved[id];
 		else launcher.moved[id] = to;
+	}
+	// One durable wake composes `to`'s notice for them (every moved result without one), in the launching conversation as
+	// their reporters run; it becomes the record's reporter, so navigation carries it and a cancellation reaches it.
+	if (rewake !== undefined) {
+		if (reporterDefinition === undefined) throw new Error("No delegation extension is loaded to deliver the carried results' notice");
+		const options = { ownership: { kind: "conversation" as const }, background: true, conversationId: rewake.origin };
+		target.executions[rewake.id]!.reporter = await tx.createTask(reporterDefinition, { executionId: rewake.id, assignment: "", rewake: true }, options);
 	}
 }
 
@@ -368,11 +379,15 @@ type Notice = { content: string; details: { attention: string; delivered: string
 /** `home`: the lead the notice was composed on (absent: the launching conversation, as before navigation carried children). */
 type ReporterState = { phase: "run" } | { phase: "wake"; deliver: boolean } | { phase: "deliver"; seq: number; followUp: boolean; notice: Notice; home?: number };
 
+/** The reporter definition, for the wake `carryChildren` enqueues: its kind, version and initial state are every host's. */
+let reporterDefinition: ReturnType<typeof reporterTask> | undefined;
+
 function reporterTask(options: DelegationOptions) {
-	return defineTask<{ executionId: string; assignment: string }, ReporterState, null>({
+	// `rewake`: starts at its wake, for results history navigation carried after their own reporters ended.
+	return defineTask<{ executionId: string; assignment: string; rewake?: true }, ReporterState, null>({
 		name: "workbench.child-reporter",
 		version: 1,
-		initial: () => ({ phase: "run" }),
+		initial: (input) => (input.rewake === true ? { phase: "wake", deliver: true } : { phase: "run" }),
 		phases: {
 			run: async (task, runtime, c) => {
 				const id = task.input.executionId;
@@ -883,7 +898,7 @@ async function admit(tx: Parameters<Parameters<Api["commit"]>[0]>[0], api: Api, 
 }
 
 export function delegationExtension(options: DelegationOptions) {
-	const Reporter = reporterTask(options);
+	const Reporter = (reporterDefinition = reporterTask(options));
 
 	/** Resolve a binding with the resolver against the models this host can run (those with a stored login). */
 	const route = async (api: Api, role: string, independentOfProvider: string | undefined, independentOfModel: string | undefined, modelOverride: string | undefined, effort: string | undefined, excludeFamilies: string[] | undefined) => {
