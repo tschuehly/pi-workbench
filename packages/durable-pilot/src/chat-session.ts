@@ -211,6 +211,17 @@ function bashMessage(entry: EntryRecord): Record<string, unknown> {
 	return { role: "bashExecution", ...(entry.data as BashRecord), entryId: String(entry.id) };
 }
 
+/**
+ * A queued input the owner sent (a prompt, with or without its Working Mode block), not a notice from background bash,
+ * a child, a Page or a package: those wake the Chat but stay out of the queue the composer shows and edits, as legacy
+ * Pi keeps custom messages out of its queue. The queue view and its edits use this one rule, so indices agree.
+ */
+function ownerQueued<T extends { mode: string; entry?: unknown }>(item: T): item is T & { mode: "steer" | "followUp" } {
+	if (item.mode === "write") return false;
+	const kind = (item.entry as { kind?: string } | undefined)?.kind;
+	return kind === undefined || kind === PROMPT_ENTRY || kind === MODE_ENTRY;
+}
+
 /** A queued input as the composer's queue shows it: the user's text (after a Working Mode block), and its images. */
 function queuedMessage(item: { id: number; mode: "steer" | "followUp"; content: unknown; entry?: unknown }): QueuedMessage {
 	const parts = typeof item.content === "string" ? [{ type: "text", text: item.content }] : (item.content as { type: string; text?: string }[]);
@@ -597,7 +608,7 @@ export class ChatSession {
 			harness.snapshot(UsageDoc, root.id, context),
 			root.agent(context),
 		]);
-		const queuedMessages = runOrder((inbox?.items ?? []).flatMap((item) => (item.mode === "write" ? [] : [queuedMessage(item)])));
+		const queuedMessages = runOrder((inbox?.items ?? []).filter(ownerQueued).map(queuedMessage));
 		const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 		let cost = 0;
 		for (const bucket of [...Object.values(usage?.models ?? {}), ...Object.values(usage?.tools ?? {})]) {
@@ -1031,7 +1042,7 @@ export class ChatSession {
 	async mutateQueue(request: { editId: string; action: QueueAction; index: number; expected: number[] }): Promise<void> {
 		const { harness, root } = this.#host;
 		const inbox = await harness.snapshot(InboxDoc, root.id, context);
-		const before = runOrder((inbox?.items ?? []).flatMap((item) => (item.mode === "write" ? [] : [item])));
+		const before = runOrder((inbox?.items ?? []).filter(ownerQueued));
 		const target = await root.commit(async (tx) => {
 			// A retried edit names its first attempt's input, whatever the queue holds now.
 			const retried = (await tx.doc(Edits)).edits[request.editId];
@@ -1043,7 +1054,7 @@ export class ChatSession {
 			return undefined;
 		}, context);
 		const plan = (queue: QueuedInput[]): EditPlan => {
-			const order = runOrder(queue);
+			const order = runOrder(queue.filter(ownerQueued));
 			if (order.length !== request.expected.length || order.some((input, n) => input.id !== request.expected[n]))
 				throw new Error("Queued messages changed; refresh the queue and try again");
 			const input = order[request.index]!;

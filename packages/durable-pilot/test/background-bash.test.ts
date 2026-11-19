@@ -87,6 +87,26 @@ test("P078/P081 bash runs in the background by default: a job ID returns at once
 	await host.close();
 });
 
+test("a completion queued behind a busy turn stays out of the owner's queue, and the owner's queued message stays editable", async () => {
+	const { store, cwd } = family("queued-notice");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-bg", text: call("bash", { description: "Short job", command: "sleep 1.5; echo done" }) });
+	const id = jobId((await toolEnd(host)).text);
+	await host.idle(1);
+	await host.call("prompt", { operationId: "op-run", text: call("bash", { description: "Busy", command: "echo running; sleep 6", foreground: true }) });
+	await host.call("prompt", { operationId: "op-f1", text: "f1" });
+	await waitFor(() => exitRecord(id) !== undefined, "the job's exit");
+	await sleep(1500); // its completion is admitted behind f1 while the foreground tool runs
+	const items = (await host.call<{ queuedMessages: { id: number; kind: string; text: string }[] }>("status")).queuedMessages;
+	assert.deepEqual(items.map((item) => `${item.kind}:${item.text}`), ["followUp:f1"], "only the owner's message is queued");
+	await host.call("mutateQueue", { editId: "edit-remove", action: "remove", index: 0, expected: items.map((item) => item.id) });
+	assert.deepEqual((await host.call<{ queuedMessages: unknown[] }>("status")).queuedMessages, [], "the notice behind it does not block the edit");
+	await host.until(() => completionRequests(store) === 1, "the completion still wakes the Chat");
+	assert.ok(!logged(store).some((l) => l.label === "f1"), "the removed message never reached the model");
+	await host.close();
+});
+
 test("P071 foreground waits for the output inline; a failing exit is an error result; no completion follows", async () => {
 	const { store, cwd } = family("foreground");
 	const host = new ChatHost(store, cwd);

@@ -300,10 +300,11 @@ export async function changeQueued(
 			const record = await tx.submissionByRequest(conversation.id, op);
 			if (record !== undefined) opOf.set(record.id, op);
 		}
-		const queue = inbox.flatMap((item, n): QueuedInput[] => {
+		const queue = inbox.flatMap((item): QueuedInput[] => {
 			if (item.mode === "write") return [];
 			const operationId = opOf.get(item.id);
-			if (operationId === undefined && n >= at) throw new Error(`Cannot edit ${request.operationId}: queued item ${item.id} was not admitted by this host`);
+			// A notice another module submitted (background bash, a child, a Page) has no operation ID: it stays where it is,
+			// so re-admitted inputs land behind it (ponytail: Durable has no reorder).
 			if (operationId === undefined) return [];
 			const content = JSON.parse(JSON.stringify(item.content)) as JsonRepresentation<UserInput>;
 			return [{ id: item.id, operationId: operationId!, mode: item.mode, text: inputText(content), content, ...(item.entry === undefined ? {} : { entry: JSON.parse(JSON.stringify(item.entry)) as JsonRepresentation<InputEntry> }) }];
