@@ -1306,6 +1306,66 @@ test("navigation: still refused, in its commit, while a notice is being delivere
 	}
 });
 
+/** Entries of `kind` per branch of a closed store: the active one and the root. */
+async function kindCounts(store: string, cwd: string, kind: string) {
+	return inspect(store, cwd, async (h) => {
+		const root = (await h.harness.root(context)).id;
+		const count = async (id: ConversationId) => (await entries(h, id)).filter((entry) => entry.kind === kind).length;
+		return { activeIsRoot: h.root.id === root, active: await count(h.root.id), root: await count(root) };
+	});
+}
+
+test("navigation: refused while a child's update wake is committed but not yet submitted; the update reaches the branch it was committed on, once", async () => {
+	const { store, cwd } = family("nav-update");
+	const host = open(store, cwd, { PI_DURABLE_HOLD: "report:after-commit@4000" });
+	await host.ready;
+	await prompt(host, "first");
+	await quiet(host);
+	await prompt(host, call("subagent", scout('call:bash {"command":"sleep 3"}', { name: "Slow" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await quiet(host);
+	await waitFor(() => logged(store).some((l) => (l as { model?: string }).model !== undefined), "the child's request");
+	await prompt(host, call("subagent_steer", { executionId: id, message: call("report_status", { status: "after steer" }), requestUpdate: true }));
+	await toolResult(host, "subagent_steer");
+	await host.until((e) => e.type === "test.hold" && e.name === "report:after-commit", "the committed update, held before its submission");
+	const t = await host.call<HistoryTree>("tree");
+	await assert.rejects(host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId }), /Stop current session activity before navigating the session tree/, "an update bound for this branch settles here first");
+	await host.until((e) => e.type === "message.end" && (e.message as Message).customType === "pi-workbench:child-update", "the update");
+	await notice(host);
+	await quiet(host);
+	const after = await host.call<HistoryTree>("tree");
+	await host.call("navigate", { targetId: treeNode(after, "assistant", "ok: first").id, expectedLeafId: after.activeLeafId });
+	await host.until((e) => e.type === "session.tree.changed", "the branch switch once it settled");
+	await quiet(host);
+	await host.close();
+	assert.deepEqual(await kindCounts(store, cwd, "workbench.child-update"), { activeIsRoot: false, active: 0, root: 1 }, "one update, on the branch it was committed on");
+});
+
+test("navigation: a stuck notice delivered before navigation is not delivered again on the new branch after a restart", async () => {
+	const { store, cwd } = family("nav-stuck");
+	let host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000" });
+	await host.ready;
+	await prompt(host, "first");
+	await quiet(host);
+	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 8" }), { name: "Hung" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await host.until(isStuck, "the stuck notice");
+	await quiet(host);
+	const t = await host.call<HistoryTree>("tree");
+	await host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+	await host.until((e) => e.type === "session.tree.changed", "the branch switch, the child still stuck");
+	await host.kill();
+	// A long window after reopen: no new quiet span, so only the delivered notice could be sent again.
+	host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "600000", PILOT_STUCK_GRACE_MS: "1000" });
+	await host.ready;
+	await prompt(host, "resume");
+	await host.until((e) => isNotice(e) && textOf((e.message as Message).content).includes(`${id} [`), "the child's notice");
+	await quiet(host);
+	await host.close();
+	assert.deepEqual(await kindCounts(store, cwd, "workbench.child-stuck"), { activeIsRoot: false, active: 0, root: 1 }, "one stuck notice, on the branch it was delivered on");
+	assert.equal(integrity(store), "ok");
+});
+
 test("navigation: the Chat keeps control of its Workers on another branch (a fork outside the branch map gets none: the fork rule test above)", async () => {
 	const { store, cwd } = family("nav-worker");
 	const host = open(store, cwd);
