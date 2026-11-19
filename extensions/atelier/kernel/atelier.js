@@ -508,13 +508,15 @@ function boot() {
       try {
         const r = await fetch(`/.atelier/events${q}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
         const j = await r.json();
-        if (r.ok) { add([j.entry]); render(); return j.entry; }
+        if (r.ok) { add(j.undone ? [j.undone, j.entry] : [j.entry]); render(); return j.entry; }
         if (r.status !== 404) { flash(j.error ?? "Rejected"); return; }
       } catch { /* no server: fall through */ }
       conn = "no session";
     }
     // A Seen counts only once the host saved it: kept here it would hide the mark and never reach the log.
     if (body.type === "seen") { flash("Could not save Seen; the mark stays."); return; }
+    // A replacement only the host can make: kept here, the answer it replaces would still be delivered.
+    if (body.replaces != null) { flash("No session took the change; your answer stays."); return; }
     // No session serves this Page: keep the event here and offer Copy (decision 131; pi-artifacts' 503 + Copy).
     if (body.type === "undo") { local = local.filter((e) => e.seq !== body.target); render(); return; }
     const e = { ...body, seq: Math.min(0, ...local.map((x) => x.seq)) - 1, at: now(), origin: "human", local: true, delivery: body.delivery ?? CLASSES[body.type] };
@@ -1407,8 +1409,8 @@ function boot() {
     if (!d) return;
     // Always editable (155): a change is a new answer that names the one it replaces.
     let previous = d.answer && !d.stale && d.answer.option !== label ? d.answer.option : undefined, replaced; // a new round replaces nothing
-    // A change inside the undo window replaces the unsent answer, so only the last one is delivered (156). The
-    // replacement posts first and the undo only once it is accepted, so a refused one leaves the answer as it was.
+    // A change inside the undo window replaces the unsent answer, so only the last one is delivered (156). One
+    // request names it (replaces): the host undoes it and logs this one together, or refuses both.
     const a = current(d);
     if (a?.origin === "human" && left(a) > 0 && ["pending", "local"].includes(st.status(a))) {
       if (a.previous === label && !text && !images.length) { // back to the delivered answer: nothing new to send
@@ -1417,11 +1419,9 @@ function boot() {
     }
     const page = d.declared ? { options: d.options.map((o) => o.label).join("|"), rec: d.options.find((o) => o.recommended)?.label, delivery: d.delivery } : {};
     // The replaced answer was never delivered, so its note and images stay with the Decision unless new ones replace them.
-    const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, ask: d.askSeq, key: d.key, ver, ...page });
+    const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, ask: d.askSeq, key: d.key, ver, replaces: replaced && !replaced.local ? replaced.seq : undefined, ...page });
     if (!posted) return false; // refused: the note and images stay for another try
-    // ponytail: should the window close between the two posts, both answers are delivered and this one names the
-    // answer before the replaced one as previous; one request carrying both would close that gap.
-    if (replaced) await post({ type: "undo", target: replaced.seq });
+    if (replaced?.local) { local = local.filter((e) => e.seq !== replaced.seq); render(); } // kept only in this browser
     if (extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
   }
 

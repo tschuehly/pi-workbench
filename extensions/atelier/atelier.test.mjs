@@ -602,13 +602,84 @@ test("a second send waits until the first one's run has started", async () => {
   } finally { handlers.session_shutdown(); p.done(); }
 });
 
-test("a replacement posted before the undo of the answer it replaces: only the replacement counts and is delivered (2.14.2)", () => {
+test("legacy replay: an Event Log with a replacement before the undo of the answer it replaces counts and delivers only the replacement (2.14.2)", () => {
   const q = { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "x", question: "Publish?", options: [{ label: "Yes" }, { label: "No" }] } };
   const decide = (seq, option) => ({ seq, at: 0, origin: "human", type: "decide", decision: "x", option, ask: 1, delivery: "immediate" });
   const log = [q, decide(2, "Yes"), decide(3, "No"), { seq: 4, at: 0, origin: "human", type: "undo", target: 2, delivery: "control" }];
   assert.equal(derive(log).decisions[0].answer.option, "No");
   assert.deepEqual(dueMessages(log, UNDO).map((m) => m.seqs), [[3]], "the undone Yes is never delivered");
   assert.equal(derive(log.slice(0, 2)).decisions[0].answer.option, "Yes", "until the replacement is accepted, the answer is Yes");
+});
+
+// S1-S3 (review 5): a change inside the undo window is one request; the host undoes the original and appends the
+// replacement together, or refuses both and leaves the original.
+const replaceAsk = { id: "x", key: "a", material: "a", question: "Publish?", options: [{ label: "Yes" }, { label: "No" }] };
+
+test("S1: a replacement names the answer it replaces; the host undoes it in the same request, as a legacy undo-then-decide log replays", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const yes = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" }).json.entry;
+    tick(1_000);
+    assert.equal(human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1", replaces: yes.seq, images: ["nope.png"] }).status, 400, "an invalid replacement is refused");
+    assert.deepEqual(readLog(page).map((e) => e.type), ["ask", "decide"], "and leaves the original as it was");
+    const r = human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1", replaces: yes.seq });
+    assert.equal(r.status, 200);
+    const log = readLog(page);
+    assert.deepEqual(log.slice(2).map((e) => [e.type, e.target ?? e.option]), [["undo", yes.seq], ["decide", "No"]], "undo and replacement land together");
+    assert.equal(log[3].replaces, undefined, "the replacement is stored as a plain answer");
+    // The same change posted as two requests, undo then decide (Kernel before 2.14.2), replays identically.
+    const p2 = project(), two = await hostOn(p2);
+    try {
+      two.host.agent(two.page, { type: "ask", decision: replaceAsk });
+      two.human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" });
+      two.tick(1_000);
+      two.human({ type: "undo", target: yes.seq });
+      two.human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1" });
+      assert.deepEqual(readLog(two.page), log, "the same Event Log");
+    } finally { two.host.stop(); p2.done(); }
+    assert.equal(derive(log).decisions[0].answer.option, "No");
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].message.content, /Decision x \(version 1\): No/);
+    assert.doesNotMatch(sent[0].message.content, /Yes/, "the replaced answer is never delivered");
+  } finally { host.stop(); p.done(); }
+});
+
+test("S2: a replacement on another ask or version than the answer it names is refused; that answer stays", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const v2 = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "2" }).json.entry;
+    const late = human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1", replaces: v2.seq }); // a delayed click on v1
+    assert.equal(late.status, 409);
+    const other = host.agent(page, { type: "ask", decision: { ...replaceAsk, id: "y" } }).seq;
+    assert.equal(human({ type: "decide", decision: "y", option: "No", ask: other, key: "a", ver: "2", replaces: v2.seq }).status, 409, "another Decision's answer");
+    assert.deepEqual(readLog(page).filter((e) => e.origin === "human").map((e) => [e.type, e.option]), [["decide", "Yes"]]);
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent[0].message.content, /Decision x \(version 2\): Yes/, "the newer-version answer is delivered");
+  } finally { host.stop(); p.done(); }
+});
+
+test("S3: a replacement after the undo window has closed is refused whole: only the original is delivered", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const yes = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" }).json.entry;
+    tick(UNDO);
+    const r = human({ type: "decide", decision: "x", option: "No", previous: "Maybe", ask, key: "a", ver: "1", replaces: yes.seq });
+    assert.equal(r.status, 409);
+    assert.equal(r.json.error, "The 3-second undo window has closed.");
+    assert.deepEqual(readLog(page).filter((e) => e.origin === "human").map((e) => [e.type, e.option]), [["decide", "Yes"]], "no contradictory second answer");
+    host.deliverDue(page);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].message.content, /Decision x \(version 1\): Yes/);
+  } finally { host.stop(); p.done(); }
 });
 
 test("dueMessages skips in-flight events and covers only drafts before the Send", () => {

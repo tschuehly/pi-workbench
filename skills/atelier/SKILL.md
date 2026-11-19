@@ -62,7 +62,8 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   basis; none for ratings or gates without evidence. Once a Page is open, ask every question there, not in the
   Chat: a reply that offers choices, or free text you need settled, becomes an `ask` at its Key ("Other…" covers
   answers that fit no option), never numbered options in a reply. The human may change any answer later; a
-  change arrives as "X → Y". Once its undo window closes, an answered `ask` folds to one line (question and
+  change arrives as "X → Y"; one inside the undo window replaces the unsent answer, so only the last reaches you
+  (the Event Log shows an `undo` then the new `decide`). Once its undo window closes, an answered `ask` folds to one line (question and
   answer) that opens the full Decision, so answered questions take little room under their Key.
   When an asked Decision no longer needs the human (someone else settled it, or the work moved on),
   `retract` it with its `id` and `text` saying why: its card leaves the Page and the Event Log keeps the reason.

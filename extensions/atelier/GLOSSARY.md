@@ -33,7 +33,8 @@ A choice the human answers among declared options, or with his own answer ("Othe
 Key, such as a 1–5 score or Confirm/Redo. It may recommend one option, and may require a note for
 some options. Any answer may carry a note and images, which the Event Log keeps beside the Page.
 The human can change the answer at any time; the answer records what it replaced and whether the
-human opened the material first. An answered Decision the agent asked folds to one line, its question and
+human opened the material first. A change inside the undo window is one request naming the answer it replaces
+(`replaces`); the host undoes that answer and logs the new one together, or refuses both and keeps it. An answered Decision the agent asked folds to one line, its question and
 answer, which opens the full Decision. The agent may retract a Decision it asked once it no longer needs the
 human; it leaves the Page, and the Event Log keeps the reason. An answered Decision cannot be retracted; an answer given after
 the retract still lands, folded with the reason it is no longer asked. Each answer names the ask it answered, so a late

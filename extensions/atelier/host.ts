@@ -203,8 +203,9 @@ const images = opt((v) => Array.isArray(v) && v.length <= IMAGES_MAX && v.every(
 const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   comment: { ...ANCHOR, text: str, thread: opt(seqNo), images },
   // previous: the answer this one changes (155); options and rec: a Page-declared Decision's atl-decide and atl-rec;
-  // custom: the human wrote his own answer ("Other…") instead of picking an option; ask: the seq of the ask it answers (2.14.2).
-  decide: { decision: str, option: str, ask: opt(seqNo), custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str), images },
+  // custom: the human wrote his own answer ("Other…") instead of picking an option; ask: the seq of the ask it answers (2.14.2);
+  // replaces: the seq of the answer in its undo window this one replaces (the host undoes it in the same step).
+  decide: { decision: str, option: str, ask: opt(seqNo), replaces: opt(seqNo), custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str), images },
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
   close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str, ask: opt(seqNo) }, send: { key: opt(str) },
@@ -404,19 +405,25 @@ export function createHost(options: {
       const agent = new Set(readLog(page).filter((e) => e.origin === "agent" && (e.type === "ask" || e.type === "answer")).map((e) => e.seq));
       if (!body.of.every((s: number) => agent.has(s))) return { status: 400, json: { error: "Seen names only the agent's asks and replies on this Page." } };
     }
-    if (body.type === "undo") {
+    const undoing = body.type === "undo" ? body.target : event.replaces;
+    if (undoing !== undefined) {
       const log = readLog(page);
-      const target = log.find((e) => e.seq === body.target && e.origin === "human" && e.type !== "undo");
+      const target = log.find((e) => e.seq === undoing && e.origin === "human" && e.type !== "undo");
       if (!target) return { status: 400, json: { error: "Nothing to undo." } };
+      // A replacement replaces only an answer to the same Decision, ask and material version, so a delayed click never undoes a newer answer.
+      if (body.type === "decide" && (target.type !== "decide" || target.decision !== event.decision || (target.ask ?? null) !== (event.ask ?? null) || (target.ver ?? null) !== (event.ver ?? null))) return { status: 409, json: { error: "The answer this one would replace has changed; nothing was saved." } };
       if (log.some((e) => e.type === "undo" && e.target === target.seq)) return { status: 409, json: { error: "Already undone." } };
       if (now() - target.at >= undoMs) return { status: 409, json: { error: `The ${undoMs / 1000}-second undo window has closed.` } };
     }
     // Decision 155: a Page-declared Decision is Immediate by default; atl-delivery may declare another class.
     const delivery = body.type === "decide" && ["record", "send", "immediate"].includes(asked) ? asked
       : body.type === "comment" && asked === "send" ? "send" : cls; // a Page may batch Comments (156)
+    // A replacement is logged as an undo then the new answer, as two separate requests were before (2.14.2).
+    delete event.replaces;
+    const undone = body.type === "decide" && undoing !== undefined ? append(page, { type: "undo", target: undoing, origin: "human", delivery: CLASSES.undo }) : undefined;
     const entry = append(page, { ...event, origin: "human", delivery });
     if (delivery === "immediate" || delivery === "boundary") later(undoMs + 50, () => deliver(rec));
-    return { status: 200, json: { entry, undoMs } };
+    return { status: 200, json: { entry, undone, undoMs } };
   }
 
   const json = (res: ServerResponse, status: number, body: unknown) => {
