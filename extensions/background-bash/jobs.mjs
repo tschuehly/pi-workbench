@@ -2,7 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as joinPath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { removeActivity, upsertActivity } from "../activity/activity.mjs";
@@ -56,7 +56,7 @@ function dropCutHead(tail) {
 
 /** A job as tools, status and completions show it. */
 export function describeJob(job) {
-  return { id: job.id, command: job.command, ...(job.description === undefined ? {} : { description: job.description }), state: job.state, elapsedSeconds: Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000), bytes: job.bytes, logPath: job.logPath, ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }) };
+  return { id: job.id, command: job.command, ...(job.description === undefined ? {} : { description: job.description }), state: job.state, elapsedSeconds: Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000), bytes: job.bytes, logPath: job.logPath, ...(job.owned ? { startedAt: job.startedAt, expiresAt: job.expiresAt, lastOutputAt: job.lastOutputAt, ...(job.error === undefined ? {} : { error: job.error }), ...(job.cleanup === undefined ? {} : { cleanup: job.cleanup }) } : {}), ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }) };
 }
 
 /**
@@ -88,19 +88,24 @@ const VANISHED = "The job runner ended without recording an exit status";
  * it runs the command (runner.mjs). Returns whether a runner was started. `cancelled`: record the job as cancelled
  * without starting a runner (its owner ended meanwhile).
  */
-export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false }) {
+export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false }) {
   if (!/^[\w-]+$/.test(id)) throw new Error(`Invalid job ID ${id}`);
   const dir = join(root, id);
   if (existsSync(join(dir, "claim")) || existsSync(join(dir, "exit"))) return false;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   closeSync(openSync(join(dir, "output.log"), "a", 0o600));
-  writeJson(join(dir, "job.json"), { id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000 });
+  // An admitted deadline is immutable, even when a host dies before the runner claims it.
+  if (!existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}) }));
   if (cancelled) {
-    writeOnce(join(dir, "exit"), JSON.stringify({ cancelled: true, finishedAt: Date.now() }));
+    writeOnce(join(dir, "exit"), JSON.stringify({ cancelled: true, finishedAt: Date.now(), ...(owned ? { cleanup: { survivors: [] } } : {}) }));
     return false;
   }
-  const runner = spawn(process.execPath, [RUNNER, dir], { cwd: dir, detached: true, stdio: "ignore", env });
-  runner.once("error", () => {});
+  const runner = spawn(process.execPath, [runnerPath, dir], { cwd: dir, detached: true, stdio: "ignore", env });
+  runner.once("error", (error) => writeOnce(join(dir, "exit"), JSON.stringify({ error: `Runner could not start: ${String(error)}`, finishedAt: Date.now() })));
+  runner.once("exit", () => {
+    // No claim means no shell could have run. Never leave the blocking tool waiting on a dead pre-claim runner.
+    if (owned && !existsSync(join(dir, "claim"))) writeOnce(join(dir, "exit"), JSON.stringify({ error: "Runner ended before claiming the command; it was not run again", finishedAt: Date.now(), cleanup: { survivors: [] } }));
+  });
   runner.unref();
   return true;
 }
@@ -115,23 +120,34 @@ export function readJob(root, id) {
   const record = readJson(join(dir, "job.json"));
   if (record === undefined) return undefined;
   const logPath = join(dir, "output.log");
-  const job = { id, command: record.command, ...(typeof record.description === "string" && record.description.trim() !== "" ? { description: record.description } : {}), startedAt: record.startedAt, logPath, dir, bytes: fileSize(logPath), state: "running" };
+  const lastOutputAt = Math.max(record.startedAt, ...[logPath, ...(record.owned && record.progressLog ? [joinPath(record.cwd, record.progressLog)] : [])].map((path) => { try { const stat = statSync(path); return stat.size > 0 ? stat.mtimeMs : 0; } catch { return 0; } }));
+  const job = { id, expiresAt: record.expiresAt, lastOutputAt, ...(record.owned ? { owned: true } : {}), command: record.command, ...(typeof record.description === "string" && record.description.trim() !== "" ? { description: record.description } : {}), startedAt: record.startedAt, logPath, dir, bytes: fileSize(logPath), state: "running" };
   let result = readJson(join(dir, "exit"));
   const claim = readJson(join(dir, "claim"));
-  if (result === undefined && claim === undefined) return { ...job, state: "pending" };
+  if (result === undefined && claim === undefined) {
+    if (!record.owned || Date.now() < record.expiresAt) return { ...job, state: "pending" };
+    // The launching host may have died before observing a pre-claim runner failure. Its committed expiry still wins.
+    writeOnce(join(dir, "exit"), JSON.stringify({ error: `Timed out after ${record.timeout} seconds before launch; runner admission was not observed`, finishedAt: Date.now(), cleanup: { survivors: [] } }));
+    result = readJson(join(dir, "exit"));
+  }
   if (result === undefined && !ownsProcess({ id, pgid: claim?.pid })) {
     writeOnce(join(dir, "exit"), JSON.stringify({ error: `${VANISHED} (interrupted, for example by a restart of this machine); it was not run again`, finishedAt: Date.now() }));
     result = readJson(join(dir, "exit"));
   }
   if (result === undefined) return { ...job, pid: claim.pid };
   const settled = result.cancelled ? { state: "cancelled" } : result.error !== undefined ? { state: "failed", error: result.error } : { state: result.exitCode === 0 ? "complete" : "failed", exitCode: result.exitCode };
-  return { ...job, ...settled, finishedAt: result.finishedAt, bytes: fileSize(logPath) };
+  return { ...job, ...settled, finishedAt: result.finishedAt, ...(result.cleanup === undefined ? {} : { cleanup: result.cleanup }), bytes: fileSize(logPath) };
 }
 
 /** Cancel a job: kill its runner's group only after verifying it is this job's runner; a pending job never starts. */
 export function cancelJob(root, id) {
   const job = readJob(root, id);
   if (job === undefined || (job.state !== "running" && job.state !== "pending")) return job;
+  if (job.owned) {
+    // The runner owns TERM -> grace -> KILL and writes the result only after checking descendants.
+    writeOnce(join(job.dir, "cancel"), "");
+    return readJob(root, id);
+  }
   if (job.pid !== undefined && ownsProcess({ id, pgid: job.pid })) { try { process.kill(-job.pid, "SIGKILL"); } catch { /* already gone */ } }
   writeOnce(join(job.dir, "exit"), JSON.stringify({ cancelled: true, finishedAt: Date.now() }));
   return readJob(root, id);

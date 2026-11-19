@@ -8,6 +8,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import type { ConversationId, EntryRecord } from "@earendil-works/pi-durable";
+import { cancelJob, readJob } from "../../../extensions/background-bash/jobs.mjs";
 import { openChatHost } from "../src/chat.ts";
 import { ChildDoc, DelegationDoc, type Execution, WorkersDoc } from "../src/delegation.ts";
 import { context } from "../src/host.ts";
@@ -24,15 +25,23 @@ const SECRET = "delegationSecret-7c1e4b9a2d6f0e35";
 process.env.PILOT_DELEGATION_TOKEN = SECRET;
 const CHAT = "chat-s4a";
 
-after(() => {
+const JOB_ROOTS = new Set<string>();
+after(async () => {
 	for (const child of live) child.kill("SIGKILL");
+	for (const root of JOB_ROOTS) {
+		const ids = existsSync(root) ? readdirSync(root) : [];
+		for (const id of ids) cancelJob(root, id);
+		await waitFor(() => ids.every((id) => !["pending", "running"].includes(readJob(root, id)?.state ?? "")), "managed child cleanup");
+	}
 	cleanup();
 });
 
 /** A host with routed children on the scripted model; the quota snapshot is refreshed so routing never runs quota-axi. */
 function open(store: string, cwd: string, env: NodeJS.ProcessEnv = {}): ChatHost {
 	writeFileSync(QUOTA, JSON.stringify({ version: 1, checkedAt: Date.now(), status: 0, stdout: JSON.stringify({ providers: [] }), stderr: "" }));
-	return new ChatHost(store, cwd, { tps: 5000, args: ["--scripted-providers", "--session-id", CHAT], env });
+	const root = env.PI_BACKGROUND_BASH_ROOT ?? join(store, "bash-jobs");
+	JOB_ROOTS.add(root);
+	return new ChatHost(store, cwd, { tps: 5000, args: ["--scripted-providers", "--session-id", CHAT], env: { PI_BACKGROUND_BASH_ROOT: root, ...env } });
 }
 
 const call = (tool: string, args: object) => `call:${tool} ${JSON.stringify(args)}`;
@@ -613,7 +622,7 @@ test("report_status alone in its batch returns the reminder; batched with anothe
 		assert.deepEqual(reports.sort(), ["Reported: alone. Next time send report_status with a real tool call, never alone.", "Reported: batched"]);
 		const [e] = await executions(h);
 		const tool = (await (await h.harness.conversation(e!.conversationId as ConversationId, context))!.agent(context)).tools.find((t) => t.name === "report_status")!;
-		assert.match(tool.description, /report only when your phase changes[\s\S]*never alone; after each wait \(at most 55 min\) send one with your next tool call\.$/);
+		assert.match(tool.description, /report only when your phase changes[\s\S]*never alone; after each wait \(at most 15 min\) send one with your next tool call\.$/);
 		assert.doesNotMatch(tool.description, /stale/);
 	});
 });
@@ -672,38 +681,38 @@ test("stuck notice: a child inside one call that leaves its update request unrea
 	const { store, cwd } = family("stuck");
 	// Steer at 1 s, notice at 4 s, the bash ends at 8 s; the child then reads the steer, reports and sleeps 2.5 s,
 	// reading the second span's steer 1.5 s after it was sent: still exactly one notice.
-	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "3000" });
+	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "3000", PILOT_COMMAND_QUIET_MS: "4000" });
 	await host.ready;
 	await prompt(host, call("subagent", scout(call("bash", { command: `sleep 8 # hung ${SECRET}` }), { name: "Hung child" })));
 	const id = launchedId(await toolResult(host, "subagent"));
 	const stuck = (await host.until(isStuck, "the stuck notice")).message as Message;
 	const body = textOf(stuck.content);
-	assert.match(body, new RegExp(`^Child ${id} "Hung child" has not read the update request for \\d+ min and appears stuck inside one call: bash \`sleep 8 # hung `), body);
-	assert.match(body, / since \d{4}-\d\d-\d\dT/, "since when the call runs");
+	assert.match(body, new RegExp(`^Child ${id} "Hung child": no observed progress from bash `), body);
+	assert.match(body, /deadline .*last captured output .*\nsleep 8 # hung /);
 	assert.ok(!body.includes(SECRET), "the preview is redacted");
-	assert.match(body, /\nCheck it with subagent_status; if it is hung, subagent_cancel it; otherwise leave it\. This notice authorizes nothing else\.$/);
-	assert.deepEqual([stuck.details && (stuck.details as { executionId: string; tool: string }).executionId, (stuck.details as { tool: string }).tool], [id, "bash"]);
+	assert.match(body, /Silence is not proof of deadlock.*This notice authorizes nothing else\.$/s);
+	assert.deepEqual([stuck.details?.executionId, stuck.details?.reason], [id, "no-progress"]);
 	await host.until((e) => isNotice(e) && textOf((e.message as Message).content).includes(`${id} [success]`), "the child's notice");
 	await quiet(host);
 	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-stuck").length, 1, "one notice for the hung span, none for the span it read in time");
 	await host.close();
 	await inspect(store, cwd, async (h) => {
 		const [e] = await executions(h);
-		assert.equal(e!.stuckNotice?.seq, 1, "the notice names the first span's steer");
+		assert.ok(e!.progressNotice?.jobId, "the notice names the managed command, not a second quiet-span alarm");
 		assert.equal(e!.outcome, "success", "never cancelled automatically");
 	});
 });
 
 test("stuck notice: marked before a host kill, it reaches the lead once after reopen", async () => {
 	const { store, cwd } = family("stuck-kill");
-	let host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000", PI_DURABLE_HOLD: "stuck:after-mark" });
+	let host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000", PILOT_COMMAND_QUIET_MS: "4000", PI_DURABLE_HOLD: "progress:after-mark" });
 	await host.ready;
-	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 4" }))));
+	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 8" }))));
 	const id = launchedId(await toolResult(host, "subagent"));
-	await host.until((e) => e.type === "test.hold" && e.name === "stuck:after-mark", "the committed notice");
+	await host.until((e) => e.type === "test.hold" && e.name === "progress:after-mark", "the committed notice");
 	await host.kill();
 	// A long window after reopen: only the committed notice may reach the lead.
-	host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "600000", PILOT_STUCK_GRACE_MS: "1000" });
+	host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "600000", PILOT_STUCK_GRACE_MS: "1000", PILOT_COMMAND_QUIET_MS: "4000" });
 	await host.ready;
 	await prompt(host, "resume");
 	await host.until(isStuck, "the stuck notice after reopen");
@@ -711,7 +720,7 @@ test("stuck notice: marked before a host kill, it reaches the lead once after re
 	await quiet(host);
 	const notices = customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-stuck");
 	assert.equal(notices.length, 1, "exactly one stuck notice");
-	assert.match(textOf(notices[0]!.content), new RegExp(`^Child ${id} .* bash \`sleep 4\``));
+	assert.match(textOf(notices[0]!.content), new RegExp(`^Child ${id} .*no observed progress from bash .*\\nsleep 8\\n`));
 	await host.close();
 	assert.equal(integrity(store), "ok");
 });
@@ -728,7 +737,7 @@ test("stuck notice: a Worker stuck in a foreground subagent call names its leaf;
 	const workerId = /Created worker (\S+)/.exec(await toolResult(host, "worker_create"))![1]!;
 	await quiet(host);
 	// The secret leads the arguments, so the 200-character preview holds it.
-	const leaf = call("subagent", { type: "image", name: `Leaf ${password}`, [`key ${password}`]: "v", parts: [{ type: "text", text: password.slice(0, 9) }, { type: "text", text: password.slice(9) }], task: call("bash", { command: "sleep 6" }), profile: "scout", cognitiveRole: "routine", background: false });
+	const leaf = call("subagent", { type: "image", name: `Leaf ${password}`, [`key ${password}`]: "v", parts: [{ type: "text", text: password.slice(0, 9) }, { type: "text", text: password.slice(9) }], task: "long:35000", profile: "scout", cognitiveRole: "routine", background: false });
 	await prompt(host, call("worker_dispatch", { workerId, task: leaf, cognitiveRole: "coordination", background: true }));
 	const id = launchedId(await toolResult(host, "worker_dispatch"));
 	const stuck = (await host.until(isStuck, "the stuck notice")).message as Message;
@@ -768,11 +777,11 @@ test("stuck notice: a foreground child still gets its update request but sends n
 test("stuck notice: marked, then the child's cancellation begins before delivery: the notice is dropped", async () => {
 	const { store, cwd } = family("stuck-cancel");
 	// The notice's hold releases while the cancellation is held after its mark, before it aborts the reporter.
-	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000", PI_DURABLE_HOLD: "stuck:after-mark@3000,cancel:after-mark@4000" });
+	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000", PILOT_COMMAND_QUIET_MS: "2000", PI_DURABLE_HOLD: "progress:after-mark@3000,cancel:after-mark@4000" });
 	await host.ready;
 	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 30" }))));
 	const id = launchedId(await toolResult(host, "subagent"));
-	await host.until((e) => e.type === "test.hold" && e.name === "stuck:after-mark", "the committed notice");
+	await host.until((e) => e.type === "test.hold" && e.name === "progress:after-mark", "the committed notice");
 	const marked = Date.now();
 	await quiet(host);
 	await prompt(host, call("subagent_cancel", { executionId: id }));
@@ -785,11 +794,11 @@ test("stuck notice: marked, then the child's cancellation begins before delivery
 	await inspect(store, cwd, async (h) => {
 		const [e] = await executions(h);
 		assert.equal(e!.outcome, "cancelled");
-		assert.equal(e!.stuckNotice?.seq, 1, "the notice was marked before the cancellation");
+		assert.ok(e!.progressNotice?.jobId, "the notice was marked before the cancellation");
 	});
 });
 
-test("children's bash: a call without timeout gets the default (1800 s, shortened here), an explicit one is kept; the lead's bash is unaffected", async () => {
+test("children's bash: a call without timeout gets the default (1200 s, shortened here), an explicit one is kept; the lead's bash is unaffected", async () => {
 	const { store, cwd } = family("child-bash-timeout");
 	// Its own job root: Workbench bash job IDs (Chat and task) repeat across this file's Chats.
 	const host = open(store, cwd, { PILOT_CHILD_BASH_TIMEOUT_S: "1", PI_BACKGROUND_BASH_ROOT: scratch("delegation-bash-jobs") });
@@ -808,12 +817,12 @@ test("children's bash: a call without timeout gets the default (1800 s, shortene
 			return m?.toolName === "bash" ? [{ text: textOf(m.content), isError: m.isError === true }] : [];
 		});
 		assert.deepEqual(results.map((r) => r.isError), [true, false], JSON.stringify(results));
-		assert.match(results[0]!.text, /Command timed out after 1 seconds/);
+		assert.match(results[0]!.text, /Timed out after 1 seconds/);
 		assert.match(results[1]!.text, /kept/);
 		const child = (await (await h.harness.conversation(e!.conversationId as ConversationId, context))!.agent(context)).tools.find((t) => t.name === "bash")!;
-		assert.match(child.description, /without one the command times out after 1800 seconds\./);
+		assert.match(child.description, /the command times out after 1200 seconds/);
 		const lead = (await h.root.agent(context)).tools.find((t) => t.name === "bash")!;
-		assert.doesNotMatch(lead.description, /1800/);
+		assert.doesNotMatch(lead.description, /1200/);
 	});
 	assert.equal(readFileSync(join(cwd, "lead.txt"), "utf8").trim(), "lead-ok", "the lead's bash has no child default");
 });

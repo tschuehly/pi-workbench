@@ -16,6 +16,38 @@ The job registry lives at `~/.pi-workbench/background-bash/jobs/<id>/` (director
 
 When a session starts or reloads, the extension reattaches that session's jobs by Pi session ID: running jobs return to Activity and `bash_status`/`bash_cancel`, and jobs that finished meanwhile deliver their normal completion message. A completion without `delivered` is resent on the next attach or when the agent settles, so a cleared queue or a daemon exit cannot lose it; once acknowledged it is never resent. A turn-triggering completion that arrives while a context checkpoint is pending or compacting waits for the session's checkpoint barrier and is sent after the checkpoint is delivered. Completions are delivered only while the owning session is open. Cancellation kills the job's process group after checking that the recorded process is still this job's runner. Records are pruned a week after the job finished.
 
-Subagents and Workers retain native foreground bash so they cannot exit before a command finishes, and wait with `wait-until` (`extensions/subagent/README.md`); one-shot print/JSON Pi also runs foreground. The `!` user-shell shortcut is unchanged. This extension cannot detach a bash call that was already running before it loaded. A new Pi session or extension reload is needed to activate changes; no PI WEB daemon restart is required.
+Legacy Subagents and Workers retain native foreground bash so they cannot exit before a command finishes, and wait with `wait-until` (`extensions/subagent/README.md`); one-shot print/JSON Pi also runs foreground. The `!` user-shell shortcut is unchanged. This extension cannot detach a bash call that was already running before it loaded. A new Pi session or extension reload is needed to activate changes; no PI WEB daemon restart is required.
 
 Durable Chats bind the same runner and registry (`packages/durable-pilot/src/background-bash.ts`): the job ID derives from the Chat and the tool call, the launch intent is committed before the spawn, and the runner's claim makes a rerun after a host kill reattach instead of launching again. Durable records the delivery receipt; the `delivered` marker is not used there.
+
+
+## Durable child pilot (not legacy parity)
+
+Durable child `bash` waits for the **same runner** instead of using native bash or returning an asynchronous job handle.
+It defaults to **1200 seconds**; a positive finite `timeout` override is validated before admission. Start and expiry
+commit before launch. The job claim prevents a second launch after host loss; restore stays paused until resumed and
+never extends expiry. An expired intent cannot start writes. Missing runner/cleanup evidence is failure/unknown, not success.
+
+Child arguments and the native programmatic result remain compatible: `output`, `truncated`, optional `fullOutputPath`,
+and `exitCode`. The retained tail uses native bash's output limits; a truncated result names a complete sanitized sidecar,
+not the private raw runner log. Nonzero exits retain their output and code; timeout/abort/supervision failures are errors,
+not invented successful exit codes. The lead's background API is unchanged; no child tools are added.
+
+Owned commands carry an inherited identity marker. The runner finds their group, descendants and marked detached
+processes (including Playwright Chrome), verifies PID/start identity before signals, then TERM → 1-second grace → KILL.
+It records cleanup before the result; early shell exit with remaining descendants is an error, not a detached writer.
+This is trusted local supervision, not containment against deliberate environment clearing plus daemonization.
+Legacy runner/group semantics are unchanged. The inherited marker is not a credential; process environments are never
+published or retained in the ownership receipt (`owned.json` contains only PID/start identities).
+
+After **600 seconds** without captured stdout/stderr, the existing child-stuck reporter sends one redacted
+“no observed progress” notice to the parent, deduplicated per command and revalidated before admission. `progressLog`
+explicitly names redirected output to observe. Silence is suspicion only; neither output nor restart renews the deadline.
+The **900-second** Durable `wait-until` cap stays inside the command default; a silent wait may receive a notice but is
+not killed for silence. The existing **1800-second report quiet window + 600-second unread-request grace** still catches
+non-command waits, with no duplicate alarm for a managed command. Run the actual work in `bash`, never `cmd &`.
+Cancel/end/settle require cleanup; normal host close is restart, not cancellation. Old native uncertain effects remain guarded.
+
+Prove this with `npm --prefix packages/durable-pilot run test:bash-atelier` (install the pinned Playwright dev dependency
+and its Chromium once with `cd packages/durable-pilot && npx playwright install chromium`). Tests use seconds, disposable
+hosts, a real detached browser, an unrelated sentinel, restart fault windows, cancellation and Worker continuation.

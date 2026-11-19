@@ -385,7 +385,7 @@ export class ChatSession {
 	 * `reason: "upgrade"`: PI WEB's Upgrade now closes the host to start its family on new code (telemetry `upgrade-restart`).
 	 */
 	async close(options: { end?: boolean; reason?: "upgrade" } = {}): Promise<void> {
-		if (options.end === true) this.#chat?.bash?.cancelAll();
+		if (options.end === true) await this.#chat?.bash?.cancelAll();
 		this.#closed = true;
 		this.#stopPower();
 		this.#chat?.bash?.close();

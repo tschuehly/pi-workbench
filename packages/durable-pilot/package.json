@@ -19,6 +19,7 @@
   "devDependencies": {
     "@types/node": "26.6.5",
     "@types/proper-lockfile": "4.1.4",
+    "playwright": "1.61.1",
     "typescript": "7.0.2"
   },
   "scripts": {
@@ -36,6 +37,6 @@
     "test:extensions": "node --test --test-concurrency=1 --test-timeout=120000 test/extensions-host.test.ts",
     "chat-host": "node src/chat-host-main.ts",
     "test:packages": "node --test --test-concurrency=1 --test-timeout=120000 test/packages.test.ts test/paused-reads.test.ts test/paused-actions.test.ts",
-    "test:bash-atelier": "node --test --test-concurrency=1 --test-timeout=120000 test/background-bash.test.ts test/atelier.test.ts"
+    "test:bash-atelier": "node --test --test-concurrency=1 --test-timeout=120000 test/background-bash.test.ts test/child-deadlines.test.ts test/atelier.test.ts"
   }
 }

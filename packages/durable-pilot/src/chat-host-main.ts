@@ -58,7 +58,7 @@ const { values } = parseArgs({
 if (values["end-jobs"] === true) {
 	if (values.store === undefined) throw new Error("--store is required");
 	// The same Chat ID the host would use; the daemon passes its usual host arguments, the rest are ignored here.
-	new BackgroundBash({ chatId: values["session-id"] ?? values.store, cwd: values.store, rootId: () => undefined }).cancelAll();
+	await new BackgroundBash({ chatId: values["session-id"] ?? values.store, cwd: values.store, rootId: () => undefined }).cancelAll();
 	process.exit(0);
 }
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
