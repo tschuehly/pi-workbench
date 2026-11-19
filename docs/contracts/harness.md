@@ -71,7 +71,7 @@ The Durable instance (`docs/plans/pi-durable-cutover-spec.md`, B7) is a second i
 this one: `promote-installed --instance durable` runs `prepare`, `switch`, `switch-workbench`,
 `switch-web`, `prune` and `check-idle` on `~/IdeaProjects/*.durable-installed`, builds under
 `~/.pi-workbench/installed-durable/`, `PI_WEB_DATA_DIR` `~/.pi-web-durable`, port 8506 and launchd
-labels `com.pi-web-durable.*`, with `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_DURABLE_DEFAULT=1` and the
+labels `com.pi-web-durable.*`, with `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_DURABLE_DEFAULT=1`, `PI_WEB_DURABLE_AUTO_UPGRADE=1` and the
 build's own Durable host. It writes its own plists and never changes `~/.pi/agent`, the legacy links,
 plists, data or builds; the legacy prune never sees its builds.
 

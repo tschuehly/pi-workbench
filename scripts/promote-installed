@@ -41,7 +41,8 @@
 #       The same commands for the separate Durable instance (docs/plans/pi-durable-cutover-spec.md, B7):
 #       ~/IdeaProjects/*.durable-installed, builds under ~/.pi-workbench/installed-durable, PI_WEB_DATA_DIR
 #       ~/.pi-web-durable (its socket and config.json there), port 8506, launchd labels com.pi-web-durable.*,
-#       PI_WEB_PI_PACKAGE_AUTO_INSTALL=0, PI_WEB_DURABLE_DEFAULT=1 and PI_WEB_DURABLE_HOST in the build's
+#       PI_WEB_PI_PACKAGE_AUTO_INSTALL=0, PI_WEB_DURABLE_DEFAULT=1, PI_WEB_DURABLE_AUTO_UPGRADE=1 (pinned Chats move to new
+#       host code by themselves when quiet; PI_PROMOTE_DURABLE_ENV="PI_WEB_DURABLE_AUTO_UPGRADE=0" turns it off) and PI_WEB_DURABLE_HOST in the build's
 #       packages/durable-pilot. It writes its own plists and never reads-modifies ~/.pi/agent, the legacy links,
 #       plists, ~/.pi-web, ~/.config/pi-web or ~/.pi-workbench/installed. Its check-idle counts only the Durable
 #       session daemon's descendants, except Durable hosts. switch-workbench repoints only the link; the running
@@ -356,7 +357,7 @@ for s in sessiond web; do
     PI_WEB_DATA_DIR="$DATA" PI_WEB_CONFIG="$DATA/config.json" PI_WEB_PORT=$PORT PI_WEB_PI_PACKAGE_AUTO_INSTALL=0 \
     PI_WEB_PI_PACKAGE_DIR="$pw/node_modules/@earendil-works/pi-coding-agent" \
     PI_WEB_DURABLE_HOST="$wb/packages/durable-pilot/src/chat-host-main.ts" PI_WEB_DURABLE_DEFAULT=1 \
-    PI_WEB_DURABLE_HOST_LAUNCHD=$HOSTLABEL $EXTRA |
+    PI_WEB_DURABLE_HOST_LAUNCHD=$HOSTLABEL PI_WEB_DURABLE_AUTO_UPGRADE=1 $EXTRA |
     plutil -convert xml1 -o "$job/new/$LABEL.$s.plist" - || { echo "writing $LABEL.$s.plist failed" >&2; exit 1; }
 done
 cat >"$job/job.sh" <<EOF

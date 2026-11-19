@@ -27,7 +27,7 @@ On 17 Nov Thomas works in a second, separately installed PI WEB instance (the **
 **B5 Lifetime rules (C3).**
 - Ending a Chat or a stop-all reaches its host and children; losing the transport does not.
 - Idle hosts close in order after 2 h, the legacy idle window.
-- A family moves to new host code only when Thomas asks and the family is quiet. Otherwise it stays on its old revision, which is shown.
+- A family moves to new host code when Thomas asks, or by itself (Thomas, 19 Nov) once only restart-safe work is left; an upgrade that changes the store format waits until the family is quiet (Atelier Pages allowed). Until then it stays on its old revision, which is shown.
 
 **B6 Durable by default in the Durable instance.** A PI WEB switch, `PI_WEB_DURABLE_DEFAULT=1` read like `PI_WEB_DURABLE_HOST`, makes New Chat create a Durable Chat. The Durable instance sets it; the legacy instance does not, so its behavior is unchanged.
 
