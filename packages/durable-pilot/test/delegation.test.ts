@@ -16,6 +16,8 @@ import { cleanup, scratch } from "./runner.ts";
 
 const TELEMETRY = scratch("delegation-telemetry");
 process.env.PI_TELEMETRY_DIR = TELEMETRY;
+// Worker status files land under HOME/.pi-workbench; keep them out of the real one.
+process.env.HOME = scratch("delegation-home");
 const QUOTA = join(scratch("delegation-quota"), "quota.json");
 process.env.PI_WORKBENCH_QUOTA_CACHE = QUOTA;
 const SECRET = "delegationSecret-7c1e4b9a2d6f0e35";
@@ -420,6 +422,10 @@ test("P095–P098 Workers: create starts nothing; busy dispatch fails preflight;
 	await quiet(host);
 	await prompt(host, call("worker_retire", { workerId, reason: "scope done" }));
 	assert.match(await toolResult(host, "worker_retire"), new RegExp(`^Retired worker ${workerId} at \\S+: scope done$`));
+	// The Worker's status file (legacy Cockpit status): the lead marks each dispatch's start and end, and the retirement.
+	const statusFile = JSON.parse(readFileSync(join(process.env.HOME!, ".pi-workbench", "workers", "status", `${workerId}.json`), "utf8")) as { state: string; log: { text: string }[] };
+	assert.equal(statusFile.state, "retired");
+	assert.deepEqual(statusFile.log.slice(-3).map((l) => l.text), ["Dispatch accepted", "Dispatch ended: success", "Retired: scope done"]);
 	await quiet(host);
 	await prompt(host, call("worker_dispatch", { workerId, task: "x", cognitiveRole: "routine" }));
 	assert.match(await toolResult(host, "worker_dispatch", 6), /^preflight_failed: Worker \S+ was retired at \S+: scope done$/);

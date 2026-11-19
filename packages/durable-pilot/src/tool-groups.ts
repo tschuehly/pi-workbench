@@ -1,7 +1,8 @@
 // Tool groups for Durable Chats (extensions/tool-groups, ported): rarely used groups stay out of the lead's startup
 // context as Durable `deferred` tools; `tools_enable({ group })` loads them with `control.addTools`, which Durable
 // records in the conversation's `modelTools`, so the exposure survives a restart, a compaction and a fork (as of its
-// entry). An enabled-group document records the choice; Orchestration "Workers" shows the workers group as legacy does.
+// entry). An enabled-group document records the choice; Orchestration "Workers" shows the workers group and "Cockpit" also
+// the atelier group, as legacy does.
 // Exposure never widens an allowlist: `modelTools` only filters a conversation's enabled `tools`, and nested calls of a
 // group tool that is not exposed in the calling conversation are blocked.
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -97,21 +98,27 @@ export function toolGroupsExtension(extensions: readonly Provider[]) {
 	});
 }
 
+/** Groups the selected Orchestration value shows: Workers needs worker tools, Cockpit also needs Atelier. */
+const MODE_GROUPS: Record<string, Group[]> = { Workers: ["workers"], Cockpit: ["workers", "atelier"] };
+const MODE_MANAGED: Group[] = ["workers", "atelier"];
+
 /**
- * Show the workers group while Orchestration is Workers and hide it again when the group was not enabled with
- * `tools_enable` (legacy `pi-workbench:working-mode` handling). Other loaded tools stay as they are.
+ * Show the groups the Orchestration value needs and hide them again when they were not enabled with `tools_enable`
+ * (legacy `pi-workbench:working-mode` handling). Other loaded tools stay as they are.
  */
 export async function syncWorkersGroup(harness: Harness, registry: Registry, conversation: Conversation, extensions: readonly Extension[]): Promise<void> {
-	const workers = groupMembers(extensions).workers;
-	if (workers.length === 0) return;
+	const members = groupMembers(extensions);
+	if (MODE_MANAGED.every((id) => members[id].length === 0)) return;
 	const [mode, groups, agent] = await Promise.all([
 		harness.snapshot(WorkingModeDoc, conversation.id, context),
 		harness.snapshot(ToolGroupsDoc, conversation.id, context),
 		harness.snapshot(AgentDoc, conversation.id, context),
 	]);
-	const show = mode?.selected.orchestration === "Workers" || (groups?.enabled ?? []).includes("workers");
+	const wanted = MODE_GROUPS[mode?.selected.orchestration ?? ""] ?? [];
+	const shown = MODE_MANAGED.filter((id) => wanted.includes(id) || (groups?.enabled ?? []).includes(id)).flatMap((id) => members[id]);
+	const hidden = MODE_MANAGED.flatMap((id) => members[id]).filter((name) => !shown.includes(name));
 	const current = added(agent?.modelTools);
-	const next = show ? [...new Set([...current, ...workers])] : current.filter((name) => !workers.includes(name));
+	const next = [...new Set([...current.filter((name) => !hidden.includes(name)), ...shown])];
 	if (next.length === current.length && next.every((name) => current.includes(name))) return;
 	if (Array.isArray(agent?.modelTools)) return; // an explicit allowlist (a child's) is never widened or edited here
 	const byName = new Map<string, ToolRegistration>(registry.snapshot().tools().map(({ tool }: { tool: ToolRegistration }) => [tool.name, tool]));

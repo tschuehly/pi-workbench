@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,9 +16,10 @@ import { nodeBin } from "../background-bash/node-bin.mjs";
 import { latestAssistantToolCallCount } from "../context-checkpoint/coordinator.mjs";
 import { createCompletionWakeup, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
 import { activityText, progressText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
+import { STATUS_STATES, leadStatusWrite, workerStatusFile, writeStatusFile } from "./status-file.mjs";
 import { COGNITIVE_ROLES, INDEPENDENT_ROLES, LEAF_PROFILES, MODEL_EFFORTS, NO_NESTED_WORKERS, PROFILES, RESOLVER as resolver, ROLE_GUIDE, STATUS_INSTRUCTION, UPDATE_REQUEST, WEB_TOOLS, WORKER_PROFILES, WORKER_ROLES, collectAll, providerOf, resolveBinding } from "./core.mjs";
 
-export { PROFILES, collectAll, providerOf };
+export { PROFILES, collectAll, providerOf, workerStatusFile, writeStatusFile };
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // A leaf launched inside a Worker is the deepest supported level.
@@ -68,42 +69,10 @@ const SteerParams = Type.Object({
   mode: Type.Optional(Type.Union([Type.Literal("steer"), Type.Literal("followUp")], { description: "steer: after its current tool calls (default); followUp: once it would otherwise stop" })),
   requestUpdate: Type.Optional(Type.Boolean({ description: "Ask the child to report_status; its next report wakes you" })),
 });
-const STATUS_STATES = ["working", "needs-you", "blocked", "waiting", "done", "failed"] as const;
 const ReportStatusParams = Type.Object({
   status: Type.String({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
   state: Type.Optional(StringEnum(STATUS_STATES, { description: "Your state for the lead's Cockpit tab; omit to keep the previous one (starts as working)" })),
 });
-const STATUS_LOG_MAX = 20;
-
-/** Where a Worker's latest report_status lands, so a Cockpit lead can read it by workerId. */
-export const workerStatusFile = (workerId: string, home = os.homedir()) => path.join(home, ".pi-workbench", "workers", "status", `${workerId}.json`);
-
-/** States a Worker reports plus `retired`, which only worker_retire writes. */
-const STATUS_FILE_STATES: readonly string[] = [...STATUS_STATES, "retired"];
-
-/**
- * Atomically rewrite the status file: latest state and line, plus the last STATUS_LOG_MAX lines.
- * An undefined line keeps the previous one and logs `logText` (the lead's end-of-dispatch and retire notes).
- */
-export function writeStatusFile(file: string, line: string | undefined, state: string | undefined, now = new Date(), logText = line) {
-  if (state !== undefined && !STATUS_FILE_STATES.includes(state)) throw new Error(`Unknown status state '${state}'`);
-  let previous: { state?: string; line?: string; log?: { t: string; text: string }[] } = {};
-  try { previous = JSON.parse(readFileSync(file, "utf8")); } catch {}
-  const updated = now.toISOString();
-  const text = logText ?? line ?? "";
-  const log = [...(Array.isArray(previous.log) ? previous.log : []), { t: updated, text }].slice(-STATUS_LOG_MAX);
-  const body = { state: state ?? previous.state ?? "working", line: line ?? previous.line ?? text, updated, log };
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(body, null, 2)}\n`);
-  renameSync(temporary, file);
-  return body;
-}
-
-/** A lead-side status write: returns a note naming the failure instead of swallowing it. */
-function leadStatusWrite(file: string, state: string, logText: string): string {
-  try { writeStatusFile(file, undefined, state, new Date(), logText); return ""; } catch (error) { return `\n\nStatus file not written: ${errorMessage(error)}`; }
-}
 
 const WorkerCreateParams = Type.Object({
   name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),

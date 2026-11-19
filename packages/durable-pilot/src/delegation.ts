@@ -52,6 +52,7 @@ import {
 	WORKER_ROLES,
 } from "../../../extensions/subagent/core.mjs";
 import { CUSTOM_TYPE as COMPLETION_CUSTOM_TYPE, composeNotice } from "../../../extensions/subagent/completion-wakeup.mjs";
+import { leadStatusWrite, STATUS_STATES, workerStatusFile, writeStatusFile } from "../../../extensions/subagent/status-file.mjs";
 import { batchSize, CheckpointDoc, continuationRequestId } from "./checkpoint.ts";
 import { redact, sanitizeDeep, sealed } from "./redact.ts";
 
@@ -382,6 +383,9 @@ function reporterTask(options: DelegationOptions) {
 					}, c);
 				};
 				void tick().catch(() => {});
+				// A Worker's status file (legacy worker_dispatch): a new job starts working, so its stateless reports never inherit
+				// the last job's done. A rerun after the child reported keeps the child's state.
+				if (before.workerId !== undefined && before.reportedAt === undefined) leadStatusWrite(workerStatusFile(before.workerId), "working", "Dispatch accepted");
 				const submission = await child.submit({ type: "input", content: task.input.assignment, whenBusy: "followUp", requestId: `assignment:${id}` }, c);
 				const settled = await submission.wait(c);
 				const done = settled.status === "done";
@@ -446,6 +450,9 @@ function reporterTask(options: DelegationOptions) {
 				cadenceStopped = true;
 				clearTimeout(cadence);
 				const record = (await runtime.snapshot(DelegationDoc, runtime.conversationId, c))!.executions[id]!;
+				// The Worker cannot report its own end; a cancellation marks it in cancelExecution instead.
+				if (record.workerId !== undefined && record.outcome !== "running" && record.cancelEpoch === undefined)
+					leadStatusWrite(workerStatusFile(record.workerId), record.outcome === "success" ? "done" : "failed", `Dispatch ended: ${record.outcome}`);
 				options.record("execution.settled", { executionId: id, kind: record.kind, outcome: record.outcome, childSessionId: `${options.chatId}:${String(conversation)}`, ...(record.workerId === undefined ? {} : { workerId: record.workerId }) });
 				for (const { entry, message } of answers)
 					options.record("usage", {
@@ -642,6 +649,7 @@ export async function cancelExecution(harness: Harness, parent: ConversationId, 
 		current.diagnostic = confirmed ? sanitize(reason) : `termination was not confirmed within ${String(CANCEL_TIMEOUT_MS / 1000)}s: ${sanitize(reason)}`;
 		if (current.workerId !== undefined) settleWorker(await tx.doc(WorkersDoc), current);
 	}, BACKGROUND);
+	if (e.workerId !== undefined) leadStatusWrite(workerStatusFile(e.workerId), "failed", `Dispatch ended: ${outcome}`);
 	return { outcome };
 }
 
@@ -907,20 +915,26 @@ export function delegationExtension(options: DelegationOptions) {
 	const reportStatus = defineTool({
 		name: "report_status",
 		description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; after each wait (at most 55 min) send one with your next tool call.",
-		parameters: obj({ status: str({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }) }, { open: true }),
+		parameters: obj({
+			status: str({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
+			state: opt(StringEnum(STATUS_STATES as unknown as [string, ...string[]], { description: "Your state for the lead's Cockpit tab; omit to keep the previous one (starts as working)" })),
+		}, { open: true }),
 		replay: "safe",
 		execute: async (params, api, c) => {
 			const status = sanitize(params.status);
 			const self = await api.snapshot(ChildDoc, api.conversationId, c);
+			let written = "";
 			if (self !== undefined && self.executionId !== "") {
 				const parent = self.parentConversationId as ConversationId;
 				const key = String(api.taskId);
+				let workerId: string | undefined;
 				const update = await api.commit(async (tx) => {
 					const doc = await tx.doc(DelegationDoc, parent);
 					const prior = doc.updateByTask[key];
 					if (prior !== undefined) return copy(prior);
 					const e = doc.executions[self.executionId];
 					if (e === undefined) return undefined;
+					workerId = e.workerId;
 					e.reportedStatus = status;
 					e.reportedAt = iso(api.now());
 					// Only a report from a call made after the steer that asked for it wakes the lead, once.
@@ -930,6 +944,14 @@ export function delegationExtension(options: DelegationOptions) {
 					doc.updateByTask[key] = pending;
 					return copy(pending);
 				}, c);
+				// A dispatched Worker's report also rewrites its status file (legacy PI_WORKBENCH_STATUS_FILE); leaves have none.
+				if (workerId !== undefined) {
+					try {
+						writeStatusFile(workerStatusFile(workerId), status, params.state);
+					} catch (error) {
+						written = ` Status file not written: ${error instanceof Error ? error.message : String(error)}`;
+					}
+				}
 				if (update !== undefined) {
 					const lead = (await api.conversation(parent, c))!;
 					await lead.submit({ type: "input", content: update.text, whenBusy: "steer", requestId: `update:${update.executionId}:${String(update.seq)}`, entry: { kind: UPDATE_ENTRY, data: { executionId: update.executionId, status } } }, c);
@@ -937,7 +959,10 @@ export function delegationExtension(options: DelegationOptions) {
 			}
 			// A lone report costs a whole model turn that re-reads the context; say so once it happens.
 			const alone = (await batchSize(api, c)) === 1;
-			return { output: text(alone ? `Reported: ${status}. Next time send report_status with a real tool call, never alone.` : `Reported: ${status}`), details: { outcome: "reported", status } };
+			return {
+				output: text((alone ? `Reported: ${status}. Next time send report_status with a real tool call, never alone.` : `Reported: ${status}`) + written),
+				details: { outcome: "reported", status, ...(params.state === undefined ? {} : { state: params.state }) },
+			};
 		},
 	});
 
@@ -1161,7 +1186,8 @@ export function delegationExtension(options: DelegationOptions) {
 				return copy(worker.retired);
 			}, c);
 			if ("error" in retired) return failure("preflight_failed", retired.error!);
-			return { output: text(`Retired worker ${workerId} at ${retired.at}: ${retired.reason}`), details: { workerId, ...retired } };
+			const note = leadStatusWrite(workerStatusFile(workerId), "retired", `Retired: ${retired.reason}`);
+			return { output: text(`Retired worker ${workerId} at ${retired.at}: ${retired.reason}${note}`), details: { workerId, ...retired } };
 		},
 	});
 

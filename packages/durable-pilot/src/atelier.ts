@@ -204,7 +204,7 @@ export class Atelier {
 			name: "atelier",
 			description: DESCRIPTION,
 			parameters: obj({
-				action: StringEnum(["open", "takeover", "update", "ask", "answer", "status", "check"]),
+				action: StringEnum(["open", "takeover", "update", "ask", "retract", "answer", "status", "check"]),
 				page: str({ description: "Page path, relative to the project or absolute" }),
 				decision: opt(obj({
 					id: str(),
@@ -214,6 +214,7 @@ export class Atelier {
 					material: opt(str({ description: "Key whose opening counts as opened" })),
 					detail: opt(str()),
 				}, { open: true })),
+				id: opt(str({ description: "retract: Decision id" })),
 				comment: opt(num({ description: "answer: Comment #" })),
 				request: opt(num({ description: "status: Request #" })),
 				state: opt(StringEnum(REQUEST_STATES as string[])),
@@ -280,6 +281,15 @@ export class Atelier {
 					if (d.options.filter((o) => o.recommended === true).length > 1) throw new Error("A Decision recommends at most one option (decision 155).");
 					const entry = earlier ?? host.agent(page, { type: "ask", decision: d, op });
 					return result(`Decision ${d.id} posted (#${entry.seq}). End your turn; the answer arrives as a message after its 3-second undo window.`, { seq: entry.seq });
+				}
+				if (params.action === "retract") {
+					// A rerun after a kill finds its retract by op; the Decision may no longer derive as asked.
+					if (earlier !== undefined) return result(`Decision ${String(earlier.decision)} retracted (#${earlier.seq}); it no longer asks.`, { seq: earlier.seq });
+					const asked = derive(entries).decisions.find((d: { id: string; declared?: boolean }) => d.id === params.id && !d.declared);
+					if (!asked || !params.text) throw new Error("retract needs the id of a Decision you asked on this Page and text: why it no longer needs the human.");
+					if (asked.answer) throw new Error(`Decision ${asked.id} is answered; keep its answer and say in the Page prose why it is overtaken.`);
+					const entry = host.agent(page, { type: "retract", decision: asked.id, reason: params.text, op });
+					return result(`Decision ${asked.id} retracted (#${entry.seq}); it no longer asks.`, { seq: entry.seq });
 				}
 				if (params.action === "answer") {
 					const target = entries.find((e) => e.seq === params.comment && e.type === "comment" && e.origin === "human");
