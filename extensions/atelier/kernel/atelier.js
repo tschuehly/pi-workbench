@@ -510,7 +510,16 @@ function boot() {
         const j = await r.json();
         if (r.ok) { add(j.undone ? [j.undone, j.entry] : [j.entry]); render(); return j.entry; }
         if (r.status !== 404) { flash(j.error ?? "Rejected"); return; }
-      } catch { /* no server: fall through */ }
+      } catch {
+        // The response is lost, so the host may have saved the change: its undo and the new answer share one write.
+        if (body.replaces != null) {
+          flash("Couldn't confirm the change; checking…");
+          await pull();
+          const undo = entries.find((e) => e.type === "undo" && e.target === body.replaces);
+          const saved = undo && entries.find((e) => e.seq === undo.seq + 1 && e.type === "decide" && e.decision === body.decision);
+          if (saved) return saved;
+        }
+      }
       conn = "no session";
     }
     // A Seen counts only once the host saved it: kept here it would hide the mark and never reach the log.

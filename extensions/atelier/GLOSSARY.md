@@ -34,7 +34,7 @@ Key, such as a 1–5 score or Confirm/Redo. It may recommend one option, and may
 some options. Any answer may carry a note and images, which the Event Log keeps beside the Page.
 The human can change the answer at any time; the answer records what it replaced and whether the
 human opened the material first. A change inside the undo window is one request naming the answer it replaces
-(`replaces`); the host undoes that answer and logs the new one together, or refuses both and keeps it. An answered Decision the agent asked folds to one line, its question and
+(`replaces`); the host writes the undo and the new answer to the Event Log in one write, or refuses or fails both and keeps that answer for delivery. A Page whose change got no response reads the Event Log to show which answer the host holds. An answered Decision the agent asked folds to one line, its question and
 answer, which opens the full Decision. The agent may retract a Decision it asked once it no longer needs the
 human; it leaves the Page, and the Event Log keeps the reason. An answered Decision cannot be retracted; an answer given after
 the retract still lands, folded with the reason it is no longer asked. Each answer names the ask it answered, so a late
@@ -59,7 +59,7 @@ dims and labels only, so Decisions inside stay answerable.
 _Avoid_: draft, pending, locked
 
 **Event Log**:
-The append-only, numbered record of every human and agent event on one Page, kept on disk.
+The append-only, numbered record of every human and agent event on one Page, kept on disk. A write lands whole or is cut back off; a torn last line is skipped.
 _Avoid_: store, inbox, queue
 
 **Delivery**:

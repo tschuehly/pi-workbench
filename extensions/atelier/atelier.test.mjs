@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
 import http from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -680,6 +682,53 @@ test("S3: a replacement after the undo window has closed is refused whole: only 
     assert.equal(sent.length, 1);
     assert.match(sent[0].message.content, /Decision x \(version 1\): Yes/);
   } finally { host.stop(); p.done(); }
+});
+
+test("S4: a replacement whose write fails leaves the Event Log as it was: the original stays and is delivered", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  const real = fs.appendFileSync;
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const yes = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" }).json.entry;
+    tick(1_000);
+    const before = readFileSync(`${page}.events.jsonl`, "utf8");
+    // The disk fills while the replacement is written: the write naming it fails after any earlier bytes landed.
+    fs.appendFileSync = (file, data, ...rest) => {
+      if (String(data).includes('"option":"No"')) { real(file, String(data).slice(0, 7), ...rest); throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }); }
+      return real(file, data, ...rest);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1", replaces: yes.seq }), /ENOSPC/, "the request fails");
+    fs.appendFileSync = real; syncBuiltinESMExports();
+    assert.equal(readFileSync(`${page}.events.jsonl`, "utf8"), before, "neither the undo nor a torn replacement is left");
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].message.content, /Decision x \(version 1\): Yes/, "the original is still delivered");
+  } finally { fs.appendFileSync = real; syncBuiltinESMExports(); host.stop(); p.done(); }
+});
+
+test("S5: a replacement for another Key than the answer it names is refused; that answer stays", async () => {
+  const p = project();
+  const { host, page, human } = await hostOn(p);
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const yes = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" }).json.entry;
+    assert.equal(human({ type: "decide", decision: "x", option: "No", ask, key: "b", ver: "1", replaces: yes.seq }).status, 409);
+    assert.deepEqual(readLog(page).filter((e) => e.origin === "human").map((e) => [e.type, e.option]), [["decide", "Yes"]]);
+  } finally { host.stop(); p.done(); }
+});
+
+test("readLog skips a torn trailing line, and the next append starts on a fresh line", () => {
+  const p = project();
+  try {
+    appendLog(p.page, { origin: "human", type: "comment", text: "kept" });
+    fs.appendFileSync(`${p.page}.events.jsonl`, '{"seq":2,"at":1,"origin":"hu');
+    assert.deepEqual(readLog(p.page).map((e) => e.text), ["kept"]);
+    assert.equal(appendLog(p.page, { origin: "human", type: "comment", text: "next" }).seq, 2);
+    assert.deepEqual(readLog(p.page).map((e) => e.text), ["kept", "next"]);
+  } finally { p.done(); }
 });
 
 test("dueMessages skips in-flight events and covers only drafts before the Send", () => {

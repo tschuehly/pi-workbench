@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
@@ -50,13 +50,21 @@ const isLink = (file: string) => { try { return lstatSync(file).isSymbolicLink()
 
 // Only the endpoint serving the Page for its receiver appends (claimPage), so reading the log for the next seq is safe.
 export function appendLog(page: string, entry: Record<string, unknown>, now = Date.now()): Entry {
+  return appendLogs(page, [entry], now)[0];
+}
+
+/** Appends entries in one write; a failed write is cut back off, so the log gains all of them or none. */
+export function appendLogs(page: string, entries: Record<string, unknown>[], now = Date.now()): Entry[] {
   const file = logPath(page);
   if (isLink(file)) throw new Error(`${file} is a symlink; Atelier writes its Event Log only beside the Page.`);
-  const entries = readLog(page);
-  const seq = entries.reduce((max, e) => Math.max(max, Number(e.seq) || 0), 0) + 1;
-  const full = { seq, at: now, ...entry } as Entry;
-  const torn = existsSync(file) && !readFileSync(file, "utf8").endsWith("\n") && statSync(file).size > 0;
-  appendFileSync(file, `${torn ? "\n" : ""}${JSON.stringify(full)}\n`);
+  let seq = readLog(page).reduce((max, e) => Math.max(max, Number(e.seq) || 0), 0);
+  const full = entries.map((entry) => ({ seq: ++seq, at: now, ...entry }) as Entry);
+  const size = existsSync(file) ? statSync(file).size : 0;
+  const torn = size > 0 && !readFileSync(file, "utf8").endsWith("\n");
+  try { appendFileSync(file, `${torn ? "\n" : ""}${full.map((e) => `${JSON.stringify(e)}\n`).join("")}`); } catch (error) {
+    try { truncateSync(file, size); } catch { /* readLog still skips a torn last line */ }
+    throw error;
+  }
   return full;
 }
 
@@ -329,11 +337,12 @@ export function createHost(options: {
   const broadcast = (page: string, event: string, data: unknown = {}) => {
     for (const res of served(page)?.clients ?? []) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
-  const append = (page: string, entry: Record<string, unknown>) => {
-    const full = appendLog(page, entry, now());
-    broadcast(page, "log", { seq: full.seq });
+  const appendAll = (page: string, entries: Record<string, unknown>[]) => {
+    const full = appendLogs(page, entries, now());
+    broadcast(page, "log", { seq: full[full.length - 1].seq });
     return full;
   };
+  const append = (page: string, entry: Record<string, unknown>) => appendAll(page, [entry])[0];
 
   // Delivers to the Page's current receiver. The receiver changes only in one synchronous step (bind), so
   // checking it and handing the message to its send happen with nothing in between. Every callback checks the
@@ -410,18 +419,19 @@ export function createHost(options: {
       const log = readLog(page);
       const target = log.find((e) => e.seq === undoing && e.origin === "human" && e.type !== "undo");
       if (!target) return { status: 400, json: { error: "Nothing to undo." } };
-      // A replacement replaces only an answer to the same Decision, ask and material version, so a delayed click never undoes a newer answer.
-      if (body.type === "decide" && (target.type !== "decide" || target.decision !== event.decision || (target.ask ?? null) !== (event.ask ?? null) || (target.ver ?? null) !== (event.ver ?? null))) return { status: 409, json: { error: "The answer this one would replace has changed; nothing was saved." } };
+      // A replacement replaces only an answer to the same Decision, ask, Key and material version, so a delayed click never undoes a newer answer.
+      if (body.type === "decide" && (target.type !== "decide" || target.decision !== event.decision || (target.ask ?? null) !== (event.ask ?? null) || (target.ver ?? null) !== (event.ver ?? null) || (target.key ?? null) !== (event.key ?? null))) return { status: 409, json: { error: "The answer this one would replace has changed; nothing was saved." } };
       if (log.some((e) => e.type === "undo" && e.target === target.seq)) return { status: 409, json: { error: "Already undone." } };
       if (now() - target.at >= undoMs) return { status: 409, json: { error: `The ${undoMs / 1000}-second undo window has closed.` } };
     }
     // Decision 155: a Page-declared Decision is Immediate by default; atl-delivery may declare another class.
     const delivery = body.type === "decide" && ["record", "send", "immediate"].includes(asked) ? asked
       : body.type === "comment" && asked === "send" ? "send" : cls; // a Page may batch Comments (156)
-    // A replacement is logged as an undo then the new answer, as two separate requests were before (2.14.2).
+    // A replacement is logged as an undo then the new answer in one write, as two separate requests were before (2.14.2).
     delete event.replaces;
-    const undone = body.type === "decide" && undoing !== undefined ? append(page, { type: "undo", target: undoing, origin: "human", delivery: CLASSES.undo }) : undefined;
-    const entry = append(page, { ...event, origin: "human", delivery });
+    const replacing = body.type === "decide" && undoing !== undefined;
+    const written = appendAll(page, [...replacing ? [{ type: "undo", target: undoing, origin: "human", delivery: CLASSES.undo }] : [], { ...event, origin: "human", delivery }]);
+    const entry = written[written.length - 1], undone = replacing ? written[0] : undefined;
     if (delivery === "immediate" || delivery === "boundary") later(undoMs + 50, () => deliver(rec));
     return { status: 200, json: { entry, undone, undoMs } };
   }
