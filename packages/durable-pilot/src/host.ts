@@ -399,6 +399,11 @@ async function finishEdits(harness: Harness): Promise<void> {
 // ─── Host ────────────────────────────────────────────────────────────────────
 
 export type HostOptions = {
+	/**
+	 * Open only to read (`--read-transcript`): Durable's read-only Harness, which recovers nothing (a running task stays
+	 * as committed, its restart count untouched) and refuses every write, and no reconciliation of interrupted calls.
+	 */
+	readonly readOnly?: boolean;
 	/** Benchmark comparison only; every host defaults to FULL + fullfsync=ON, verified on open. */
 	readonly synchronous?: Synchronous;
 	readonly fullfsync?: boolean;
@@ -487,6 +492,7 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 			settings: Object.defineProperties({ afterFailedRun: "keep", progress: { persistWithinMs: 0 } }, Object.getOwnPropertyDescriptors(options.settings ?? {})),
 			env: options.env ?? (() => new NodeExecutionEnv({ cwd: work })),
 			...(options.now === undefined ? {} : { now: options.now }),
+			...(options.readOnly === true ? { readOnly: true } : {}),
 			onReport: (report: Report) => {
 				reports.push({
 					type: report.kind,
@@ -500,7 +506,7 @@ export async function openHost(dir: string, options: HostOptions = {}): Promise<
 	const reserved = await harness.root(context, { agent: options.rootAgent ?? { model: MODEL } });
 	const active = (await harness.snapshot(BranchesDoc, context))?.active ?? null;
 	const root = active === null ? reserved : ((await harness.conversation(active, context)) ?? reserved);
-	const uncertain = await reconcileOnOpen(harness, registry);
+	const uncertain = options.readOnly === true ? [] : await reconcileOnOpen(harness, registry);
 	return {
 		store,
 		harness,

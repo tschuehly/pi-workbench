@@ -131,6 +131,8 @@ export type ChatHostOptions = {
 	 * routed children run under the model names routing chose without leaving the machine.
 	 */
 	readonly scriptedProviders?: boolean;
+	/** Open the store only to read its history: no packages, reconciliation or model clamp (`HostOptions.readOnly`). */
+	readonly readOnly?: boolean;
 	/** Run the bound installed Pi packages (`packages.ts`) from this agent directory's settings. */
 	readonly packages?: { readonly agentDir?: string };
 };
@@ -236,7 +238,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const early: PackageEvent[] = [];
 	const chat: { onPackageEvent?: (event: PackageEvent) => void } = {};
 	const emitPackage = (event: PackageEvent) => (chat.onPackageEvent === undefined ? early.push(event) : chat.onPackageEvent(event));
-	const packages = options.packages === undefined
+	const packages = options.packages === undefined || options.readOnly === true
 		? undefined
 		: await PiPackages.load({
 				cwd: options.cwd,
@@ -247,6 +249,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 			});
 	const credentials = new PiAuthStore();
 	const host = await openHost(options.dir, {
+		...(options.readOnly === true ? { readOnly: true } : {}),
 		// The scripted model reasons, so thinking levels apply to it as to Claude.
 		faux: { tokensPerSecond: options.fauxTokensPerSecond ?? 200, models: [{ id: MODEL.modelId, reasoning: true }] },
 		provider: () => withBaseUrl(withStoredModels(anthropicProvider()), modelsJsonBaseUrl("anthropic")),
@@ -285,7 +288,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		for (const provider of [anthropicProvider(), ...builtinProviders()]) host.models.setProvider(wrapProvider(scriptedAs(provider)));
 	}
 	// As Pi does on load: a stored level the model does not support is clamped (before anything is scheduled).
-	await applyModel(host);
+	if (options.readOnly !== true) await applyModel(host);
 	await packages?.start({
 		// The active branch at each use: history navigation may select another.
 		get root() { return host.root; },

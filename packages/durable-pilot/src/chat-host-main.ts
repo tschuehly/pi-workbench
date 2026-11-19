@@ -94,7 +94,8 @@ const host = await openChatHost({
 	scripted: values.scripted === true,
 	...(tps === undefined ? {} : { fauxTokensPerSecond: tps }),
 	...(values.thinking === undefined ? {} : { thinkingLevel: values.thinking }),
-	...(values.packages === true && values["read-transcript"] !== true ? { packages: {} } : {}),
+	...(values.packages === true ? { packages: {} } : {}),
+	...(values["read-transcript"] === true ? { readOnly: true } : {}),
 	// Tests and trials: also by environment, so PI WEB's isolated e2e daemon can ask for it without a new host argument.
 	...(values["scripted-providers"] === true || process.env.PI_DURABLE_SCRIPTED_PROVIDERS === "1" ? { scriptedProviders: true } : {}),
 });

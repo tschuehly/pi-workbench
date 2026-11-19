@@ -9,8 +9,10 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { fork } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { ChatHost, live, logged, type Message, textOf, waitFor, writeFakeLogins } from "./chat-proc.ts";
-import { cleanup, scratch } from "./runner.ts";
+import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 type Status = { isStreaming: boolean; warnings?: { message: string }[] };
 
@@ -83,6 +85,29 @@ function effects(f: Family) {
 	};
 }
 
+/** Every row of every table in the family store: what a reader must leave exactly as it was. */
+function rows(f: Family): unknown {
+	const db = new DatabaseSync(join(f.store, "session.sqlite"));
+	try {
+		const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[];
+		return tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}"`).all()]);
+	} finally {
+		db.close();
+	}
+}
+
+/** PI WEB's history read of a Chat with no host (`--read-transcript`), with the host's usual arguments. */
+async function readTranscript(f: Family): Promise<Message[]> {
+	const reader = fork(join(PACKAGE, "src", "chat-host-main.ts"), ["--store", f.store, "--cwd", f.cwd, "--model", "faux", "--session-id", "chat-paused", "--packages", "--scripted-providers", "--read-transcript"], { stdio: ["ignore", "ignore", "pipe", "ipc"], env: { ...process.env, ...f.env } });
+	let stderr = "";
+	reader.stderr!.on("data", (data) => (stderr += data.toString()));
+	let messages: Message[] | undefined;
+	reader.on("message", (message: { transcript?: { messages: Message[] } }) => (messages = message.transcript?.messages));
+	const code = await new Promise((resolve) => reader.on("exit", resolve));
+	assert.equal(code, 0, stderr);
+	return messages ?? assert.fail("no transcript");
+}
+
 /** What PI WEB does when it opens a Chat to show it, then the owner's reads: nothing here may send or run anything. */
 async function readOnly(h: ChatHost): Promise<void> {
 	await h.call("configure", { resources: {} });
@@ -132,6 +157,12 @@ test("reads never schedule: a paused restore with every component's saved state 
 	assert.equal(childRequests(), 1, "the background Subagent's generation was interrupted too");
 	assert.equal(before.launches, 1);
 	assert.equal(before.receipts, 0);
+
+	// ─── A history read while no host runs: it writes nothing, sends and runs nothing ──
+	const stored = rows(f);
+	assert.ok((await readTranscript(f)).some((m) => m.role === "user" && textOf(m.content) === "gen"), "the history up to the kill");
+	assert.deepEqual(rows(f), stored, "the reader changed no row: no reconciliation guard, model clamp or delivery");
+	assert.deepEqual(effects(f), before, "the reader sent and ran nothing");
 
 	// ─── Open and read only; a watcher notification arrives; close while paused ──
 	const second = host(f);
