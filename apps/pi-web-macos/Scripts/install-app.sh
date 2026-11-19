@@ -13,6 +13,8 @@ else
 fi
 pi_web_dir="${PI_WEB_DIR:-${default_pi_web_dir}}"
 pi_web_url="${PI_WEB_URL:-http://127.0.0.1:8505}"
+app_name="${PI_WEB_APP_NAME:-}"
+bundle_id="${PI_WEB_APP_ID:-}"
 destination="${PI_WEB_APP_PATH:-${HOME}/Applications/Pi Workbench.app}"
 command_dir="${PI_WEB_COMMAND_DIR:-${HOME}/.local/bin}"
 app_icon="${app_dir}/Resources/AppIcon.icns"
@@ -46,7 +48,12 @@ if (( app_only )) && [[ -f "${existing_config}" ]]; then
   pi_web_dir="${PI_WEB_DIR:-$(/usr/libexec/PlistBuddy -c 'Print :CheckoutPath' "${existing_config}")}" || fail "Cannot read installed checkout."
   pi_web_url="${PI_WEB_URL:-$(/usr/libexec/PlistBuddy -c 'Print :ServerURL' "${existing_config}")}" || fail "Cannot read installed server URL."
   pi_web_cli_override="${PI_WEB_CLI:-$(/usr/libexec/PlistBuddy -c 'Print :CLIPath' "${existing_config}")}" || fail "Cannot read installed CLI."
+  existing_info="${destination}/Contents/Info.plist"
+  [[ -n "${app_name}" ]] || app_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${existing_info}" 2>/dev/null || true)"
+  [[ -n "${bundle_id}" ]] || bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${existing_info}" 2>/dev/null || true)"
 fi
+app_name="${app_name:-Pi Workbench}"
+bundle_id="${bundle_id:-works.pi.workbench}"
 
 absolute_executable() {
   local value="$1"
@@ -121,21 +128,21 @@ cp "${bin_dir}/PIWebMac" "${executable_dir}/PIWebMac"
 chmod +x "${executable_dir}/PIWebMac"
 cp "${app_icon}" "${resources_dir}/AppIcon.icns"
 
-cat >"${contents_dir}/Info.plist" <<'PLIST'
+cat >"${contents_dir}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>Pi Workbench</string>
+  <string>${app_name}</string>
   <key>CFBundleExecutable</key>
   <string>PIWebMac</string>
   <key>CFBundleIdentifier</key>
-  <string>works.pi.workbench</string>
+  <string>${bundle_id}</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleName</key>
-  <string>Pi Workbench</string>
+  <string>${app_name}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -195,5 +202,5 @@ printf 'Installed %s\n' "${command_dir}/pi-web-mac"
 printf 'Open the app from Finder, Spotlight, the Dock, or pi-web-mac.\n'
 # A running copy keeps the old code, and macOS refuses its folder panels once the signature on disk changed.
 if /usr/bin/pgrep -f "${destination}/Contents/MacOS/" >/dev/null 2>&1; then
-  printf 'Pi Workbench is still running the previous build: quit and reopen it (folder panels fail until then).\n' >&2
+  printf '%s is still running the previous build: quit and reopen it (folder panels fail until then).\n' "${app_name}" >&2
 fi

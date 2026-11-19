@@ -65,7 +65,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
     description: DESCRIPTION,
     promptSnippet: "Show the human an interactive HTML Page and act on their input",
     parameters: Type.Object({
-      action: StringEnum(["open", "takeover", "update", "ask", "answer", "status", "check"]),
+      action: StringEnum(["open", "takeover", "update", "ask", "retract", "answer", "status", "check"]),
       page: Type.String({ description: "Page path, relative to the project or absolute" }),
       decision: Type.Optional(Type.Object({
         id: Type.String(),
@@ -75,6 +75,7 @@ export default function atelierExtension(pi: ExtensionAPI) {
         material: Type.Optional(Type.String({ description: "Key whose opening counts as opened" })),
         detail: Type.Optional(Type.String()),
       })),
+      id: Type.Optional(Type.String({ description: "retract: Decision id" })),
       comment: Type.Optional(Type.Number({ description: "answer: Comment #" })),
       request: Type.Optional(Type.Number({ description: "status: Request #" })),
       state: Type.Optional(StringEnum(REQUEST_STATES)),
@@ -137,6 +138,13 @@ export default function atelierExtension(pi: ExtensionAPI) {
         if (d.options.filter((o: any) => o.recommended === true).length > 1) throw new Error("A Decision recommends at most one option (decision 155).");
         const entry = host.agent(page, { type: "ask", decision: d });
         return text(`Decision ${d.id} posted (#${entry.seq}). End your turn; the answer arrives as a message after its 3-second undo window.`, { seq: entry.seq });
+      }
+      if (params.action === "retract") {
+        const asked = derive(entries).decisions.find((d: any) => d.id === params.id && !d.declared);
+        if (!asked || !params.text) throw new Error("retract needs the id of a Decision you asked on this Page and text: why it no longer needs the human.");
+        if (asked.answer) throw new Error(`Decision ${asked.id} is answered; keep its answer and say in the Page prose why it is overtaken.`);
+        const entry = host.agent(page, { type: "retract", decision: asked.id, reason: params.text });
+        return text(`Decision ${asked.id} retracted (#${entry.seq}); it no longer asks.`, { seq: entry.seq });
       }
       if (params.action === "answer") {
         const target = entries.find((e) => e.seq === params.comment && e.type === "comment" && e.origin === "human");

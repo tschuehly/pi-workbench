@@ -118,13 +118,14 @@ them with a universal one-review limit.
 ## Orchestration
 
 Orchestration selects the preferred structure for primary execution. Thomas confirmed the fourth
-axis after the grill: `Main | Subagents | Workers`.
+axis after the grill: `Main | Subagents | Workers`; `Cockpit` runs FirstMate v1.
 
 | Value | Execution behavior |
 | --- | --- |
 | `Main` | Pia performs the primary work in the main session. |
 | `Subagents` | Pia parallelizes by default: splits each task into independent parts, launches them as parallel background subagents, delegates mechanical volume, and keeps the main session for steering and integration. |
 | `Workers` | Pia names the scopes that receive repeated tasks, creates one worker per scope, routes every task in that scope to it, and runs independent workers in parallel. |
+| `Cockpit` | Pia runs one durable worker per Workstream in parallel and shows each worker's living report as one tab on a single Atelier Page for the Chat, rewritten in place and written by a fresh subagent from the report and the worker's status file (`~/.pi-workbench/workers/status/<workerId>.json`). Every question is a standalone Page Decision, not a Chat ask; whether and how Pia tells Thomas that a tab changed follows Attention (the conversation when Attention names no channel), so AFK sends nothing; workers never post, and Pia posts each Send after Thomas approves it. |
 
 This is guidance, not mandatory team creation for trivial work. Workers are useful when repeated
 bounded actions in one scope benefit from retained context. The existing supported hierarchy is
@@ -133,6 +134,7 @@ child lifetimes.
 
 Main does not prohibit advisors required by Attention or independent checks required by Checking.
 Worker continuity is not independent review: independent scrutiny still uses a fresh subagent.
+Workers and Cockpit turn on the worker tools; Cockpit also turns on the `atelier` tool.
 The Orchestration dial selects execution structure; existing model routing selects the bindings.
 It starts at `Main`.
 

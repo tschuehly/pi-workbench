@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,9 +68,42 @@ const SteerParams = Type.Object({
   mode: Type.Optional(Type.Union([Type.Literal("steer"), Type.Literal("followUp")], { description: "steer: after its current tool calls (default); followUp: once it would otherwise stop" })),
   requestUpdate: Type.Optional(Type.Boolean({ description: "Ask the child to report_status; its next report wakes you" })),
 });
+const STATUS_STATES = ["working", "needs-you", "blocked", "waiting", "done", "failed"] as const;
 const ReportStatusParams = Type.Object({
   status: Type.String({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
+  state: Type.Optional(StringEnum(STATUS_STATES, { description: "Your state for the lead's Cockpit tab; omit to keep the previous one (starts as working)" })),
 });
+const STATUS_LOG_MAX = 20;
+
+/** Where a Worker's latest report_status lands, so a Cockpit lead can read it by workerId. */
+export const workerStatusFile = (workerId: string, home = os.homedir()) => path.join(home, ".pi-workbench", "workers", "status", `${workerId}.json`);
+
+/** States a Worker reports plus `retired`, which only worker_retire writes. */
+const STATUS_FILE_STATES: readonly string[] = [...STATUS_STATES, "retired"];
+
+/**
+ * Atomically rewrite the status file: latest state and line, plus the last STATUS_LOG_MAX lines.
+ * An undefined line keeps the previous one and logs `logText` (the lead's end-of-dispatch and retire notes).
+ */
+export function writeStatusFile(file: string, line: string | undefined, state: string | undefined, now = new Date(), logText = line) {
+  if (state !== undefined && !STATUS_FILE_STATES.includes(state)) throw new Error(`Unknown status state '${state}'`);
+  let previous: { state?: string; line?: string; log?: { t: string; text: string }[] } = {};
+  try { previous = JSON.parse(readFileSync(file, "utf8")); } catch {}
+  const updated = now.toISOString();
+  const text = logText ?? line ?? "";
+  const log = [...(Array.isArray(previous.log) ? previous.log : []), { t: updated, text }].slice(-STATUS_LOG_MAX);
+  const body = { state: state ?? previous.state ?? "working", line: line ?? previous.line ?? text, updated, log };
+  mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(body, null, 2)}\n`);
+  renameSync(temporary, file);
+  return body;
+}
+
+/** A lead-side status write: returns a note naming the failure instead of swallowing it. */
+function leadStatusWrite(file: string, state: string, logText: string): string {
+  try { writeStatusFile(file, undefined, state, new Date(), logText); return ""; } catch (error) { return `\n\nStatus file not written: ${errorMessage(error)}`; }
+}
 
 const WorkerCreateParams = Type.Object({
   name: Type.String({ minLength: 1, description: "Short human-readable worker name" }),
@@ -460,8 +493,14 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       // A lone report costs a whole model turn that re-reads the context; say so once it happens.
       const alone = ctx?.sessionManager?.getBranch !== undefined && latestAssistantToolCallCount(ctx.sessionManager.getBranch()) === 1;
-      const text = alone ? `Reported: ${params.status}. Next time send report_status with a real tool call, never alone.` : `Reported: ${params.status}`;
-      return { content: [{ type: "text" as const, text }], details: { outcome: "reported", status: params.status } };
+      // worker_dispatch names the Worker's status file; plain Subagents and leaves have none.
+      const file = process.env.PI_WORKBENCH_STATUS_FILE;
+      let written = "";
+      if (file) {
+        try { writeStatusFile(file, params.status, params.state); } catch (error) { written = ` Status file not written: ${errorMessage(error)}`; }
+      }
+      const text = (alone ? `Reported: ${params.status}. Next time send report_status with a real tool call, never alone.` : `Reported: ${params.status}`) + written;
+      return { content: [{ type: "text" as const, text }], details: { outcome: "reported", status: params.status, ...(params.state === undefined ? {} : { state: params.state }) } };
     },
   });
 
@@ -581,24 +620,26 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       } catch (error) {
         return registryFailure(error);
       }
+      // Every failure after beginDispatch releases the lock and marks the status file failed; rejections above leave it untouched.
+      let startNote = "";
       const abandon = async (diagnostic: string) => {
         try { await registry.completeDispatch(params.workerId, begin.lockToken, { outcome: "preflight_failed", cognitiveRole: params.cognitiveRole, diagnostic }); } catch {}
+        const failedNote = leadStatusWrite(workerStatusFile(params.workerId), "failed", `Dispatch failed to start: ${diagnostic}`);
+        return failure("preflight_failed", diagnostic + startNote + failedNote);
       };
       const profile = PROFILES[begin.profile as keyof typeof PROFILES];
-      if (profile === undefined) {
-        await abandon(`Worker profile '${begin.profile}' is not a bundled profile.`);
-        return failure("preflight_failed", `Worker profile '${begin.profile}' is not a bundled profile.`);
-      }
+      if (profile === undefined) return abandon(`Worker profile '${begin.profile}' is not a bundled profile.`);
       let binding;
       try {
         binding = await resolveBinding(params.cognitiveRole, undefined, undefined, params.modelOverride, params.effort, undefined, options.resolverPath, liveModelMetadata(ctx.modelRegistry, params.modelOverride));
       } catch (error) {
-        await abandon(errorMessage(error));
-        return failure("preflight_failed", errorMessage(error));
+        return abandon(errorMessage(error));
       }
       const continuing = begin.continuationSessionId !== null;
       const preamble = `You are the durable attended worker \"${begin.name}\" with the semantic scope \"${begin.scope}\".${continuing ? " This dispatch resumes your persisted session; the earlier conversation above is your own prior work in this scope." : " This is your first dispatch in this scope."}`;
       const childTask = [profile.instruction, STATUS_INSTRUCTION, preamble, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
+      // A new job starts working, so the child's stateless reports never inherit the last job's done.
+      startNote = leadStatusWrite(workerStatusFile(params.workerId), "working", "Dispatch accepted");
       let receipt;
       try {
         receipt = await adapter.dispatch({
@@ -611,12 +652,12 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           parentSessionId,
           ...parentSessionFile(ctx),
           kind: "worker",
+          statusFile: workerStatusFile(params.workerId),
           ...(params.telemetryConcept === undefined ? {} : { telemetryConcept: params.telemetryConcept }),
           ...(continuing ? { continuation: { sessionId: begin.continuationSessionId! } } : {}),
         });
       } catch (error) {
-        await abandon(errorMessage(error));
-        return failure("preflight_failed", errorMessage(error));
+        return abandon(errorMessage(error));
       }
       emitExecutionEvent(host, {
         type: "execution.launched", at: receipt.acceptedAt, sessionId: parentSessionId,
@@ -663,11 +704,14 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       // Register terminal cleanup before waiting so it wins a same-tick detach race.
       let receiptSettled = false;
+      let statusNote = "";
       const completion = (async () => {
         let usage: unknown;
         const usageWatch = (async () => { for await (const observation of adapter.observe(receipt.executionId)) if (observation.type === "usage") usage = observation.detail; })().catch(() => {});
         const final = await adapter.result(receipt.executionId);
         foreground.delete(receipt.executionId);
+        // The Worker cannot report its own end; the lead marks it so the Cockpit tab stops saying working.
+        statusNote = startNote + leadStatusWrite(workerStatusFile(params.workerId), final.outcome === "success" ? "done" : "failed", `Dispatch ended: ${final.outcome}`);
         emitExecutionEvent(host, {
           type: "execution.settled", at: new Date().toISOString(), sessionId: parentSessionId,
           executionId: receipt.executionId, kind: "worker", workerId: params.workerId,
@@ -705,7 +749,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
             cognitiveRole: params.cognitiveRole,
             workerId: params.workerId,
             workerName: begin.name,
-            text: terminalText(final),
+            text: terminalText(final) + statusNote,
             truncated: final.truncated === true,
           },
         });
@@ -732,7 +776,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         const result = await streamToResult(adapter, receipt.executionId, begin.profile, params.cognitiveRole, receipt.acceptedAt, signal, onUpdate, { cancelOnAbort: true, detachSignal: detachController.signal });
         if ((result as { details?: { outcome?: unknown } }).details?.outcome === "detached") return backgroundResult("Moved");
         markCollected(receipt.executionId);
-        return receiptSafeResult({ result, executionId: receipt.executionId, terminal: true, receipt: workerReceipts.get(receipt.executionId) });
+        const safe = await receiptSafeResult({ result, executionId: receipt.executionId, terminal: true, receipt: workerReceipts.get(receipt.executionId) });
+        return statusNote === "" ? safe : { ...safe, content: [...(safe as { content: unknown[] }).content, { type: "text" as const, text: statusNote.trim() }] };
       } finally {
         foreground.delete(receipt.executionId);
       }
@@ -805,7 +850,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       }
       try {
         const retired = await registry.retire(params.workerId, params.reason, { ownerSessionId: ctx.sessionManager.getSessionId() });
-        return { content: [{ type: "text", text: `Retired worker ${params.workerId} at ${retired.at}: ${retired.reason}` }], details: { workerId: params.workerId, ...retired } };
+        const note = leadStatusWrite(workerStatusFile(params.workerId), "retired", `Retired: ${params.reason}`);
+        return { content: [{ type: "text", text: `Retired worker ${params.workerId} at ${retired.at}: ${retired.reason}${note}` }], details: { workerId: params.workerId, ...retired } };
       } catch (error) {
         return registryFailure(error);
       }

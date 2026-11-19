@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
@@ -12,7 +12,7 @@ import { CLASSES, UNDO_MS, compose, derive, inGroup, keyTexts } from "./kernel/a
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-export const KERNEL_VERSION = "2.13.0";
+export const KERNEL_VERSION = "2.14.2";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
@@ -33,7 +33,7 @@ export const logPath = (page: string) => `${page}.events.jsonl`;
 /** Images the human attaches to a Decision's answer or a Comment live beside the Event Log; the log names them relative to the Page's directory. */
 export const imagesDir = (page: string) => `${page}.images`;
 
-/** The Event Log (143): append-only JSON lines beside the Page. A torn last line is skipped, never fatal. */
+/** The Event Log (143): append-only JSON lines beside the Page. Any line that does not parse is skipped, never fatal. */
 export function readLog(page: string): Entry[] {
   let text: string;
   try { text = readFileSync(logPath(page), "utf8"); } catch { return []; }
@@ -50,13 +50,22 @@ const isLink = (file: string) => { try { return lstatSync(file).isSymbolicLink()
 
 // Only the endpoint serving the Page for its receiver appends (claimPage), so reading the log for the next seq is safe.
 export function appendLog(page: string, entry: Record<string, unknown>, now = Date.now()): Entry {
+  return appendLogs(page, [entry], now)[0];
+}
+
+/** Appends entries in one write; a failed write is cut back off. Known limit: if that
+ *  truncate fails too, a torn tail stays and readLog keeps only its whole lines. */
+export function appendLogs(page: string, entries: Record<string, unknown>[], now = Date.now()): Entry[] {
   const file = logPath(page);
   if (isLink(file)) throw new Error(`${file} is a symlink; Atelier writes its Event Log only beside the Page.`);
-  const entries = readLog(page);
-  const seq = entries.reduce((max, e) => Math.max(max, Number(e.seq) || 0), 0) + 1;
-  const full = { seq, at: now, ...entry } as Entry;
-  const torn = existsSync(file) && !readFileSync(file, "utf8").endsWith("\n") && statSync(file).size > 0;
-  appendFileSync(file, `${torn ? "\n" : ""}${JSON.stringify(full)}\n`);
+  let seq = readLog(page).reduce((max, e) => Math.max(max, Number(e.seq) || 0), 0);
+  const full = entries.map((entry) => ({ seq: ++seq, at: now, ...entry }) as Entry);
+  const size = existsSync(file) ? statSync(file).size : 0;
+  const torn = size > 0 && !readFileSync(file, "utf8").endsWith("\n");
+  try { appendFileSync(file, `${torn ? "\n" : ""}${full.map((e) => `${JSON.stringify(e)}\n`).join("")}`); } catch (error) {
+    try { truncateSync(file, size); } catch { /* readLog still skips a torn last line */ }
+    throw error;
+  }
   return full;
 }
 
@@ -203,11 +212,12 @@ const images = opt((v) => Array.isArray(v) && v.length <= IMAGES_MAX && v.every(
 const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   comment: { ...ANCHOR, text: str, thread: opt(seqNo), images },
   // previous: the answer this one changes (155); options and rec: a Page-declared Decision's atl-decide and atl-rec;
-  // custom: the human wrote his own answer ("Other…") instead of picking an option.
-  decide: { decision: str, option: str, custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str), images },
+  // custom: the human wrote his own answer ("Other…") instead of picking an option; ask: the seq of the ask it answers (2.14.2);
+  // replaces: the seq of the answer in its undo window this one replaces (the host undoes it in the same step).
+  decide: { decision: str, option: str, ask: opt(seqNo), replaces: opt(seqNo), custom: opt((v) => typeof v === "boolean"), previous: opt(str), options: opt(str), rec: opt(str), opened: opt((v) => typeof v === "boolean"), note: opt(str), key: opt(str), ver: opt(str), images },
   request: { job: str, input: opt((o) => typeof o === "object" && Object.values(o).every(str)), key: opt(str), ver: opt(str) },
   rework: { target: seqNo, note: opt(str) }, cancel: { target: seqNo }, accept: { target: seqNo }, undo: { target: seqNo },
-  close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str }, send: { key: opt(str) },
+  close: { target: seqNo, ver: opt(str) }, still: { target: seqNo, ver: opt(str) }, opened: { decision: str, ask: opt(seqNo) }, send: { key: opt(str) },
   // seen: the agent events (asks, replies) whose Needs you mark the human cleared, so a reload marks them no more (2.13.0).
   seen: { of: (v) => Array.isArray(v) && v.length > 0 && v.length <= 1000 && v.every((s) => Number.isSafeInteger(s) && s > 0) },
 };
@@ -330,11 +340,12 @@ export function createHost(options: {
   const broadcast = (page: string, event: string, data: unknown = {}) => {
     for (const res of served(page)?.clients ?? []) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
-  const append = (page: string, entry: Record<string, unknown>) => {
-    const full = appendLog(page, entry, now());
-    broadcast(page, "log", { seq: full.seq });
+  const appendAll = (page: string, entries: Record<string, unknown>[]) => {
+    const full = appendLogs(page, entries, now());
+    broadcast(page, "log", { seq: full[full.length - 1].seq });
     return full;
   };
+  const append = (page: string, entry: Record<string, unknown>) => appendAll(page, [entry])[0];
 
   // Delivers to the Page's current receiver. The receiver changes only in one synchronous step (bind), so
   // checking it and handing the message to its send happen with nothing in between. Every callback checks the
@@ -398,25 +409,34 @@ export function createHost(options: {
     }
     if (body.type === "decide" && body.custom && !body.option.trim()) return { status: 400, json: { error: "An own answer needs its text." } };
     const asked = body.delivery;
+    // An answer or an opened names an ask of its own Decision on this Page, or none (older Pages: the id's latest ask).
+    if (event.ask !== undefined && !readLog(page).some((e) => e.seq === event.ask && e.type === "ask" && e.decision?.id === event.decision)) return { status: 400, json: { error: `No ask #${event.ask} for Decision ${event.decision} on this Page.` } };
     if (body.type === "comment" && body.thread !== undefined && !readLog(page).some((e) => e.seq === body.thread && e.type === "comment")) return { status: 400, json: { error: `No Comment #${body.thread} to reply to.` } };
     // Seen names only agent asks and replies already in the log, so it never acknowledges one still to come.
     if (body.type === "seen") {
       const agent = new Set(readLog(page).filter((e) => e.origin === "agent" && (e.type === "ask" || e.type === "answer")).map((e) => e.seq));
       if (!body.of.every((s: number) => agent.has(s))) return { status: 400, json: { error: "Seen names only the agent's asks and replies on this Page." } };
     }
-    if (body.type === "undo") {
+    const undoing = body.type === "undo" ? body.target : event.replaces;
+    if (undoing !== undefined) {
       const log = readLog(page);
-      const target = log.find((e) => e.seq === body.target && e.origin === "human" && e.type !== "undo");
+      const target = log.find((e) => e.seq === undoing && e.origin === "human" && e.type !== "undo");
       if (!target) return { status: 400, json: { error: "Nothing to undo." } };
+      // A replacement replaces only an answer to the same Decision, ask, Key and material version, so a delayed click never undoes a newer answer.
+      if (body.type === "decide" && (target.type !== "decide" || target.decision !== event.decision || (target.ask ?? null) !== (event.ask ?? null) || (target.ver ?? null) !== (event.ver ?? null) || (target.key ?? null) !== (event.key ?? null))) return { status: 409, json: { error: "The answer this one would replace has changed; nothing was saved." } };
       if (log.some((e) => e.type === "undo" && e.target === target.seq)) return { status: 409, json: { error: "Already undone." } };
       if (now() - target.at >= undoMs) return { status: 409, json: { error: `The ${undoMs / 1000}-second undo window has closed.` } };
     }
     // Decision 155: a Page-declared Decision is Immediate by default; atl-delivery may declare another class.
     const delivery = body.type === "decide" && ["record", "send", "immediate"].includes(asked) ? asked
       : body.type === "comment" && asked === "send" ? "send" : cls; // a Page may batch Comments (156)
-    const entry = append(page, { ...event, origin: "human", delivery });
+    // A replacement is logged as an undo then the new answer in one write, as two separate requests were before (2.14.2).
+    delete event.replaces;
+    const replacing = body.type === "decide" && undoing !== undefined;
+    const written = appendAll(page, [...replacing ? [{ type: "undo", target: undoing, origin: "human", delivery: CLASSES.undo }] : [], { ...event, origin: "human", delivery }]);
+    const entry = written[written.length - 1], undone = replacing ? written[0] : undefined;
     if (delivery === "immediate" || delivery === "boundary") later(undoMs + 50, () => deliver(rec));
-    return { status: 200, json: { entry, undoMs } };
+    return { status: 200, json: { entry, undone, undoMs } };
   }
 
   const json = (res: ServerResponse, status: number, body: unknown) => {

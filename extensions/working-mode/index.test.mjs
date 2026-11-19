@@ -160,6 +160,7 @@ test("a mode change reaches the model as one tagged message; the system prompt n
   assert.match(block, /Alignment — Align: Investigate freely, but before the first edit/);
   assert.match(block, /Attention — Phone: .*ask_human`, never in the session conversation/);
   assert.match(block, /When a milestone finishes or you stop to wait, send one `notify_human` update/);
+  assert.match(block, /When Thomas writes in the session conversation, he is temporarily at his computer: answer and ask there \(decisions via `ask_user`\) for as long as he replies there; only after a conversation question stays unanswered for 15 minutes do new questions and milestone updates go by phone again\./);
   assert.doesNotMatch(block, /Checking —|Orchestration —/);
   assert.match(block, /This block replaces every earlier <working-mode> block\.\n<\/working-mode>$/);
   assert.doesNotMatch(block, /ignore previous/i);
@@ -197,6 +198,47 @@ test("resume restores the selection from the session without posting again", asy
   await resumed.session.prompt("two");
   assert.equal(resumed.blocks(resumed.last()).length, 1, "the saved block is reused, not re-posted");
   resumed.session.dispose();
+});
+
+test("Orchestration Cockpit posts the Cockpit guidance: one worker per Workstream, questions on the Page", async () => {
+  const s = await session();
+  await s.session.prompt("/mode orchestration cockpit");
+  await s.session.prompt("one");
+  const [block] = s.blocks(s.last());
+  assert.match(block, /Orchestration: Cockpit/);
+  assert.match(block, /Orchestration — Cockpit: .*one durable worker/);
+  assert.match(block, /one tab per worker/);
+  assert.match(block, /~\/\.pi-workbench\/workers\/status\/<workerId>\.json/);
+  assert.match(block, /Every Decision stands alone/);
+  assert.match(block, /as a Page Decision/);
+  assert.match(block, /Workers never post/);
+  assert.deepEqual(s.snapshots.at(-1).selected, { ...defaults, orchestration: "Cockpit" });
+  s.session.dispose();
+});
+
+test("Cockpit sets where questions live; Attention alone decides whether and how Thomas is contacted", () => {
+  const cockpit = axes.orchestration.values.Cockpit;
+  // No unconditional ping: every outward contact line defers to the Attention axis.
+  assert.doesNotMatch(cockpit, /post one line in Chat/);
+  assert.match(cockpit, /follows your Attention setting/);
+  assert.match(cockpit, /send nothing when it says not to contact him/);
+  // Every Attention value leaves a named channel (or a named silence) for the tab-changed line.
+  const channel = {
+    Default: /the conversation, when Attention names none/,
+    Focused: /this conversation/,
+    Switching: /request_attention/,
+    Phone: /notify_human/,
+    AFK: /Do not contact Thomas/,
+  };
+  assert.deepEqual(Object.keys(axes.attention.values), Object.keys(channel), "every Attention value is covered");
+  for (const attention of Object.keys(axes.attention.values)) {
+    const block = renderBlock({ ...defaults, attention, orchestration: "Cockpit" }, 1, true);
+    assert.ok(block.includes(cockpit), attention);
+    assert.ok(block.includes(axes.attention.values[attention]), attention);
+    assert.match(block, channel[attention], attention);
+    // Attention's own question channel (ask_user, ask_human, Chat) yields to the Page explicitly, not silently.
+    if (/ask_user|ask_human/.test(axes.attention.values[attention])) assert.match(cockpit, /instead of the question channel your Attention setting names/, attention);
+  }
 });
 
 test("after compaction summarizes the block away, the next prompt attaches it again", async () => {

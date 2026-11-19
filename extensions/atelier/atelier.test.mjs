@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
 import http from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -306,7 +308,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.13\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.14\.2 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -389,6 +391,200 @@ test("the extension delivers as an atelier follow-up message and records the rec
   } finally { handlers.session_shutdown(); p.done(); }
 });
 
+test("retract withdraws an asked Decision: it no longer asks, and the Event Log keeps the reason (2.14.0)", async () => {
+  const p = project();
+  const tools = new Map(), handlers = {};
+  atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: () => {} });
+  const ctx = { cwd: p.root, isIdle: () => true, sessionManager: { getSessionId: () => `s-retract-${process.pid}` } };
+  handlers.session_start({}, ctx);
+  const run = (params) => tools.get("atelier").execute("id", { page: "page.html", ...params }, undefined, undefined, ctx);
+  const page = path.join(realpathSync(p.root), "page.html");
+  try {
+    await run({ action: "open" });
+    await run({ action: "ask", decision: { id: "merge", question: "Merge agent#2243 now?", options: [{ label: "Merge", consequence: "ships" }, { label: "Wait", consequence: "waits" }] } });
+    await run({ action: "ask", decision: { id: "keep", question: "Keep?", options: [{ label: "Yes", consequence: "" }, { label: "No", consequence: "" }] } });
+    assert.deepEqual(derive(readLog(page)).toAnswer.map((d) => d.id), ["merge", "keep"]);
+    await assert.rejects(run({ action: "retract", id: "merge" }), /text: why/);
+    await assert.rejects(run({ action: "retract", id: "nope", text: "x" }), /Decision you asked/);
+    const retracted = await run({ action: "retract", id: "merge", text: "no longer needed: Igor merged it" });
+    assert.match(retracted.content[0].text, /Decision merge retracted .*no longer asks/);
+    const st = derive(readLog(page));
+    assert.deepEqual(st.decisions.map((d) => d.id), ["keep"], "the retracted card leaves the Page");
+    assert.deepEqual(st.toAnswer.map((d) => d.id), ["keep"]);
+    assert.deepEqual(readLog(page).filter((e) => e.type === "retract").map(({ origin, decision, reason }) => ({ origin, decision, reason })),
+      [{ origin: "agent", decision: "merge", reason: "no longer needed: Igor merged it" }]);
+    await run({ action: "ask", decision: { id: "merge", question: "Merge agent#2250 now?", options: [{ label: "Merge", consequence: "" }, { label: "Wait", consequence: "" }] } });
+    assert.ok(derive(readLog(page)).toAnswer.some((d) => d.id === "merge"), "asking the same id again asks anew");
+  } finally { handlers.session_shutdown(); p.done(); }
+});
+
+test("retract refuses an answered Decision: the human's answer stays, in the tool and in the Kernel (2.14.1)", async () => {
+  const p = project();
+  const tools = new Map(), handlers = {};
+  atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: () => {} });
+  const ctx = { cwd: p.root, isIdle: () => true, sessionManager: { getSessionId: () => `s-retract-answered-${process.pid}` } };
+  handlers.session_start({}, ctx);
+  const run = (params) => tools.get("atelier").execute("id", { page: "page.html", ...params }, undefined, undefined, ctx);
+  const page = path.join(realpathSync(p.root), "page.html");
+  try {
+    await run({ action: "open" });
+    await run({ action: "ask", decision: { id: "merge", question: "Merge?", options: [{ label: "Merge", consequence: "" }, { label: "Wait", consequence: "" }] } });
+    appendLog(page, { origin: "human", type: "decide", decision: "merge", option: "Wait", delivery: "record" });
+    await assert.rejects(run({ action: "retract", id: "merge", text: "moot" }), /Decision merge is answered; keep its answer and say in the Page prose why it is overtaken/);
+    assert.equal(readLog(page).filter((e) => e.type === "retract").length, 0, "a refused retract writes nothing");
+  } finally { handlers.session_shutdown(); p.done(); }
+  // The Kernel ignores a retract that reaches an answered Decision anyway (an older tool, a hand-written log).
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "m", question: "Merge?", options: [{ label: "Merge" }, { label: "Wait" }] } },
+    { seq: 2, at: 0, origin: "human", type: "decide", decision: "m", option: "Wait", delivery: "immediate" },
+    { seq: 3, at: 0, origin: "agent", type: "retract", decision: "m", reason: "moot" },
+  ];
+  assert.deepEqual(derive(log).decisions.map((d) => [d.id, d.answer?.option]), [["m", "Wait"]]);
+});
+
+test("an answer after a retract lands: it is recorded, shown with the reason, and delivered (2.14.1)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const q = { id: "m", question: "Merge?", options: [{ label: "Merge" }, { label: "Wait" }] };
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: q },
+    { seq: 2, at: 0, origin: "agent", type: "retract", decision: "m", reason: "Igor merged it" },
+    { seq: 3, at: 0, origin: "human", type: "decide", decision: "m", option: "Wait", delivery: "immediate" },
+  ];
+  const d = derive(log).decisions.find((x) => x.id === "m");
+  assert.deepEqual([d?.answer?.option, d?.retracted, d?.state], ["Wait", "Igor merged it", "done"], "the late answer is kept with the reason");
+  assert.deepEqual(publicState(derive(log)).toAnswer, [], "it asks nothing");
+  assert.equal(publicState(derive(log)).decisions[0].retracted, "Igor merged it");
+  assert.match(compose("page.html", "http://x", [log[2]], log), /#3 Decision m: Wait; no longer asked: "Igor merged it"/);
+  assert.deepEqual(dueMessages(log, 60_000).map((m) => m.seqs), [[3]], "it is delivered like any answer");
+  assert.deepEqual(derive(log.slice(0, 2)).decisions, [], "before a late answer the retracted card is gone");
+});
+
+test("a re-asked id starts fresh: no answer from an earlier ask shows under the new question (2.14.1)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const ask = (seq, question) => ({ seq, at: 0, origin: "agent", type: "ask", decision: { id: "draft", key: "doc", material: "doc", question, options: [{ label: "Yes" }, { label: "No" }] } });
+  const decide = (seq, option, ver) => ({ seq, at: 0, origin: "human", type: "decide", decision: "draft", option, key: "doc", ver, delivery: "immediate" });
+  const shown = (log) => { const d = publicState(derive(log, () => "v2")).decisions.find((x) => x.id === "draft"); return [d.answer, d.round, d.history]; };
+  // Retracted unanswered, a late answer on v1, then asked anew on v2 and answered No.
+  const retracted = [ask(1, "Approve draft?"), { seq: 2, at: 0, origin: "agent", type: "retract", decision: "draft", reason: "v2 replaces it" }, decide(3, "Yes", "v1"), ask(4, "Delete draft?"), decide(5, "No", "v2")];
+  assert.deepEqual(shown(retracted), ["No", 1, []]);
+  // Asked again without a retract after an answer on v1.
+  assert.deepEqual(shown([ask(1, "Approve draft?"), decide(2, "Yes", "v1"), ask(3, "Delete draft?"), decide(4, "No", "v2")]), ["No", 1, []]);
+});
+
+test("an answer names the ask it answered: a delayed answer to a withdrawn question never answers the re-asked one (2.14.2)", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const options = [{ label: "Yes", consequence: "" }, { label: "No", consequence: "" }];
+    const first = host.agent(page, { type: "ask", decision: { id: "approval", question: "Publish draft?", options } });
+    host.agent(page, { type: "retract", decision: "approval", reason: "publishing moved to CI" });
+    const second = host.agent(page, { type: "ask", decision: { id: "approval", question: "Delete draft?", options } });
+    // The original tab's "Yes" to "Publish draft?" arrives late.
+    assert.equal(human({ type: "decide", decision: "approval", option: "Yes", ask: first.seq }).status, 200);
+    assert.equal(readLog(page).at(-1).ask, first.seq, "the host records which ask the answer names");
+    const d = derive(readLog(page)).decisions.find((x) => x.id === "approval");
+    assert.deepEqual([d.question, d.answer, d.state], ["Delete draft?", null, "new"], "the new question stays unanswered");
+    tick(UNDO + 100);
+    host.deliverDue(page);
+    assert.match(sent.at(-1).message.content, /Decision approval: Yes; no longer asked: "publishing moved to CI" \(question "Publish draft\?"\)/, "delivered as a late answer naming the old question");
+    // An answer naming the current ask answers it.
+    human({ type: "decide", decision: "approval", option: "No", ask: second.seq });
+    const now = derive(readLog(page)).decisions.find((x) => x.id === "approval");
+    assert.deepEqual([now.question, now.answer?.option, now.state, now.retracted ?? null], ["Delete draft?", "No", "done", null]);
+  } finally { host.stop(); p.done(); }
+  // With the id not asked anew, the late answer shows folded with its reason, as before.
+  const q = { id: "m", question: "Merge?", options: [{ label: "Merge" }, { label: "Wait" }] };
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: q },
+    { seq: 2, at: 0, origin: "agent", type: "retract", decision: "m", reason: "r1" },
+    { seq: 3, at: 0, origin: "agent", type: "ask", decision: { ...q, question: "Merge now?" } },
+    { seq: 4, at: 0, origin: "agent", type: "retract", decision: "m", reason: "r2" },
+    { seq: 5, at: 0, origin: "human", type: "decide", decision: "m", option: "Wait", ask: 1, delivery: "immediate" },
+  ];
+  const late = derive(log).decisions.find((x) => x.id === "m");
+  assert.deepEqual([late.question, late.answer.option, late.retracted, late.state], ["Merge?", "Wait", "r1", "done"], "it lands on the ask it names");
+  // Asked anew without a retract: a late answer to the first ask leaves the new one open and says so.
+  const reasked = [log[0], log[2], { ...log[4], seq: 6 }];
+  assert.deepEqual(derive(reasked).toAnswer.map((x) => [x.question, x.answer]), [["Merge now?", null]]);
+  assert.match(compose("page.html", "", [reasked[2]], reasked), /#6 Decision m: Wait; no longer asked: "asked again" \(question "Merge\?"\)/);
+});
+
+test("an Event Log without the ask field replays as before: the answer goes to the id's latest ask (2.14.2)", () => {
+  const q = (question) => ({ id: "m", question, options: [{ label: "Merge" }, { label: "Wait" }] });
+  const decide = (seq) => ({ seq, at: 0, origin: "human", type: "decide", decision: "m", option: "Wait", delivery: "immediate" });
+  const ask = (seq, question) => ({ seq, at: 0, origin: "agent", type: "ask", decision: q(question) });
+  const retract = (seq, reason) => ({ seq, at: 0, origin: "agent", type: "retract", decision: "m", reason });
+  const shown = (log) => { const d = derive(log).decisions.find((x) => x.id === "m"); return [d.question, d.answer?.option ?? null, d.retracted ?? null, d.state]; };
+  assert.deepEqual(shown([ask(1, "A?"), retract(2, "r1"), ask(3, "B?"), decide(4)]), ["B?", "Wait", null, "done"]);
+  assert.deepEqual(shown([ask(1, "A?"), retract(2, "r1"), ask(3, "B?"), retract(4, "r2"), decide(5)]), ["B?", "Wait", "r2", "done"], "the latest withdrawn ask takes it, with its own reason");
+  assert.deepEqual(shown([ask(1, "A?"), retract(2, "r1"), decide(3)]), ["A?", "Wait", "r1", "done"]);
+});
+
+test("the host refuses an answer or an opened naming an ask that is not this Decision's (2.14.2)", async () => {
+  const p = project();
+  const { host, page, human } = await hostOn(p);
+  try {
+    const options = [{ label: "Yes", consequence: "" }, { label: "No", consequence: "" }];
+    const a = host.agent(page, { type: "ask", decision: { id: "approval", question: "Publish?", options } });
+    const other = host.agent(page, { type: "ask", decision: { id: "other", question: "Other?", options } });
+    const before = readLog(page).length;
+    for (const body of [
+      { type: "decide", decision: "approval", option: "Yes", ask: 9999 },
+      { type: "decide", decision: "approval", option: "Yes", ask: other.seq },
+      { type: "opened", decision: "approval", ask: other.seq },
+    ]) {
+      const r = human(body);
+      assert.deepEqual([r.status, r.json.error], [400, `No ask #${body.ask} for Decision approval on this Page.`], JSON.stringify(body));
+    }
+    assert.equal(readLog(page).length, before, "nothing is appended");
+    assert.equal(human({ type: "decide", decision: "approval", option: "Yes" }).status, 200, "an answer without ask is accepted as before");
+    assert.equal(human({ type: "decide", decision: "approval", option: "No", ask: a.seq }).status, 200);
+  } finally { host.stop(); p.done(); }
+});
+
+test("opened binds to the ask its tab showed; one without ask marks the id's current ask (2.14.2)", async () => {
+  const p = project();
+  const { host, page, human } = await hostOn(p);
+  try {
+    const options = [{ label: "Yes", consequence: "" }, { label: "No", consequence: "" }];
+    const first = host.agent(page, { type: "ask", decision: { id: "m", question: "Publish?", material: "a", options } });
+    host.agent(page, { type: "retract", decision: "m", reason: "moved" });
+    host.agent(page, { type: "ask", decision: { id: "m", question: "Delete?", material: "a", options } });
+    assert.equal(human({ type: "opened", decision: "m", ask: first.seq }).status, 200);
+    assert.equal(readLog(page).at(-1).ask, first.seq, "the host records the ask opened names");
+    const opened = () => derive(readLog(page)).decisions.find((x) => x.id === "m").opened;
+    assert.equal(opened(), false, "opening the withdrawn question's material does not open the new one");
+    human({ type: "opened", decision: "m" });
+    assert.equal(opened(), true, "an opened without ask marks the current ask, as before");
+  } finally { host.stop(); p.done(); }
+});
+
+test("version history leaves out answers naming a withdrawn ask; answers without ask still count toward the current one (2.14.2)", () => {
+  const q = (seq, question) => ({ seq, at: 0, origin: "agent", type: "ask", decision: { id: "x", key: "doc", material: "doc", question, options: [{ label: "Yes" }, { label: "No" }] } });
+  const decide = (seq, option, ver, ask) => ({ seq, at: 0, origin: "human", type: "decide", decision: "x", option, key: "doc", ver, ask, delivery: "immediate" });
+  const log = [q(1, "Publish?"), { seq: 2, at: 0, origin: "agent", type: "retract", decision: "x", reason: "r" }, q(3, "Delete?"), decide(4, "No", "v2", 3), decide(5, "Yes", "v1", 1)];
+  const d = derive(log, () => "v3").decisions.find((x) => x.id === "x");
+  assert.deepEqual([d.question, d.answer.option, d.round, d.history.map((h) => [h.ver, h.answer])], ["Delete?", "No", 2, [["v2", "No"]]]);
+});
+
+test("a late answer on another material version keeps the question withdrawn (2.14.2)", () => {
+  const log = [
+    { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "x", key: "doc", material: "doc", question: "Approve?", options: [{ label: "Yes" }, { label: "No" }] } },
+    { seq: 2, at: 0, origin: "agent", type: "retract", decision: "x", reason: "superseded" },
+    { seq: 3, at: 0, origin: "human", type: "decide", decision: "x", option: "Yes", key: "doc", ver: "v1", delivery: "immediate" },
+  ];
+  const st = derive(log, () => "v2");
+  const d = st.decisions.find((x) => x.id === "x");
+  assert.deepEqual([d.answer.option, d.retracted, d.state, d.stale], ["Yes", "superseded", "done", false]);
+  assert.deepEqual(st.toAnswer.map((x) => x.id), [], "a withdrawn question never asks again");
+});
+
+test("describe names a retract with its Decision and reason", async () => {
+  const { describe } = await import("./kernel/atelier.js");
+  const e = { seq: 7, at: 0, origin: "agent", type: "retract", decision: "merge", reason: "Igor merged it" };
+  assert.equal(describe(e, [e]), `#7 Retracted Decision merge: "Igor merged it"`);
+});
+
 test("a second send waits until the first one's run has started", async () => {
   const p = project();
   const root = realpathSync(p.root);
@@ -406,6 +602,133 @@ test("a second send waits until the first one's run has started", async () => {
     handlers.agent_start();
     assert.deepEqual(messages.map((m) => m.customType), ["atelier:immediate", "atelier:send"]);
   } finally { handlers.session_shutdown(); p.done(); }
+});
+
+test("legacy replay: an Event Log with a replacement before the undo of the answer it replaces counts and delivers only the replacement (2.14.2)", () => {
+  const q = { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "x", question: "Publish?", options: [{ label: "Yes" }, { label: "No" }] } };
+  const decide = (seq, option) => ({ seq, at: 0, origin: "human", type: "decide", decision: "x", option, ask: 1, delivery: "immediate" });
+  const log = [q, decide(2, "Yes"), decide(3, "No"), { seq: 4, at: 0, origin: "human", type: "undo", target: 2, delivery: "control" }];
+  assert.equal(derive(log).decisions[0].answer.option, "No");
+  assert.deepEqual(dueMessages(log, UNDO).map((m) => m.seqs), [[3]], "the undone Yes is never delivered");
+  assert.equal(derive(log.slice(0, 2)).decisions[0].answer.option, "Yes", "until the replacement is accepted, the answer is Yes");
+});
+
+// S1-S3 (review 5): a change inside the undo window is one request; the host undoes the original and appends the
+// replacement together, or refuses both and leaves the original.
+const replaceAsk = { id: "x", key: "a", material: "a", question: "Publish?", options: [{ label: "Yes" }, { label: "No" }] };
+
+test("S1: a replacement names the answer it replaces; the host undoes it in the same request, as a legacy undo-then-decide log replays", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const yes = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" }).json.entry;
+    tick(1_000);
+    assert.equal(human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1", replaces: yes.seq, images: ["nope.png"] }).status, 400, "an invalid replacement is refused");
+    assert.deepEqual(readLog(page).map((e) => e.type), ["ask", "decide"], "and leaves the original as it was");
+    const r = human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1", replaces: yes.seq });
+    assert.equal(r.status, 200);
+    const log = readLog(page);
+    assert.deepEqual(log.slice(2).map((e) => [e.type, e.target ?? e.option]), [["undo", yes.seq], ["decide", "No"]], "undo and replacement land together");
+    assert.equal(log[3].replaces, undefined, "the replacement is stored as a plain answer");
+    // The same change posted as two requests, undo then decide (Kernel before 2.14.2), replays identically.
+    const p2 = project(), two = await hostOn(p2);
+    try {
+      two.host.agent(two.page, { type: "ask", decision: replaceAsk });
+      two.human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" });
+      two.tick(1_000);
+      two.human({ type: "undo", target: yes.seq });
+      two.human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1" });
+      assert.deepEqual(readLog(two.page), log, "the same Event Log");
+    } finally { two.host.stop(); p2.done(); }
+    assert.equal(derive(log).decisions[0].answer.option, "No");
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].message.content, /Decision x \(version 1\): No/);
+    assert.doesNotMatch(sent[0].message.content, /Yes/, "the replaced answer is never delivered");
+  } finally { host.stop(); p.done(); }
+});
+
+test("S2: a replacement on another ask or version than the answer it names is refused; that answer stays", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const v2 = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "2" }).json.entry;
+    const late = human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1", replaces: v2.seq }); // a delayed click on v1
+    assert.equal(late.status, 409);
+    const other = host.agent(page, { type: "ask", decision: { ...replaceAsk, id: "y" } }).seq;
+    assert.equal(human({ type: "decide", decision: "y", option: "No", ask: other, key: "a", ver: "2", replaces: v2.seq }).status, 409, "another Decision's answer");
+    assert.deepEqual(readLog(page).filter((e) => e.origin === "human").map((e) => [e.type, e.option]), [["decide", "Yes"]]);
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent[0].message.content, /Decision x \(version 2\): Yes/, "the newer-version answer is delivered");
+  } finally { host.stop(); p.done(); }
+});
+
+test("S3: a replacement after the undo window has closed is refused whole: only the original is delivered", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const yes = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" }).json.entry;
+    tick(UNDO);
+    const r = human({ type: "decide", decision: "x", option: "No", previous: "Maybe", ask, key: "a", ver: "1", replaces: yes.seq });
+    assert.equal(r.status, 409);
+    assert.equal(r.json.error, "The 3-second undo window has closed.");
+    assert.deepEqual(readLog(page).filter((e) => e.origin === "human").map((e) => [e.type, e.option]), [["decide", "Yes"]], "no contradictory second answer");
+    host.deliverDue(page);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].message.content, /Decision x \(version 1\): Yes/);
+  } finally { host.stop(); p.done(); }
+});
+
+test("S4: a replacement whose write fails leaves the Event Log as it was: the original stays and is delivered", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  const real = fs.appendFileSync;
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const yes = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" }).json.entry;
+    tick(1_000);
+    const before = readFileSync(`${page}.events.jsonl`, "utf8");
+    // The disk fills while the replacement is written: the write naming it fails after any earlier bytes landed.
+    fs.appendFileSync = (file, data, ...rest) => {
+      if (String(data).includes('"option":"No"')) { real(file, String(data).slice(0, 7), ...rest); throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }); }
+      return real(file, data, ...rest);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => human({ type: "decide", decision: "x", option: "No", ask, key: "a", ver: "1", replaces: yes.seq }), /ENOSPC/, "the request fails");
+    fs.appendFileSync = real; syncBuiltinESMExports();
+    assert.equal(readFileSync(`${page}.events.jsonl`, "utf8"), before, "neither the undo nor a torn replacement is left");
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].message.content, /Decision x \(version 1\): Yes/, "the original is still delivered");
+  } finally { fs.appendFileSync = real; syncBuiltinESMExports(); host.stop(); p.done(); }
+});
+
+test("S5: a replacement for another Key than the answer it names is refused; that answer stays", async () => {
+  const p = project();
+  const { host, page, human } = await hostOn(p);
+  try {
+    const ask = host.agent(page, { type: "ask", decision: replaceAsk }).seq;
+    const yes = human({ type: "decide", decision: "x", option: "Yes", ask, key: "a", ver: "1" }).json.entry;
+    assert.equal(human({ type: "decide", decision: "x", option: "No", ask, key: "b", ver: "1", replaces: yes.seq }).status, 409);
+    assert.deepEqual(readLog(page).filter((e) => e.origin === "human").map((e) => [e.type, e.option]), [["decide", "Yes"]]);
+  } finally { host.stop(); p.done(); }
+});
+
+test("readLog skips a torn trailing line, and the next append starts on a fresh line", () => {
+  const p = project();
+  try {
+    appendLog(p.page, { origin: "human", type: "comment", text: "kept" });
+    fs.appendFileSync(`${p.page}.events.jsonl`, '{"seq":2,"at":1,"origin":"hu');
+    assert.deepEqual(readLog(p.page).map((e) => e.text), ["kept"]);
+    assert.equal(appendLog(p.page, { origin: "human", type: "comment", text: "next" }).seq, 2);
+    assert.deepEqual(readLog(p.page).map((e) => e.text), ["kept", "next"]);
+  } finally { p.done(); }
 });
 
 test("dueMessages skips in-flight events and covers only drafts before the Send", () => {

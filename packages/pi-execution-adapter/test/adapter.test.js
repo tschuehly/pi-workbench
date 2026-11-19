@@ -302,6 +302,25 @@ test("propagates deterministic parent and execution lineage to the child", async
   assert.equal(spawnOptions.env.PI_TELEMETRY_EXECUTION_ID, receipt.executionId);
 });
 
+test("passes a Worker's status file to that child only; inherited values never reach a leaf", async () => {
+  const previous = process.env.PI_WORKBENCH_STATUS_FILE;
+  process.env.PI_WORKBENCH_STATUS_FILE = "/inherited/status.json";
+  try {
+    const options = [];
+    const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, _args, spawnOptions) => { options.push(spawnOptions); return fakeRpc(); } });
+    const worker = await adapter.dispatch(spec({ statusFile: "/status/worker-1.json" }));
+    await adapter.result(worker.executionId);
+    const leaf = await adapter.dispatch(spec());
+    await adapter.result(leaf.executionId);
+    assert.equal(options[0].env.PI_WORKBENCH_STATUS_FILE, "/status/worker-1.json");
+    assert.equal(options[1].env.PI_WORKBENCH_STATUS_FILE, undefined);
+    await assert.rejects(adapter.dispatch(spec({ statusFile: " " })), /statusFile must be a non-empty string/);
+  } finally {
+    if (previous === undefined) delete process.env.PI_WORKBENCH_STATUS_FILE;
+    else process.env.PI_WORKBENCH_STATUS_FILE = previous;
+  }
+});
+
 test("resumes a recorded session, verifies its identity, and keeps fresh launches unnamed by session", async () => {
   const children = [];
   const adapter = new PiRpcExecutionAdapter({ clock: () => now, spawn: (_command, args) => { const child = fakeRpc({ sessionId: "worker-session-1" }); children.push({ child, args }); return child; } });
