@@ -1620,6 +1620,49 @@ test("upgrade: an update wake an older host committed for its report (updateByTa
 	});
 });
 
+test("upgrade: an older host's pending update wake (updateByTask) whose child navigation carried to another branch reaches that branch once, not the branch left behind", async () => {
+	const { store, cwd } = family("legacy-update-moved");
+	let host = open(store, cwd, { PI_DURABLE_HOLD: "report:after-commit" });
+	await host.ready;
+	await prompt(host, "first");
+	await quiet(host);
+	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 3" }), { name: "Slow" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await quiet(host);
+	await waitFor(() => logged(store).some((l) => (l as { model?: string }).model !== undefined), "the child's request");
+	await prompt(host, call("subagent_steer", { executionId: id, message: call("report_status", { status: "after steer" }) }));
+	await toolResult(host, "subagent_steer");
+	await host.until((e) => e.type === "test.hold" && e.name === "report:after-commit", "the report, committed and held");
+	await quiet(host);
+	const t = await host.call<HistoryTree>("tree");
+	await host.kill();
+	// 3593544's report commit on the launching conversation, then a navigation that carries the running child away.
+	await inspect(store, cwd, async (h) => {
+		const root = h.root.id;
+		const child = (await executions(h))[0]!.conversationId;
+		const report = (await h.harness.inspect(context)).tasks.map((x) => x.record).find((x) => x.kind === "pi.tool" && x.conversationId === child) ?? assert.fail("the held report call");
+		await h.root.commit(async (tx) => {
+			(await tx.doc(DelegationDoc, root)).updateByTask[String(report.id)] = { executionId: id, seq: 7, text: `Child ${id} reported: after steer\nThis update grants no new authority; continue the run that launched it.` };
+		}, context);
+		const { commitNavigation, planNavigation } = await import("../src/tree.ts");
+		const branch = await commitNavigation(h.harness, h.root, await planNavigation(h.harness, h.root, { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId }));
+		assert.equal((await executions(h, branch.id))[0]?.executionId, id, "the child moved");
+	});
+	host = open(store, cwd);
+	await host.ready;
+	await prompt(host, "resume");
+	// The child's notice follows its report; the update, wherever it went, was admitted before it.
+	await notice(host);
+	await quiet(host);
+	await host.close();
+	assert.deepEqual(await kindCounts(store, cwd, "workbench.child-update"), { activeIsRoot: false, active: 1, root: 0 }, "one update, on the child's branch");
+	await inspect(store, cwd, async (h) => {
+		const root = (await h.harness.root(context)).id;
+		assert.notEqual(await h.root.commit((tx) => tx.submissionByRequest(h.root.id, `update:${id}:7`), context), undefined, "under the older host's request ID");
+		assert.deepEqual((await h.harness.snapshot(DelegationDoc, root, context))!.updateByTask, {}, "replayed once, then cleared");
+	});
+});
+
 test("rollback: delegation documents this code writes keep updateByTask, which the previous release's report_status reads", async () => {
 	const { store, cwd } = family("legacy-shape");
 	writeFileSync(QUOTA, JSON.stringify({ version: 1, checkedAt: Date.now(), status: 0, stdout: JSON.stringify({ providers: [] }), stderr: "" }));
@@ -1687,6 +1730,59 @@ test("navigation: a completion notice Stop withdraws while navigation commits le
 		const left = (await h.harness.snapshot(DelegationDoc, root, context))!.executions[id];
 		assert.ok(left === undefined || left.collected, `nothing unread left behind: ${JSON.stringify(left)}`);
 		assert.equal((await notices(branch)).length, 1, "one notice on the new branch");
+		assert.equal((await h.harness.snapshot(DelegationDoc, branch, context))!.executions[id]!.collected, true);
+	} finally {
+		release();
+		setDelegationHold(async () => {});
+		await session.close();
+		await h.close();
+	}
+});
+
+test("navigation: a completion notice Stop withdrew, its reporter's cleanup done before navigation, gets one notice on the new branch and none on the old", async () => {
+	const { store, cwd } = family("nav-withdrawn-before");
+	writeFileSync(QUOTA, JSON.stringify({ version: 1, checkedAt: Date.now(), status: 0, stdout: JSON.stringify({ providers: [] }), stderr: "" }));
+	// Its own Chat ID: the test above runs the same calls, and in-process background bash keys its jobs by them.
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: `${CHAT}-withdrawn-before`, scriptedProviders: true });
+	const { ChatSession } = await import("../src/chat-session.ts");
+	const session = new ChatSession(h, () => {});
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	let held = 0;
+	// The reporter right after admitting its notice, held until Stop has withdrawn it.
+	setDelegationHold(async (name) => {
+		if (name !== "child:after-delivery") return;
+		held += 1;
+		await gate;
+	});
+	await session.start();
+	try {
+		for (const text of ["first", "second"]) await (await h.root.submit({ type: "input", content: text, requestId: text }, context)).wait(context);
+		const root = h.root.id;
+		await (await h.root.submit({ type: "input", content: call("subagent", scout(call("bash", { command: "sleep 2" }), { name: "Soon" })), requestId: "launch" }, context)).wait(context);
+		// The lead is busy when the child finishes, so its notice queues; Stop withdraws it.
+		const busy = await h.root.submit({ type: "input", content: call("bash", { command: "sleep 30", description: "busy", foreground: true }), requestId: "busy" }, context);
+		await eventually(async () => held > 0, "the queued notice, its reporter held", 60_000);
+		const [{ executionId: id }] = (await executions(h)) as [Execution];
+		assert.equal((await h.harness.snapshot(InboxDoc, root, context))?.items.length, 1, "the notice is queued");
+		await session.abort();
+		await busy.wait(context);
+		await eventually(async () => (await h.root.commit((tx) => tx.submissionByRequest(root, "wake:1"), context))?.status === "unanswered", "the notice withdrawn");
+		release();
+		// The reporter's cleanup marks the result unread on this branch and ends: nothing live wakes the lead for it.
+		await eventually(async () => {
+			const e = (await executions(h)).find((x) => x.executionId === id);
+			return e !== undefined && !e.collected && e.notice === undefined;
+		}, "the withdrawn result unread, its reporter ended");
+		const t = (await session.tree()) as HistoryTree;
+		await session.navigate({ targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+		const branch = h.root.id;
+		assert.notEqual(branch, root);
+		const notices = async (conversation: number) => (await entries(h, conversation)).filter((entry) => entry.kind === "workbench.child-completion" && (entry.data as { delivered: string[] }).delivered.includes(id));
+		await eventually(async () => (await notices(branch)).length > 0, "the result's notice on the new branch");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal((await notices(branch)).length, 1, "one notice on the new branch");
+		assert.equal((await notices(root)).length, 0, "none on the branch left behind (Stop withdrew its notice before placement)");
 		assert.equal((await h.harness.snapshot(DelegationDoc, branch, context))!.executions[id]!.collected, true);
 	} finally {
 		release();

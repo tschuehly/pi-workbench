@@ -301,7 +301,8 @@ export async function navigationCarries(reader: DocumentReader, lead: Conversati
 /**
  * In the navigation commit: move the lead's carried children from `from` to `to` and point their launching conversation
  * at `to`. A notice that named a result for collection was read on `from`, so it is dropped: `to`'s next notice carries
- * the result, sent by a reporter restarted at its wake when the result's own has ended. Throws `busy` while `from` runs or
+ * the result, sent by a reporter restarted at its wake. Every moved result gets one, as its own reporter may have ended
+ * (named for collection, or a withdrawn notice's cleanup); one still at its wake loses to it on the notice guard. Throws `busy` while `from` runs or
  * has queued input (a notice, update or stuck notice its sender admitted in a commit before this one), or a child that
  * stays runs (one being cancelled, a foreground one). Read from documents: a fork's commit cannot read tables after
  * writing its conversation. The destination composes its own notices with its own `wake` sequence.
@@ -313,8 +314,8 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 		if (carried(e)) moving.push(id);
 		else if (e.outcome === "running") throw new Error(busy);
 	}
-	// A result a settled notice named for collection: the reporter that would wake the lead for it has ended.
-	await moveRecords(tx, from, to, moving, (e) => e.outcome !== "running" && e.notice !== undefined);
+	// Carried and terminal means uncollected: a fresh wake on `to`; the collection and notice guards keep it to one notice.
+	await moveRecords(tx, from, to, moving, (e) => e.outcome !== "running");
 }
 
 /**
@@ -1068,7 +1069,6 @@ export function delegationExtension(options: DelegationOptions) {
 				const id = self.executionId;
 				let workerId: string | undefined;
 				const key = String(api.taskId);
-				const launcher = (await api.conversation(parent, c))!;
 				for (let moved = true; moved;) {
 					const home = (await located(api, parent, id, c)).home;
 					const lead = (await api.conversation(home, c))!;
@@ -1076,13 +1076,14 @@ export function delegationExtension(options: DelegationOptions) {
 					await api.commit(async (tx) => {
 						if ((await homeIn(tx, parent, id)) !== home) return void (moved = true);
 						const e = (await tx.doc(DelegationDoc, home)).executions[id];
-						// The rerun of a report an older host (3593544) committed: its wake, once, to the conversation that stored it.
+						// The rerun of a report an older host (3593544) committed: its wake, once. Already submitted to the conversation
+						// that stored it, it was delivered there; otherwise it goes to the child's current branch, under its request ID.
 						const launched = await tx.doc(DelegationDoc, parent);
 						const legacy = launched.updateByTask[key];
 						if (legacy !== undefined) {
 							const requestId = `update:${legacy.executionId}:${String(legacy.seq)}`;
 							if ((await tx.submissionByRequest(parent, requestId)) === undefined)
-								await launcher.submit(tx, { type: "input", content: legacy.text, whenBusy: "steer", requestId, entry: { kind: UPDATE_ENTRY, data: { executionId: legacy.executionId, status } } });
+								await lead.submit(tx, { type: "input", content: legacy.text, whenBusy: "steer", requestId, entry: { kind: UPDATE_ENTRY, data: { executionId: legacy.executionId, status } } });
 							delete launched.updateByTask[key];
 						}
 						workerId = e?.workerId;
