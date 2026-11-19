@@ -21,7 +21,7 @@ import type { ChatHost } from "./chat.ts";
 import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
 import { CEILING_CUSTOM_TYPE, CEILING_ENTRY, CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData, CheckpointDoc } from "./checkpoint.ts";
 import { syncWorkersGroup } from "./tool-groups.ts";
-import { ACTIVITY_STATUS_KEY, COMPLETION_CUSTOM_TYPE, COMPLETION_ENTRY, DelegationDoc, finishCancellations, roster, UPDATE_CUSTOM_TYPE, UPDATE_ENTRY } from "./delegation.ts";
+import { ACTIVITY_STATUS_KEY, COMPLETION_CUSTOM_TYPE, COMPLETION_ENTRY, DelegationDoc, finishCancellations, roster, STUCK_CUSTOM_TYPE, STUCK_ENTRY, UPDATE_CUSTOM_TYPE, UPDATE_ENTRY } from "./delegation.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Admissions, admit, changeQueued, context, Edits, type EditPlan, type Host, type QueuedInput, Reconcile, resolveUncertain } from "./host.ts";
 import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./redact.ts";
@@ -194,6 +194,7 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	// Delegation: the coalesced completion wake and a requested child update, as the legacy extension's custom messages.
 	if (entry.kind === COMPLETION_ENTRY) return [custom(COMPLETION_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === UPDATE_ENTRY) return [custom(UPDATE_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
+	if (entry.kind === STUCK_ENTRY) return [custom(STUCK_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === CEILING_ENTRY) return [custom(CEILING_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	const notice = NOTICE_TYPES[entry.kind];
 	if (notice !== undefined) return [custom(notice, textOfContent(message.content), entry.data ?? null)];

@@ -61,6 +61,9 @@ export { COMPLETION_CUSTOM_TYPE };
 /** A child's requested status update as placed in the lead's transcript (legacy `pi-workbench:child-update`). */
 export const UPDATE_ENTRY = "workbench.child-update";
 export const UPDATE_CUSTOM_TYPE = "pi-workbench:child-update";
+/** A child that left its quiet-report update request unread past the grace, as placed in the lead's transcript. */
+export const STUCK_ENTRY = "workbench.child-stuck";
+export const STUCK_CUSTOM_TYPE = "pi-workbench:child-stuck";
 /** PI WEB's Activity roster status key (Workbench `extensions/activity`). */
 export const ACTIVITY_STATUS_KEY = "pi-workbench:activity";
 
@@ -68,10 +71,13 @@ export const ACTIVITY_STATUS_KEY = "pi-workbench:activity";
 const RESULT_MAX = 8_000;
 const CANCEL_TIMEOUT_MS = 15_000;
 const KEPT_COLLECTIONS = 20;
-/** A running child silent on report_status this long gets the lead's update request once (legacy REPORT_QUIET_MS). */
-export const REPORT_QUIET_MS = 55 * 60_000;
-// Tests shorten the quiet window, as legacy wait-until's PI_WORKBENCH_WAIT_CAP_SECONDS shortens its cap.
+/** A running child silent on report_status this long gets the lead's update request once (legacy REPORT_QUIET_MS is 55 min). */
+export const REPORT_QUIET_MS = 30 * 60_000;
+/** A quiet-report update request still unread this long after it was sent wakes the lead once with a stuck notice. */
+export const STUCK_GRACE_MS = 10 * 60_000;
+// Tests shorten both, as legacy wait-until's PI_WORKBENCH_WAIT_CAP_SECONDS shortens its cap.
 const reportQuietMs = () => Number(process.env.PILOT_REPORT_QUIET_MS) || REPORT_QUIET_MS;
+const stuckGraceMs = () => Number(process.env.PILOT_STUCK_GRACE_MS) || STUCK_GRACE_MS;
 
 const sanitize = sealed(redact);
 
@@ -117,7 +123,9 @@ export type Execution = {
 	/** The completion notice that carried this result (collected with it) or named it for subagent_collect. */
 	notice?: { seq: number; carried: boolean };
 	/** The quiet-report steer sent for the quiet span starting at `since` (its steer sequence); a later report re-arms it. */
-	quietSteer?: { since: string; seq: number };
+	quietSteer?: { since: string; seq: number; at?: string };
+	/** The stuck notice sent to the lead for that quiet span, with the steer it names; a new span re-arms it. */
+	stuckNotice?: { since: string; seq: number; text: string; data: JsonObject };
 };
 
 type Result = { output: { type: "text"; text: string }[]; details: JsonObject; isError?: true };
@@ -268,24 +276,41 @@ function reporterTask(options: DelegationOptions) {
 				// Best effort, as legacy watchReportCadence: a child quiet on report_status for the quiet window since its launch or
 				// last report gets the lead's update request once, waking nobody; its next report re-arms it. The span and its steer
 				// are in the record, so after a restart the same steer is re-sent under its request ID, never a second one.
+				// A steer still unread (not placed) the grace after it was sent means the child is inside one call that does not
+				// return: the lead gets one stuck notice for that span, recorded the same way and sent under `stuck:<id>:<seq>`.
 				let cadence: NodeJS.Timeout | undefined;
 				let cadenceStopped = false;
+				let stuckSent: string | undefined;
+				const unread = async (tx: Tx, seq: number) => {
+					const steer = await tx.submissionByRequest(conversation, `steer:${id}:${String(seq)}`);
+					return steer === undefined || steer.status === "queued";
+				};
 				const tick = async (): Promise<void> => {
 					if (cadenceStopped || runtime.signal.aborted) return;
 					const quiet = reportQuietMs();
+					const grace = stuckGraceMs();
 					let next: number | undefined = quiet;
 					let send: number | undefined;
+					let stuck: Execution["stuckNotice"] | "due" | undefined;
 					await runtime.commit(async (tx) => {
 						const e = (await tx.doc(DelegationDoc, runtime.conversationId)).executions[id];
 						if (e === undefined || e.outcome !== "running" || e.cancelEpoch !== undefined) next = undefined;
 						else {
 							const since = e.reportedAt ?? e.launchedAt;
 							const due = Date.parse(since) + quiet;
-							if (e.quietSteer?.since === since) send = e.quietSteer.seq;
-							else if (runtime.now() >= due) {
+							if (e.quietSteer?.since === since) {
+								send = e.quietSteer.seq;
+								if (e.stuckNotice?.since === since) stuck = copy(e.stuckNotice);
+								else if (await unread(tx, send)) {
+									const stuckDue = Date.parse(e.quietSteer.at ?? iso(due)) + grace;
+									if (runtime.now() >= stuckDue) stuck = "due";
+									else next = Math.min(quiet, stuckDue - runtime.now());
+								}
+							} else if (runtime.now() >= due) {
 								e.steers += 1;
-								e.quietSteer = { since, seq: e.steers };
+								e.quietSteer = { since, seq: e.steers, at: iso(runtime.now()) };
 								send = e.steers;
+								next = Math.min(quiet, grace);
 							} else next = due - runtime.now();
 						}
 						return undefined;
@@ -294,7 +319,56 @@ function reporterTask(options: DelegationOptions) {
 						await holdFn("cadence:after-mark", runtime.signal);
 						await child.submit({ type: "input", content: UPDATE_REQUEST, whenBusy: "steer", requestId: `steer:${id}:${String(send)}` }, c);
 					}
+					if (stuck === "due") stuck = await markStuck(send!);
+					if (stuck !== undefined && stuckSent !== stuck.since) {
+						await holdFn("stuck:after-mark", runtime.signal);
+						await deliverStuck(stuck);
+						stuckSent = stuck.since;
+					}
 					if (next !== undefined && !cadenceStopped) cadence = setTimeout(() => void tick().catch(() => {}), next).unref();
+				};
+				/** Compose the notice from the child's open tool call, then record it if the steer is still unread. */
+				const markStuck = async (seq: number): Promise<Execution["stuckNotice"]> => {
+					const on = await stuckOn(runtime, conversation, c);
+					let marked: Execution["stuckNotice"];
+					await runtime.commit(async (tx) => {
+						const e = (await tx.doc(DelegationDoc, runtime.conversationId)).executions[id];
+						if (e === undefined || e.outcome !== "running" || e.cancelEpoch !== undefined) return undefined;
+						const since = e.reportedAt ?? e.launchedAt;
+						if (e.quietSteer?.since !== since || e.quietSteer.seq !== seq) return undefined;
+						if (e.stuckNotice?.since === since) {
+							marked = copy(e.stuckNotice);
+							return undefined;
+						}
+						if (!(await unread(tx, seq))) return undefined;
+						const minutes = Math.max(1, Math.round((runtime.now() - Date.parse(e.quietSteer.at ?? since)) / 60_000));
+						const text = [
+							`Child ${id} "${e.name}" has not read the update request for ${String(minutes)} min and appears stuck inside one call: ${on.text}.`,
+							"Check it with subagent_status; if it is hung, subagent_cancel it; otherwise leave it. This notice authorizes nothing else.",
+						].join("\n");
+						e.stuckNotice = { since, seq, text, data: { executionId: id, name: e.name, minutes, ...on.data } };
+						marked = copy(e.stuckNotice);
+						return undefined;
+					}, c);
+					return marked;
+				};
+				/** To the lead as a completion wake goes: behind an active compact_and_continue, else a steer. */
+				const deliverStuck = async (notice: NonNullable<Execution["stuckNotice"]>) => {
+					let held = false;
+					for (;;) {
+						const active = (await runtime.snapshot(CheckpointDoc, runtime.conversationId, c))?.active;
+						if (active === null || active === undefined) break;
+						held = true;
+						await runtime.waitForTask(active.task as TaskId, c);
+					}
+					const lead = (await runtime.conversation(runtime.conversationId, c))!;
+					await lead.submit({
+						type: "input",
+						content: notice.text,
+						whenBusy: held ? "followUp" : "steer",
+						requestId: `stuck:${id}:${String(notice.seq)}`,
+						entry: { kind: STUCK_ENTRY, data: notice.data },
+					}, c);
 				};
 				void tick().catch(() => {});
 				const submission = await child.submit({ type: "input", content: task.input.assignment, whenBusy: "followUp", requestId: `assignment:${id}` }, c);
@@ -436,6 +510,34 @@ async function steerPending(tx: Tx, conversation: ConversationId, e: Execution):
 		if (submission === undefined || submission.status === "queued" || submission.status === "placed") return true;
 	}
 	return false;
+}
+
+type ContextReader = DocumentReader & { context(id: ConversationId, c: Context): Promise<{ entries: readonly { model?: readonly unknown[] }[] }> };
+
+/**
+ * What a child is stuck on: the open tool call of its latest assistant entry (one without a result), its sanitized
+ * argument preview and since when; a Worker in a foreground `subagent` call also names that leaf.
+ */
+async function stuckOn(runtime: ContextReader, conversation: ConversationId, c: Context): Promise<{ text: string; data: JsonObject }> {
+	type Part = { type: string; id?: string; name?: string; arguments?: Record<string, unknown> };
+	const messages = (await runtime.context(conversation, c)).entries.flatMap((entry) => (entry.model ?? []) as { role: string; toolCallId?: string; timestamp?: number; content?: Part[] }[]);
+	const answered = new Set(messages.flatMap((m) => (m.role === "toolResult" && m.toolCallId !== undefined ? [m.toolCallId] : [])));
+	const last = messages.findLast((m) => m.role === "assistant");
+	const call = (Array.isArray(last?.content) ? last.content : []).find((p) => p.type === "toolCall" && p.name !== "report_status" && !answered.has(p.id ?? ""));
+	if (call === undefined) return { text: "no tool call is open, so it may be waiting on its model", data: {} };
+	const args = call.arguments ?? {};
+	const preview = bounded(sanitize(typeof args.command === "string" ? args.command : JSON.stringify(args)), 200);
+	const at = last?.timestamp === undefined ? undefined : iso(last.timestamp);
+	let text = `${call.name ?? "a tool"} \`${preview}\`${at === undefined ? "" : ` since ${at}`}`;
+	const data: JsonObject = { tool: call.name ?? "", preview, ...(at === undefined ? {} : { since: at }) };
+	if (call.name === "subagent") {
+		const leaf = Object.values((await runtime.snapshot(DelegationDoc, conversation, c))?.executions ?? {}).find((l) => l.outcome === "running" && !l.background);
+		if (leaf !== undefined) {
+			text += `; it is a Worker blocked in a foreground subagent call on leaf ${leaf.executionId} "${leaf.name}"`;
+			data.leaf = leaf.executionId;
+		}
+	}
+	return { text, data };
 }
 
 /** What settling leaves needs of the reporter's runtime. */

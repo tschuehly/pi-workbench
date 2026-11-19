@@ -614,7 +614,8 @@ test("report_status alone in its batch returns the reminder; batched with anothe
 
 test("quiet-report cadence: a child quiet for the window gets one update-request steer, waking nobody; its next report re-arms it; its commands are marked a child's", async () => {
 	const { store, cwd } = family("cadence");
-	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000" });
+	// Each steer is read within the stuck grace (the first after 2 s, the second after 1.5 s): no stuck notice.
+	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "3000" });
 	await host.ready;
 	await prompt(host, call("bash", { command: 'echo "lead=${PI_WORKBENCH_EXECUTION_KIND:-none}" > lead-kind.txt', description: "Lead kind", foreground: true }));
 	await quiet(host);
@@ -623,6 +624,7 @@ test("quiet-report cadence: a child quiet for the window gets one update-request
 	assert.match(await toolResult(host, "subagent"), /^done after report_status\n/);
 	await quiet(host);
 	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-update").length, 0, "a quiet-report steer wakes nobody");
+	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-stuck").length, 0, "a child that read its steer sends no stuck notice");
 	await host.close();
 	assert.equal(readFileSync(join(cwd, "kind.txt"), "utf8").trim(), "kind=subagent", "wait-until inside a child caps its wait");
 	assert.equal(readFileSync(join(cwd, "lead-kind.txt"), "utf8").trim(), "lead=none");
@@ -656,6 +658,85 @@ test("quiet-report cadence: the steer committed before a host kill is sent once 
 		assert.equal(asked.length, 1, "the steer reached the child once");
 		assert.deepEqual([e!.steers, e!.reportedStatus], [1, "update 1"]);
 	});
+});
+
+const isStuck = (e: { type: string; message?: unknown }) => e.type === "message.end" && (e.message as Message).customType === "pi-workbench:child-stuck";
+
+test("stuck notice: a child inside one call that leaves its update request unread past the grace wakes the lead once, naming the call", async () => {
+	const { store, cwd } = family("stuck");
+	// Steer at 1 s, notice at 4 s, the bash ends at 8 s; the child then reads the steer, reports and sleeps 2.5 s,
+	// reading the second span's steer 1.5 s after it was sent: still exactly one notice.
+	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "3000" });
+	await host.ready;
+	await prompt(host, call("subagent", scout(call("bash", { command: `sleep 8 # hung ${SECRET}` }), { name: "Hung child" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	const stuck = (await host.until(isStuck, "the stuck notice")).message as Message;
+	const body = textOf(stuck.content);
+	assert.match(body, new RegExp(`^Child ${id} "Hung child" has not read the update request for \\d+ min and appears stuck inside one call: bash \`sleep 8 # hung `), body);
+	assert.match(body, / since \d{4}-\d\d-\d\dT/, "since when the call runs");
+	assert.ok(!body.includes(SECRET), "the preview is redacted");
+	assert.match(body, /\nCheck it with subagent_status; if it is hung, subagent_cancel it; otherwise leave it\. This notice authorizes nothing else\.$/);
+	assert.deepEqual([stuck.details && (stuck.details as { executionId: string; tool: string }).executionId, (stuck.details as { tool: string }).tool], [id, "bash"]);
+	await host.until((e) => isNotice(e) && textOf((e.message as Message).content).includes(`${id} [success]`), "the child's notice");
+	await quiet(host);
+	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-stuck").length, 1, "one notice for the hung span, none for the span it read in time");
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const [e] = await executions(h);
+		assert.equal(e!.stuckNotice?.seq, 1, "the notice names the first span's steer");
+		assert.equal(e!.outcome, "success", "never cancelled automatically");
+	});
+});
+
+test("stuck notice: marked before a host kill, it reaches the lead once after reopen", async () => {
+	const { store, cwd } = family("stuck-kill");
+	let host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000", PI_DURABLE_HOLD: "stuck:after-mark" });
+	await host.ready;
+	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 4" }))));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await host.until((e) => e.type === "test.hold" && e.name === "stuck:after-mark", "the committed notice");
+	await host.kill();
+	// A long window after reopen: only the committed notice may reach the lead.
+	host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "600000", PILOT_STUCK_GRACE_MS: "1000" });
+	await host.ready;
+	await prompt(host, "resume");
+	await host.until(isStuck, "the stuck notice after reopen");
+	await host.until((e) => isNotice(e) && textOf((e.message as Message).content).includes(`${id} [`), "the child's notice");
+	await quiet(host);
+	const notices = customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-stuck");
+	assert.equal(notices.length, 1, "exactly one stuck notice");
+	assert.match(textOf(notices[0]!.content), new RegExp(`^Child ${id} .* bash \`sleep 4\``));
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+test("children's bash: a call without timeout gets the default (1800 s, shortened here), an explicit one is kept; the lead's bash is unaffected", async () => {
+	const { store, cwd } = family("child-bash-timeout");
+	// Its own job root: Workbench bash job IDs (Chat and task) repeat across this file's Chats.
+	const host = open(store, cwd, { PILOT_CHILD_BASH_TIMEOUT_S: "1", PI_BACKGROUND_BASH_ROOT: scratch("delegation-bash-jobs") });
+	await host.ready;
+	await prompt(host, call("bash", { command: "sleep 2; echo lead-ok > lead.txt", description: "Lead sleep", foreground: true }));
+	await toolResult(host, "bash");
+	await quiet(host);
+	await prompt(host, call("subagent", scout(calls({ name: "bash", arguments: { command: "sleep 3; echo late" } }, { name: "bash", arguments: { command: "sleep 2; echo kept", timeout: 30 } }), { background: false })));
+	await toolResult(host, "subagent");
+	await quiet(host);
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const [e] = await executions(h);
+		const results = (await entries(h, e!.conversationId)).flatMap((entry) => {
+			const m = entry.model?.[0] as (Message & { toolName?: string; isError?: boolean }) | undefined;
+			return m?.toolName === "bash" ? [{ text: textOf(m.content), isError: m.isError === true }] : [];
+		});
+		assert.deepEqual(results.map((r) => r.isError), [true, false], JSON.stringify(results));
+		assert.match(results[0]!.text, /Command timed out after 1 seconds/);
+		assert.match(results[1]!.text, /kept/);
+		const child = (await (await h.harness.conversation(e!.conversationId as ConversationId, context))!.agent(context)).tools.find((t) => t.name === "bash")!;
+		assert.match(child.description, /without one the command times out after 1800 seconds\./);
+		const lead = (await h.root.agent(context)).tools.find((t) => t.name === "bash")!;
+		assert.doesNotMatch(lead.description, /1800/);
+	});
+	assert.equal(readFileSync(join(cwd, "lead.txt"), "utf8").trim(), "lead-ok", "the lead's bash has no child default");
 });
 
 // ─── compact_and_continue in a child (main 0bfd282, a2684e3) ─────────────────

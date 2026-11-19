@@ -7,7 +7,8 @@
 import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { Provider } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
+import { type CompactionSettings, defineExtension, type Extension, section, type ToolRegistration } from "@earendil-works/pi-durable";
+import { num, obj, opt, str } from "@earendil-works/pi-schema";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
@@ -68,6 +69,24 @@ export function previewingEdit(edit = createEditTool()): typeof edit {
 			if (c.abortSignal?.aborted !== true) await api.details({ preview } as never, c);
 			return edit.execute(args, api, c);
 		},
+	};
+}
+
+/** Children's foreground bash timeout when a call gives none: one hung command cannot hold a child for hours. */
+export const CHILD_BASH_TIMEOUT_S = 1800;
+
+/** Pi's bash for Subagents and Workers (the lead has the Workbench bash): a call without `timeout` gets the default. */
+export function childBash(tool: ToolRegistration): ToolRegistration {
+	// Tests shorten it, as PILOT_REPORT_QUIET_MS shortens the quiet window.
+	const seconds = () => Number(process.env.PILOT_CHILD_BASH_TIMEOUT_S) || CHILD_BASH_TIMEOUT_S;
+	return {
+		...tool,
+		description: tool.description.replace("Optionally provide a timeout in seconds.", `Optionally provide a timeout in seconds; without one the command times out after ${String(CHILD_BASH_TIMEOUT_S)} seconds.`),
+		parameters: obj({
+			command: str({ description: "Bash command to execute" }),
+			timeout: opt(num({ description: `Timeout in seconds (optional, default ${String(CHILD_BASH_TIMEOUT_S)})` })),
+		}, { open: true }),
+		execute: (args, api, c) => tool.execute({ ...(args as object), timeout: (args as { timeout?: number }).timeout ?? seconds() } as never, api, c),
 	};
 }
 
@@ -206,7 +225,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data), leadOnly: [workbenchBash] }),
 		// Subagents and Workers keep the native blocking bash, as the legacy extension leaves it to them: their
 		// conversations deselect the Workbench bash, so this one is theirs (decided per conversation, not per process).
-		defineExtension({ name: "workbench.native-bash", tools: [warningTool(createBashTool())] }),
+		defineExtension({ name: "workbench.native-bash", tools: [warningTool(childBash(createBashTool()))] }),
 		workbenchBash,
 		atelier.extension(),
 		spawner.extension(),
