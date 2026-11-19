@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import type { ConversationId, EntryRecord } from "@earendil-works/pi-durable";
 import { openChatHost } from "../src/chat.ts";
-import { ChildDoc, DelegationDoc, type Execution, WorkersDoc } from "../src/delegation.ts";
+import { ChildDoc, DelegationDoc, type Execution, setDelegationHold, WorkersDoc } from "../src/delegation.ts";
 import { BranchesDoc, context } from "../src/host.ts";
 import { ChatHost, eventCopies, family, hideIn, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
@@ -1406,6 +1406,66 @@ test("navigation: results an earlier notice named for collection, left uncollect
 		const carried = (await h.harness.snapshot(DelegationDoc, branch, context))!.executions;
 		assert.deepEqual([carried.r1!.collected, carried.r2!.collected], [true, true]);
 	} finally {
+		await session.close();
+		await h.close();
+	}
+});
+
+/** Poll an async condition (a store read in this process). */
+async function eventually(condition: () => Promise<boolean>, what: string, timeoutMs = 20_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!(await condition())) {
+		if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+}
+
+test("navigation: of two carried results an earlier notice named, the one still uncollected after the other was collected gets the branch's notice", async () => {
+	const { store, cwd } = family("nav-rewake-each");
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT, scriptedProviders: true });
+	const { ChatSession } = await import("../src/chat-session.ts");
+	const session = new ChatSession(h, () => {});
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	let held = 0;
+	setDelegationHold(async (name) => {
+		if (name !== "child:before-delivery") return;
+		held += 1;
+		await gate;
+	});
+	await session.start();
+	try {
+		for (const text of ["first", "second"]) await (await h.root.submit({ type: "input", content: text, requestId: text }, context)).wait(context);
+		const root = h.root.id;
+		const child = (await h.harness.createConversation({ ownership: { kind: "ownerless" } }, context)).id;
+		const now = new Date().toISOString();
+		const named = (id: string) => ({
+			executionId: id, kind: "subagent", name: id, profile: "scout", cognitiveRole: "routine", provider: "faux", model: "faux", effort: "off",
+			cwd, taskPreview: id, launchedAt: now, endedAt: now, conversationId: child, anchor: 0, reporter: 0, background: true,
+			outcome: "success", text: `result ${id}`, length: 9, collected: false, steers: 0, notice: { seq: 1, carried: false },
+		}) as unknown as Execution;
+		await h.root.commit(async (tx) => {
+			const doc = await tx.doc(DelegationDoc, root);
+			doc.executions.r1 = named("r1");
+			doc.executions.r2 = named("r2");
+			doc.wake.seq = 1;
+		}, context);
+		const t = (await session.tree()) as HistoryTree;
+		await session.navigate({ targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+		const branch = h.root.id;
+		assert.notEqual(branch, root);
+		await eventually(async () => held > 0, "the branch's notice, held");
+		// The lead collects r1 before that notice is composed (subagent_collect's commit).
+		await h.root.commit(async (tx) => void ((await tx.doc(DelegationDoc, branch)).executions.r1!.collected = true), context);
+		release();
+		const notices = async () => (await entries(h, branch)).filter((entry) => entry.kind === "workbench.child-completion").map((entry) => (entry.data as { delivered: string[] }).delivered);
+		await eventually(async () => (await notices()).length > 0, "a notice on the branch for r2");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.deepEqual(await notices(), [["r2"]], "one notice carries the result still uncollected");
+		assert.equal((await h.harness.snapshot(DelegationDoc, branch, context))!.executions.r2!.collected, true);
+	} finally {
+		release();
+		setDelegationHold(async () => {});
 		await session.close();
 		await h.close();
 	}

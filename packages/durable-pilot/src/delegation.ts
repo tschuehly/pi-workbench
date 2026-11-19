@@ -312,7 +312,7 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 	if ((source.wake.delivering?.length ?? 0) > 0) throw new Error(busy);
 	// Bound after `settleBound` checked: still on its way to `from`.
 	if (Object.values(source.executions).some((e) => Object.keys(e.bound ?? {}).length > 0)) throw new Error(busy);
-	let rewake: { id: string; origin: ConversationId } | undefined;
+	const rewake: { id: string; origin: ConversationId }[] = [];
 	for (const [id, e] of Object.entries(source.executions)) {
 		const moving = carried(e);
 		if (!moving && e.outcome === "running") throw new Error(busy);
@@ -321,7 +321,7 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 		const record = copy(e);
 		record.origin = origin;
 		// A result a settled notice named for collection: the reporter that would wake the lead for it has ended.
-		if (e.outcome !== "running" && e.notice !== undefined) rewake ??= { id, origin };
+		if (e.outcome !== "running" && e.notice !== undefined) rewake.push({ id, origin });
 		delete record.notice;
 		target.executions[id] = record;
 		delete source.executions[id];
@@ -335,13 +335,12 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 		if (origin === to) delete launcher.moved[id];
 		else launcher.moved[id] = to;
 	}
-	// One durable wake composes `to`'s notice for them (every moved result without one), in the launching conversation as
-	// their reporters run; it becomes the record's reporter, so navigation carries it and a cancellation reaches it.
-	if (rewake !== undefined) {
-		if (reporterDefinition === undefined) throw new Error("No delegation extension is loaded to deliver the carried results' notice");
-		const options = { ownership: { kind: "conversation" as const }, background: true, conversationId: rewake.origin };
-		target.executions[rewake.id]!.reporter = await tx.createTask(reporterDefinition, { executionId: rewake.id, assignment: "", rewake: true }, options);
-	}
+	// A durable wake per such result, in the launching conversation as their reporters run: the first composes `to`'s
+	// notice for every moved result without one, and one still uncollected after another was collected keeps its own. Each
+	// becomes its record's reporter, so navigation carries it and a cancellation reaches it.
+	if (rewake.length > 0 && reporterDefinition === undefined) throw new Error("No delegation extension is loaded to deliver the carried results' notice");
+	for (const { id, origin } of rewake)
+		target.executions[id]!.reporter = await tx.createTask(reporterDefinition!, { executionId: id, assignment: "", rewake: true }, { ownership: { kind: "conversation" as const }, background: true, conversationId: origin });
 }
 
 /**
