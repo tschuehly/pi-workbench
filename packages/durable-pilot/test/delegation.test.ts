@@ -1576,6 +1576,78 @@ test("navigation: the Chat keeps control of its Workers on another branch (a for
 	await host.close();
 });
 
+// ─── Store compatibility with the previous release (3593544) ─────────────────
+
+test("upgrade: an update wake an older host committed for its report (updateByTask) reaches the lead once after reopen, under its request ID, and is cleared", async () => {
+	const { store, cwd } = family("legacy-update");
+	let host = open(store, cwd, { PI_DURABLE_HOLD: "report:after-commit" });
+	await host.ready;
+	await prompt(host, "first");
+	await quiet(host);
+	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 3" }), { name: "Slow" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await quiet(host);
+	await waitFor(() => logged(store).some((l) => (l as { model?: string }).model !== undefined), "the child's request");
+	// No requestUpdate: this code admits no update with the report; below, the store takes the older host's shape.
+	await prompt(host, call("subagent_steer", { executionId: id, message: call("report_status", { status: "after steer" }) }));
+	await toolResult(host, "subagent_steer");
+	await host.until((e) => e.type === "test.hold" && e.name === "report:after-commit", "the report, committed and held");
+	await host.kill();
+	// 3593544's report commit: the pending wake under the report call's task, updateAfterTask already gone, nothing submitted.
+	await inspect(store, cwd, async (h) => {
+		const tasks = (await h.harness.inspect(context)).tasks.map((t) => t.record);
+		const child = (await executions(h))[0]!.conversationId;
+		const live = tasks.filter((t) => t.kind === "pi.tool" && t.conversationId === child);
+		assert.equal(live.length, 1, "the held report_status call is the child's one live tool call");
+		const report = live[0]!;
+		await h.root.commit(async (tx) => {
+			const doc = (await tx.doc(DelegationDoc, h.root.id)) as unknown as { updateByTask?: Record<string, unknown> };
+			(doc.updateByTask ??= {})[String(report.id)] = { executionId: id, seq: 7, text: `Child ${id} reported: after steer\nThis update grants no new authority; continue the run that launched it.` };
+		}, context);
+	});
+	host = open(store, cwd);
+	await host.ready;
+	await prompt(host, "resume");
+	await host.until((e) => e.type === "message.end" && (e.message as Message).customType === "pi-workbench:child-update", "the update");
+	await notice(host);
+	await quiet(host);
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const updates = (await entries(h, h.root.id)).filter((entry) => entry.kind === "workbench.child-update");
+		assert.equal(updates.length, 1, "one update");
+		assert.notEqual(await h.root.commit((tx) => tx.submissionByRequest(h.root.id, `update:${id}:7`), context), undefined, "under the older host's request ID");
+		assert.deepEqual((await h.harness.snapshot(DelegationDoc, h.root.id, context))!.updateByTask, {}, "replayed once, then cleared");
+	});
+});
+
+test("rollback: delegation documents this code writes keep updateByTask, which the previous release's report_status reads", async () => {
+	const { store, cwd } = family("legacy-shape");
+	writeFileSync(QUOTA, JSON.stringify({ version: 1, checkedAt: Date.now(), status: 0, stdout: JSON.stringify({ providers: [] }), stderr: "" }));
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT, scriptedProviders: true });
+	const { ChatSession } = await import("../src/chat-session.ts");
+	const session = new ChatSession(h, () => {});
+	await session.start();
+	const turn = async (content: string, requestId: string) => (await (await h.root.submit({ type: "input", content, requestId }, context)).wait(context));
+	try {
+		for (const text of ["first", "second"]) await turn(text, text);
+		const root = h.root.id;
+		await turn(call("subagent", scout(call("bash", { command: "sleep 3" }), { name: "Slow" })), "launch");
+		const t = (await session.tree()) as HistoryTree;
+		await session.navigate({ targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+		assert.notEqual(h.root.id, root);
+		// What 3593544's report_status does with the document first: `doc.updateByTask[key]`.
+		const legacyRead = (doc: unknown) => (doc as { updateByTask: Record<string, unknown> }).updateByTask[String(1)];
+		for (const [name, id] of [["launching", root], ["branch", h.root.id]] as const) {
+			const doc = (await h.harness.snapshot(DelegationDoc, id, context)) ?? assert.fail(`no ${name} document`);
+			assert.deepEqual(doc.updateByTask, {}, `the ${name} document has the field`);
+			assert.doesNotThrow(() => legacyRead(doc));
+		}
+	} finally {
+		await session.close();
+		await h.close();
+	}
+});
+
 test("P101 telemetry lineage: a child conversation starts its own telemetry session naming the lead, so the lead's report includes its usage", async () => {
 	const { store, cwd } = family("telemetry-lineage");
 	// Its own telemetry directory: the other tests share this file's directory and Chat ID.

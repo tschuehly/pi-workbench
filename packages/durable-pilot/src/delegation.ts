@@ -147,6 +147,11 @@ type DelegationState = {
 	collections: Record<string, Result>;
 	/** Steer sequence by tool call, for reruns. */
 	steerByTask: Record<string, number>;
+	/**
+	 * An update wake an older host (3593544) committed by its report call before submitting it; its rerun here sends it
+	 * once and clears it. This code writes `{}`, kept because older hosts on the same store read it.
+	 */
+	updateByTask: Record<string, { executionId: string; seq: number; text: string }>;
 	cancelEpoch: number;
 	/** Sequence of completion notices, for their request IDs. */
 	wake: { seq: number };
@@ -161,7 +166,7 @@ export const DelegationDoc = defineDoc<DelegationState>({
 	scope: "conversation",
 	history: "latest",
 	fork: "initial",
-	initial: () => ({ executions: {}, byTask: {}, collections: {}, steerByTask: {}, cancelEpoch: 0, wake: { seq: 0 } }),
+	initial: () => ({ executions: {}, byTask: {}, collections: {}, steerByTask: {}, updateByTask: {}, cancelEpoch: 0, wake: { seq: 0 } }),
 	checkpointWhen: () => false,
 });
 
@@ -1045,6 +1050,8 @@ export function delegationExtension(options: DelegationOptions) {
 				const parent = self.parentConversationId as ConversationId;
 				const id = self.executionId;
 				let workerId: string | undefined;
+				const key = String(api.taskId);
+				const launcher = (await api.conversation(parent, c))!;
 				for (let moved = true; moved;) {
 					const home = (await located(api, parent, id, c)).home;
 					const lead = (await api.conversation(home, c))!;
@@ -1052,6 +1059,15 @@ export function delegationExtension(options: DelegationOptions) {
 					await api.commit(async (tx) => {
 						if ((await homeIn(tx, parent, id)) !== home) return void (moved = true);
 						const e = (await tx.doc(DelegationDoc, home)).executions[id];
+						// The rerun of a report an older host (3593544) committed: its wake, once, to the conversation that stored it.
+						const launched = await tx.doc(DelegationDoc, parent);
+						const legacy = launched.updateByTask[key];
+						if (legacy !== undefined) {
+							const requestId = `update:${legacy.executionId}:${String(legacy.seq)}`;
+							if ((await tx.submissionByRequest(parent, requestId)) === undefined)
+								await launcher.submit(tx, { type: "input", content: legacy.text, whenBusy: "steer", requestId, entry: { kind: UPDATE_ENTRY, data: { executionId: legacy.executionId, status } } });
+							delete launched.updateByTask[key];
+						}
 						workerId = e?.workerId;
 						if (e === undefined) return;
 						e.reportedStatus = status;
