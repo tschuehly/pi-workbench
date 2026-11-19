@@ -710,6 +710,79 @@ test("stuck notice: marked before a host kill, it reaches the lead once after re
 	assert.equal(integrity(store), "ok");
 });
 
+test("stuck notice: a Worker stuck in a foreground subagent call names its leaf; a known secret with a quote and a backslash in the call's arguments is masked, raw and JSON-escaped", async () => {
+	const { store, cwd } = family("stuck-escaped");
+	const password = 'stuck"Pass\\word-4b8e1d7c93a5';
+	const escaped = JSON.stringify(password).slice(1, -1);
+	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000", PILOT_STUCK_PASSWORD: password });
+	await host.ready;
+	await prompt(host, call("tools_enable", { group: "workers" }));
+	await quiet(host);
+	await prompt(host, call("worker_create", { name: "Stuck keeper", scope: "the parser", profile: "coordinator" }));
+	const workerId = /Created worker (\S+)/.exec(await toolResult(host, "worker_create"))![1]!;
+	await quiet(host);
+	// The secret leads the arguments, so the 200-character preview holds it.
+	const leaf = call("subagent", { name: `Leaf ${password}`, task: call("bash", { command: "sleep 6" }), profile: "scout", cognitiveRole: "routine", background: false });
+	await prompt(host, call("worker_dispatch", { workerId, task: leaf, cognitiveRole: "coordination", background: true }));
+	const id = launchedId(await toolResult(host, "worker_dispatch"));
+	const stuck = (await host.until(isStuck, "the stuck notice")).message as Message;
+	const body = textOf(stuck.content);
+	assert.match(String((stuck.details as { preview?: string }).preview), /^\{"name":"Leaf \[REDACTED:env:PILOT_STUCK_PASSWORD\]"/, "the entry's data.preview");
+	assert.ok(body.startsWith(`Child ${id} `) && body.includes('stuck inside one call: subagent `{"name":"Leaf [REDACTED:env:PILOT_STUCK_PASSWORD]"'), body);
+	assert.match(body, /; it is a Worker blocked in a foreground subagent call on leaf \S+ "Leaf \[REDACTED/, body);
+	for (const form of [password, escaped]) assert.ok(!body.includes(form), `the notice holds no ${form}`);
+	await host.until((e) => isNotice(e) && textOf((e.message as Message).content).includes(`${id} [success]`), "the Worker's notice");
+	await quiet(host);
+	const delivered = JSON.stringify(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-stuck"));
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const [e] = await executions(h);
+		// The record holds the latest span's notice; every notice the lead got is in its transcript.
+		const stored = JSON.stringify(e!.stuckNotice) + delivered;
+		for (const form of [password, escaped, JSON.stringify(escaped).slice(1, -1)]) assert.ok(!stored.includes(form), `the stored notice holds no ${form}`);
+	});
+});
+
+test("stuck notice: a foreground child still gets its update request but sends no stuck notice; its call already blocks the lead", async () => {
+	const { store, cwd } = family("stuck-foreground");
+	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000" });
+	await host.ready;
+	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 5" }), { background: false })));
+	await toolResult(host, "subagent");
+	await quiet(host);
+	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-stuck").length, 0, "no stuck notice for a foreground child");
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const [e] = await executions(h);
+		assert.ok(e!.steers >= 1 && e!.quietSteer !== undefined, "the quiet-report steer is unchanged");
+		assert.equal(e!.stuckNotice, undefined);
+	});
+});
+
+test("stuck notice: marked, then the child's cancellation begins before delivery: the notice is dropped", async () => {
+	const { store, cwd } = family("stuck-cancel");
+	// The notice's hold releases while the cancellation is held after its mark, before it aborts the reporter.
+	const host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000", PI_DURABLE_HOLD: "stuck:after-mark@3000,cancel:after-mark@4000" });
+	await host.ready;
+	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 30" }))));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await host.until((e) => e.type === "test.hold" && e.name === "stuck:after-mark", "the committed notice");
+	const marked = Date.now();
+	await quiet(host);
+	await prompt(host, call("subagent_cancel", { executionId: id }));
+	await host.until((e) => e.type === "test.hold" && e.name === "cancel:after-mark", "the committed cancellation");
+	assert.ok(Date.now() - marked < 3000, "the cancellation was marked while the notice was held");
+	await toolResult(host, "subagent_cancel");
+	await quiet(host);
+	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-stuck").length, 0, "a cancelled child's notice wakes nobody");
+	await host.close();
+	await inspect(store, cwd, async (h) => {
+		const [e] = await executions(h);
+		assert.equal(e!.outcome, "cancelled");
+		assert.equal(e!.stuckNotice?.seq, 1, "the notice was marked before the cancellation");
+	});
+});
+
 test("children's bash: a call without timeout gets the default (1800 s, shortened here), an explicit one is kept; the lead's bash is unaffected", async () => {
 	const { store, cwd } = family("child-bash-timeout");
 	// Its own job root: Workbench bash job IDs (Chat and task) repeat across this file's Chats.

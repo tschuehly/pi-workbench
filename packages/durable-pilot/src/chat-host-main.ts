@@ -94,13 +94,21 @@ const host = await openChatHost({
 	// Tests and trials: also by environment, so PI WEB's isolated e2e daemon can ask for it without a new host argument.
 	...(values["scripted-providers"] === true || process.env.PI_DURABLE_SCRIPTED_PROVIDERS === "1" ? { scriptedProviders: true } : {}),
 });
-// Crash-matrix barriers (tests only): the named reporter fault windows announce themselves and stop until killed.
-const holds = (process.env.PI_DURABLE_HOLD ?? "").split(",").filter(Boolean);
-if (holds.length > 0)
+// Crash-matrix barriers (tests only): the named reporter fault windows announce themselves and stop until killed;
+// `name@ms` releases the window after that many milliseconds instead, so a race can be staged without a kill.
+const holds = new Map((process.env.PI_DURABLE_HOLD ?? "").split(",").filter(Boolean).map((hold) => {
+	const [name, ms] = hold.split("@");
+	return [name!, ms === undefined ? undefined : Number(ms)] as const;
+}));
+if (holds.size > 0)
 	setDelegationHold((name, signal) => {
-		if (!holds.includes(name)) return Promise.resolve();
+		if (!holds.has(name)) return Promise.resolve();
 		send({ event: { type: "test.hold", name } });
-		return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new Error(`hold ${name} aborted`)), { once: true }));
+		const release = holds.get(name);
+		return new Promise((resolve, reject) => {
+			if (release !== undefined) setTimeout(resolve, release);
+			signal?.addEventListener("abort", () => reject(new Error(`hold ${name} aborted`)), { once: true });
+		});
 	});
 // A socket host has no daemon until one connects: spawn_session answer timeouts wait for it.
 if (socketPath !== undefined) host.spawner.disconnected();

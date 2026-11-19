@@ -53,7 +53,7 @@ import {
 } from "../../../extensions/subagent/core.mjs";
 import { CUSTOM_TYPE as COMPLETION_CUSTOM_TYPE, composeNotice } from "../../../extensions/subagent/completion-wakeup.mjs";
 import { batchSize, CheckpointDoc, continuationRequestId } from "./checkpoint.ts";
-import { redact, sealed } from "./redact.ts";
+import { redact, sanitizeDeep, sealed } from "./redact.ts";
 
 /** A completion wake as placed in the lead's transcript (legacy custom message `pi-workbench:child-completion`). */
 export const COMPLETION_ENTRY = "workbench.child-completion";
@@ -278,6 +278,7 @@ function reporterTask(options: DelegationOptions) {
 				// are in the record, so after a restart the same steer is re-sent under its request ID, never a second one.
 				// A steer still unread (not placed) the grace after it was sent means the child is inside one call that does not
 				// return: the lead gets one stuck notice for that span, recorded the same way and sent under `stuck:<id>:<seq>`.
+				// Background children only: a foreground child's call already blocks the lead's tool call.
 				let cadence: NodeJS.Timeout | undefined;
 				let cadenceStopped = false;
 				let stuckSent: string | undefined;
@@ -285,6 +286,10 @@ function reporterTask(options: DelegationOptions) {
 					const steer = await tx.submissionByRequest(conversation, `steer:${id}:${String(seq)}`);
 					return steer === undefined || steer.status === "queued";
 				};
+				/** A background child still running uncancelled in the span whose steer `seq` is still unread. */
+				const stuckEligible = async (tx: Tx, e: Execution | undefined, seq: number): Promise<boolean> =>
+					e !== undefined && e.background && e.outcome === "running" && e.cancelEpoch === undefined
+					&& e.quietSteer?.since === (e.reportedAt ?? e.launchedAt) && e.quietSteer.seq === seq && (await unread(tx, seq));
 				const tick = async (): Promise<void> => {
 					if (cadenceStopped || runtime.signal.aborted) return;
 					const quiet = reportQuietMs();
@@ -301,7 +306,7 @@ function reporterTask(options: DelegationOptions) {
 							if (e.quietSteer?.since === since) {
 								send = e.quietSteer.seq;
 								if (e.stuckNotice?.since === since) stuck = copy(e.stuckNotice);
-								else if (await unread(tx, send)) {
+								else if (e.background && (await unread(tx, send))) {
 									const stuckDue = Date.parse(e.quietSteer.at ?? iso(due)) + grace;
 									if (runtime.now() >= stuckDue) stuck = "due";
 									else next = Math.min(quiet, stuckDue - runtime.now());
@@ -310,7 +315,7 @@ function reporterTask(options: DelegationOptions) {
 								e.steers += 1;
 								e.quietSteer = { since, seq: e.steers, at: iso(runtime.now()) };
 								send = e.steers;
-								next = Math.min(quiet, grace);
+								if (e.background) next = Math.min(quiet, grace);
 							} else next = due - runtime.now();
 						}
 						return undefined;
@@ -333,15 +338,13 @@ function reporterTask(options: DelegationOptions) {
 					let marked: Execution["stuckNotice"];
 					await runtime.commit(async (tx) => {
 						const e = (await tx.doc(DelegationDoc, runtime.conversationId)).executions[id];
-						if (e === undefined || e.outcome !== "running" || e.cancelEpoch !== undefined) return undefined;
+						if (e === undefined || !(await stuckEligible(tx, e, seq))) return undefined;
 						const since = e.reportedAt ?? e.launchedAt;
-						if (e.quietSteer?.since !== since || e.quietSteer.seq !== seq) return undefined;
 						if (e.stuckNotice?.since === since) {
 							marked = copy(e.stuckNotice);
 							return undefined;
 						}
-						if (!(await unread(tx, seq))) return undefined;
-						const minutes = Math.max(1, Math.round((runtime.now() - Date.parse(e.quietSteer.at ?? since)) / 60_000));
+						const minutes = Math.max(1, Math.round((runtime.now() - Date.parse(e.quietSteer!.at ?? since)) / 60_000));
 						const text = [
 							`Child ${id} "${e.name}" has not read the update request for ${String(minutes)} min and appears stuck inside one call: ${on.text}.`,
 							"Check it with subagent_status; if it is hung, subagent_cancel it; otherwise leave it. This notice authorizes nothing else.",
@@ -361,6 +364,14 @@ function reporterTask(options: DelegationOptions) {
 						held = true;
 						await runtime.waitForTask(active.task as TaskId, c);
 					}
+					// Revalidated last: a notice marked before a cancellation, a report or the child's read is dropped.
+					let eligible = false;
+					await runtime.commit(async (tx) => {
+						const e = (await tx.doc(DelegationDoc, runtime.conversationId)).executions[id];
+						eligible = e?.stuckNotice?.since === notice.since && (await stuckEligible(tx, e, notice.seq));
+						return undefined;
+					}, c);
+					if (!eligible) return;
 					const lead = (await runtime.conversation(runtime.conversationId, c))!;
 					await lead.submit({
 						type: "input",
@@ -526,7 +537,8 @@ async function stuckOn(runtime: ContextReader, conversation: ConversationId, c: 
 	const call = (Array.isArray(last?.content) ? last.content : []).find((p) => p.type === "toolCall" && p.name !== "report_status" && !answered.has(p.id ?? ""));
 	if (call === undefined) return { text: "no tool call is open, so it may be waiting on its model", data: {} };
 	const args = call.arguments ?? {};
-	const preview = bounded(sanitize(typeof args.command === "string" ? args.command : JSON.stringify(args)), 200);
+	// Argument strings are masked before JSON escaping, which would hide a secret holding a quote or backslash from the redactor.
+	const preview = sanitize(bounded(typeof args.command === "string" ? sanitize(args.command) : JSON.stringify(sanitizeDeep(args, sanitize)), 200));
 	const at = last?.timestamp === undefined ? undefined : iso(last.timestamp);
 	let text = `${call.name ?? "a tool"} \`${preview}\`${at === undefined ? "" : ` since ${at}`}`;
 	const data: JsonObject = { tool: call.name ?? "", preview, ...(at === undefined ? {} : { since: at }) };
