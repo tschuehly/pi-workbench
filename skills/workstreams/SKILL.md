@@ -50,7 +50,8 @@ End a multi-Workstream review with a compact disposition table when it helps Tho
 Write `workstreams checkpoint <id>` when meaningful attention changes, without asking Thomas to confirm each field. In a Workstream that is not this session's home (for example one it just created), the same command writes a visiting checkpoint there and leaves the home unchanged:
 
 - `--what`: what now exists or works, two to four short sentences, one fact each, with anchors (commit, PR, path, count) in the sentence they belong to.
-- `--remains`: what is blocked or still owed, one sentence per item, Thomas's decisions first.
+  Carry Thomas's settled decisions forward in one line: `Decided (do not re-ask): …`.
+- `--remains`: open items only, one sentence each, decisions Thomas still needs to make first.
 - `--next`: one plain sentence starting with the actor.
 - `--waiting`: `owner` when Thomas must act, `agent` when an agent can continue, `external` for a third party, CI, or reviewer.
 - `--title`: this session's goal as a 2–6 word Chat title; never status or progress.
