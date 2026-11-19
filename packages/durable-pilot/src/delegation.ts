@@ -27,6 +27,7 @@ import {
 	defineTool,
 	type Extension,
 	type Harness,
+	InboxDoc,
 	type JsonObject,
 	LiveDoc,
 	type TaskId,
@@ -128,15 +129,10 @@ export type Execution = {
 	/** The quiet-report steer sent for the quiet span starting at `since` (its steer sequence); a later report re-arms it. */
 	quietSteer?: { since: string; seq: number; at?: string };
 	/**
-	 * The stuck notice sent to the lead for that quiet span, with the steer it names; a new span re-arms it. `home`: the
-	 * branch it was bound for, committed before it is submitted there; a replay resubmits it there, never elsewhere.
+	 * The stuck notice for that quiet span, with the steer it names; a new span re-arms it. `sent`: admitted to the lead,
+	 * in the commit that set it (absent in older records, which sent it to the launching conversation).
 	 */
-	stuckNotice?: { since: string; seq: number; text: string; data: JsonObject; home?: number };
-	/**
-	 * Lead submissions committed for a branch and not yet seen settled there, by request ID: the branch. History
-	 * navigation waits for them (`settleBound`); a request ID deduplicates only on its branch.
-	 */
-	bound?: Record<string, number>;
+	stuckNotice?: { since: string; seq: number; text: string; data: JsonObject; sent?: true };
 	/** The conversation that launched it (its tasks' conversation), once history navigation carried it elsewhere. */
 	origin?: number;
 };
@@ -149,13 +145,11 @@ type DelegationState = {
 	byTask: Record<string, string>;
 	/** What a collecting tool call returned, by that call: a rerun returns it again. */
 	collections: Record<string, Result>;
-	/** Steer sequence and update wake by tool call, for reruns. */
+	/** Steer sequence by tool call, for reruns. */
 	steerByTask: Record<string, number>;
-	/** `home`: the branch the update wake was bound for in its commit; its replay resubmits it there. */
-	updateByTask: Record<string, { executionId: string; seq: number; text: string; home?: number }>;
 	cancelEpoch: number;
-	/** Sequence of completion notices, for their request IDs, and those composed but not yet settled (history navigation waits). */
-	wake: { seq: number; delivering?: number[] };
+	/** Sequence of completion notices, for their request IDs. */
+	wake: { seq: number };
 	/** Children launched here that history navigation carried to another branch, by execution: where their record is now. */
 	moved?: Record<string, number>;
 };
@@ -167,7 +161,7 @@ export const DelegationDoc = defineDoc<DelegationState>({
 	scope: "conversation",
 	history: "latest",
 	fork: "initial",
-	initial: () => ({ executions: {}, byTask: {}, collections: {}, steerByTask: {}, updateByTask: {}, cancelEpoch: 0, wake: { seq: 0 } }),
+	initial: () => ({ executions: {}, byTask: {}, collections: {}, steerByTask: {}, cancelEpoch: 0, wake: { seq: 0 } }),
 	checkpointWhen: () => false,
 });
 
@@ -299,19 +293,17 @@ export async function navigationCarries(reader: DocumentReader, lead: Conversati
 }
 
 /**
- * In the navigation commit: move the lead's carried children from `from` to `to`, with their pending update wakes, and
- * point their launching conversation at `to`. A notice that named a result for collection was read on `from`, so it is
- * dropped: `to`'s next notice carries the result, sent by a reporter restarted at its wake when the result's own has
- * ended. Throws `busy` while a notice is being delivered on `from`, an update or stuck notice is bound for it, or a child
- * that stays runs (one being cancelled, a foreground one). Read from documents: a fork's commit cannot read tasks after
+ * In the navigation commit: move the lead's carried children from `from` to `to` and point their launching conversation
+ * at `to`. A notice that named a result for collection was read on `from`, so it is dropped: `to`'s next notice carries
+ * the result, sent by a reporter restarted at its wake when the result's own has ended. Throws `busy` while `from` runs or
+ * has queued input (a notice, update or stuck notice its sender admitted in a commit before this one), or a child that
+ * stays runs (one being cancelled, a foreground one). Read from documents: a fork's commit cannot read tables after
  * writing its conversation. The destination composes its own notices with its own `wake` sequence.
  */
 export async function carryChildren(tx: Tx, from: ConversationId, to: ConversationId, busy: string): Promise<void> {
+	if ((await tx.doc(LiveDoc, from)).run !== undefined || (await tx.doc(InboxDoc, from)).items.length > 0) throw new Error(busy);
 	const source = await tx.doc(DelegationDoc, from);
 	const target = await tx.doc(DelegationDoc, to);
-	if ((source.wake.delivering?.length ?? 0) > 0) throw new Error(busy);
-	// Bound after `settleBound` checked: still on its way to `from`.
-	if (Object.values(source.executions).some((e) => Object.keys(e.bound ?? {}).length > 0)) throw new Error(busy);
 	const rewake: { id: string; origin: ConversationId }[] = [];
 	for (const [id, e] of Object.entries(source.executions)) {
 		const moving = carried(e);
@@ -325,11 +317,6 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 		delete record.notice;
 		target.executions[id] = record;
 		delete source.executions[id];
-		for (const [key, update] of Object.entries(source.updateByTask))
-			if (update.executionId === id) {
-				target.updateByTask[key] = copy(update);
-				delete source.updateByTask[key];
-			}
 		const launcher = await tx.doc(DelegationDoc, origin);
 		launcher.moved ??= {};
 		if (origin === to) delete launcher.moved[id];
@@ -341,20 +328,6 @@ export async function carryChildren(tx: Tx, from: ConversationId, to: Conversati
 	if (rewake.length > 0 && reporterDefinition === undefined) throw new Error("No delegation extension is loaded to deliver the carried results' notice");
 	for (const { id, origin } of rewake)
 		target.executions[id]!.reporter = await tx.createTask(reporterDefinition!, { executionId: id, assignment: "", rewake: true }, { ownership: { kind: "conversation" as const }, background: true, conversationId: origin });
-}
-
-/**
- * Before the navigation commit (a fork's commit cannot read tables once it wrote its conversation): drop each update
- * wake or stuck notice bound for `from` that has settled there, or can no longer be submitted (its child ended); throw
- * `busy` while one is still queued, placed, or to be submitted. `carryChildren` refuses any binding made after this.
- */
-export async function settleBound(tx: Tx, from: ConversationId, busy: string): Promise<void> {
-	for (const e of Object.values((await tx.doc(DelegationDoc, from)).executions))
-		for (const [requestId, home] of Object.entries(e.bound ?? {})) {
-			const submission = await tx.submissionByRequest(home as ConversationId, requestId);
-			if (submission === undefined ? e.outcome === "running" : submission.status === "queued" || submission.status === "placed") throw new Error(busy);
-			delete e.bound![requestId];
-		}
 }
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────
@@ -408,7 +381,6 @@ function reporterTask(options: DelegationOptions) {
 				// Background children only: a foreground child's call already blocks the lead's tool call.
 				let cadence: NodeJS.Timeout | undefined;
 				let cadenceStopped = false;
-				let stuckSent: string | undefined;
 				const unread = async (tx: Tx, seq: number) => {
 					const steer = await tx.submissionByRequest(conversation, `steer:${id}:${String(seq)}`);
 					return steer === undefined || steer.status === "queued";
@@ -432,7 +404,7 @@ function reporterTask(options: DelegationOptions) {
 							const due = Date.parse(since) + quiet;
 							if (e.quietSteer?.since === since) {
 								send = e.quietSteer.seq;
-								if (e.stuckNotice?.since === since) stuck = copy(e.stuckNotice);
+								if (e.stuckNotice?.since === since) stuck = e.stuckNotice.sent === true ? undefined : copy(e.stuckNotice);
 								else if (e.background && (await unread(tx, send))) {
 									const stuckDue = Date.parse(e.quietSteer.at ?? iso(due)) + grace;
 									if (runtime.now() >= stuckDue) stuck = "due";
@@ -444,8 +416,6 @@ function reporterTask(options: DelegationOptions) {
 								send = e.steers;
 								if (e.background) next = Math.min(quiet, grace);
 							} else next = due - runtime.now();
-							// Bound but maybe not submitted before a kill, in a span since ended: still sent, once, where it was bound.
-							if (stuck === undefined && e.stuckNotice?.home !== undefined && e.bound?.[`stuck:${id}:${String(e.stuckNotice.seq)}`] !== undefined) stuck = copy(e.stuckNotice);
 						}
 						return undefined;
 					}, c);
@@ -454,10 +424,9 @@ function reporterTask(options: DelegationOptions) {
 						await child.submit({ type: "input", content: UPDATE_REQUEST, whenBusy: "steer", requestId: `steer:${id}:${String(send)}` }, c);
 					}
 					if (stuck === "due") stuck = await markStuck(send!);
-					if (stuck !== undefined && stuckSent !== stuck.since) {
+					if (stuck !== undefined) {
 						await holdFn("stuck:after-mark", runtime.signal);
 						await deliverStuck(stuck);
-						stuckSent = stuck.since;
 					}
 					if (next !== undefined && !cadenceStopped) cadence = setTimeout(() => void tick().catch(() => {}), next).unref();
 				};
@@ -493,30 +462,26 @@ function reporterTask(options: DelegationOptions) {
 						held = true;
 						await runtime.waitForTask(active.task as TaskId, c);
 					}
-					// Revalidated last: a notice marked before a cancellation, a report or the child's read is dropped. The commit
-					// binds it to the branch it is sent to (navigation waits until it settles there); a replay sends it there again.
-					let home: ConversationId | undefined;
-					await runtime.commit(async (tx) => {
-						const current = await homeIn(tx, origin, id);
-						const e = (await tx.doc(DelegationDoc, current)).executions[id];
-						if (e?.stuckNotice?.since !== notice.since) return undefined;
-						if (e.stuckNotice.home === undefined && (await stuckEligible(tx, e, notice.seq))) {
-							e.stuckNotice.home = current;
-							e.bound ??= {};
-							e.bound[`stuck:${id}:${String(notice.seq)}`] = current;
-						}
-						home = e.stuckNotice.home as ConversationId | undefined;
-						return undefined;
-					}, c);
-					if (home === undefined) return;
-					const lead = (await runtime.conversation(home, c))!;
-					await lead.submit({
-						type: "input",
-						content: notice.text,
-						whenBusy: held ? "followUp" : "steer",
-						requestId: `stuck:${id}:${String(notice.seq)}`,
-						entry: { kind: STUCK_ENTRY, data: notice.data },
-					}, c);
+					// Revalidated and admitted in one commit, on the branch the record is on (navigation commits are ordered against
+					// it): a notice marked before a cancellation, a report or the child's read is dropped. An older record without
+					// `sent` that went out did so to the launching conversation.
+					const requestId = `stuck:${id}:${String(notice.seq)}`;
+					for (let moved = true; moved;) {
+						const home = (await located(runtime, origin, id, c)).home;
+						const lead = (await runtime.conversation(home, c))!;
+						moved = false;
+						await runtime.commit(async (tx) => {
+							if ((await homeIn(tx, origin, id)) !== home) return void (moved = true);
+							const e = (await tx.doc(DelegationDoc, home)).executions[id];
+							if (e?.stuckNotice?.since !== notice.since || e.stuckNotice.sent === true) return undefined;
+							if ((await tx.submissionByRequest(origin, requestId)) === undefined) {
+								if (!(await stuckEligible(tx, e, notice.seq))) return undefined;
+								await lead.submit(tx, { type: "input", content: notice.text, whenBusy: held ? "followUp" : "steer", requestId, entry: { kind: STUCK_ENTRY, data: notice.data } });
+							}
+							e.stuckNotice.sent = true;
+							return undefined;
+						}, c);
+					}
 				};
 				void tick().catch(() => {});
 				// A Worker's status file (legacy worker_dispatch): a new job starts working, so its stateless reports never inherit
@@ -613,43 +578,42 @@ function reporterTask(options: DelegationOptions) {
 					held = true;
 					await runtime.waitForTask(active.task as TaskId, c);
 				}
-				// The notice is composed in the commit that marks what it carries collected and what it names noticed, so every
-				// result reaches exactly one notice: a child already in an earlier one sends none; a late child sends the next.
-				// On the record's home, with that lead's own sequence: its `wake:<seq>` request IDs never collide.
-				await runtime.commit(async (tx) => {
-					const home = await homeIn(tx, runtime.conversationId, task.input.executionId);
-					const doc = await tx.doc(DelegationDoc, home);
-					const e = doc.executions[task.input.executionId]!;
-					if (e.collected || e.notice !== undefined || e.cancelEpoch !== undefined) return { status: "terminal", outcome: { status: "completed", result: null } };
-					const ready = Object.values(doc.executions)
-						.filter((x) => x.background && x.outcome !== "running" && !x.collected && x.notice === undefined && x.cancelEpoch === undefined)
-						.sort((a, b) => (a.endedAt ?? "").localeCompare(b.endedAt ?? ""));
-					const notice = composeNotice(new Map(ready.map((x) => [x.executionId, { outcome: x.outcome, text: resultOf(x).output[0]!.text, truncated: x.truncated === true }]))) as Notice;
-					const seq = (doc.wake.seq += 1);
-					// Through the draft: `(x ??= []).push` would push to an untracked array (see checkpoint.ts).
-					doc.wake.delivering ??= [];
-					doc.wake.delivering.push(seq);
-					for (const id of notice.details.delivered) Object.assign(doc.executions[id]!, { collected: true, notice: { seq, carried: true } });
-					for (const id of notice.details.collect) doc.executions[id]!.notice = { seq, carried: false };
-					return { status: "running", checkpoint: { phase: "deliver", seq, followUp: held, notice: { content: sanitize(notice.content), details: notice.details }, home } };
-				}, c);
+				// The notice is composed and admitted in the commit that marks what it carries collected and what it names
+				// noticed, so every result reaches exactly one notice: a child already in an earlier one sends none; a late child
+				// sends the next. On the record's home (navigation commits are ordered against this one), with that lead's own
+				// sequence: its `wake:<seq>` request IDs never collide.
+				const id = task.input.executionId;
+				for (let moved = true; moved;) {
+					const home = (await located(runtime, runtime.conversationId, id, c)).home;
+					const lead = (await runtime.conversation(home, c))!;
+					moved = false;
+					await runtime.commit(async (tx) => {
+						if ((await homeIn(tx, runtime.conversationId, id)) !== home) return void (moved = true);
+						const doc = await tx.doc(DelegationDoc, home);
+						const e = doc.executions[id]!;
+						if (e.collected || e.notice !== undefined || e.cancelEpoch !== undefined) return { status: "terminal", outcome: { status: "completed", result: null } };
+						const ready = Object.values(doc.executions)
+							.filter((x) => x.background && x.outcome !== "running" && !x.collected && x.notice === undefined && x.cancelEpoch === undefined)
+							.sort((a, b) => (a.endedAt ?? "").localeCompare(b.endedAt ?? ""));
+						const composed = composeNotice(new Map(ready.map((x) => [x.executionId, { outcome: x.outcome, text: resultOf(x).output[0]!.text, truncated: x.truncated === true }]))) as Notice;
+						const notice = { content: sanitize(composed.content), details: composed.details };
+						const seq = (doc.wake.seq += 1);
+						await lead.submit(tx, wakeDraft(seq, held, notice));
+						for (const x of notice.details.delivered) Object.assign(doc.executions[x]!, { collected: true, notice: { seq, carried: true } });
+						for (const x of notice.details.collect) doc.executions[x]!.notice = { seq, carried: false };
+						return { status: "running", checkpoint: { phase: "deliver", seq, followUp: held, notice, home } };
+					}, c);
+				}
 			},
 			deliver: async (task, runtime, c) => {
-				// Navigation waits for a delivery in flight, so the lead it was composed on still holds its records.
+				// Admitted with the wake's commit (a reporter of an older version composed it only): its request ID finds it.
 				const { seq, followUp, notice, home = runtime.conversationId } = task.state.checkpoint as Extract<ReporterState, { phase: "deliver" }>;
 				const lead = (await runtime.conversation(home as ConversationId, c))!;
-				const submission = await lead.submit({
-					type: "input",
-					content: notice.content,
-					whenBusy: followUp ? "followUp" : "steer",
-					requestId: `wake:${String(seq)}`,
-					entry: { kind: COMPLETION_ENTRY, data: notice.details },
-				}, c);
+				const submission = await lead.submit(wakeDraft(seq, followUp, notice), c);
 				await holdFn("child:after-delivery", runtime.signal);
 				const settled = await submission.wait(c);
 				await runtime.commit(async (tx) => {
 					const doc = await tx.doc(DelegationDoc, home as ConversationId);
-					if (doc.wake.delivering !== undefined) doc.wake.delivering = doc.wake.delivering.filter((x) => x !== seq);
 					// Withdrawn before it was placed (Stop): the lead never read it, so its results wait for the next notice or a collect.
 					if (settled.status === "unanswered" && settled.entry === undefined)
 						for (const e of Object.values(doc.executions)) {
@@ -661,17 +625,18 @@ function reporterTask(options: DelegationOptions) {
 				}, c);
 			},
 		},
-		// An aborted delivery settles its notice too, or navigation would wait for it for good.
-		abort: (task, runtime, c) => runtime.commit(async (tx) => {
-			const state = task.state.checkpoint as ReporterState;
-			if (state.phase === "deliver") {
-				const doc = await tx.doc(DelegationDoc, (state.home ?? runtime.conversationId) as ConversationId);
-				if (doc.wake.delivering !== undefined) doc.wake.delivering = doc.wake.delivering.filter((x) => x !== state.seq);
-			}
-			return { status: "terminal", outcome: { status: "aborted" } };
-		}, c),
+		abort: (_task, runtime, c) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c),
 	});
 }
+
+/** A completion notice as admitted to the lead under `wake:<seq>`. */
+const wakeDraft = (seq: number, followUp: boolean, notice: Notice) => ({
+	type: "input" as const,
+	content: notice.content,
+	whenBusy: followUp ? ("followUp" as const) : ("steer" as const),
+	requestId: `wake:${String(seq)}`,
+	entry: { kind: COMPLETION_ENTRY, data: notice.details },
+});
 
 /** Whether a steer or follow-up admitted for this child is not yet submitted to it, or not yet answered. */
 async function steerPending(tx: Tx, conversation: ConversationId, e: Execution): Promise<boolean> {
@@ -1078,34 +1043,28 @@ export function delegationExtension(options: DelegationOptions) {
 			let written = "";
 			if (self !== undefined && self.executionId !== "") {
 				const parent = self.parentConversationId as ConversationId;
-				const key = String(api.taskId);
+				const id = self.executionId;
 				let workerId: string | undefined;
-				let lead = parent;
-				const update = await api.commit(async (tx) => {
-					lead = await homeIn(tx, parent, self.executionId);
-					const doc = await tx.doc(DelegationDoc, lead);
-					const e = doc.executions[self.executionId];
-					// Read before the replay return: a host killed after this commit still rewrites the status file on replay.
-					workerId = e?.workerId;
-					// A replay sends the update to the branch it was bound for, where its request ID deduplicates it.
-					const prior = doc.updateByTask[key];
-					if (prior !== undefined) {
-						lead = (prior.home ?? lead) as ConversationId;
-						return copy(prior);
-					}
-					if (e === undefined) return undefined;
-					e.reportedStatus = status;
-					e.reportedAt = iso(api.now());
-					// Only a report from a call made after the steer that asked for it wakes the lead, once.
-					if (e.updateAfterTask === undefined || Number(api.taskId) <= e.updateAfterTask || e.outcome !== "running" || e.cancelEpoch !== undefined) return undefined;
-					// Bound to this branch in this commit: navigation waits until its submission settles here.
-					const pending = { executionId: e.executionId, seq: e.updateAfterTask, text: `Child ${e.executionId} reported: ${status}\nThis update grants no new authority; continue the run that launched it.`, home: lead };
-					delete e.updateAfterTask;
-					doc.updateByTask[key] = pending;
-					e.bound ??= {};
-					e.bound[`update:${e.executionId}:${String(pending.seq)}`] = lead;
-					return copy(pending);
-				}, c);
+				for (let moved = true; moved;) {
+					const home = (await located(api, parent, id, c)).home;
+					const lead = (await api.conversation(home, c))!;
+					moved = false;
+					await api.commit(async (tx) => {
+						if ((await homeIn(tx, parent, id)) !== home) return void (moved = true);
+						const e = (await tx.doc(DelegationDoc, home)).executions[id];
+						workerId = e?.workerId;
+						if (e === undefined) return;
+						e.reportedStatus = status;
+						e.reportedAt = iso(api.now());
+						// Only a report from a call made after the steer that asked for it wakes the lead, once: admitted with this
+						// commit, on the branch the record is on (navigation commits are ordered against it), so a rerun sends none.
+						const seq = e.updateAfterTask;
+						if (seq === undefined || Number(api.taskId) <= seq || e.outcome !== "running" || e.cancelEpoch !== undefined) return;
+						delete e.updateAfterTask;
+						const content = `Child ${id} reported: ${status}\nThis update grants no new authority; continue the run that launched it.`;
+						await lead.submit(tx, { type: "input", content, whenBusy: "steer", requestId: `update:${id}:${String(seq)}`, entry: { kind: UPDATE_ENTRY, data: { executionId: id, status } } });
+					}, c);
+				}
 				await holdFn("report:after-commit", c.abortSignal);
 				// A dispatched Worker's report also rewrites its status file (legacy PI_WORKBENCH_STATUS_FILE); leaves have none.
 				if (workerId !== undefined) {
@@ -1114,9 +1073,6 @@ export function delegationExtension(options: DelegationOptions) {
 					} catch (error) {
 						written = ` Status file not written: ${error instanceof Error ? error.message : String(error)}`;
 					}
-				}
-				if (update !== undefined) {
-					await (await api.conversation(lead, c))!.submit({ type: "input", content: update.text, whenBusy: "steer", requestId: `update:${update.executionId}:${String(update.seq)}`, entry: { kind: UPDATE_ENTRY, data: { executionId: update.executionId, status } } }, c);
 				}
 			}
 			// A lone report costs a whole model turn that re-reads the context; say so once it happens.

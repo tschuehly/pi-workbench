@@ -923,11 +923,13 @@ test("kill row report: killed after a Worker's needs-you report committed, the r
 	await host.ready;
 	// Any input resumes a paused restore.
 	await prompt(host, "resume");
-	await host.until((e) => e.type === "message.end" && (e.message as Message).customType === "pi-workbench:child-update", "the update");
-	const statusFile = JSON.parse(readFileSync(join(process.env.HOME!, ".pi-workbench", "workers", "status", `${workerId}.json`), "utf8")) as { state: string; log: { text: string }[] };
-	assert.equal(statusFile.state, "needs-you", "the replayed report rewrote the status file");
-	assert.ok(statusFile.log.some((l) => l.text === "Need owner decision"), "the report is in the log");
+	const file = join(process.env.HOME!, ".pi-workbench", "workers", "status", `${workerId}.json`);
+	const read = () => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) as { state: string; log: { text: string }[] } : undefined);
+	await waitFor(() => read()?.state === "needs-you", "the replayed report rewriting the status file");
+	assert.ok(read()!.log.some((l) => l.text === "Need owner decision"), "the report is in the log");
 	await quiet(host);
+	// Admitted with the report's commit, before the kill: the lead got the update once, not again on the replay.
+	assert.equal(customs((await host.call<Transcript>("transcript")).messages, "pi-workbench:child-update").length, 1);
 	await host.close();
 });
 
@@ -1267,7 +1269,7 @@ test("navigation: a host restart after navigation, before the carried child fini
 	assert.equal(integrity(store), "ok");
 });
 
-test("navigation: still refused, in its commit, while a notice is being delivered or a child that stays runs; a named-for-collect result moves without its old notice, a fresh wake to send it", async () => {
+test("navigation: still refused, in its commit, while the lead runs a submission admitted after the check or a child that stays runs; a named-for-collect result moves without its old notice, a fresh wake to send it", async () => {
 	const { store, cwd } = family("nav-guards");
 	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT, scriptedProviders: true });
 	const { ChatSession } = await import("../src/chat-session.ts");
@@ -1276,16 +1278,20 @@ test("navigation: still refused, in its commit, while a notice is being delivere
 	try {
 		for (const text of ["first", "second"]) await (await h.root.submit({ type: "input", content: text, requestId: text }, context)).wait(context);
 		const t = (await session.tree()) as HistoryTree;
-		const go = () => session.navigate({ targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
 		const root = h.root.id;
 		const child = (await h.harness.createConversation({ ownership: { kind: "ownerless" } }, context)).id;
-		const set = (change: (doc: { executions: Record<string, Execution>; wake: { seq: number; delivering?: number[] } }) => void) =>
+		const set = (change: (doc: { executions: Record<string, Execution> }) => void) =>
 			h.root.commit(async (tx) => void change(await tx.doc(DelegationDoc, root)), context);
 		const BUSY = /Stop current session activity before navigating the session tree/;
-		await set((doc) => void (doc.wake.delivering = [1]));
-		await assert.rejects(go(), BUSY, "a notice in flight finishes on its branch first");
+		// A notice, update or stuck notice admitted after the session's own check: the lead runs it, in the commit's view.
+		const { commitNavigation, planNavigation } = await import("../src/tree.ts");
+		const plan = await planNavigation(h.harness, h.root, { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+		const notice = await h.root.submit({ type: "input", content: call("bash", { command: "sleep 1", foreground: true }), requestId: "in-flight" }, context);
+		await assert.rejects(commitNavigation(h.harness, h.root, plan), BUSY, "a lead submission in flight finishes on its branch first");
+		await notice.wait(context);
+		const settled = (await session.tree()) as HistoryTree;
+		const go = () => session.navigate({ targetId: treeNode(settled, "assistant", "ok: first").id, expectedLeafId: settled.activeLeafId });
 		await set((doc) => {
-			doc.wake.delivering = [];
 			doc.executions.c = { executionId: "c", conversationId: child, outcome: "running", background: true, cancelEpoch: 1, collected: true } as unknown as Execution;
 		});
 		await assert.rejects(go(), BUSY, "a child being cancelled stays and blocks");
@@ -1316,7 +1322,7 @@ async function kindCounts(store: string, cwd: string, kind: string) {
 	});
 }
 
-test("navigation: refused while a child's update wake is committed but not yet submitted; the update reaches the branch it was committed on, once", async () => {
+test("navigation: refused while a child's update wake, admitted with its report, waits on the lead; the update reaches that branch, once", async () => {
 	const { store, cwd } = family("nav-update");
 	const host = open(store, cwd, { PI_DURABLE_HOLD: "report:after-commit@4000" });
 	await host.ready;
@@ -1328,9 +1334,9 @@ test("navigation: refused while a child's update wake is committed but not yet s
 	await waitFor(() => logged(store).some((l) => (l as { model?: string }).model !== undefined), "the child's request");
 	await prompt(host, call("subagent_steer", { executionId: id, message: call("report_status", { status: "after steer" }), requestUpdate: true }));
 	await toolResult(host, "subagent_steer");
-	await host.until((e) => e.type === "test.hold" && e.name === "report:after-commit", "the committed update, held before its submission");
+	await host.until((e) => e.type === "test.hold" && e.name === "report:after-commit", "the report, its update admitted with its commit, held");
 	const t = await host.call<HistoryTree>("tree");
-	await assert.rejects(host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId }), /Stop current session activity before navigating the session tree/, "an update bound for this branch settles here first");
+	await assert.rejects(host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId }), /Stop current session activity before navigating the session tree/, "an update admitted on this branch settles here first");
 	await host.until((e) => e.type === "message.end" && (e.message as Message).customType === "pi-workbench:child-update", "the update");
 	await notice(host);
 	await quiet(host);
@@ -1469,6 +1475,80 @@ test("navigation: of two carried results an earlier notice named, the one still 
 		await session.close();
 		await h.close();
 	}
+});
+
+test("navigation: a report that fails after its commit neither loses its update wake nor blocks navigation while the child runs", async () => {
+	const { store, cwd } = family("nav-update-fails");
+	writeFileSync(QUOTA, JSON.stringify({ version: 1, checkedAt: Date.now(), status: 0, stdout: JSON.stringify({ providers: [] }), stderr: "" }));
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: CHAT, scriptedProviders: true });
+	const { ChatSession } = await import("../src/chat-session.ts");
+	const session = new ChatSession(h, () => {});
+	// Whatever the report_status call would still do after its commit fails (the window a later submission had).
+	setDelegationHold(async (name) => {
+		if (name === "report:after-commit") throw new Error("failed after the report's commit (test)");
+	});
+	await session.start();
+	const turn = async (content: string, requestId: string) => (await (await h.root.submit({ type: "input", content, requestId }, context)).wait(context));
+	try {
+		for (const text of ["first", "second"]) await turn(text, text);
+		const root = h.root.id;
+		await turn(call("subagent", scout(call("bash", { command: "sleep 3" }), { name: "Slow" })), "launch");
+		const { executionId: id, conversationId: child } = (await executions(h))[0]!;
+		await turn(call("subagent_steer", { executionId: id, message: calls({ name: "report_status", arguments: { status: "after steer" } }, { name: "bash", arguments: { command: "sleep 8" } }), requestUpdate: true }), "steer");
+		await eventually(async () => (await entries(h, child)).some((entry) => (entry.model?.[0] as { toolName?: string } | undefined)?.toolName === "report_status"), "the child's report");
+		// The child sleeps on; once the lead has taken the update, navigation goes through.
+		let refused: unknown;
+		const deadline = Date.now() + 4000;
+		for (;;) {
+			const t = (await session.tree()) as HistoryTree;
+			try {
+				await session.navigate({ targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+				break;
+			} catch (error) {
+				refused = error;
+				if (Date.now() > deadline) assert.fail(`navigation still refused while the child runs: ${String(refused)}`);
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+		}
+		assert.notEqual(h.root.id, root);
+		const [e] = await executions(h);
+		assert.deepEqual([e!.executionId, e!.outcome], [id, "running"], "the running child moved to the branch");
+		assert.equal((await entries(h, root)).filter((entry) => entry.kind === "workbench.child-update").length, 1, "the update reached the lead it was reported to, once");
+	} finally {
+		setDelegationHold(async () => {});
+		await session.close();
+		await h.close();
+	}
+});
+
+test("navigation: a stuck notice delivered under an older store's record (no delivery mark) is not delivered again on the new branch after a restart", async () => {
+	const { store, cwd } = family("nav-stuck-old");
+	let host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "1000", PILOT_STUCK_GRACE_MS: "1000" });
+	await host.ready;
+	await prompt(host, "first");
+	await quiet(host);
+	await prompt(host, call("subagent", scout(call("bash", { command: "sleep 8" }), { name: "Hung" })));
+	const id = launchedId(await toolResult(host, "subagent"));
+	await host.until(isStuck, "the stuck notice");
+	await quiet(host);
+	const t = await host.call<HistoryTree>("tree");
+	await host.call("navigate", { targetId: treeNode(t, "assistant", "ok: first").id, expectedLeafId: t.activeLeafId });
+	await host.until((e) => e.type === "session.tree.changed", "the branch switch, the child still stuck");
+	await host.kill();
+	// The record's shape before this change: the notice and its span, nothing saying it went out or where.
+	await inspect(store, cwd, (h) => h.root.commit(async (tx) => {
+		const e = (await tx.doc(DelegationDoc, h.root.id)).executions[id]!;
+		const { since, seq, text, data } = e.stuckNotice!;
+		Object.assign(e, { stuckNotice: { since, seq, text, data } });
+		delete (e as { bound?: unknown }).bound;
+	}, context));
+	host = open(store, cwd, { PILOT_REPORT_QUIET_MS: "600000", PILOT_STUCK_GRACE_MS: "1000" });
+	await host.ready;
+	await prompt(host, "resume");
+	await host.until((e) => isNotice(e) && textOf((e.message as Message).content).includes(`${id} [`), "the child's notice");
+	await quiet(host);
+	await host.close();
+	assert.deepEqual(await kindCounts(store, cwd, "workbench.child-stuck"), { activeIsRoot: false, active: 0, root: 1 }, "one stuck notice, on the branch it was delivered on");
 });
 
 test("navigation: the Chat keeps control of its Workers on another branch (a fork outside the branch map gets none: the fork rule test above)", async () => {

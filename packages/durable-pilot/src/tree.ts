@@ -6,7 +6,7 @@ import { AgentDoc, type Conversation, type ConversationId, type EntryId, type En
 import { browserMessages } from "./chat-session.ts";
 import { AtelierDoc } from "./atelier.ts";
 import { BashJobsDoc } from "./background-bash.ts";
-import { carryChildren, settleBound, WorkersDoc } from "./delegation.ts";
+import { carryChildren, WorkersDoc } from "./delegation.ts";
 import { BranchesDoc, context } from "./host.ts";
 import { redact, sanitizeDeep, sealed } from "./redact.ts";
 import { ToolGroupsDoc } from "./tool-groups.ts";
@@ -141,8 +141,6 @@ export async function commitNavigation(harness: Harness, active: Conversation, p
 		for (const page of pages.pages) if (!target.pages.includes(page)) target.pages.push(page);
 		if (pages.port !== undefined) target.port = pages.port;
 	};
-	// Lead submissions bound for this branch settle here first; `carryChildren` refuses any bound after this check.
-	await harness.commit((tx) => settleBound(tx, active.id, BUSY), context);
 	if (plan.select !== undefined) {
 		await harness.commit((tx) => record(tx, plan.select!), context);
 		return (await harness.conversation(plan.select, context))!;
