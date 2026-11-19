@@ -1369,6 +1369,28 @@ requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classLis
     assert.match(seen.c2.toasts, /Another answer was saved first/, "C2: says another answer won");
     assert.equal(await js("atelier.state().decisions.find((x)=>x.id==='lr').answer"), "Later", "C2: the Page shows the answer the host saved");
   });
+  // 2.14.2 review 8: E1 a first answer whose response is lost while the host answers keeps the bar live; E2 another
+  // tab's answer that differs only in opened is not this one's.
+  await fixCheck("2.14.2-review8-a-lost-first-answer-keeps-the-bar-live-and-opened-counts", async () => {
+    const lp = path.join(dir, "lost-first.html");
+    await writeFile(lp, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Lost first answer</title><style>body{margin:16px 16px 16px 60px;font:15px system-ui}</style>
+<body><div atl-key="p" id="p">The draft.</div><script type="module" src="atelier.js"></script></body></html>`);
+    await openFresh(lp);
+    host.agent(lp, { type: "ask", decision: { id: "lf", key: "p", question: "Publish draft?", options: [{ label: "Yes", consequence: "y" }, { label: "No", consequence: "n" }] } });
+    const card = '[data-id="d:lf"]';
+    await until(`!!document.querySelector('${card} [data-atl=decide][data-label="Yes"]')`);
+    // "lost": the host saves the POST, its response never arrives. "twin": another tab saves the same answer with opened: true first.
+    await js(`(()=>{window.__fetch??=window.fetch;window.fetch=(u,o)=>{if(o?.method!=="POST"||!String(u).startsWith("/.atelier/events"))return window.__fetch(u,o);const lost=(p)=>p.then(()=>Promise.reject(new TypeError("response lost")));return window.__mode==="lost"?lost(window.__fetch(u,o)):lost(window.__fetch(u,{...o,body:JSON.stringify({...JSON.parse(o.body),opened:true})}).then(()=>window.__fetch(u,o)))};window.__mode="lost";return true})()`);
+    await click(`${card} [data-atl=decide][data-label="Yes"]`);
+    await until("atelier.state().decisions.find((x)=>x.id==='lf').answer==='Yes'");
+    await sleep(500);
+    assert.notEqual(await js("atelier.state().conn"), "no session", "E1: a reachable host leaves the bar alone");
+    assert.equal(await js("atelier.state().decisions.find((x)=>x.id==='lf').answer"), "Yes", "E1: the Page shows the answer the host saved");
+    const seen = await js(`(async()=>{document.querySelectorAll('.atl-toast').forEach((t)=>t.remove());window.__mode="twin";document.querySelector('${card} [data-atl=addnote]')?.click();document.querySelector('${card} .atl-note').value="why not";document.querySelector('${card} [data-atl=decide][data-label="No"]').click();while(![...document.querySelectorAll('.atl-toast')].some((t)=>/saved first|reach the host|Couldn't confirm/.test(t.textContent)))await new Promise((r)=>setTimeout(r,20));await new Promise((r)=>setTimeout(r,500));return {note:document.querySelector('${card} .atl-note')?.value,toasts:[...document.querySelectorAll('.atl-toast')].map((t)=>t.textContent).join(" | ")}})()`);
+    await js("(()=>{window.fetch=window.__fetch;return true})()");
+    assert.match(seen.toasts, /Another answer was saved first/, `E2: an answer with another opened is not this one's: ${JSON.stringify(seen)}`);
+    assert.equal(seen.note, "why not", "E2: the note stays");
+  });
   // 2.14.2 review 4 R4: an opened still in flight for a withdrawn ask does not swallow a real click on the re-asked one.
   await fixCheck("2.14.2-review4-4-opened-in-flight-per-ask", async () => {
     const op = path.join(dir, "opened-reask.html");

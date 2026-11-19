@@ -513,17 +513,16 @@ function boot() {
         if (r.status !== 404) { flash(j.error ?? "Rejected"); return; }
       } catch {
         // The response is lost, so the host may have saved the change: its undo and the new answer share one write.
-        if (body.replaces != null) {
-          flash("Couldn't confirm the change; checking…");
-          if (await pull()) { // the host answers, so the session is there: only this change missed it
-            const undo = entries.find((e) => e.type === "undo" && e.target === body.replaces);
-            const saved = undo && entries.find((e) => e.seq === undo.seq + 1 && e.type === "decide" && e.decision === body.decision);
-            // Another tab may have replaced it first: only this submission's own answer counts as saved.
-            const same = (k) => JSON.stringify(saved[k] ?? null) === JSON.stringify(body[k] ?? null);
-            if (saved && same("option") && same("note") && same("images")) return saved;
-            if (saved) { flash("Another answer was saved first; your answer stays."); return; }
-            flash("Your change didn't reach the host; your answer stays."); return;
-          }
+        flash("Couldn't confirm the change; checking…");
+        if (await pull()) { // the host answers, so the session is there: only this change missed it
+          if (body.replaces == null) { flash("Couldn't confirm the change; the Page shows what the host saved."); return; }
+          const undo = entries.find((e) => e.type === "undo" && e.target === body.replaces);
+          const saved = undo && entries.find((e) => e.seq === undo.seq + 1 && e.type === "decide" && e.decision === body.decision);
+          // Another tab may have replaced it first: only this submission's own answer counts as saved.
+          const same = (k) => JSON.stringify(saved[k] ?? null) === JSON.stringify(body[k] ?? null);
+          if (saved && ["option", "custom", "opened", "note", "images"].every(same)) return saved;
+          if (saved) { flash("Another answer was saved first; your answer stays."); return; }
+          flash("Your change didn't reach the host; your answer stays."); return;
         }
       }
       conn = "no session";
