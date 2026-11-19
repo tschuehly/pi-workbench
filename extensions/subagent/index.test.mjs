@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import subagentExtension, { PROFILES, collectAll, holdForLeaves, createCheckpointAwareWakeup, detachLatestForeground, emitExecutionEvent, harnessRevision, inheritedConcept, keepChildWebToolsLazy, liveModelMetadata, providerOf, reservePending, streamToResult, taskGoal, watchActivity, watchReportCadence, workerStatusFile, writeStatusFile } from "./index.ts";
 import { PiRpcExecutionAdapter } from "../../packages/pi-execution-adapter/src/index.js";
+import { createUserLocalWorkerRegistry } from "../../packages/worker-registry/src/index.js";
 import { checkpointBarrier, createCheckpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 
 test("registers Cmd+B, concept telemetry, and a portable fallback", () => {
@@ -612,18 +613,20 @@ for (const [cause, routingFails] of [["an unknown profile", false], ["a routing 
       subagentExtension({ events: { emit: () => {} }, on: (event, handler) => handlers.set(event, handler), registerTool: (tool) => tools.set(tool.name, tool), registerShortcut: () => {}, sendMessage: () => {} },
         { adapter: { dispatch: async () => { dispatched = true; throw new Error("must not dispatch"); }, cancelAll: async () => [] }, resolverPath });
       const ctx = { cwd: "/repo", sessionManager: { getSessionId: () => "lead", getSessionFile: () => "/sessions/lead.jsonl" } };
-      const implementer = PROFILES.implementer;
       try {
-        const created = await tools.get("worker_create").execute("create", { name: "Worker", scope: "Test failed preflight", profile: "implementer" }, undefined, undefined, ctx);
-        if (!routingFails) delete PROFILES.implementer;
-        const result = await tools.get("worker_dispatch").execute("dispatch", { workerId: created.details.workerId, task: "Never starts.", cognitiveRole: "implementation", background }, undefined, undefined, ctx);
+        const created = routingFails
+          ? await tools.get("worker_create").execute("create", { name: "Worker", scope: "Test failed preflight", profile: "implementer" }, undefined, undefined, ctx)
+          : await createUserLocalWorkerRegistry({ directory: join(temporary, ".pi-workbench", "workers") }).create({
+            name: "Worker", scope: "Test failed preflight", profile: "unknown-profile", repositoryRoot: "/repo", ownerSessionId: "lead",
+          });
+        const workerId = routingFails ? created.details.workerId : created.workerId;
+        const result = await tools.get("worker_dispatch").execute("dispatch", { workerId, task: "Never starts.", cognitiveRole: "implementation", background }, undefined, undefined, ctx);
         assert.equal(result.details.outcome, "preflight_failed");
         assert.equal(dispatched, false);
-        const body = JSON.parse(await readFile(workerStatusFile(created.details.workerId), "utf8"));
+        const body = JSON.parse(await readFile(workerStatusFile(workerId), "utf8"));
         assert.equal(body.state, "failed", "a dispatch that failed after beginDispatch does not leave the last state");
-        assert.match(body.log.at(-1).text, routingFails ? /^Dispatch failed to start: Routing resolver failed/ : /^Dispatch failed to start: Worker profile 'implementer' is not a bundled profile/);
+        assert.match(body.log.at(-1).text, routingFails ? /^Dispatch failed to start: Routing resolver failed/ : /^Dispatch failed to start: Worker profile 'unknown-profile' is not a bundled profile/);
       } finally {
-        PROFILES.implementer = implementer;
         await handlers.get("session_shutdown")?.();
         if (previousHome === undefined) delete process.env.HOME;
         else process.env.HOME = previousHome;
