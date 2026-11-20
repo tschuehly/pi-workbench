@@ -7,6 +7,7 @@
 //
 // Usage: node scripts/context-usage.mjs [--cwd DIR] [--model provider/id] [--json] [-- extra pi args, e.g. -e ext.ts]
 import { spawnSync } from "node:child_process";
+import { CHILD_TOOLS as childTools } from "../extensions/subagent/core.mjs";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,9 +16,6 @@ const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i
 const cwd = path.resolve(arg("--cwd", process.cwd()));
 const model = arg("--model", "anthropic/claude-opus-5-5");
 const extra = process.argv.includes("--") ? process.argv.slice(process.argv.indexOf("--") + 1) : [];
-// Mirrors CHILD_TOOLS for the scout profile in extensions/subagent/index.ts.
-const src = readFileSync(new URL("../extensions/subagent/index.ts", import.meta.url), "utf8");
-const childTools = JSON.parse(src.match(/const CHILD_TOOLS = (\[[^\]]*\])/)[1]);
 
 function measure(extraArgs, env = process.env) {
   const dir = mkdtempSync(path.join(tmpdir(), "ctx-usage-"));

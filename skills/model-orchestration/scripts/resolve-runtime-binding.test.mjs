@@ -45,14 +45,15 @@ const quota = {
 };
 const catalog = [
   "anthropic claude-sonnet-5-5 1M 128K yes yes",
-  "anthropic claude-fable-5-1 1M 128K yes yes",
+  "anthropic claude-fable-5-2 1M 128K yes yes",
   "anthropic claude-opus-5 1M 128K yes yes",
   "anthropic claude-opus-5-5 1M 128K yes yes",
   "openai gpt-5.6-sol 272K 128K yes yes",
-  "openai gpt-6.1-sol 272K 128K yes yes",
+  "openai gpt-6.2-sol 272K 128K yes yes",
   "openai gpt-6-luna 272K 128K yes yes",
-  "openai gpt-6-astra 272K 128K yes yes",
+  "openai gpt-6.2-astra 272K 128K yes yes",
   "openai plain-chat 272K 128K no yes",
+  "meta muse-ember-1.0 1M 512K yes yes",
   "github-copilot gpt-5-mini 264K 64K yes yes",
   "github-copilot plain-chat 264K 64K no yes",
   "github-copilot claude-sonnet-5-5 1M 128K yes yes",
@@ -68,17 +69,18 @@ try {
   fs.writeFileSync(modelMetadataPath, JSON.stringify({
     openai: { models: [
       { id: "gpt-5.6-sol", reasoning: true, thinkingLevelMap: { medium: "medium", high: "high", xhigh: "xhigh" } },
-      { id: "gpt-6.1-sol", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
+      { id: "gpt-6.2-sol", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
       { id: "gpt-6-luna", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
-      { id: "gpt-6-astra", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
+      { id: "gpt-6.2-astra", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } },
       { id: "plain-chat", reasoning: false },
     ] },
     anthropic: { models: [
       { id: "claude-sonnet-5-5", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } },
-      { id: "claude-fable-5-1", reasoning: true, thinkingLevelMap: { high: "high", xhigh: "xhigh" } },
+      { id: "claude-fable-5-2", reasoning: true, thinkingLevelMap: { high: "high", xhigh: "xhigh" } },
       { id: "claude-opus-5", reasoning: true, thinkingLevelMap: { high: "high" } },
       { id: "claude-opus-5-5", reasoning: true, thinkingLevelMap: { medium: "medium", high: "high", xhigh: "xhigh" } },
     ] },
+    meta: { models: [{ id: "muse-ember-1.0", reasoning: true, thinkingLevelMap: { high: "high" } }] },
     "github-copilot": { models: [
       { id: "gpt-5-mini", reasoning: true, thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: null, max: null } },
       { id: "plain-chat", reasoning: false },
@@ -102,7 +104,7 @@ try {
 
   for (const [role, model, effort, tier] of [
     ["routine", "gpt-6-luna", "medium", "light"], ["implementation", "claude-opus-5-5", "medium", "standard"],
-    ["frontier", "gpt-6-astra", "high", "strong"], ["coordination", "claude-opus-5-5", "medium", "standard"],
+    ["frontier", "gpt-6.2-astra", "high", "strong"], ["coordination", "claude-opus-5-5", "medium", "standard"],
   ]) {
     const resolved = JSON.parse(execFileSync(process.execPath, [resolver, role, "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
     assert.equal(resolved.modelBinding.model, model, role);
@@ -126,10 +128,15 @@ try {
   assert.match(staged.stderr, /STAGE=policy[\s\S]*STAGE=quota[\s\S]*STAGE=catalog/);
 
   // The reserve tier (Fable) is reachable only by name, e.g. the second member of a frontier panel.
-  const reserve = JSON.parse(execFileSync(process.execPath, [resolver, "frontier", "--model", "anthropic/claude-fable-5-1", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
-  assert.equal(reserve.modelBinding.model, "claude-fable-5-1");
+  const reserve = JSON.parse(execFileSync(process.execPath, [resolver, "frontier", "--model", "anthropic/claude-fable-5-2", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(reserve.modelBinding.model, "claude-fable-5-2");
   assert.equal(reserve.modelBinding.effort, "high");
   assert.equal(reserve.modelBinding.tier, undefined, "an explicit model is outside tier routing");
+
+  const ember = JSON.parse(execFileSync(process.execPath, [resolver, "review", "--model", "meta/muse-ember-1.0", "--independent-of-model", "openai/gpt-6.2-sol", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(ember.modelBinding.model, "muse-ember-1.0");
+  assert.equal(ember.modelBinding.provider, "meta");
+  assert.equal(ember.modelBinding.effort, "high");
 
   const mediumFrontier = JSON.parse(execFileSync(process.execPath, [resolver, "frontier", "--effort", "medium", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(mediumFrontier.modelBinding.effort, "medium", "frontier may drop to its medium floor");
@@ -139,11 +146,11 @@ try {
   const maxFrontier = JSON.parse(execFileSync(process.execPath, [resolver, "frontier", "--effort", "max", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(maxFrontier.modelBinding.effort, "max", "raising effort above the floor is allowed");
 
-  const astraWorker = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--model", "openai/gpt-6-astra", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  const astraWorker = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--model", "openai/gpt-6.2-astra", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
   assert.equal(astraWorker.modelBinding.provider, "openai");
-  assert.equal(astraWorker.modelBinding.model, "gpt-6-astra");
+  assert.equal(astraWorker.modelBinding.model, "gpt-6.2-astra");
   assert.equal(astraWorker.modelBinding.effort, "medium", "the Cognitive Role still selects effort");
-  assert.equal(astraWorker.modelBinding.modelOverride, "openai/gpt-6-astra");
+  assert.equal(astraWorker.modelBinding.modelOverride, "openai/gpt-6.2-astra");
   assert.equal(astraWorker.modelBinding.quotaSnapshot.telemetryStatus, "fresh");
 
   const crossProviderWorker = JSON.parse(execFileSync(process.execPath, [resolver, "implementation", "--model", "anthropic/claude-sonnet-5-5", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
@@ -161,8 +168,8 @@ try {
   assert.equal(reasoningOff.modelBinding.model, "plain-chat");
   assert.equal(reasoningOff.modelBinding.effort, "off");
 
-  const explicitModelAndEffort = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--model", "openai/gpt-6-astra", "--effort", "max", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
-  assert.equal(explicitModelAndEffort.modelBinding.model, "gpt-6-astra");
+  const explicitModelAndEffort = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--model", "openai/gpt-6.2-astra", "--effort", "max", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
+  assert.equal(explicitModelAndEffort.modelBinding.model, "gpt-6.2-astra");
   assert.equal(explicitModelAndEffort.modelBinding.effort, "max");
 
   const invalidEffort = spawnSync(process.execPath, [resolver, "implementation", "--effort", "ultra", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
@@ -173,7 +180,7 @@ try {
   assert.equal(unsupportedExplicitEffort.status, 3);
   assert.match(unsupportedExplicitEffort.stderr, /does not support Model Effort 'max'/);
 
-  for (const requested of ["gpt-6-astra", "/gpt-6-astra", "openai/", "openai/not-installed"]) {
+  for (const requested of ["gpt-6.2-astra", "/gpt-6.2-astra", "openai/", "openai/not-installed"]) {
     const rejected = spawnSync(process.execPath, [resolver, "coordination", "--model", requested, "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
     assert.equal(rejected.status, 3, requested);
   }
@@ -212,8 +219,8 @@ try {
   };
 
   // Reviewing strong-tier work: the lead names the other family's strong model; independence still holds.
-  const strongReview = passIndependent(["review", "--model", "openai/gpt-6-astra", "--independent-of", "anthropic"]);
-  assert.equal(strongReview.modelBinding.model, "gpt-6-astra");
+  const strongReview = passIndependent(["review", "--model", "openai/gpt-6.2-astra", "--independent-of", "anthropic"]);
+  assert.equal(strongReview.modelBinding.model, "gpt-6.2-astra");
   assert.equal(strongReview.modelBinding.effort, "high");
   assert.equal(strongReview.modelBinding.independence.selectedFamily, "openai");
   const sameFamilyOverride = runIndependent(["review", "--model", "anthropic/claude-sonnet-5-5", "--independent-of", "anthropic"]);
@@ -231,10 +238,10 @@ try {
   assert.equal(lowerEffortReview.status, 3, "review never runs below its medium floor");
   assert.match(lowerEffortReview.stderr, /needs at least Model Effort 'medium'/);
 
-  const exactModelWithoutOverlay = passIndependent(["review", "--independent-of-model", "openai-codex/gpt-6.1-sol"]);
+  const exactModelWithoutOverlay = passIndependent(["review", "--independent-of-model", "openai-codex/gpt-6.2-sol"]);
   assert.deepEqual(exactModelWithoutOverlay.modelBinding.independence, {
     ...reviewOfOpenAi.modelBinding.independence,
-    independentOfModel: "openai-codex/gpt-6.1-sol",
+    independentOfModel: "openai-codex/gpt-6.2-sol",
   });
   assert.equal(exactModelWithoutOverlay.modelBinding.model, "claude-opus-5-5");
 
@@ -253,7 +260,7 @@ try {
   }
 
   // Only one non-author family exists, so a second cross-family reviewer is unavailable.
-  const secondReviewer = runIndependent(["review", "--independent-of-model", "openai/gpt-6.1-sol", "--exclude-family", "anthropic"]);
+  const secondReviewer = runIndependent(["review", "--independent-of-model", "openai/gpt-6.2-sol", "--exclude-family", "anthropic"]);
   assert.equal(secondReviewer.status, 3);
   assert.match(secondReviewer.stderr, /no independent candidate/i);
 
@@ -274,7 +281,7 @@ try {
   assert.match(contradictoryAuthor.stderr, /contradicts --independent-of-model/);
 
   const reviewOfClaude = passIndependent(["review", "--independent-of", "anthropic"]);
-  assert.equal(reviewOfClaude.modelBinding.model, "gpt-6.1-sol");
+  assert.equal(reviewOfClaude.modelBinding.model, "gpt-6.2-sol");
   assert.equal(reviewOfClaude.modelBinding.independence.selectedFamily, "openai");
 
   assert.equal(reviewOfClaude.modelBinding.effort, "high", "review of Anthropic work never drops to the light tier");
@@ -344,14 +351,14 @@ try {
   fs.writeFileSync(quotaPath, JSON.stringify(quota));
   // Exhausted Claude quota moves coordination to its tier partner, never to another tier.
   const partner = JSON.parse(execFileSync(process.execPath, [resolver, "coordination", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" }));
-  assert.equal(partner.modelBinding.model, "gpt-6.1-sol");
+  assert.equal(partner.modelBinding.model, "gpt-6.2-sol");
   assert.equal(partner.modelBinding.effort, "medium");
   assert.equal(partner.modelBinding.fallback.from, "anthropic/claude-opus-5-5");
   assert.match(partner.modelBinding.fallback.reason, /quota exhausted for 'claude'/);
   const pinned = spawnSync(process.execPath, [resolver, "coordination", "--model", "anthropic/claude-opus-5-5", "--model-metadata", modelMetadataPath, "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(pinned.status, 3, "an explicit model has no fallback");
   assert.match(pinned.stderr, /quota exhausted/);
-  const reviewOfSol = spawnSync(process.execPath, [resolver, "review", "--independent-of-model", "openai/gpt-6.1-sol", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
+  const reviewOfSol = spawnSync(process.execPath, [resolver, "review", "--independent-of-model", "openai/gpt-6.2-sol", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(reviewOfSol.status, 3, "review never falls back to the author's family");
   assert.match(reviewOfSol.stderr, /quota exhausted for 'claude'/);
   const bothExhaustedPath = path.join(temp, "quota-both-exhausted.json");
@@ -360,11 +367,11 @@ try {
   fs.writeFileSync(bothExhaustedPath, JSON.stringify(bothExhausted));
   const noPartner = spawnSync(process.execPath, [resolver, "coordination", "--quota", bothExhaustedPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(noPartner.status, 3, "with both tier models exhausted, routing blocks instead of changing tier");
-  assert.match(noPartner.stderr, /claude-opus-5-5: quota exhausted.*gpt-6.1-sol: quota exhausted/);
+  assert.match(noPartner.stderr, /claude-opus-5-5: quota exhausted.*gpt-6.2-sol: quota exhausted/);
 
   quota.providers[0].windows[0].percentRemaining = 70;
   fs.writeFileSync(quotaPath, JSON.stringify(quota));
-  fs.writeFileSync(catalogPath, "openai gpt-6.1-sol");
+  fs.writeFileSync(catalogPath, "openai gpt-6.2-sol");
   const absent = spawnSync(process.execPath, [resolver, "routine", "--quota", quotaPath, "--catalog", catalogPath], { encoding: "utf8" });
   assert.equal(absent.status, 3);
   assert.match(absent.stderr, /Pi model .* unavailable/);
@@ -428,21 +435,21 @@ try {
   const allowedOverride = passOverlay(["coordination", "--model", "anthropic/claude-sonnet-5-5"]);
   assert.equal(allowedOverride.modelBinding.model, "claude-sonnet-5-5");
   assert.equal(allowedOverride.modelBinding.effort, "high");
-  const outsideOverlay = runOverlay(["coordination", "--model", "openai/gpt-6-astra"]);
+  const outsideOverlay = runOverlay(["coordination", "--model", "openai/gpt-6.2-astra"]);
   assert.equal(outsideOverlay.status, 3);
   assert.match(outsideOverlay.stderr, /outside the active routing overlay/i);
 
   const openAiOverlayPath = path.join(temp, "openai-overlay.json");
   fs.writeFileSync(openAiOverlayPath, JSON.stringify({
     version: 1,
-    allowedModels: [{ provider: "openai", model: "gpt-5.6-sol" }, { provider: "openai", model: "gpt-6-astra" }],
+    allowedModels: [{ provider: "openai", model: "gpt-5.6-sol" }, { provider: "openai", model: "gpt-6.2-astra" }],
     roles: { coordination: { provider: "openai", model: "gpt-5.6-sol", effort: "high", quotaProvider: "openai" } },
     independentReview: {
-      "openai/gpt-5.6-sol": { provider: "openai", model: "gpt-6-astra", effort: "high", quotaProvider: "openai" },
-      "openai/gpt-6-astra": { provider: "openai", model: "gpt-5.6-sol", effort: "high", quotaProvider: "openai" },
+      "openai/gpt-5.6-sol": { provider: "openai", model: "gpt-6.2-astra", effort: "high", quotaProvider: "openai" },
+      "openai/gpt-6.2-astra": { provider: "openai", model: "gpt-5.6-sol", effort: "high", quotaProvider: "openai" },
     },
   }));
-  const sameProviderOverride = passOverlay(["coordination", "--model", "openai/gpt-6-astra"], openAiOverlayPath);
+  const sameProviderOverride = passOverlay(["coordination", "--model", "openai/gpt-6.2-astra"], openAiOverlayPath);
   assert.equal(sameProviderOverride.modelBinding.admission, "fresh-quota");
   assert.equal(sameProviderOverride.modelBinding.quotaSnapshot.relevantWindows[0].id, "seven_day", "same-provider overlay override retains its declared quota provider");
 
@@ -458,7 +465,7 @@ try {
   const overlayBlocks = [
     [["review", "--independent-of", "openai-codex"], /requires --independent-of-model/, "cross-family independence is not available under the overlay"],
     [["review", "--independent-of-model", "anthropic/claude-sonnet-5-5", "--exclude-family", "openai"], /exclude-family.*distinct-model.*overlay/i, "family exclusions are unavailable under the distinct-model overlay"],
-    [["review", "--independent-of-model", "anthropic/claude-fable-5-1"], /no independent binding for author model/, "an unmapped author model fails closed"],
+    [["review", "--independent-of-model", "anthropic/claude-fable-5-2"], /no independent binding for author model/, "an unmapped author model fails closed"],
     [["routine", "--independent-of-model", "anthropic/claude-opus-5-5"], /does not use an independence constraint/, "a non-independent role rejects an author model"],
   ];
   for (const [args, pattern, message] of overlayBlocks) {
@@ -488,7 +495,7 @@ try {
   badOverlay("{not json", /not valid JSON/, "invalid JSON fails closed");
   badOverlay({ ...valid, version: 2 }, /version must be 1/, "an unknown overlay version fails closed");
   badOverlay({ ...valid, allowedModels: [] }, /at least one allowed model/, "an empty allowlist fails closed");
-  badOverlay({ ...valid, roles: { ...valid.roles, routine: { provider: "openai", model: "gpt-6.1-sol", effort: "medium", quotaProvider: "openai" } } }, /resolves outside its own allowlist/, "a role outside the allowlist fails closed");
+  badOverlay({ ...valid, roles: { ...valid.roles, routine: { provider: "openai", model: "gpt-6.2-sol", effort: "medium", quotaProvider: "openai" } } }, /resolves outside its own allowlist/, "a role outside the allowlist fails closed");
   badOverlay({ ...valid, roles: { ...valid.roles, "not-a-role": valid.roles.routine } }, /unknown cognitive role/, "an unknown mapped role fails closed");
 
   // An unmapped role fails closed rather than falling back to the default openai binding.

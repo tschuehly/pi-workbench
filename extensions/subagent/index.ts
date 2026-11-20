@@ -48,7 +48,7 @@ const Params = Type.Object({
   name: Type.Optional(Type.String({ minLength: 1, description: "Short human-readable label for this child, a few words not a sentence (e.g. 'Fix login redirect'). Names the delegate roster row and the child session; falls back to a label derived from task when omitted." })),
   profile: StringEnum(LEAF_PROFILES, { description: "Bundled Level 1 child behavior profile" }),
   cognitiveRole: StringEnum(COGNITIVE_ROLES, { description: ROLE_GUIDE }),
-  modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Exact '<provider>/<model>': an owner request, the reserve model claude-fable-5-1 as second frontier panel member, or the other family's strong model for review of frontier work; review still checks the family" })),
+  modelOverride: Type.Optional(Type.String({ minLength: 3, description: "Exact '<provider>/<model>': an owner request, the reserve model claude-fable-5-2 as second frontier panel member, or the other family's strong model for review of frontier work; review still checks the family" })),
   effort: Type.Optional(StringEnum(MODEL_EFFORTS, { description: "Explicit Model Effort; the Cognitive Role still selects the model" })),
   independentOfProvider: Type.Optional(Type.String({ minLength: 1, description: "Author provider to route away from for review. Use only when the exact author model is genuinely unavailable; explicit providers never inherit the active parent's model." })),
   independentOfModel: Type.Optional(Type.String({ minLength: 1, description: "Exact '<provider>/<model>' that authored the bytes under review, from the author's completion receipt. Independent roles default to the active parent provider/model; distinct-model overlays require this exact value." })),

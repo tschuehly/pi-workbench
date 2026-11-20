@@ -37,7 +37,7 @@ rather than choosing a weaker role.
 The reserve model, Fable, runs only when named. Use it as the second member of a **frontier
 panel** when a problem is both wide-latitude and consequential, or when a single frontier child
 already failed: launch two `frontier` children with the same frozen brief, one on the default
-strong model and one with `modelOverride: anthropic/claude-fable-5-1`, and combine their answers
+strong model and one with `modelOverride: anthropic/claude-fable-5-2`, and combine their answers
 yourself after both finish. Keep each child's answer hidden from the other.
 
 **Complete when:** both answers are collected and the combined conclusion names where they agreed
