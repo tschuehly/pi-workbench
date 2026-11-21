@@ -1,4 +1,4 @@
-// Atelier Kernel 2.15.1: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.16.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -34,6 +34,9 @@
 //   atl-nav="Label"            an item in the Kernel's top bar that reveals and scrolls to the element; empty: its first heading.
 //                              The bar is fixed at the top, --atl-top high, reserved as a top border on :root; a Page's own sticky
 //                              or fixed header sits below it with top: var(--atl-top, 0). Items that do not fit fold into a menu
+//   parts (2.16.0): Alt+click (or a touch long press) inside a Key comments on its tbody row, li, p, figure, dt/dd, pre or
+//                              SVG g with a direct <title>; the comment carries part {kind, text} beside the Key and re-finds it
+//                              by both after an Update, else shows on the Key. A part with its own atl-key is that Key
 //   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab; "next ↓",
 //                              Show and the changes rail click that tab (outermost first, so nested tabs open too)
 //   document "atelier:reveal"  fires with detail {key} when the Kernel reveals an item, before it scrolls there
@@ -238,7 +241,7 @@ const clip = (s, n) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); 
 // Where an event sits, with enough of the Page that the agent need not open it: the quoted selection, else the Key's text.
 const at = (e, excerpt) => {
   const text = e.key && !e.quote ? clip(excerpt?.(e.key), 120) : "";
-  const where = e.quote ? `on the text ${quote(clip(e.quote.exact, 120))}${e.key ? ` in ${e.key}` : ""}` : e.key ? `on ${e.key}${text ? ` (${quote(text)})` : ""}` : e.selector ? `on ${e.selector.sel}` : "on the Page";
+  const where = e.quote ? `on the text ${quote(clip(e.quote.exact, 120))}${e.key ? ` in ${e.key}` : ""}` : e.key && e.part ? `on the ${e.part.kind} ${quote(e.part.text)} in ${e.key}` : e.key ? `on ${e.key}${text ? ` (${quote(text)})` : ""}` : e.selector ? `on ${e.selector.sel}` : "on the Page";
   return [where, e.t != null ? `at ${Number(e.t).toFixed(1)} s` : "", e.ver ? `(version ${e.ver})` : ""].filter(Boolean).join(" ");
 };
 
@@ -361,6 +364,7 @@ const ICONS = {
   eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
   paperclip: '<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>',
   image: '<path d="M16 5h6"/><path d="M19 2v6"/><path d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/><circle cx="9" cy="9" r="2"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
   alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
 };
 /** Word diff (LCS) of two texts as [op, words] runs, op "=", "-" or "+". */
@@ -432,6 +436,35 @@ function boot() {
     if (!keyMap) { keyMap = new Map(); for (const el of keyed()) { const k = keyOf(el); if (!keyMap.has(k)) keyMap.set(k, el); } }
     return addr ? keyMap.get(addr) : undefined;
   };
+  // Parts (2.16.0): what Alt+click names inside the nearest Key, by kind and its first words; never a cell, header or word.
+  const UNIT = "tbody tr, li, p, figure, dt, dd, pre, svg g:has(> title)";
+  const partKind = (el) => el.matches("tr") ? "row" : el.matches("li") ? "item" : el.matches("p") ? "paragraph" : el.matches("figure") ? "figure" : el.matches("dt, dd") ? "definition" : el.matches("pre") ? "code" : "chart bar";
+  const words = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
+  function ident(el) { // its text without Kernel UI, so a marker inside a part never renames it
+    if (el.matches("tr")) return words(el.cells[0] && keyText(el.cells[0]));
+    if (el.matches("figure")) { const c = el.querySelector("figcaption"); return words(c ? keyText(c) : el.querySelector("[aria-label]")?.getAttribute("aria-label")); }
+    if (el.matches("dd")) { let t = el.previousElementSibling; while (t && !t.matches("dt")) t = t.previousElementSibling; return words(t && keyText(t)); }
+    if (el.matches("pre")) return words(keyText(el).split("\n")[0]);
+    if (el.matches("g")) return words(el.querySelector(":scope > title").textContent);
+    const t = words(keyText(el)); return t.length > 40 ? `${t.slice(0, 40).trimEnd()}…` : t;
+  }
+  // What the pointer is on: a part ({el, key, part, label}), its Key when the part has its own atl-key or there is none, or null outside any Key.
+  function partAt(target) {
+    if (!target?.closest || isUi(target)) return null;
+    let keyEl = target.closest("[atl-key]");
+    while (keyEl && isUi(keyEl)) keyEl = keyEl.parentElement?.closest("[atl-key]");
+    if (!keyEl) return null;
+    const unit = target.closest(UNIT);
+    if (unit && unit !== keyEl && keyEl.contains(unit)) {
+      const key = keyOf(keyEl), part = { kind: partKind(unit), text: ident(unit) };
+      return { el: unit, key, part, label: `${key} › ${part.kind} ${part.text}` };
+    }
+    const key = keyOf(keyEl); return { el: keyEl, key, label: `Key ${key}` };
+  }
+  // Where a part is now: the same kind and text inside its Key, wherever it moved; else null.
+  const findPart = (keyEl, part) => [...keyEl.querySelectorAll(UNIT)].find((u) => !isUi(u) && u.closest("[atl-key]") === keyEl && partKind(u) === part.kind && ident(u) === part.text) ?? null;
+  const partWhere = (r) => r.part ? `${r.key} › ${r.part.kind} ${r.part.text}` : r.key;
+  const partGone = (r) => r.part && findKey(r.key) && !findPart(findKey(r.key), r.part) ? `${r.part.kind} “${r.part.text}” is gone; shown on Key ${r.key}` : "";
   const verOf = (el) => el?.closest("[atl-ver]")?.getAttribute("atl-ver") ?? null;
   const currentVer = (addr) => verOf(findKey(addr));
   // Decisions the Page declares with atl-decide (155); the first element at an address wins, like findKey.
@@ -454,7 +487,10 @@ function boot() {
   // ---- UI roots. Everything the Kernel draws carries atl-ui and is lifted out before each morph.
   const panel = h(`<aside atl-ui="panel" aria-label="Atelier"><style class="atl-palette"></style><style>${STYLE}</style><div class="atl-undo" aria-live="polite"></div><div class="atl-list"></div></aside>`);
   // The top bar (2.15.0): the Page's atl-nav items on the left, the counts and Send on the right; outside <body>, so no Update lifts it.
-  const topBar = h(`<div atl-ui="top" class="atl-top"><button type="button" data-atl="navmenu" class="atl-navmenu" aria-expanded="false" hidden>Sections</button><div class="atl-nav" role="navigation" aria-label="Page sections"></div><button type="button" data-atl="reqmenu" class="atl-reqmenu" aria-expanded="false" aria-controls="atl-reqs" hidden>Requests</button><div class="atl-reqs" id="atl-reqs" role="region" aria-label="Requests" hidden></div><div class="atl-bar"></div></div>`);
+  // The bar's help card (2.16.0): how to comment, the keys, and what happens next, in plain words.
+  const ALT = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? "") ? "⌥ Option" : "Alt";
+  const HELP = `<b>How to comment</b><ul><li>Point at a section and press its Comment button.</li><li>${ALT}+click a row, item, chart bar or paragraph to comment on just that part.</li><li>Select text, then press Comment.</li><li>On a phone, press and hold a part.</li></ul><b>Keys</b><ul><li>Esc closes a box or menu.</li><li>Enter in a Decision's note sends it.</li></ul><b>What happens next</b><p>Your comments reach the agent the next time it reads the Page.</p>`;
+  const topBar = h(`<div atl-ui="top" class="atl-top"><button type="button" data-atl="navmenu" class="atl-navmenu" aria-expanded="false" hidden>Sections</button><div class="atl-nav" role="navigation" aria-label="Page sections"></div><button type="button" data-atl="reqmenu" class="atl-reqmenu" aria-expanded="false" aria-controls="atl-reqs" hidden>Requests</button><div class="atl-reqs" id="atl-reqs" role="region" aria-label="Requests" hidden></div><div class="atl-bar"></div><button type="button" data-atl="helpmenu" class="atl-helpmenu" aria-expanded="false" aria-controls="atl-help" aria-label="Help" title="Help">${icon("help")}</button><div class="atl-help" id="atl-help" role="region" aria-label="Help" hidden>${HELP}</div></div>`);
   const navs = () => [...document.querySelectorAll("[atl-nav]")].filter((el) => !isUi(el));
   // A thread opened from its marker floats beside it, outside <body> like every Comment box, so no Update lifts it.
   const tpop = h(`<div atl-ui="thread" class="atl-pop atl-tpop" role="dialog" tabindex="-1"><div class="atl-tbar"><span class="atl-label"></span><button type="button" data-atl="hidethread" aria-label="Close this box" title="Close (Esc)">${icon("x")}</button></div><div class="atl-tcard"></div><div class="atl-slot"></div></div>`);
@@ -666,6 +702,7 @@ function boot() {
   }
   function placeThread(t, idx) {
     const r = t.root;
+    if (r.key && r.part && findKey(r.key)) { const el = findPart(findKey(r.key), r.part); if (el) return { where: "text", el }; }
     if (r.key && findKey(r.key)) return { where: "key", el: findKey(r.key) };
     if (r.quote) { const range = findQuote(r.quote, idx); if (range) return { where: "text", range }; }
     if (r.selector) { const el = findSelector(r.selector); if (el) return { where: "text", el }; }
@@ -697,7 +734,7 @@ function boot() {
       const anchor = t.root.quote ? `“${esc(t.root.quote.exact.slice(0, 80))}”` : esc(String(t.root.text ?? "").slice(0, 80));
       return `<div class="atl-head"><span class="atl-tag">closed</span>${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}<button data-atl="expand" data-seq="${t.root.seq}" class="atl-earlier">${folded.length} message${folded.length === 1 ? "" : "s"}</button></div><div class="atl-dim">${anchor}</div>`;
     }
-    const anchor = t.root.quote ? `<div class="atl-quote">“${esc(t.root.quote.exact.slice(0, 140))}”</div>` : t.root.t != null ? `<div class="atl-dim">at ${Number(t.root.t).toFixed(1)} s</div>` : "";
+    const gone = partGone(t.root), anchor = (t.root.quote ? `<div class="atl-quote">“${esc(t.root.quote.exact.slice(0, 140))}”</div>` : t.root.t != null ? `<div class="atl-dim">at ${Number(t.root.t).toFixed(1)} s</div>` : "") + (gone ? `<div class="atl-dim atl-moved">${icon("alert")} ${esc(gone)}</div>` : "");
     return `<div class="atl-head">${inPop && !t.closed ? "" : `<span class="atl-tag">${t.closed ? "closed" : "open"}</span>`}${t.closed && !inPop ? `<button data-atl="collapse" data-seq="${t.root.seq}" class="atl-earlier">Collapse</button>` : ""}${t.stale ? `<span class="atl-tag atl-warn">${icon("alert")} on an earlier version</span>` : ""}${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}</div>${anchor}
       ${head.map(msg).join("")}${folded.length ? `<button data-atl="expand" data-seq="${t.root.seq}" class="atl-earlier">${folded.length} earlier</button>` : ""}${tail.map(msg).join("")}
       <div class="atl-actions"><button data-atl="reply" data-seq="${t.root.seq}">${icon("pencil")} Reply</button>${t.stale && !t.closed ? `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Fixed: close</button><button data-atl="still" data-seq="${t.root.seq}">Still applies</button>` : t.closed ? "" : `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Close</button>`}${!inPop && (t.root.key || t.root.quote || t.root.selector) ? `<button data-atl="jump" data-seq="${t.root.seq}">${icon("eye")} Show</button>` : ""}</div>`;
@@ -821,7 +858,7 @@ function boot() {
     for (const t of st.threads) { const p = placed.get(t.root.seq); if (p.where === "text") atText.push({ t, at: p.range ?? p.el }); }
     const spotted = new Set();
     for (const { t, at } of atText) {
-      const start = at instanceof Range ? at.startContainer.parentElement : at, host = at instanceof Range ? start?.closest(BLOCK) ?? start : at;
+      const start = at instanceof Range ? at.startContainer.parentElement : at, host = at instanceof Range ? start?.closest(BLOCK) ?? start : at.ownerSVGElement ?? at; // HTML never renders inside an SVG
       if (!host || isUi(host)) continue;
       let s = spots.get(t.root.seq);
       if (!s) { s = h(`<span atl-ui="spot" class="atl-pin atl-spot"></span>`); spots.set(t.root.seq, s); }
@@ -832,7 +869,7 @@ function boot() {
       const t = st.threads.find((x) => x.root.seq === thread.seq);
       if (!t) closeThread(false, false); // undone, or gone from the log
       else {
-        const where = t.root.quote ? `“${clip(t.root.quote.exact, 40)}”` : t.root.key ?? t.root.selector?.sel ?? "the Page";
+        const where = t.root.quote ? `“${clip(t.root.quote.exact, 40)}”` : t.root.key ? partWhere(t.root) : t.root.selector?.sel ?? "the Page";
         set(tpop.querySelector(".atl-label"), `Thread on ${esc(where)}`);
         tpop.setAttribute("aria-label", `Thread on ${where}`);
         reconcile(tpop.querySelector(".atl-tcard"), [{ id: `p:${t.root.seq}`, html: threadHtml(t, st, true) }]);
@@ -940,8 +977,14 @@ function boot() {
   }
   addEventListener("resize", fitNav);
   // The bar's two menus (Sections, Requests) close on a pick, Esc, or a click outside them; focus goes back to the button.
-  const menuOpen = () => topBar.classList.contains("atl-menu-open") || !topBar.querySelector(".atl-reqs").hidden;
+  const menuOpen = () => topBar.classList.contains("atl-menu-open") || !topBar.querySelector(".atl-reqs").hidden || !topBar.querySelector(".atl-help").hidden;
   function closeMenus(except = null) {
+    const help = topBar.querySelector(".atl-help");
+    if (except !== "help" && !help.hidden) {
+      const had = help.contains(document.activeElement);
+      help.hidden = true; topBar.querySelector(".atl-helpmenu").setAttribute("aria-expanded", "false");
+      if (had) topBar.querySelector(".atl-helpmenu").focus({ preventScroll: true });
+    }
     const nav = topBar.querySelector(".atl-navmenu"), req = topBar.querySelector(".atl-reqmenu"), reqs = topBar.querySelector(".atl-reqs");
     if (except !== "nav") { topBar.classList.remove("atl-menu-open"); nav.setAttribute("aria-expanded", "false"); }
     if (except !== "req" && !reqs.hidden) {
@@ -982,7 +1025,7 @@ function boot() {
   // the row. A pin keeps inside its Key's scroll containers and the
   // viewport; a Key scrolled out of its container (a sideways storyboard) shows none, so a pin never widens the Page.
   const SOLID = "img,video,canvas,svg,iframe,object,embed,input,select,textarea,button,a[href],hr,progress,meter"; // a summary counts by its text and icons
-  const FLOAT = "[atl-ui=pin],[atl-ui=spot],[atl-ui=mark],[atl-ui=sel],[atl-ui=panel],[atl-ui=rail],[atl-ui=composer],[atl-ui=thread],[atl-ui=wip],script,style,template";
+  const FLOAT = "[atl-ui=part],[atl-ui=pin],[atl-ui=spot],[atl-ui=mark],[atl-ui=sel],[atl-ui=panel],[atl-ui=rail],[atl-ui=composer],[atl-ui=thread],[atl-ui=wip],script,style,template";
   const shown = (el) => el.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) ?? true;
   const meets = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   // The visible content in the area, and the boxes of the elements there that neither hold nor sit in the Key.
@@ -1604,6 +1647,7 @@ function boot() {
       await jumpTo(el, undefined, "start");
     },
     navmenu: (b) => { closeMenus("nav"); const open = topBar.classList.toggle("atl-menu-open"); b.setAttribute("aria-expanded", String(open)); },
+    helpmenu: (b) => { closeMenus("help"); const help = topBar.querySelector(".atl-help"); help.hidden = !help.hidden; b.setAttribute("aria-expanded", String(!help.hidden)); if (!help.hidden) b.focus({ preventScroll: true }); },
     reqmenu: (b) => { closeMenus("req"); const reqs = topBar.querySelector(".atl-reqs"); reqs.hidden = !reqs.hidden; b.setAttribute("aria-expanded", String(!reqs.hidden)); },
     chmark: (b) => toggleDiff(b.dataset.addr),
     chseen: (b) => clearTrace(b.dataset.addr),
@@ -1660,14 +1704,56 @@ function boot() {
     // A Page button with atl-comment opens a Comment on its Key, floating beside that button (e.g. in a sticky bar).
     const pc = ev.target.closest?.("[atl-comment]");
     if (pc && !isUi(pc) && keyOf(pc)) { ev.preventDefault(); const key = keyOf(pc); openComposer({ label: `Comment on ${key}`, anchor: anchorForKey(key) }, { at: () => pc, from: pc }); return; }
-    // Alt+click comments on the nearest Key, or on a verified selector where there is none.
+    // Alt+click comments on the part under it in the nearest Key (2.16.0), on that Key, or on a verified selector where there is none.
     if (ev.altKey && !isUi(ev.target)) {
       ev.preventDefault();
-      const key = keyOf(ev.target);
-      if (key) actions.comment({ dataset: { key } });
+      const p = partAt(ev.target);
+      if (p) commentOn(p);
       else { const target = ev.target; openComposer({ label: `Comment on ${target.localName}`, anchor: { selector: { sel: selectorFor(target), snap: target.textContent.trim().slice(0, 80) } } }, { at: () => target }); }
     }
   });
+  function commentOn(p) {
+    hidePart();
+    if (!p.part) { actions.comment({ dataset: { key: p.key } }); return; }
+    const el = p.el; openComposer({ label: `Comment on ${p.label}`, anchor: { ...anchorForKey(p.key), part: p.part } }, { at: () => el.isConnected ? el : findKey(p.key) });
+  }
+  // Holding Alt (Option) outlines the part under the mouse with its name; a mouse only, never touch or pen.
+  const partBox = h(`<div atl-ui="part" class="atl-partbox" aria-hidden="true"><span></span></div>`);
+  let partTarget = null;
+  function hidePart() { partBox.remove(); }
+  function showPart(target) {
+    const p = partAt(target);
+    if (!p) { hidePart(); return; }
+    const r = p.el.getBoundingClientRect();
+    Object.assign(partBox.style, { left: `${r.left - 2}px`, top: `${r.top - 2}px`, width: `${r.width + 4}px`, height: `${r.height + 4}px` });
+    partBox.firstElementChild.textContent = p.label;
+    if (!partBox.isConnected) document.documentElement.append(partBox);
+  }
+  document.addEventListener("pointermove", (ev) => {
+    if (ev.pointerType !== "mouse") return;
+    partTarget = ev.target;
+    if (ev.altKey && !composer) showPart(ev.target); else hidePart();
+  }, { passive: true });
+  addEventListener("keydown", (ev) => { if (ev.key === "Alt" && partTarget && !composer) showPart(partTarget); });
+  addEventListener("keyup", (ev) => { if (ev.key === "Alt") hidePart(); });
+  addEventListener("blur", hidePart);
+  addEventListener("scroll", hidePart, { capture: true, passive: true });
+  // On touch, a long press (500 ms, cancelled by moving more than 8 px) comments like Alt+click, inside a Key only and never on a control.
+  let press = null;
+  const unpress = () => { if (press) { clearTimeout(press.timer); press = null; } };
+  document.addEventListener("pointerdown", (ev) => {
+    unpress();
+    if (ev.pointerType !== "touch" || !ev.isPrimary || ev.target.closest?.(CONTROLS + ",label,[contenteditable]")) return;
+    const p = partAt(ev.target);
+    if (!p) return;
+    press = { x: ev.clientX, y: ev.clientY, timer: setTimeout(() => { press = null; pressed = true; getSelection()?.removeAllRanges(); commentOn(p); }, 500) };
+  });
+  let pressed = false; // the click and context menu a long press ends with must not act on the Page
+  document.addEventListener("pointermove", (ev) => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 8) unpress(); });
+  for (const t of ["pointerup", "pointercancel"]) document.addEventListener(t, unpress);
+  document.addEventListener("contextmenu", (ev) => { if (pressed || press) ev.preventDefault(); });
+  document.addEventListener("click", (ev) => { if (pressed) { pressed = false; if (!isUi(ev.target)) { ev.preventDefault(); ev.stopPropagation(); } } }, true);
+  document.addEventListener("pointerdown", () => { if (!press) pressed = false; }, true);
   // Esc closes the Comment box first, then the floating thread; a click elsewhere closes the thread unless a reply is typed.
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape" || (!composer && !thread && !menuOpen())) return;
@@ -1675,8 +1761,8 @@ function boot() {
     if (composer) closeComposer(true); else if (thread) closeThread(); else closeMenus();
   });
   document.addEventListener("pointerdown", (ev) => {
-    const inNav = ev.target.closest?.(".atl-nav,[data-atl=navmenu]"), inReq = ev.target.closest?.(".atl-reqs,[data-atl=reqmenu]");
-    if (menuOpen()) closeMenus(inNav ? "nav" : inReq ? "req" : null);
+    const inNav = ev.target.closest?.(".atl-nav,[data-atl=navmenu]"), inReq = ev.target.closest?.(".atl-reqs,[data-atl=reqmenu]"), inHelp = ev.target.closest?.(".atl-help,[data-atl=helpmenu]");
+    if (menuOpen()) closeMenus(inNav ? "nav" : inReq ? "req" : inHelp ? "help" : null);
     if (!thread || tpop.contains(ev.target) || ev.target.closest?.("[data-atl=thread]")) return;
     if (composer?.inline && composer.node.querySelector("textarea").value.trim()) return;
     closeThread(false);
@@ -1795,6 +1881,8 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 .atl-top button.atl-navi{flex:0 1 auto;min-width:0}.atl-nl{max-width:12em;overflow:hidden;text-overflow:ellipsis}.atl-top .atl-cn{flex:none}.atl-top .atl-recv{max-width:14em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .atl-top .atl-navmenu{display:none}.atl-collapse .atl-navmenu{display:inline-flex}.atl-collapse>.atl-nav{display:none}
 .atl-collapse.atl-menu-open>.atl-nav{display:flex;position:fixed;top:var(--atl-top);left:4px;flex-direction:column;align-items:stretch;max-width:calc(100vw - 8px);max-height:70vh;overflow:auto;padding:4px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:8px;box-shadow:0 4px 18px #0002}
+.atl-top button.atl-helpmenu{padding:0 4px;border-color:transparent;background:none;color:var(--atl-muted)}.atl-top button.atl-helpmenu[aria-expanded=true]{color:var(--atl-accent)}
+.atl-help{position:fixed;top:var(--atl-top);right:4px;width:340px;max-width:calc(100vw - 8px);max-height:70vh;overflow:auto;box-sizing:border-box;padding:8px 12px;background:var(--atl-bg);color:var(--atl-fg);border:1px solid var(--atl-line);border-radius:8px;box-shadow:0 4px 18px #0002;font:13px/1.45 system-ui,sans-serif}.atl-help ul{margin:2px 0 8px;padding-left:18px}.atl-help p{margin:2px 0 0}
 .atl-reqs{position:fixed;top:var(--atl-top);right:4px;width:340px;max-width:calc(100vw - 8px);max-height:70vh;overflow:auto;box-sizing:border-box;padding:4px 8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:8px;box-shadow:0 4px 18px #0002}
 .atl-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 @media (max-width:600px){.atl-rl,.atl-test>span,.atl-top .atl-bar>.atl-tag:not(.atl-warn){display:none}.atl-top .atl-recv{max-width:7em}}
@@ -1856,6 +1944,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui] button.atl-chip.atl-stale{border-color:var(--atl-warn)}[atl-ui] button.atl-chip.atl-draft{border-style:dashed}
 [atl-ui] button.atl-chip[aria-expanded=true]{border-color:var(--atl-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--atl-accent) 40%,transparent)}
 .atl-selbtn{position:fixed;z-index:2147483001;box-shadow:0 2px 8px #0003}
+.atl-partbox{position:fixed;z-index:2147483000;pointer-events:none;box-sizing:border-box;border:2px solid var(--atl-accent);border-radius:4px}.atl-partbox>span{position:absolute;left:-2px;bottom:100%;max-width:min(420px,90vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:4px 4px 0 0;background:var(--atl-accent);color:#fff;font:12px/1.5 system-ui,sans-serif}.atl-moved{display:flex;gap:4px;align-items:center}
 .atl-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;border:1px solid var(--atl-line);border-radius:9px;padding:0 6px;color:var(--atl-muted)}
 .atl-warn,.atl-tag.atl-warn{color:var(--atl-warn)}.atl-tag.atl-new{background:var(--atl-accent);border-color:var(--atl-accent);color:#fff}
 .atl-dim,.atl-label{color:var(--atl-muted);font-size:12px}

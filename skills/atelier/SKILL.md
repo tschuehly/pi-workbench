@@ -45,9 +45,17 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   Fix each real one and look at both screenshots.
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`
   and `idiomorph.js` beside the Page; let it, rather than copying them by hand.
-- `atl-key="name"` on every element the human judges, down to each table row, list item, chart and figure
-  inside a section, not only the section: he comments on one row, not the whole table. Nested Keys form an
+- `atl-key="name"` on every section, and on each table row, list item, chart or figure you expect comments on,
+  so a comment lands on one row, not the whole table. Nested Keys form an
   address such as `tools/ask_user` or `run-12/turn-3`; use domain ids, and keep them stable across Updates.
+  Write real structure inside Keys: `<table>` with `<tbody>` rows, `<ul>`/`<ol>`, `<p>`, `<figure>` with a
+  `<figcaption>`, `<dl>`, `<pre>`, and an SVG `<g>` per chart bar with a direct `<title>` naming it. Alt+click
+  (Option on a Mac) or a long press on a phone comments on such a part without its own Key: a row (a cell
+  resolves to its row; a header to the Key), item, paragraph, figure, definition, code block or chart bar.
+  The comment names it by kind and text (`on the row "read" in tools`: a row's first cell, an item's or
+  paragraph's first 40 characters, a caption, a `<dt>`, a `<pre>`'s first line, a bar's `<title>`), so keep
+  those stable across Updates; when the part is gone the thread shows on its Key and says so. A part with its
+  own `atl-key` gets that Key's Comment instead: Keys win.
 - `atl-ver="…"` on content that changes, such as a build SHA or a content hash. Events record it,
   and older events show as "on an earlier version". An answer to the Key's `atl-decide` (or to an `ask` that names
   `material`) holds for the version it was given on. On another version the Decision shows "Version 2" (3, …:
@@ -121,7 +129,8 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   `--atl-warn` to match a Page.
 - `atl-nav="Label"` on a section makes it an item in the Kernel's top bar (empty: its first heading's text); a click
   reveals it like "next ↓" (tabs, `atelier:reveal`), and the item counts what needs the human under it and dots its
-  changes. The bar, fixed at the top on every Page, also holds "next ↓", "to answer", Send, the receiver, and a
+  changes. The bar, fixed at the top on every Page, also holds "next ↓", "to answer", Send, the receiver, a "?"
+  Help card (how to comment, keys, what happens next), and a
   Requests menu (with the count not yet accepted or cancelled; accept or rework there); the Kernel
   reserves its height, `--atl-top`, as a top border on `:root` (the Page's own padding stays), so a Page's own sticky or
   fixed header uses `top: var(--atl-top, 0)`; a bar item lands its target below that header. A full-height app sizes
@@ -196,7 +205,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.15.1 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.16.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of

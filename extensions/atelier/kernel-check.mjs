@@ -40,6 +40,23 @@ const box = async (sel) => js(`(()=>{const r=document.querySelector(${JSON.strin
 const opacity = (key) => js(`getComputedStyle(document.querySelector('[atl-ui=pin][data-key="${key}"] .atl-add')).opacity`);
 const buttons = () => js("[...document.querySelectorAll('[data-atl=comment]')].map((b)=>b.dataset.key)");
 const at = (x, y) => b("mouse", "move", String(Math.round(x)), String(Math.round(y)));
+// Trusted mouse input with modifiers through the browser's DevTools protocol: agent-browser's keydown sets no altKey on the mouse.
+async function cdpMouse(steps) {
+  const ws = new WebSocket((await b("get", "cdp-url")).cdpUrl), wait = new Map(); let id = 0;
+  ws.onmessage = (m) => { const d = JSON.parse(m.data); wait.get(d.id)?.(d); };
+  const send = (method, params = {}, sessionId) => new Promise((r) => { const i = ++id; wait.set(i, r); ws.send(JSON.stringify({ id: i, method, params, sessionId })); });
+  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+  try {
+    const href = await js("location.href"), { result } = await send("Target.getTargets");
+    const t = result.targetInfos.find((x) => x.type === "page" && x.url === href);
+    const { result: { sessionId } } = await send("Target.attachToTarget", { targetId: t.targetId, flatten: true });
+    for (const s of steps) {
+      if (s.wait) await sleep(s.wait);
+      else if (s.method) await send(s.method, s.params, sessionId);
+      else await send("Input.dispatchMouseEvent", { button: s.type === "mouseMoved" ? "none" : "left", clickCount: 1, ...s }, sessionId);
+    }
+  } finally { ws.close(); }
+}
 const click = async (sel) => { const r = await box(sel); await at(r.x + r.w / 2, r.y + r.h / 2); await b("mouse", "down"); await b("mouse", "up"); };
 
 try {
@@ -1561,9 +1578,100 @@ ${heads.map((t, i) => `<section id="s${i}" atl-nav><h2>${t}</h2>${i === 0 ? '<p 
     await click("#go");
     assert.equal(await js("window.went === true"), true, "the bottom button is clickable");
   });
-  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0, 2.13.0, 2.14.0, 2.14.1, 2.14.2, 2.14.3, 2.15.0, 2.15.0 review 1 and 2.15.1 fix holds");
+  // 2.16.0 (owner approved the semantic-comments demo): Alt+click comments on a part inside a Key: a cell resolves to its
+  // row, a list item, an SVG chart bar by its <title>. The anchor names the part, its marker sits at the part's top-right
+  // corner without moving the table, and after an Update that drops the row the thread falls back to the Key and says so.
+  const partsPage = (file, rows, items) => writeFile(file, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Parts</title>
+<style>body{margin:16px;font:15px system-ui}.wrap{overflow-x:auto}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}svg{width:300px;max-width:100%}</style>
+<body><section atl-key="tools"><h2>Tools</h2><div class="wrap"><table><thead><tr><th>Tool</th><th>Calls</th></tr></thead><tbody>${rows.map(([n, c]) => `<tr><td><code>${n}</code></td><td>${c}</td></tr>`).join("")}</tbody></table></div></section>
+<div atl-key="notes"><ul>${items.map((t) => `<li>${t}</li>`).join("")}</ul></div>
+<figure atl-key="chart"><svg viewBox="0 0 300 60" role="img" aria-label="Calls per tool">${rows.slice(0, 2).map(([n, c], i) => `<g><title>${n}</title><rect x="80" y="${4 + i * 28}" width="${c / 100}" height="20"/></g>`).join("")}</svg><figcaption>Calls per tool</figcaption></figure>
+<script type="module" src="atelier.js"></script></body></html>`);
+  const ROWS = [["bash", 22915], ["read", 18240], ["edit", 9872]], ITEMS = ["bash and read make up most calls.", "subagent costs the most tokens per session."];
+  const measured = {};
+  for (const [w, hgt] of [["1440", "900"], ["390", "844"]]) {
+    await fixCheck(`2.16.0-alt-click-parts-row-item-chart-bar-at-${w}`, async () => {
+      const file = path.join(dir, `parts-${w}.html`);
+      await partsPage(file, ROWS, ITEMS);
+      await b("set", "viewport", w, hgt);
+      await b("open", (await host.open(file)).url);
+      await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded");
+      const layout = () => js("JSON.stringify([...document.querySelectorAll('tbody tr, tbody td')].map((e)=>{const r=e.getBoundingClientRect();return [Math.round(r.x),Math.round(r.y),Math.round(r.width),Math.round(r.height)]}))");
+      const before = await layout();
+      const altClick = async (sel, text) => {
+        await js(`document.querySelector(${JSON.stringify(sel)}).scrollIntoView({block:'center'}); true`); await sleep(150);
+        const r = await box(sel), x = r.x + r.w / 2, y = r.y + r.h / 2;
+        await at(x, y); await cdpMouse([{ type: "mouseMoved", x: x + 1, y, modifiers: 1 }]); // 1: Alt held
+        const label = await js("document.querySelector('[atl-ui=part]')?.textContent ?? null");
+        await cdpMouse([{ type: "mousePressed", x: x + 1, y, modifiers: 1 }, { type: "mouseReleased", x: x + 1, y, modifiers: 1 }]);
+        await until("!!document.querySelector('[atl-ui=composer] textarea') && !document.querySelector('[atl-ui=part]')");
+        const composerLabel = await js("document.querySelector('[atl-ui=composer] .atl-label').textContent");
+        await b("keyboard", "type", text);
+        await click("[atl-ui=composer] [type=submit]");
+        await until("!document.querySelector('[atl-ui=composer]')");
+        return { label, composerLabel };
+      };
+      const row = await altClick("tbody tr:nth-child(2) td:nth-child(2)", "why so many reads?");
+      const item = await altClick("li:nth-child(2)", "which subagent?");
+      const bar = await altClick("svg g:nth-of-type(1) rect", "bash leads");
+      assert.deepEqual([row, item, bar], [
+        { label: "tools › row read", composerLabel: "Comment on tools › row read" },
+        { label: "notes › item subagent costs the most tokens per sessi…", composerLabel: "Comment on notes › item subagent costs the most tokens per sessi…" },
+        { label: "chart › chart bar bash", composerLabel: "Comment on chart › chart bar bash" },
+      ], "Alt held outlines and names the part; the cell resolves to its row");
+      const parts = readLog(file).filter((e) => e.type === "comment").map((e) => [e.key, e.part]);
+      assert.deepEqual(parts, [["tools", { kind: "row", text: "read" }], ["notes", { kind: "item", text: "subagent costs the most tokens per sessi…" }], ["chart", { kind: "chart bar", text: "bash" }]], "each anchor carries its part");
+      await until("document.querySelectorAll('[atl-ui=spot] [data-atl=thread]').length===3");
+      await js("scrollTo(0,0); true"); await sleep(200);
+      // Each marker sits inside its part's box at the top-right corner.
+      const where = await js(`(()=>{const m=[...document.querySelectorAll('[atl-ui=spot] [data-atl=thread]')].map((b)=>b.getBoundingClientRect());
+        const p=[document.querySelector('tbody tr:nth-child(2)'),document.querySelector('li:nth-child(2)'),document.querySelector('svg g')].map((e)=>e.getBoundingClientRect());
+        return p.map((r)=>{const b=m.find((x)=>x.left>=r.left-2&&x.right<=r.right+2&&x.top>=r.top-2&&x.top<=r.top+8);return b?{part:[Math.round(r.right),Math.round(r.top)],marker:[Math.round(b.right),Math.round(b.top)]}:null})})()`);
+      assert(where.every(Boolean), `a marker at each part's top-right corner: ${JSON.stringify(where)}`);
+      measured[w] = where;
+      assert.equal(await layout(), before, "the row's marker moves no table cell");
+      assert.equal(await js("document.documentElement.scrollWidth - document.documentElement.clientWidth"), 0, "no sideways scroll");
+      // Update: the row is removed, the items swap places. The item's marker follows it; the row's thread falls back to its Key.
+      await partsPage(file, ROWS.filter(([n]) => n !== "read"), [ITEMS[1], ITEMS[0]]); host.update(file);
+      await until("document.querySelectorAll('tbody tr').length===2 && document.querySelectorAll('[atl-ui=spot] [data-atl=thread]').length===2");
+      assert.equal(await js("(()=>{const r=document.querySelector('li:nth-child(1)').getBoundingClientRect();return [...document.querySelectorAll('[atl-ui=spot] [data-atl=thread]')].some((b)=>{const x=b.getBoundingClientRect();return x.top>=r.top-2&&x.top<=r.top+8})})()"), true, "the moved item keeps its marker");
+      const seq = readLog(file).find((e) => e.part?.kind === "row").seq;
+      await until(`!!document.querySelector('[atl-ui=pin][data-key=tools] [data-atl=thread][data-seq="${seq}"]')`);
+      await js("scrollTo(0,0); true"); await sleep(150);
+      await click(`[atl-ui=pin][data-key=tools] [data-atl=thread][data-seq="${seq}"]`);
+      await until("!!document.querySelector('[atl-ui=thread] .atl-moved')");
+      assert.equal(await js("document.querySelector('[atl-ui=thread] .atl-moved').textContent.trim()"), "row “read” is gone; shown on Key tools", "the thread says where its part went");
+      await b("press", "Escape");
+      // On touch, a long press on a part opens its Comment; a short tap does not.
+      await js("document.querySelector('li').scrollIntoView({block:'center'}); true"); await sleep(150);
+      const li = await box("li:nth-child(1)"), pt = [{ x: li.x + 20, y: li.y + li.h / 2 }];
+      const touch = (type, extra = {}) => ({ method: "Input.dispatchTouchEvent", params: { type, touchPoints: type === "touchEnd" ? [] : pt, ...extra } });
+      await cdpMouse([{ method: "Emulation.setTouchEmulationEnabled", params: { enabled: true, maxTouchPoints: 1 } }, touch("touchStart"), { wait: 150 }, touch("touchEnd"), { wait: 700 }]);
+      assert.equal(await js("!!document.querySelector('[atl-ui=composer]')"), false, "a tap opens no Comment");
+      await cdpMouse([touch("touchStart"), { wait: 700 }, touch("touchEnd"), { method: "Emulation.setTouchEmulationEnabled", params: { enabled: false } }]);
+      await until("!!document.querySelector('[atl-ui=composer]')");
+      assert.equal(await js("document.querySelector('[atl-ui=composer] .atl-label').textContent"), "Comment on notes › item subagent costs the most tokens per sessi…", "a long press comments on the part");
+      await b("press", "Escape");
+    });
+  }
+  console.log(`  2.16.0 part markers [part right/top, marker right/top]: ${JSON.stringify(measured)}`);
+  await fixCheck("2.16.0-help-card-in-the-bar-at-390-and-1440", async () => {
+    for (const [w, hgt] of [["390", "844"], ["1440", "900"]]) {
+      await b("set", "viewport", w, hgt); await sleep(300);
+      const bar = await js("(()=>{const t=document.querySelector('[atl-ui=top]'),b=t.querySelector('[data-atl=helpmenu]').getBoundingClientRect();return {one:t.scrollHeight<=t.clientHeight+1,inside:b.width>0&&b.left>=0&&b.right<=innerWidth,label:t.querySelector('[data-atl=helpmenu]').getAttribute('aria-label'),text:t.querySelector('[data-atl=helpmenu]').textContent.trim()}})()");
+      assert.deepEqual(bar, { one: true, inside: true, label: "Help", text: "" }, `${w}: an icon-only Help button on one bar line`);
+      await click("[atl-ui=top] [data-atl=helpmenu]");
+      await until("!document.querySelector('[atl-ui=top] .atl-help').hidden");
+      const card = await js("(()=>{const c=document.querySelector('[atl-ui=top] .atl-help'),r=c.getBoundingClientRect();return {inside:r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&r.top>=0,text:c.textContent}})()");
+      assert(card.inside, `${w}: the card fits the viewport`);
+      assert.match(card.text, /How to comment.*(⌥ Option|Alt)\+click a row, item, chart bar or paragraph.*press and hold.*Esc closes.*reach the agent the next time it reads the Page/s);
+      await b("press", "Escape");
+      await until("document.querySelector('[atl-ui=top] .atl-help').hidden && document.activeElement===document.querySelector('[atl-ui=top] [data-atl=helpmenu]')");
+    }
+  });
+  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0, 2.13.0, 2.14.0, 2.14.1, 2.14.2, 2.14.3, 2.15.0, 2.15.0 review 1, 2.15.1 and 2.16.0 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen; 2.14.0: a retracted ask leaves the live Page; 2.14.1: an answer that crossed the retract shows folded with the reason; 2.14.2: a delayed answer to a withdrawn question never answers the re-asked one, also when its image was still uploading; such an answer keeps the material version its click saw, a replacement inside the undo window is one request and a refused or unreachable one keeps the answer it would replace and one whose response is lost shows what the host saved, and an opened in flight for a withdrawn ask leaves the re-asked one its own; 2.15.0: one top bar on every Page, through Updates, lists the atl-nav items with what needs the human under each, opens a hidden tab and lands below the bar, covers no content, never widens a phone Page, and sends batched Comments; review 1: the bar adds to the Page's padding and keeps a full-height app's bottom button on screen, an item lands below a sticky Page header, keeps focus through a count change and moves it to an unkeyed target, counts a selector thread, and folds long labels into a Sections menu on a phone; 2.15.1: the bar has no selection Comment button, toasts close, and Requests sit in a bar menu with their count, accept there, and both bar menus close on Esc.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen; 2.14.0: a retracted ask leaves the live Page; 2.14.1: an answer that crossed the retract shows folded with the reason; 2.14.2: a delayed answer to a withdrawn question never answers the re-asked one, also when its image was still uploading; such an answer keeps the material version its click saw, a replacement inside the undo window is one request and a refused or unreachable one keeps the answer it would replace and one whose response is lost shows what the host saved, and an opened in flight for a withdrawn ask leaves the re-asked one its own; 2.15.0: one top bar on every Page, through Updates, lists the atl-nav items with what needs the human under each, opens a hidden tab and lands below the bar, covers no content, never widens a phone Page, and sends batched Comments; review 1: the bar adds to the Page's padding and keeps a full-height app's bottom button on screen, an item lands below a sticky Page header, keeps focus through a count change and moves it to an unkeyed target, counts a selector thread, and folds long labels into a Sections menu on a phone; 2.15.1: the bar has no selection Comment button, toasts close, and Requests sit in a bar menu with their count, accept there, and both bar menus close on Esc; 2.16.0: Alt+click names and comments on a table row (from its cell), a list item and an SVG chart bar at 1440 and 390 px, with each marker at its part's corner, no table shift, a moved item keeping its marker, a removed row falling back to its Key with a note, a touch long press commenting and a tap not, and a ? Help card in the bar that fits both widths and closes on Esc.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

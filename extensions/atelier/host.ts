@@ -12,7 +12,7 @@ import { CLASSES, UNDO_MS, compose, derive, inGroup, keyTexts } from "./kernel/a
 
 const KERNEL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "kernel");
 export const KERNEL_FILES = ["atelier.js", "idiomorph.js"];
-export const KERNEL_VERSION = "2.15.1";
+export const KERNEL_VERSION = "2.16.0";
 // Plannotator pi-session-bridge.ts: Pi's sendMessage returns void, so a send is only "queued" until the
 // message starts; a watchdog flags one that never starts. Busy sessions arm it at agent_settled, because
 // agent_end is not final.
@@ -207,7 +207,7 @@ export function inside(root: string, candidate: string): string | undefined {
 const str = (v: unknown) => typeof v === "string";
 const opt = (ok: (v: any) => boolean) => (v: unknown) => v == null || ok(v);
 const seqNo = (v: unknown) => Number.isInteger(v);
-const ANCHOR = { key: opt(str), ver: opt(str), t: opt(Number.isFinite), quote: opt((q) => str(q.exact) && str(q.prefix) && str(q.suffix)), selector: opt((s) => str(s.sel) && str(s.snap)) };
+const ANCHOR = { key: opt(str), ver: opt(str), t: opt(Number.isFinite), part: opt((p) => str(p.kind) && str(p.text)), quote: opt((q) => str(q.exact) && str(q.prefix) && str(q.suffix)), selector: opt((s) => str(s.sel) && str(s.snap)) };
 const images = opt((v) => Array.isArray(v) && v.length <= IMAGES_MAX && v.every(str));
 const FIELDS: Record<string, Record<string, (v: any) => boolean>> = {
   comment: { ...ANCHOR, text: str, thread: opt(seqNo), images },

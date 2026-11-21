@@ -308,7 +308,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.15\.1 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.16\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -813,6 +813,25 @@ test("the Kernel palette is light unless the Page declares dark", () => {
 test("the delivery message is one header line and one line per event", () => {
   const c = { seq: 6, at: 0, origin: "human", type: "comment", key: "how/step-write", text: "too long", delivery: "send" };
   assert.equal(compose("/abs/dir/atelier.html", "http://127.0.0.1:1/x", [c], [c]), 'Atelier Comment on how/step-write: "too long"\natelier.html (http://127.0.0.1:1/x)\n- #6 Comment on how/step-write: "too long"');
+});
+
+test("a Comment on a part names its kind and text for the agent; one without a part reads as before (2.16.0)", () => {
+  const c = { seq: 7, at: 0, origin: "human", type: "comment", key: "tools", ver: "v2", part: { kind: "row", text: "read" }, text: "why so many?" };
+  assert.equal(compose("p.html", "", [c], [c], { excerpt: () => "Tool What it does" }), 'Atelier Comment on the row "read" in tools: "why so many?"\np.html\n- #7 Comment on the row "read" in tools (version v2): "why so many?"');
+  const { part, ...old } = c;
+  assert.equal(compose("p.html", "", [old], [old], { excerpt: () => "Tool What it does" }).split("\n")[2], '- #7 Comment on tools ("Tool What it does") (version v2): "why so many?"');
+});
+
+test("the host keeps a Comment's part and drops a malformed one", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    assert.deepEqual(human({ type: "comment", key: "a", part: { kind: "item", text: "First note" }, text: "t" }).json.entry.part, { kind: "item", text: "First note" });
+    assert.equal(human({ type: "comment", key: "a", part: { kind: 3 }, text: "bad" }).status, 400, "a part without kind and text is refused");
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent[0].message.content, /Comment on the item "First note" in a: "t"/);
+  } finally { host.stop(); p.done(); }
 });
 
 test("a thread shows every message in order; only threads over four messages fold their middle", () => {
