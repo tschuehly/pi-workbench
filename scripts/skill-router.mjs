@@ -60,7 +60,8 @@ const skills = findSkills(dir, dir).map((file) => {
 if (skills.length === 0) throw new Error(`no nested SKILL.md under ${dir}`);
 
 const name = meta.name ?? basename(dir);
-const description = `${summary.replace(/\s+$/, "")} Router for ${skills.length} skills: read this first, then the one matching sub-skill.`;
+// A trial answered from memory while the description only named the bundle; say when to load it.
+const description = `${summary.replace(/\s+$/, "")} Load this before answering any such question from memory: it routes to the matching one of ${skills.length} specialised skills.`;
 writeFileSync(routerFile, `---
 name: ${name}
 description: ${JSON.stringify(description)}

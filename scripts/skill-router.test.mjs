@@ -25,7 +25,7 @@ test("writes a router SKILL.md and an INDEX.md, idempotently", () => {
   const dir = bundle();
   assert.match(run(dir), /2 skills/);
   const router = readFileSync(join(dir, "SKILL.md"), "utf8");
-  assert.match(router, /^---\nname: praxis\ndescription: "Praxis für Solo-Selbstständige\. Router for 2 skills/);
+  assert.match(router, /^---\nname: praxis\ndescription: "Praxis für Solo-Selbstständige\. Load this before answering any such question from memory: it routes to the matching one of 2 specialised skills\."/);
   assert.match(router, /INDEX\.md/);
   const index = readFileSync(join(dir, "INDEX.md"), "utf8");
   assert.ok(index.indexOf("abmahnung") < index.indexOf("rechnung"), "sorted by name");
