@@ -40,6 +40,9 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
     measured, the rest were not. A view "not reached" was not measured; Coverage says what was not exercised.
   The full report and screenshots sit in `$PI_TMP`; have the screenshots inspected visually before handing the Page
   to the owner.
+- Before reporting a Page (or any UI work) ready, run `node scripts/check-layout.mjs <url|file>` (path relative to
+  this skill): it screenshots 390×844 and 1440×900 and lists clipped, truncated and overflowing elements (exit 1).
+  Fix each real one and look at both screenshots.
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`
   and `idiomorph.js` beside the Page; let it, rather than copying them by hand.
 - `atl-key="name"` on every element the human judges. Nested Keys form an address such as
