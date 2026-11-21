@@ -58,10 +58,13 @@ restart: `scripts/promote-installed switch-workbench <workbench-rev>` builds the
 atomically repoints only `pi-workbench.installed`. Open sessions keep the code they loaded; new
 sessions load the new revision. Move an open session to it before relying on changed tools or roles
 in it. On the legacy instance `/reload` does that, and running Subagents and Workers survive the
-reload and finish on the code that launched them. The Durable instance has no `/reload`: each Chat
-stays pinned to its build until **Upgrade host** in the Chat, or the automatic upgrade once only
-work that survives a restart remains (no running turn, queued input or children;
-`docs/plans/pi-durable-cutover-runbook.md`). It prints the command that switches back.
+reload and finish on the code that launched them. It prints the command that switches back.
+
+The Durable instance has no `/reload`, and its `switch-workbench` reaches no Chat: the running daemon
+keeps the Durable host build it started with, for new Chats too. Use `switch <workbench-rev>
+<current pi-web-rev>` instead. Durable hosts outlive the daemon restart, and each open Chat then moves
+to the new build by **Upgrade host** or by the automatic upgrade once only work that survives a
+restart remains (no running turn, queued input or children; `docs/plans/pi-durable-cutover-runbook.md`).
 
 A PI WEB change that leaves the session daemon's code and dependencies untouched (browser client or
 web/API server only) goes live with `scripts/promote-installed switch-web <pi-web-rev>`. It restarts
