@@ -23,13 +23,9 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | --- | --- |
 | Installed vs development checkouts, promotion | `docs/contracts/harness.md` ("Installed and Development Checkouts") |
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
-| Pi CLI activity presentation | `extensions/activity/` |
+| One extension per concern: Pi CLI activity, `PI_TMP` scratch and cleanup, Ponytail block sync, low-disk nudges, secret redaction, lazy tool groups | `extensions/activity/`, `pi-tmp/`, `ponytail-sync/`, `storage-guard/` (+ `docs/plans/storage-aware-agents.md`), `secret-redaction/`, `tool-groups/` |
 | Atelier Pages: Kernel, page server, Delivery of human events | `extensions/atelier/`, `skills/atelier/`, decisions 129-156 in `docs/foundation/decisions.md` |
 | Atelier as a Claude Code plugin (copies synced from `extensions/atelier`) | `claude-code/`, `.claude-plugin/marketplace.json` |
-| Per-session scratch folder (`PI_TMP`) and its cleanup | `extensions/pi-tmp/` |
-| Ponytail block in `APPEND_SYSTEM.md`, regenerated from the installed package | `extensions/ponytail-sync/` |
-| Low-disk nudges for agents (below 50 GB) | `extensions/storage-guard/`, `docs/plans/storage-aware-agents.md` |
-| Secret redaction of tool output, assistant text, and context | `extensions/secret-redaction/` |
 | Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
 | Session-log inventory and conversation extraction | `tools/session-logs/README.md` |
 | Owner re-entry orientation for Chats and Workstreams | `skills/orient/` |
@@ -39,7 +35,6 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Attended human–Pi work | `docs/contracts/execution.md`, `docs/contracts/workstreams.md` |
 | Child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |
 | Subagent and Worker evaluation | `docs/plans/subagent-worker-iterative-improvement.md`, `docs/plans/model-role-evaluation.md`, `scripts/pi-eval.mjs` |
-| Lazy tool groups (`tools_enable`: worker, monitor, Atelier; goal tools) | `extensions/tool-groups/` |
 | Working Mode (Alignment, Attention, Checking, Orchestration) | `extensions/working-mode/`, `docs/foundation/working-mode.md`, `docs/plans/working-mode.md` |
 | Daily tooling upgrade and startup-context guard (new skills, tools, upfront MCP servers) | `scripts/auto-upgrade`, `scripts/context-guard.mjs`, `scripts/context-usage.mjs` |
 | Model routing, unmanaged lead launch, and lead usage-limit fallback | `skills/model-orchestration/`, `scripts/pi-role`, `extensions/lead-fallback/`, `docs/plans/model-orchestration-redesign.md` |
