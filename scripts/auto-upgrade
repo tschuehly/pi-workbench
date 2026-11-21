@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Unattended upgrade of the owner's tooling, at most once a day: Pi and its packages (pi-update), global npm CLIs,
-# skills (npx skills), and Homebrew formulas. When anything changed or failed, it opens a PI WEB Chat that analyzes
+# skills (npx skills), Homebrew formulas, and fast-forwards of the git repos under ~/IdeaProjects. When anything changed or failed, it opens a PI WEB Chat that analyzes
 # the run; a failed step also pings Telegram. Logs: ~/.pi-workbench/auto-upgrade/<date>.log.
 #
 # Usage: auto-upgrade run [--force]   upgrade now (--force ignores today's earlier run)
@@ -17,7 +17,7 @@ LABEL=com.pi-workbench.auto-upgrade
 PLIST=$HOME/Library/LaunchAgents/$LABEL.plist
 # Held back for the analysis Chat: PI WEB and the Durable hosts run from a versioned Cellar node path.
 HELD_FORMULAS=(node)
-PAH=$HOME/.pi/agent/npm/node_modules/ping-a-human-pi/bin/cli.mjs
+PAH=$HOME/.pi/agent/npm/node_modules/ping-a-human-pi/bin/pah
 
 snapshot() {
 	echo "## npm -g"; npm ls -g --depth=0 2>/dev/null | tail -n +2
@@ -50,10 +50,39 @@ upgrade_npm() { local pkgs; pkgs=$(npm_outdated); [[ -z $pkgs ]] && { echo "up t
 
 upgrade_brew() {
 	brew update || return
-	local pkgs; pkgs=$(brew outdated --formula -q | grep -vxF -f <(printf '%s\n' "${HELD_FORMULAS[@]}"))
+	local pkgs; pkgs=$(brew outdated --formula -q | grep -vxF -f <(printf '%s\n' "${HELD_FORMULAS[@]}"; brew list --pinned))
 	[[ -z $pkgs ]] && { echo "up to date"; return 0; }
 	# Keep old kegs (a held formula may still link them) and leave held dependents alone; the analysis Chat cleans up.
 	HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew upgrade --formula $pkgs
+}
+
+# One main checkout (never a linked worktree): fetch, then fast-forward only. Prints a line for anything to report.
+update_repo() {
+	local r=$1 b up d ahead behind
+	git -C "$r" fetch --all --prune --quiet 2>/dev/null || { echo "fetch failed: $r"; return; }
+	if ! b=$(git -C "$r" symbolic-ref --short -q HEAD); then b=; elif up=$(git -C "$r" rev-parse --abbrev-ref -q '@{u}' 2>/dev/null); then
+		read -r ahead behind < <(git -C "$r" rev-list --left-right --count 'HEAD...@{u}')
+		if ((behind > 0 && ahead > 0)); then echo "diverged: $r ($b is $ahead ahead, $behind behind $up)"
+		elif ((behind > 0)); then
+			# git refuses when the update would touch uncommitted edits.
+			git -C "$r" merge --ff-only --quiet '@{u}' 2>/dev/null && echo "updated: $r ($b +$behind)" || echo "skipped: $r ($b; local changes in the way)"
+		fi
+	fi
+	for d in main master; do
+		[[ $d == "$b" ]] && continue
+		up=$(git -C "$r" rev-parse --symbolic-full-name -q "$d@{u}" 2>/dev/null) || continue
+		[[ $(git -C "$r" rev-parse "$d") == $(git -C "$r" rev-parse "$up") ]] && continue
+		# A local fetch moves the ref only on a fast-forward and never while a worktree has it checked out.
+		git -C "$r" fetch --quiet . "$up:refs/heads/$d" 2>/dev/null && echo "updated: $r ($d)" || echo "skipped: $r ($d not a fast-forward of ${up#refs/remotes/}, or checked out in a worktree)"
+	done
+}
+
+update_repos() { # main checkouts under ~/IdeaProjects, two levels deep; symlinked and linked checkouts are skipped
+	local g
+	find "$HOME/IdeaProjects" -mindepth 2 -maxdepth 3 -name .git -type d -not -path '*/node_modules/*' | sort | while read -r g; do
+		GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=20" update_repo "${g%/.git}"
+	done >"$repos"
+	cat "$repos"
 }
 
 open_chat() { # $1 = prompt text; prints the new Chat id
@@ -73,7 +102,7 @@ run() {
 	[[ ${1:-} != --force && "$(cat "$STATE/last-run" 2>/dev/null)" == "$today" ]] && exit 0
 	mkdir "$STATE/lock" 2>/dev/null || { [[ -n $(find "$STATE/lock" -maxdepth 0 -mmin +180) ]] && rm -rf "$STATE/lock" && mkdir "$STATE/lock"; } || exit 0
 	trap 'rm -rf "$STATE/lock"' EXIT
-	local log=$STATE/$today.log changes=$STATE/$today.changes
+	local log=$STATE/$today.log changes=$STATE/$today.changes repos=$STATE/$today.repos
 	exec >>"$log" 2>&1
 	echo "### auto-upgrade $(date -Iseconds)"
 
@@ -82,6 +111,7 @@ run() {
 	step npm upgrade_npm
 	step skills npx -y skills update -g -y
 	step brew upgrade_brew
+	step git update_repos
 	snapshot >"$STATE/after"
 	diff "$STATE/before" "$STATE/after" >"$changes"
 	local held; held=$(brew outdated --formula -q 2>/dev/null | grep -xF -f <(printf '%s\n' "${HELD_FORMULAS[@]}") | tr '\n' ' ')
@@ -89,12 +119,13 @@ run() {
 	find "$STATE" -name '20*.*' -mtime +30 -delete
 
 	if ((${#failed[@]})); then
-		node "$PAH" ping "auto-upgrade: ${failed[*]} failed on $(hostname -s); log $log" || echo "!! telegram ping failed"
+		"$PAH" ping "auto-upgrade: ${failed[*]} failed on $(hostname -s); log $log" || echo "!! telegram ping failed"
 	fi
-	[[ -s $changes || ${#failed[@]} -gt 0 || -n $held ]] || { echo "nothing changed"; return; }
+	[[ -s $changes || -s $repos || ${#failed[@]} -gt 0 || -n $held ]] || { echo "nothing changed"; return; }
 	local prompt="Automatic tooling upgrade ran ($today). Analyze it and report.
 - Log: $log
 - Version changes (diff of before/after): $changes
+- Git repos under ~/IdeaProjects (updated, diverged, skipped, fetch failed): $repos
 - Failed steps: ${failed[*]:-none}
 - Held back for you to handle: ${held:-none}
 
@@ -102,10 +133,11 @@ run() {
 2. If @earendil-works/pi-coding-agent moved past the Durable host's pinned @earendil-works versions in packages/durable-pilot/package.json, say so; that bump is manual.
 3. For a failed step, diagnose it from the log and fix it if the fix is safe and local; otherwise say what is needed.
 4. For a held formula (node): PI WEB and the Durable hosts run from a versioned Cellar node path. Propose the upgrade path (upgrade, keep the old keg until the services move by promotion, then brew cleanup) and do it only after Thomas agrees.
+5. For each diverged, skipped or fetch-failed repo, say in one line why and what Thomas would do; change nothing in it.
 Report briefly. Call request_attention only if something needs Thomas."
 	local id; id=$(open_chat "$prompt") && echo "analysis Chat: $id" || {
 		echo "!! could not open the analysis Chat at $PIWEB"
-		node "$PAH" ping "auto-upgrade: changes need review but PI WEB was unreachable; log $log" || true
+		"$PAH" ping "auto-upgrade: changes need review but PI WEB was unreachable; log $log" || true
 	}
 }
 
@@ -130,6 +162,7 @@ EOF
 
 uninstall() { launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null; rm -f "$PLIST"; echo "removed $LABEL"; }
 
+[[ ${BASH_SOURCE[0]} == "$0" ]] || return 0 # sourced by the test
 case ${1:-} in
 	run) shift; run "$@" ;;
 	install) install ;;
