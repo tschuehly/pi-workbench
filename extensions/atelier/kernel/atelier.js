@@ -1,4 +1,4 @@
-// Atelier Kernel 2.14.2: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.15.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -31,6 +31,9 @@
 //                              bottom right, offset by --atl-dock-right and --atl-dock-bottom. Outside <body>'s own children
 //                              (atl-dock, or a Page script moving it) the panel takes its container's width up to 760px;
 //                              where the Page limits its height, it scrolls inside, so no control is cut off
+//   atl-nav="Label"            an item in the Kernel's top bar that reveals and scrolls to the element; empty: its first heading.
+//                              The bar is fixed at the top, --atl-top high, reserved as a top border on :root; a Page's own sticky
+//                              or fixed header sits below it with top: var(--atl-top, 0). Items that do not fit fold into a menu
 //   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab; "next ↓",
 //                              Show and the changes rail click that tab (outermost first, so nested tabs open too)
 //   document "atelier:reveal"  fires with detail {key} when the Kernel reveals an item, before it scrolls there
@@ -448,7 +451,10 @@ function boot() {
   const now = () => Date.now();
 
   // ---- UI roots. Everything the Kernel draws carries atl-ui and is lifted out before each morph.
-  const panel = h(`<aside atl-ui="panel" aria-label="Atelier"><style class="atl-palette"></style><style>${STYLE}</style><div class="atl-bar"></div><div class="atl-undo" aria-live="polite"></div><div class="atl-list"></div></aside>`);
+  const panel = h(`<aside atl-ui="panel" aria-label="Atelier"><style class="atl-palette"></style><style>${STYLE}</style><div class="atl-undo" aria-live="polite"></div><div class="atl-list"></div></aside>`);
+  // The top bar (2.15.0): the Page's atl-nav items on the left, the counts and Send on the right; outside <body>, so no Update lifts it.
+  const topBar = h(`<div atl-ui="top" class="atl-top"><button type="button" data-atl="navmenu" class="atl-navmenu" aria-expanded="false" hidden>Sections</button><div class="atl-nav" role="navigation" aria-label="Page sections"></div><div class="atl-bar"></div></div>`);
+  const navs = () => [...document.querySelectorAll("[atl-nav]")].filter((el) => !isUi(el));
   // A thread opened from its marker floats beside it, outside <body> like every Comment box, so no Update lifts it.
   const tpop = h(`<div atl-ui="thread" class="atl-pop atl-tpop" role="dialog" tabindex="-1"><div class="atl-tbar"><span class="atl-label"></span><button type="button" data-atl="hidethread" aria-label="Close this box" title="Close (Esc)">${icon("x")}</button></div><div class="atl-tcard"></div><div class="atl-slot"></div></div>`);
   const orphans = h(`<section atl-ui="orphans" aria-label="Decisions"></section>`);
@@ -462,6 +468,7 @@ function boot() {
   document.body.prepend(orphans);
   dock().append(panel);
   document.body.append(selBtn, rail);
+  document.documentElement.append(topBar);
 
   function h(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
   function set(el, html) { if (el && el.__html !== html) { el.__html = html; el.innerHTML = html; } }
@@ -838,7 +845,7 @@ function boot() {
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
     const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
     const open = st.openThreads.length + st.toAnswer.length;
-    set(panel.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")} Test host, no Pi session</span>` : receiver ? `<span class="atl-dim atl-recv" title="Your input goes to this Pi session">→ ${esc(receiver.label)}</span>` : receiver === null ? `<span class="atl-tag atl-warn atl-recv" title="No Pi session receives your input now; it is kept until one opens this Page">no receiver</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
+    set(topBar.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}<button data-atl="selcomment" aria-label="Comment on the selected text" title="Select text on the Page, then comment on it">${icon("comment-plus")}</button>${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")}<span> Test host, no Pi session</span></span>` : receiver ? `<span class="atl-dim atl-recv" title="Your input goes to this Pi session">→ ${esc(receiver.label)}</span>` : receiver === null ? `<span class="atl-tag atl-warn atl-recv" title="No Pi session receives your input now; it is kept until one opens this Page">no receiver</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
     renderUndo(undoable());
     const section = (title, items) => items.length ? `<h4>${title}</h4>` : "";
     const list = panel.querySelector(".atl-list");
@@ -873,11 +880,58 @@ function boot() {
       if (!label.isConnected) document.documentElement.append(label);
     }
     syncNeeds(st);
+    lastSt = st; lastPlaced = placed;
     renderMarks();
+    tidyPanel();
     positionPins();
     const pub = publicState(st, { conn, loaded, wip: wipState() }), json = JSON.stringify(pub);
     if (json !== published) { published = json; document.dispatchEvent(new CustomEvent("atelier:state", { detail: pub })); }
   }
+
+  // The panel shows only toasts, undo and its cards; the top bar carries the rest (2.15.0).
+  const tidyPanel = () => { panel.hidden = !panel.querySelector(".atl-toast,.atl-card,.atl-list p"); };
+  // Each atl-nav item counts what needs the human under it (Decisions not done, open threads where they are drawn) and
+  // dots its unseen changes. One button per target, updated in place, so keyboard focus survives a count change.
+  let lastSt = null, lastPlaced = new Map();
+  const navButtons = new Map();
+  function renderNav(st = lastSt) {
+    const items = navs(), box = topBar.querySelector(".atl-nav"), menu = topBar.querySelector(".atl-navmenu");
+    if (!st) return;
+    for (const [el, b] of navButtons) if (!items.includes(el)) { b.remove(); navButtons.delete(el); }
+    box.querySelector(".atl-title")?.remove();
+    menu.hidden = !items.length;
+    if (!items.length) { box.append(h(`<span class="atl-title">${esc(document.title)}</span>`)); topBar.classList.remove("atl-collapse", "atl-menu-open"); return; }
+    const marked = [...traces].filter(([, t]) => !t.fading).map(([addr, t]) => [t.kind === "removed" ? t.nodes.gone : findKey(addr), t.kind]);
+    const at = (t) => { const p = lastPlaced.get(t.root.seq); return p?.el ?? p?.range?.commonAncestorContainer ?? null; };
+    let total = 0;
+    items.forEach((el, i) => {
+      const label = clip(el.getAttribute("atl-nav").trim() || el.querySelector("h1,h2,h3,h4,h5,h6")?.textContent || `Section ${i + 1}`, 80);
+      const under = (n) => !!n && el.contains(n);
+      const need = st.toAnswer.filter((d) => under(findKey(d.key))).length + st.openThreads.filter((t) => under(at(t))).length;
+      const kind = marked.filter(([n]) => under(n)).reduce((best, [, k]) => !best || RANK[k] > RANK[best] ? k : best, null);
+      const tip = [label, need ? `${need} need${need === 1 ? "s" : ""} you` : "", kind ? KIND[kind] : ""].filter(Boolean).join(", ");
+      total += need;
+      let b = navButtons.get(el);
+      if (!b) { b = h(`<button type="button" data-atl="nav" class="atl-navi"></button>`); navButtons.set(el, b); }
+      b.dataset.i = i; b.setAttribute("aria-label", tip); b.title = tip;
+      set(b, `<span class="atl-nl">${esc(label)}</span>${need ? `<span class="atl-cn">${need}</span>` : ""}${kind ? `<span class="atl-dot atl-k-${kind}"></span>` : ""}`);
+      if (box.children[i] !== b) box.insertBefore(b, box.children[i] ?? null); // moves only a button out of place
+    });
+    set(menu, `Sections${total ? `<span class="atl-cn">${total}</span>` : ""}`);
+    fitNav();
+  }
+  // Items that do not fit beside the counts and Send shrink their labels, then fold into the Sections menu (a phone).
+  function fitNav() {
+    const box = topBar.querySelector(".atl-nav");
+    if (!navButtons.size) return;
+    const open = topBar.classList.contains("atl-menu-open");
+    topBar.classList.remove("atl-collapse", "atl-menu-open");
+    // Labels shrink first; below ~5em of text each they fold.
+    const over = box.scrollWidth > box.clientWidth + 1 || [...box.querySelectorAll(".atl-nl")].some((n) => n.scrollWidth > n.clientWidth && n.clientWidth < 64);
+    topBar.classList.toggle("atl-collapse", over); topBar.classList.toggle("atl-menu-open", over && open);
+    topBar.querySelector(".atl-navmenu").setAttribute("aria-expanded", String(over && open));
+  }
+  addEventListener("resize", fitNav);
 
   // ---- the floating Comment button: at the top-right of the innermost hovered or focused Key, taking no layout space,
   // after the Key's thread markers, which stay without hover
@@ -1043,7 +1097,7 @@ function boot() {
     if (!r) return;
     const rects = r.getClientRects(), last = rects[rects.length - 1] ?? r.getBoundingClientRect();
     selBtn.style.left = `${Math.max(4, Math.min(innerWidth - selBtn.offsetWidth - 4, last.right + 4))}px`;
-    selBtn.style.top = `${Math.max(4, Math.min(innerHeight - selBtn.offsetHeight - 4, last.bottom + 6))}px`;
+    selBtn.style.top = `${Math.max(topBar.offsetHeight + 4, Math.min(innerHeight - selBtn.offsetHeight - 4, last.bottom + 6))}px`;
   }
   let selQueued = false;
   document.addEventListener("selectionchange", () => { if (!selQueued) { selQueued = true; requestAnimationFrame(() => { selQueued = false; placeSel(); }); } });
@@ -1259,6 +1313,7 @@ function boot() {
       if (dot.parentElement !== a) a.append(dot);
     }
     positionMarks();
+    renderNav();
   }
   function positionMarks() {
     for (const [addr, t] of traces) {
@@ -1376,7 +1431,7 @@ function boot() {
   // panel later gets a few frames before the next one. Then "atelier:reveal" names the target's Key, for navigation
   // of the Page's own, before the Kernel scrolls there. Kernel UI names its Key in data-key, as it may sit beside it.
   const visible = (n) => n.checkVisibility?.({ visibilityProperty: true }) ?? n.getClientRects().length > 0;
-  async function jumpTo(el, key = el && (el.closest("[atl-ui][data-key]")?.dataset.key ?? keyOf(el))) {
+  async function jumpTo(el, key = el && (el.closest("[atl-ui][data-key]")?.dataset.key ?? keyOf(el)), block = "center") {
     if (!el) return;
     const around = []; for (let p = el; p && p !== document.body; p = p.parentElement) around.unshift(p);
     for (const p of around) {
@@ -1389,9 +1444,30 @@ function boot() {
       for (let i = 0; i < 5 && !visible(p); i++) await new Promise((r) => requestAnimationFrame(r));
     }
     document.dispatchEvent(new CustomEvent("atelier:reveal", { detail: { key: key ?? null } }));
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (block === "start") landBelowCover(el); else el.scrollIntoView({ block, behavior: "smooth" }); // :root scroll-padding keeps it below the top bar
     el.classList.add("atl-flash"); setTimeout(() => el.classList.remove("atl-flash"), 1200);
     if (el.tabIndex >= -1 && el.focus) el.focus({ preventScroll: true });
+  }
+  // Scrolls el to the top, then below whatever fixed or sticky layer covers its top edge there (the bar, a Page header).
+  function landBelowCover(el) {
+    const margin = el.style.scrollMarginTop;
+    let extra = 0;
+    for (let i = 0; i < 3; i++) {
+      el.scrollIntoView({ block: "start", behavior: "instant" });
+      const r = el.getBoundingClientRect(), x = Math.min(innerWidth - 1, Math.max(0, r.left + 8)), y = Math.max(0, r.top + 1);
+      let bottom = r.top;
+      for (const n of document.elementsFromPoint(x, y)) {
+        if (n === el || el.contains(n) || n.contains(el)) break;
+        for (let p = n; p && p !== document.documentElement; p = p.parentElement) {
+          if (p.contains(el)) break;
+          if (/fixed|sticky/.test(getComputedStyle(p).position)) { bottom = Math.max(bottom, p.getBoundingClientRect().bottom); break; }
+        }
+      }
+      if (bottom - r.top <= 0.01) break;
+      extra += Math.ceil(bottom - r.top); // whole pixels, so a fractional header edge never covers the target
+      el.style.scrollMarginTop = `calc(${margin || "0px"} + ${extra}px)`;
+    }
+    el.style.scrollMarginTop = margin;
   }
   function markRead(seq) { const st = state(); const t = st.threads.find((x) => x.root.seq === seq); if (t) { read[seq] = Math.max(...t.msgs.map((m) => m.seq)); localStorage.setItem(readKey, JSON.stringify(read)); } }
 
@@ -1500,6 +1576,15 @@ function boot() {
       render();
     },
     collapse: (b) => { expanded.delete(+b.dataset.seq); render(); },
+    nav: async (b) => {
+      const el = navs()[+b.dataset.i];
+      topBar.classList.remove("atl-menu-open"); topBar.querySelector(".atl-navmenu").setAttribute("aria-expanded", "false");
+      if (!el) return;
+      // As an in-page anchor would: focus moves to the target, made focusable (tabindex=-1) when it is not.
+      if (!el.matches("a[href],button,input,select,textarea,[tabindex],[contenteditable]")) el.setAttribute("tabindex", "-1");
+      await jumpTo(el, undefined, "start");
+    },
+    navmenu: (b) => { const open = topBar.classList.toggle("atl-menu-open"); b.setAttribute("aria-expanded", String(open)); },
     chmark: (b) => toggleDiff(b.dataset.addr),
     chseen: (b) => clearTrace(b.dataset.addr),
     chall: () => clearTraces([...traces.keys()]),
@@ -1601,6 +1686,8 @@ function boot() {
     extra.hidden = !open;
     const ownRow = extra.querySelector(".atl-own");
     if (ownRow) ownRow.hidden = !own;
+    const note = extra.querySelector(".atl-note");
+    if (note && ownRow) note.hidden = own && !note.value.trim(); // an own answer explains itself; a note already typed stays (2.14.3)
     const button = extra.previousElementSibling;
     if (button?.dataset.atl !== "addnote") return; // a Comment box's images
     button.setAttribute("aria-expanded", String(open));
@@ -1653,7 +1740,7 @@ function boot() {
   document.addEventListener("pointerdown", opened, true);
   document.addEventListener("keydown", opened, true);
 
-  function flash(text) { const n = h(`<div class="atl-toast" role="status">${esc(text)}</div>`); panel.querySelector(".atl-undo").before(n); setTimeout(() => n.remove(), 4000); }
+  function flash(text) { const n = h(`<div class="atl-toast" role="status">${esc(text)}</div>`); panel.querySelector(".atl-undo").before(n); tidyPanel(); setTimeout(() => { n.remove(); tidyPanel(); }, 4000); }
 
   // Pages render keyed rows from their data files after load (152); draw their Kernel UI once the page settles.
   let queued = false;
@@ -1673,6 +1760,20 @@ const STYLE = `
 [atl-ui=panel]{box-sizing:border-box;width:100%;max-width:760px;min-height:0;overflow:auto;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;padding:8px}
 body>[atl-ui=panel]{position:fixed;right:var(--atl-dock-right,12px);bottom:var(--atl-dock-bottom,12px);z-index:2147483000;width:max-content;max-width:min(340px,calc(100vw - 24px));max-height:70vh;box-shadow:0 4px 18px #0002}
 body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
+/* A border, so a Page's own padding stays; border-box, so an html height:100% app still ends at the viewport bottom.
+   shortcut: a body sized 100vh still overflows by the bar; such a Page uses height:100% or calc(100dvh - var(--atl-top,0px)) */
+:where(:root){--atl-top:36px;box-sizing:border-box}:root{border-top:var(--atl-top) solid transparent;scroll-padding-top:var(--atl-top)}
+[atl-nav][tabindex="-1"]:focus{outline:none}
+.atl-top{position:fixed;top:0;left:0;right:0;z-index:2147482900;box-sizing:border-box;height:var(--atl-top);display:flex;align-items:center;gap:8px;padding:0 8px;background:var(--atl-bg);border-bottom:1px solid var(--atl-line);overflow:hidden}
+.atl-nav{flex:1 1 40%;min-width:0;display:flex;gap:2px;align-items:center;overflow-x:auto;scrollbar-width:none}
+.atl-top>.atl-bar{flex:0 0 auto;margin-left:auto;flex-wrap:nowrap}.atl-top button,.atl-top .atl-tag{flex:none;white-space:nowrap}
+[atl-ui=top] button{min-height:26px}[atl-ui] button.atl-navi{border-color:transparent;background:none;padding:0 8px}[atl-ui] button.atl-navi:hover{border-color:var(--atl-line)}
+.atl-top .atl-cn{min-width:16px;padding:0 4px;border-radius:8px;background:var(--atl-accent);color:#fff;font-size:11px;line-height:16px;text-align:center;box-sizing:border-box}.atl-navi .atl-dot{margin:0}
+.atl-top button.atl-navi{flex:0 1 auto;min-width:0}.atl-nl{max-width:12em;overflow:hidden;text-overflow:ellipsis}.atl-top .atl-cn{flex:none}.atl-top .atl-recv{max-width:14em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.atl-top .atl-navmenu{display:none}.atl-collapse .atl-navmenu{display:inline-flex}.atl-collapse>.atl-nav{display:none}
+.atl-collapse.atl-menu-open>.atl-nav{display:flex;position:fixed;top:var(--atl-top);left:4px;flex-direction:column;align-items:stretch;max-width:calc(100vw - 8px);max-height:70vh;overflow:auto;padding:4px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:8px;box-shadow:0 4px 18px #0002}
+.atl-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+@media (max-width:600px){.atl-test>span,.atl-top .atl-bar>.atl-tag:not(.atl-warn){display:none}.atl-top .atl-recv{max-width:7em}}
 [atl-ui=orphans]:not(:empty){max-height:50vh;overflow:auto;margin:8px;display:grid;gap:8px}
 [atl-wip]:not([atl-ui]){opacity:.55;outline:2px dashed var(--atl-warn);outline-offset:2px}
 .atl-wip{position:absolute;z-index:2147481500;translate:0 -50%;max-width:min(40ch,calc(100vw - 16px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;padding:0 6px;border:1px solid var(--atl-warn);border-radius:4px;background:var(--atl-bg);color:var(--atl-warn);pointer-events:none}
@@ -1700,7 +1801,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui] button.atl-rec{border-color:var(--atl-accent);border-style:dashed}
 [atl-ui] button.atl-chosen{background:var(--atl-accent);border-color:var(--atl-accent);border-style:solid;color:#fff}
 [atl-ui] button.atl-chosen .atl-dim{color:inherit}
-.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate{flex-basis:100%}.atl-dstate:empty{display:none}
+.atl-dopts{display:inline-flex;flex-wrap:wrap;gap:4px}.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate{flex-basis:100%}.atl-dstate:empty{display:none}
 [atl-ui] button.atl-other{color:var(--atl-muted);border-style:dashed}[atl-ui] .atl-opts>button.atl-other{justify-self:start}[atl-ui] button.atl-other.atl-chosen{color:#fff}
 .atl-own{display:flex;flex:1 1 100%;gap:4px;align-items:center}.atl-own .atl-ownans{flex:1 1 14em;width:auto}
 .atl-receipt{display:grid;gap:3px;justify-self:start;box-sizing:border-box;width:fit-content;max-width:min(100%,64ch);border:1px solid var(--atl-line);border-radius:6px;padding:5px 8px;background:var(--atl-bg)}
@@ -1757,7 +1858,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui].atl-rail>button.atl-allseen{top:0;right:16px;height:auto;pointer-events:auto}
 .atl-seen svg,.atl-allseen svg{width:12px;height:12px}
 .atl-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--atl-ch);margin:0 0 0 6px;vertical-align:middle}
-.atl-rail{position:fixed;top:8px;bottom:8px;right:3px;width:12px;z-index:2147482500;pointer-events:none}
+.atl-rail{position:fixed;top:calc(var(--atl-top,0px) + 8px);bottom:8px;right:3px;width:12px;z-index:2147482500;pointer-events:none}
 [atl-ui].atl-rail>button{position:absolute;right:0;width:12px;height:12px;min-height:0;padding:0;border-radius:50%;border:2px solid var(--atl-bg);background:var(--atl-ch);pointer-events:auto}
 .atl-gone{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0}.atl-gone::before{content:"";flex:1;border-top:1px solid var(--atl-ch-removed)}
 [atl-ui].atl-gone>button{min-height:0;border:0;padding:0 2px;font-size:11px;color:var(--atl-muted);background:none;text-decoration:underline}

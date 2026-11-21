@@ -9,13 +9,15 @@
 // FAIL (measured; must be fixed):
 // - Kernel version in the page equals the host's; Page state: the Kernel read its Event Log.
 // - Kernel layout: hiding the Kernel's own <body> children must not move the Page's first-level boxes (a <body> grid
-//   gives them grid cells; display:contents wrappers count as their children).
+//   gives them grid cells; display:contents wrappers count as their children). Measured apart, the top bar's reserved
+//   height (--atl-top on :root) alone may move them down by that height, or shorten a full-height one by as much.
 // - Per view: console and page errors; horizontal overflow at either width (and the element reaching furthest right). Errors of a click
 //   that shows no view fail as well ("Errors without a view").
 // The Kernel controls probe below rewrites Page selectors; it runs after a view's measured checks and leaves the Page as
 // it found it (same specificity, no transitions), so it never changes what a FAIL measures.
 // WARN (heuristic; never changes the exit code; names the screenshots to inspect):
 // - HTML balance: unclosed or stray end tags in the source (hidden views leak below the visible one).
+// - Top bar: a Page's own fixed or sticky element above --atl-top sits under the Kernel's top bar.
 // - Kernel controls: Page CSS that changes a Kernel control's box, sizing or visibility (`aside button` also hits the
 //   Kernel panel, itself an <aside>); a Page onclick on a Kernel control.
 // - Per view, at both widths: text drawn over visible other text; text no scroll position frees from under an opaque fixed or
@@ -131,17 +133,35 @@ function kernelOnce(d) {
   const boxed = (els) => els.flatMap((el) => (getComputedStyle(el).display === "contents" ? boxed([...el.children]) : [el]));
   const pageKids = boxed([...document.body.children]).filter((el) => !el.hasAttribute("atl-ui") && !["SCRIPT", "STYLE", "TEMPLATE", "LINK"].includes(el.tagName));
   const boxes = () => pageKids.map((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.x + scrollX), Math.round(r.y + scrollY), Math.round(r.width), Math.round(r.height)]; });
+  // The Kernel's top bar (2.15.0) reserves its height on :root: Page content may move down by exactly that, nothing else.
+  const bar = document.querySelector("html > [atl-ui=top]"), offset = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+  // Two measurements, one per cause: the bar's offset alone (Kernel children shown), then the Kernel's <body> children
+  // alone (offset off), so a shift by one cause never passes as the other.
   const withKernel = boxes();
+  const root = document.documentElement.style, savedTop = [root.getPropertyValue("--atl-top"), root.getPropertyPriority("--atl-top")];
+  if (bar) root.setProperty("--atl-top", "0px", "important");
+  const noBar = boxes();
   const saved = own.map((el) => el.style.getPropertyValue("display"));
   own.forEach((el) => el.style.setProperty("display", "none", "important"));
   const without = boxes();
   own.forEach((el, i) => saved[i] ? el.style.setProperty("display", saved[i]) : el.style.removeProperty("display"));
-  const moved = pageKids.flatMap((el, i) => withKernel[i].some((v, j) => Math.abs(v - without[i][j]) > 1)
-    ? [`${d(el)} ${without[i].slice(0, 2).join(",")} ${without[i][2]}×${without[i][3]} → ${withKernel[i].slice(0, 2).join(",")} ${withKernel[i][2]}×${withKernel[i][3]}`] : []);
+  if (bar) savedTop[0] ? root.setProperty("--atl-top", ...savedTop) : root.removeProperty("--atl-top");
+  // The bar may move a box down by its height, and shorten a full-height one (html height:100%) by as much.
+  const near = (a, b) => Math.abs(a - b) <= 1;
+  const byBar = (a, b, j) => near(a, b) || (j === 1 && near(a - b, offset)) || (j === 3 && near(b - a, offset));
+  // A Page's own fixed or sticky layer at the top would sit under the bar; top: var(--atl-top, 0) puts it below.
+  const underBar = !bar ? [] : [...document.body.querySelectorAll("*")].filter((el) => {
+    if (el.closest("[atl-ui]")) return false;
+    const s = getComputedStyle(el);
+    return (s.position === "fixed" || s.position === "sticky") && s.top !== "auto" && parseFloat(s.top) < offset - 1 && el.getClientRects().length > 0;
+  });
+  const fmt = (x) => `${x.slice(0, 2).join(",")} ${x[2]}×${x[3]}`;
+  const moved = pageKids.flatMap((el, i) => noBar[i].some((v, j) => !near(v, without[i][j])) ? [`${d(el)} ${fmt(without[i])} → ${fmt(noBar[i])}`]
+    : withKernel[i].some((v, j) => !byBar(v, noBar[i][j], j)) ? [`${d(el)} ${fmt(noBar[i])} → ${fmt(withKernel[i])} (more than the top bar's ${offset}px)`] : []);
   return {
     loaded: s.loaded, decisions: s.decisions.length,
     kernelSrc: [...document.scripts].find((sc) => /(^|\/)atelier\.js(\?|#|$)/.test(sc.src))?.src ?? null,
-    moved: moved.slice(0, 3), kernelElements: own.slice(0, 5).map(d),
+    moved: moved.slice(0, 3), kernelElements: own.slice(0, 5).map(d), offset, underBar: underBar.slice(0, 3).map(d), underBarCount: underBar.length,
   };
 }
 
@@ -425,7 +445,7 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
 
   const id = randomUUID().slice(0, 8);
   const copy = page.replace(/(\.html?)?$/i, `.atelier-check-${id}$1`);
-  let made = false, host, shots, sockets, launched = false;
+  let made = false, host, shots, sockets, launched = false, topBar;
   // Only this run's exclusively created copy and the files the test host made for it.
   const clean = () => { if (made) for (const f of [copy, logPath(copy), `${logPath(copy)}.lock`, imagesDir(copy)]) rmSync(f, { force: true, recursive: true }); };
   const session = `atl-${id}`; // short: a socket path has ~100 characters
@@ -505,7 +525,10 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
     hard("Page state", once.loaded, once.loaded ? `the Kernel read its Event Log; ${once.decisions} Decision(s)` : `the Kernel did not read its Event Log${ready ? "" : " within 15 s"}`);
     hard("Kernel layout", !once.moved.length, once.moved.length
       ? `Kernel elements in <body> (${once.kernelElements.join(", ")}) move Page content: ${once.moved.join("; ")}. Wrap the Page in one container instead of laying out <body> itself.`
-      : "Kernel elements in <body> take no layout space");
+      : `Kernel elements in <body> take no layout space${once.offset ? `; the top bar reserves ${once.offset}px` : ""}`);
+    topBar = { name: "Top bar", status: once.underBarCount ? "warn" : "pass",
+      detail: once.underBarCount ? `${once.underBarCount} fixed or sticky Page element(s) sit under the Kernel top bar: ${once.underBar.join(", ")}. Give them top: var(--atl-top, 0).` : "no Page layer under the Kernel top bar" };
+    result.checks.push(topBar);
 
     // Views: the initial one, then one per [aria-controls] control (its target, its index among that target's
     // controls, its label), depth first. An open target counts as that control's view only when no other shown control
@@ -594,6 +617,7 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
       kc.handlers.size ? `Page onclick on Kernel control(s): ${[...kc.handlers].join(", ")}.` : "",
     ].filter(Boolean).join(" ") || `${kc.of} Kernel controls keep their own styles and handlers`, ...(restyled && { screenshots: [...kc.shots] }) });
     if (balance.status === "warn") balance.screenshots = result.views.flatMap((v) => v.screenshot ?? []);
+    if (topBar?.status === "warn") topBar.screenshots = result.views.slice(0, 1).flatMap((v) => v.screenshot ?? []);
   }
   try { if (sha(readFileSync(page)) !== revision) result.unchecked.push(`revision: the Page file changed during the check; this result is for revision ${result.revision}`); } catch { /* gone */ }
   const statuses = [...result.checks, ...result.views].map((x) => x.status);
