@@ -2,6 +2,7 @@
   "name": "pi-workbench",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Pi-only workbench harness capabilities",
   "keywords": [
     "pi-package"
