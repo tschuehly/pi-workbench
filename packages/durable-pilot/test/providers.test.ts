@@ -310,7 +310,9 @@ describe("thinking level across providers", () => {
 			await chat.session.setModel("github-copilot", "grok-4.7");
 			await root.configure({ thinkingLevel: "high" }, context);
 			await turn(chat, "copilot high");
-			assert.deepEqual(net.sent[0]!.body.reasoning?.effort, "low", "Codex maps minimal to low (model thinkingLevelMap)");
+			// From 1.6 Codex keeps reasoning.effort fixed and sends the level as a trailing configuration_update item (cache-stable).
+			const update = (net.sent[0]!.body.input as { type?: string; reasoning?: { effort?: string } }[]).at(-1);
+			assert.deepEqual(update, { type: "configuration_update", reasoning: { effort: "low" } }, "Codex maps minimal to low (model thinkingLevelMap)");
 			assert.deepEqual(net.sent[1]!.body.reasoning?.effort, "high");
 		} finally {
 			net.restore();
