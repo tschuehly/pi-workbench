@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Unattended upgrade of the owner's tooling, at most once a day: Pi and its packages (pi-update), global npm CLIs,
-# skills (npx skills), Homebrew formulas, and fast-forwards of the git repos under ~/IdeaProjects. When anything changed or failed, it opens a PI WEB Chat that analyzes
+# skills (npx skills), Homebrew formulas, and fast-forwards of the git repos under ~/IdeaProjects; then scripts/context-guard.mjs checks
+# Pi's startup context when ~/.pi-workbench/context-guard/folders.json exists. When anything changed, was flagged or failed, it opens a PI WEB Chat that analyzes
 # the run; a failed step also pings Telegram. Logs: ~/.pi-workbench/auto-upgrade/<date>.log.
 #
 # Usage: auto-upgrade run [--force]   upgrade now (--force ignores today's earlier run)
@@ -18,6 +19,8 @@ PLIST=$HOME/Library/LaunchAgents/$LABEL.plist
 # Held back for the analysis Chat: PI WEB and the Durable hosts run from a versioned Cellar node path.
 HELD_FORMULAS=(node)
 PAH=$HOME/.pi/agent/npm/node_modules/ping-a-human-pi/bin/pah
+export PI_CONTEXT_GUARD_DIR=${PI_CONTEXT_GUARD_DIR:-$HOME/.pi-workbench/context-guard}
+GUARD=${PI_AUTO_UPGRADE_GUARD:-$(dirname "${BASH_SOURCE[0]}")/context-guard.mjs}
 
 snapshot() {
 	echo "## npm -g"; npm ls -g --depth=0 2>/dev/null | tail -n +2
@@ -85,6 +88,14 @@ update_repos() { # main checkouts under ~/IdeaProjects, two levels deep; symlink
 	cat "$repos"
 }
 
+context_guard() { # $1 = report file, written only when the guard flags something (exit 1); exit 2+ fails the step
+	[[ -f $PI_CONTEXT_GUARD_DIR/folders.json ]] || { echo "no $PI_CONTEXT_GUARD_DIR/folders.json; skipped"; return 0; }
+	local out rc; out=$(node "$GUARD" 2>&1); rc=$?
+	echo "$out"
+	((rc == 1)) && echo "$out" >"$1"
+	((rc <= 1))
+}
+
 open_chat() { # $1 = prompt text; prints the new Chat id
 	local body id
 	body=$(node -e 'console.log(JSON.stringify({cwd: process.argv[1], runtime: "durable"}))' "$CHAT_CWD")
@@ -102,7 +113,7 @@ run() {
 	[[ ${1:-} != --force && "$(cat "$STATE/last-run" 2>/dev/null)" == "$today" ]] && exit 0
 	mkdir "$STATE/lock" 2>/dev/null || { [[ -n $(find "$STATE/lock" -maxdepth 0 -mmin +180) ]] && rm -rf "$STATE/lock" && mkdir "$STATE/lock"; } || exit 0
 	trap 'rm -rf "$STATE/lock"' EXIT
-	local log=$STATE/$today.log changes=$STATE/$today.changes repos=$STATE/$today.repos
+	local log=$STATE/$today.log changes=$STATE/$today.changes repos=$STATE/$today.repos context=$STATE/$today.context
 	exec >>"$log" 2>&1
 	echo "### auto-upgrade $(date -Iseconds)"
 
@@ -112,6 +123,8 @@ run() {
 	step skills npx -y skills update -g -y
 	step brew upgrade_brew
 	step git update_repos
+	rm -f "$context"
+	step context context_guard "$context"
 	snapshot >"$STATE/after"
 	diff "$STATE/before" "$STATE/after" >"$changes"
 	local held; held=$(brew outdated --formula -q 2>/dev/null | grep -xF -f <(printf '%s\n' "${HELD_FORMULAS[@]}") | tr '\n' ' ')
@@ -121,11 +134,12 @@ run() {
 	if ((${#failed[@]})); then
 		"$PAH" ping "auto-upgrade: ${failed[*]} failed on $(hostname -s); log $log" || echo "!! telegram ping failed"
 	fi
-	[[ -s $changes || -s $repos || ${#failed[@]} -gt 0 || -n $held ]] || { echo "nothing changed"; return; }
+	[[ -s $changes || -s $repos || -s $context || ${#failed[@]} -gt 0 || -n $held ]] || { echo "nothing changed"; return; }
 	local prompt="Automatic tooling upgrade ran ($today). Analyze it and report.
 - Log: $log
 - Version changes (diff of before/after): $changes
 - Git repos under ~/IdeaProjects (updated, diverged, skipped, fetch failed): $repos
+- Startup-context flags (context-guard; absent when none): $context
 - Failed steps: ${failed[*]:-none}
 - Held back for you to handle: ${held:-none}
 
@@ -134,6 +148,7 @@ run() {
 3. For a failed step, diagnose it from the log and fix it if the fix is safe and local; otherwise say what is needed.
 4. For a held formula (node): PI WEB and the Durable hosts run from a versioned Cellar node path. Propose the upgrade path (upgrade, keep the old keg until the services move by promotion, then brew cleanup) and do it only after Thomas agrees.
 5. For each diverged, skipped or fetch-failed repo, say in one line why and what Thomas would do; change nothing in it.
+6. For each context-guard flag in $context, propose the fix (scope the skill to its project, hide it with disable-model-invocation, put a pack behind a router with scripts/skill-router.mjs, or set the MCP server's exposure to deferred) and apply it only after Thomas agrees.
 Report briefly. Call request_attention only if something needs Thomas."
 	local id; id=$(open_chat "$prompt") && echo "analysis Chat: $id" || {
 		echo "!! could not open the analysis Chat at $PIWEB"

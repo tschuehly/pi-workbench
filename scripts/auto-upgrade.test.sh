@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks auto-upgrade's update_repo on throwaway repos: run `bash scripts/auto-upgrade.test.sh`.
+# Checks auto-upgrade's update_repo on throwaway repos and its context-guard step with a stub guard: run `bash scripts/auto-upgrade.test.sh`.
 set -euo pipefail
 source "$(dirname "$0")/auto-upgrade"
 t=$(mktemp -d "${PI_TMP:-${TMPDIR:-/tmp}}/auto-upgrade-test.XXXX"); trap 'rm -rf "$t"' EXIT
@@ -21,3 +21,12 @@ check diverged "diverged: $t/diverged (main is 1 ahead, 1 behind origin/main)"
 check onfeature "updated: $t/onfeature (main)"
 check wt "skipped: $t/wt (main not a fast-forward"
 [[ -z $(update_repo "$t/behind") ]] && echo "ok behind: nothing left to report"
+
+# context_guard: skipped without folders.json; the report file exists only when the guard flags (exit 1); exit 2 fails the step.
+export PI_CONTEXT_GUARD_DIR=$t/guard GUARD=$t/guard.mjs; mkdir -p "$t/guard"
+context_guard "$t/none" >/dev/null && [[ ! -e $t/none ]] && echo "ok guard: skipped without folders.json" || { echo "FAIL guard"; exit 1; }
+echo '[]' >"$t/guard/folders.json"
+guard() { echo "console.log('$1'); process.exitCode = $2;" >"$GUARD"; }
+guard "No flags." 0; context_guard "$t/clean" >/dev/null && [[ ! -e $t/clean ]] && echo "ok guard: clean run writes no report" || { echo "FAIL guard"; exit 1; }
+guard "- flag" 1; context_guard "$t/flagged" >/dev/null && [[ $(cat "$t/flagged") == "- flag" ]] && echo "ok guard: flags written to the report" || { echo "FAIL guard"; exit 1; }
+guard "boom" 2; ! context_guard "$t/crash" >/dev/null && [[ ! -e $t/crash ]] && echo "ok guard: crash fails the step" || { echo "FAIL guard"; exit 1; }
