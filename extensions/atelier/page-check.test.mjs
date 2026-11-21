@@ -35,14 +35,14 @@ const bare = (body, css = "", script = "") => `<!doctype html><html lang="en"><m
 <body><main>${body}</main><script>${script}</script><script type="module" src="atelier.js"></script></body></html>`;
 const show = (id, hide = "") => `onclick="document.getElementById('${id}').hidden=false${hide && `;document.getElementById('${hide}').hidden=true`}"`;
 const absTwice = '<div style="position:relative;height:30px"><span style="position:absolute">COLLISION ONE</span><span style="position:absolute">COLLISION TWO</span></div>';
-const sticky = (bg) => bare('<header>HEADER</header><h2>SCROLLED CONTENT</h2><div style="height:1200px"></div>', `header{position:sticky;top:0;z-index:1;height:60px;background:${bg}}h2{margin:0}`, 'addEventListener("load",()=>scrollTo(0,60))');
+const sticky = (bg, top = "var(--atl-top, 0)") => bare('<header>HEADER</header><h2>SCROLLED CONTENT</h2><div style="height:1200px"></div>', `header{position:sticky;top:${top};z-index:1;height:60px;background:${bg}}h2{margin:0}`, 'addEventListener("load",()=>scrollTo(0,60))');
 
 const FIXTURES = {
   good: page(),
   // <body> itself is the grid: the Kernel's own <body> children take grid cells and push the Page's columns along.
   "broken-grid": page({ css: "body{display:grid;grid-template-columns:240px 1fr}", body: (inner) => inner }),
-  // `aside button` also hits the Kernel's buttons docked in the aside (and the panel, itself an <aside>).
-  "broken-tabs": page({ css: "aside button{display:flex;justify-content:space-between;width:100%;text-align:left;margin:2px 0}", wire: "aside button" }),
+  // `div button` also hits the Kernel's top bar buttons (an idle docked panel is hidden, 2.15.0).
+  "broken-tabs": page({ css: "div button{display:flex;justify-content:space-between;width:100%;text-align:left;margin:2px 0}", wire: "div button" }),
   // A <div> left open in the hidden view.
   unbalanced: page({ panel2: "<div class=row><p>Gap row.</p>" }),
   // A badge placed into the grid cell of the item's main text.
@@ -55,6 +55,8 @@ const FIXTURES = {
   crossing: bare('<svg width="400" height="220" font-size="16"><text x="100" y="100" transform="rotate(45 175 95)">CROSSING LABEL ONE</text><text x="100" y="100" transform="rotate(-45 175 95)">CROSSING LABEL TWO</text></svg>'),
   "sticky-opaque": sticky("white"),
   "sticky-clear": sticky("transparent"),
+  // 2.15.0: a sticky header at top 0 sits under the Kernel's top bar.
+  "sticky-under-bar": sticky("white", "0"),
   inline: bare('<p>FIRST WORDS <span style="position:relative;left:-100px">SECOND WORDS</span></p>'),
   // Finding 7: a nested view, one reached again by reload (Away hides Outer), and a control that shows nothing.
   nested: bare(`<button aria-controls="outer" ${show("outer")}>Outer</button><button aria-controls="nowhere">Dead</button>
@@ -415,7 +417,7 @@ test("the Page check flags each real defect by its measured check and passes the
     // Heuristic ones WARN, name what they saw and the screenshot to inspect, and never fail.
     const tabs = results["broken-tabs"];
     assert.deepEqual([tabs.status, failing(tabs), warned(tabs)], ["warn", [], ["Kernel controls"]], why("broken-tabs"));
-    assert.match(why("broken-tabs"), /- WARN {2}Kernel controls: .*via `aside button`.*Page onclick on Kernel control.* Inspect: \S+view-00\.png[\s\S]*WARN is a heuristic/);
+    assert.match(why("broken-tabs"), /- WARN {2}Kernel controls: .*via `div button`.*Page onclick on Kernel control.* Inspect: \S+view-00\.png[\s\S]*WARN is a heuristic/);
     assert.deepEqual([results.unbalanced.status, warned(results.unbalanced)], ["warn", ["HTML balance"]], why("unbalanced"));
     assert.match(why("unbalanced"), /- WARN {2}HTML balance: 1 unclosed.* Inspect: \S+view-00\.png/);
     assert.deepEqual([failing(results.overlap), warned(results.overlap)], [[], ["view Two"]], why("overlap"));
@@ -430,6 +432,10 @@ test("the Page check flags each real defect by its measured check and passes the
     assert.equal(results["sticky-opaque"].status, "pass", why("sticky-opaque"));
     assert.deepEqual(warned(results.crossing), ["view initial view"], why("crossing"));
     assert.match(why("sticky-clear"), /1 possible text overlap\(s\): header × h2/);
+    // 2.15.0: a sticky header at top 0 sits under the Kernel's top bar; top: var(--atl-top, 0) clears it (sticky-opaque).
+    assert.deepEqual([failing(results["sticky-under-bar"]), warned(results["sticky-under-bar"])], [[], ["Top bar"]], why("sticky-under-bar"));
+    assert.match(why("sticky-under-bar"), /- WARN {2}Top bar: 1 fixed or sticky Page element\(s\) sit under the Kernel top bar: header\. .* Inspect: \S+view-00\.png/);
+    assert.match(why("good"), /- pass {2}Kernel layout: Kernel elements in <body> take no layout space; the top bar reserves 36px/);
     assert.match(why("inline"), /1 possible text overlap\(s\): p × span/);
     // Finding 7
     assert.deepEqual(results.nested.views.map((v) => `${v.label}:${v.status}`), ["initial view:pass", "Outer:pass", "Outer › Inner:warn", "Outer › Away:pass", "Outer › Again:pass"], why("nested"));

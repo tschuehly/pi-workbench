@@ -1414,9 +1414,53 @@ requestAnimationFrame(()=>{for(const s of p.parentElement.children)if(s.classLis
     for (let i = 0; i < 30 && readLog(op).filter((e) => e.type === "opened").length < 2; i++) await sleep(100);
     assert.deepEqual(readLog(op).filter((e) => e.type === "opened").map((e) => e.ask).sort(), [first.seq, second.seq].sort(), "each ask gets its own opened");
   });
-  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0, 2.13.0, 2.14.0, 2.14.1, 2.14.2 and 2.14.3 fix holds");
+  // 2.15.0 (owner: "Kernel top bar, agent fills it"): one bar at the top of every Page with its atl-nav items, what needs the
+  // human under each, the counts and Send; its height reserved, so it covers no content and a jump lands below it.
+  await fixCheck("2.15.0-top-bar-nav-counts-reveal-and-send", async () => {
+    const tb = path.join(dir, "topbar.html");
+    const writeTb = (title = "Top bar") => writeFile(tb, `<!doctype html><html lang="en"><meta charset="utf-8"><title>${title}</title>
+<style>body{margin:0;font:15px system-ui}.gap{height:1400px}</style>
+<body><h1 id="first">First content</h1>
+<nav id="tabs"><button id="tA" aria-controls="pA">A</button><button id="tB" aria-controls="pB">B</button></nav>
+<section id="pA" atl-nav="Alpha"><p atl-key="a1" atl-decide="Yes|No">Decide A1</p><div class="gap"></div></section>
+<section id="pB" atl-nav hidden><h2>Bravo heading</h2><p atl-key="b1" atl-delivery="send">B text</p><div class="gap"></div></section>
+<script>window.updates=0;window.reveals=[];document.addEventListener("atelier:update",()=>updates++);document.addEventListener("atelier:reveal",(e)=>reveals.push(e.detail.key));
+document.addEventListener("click",(e)=>{const t=e.target.closest("#tabs [aria-controls]");if(!t)return;for(const id of ["pA","pB"])document.getElementById(id).hidden=id!==t.getAttribute("aria-controls")});</script>
+<script type="module" src="atelier.js"></script></body></html>`);
+    await writeTb();
+    await b("set", "viewport", "1440", "900");
+    await b("open", (await host.open(tb)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded");
+    const items = "[...document.querySelectorAll('[atl-ui=top] [data-atl=nav]')].map((b)=>b.textContent)";
+    assert.deepEqual(await js("document.querySelectorAll('[atl-ui=top]').length"), 1, "one bar after load");
+    assert.deepEqual(await js(items), ["Alpha1", "Bravo heading"], "atl-nav items, an empty one named by its heading, with a count for the open Decision");
+    const first = await js("[document.getElementById('first').getBoundingClientRect().top, document.querySelector('[atl-ui=top]').getBoundingClientRect().bottom, getComputedStyle(document.documentElement).getPropertyValue('--atl-top')]");
+    assert(first[0] >= first[1], `first Page content starts below the bar: ${first}`);
+    assert.equal(first[2].trim(), "36px", "the bar's height is --atl-top");
+    assert.equal(await js("document.querySelector('[atl-ui=panel]').hidden"), true, "the panel hides with nothing to show");
+    await click('[atl-ui=top] [data-atl=nav][data-i="1"]');
+    await until("!document.getElementById('pB').hidden && Math.abs(document.getElementById('pB').getBoundingClientRect().top - document.querySelector('[atl-ui=top]').getBoundingClientRect().bottom) < 2");
+    assert.deepEqual(await js("[document.getElementById('pA').hidden, reveals]"), [true, [null]], "the item opened its tab and fired atelier:reveal");
+    // Send (n) from the bar: a batched Comment waits until the bar's Send releases it.
+    host.postHuman(tb, { type: "comment", key: "b1", text: "Batched", delivery: "send" });
+    await until("document.querySelector('[atl-ui=top] [data-atl=send]')?.textContent.includes('Send (1)')");
+    await click("[atl-ui=top] [data-atl=send]");
+    await until("atelier.state().drafts===0");
+    assert(readLog(tb).some((e) => e.type === "send"), "the bar's Send posted a send");
+    // An Update keeps exactly one bar, and re-renders its items from the new source.
+    await writeTb("Top bar 2");
+    host.update(tb);
+    await until("updates===1");
+    assert.equal(await js("document.querySelectorAll('[atl-ui=top]').length"), 1, "one bar after an Update");
+    assert.deepEqual(await js(items), ["Alpha1", "Bravo heading1"], "items after an Update, Bravo now counting the sent Comment's open thread");
+    await b("set", "viewport", "390", "844");
+    await sleep(300);
+    assert.equal(await js("document.documentElement.scrollWidth - document.documentElement.clientWidth"), 0, "the bar never widens the Page at 390px");
+    await b("set", "viewport", "1440", "900");
+  });
+  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0, 2.13.0, 2.14.0, 2.14.1, 2.14.2, 2.14.3 and 2.15.0 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen; 2.14.0: a retracted ask leaves the live Page; 2.14.1: an answer that crossed the retract shows folded with the reason; 2.14.2: a delayed answer to a withdrawn question never answers the re-asked one, also when its image was still uploading; such an answer keeps the material version its click saw, a replacement inside the undo window is one request and a refused or unreachable one keeps the answer it would replace and one whose response is lost shows what the host saved, and an opened in flight for a withdrawn ask leaves the re-asked one its own.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen; 2.14.0: a retracted ask leaves the live Page; 2.14.1: an answer that crossed the retract shows folded with the reason; 2.14.2: a delayed answer to a withdrawn question never answers the re-asked one, also when its image was still uploading; such an answer keeps the material version its click saw, a replacement inside the undo window is one request and a refused or unreachable one keeps the answer it would replace and one whose response is lost shows what the host saved, and an opened in flight for a withdrawn ask leaves the re-asked one its own; 2.15.0: one top bar on every Page, through Updates, lists the atl-nav items with what needs the human under each, opens a hidden tab and lands below the bar, covers no content, never widens a phone Page, and sends batched Comments.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }
