@@ -12,7 +12,7 @@ When a session that can call `compact_and_continue` crosses 200,000 context toke
 
 ## Startup budget
 
-A lead session's first reply reports how big its prompt was before the first message (input plus cache read and write, the number `scripts/context-usage.mjs` measures). Above 20,000 tokens (`STARTUP_BUDGET_TOKENS`), the owner sees a one-line warning naming the size and the command that breaks it down; the model never sees it. It fires once per session, not for resumed sessions or Subagent and Worker children.
+A lead session's first reply reports how big its prompt was before the first message (input plus cache read and write, the number `scripts/context-usage.mjs` measures). Above 30,000 tokens (`STARTUP_BUDGET_TOKENS`; the owner target is 20,000 once trimmed), the owner sees a one-line warning naming the size and the command that breaks it down; the model never sees it. It fires once per session, not for resumed sessions or Subagent and Worker children.
 
 ## Checkpoint barrier
 

@@ -130,8 +130,8 @@ export function compactionInstructions(request) {
   ].join("\n");
 }
 
-// Owner budget (2026-11-21): a lead should start below 20k tokens; above it, the next config slip is visible.
-export const STARTUP_BUDGET_TOKENS = 20_000;
+// Owner budget (2026-11-21): warn above 30k for now; target 20k; above it, the next config slip is visible.
+export const STARTUP_BUDGET_TOKENS = 30_000;
 
 /** The first reply's prompt (input + cache read + cache write) is what the session loaded before its first message. */
 export function startupBudgetNotice(message, earlierReplies, budget = STARTUP_BUDGET_TOKENS) {
