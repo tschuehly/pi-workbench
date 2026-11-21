@@ -158,15 +158,44 @@ test("P064 spawn_session: the answer timeout only runs while a daemon is connect
 	}
 });
 
-test("P064 spawn_session without PI WEB's spawn support fails visibly instead of waiting", async () => {
-	const { store, cwd } = family("spawn-off");
-	const host = new ChatHost(store, cwd);
+test("P064 only offers spawn_session while PI WEB enables it, without changing the worker tools", async () => {
+	const { store, cwd } = family("spawn-toggle");
+	let host = new ChatHost(store, cwd);
 	await host.ready;
-	await host.call("prompt", { operationId: "op-1", text: call("spawn_session", { prompt: "Fix the build" }) });
-	const result = await host.until(isResult("spawn_session"), "the spawn_session result");
+	const probe = async (n: number, text: string) => {
+		await host.call("prompt", { operationId: `op-${n}`, text });
+		await host.idle(n);
+		return logged(store).find((request) => request.label === text.slice(0, 40))!.tools!;
+	};
+	assert.ok(!(await probe(1, "default state")).includes("spawn_session"));
+	await host.call("configure", { resources: {}, spawnSessions: true });
+	await host.call("mode", { args: "orchestration Workers" });
+	const enabled = await probe(2, "enabled with Workers");
+	assert.ok(enabled.includes("spawn_session"));
+	assert.ok(enabled.includes("worker_create"));
+	const { activeLeafId: enabledLeaf } = await host.call<{ activeLeafId: string }>("tree");
+
+	await host.call("configure", { resources: {}, spawnSessions: false });
+	const disabled = await probe(3, call("spawn_session", { prompt: "Fix the build" }));
+	assert.ok(!disabled.includes("spawn_session"));
+	assert.ok(disabled.includes("worker_create"));
+	const result = await host.until(isResult("spawn_session"), "the unoffered tool result");
 	assert.equal((result.message as Message).isError, true);
-	assert.match(textOf((result.message as Message).content), /Spawning sessions is disabled/);
+	assert.match(textOf((result.message as Message).content), /Tool spawn_session is not available/);
 	assert.ok(!host.events.some((e) => e.type === "durable.spawn"));
+
+	const { activeLeafId } = await host.call<{ activeLeafId: string }>("tree");
+	await host.call("navigate", { targetId: enabledLeaf, expectedLeafId: activeLeafId });
+	assert.ok(!(await probe(4, "earlier branch")).includes("spawn_session"), "history does not restore an old PI WEB setting");
+	await host.call("configure", { resources: {}, spawnSessions: true });
+	assert.ok((await probe(5, "enabled again")).includes("spawn_session"));
+	await host.close();
+
+	host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-6", text: "before daemon config" });
+	await host.idle(1);
+	assert.ok(!logged(store).find((request) => request.label === "before daemon config")!.tools!.includes("spawn_session"));
 	await host.close();
 });
 

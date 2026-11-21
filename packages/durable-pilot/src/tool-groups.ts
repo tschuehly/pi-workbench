@@ -109,19 +109,21 @@ const MODE_MANAGED: Group[] = ["workers", "atelier"];
 export async function syncWorkersGroup(harness: Harness, registry: Registry, conversation: Conversation, extensions: readonly Extension[]): Promise<void> {
 	const members = groupMembers(extensions);
 	if (MODE_MANAGED.every((id) => members[id].length === 0)) return;
-	const [mode, groups, agent] = await Promise.all([
+	const [mode, groups] = await Promise.all([
 		harness.snapshot(WorkingModeDoc, conversation.id, context),
 		harness.snapshot(ToolGroupsDoc, conversation.id, context),
-		harness.snapshot(AgentDoc, conversation.id, context),
 	]);
 	const wanted = MODE_GROUPS[mode?.selected.orchestration ?? ""] ?? [];
 	const shown = MODE_MANAGED.filter((id) => wanted.includes(id) || (groups?.enabled ?? []).includes(id)).flatMap((id) => members[id]);
 	const hidden = MODE_MANAGED.flatMap((id) => members[id]).filter((name) => !shown.includes(name));
-	const current = added(agent?.modelTools);
-	const next = [...new Set([...current.filter((name) => !hidden.includes(name)), ...shown])];
-	if (next.length === current.length && next.every((name) => current.includes(name))) return;
-	if (Array.isArray(agent?.modelTools)) return; // an explicit allowlist (a child's) is never widened or edited here
-	const byName = new Map<string, ToolRegistration>(registry.snapshot().tools().map(({ tool }: { tool: ToolRegistration }) => [tool.name, tool]));
-	const remove = ((agent?.modelTools as { remove?: string[] } | undefined)?.remove ?? []).flatMap((name) => byName.get(name) ?? []);
-	await conversation.configure({ modelTools: { remove, add: next.flatMap((name) => byName.get(name) ?? []) } }, context);
+	const registered = new Set(registry.snapshot().tools().map(({ tool }) => tool.name));
+	await conversation.commit(async (tx) => {
+		const agent = await tx.doc(AgentDoc, conversation.id);
+		const modelTools = agent.modelTools;
+		if (Array.isArray(modelTools)) return; // Never edit a child's explicit allowlist.
+		const current = modelTools?.add ?? [];
+		const next = [...new Set([...current.filter((name) => !hidden.includes(name)), ...shown.filter((name) => registered.has(name))])];
+		if (next.length === current.length && next.every((name) => current.includes(name))) return;
+		agent.modelTools = { ...modelTools, add: next };
+	}, context);
 }
