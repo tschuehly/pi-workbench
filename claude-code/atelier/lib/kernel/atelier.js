@@ -852,8 +852,8 @@ function boot() {
     const list = panel.querySelector(".atl-list");
     if (!list.firstChild) list.append(h(`<div><div class="atl-h-copy"></div><div class="atl-h-text"></div><div class="atl-text"></div><div class="atl-h-un"></div><div class="atl-un"></div></div>`));
     set(list.querySelector(".atl-h-copy"), notDelivered.length ? `<p class="atl-warn">${icon("alert")} ${notDelivered.length} not delivered to a session. <button data-atl="copy">Copy</button></p>` : "");
-    // Requests live in the top bar's menu (2.15.1); the count is what still needs him: not accepted, not cancelled.
-    const reqBtn = topBar.querySelector(".atl-reqmenu"), reqNeed = st.requests.filter((r) => !r.accepted && r.state !== "cancelled").length;
+    // Requests live in the top bar's menu (2.15.1); the count is what still needs him: not accepted, not cancelled, not failed (he has no button for those).
+    const reqBtn = topBar.querySelector(".atl-reqmenu"), reqNeed = st.requests.filter((r) => !r.accepted && r.state !== "cancelled" && r.state !== "failed").length;
     reqBtn.hidden = !st.requests.length;
     if (!st.requests.length) closeMenus();
     set(reqBtn, `${icon("list")}<span class="atl-rl">Requests</span>${reqNeed ? `<span class="atl-cn">${reqNeed}</span>` : ""}`);

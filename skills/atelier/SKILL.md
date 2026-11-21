@@ -45,8 +45,9 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   Fix each real one and look at both screenshots.
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`
   and `idiomorph.js` beside the Page; let it, rather than copying them by hand.
-- `atl-key="name"` on every element the human judges. Nested Keys form an address such as
-  `run-12/turn-3`; use domain ids, and keep them stable across Updates.
+- `atl-key="name"` on every element the human judges, down to each table row, list item, chart and figure
+  inside a section, not only the section: he comments on one row, not the whole table. Nested Keys form an
+  address such as `tools/ask_user` or `run-12/turn-3`; use domain ids, and keep them stable across Updates.
 - `atl-ver="…"` on content that changes, such as a build SHA or a content hash. Events record it,
   and older events show as "on an earlier version". An answer to the Key's `atl-decide` (or to an `ask` that names
   `material`) holds for the version it was given on. On another version the Decision shows "Version 2" (3, …:
