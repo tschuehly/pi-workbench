@@ -12,6 +12,7 @@ python3 tools/session-logs/cli.py read <session-id> --tools --match workstream -
 python3 tools/session-logs/cli.py --pi-web list --match workstream
 python3 tools/session-logs/cli.py --pi-web read <chat-uuid> --roles user
 python3 tools/session-logs/cli.py --pi-web-root /path/to/durable list --kind child
+python3 tools/session-logs/cli.py --pi-web export ~/.pi-workbench/backpass-export
 python3 -m unittest discover -s tools/session-logs -p 'test_*.py'
 ```
 
@@ -63,6 +64,13 @@ temporary directory (`$PI_TMP` when set), checks for concurrent changes and open
 `mode=ro`. This includes committed WAL entries without touching the live store or its sidecars.
 If all snapshot attempts race the host, retry when the chat is quieter. Temporary disk use is
 bounded by the largest database and WAL being read.
+
+`export DIR` writes each conversation as a Pi-format JSONL file (`<chat-uuid>.jsonl`, children as
+`<chat-uuid>_<conversation-id>.jsonl` with `parentSession` naming the owner's file), for tools that
+read only Pi's JSONL store. The working directory comes from PI WEB's `session-runtimes.json`;
+chats without one are skipped with a warning. Each file's modification time is its last entry's
+time. For backpass, point `PI_CODING_AGENT_SESSION_DIR` at `DIR`. Re-exporting overwrites the
+files; exports are private evidence, so keep `DIR` outside Git.
 
 **Private evidence:** output can contain secrets and personal information, even without tools.
 This CLI is not a redactor. Keep exports and analysis in user-local storage, outside Git, and
