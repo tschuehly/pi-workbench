@@ -9,8 +9,8 @@
 // FAIL (measured; must be fixed):
 // - Kernel version in the page equals the host's; Page state: the Kernel read its Event Log.
 // - Kernel layout: hiding the Kernel's own <body> children must not move the Page's first-level boxes (a <body> grid
-//   gives them grid cells; display:contents wrappers count as their children); only the top bar's reserved height
-//   (--atl-top on :root) may move them down.
+//   gives them grid cells; display:contents wrappers count as their children). Measured apart, the top bar's reserved
+//   height (--atl-top on :root) alone may move them down by that height, or shorten a full-height one by as much.
 // - Per view: console and page errors; horizontal overflow at either width (and the element reaching furthest right). Errors of a click
 //   that shows no view fail as well ("Errors without a view").
 // The Kernel controls probe below rewrites Page selectors; it runs after a view's measured checks and leaves the Page as
@@ -135,23 +135,29 @@ function kernelOnce(d) {
   const boxes = () => pageKids.map((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.x + scrollX), Math.round(r.y + scrollY), Math.round(r.width), Math.round(r.height)]; });
   // The Kernel's top bar (2.15.0) reserves its height on :root: Page content may move down by exactly that, nothing else.
   const bar = document.querySelector("html > [atl-ui=top]"), offset = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+  // Two measurements, one per cause: the bar's offset alone (Kernel children shown), then the Kernel's <body> children
+  // alone (offset off), so a shift by one cause never passes as the other.
   const withKernel = boxes();
-  const saved = own.map((el) => el.style.getPropertyValue("display"));
-  own.forEach((el) => el.style.setProperty("display", "none", "important"));
   const root = document.documentElement.style, savedTop = [root.getPropertyValue("--atl-top"), root.getPropertyPriority("--atl-top")];
   if (bar) root.setProperty("--atl-top", "0px", "important");
+  const noBar = boxes();
+  const saved = own.map((el) => el.style.getPropertyValue("display"));
+  own.forEach((el) => el.style.setProperty("display", "none", "important"));
   const without = boxes();
-  if (bar) savedTop[0] ? root.setProperty("--atl-top", ...savedTop) : root.removeProperty("--atl-top");
   own.forEach((el, i) => saved[i] ? el.style.setProperty("display", saved[i]) : el.style.removeProperty("display"));
-  const shifted = (a, b, j) => j === 1 ? Math.abs(a - b) > 1 && Math.abs(a - b - offset) > 1 : Math.abs(a - b) > 1;
+  if (bar) savedTop[0] ? root.setProperty("--atl-top", ...savedTop) : root.removeProperty("--atl-top");
+  // The bar may move a box down by its height, and shorten a full-height one (html height:100%) by as much.
+  const near = (a, b) => Math.abs(a - b) <= 1;
+  const byBar = (a, b, j) => near(a, b) || (j === 1 && near(a - b, offset)) || (j === 3 && near(b - a, offset));
   // A Page's own fixed or sticky layer at the top would sit under the bar; top: var(--atl-top, 0) puts it below.
   const underBar = !bar ? [] : [...document.body.querySelectorAll("*")].filter((el) => {
     if (el.closest("[atl-ui]")) return false;
     const s = getComputedStyle(el);
     return (s.position === "fixed" || s.position === "sticky") && s.top !== "auto" && parseFloat(s.top) < offset - 1 && el.getClientRects().length > 0;
   });
-  const moved = pageKids.flatMap((el, i) => withKernel[i].some((v, j) => shifted(v, without[i][j], j))
-    ? [`${d(el)} ${without[i].slice(0, 2).join(",")} ${without[i][2]}×${without[i][3]} → ${withKernel[i].slice(0, 2).join(",")} ${withKernel[i][2]}×${withKernel[i][3]}`] : []);
+  const fmt = (x) => `${x.slice(0, 2).join(",")} ${x[2]}×${x[3]}`;
+  const moved = pageKids.flatMap((el, i) => noBar[i].some((v, j) => !near(v, without[i][j])) ? [`${d(el)} ${fmt(without[i])} → ${fmt(noBar[i])}`]
+    : withKernel[i].some((v, j) => !byBar(v, noBar[i][j], j)) ? [`${d(el)} ${fmt(noBar[i])} → ${fmt(withKernel[i])} (more than the top bar's ${offset}px)`] : []);
   return {
     loaded: s.loaded, decisions: s.decisions.length,
     kernelSrc: [...document.scripts].find((sc) => /(^|\/)atelier\.js(\?|#|$)/.test(sc.src))?.src ?? null,

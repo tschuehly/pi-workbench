@@ -1458,9 +1458,74 @@ document.addEventListener("click",(e)=>{const t=e.target.closest("#tabs [aria-co
     assert.equal(await js("document.documentElement.scrollWidth - document.documentElement.clientWidth"), 0, "the bar never widens the Page at 390px");
     await b("set", "viewport", "1440", "900");
   });
-  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0, 2.13.0, 2.14.0, 2.14.1, 2.14.2, 2.14.3 and 2.15.0 fix holds");
+  // 2.15.0 review 1: the bar's space adds to the Page's own padding and keeps a full-height app inside the viewport; a jump
+  // lands below a Page's sticky header; focus stays on an item whose count changes and moves to an unkeyed target; a
+  // selector thread counts in its section; long labels stay readable at 1440 and 390 px.
+  const rv = path.join(dir, "review.html");
+  const heads = ["One round, with real content and its words", "Where one click travels through the Page", "What a new version does to an old answer", "What the agent writes, and what you get"];
+  await writeFile(rv, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Review</title>
+<style>:root{padding:24px}body{margin:0;font:15px system-ui}header{position:sticky;top:var(--atl-top,0px);height:60px;background:#fff;z-index:1;border-bottom:1px solid #ccc}.gap{height:1200px}</style>
+<body><header id="hdr">Page header</header>
+${heads.map((t, i) => `<section id="s${i}" atl-nav><h2>${t}</h2>${i === 0 ? '<p id="para">A paragraph with an id and no Key.</p>' : `<p atl-key="k${i}">Keyed text ${i}.</p>`}<div class="gap"></div></section>`).join("\n")}
+<script type="module" src="atelier.js"></script></body></html>`);
+  // How far the target's top sits below the sticky header's bottom: 0 to 1 px when it lands right below it.
+  const underHdr = (i) => `(document.getElementById('s${i}').getBoundingClientRect().top - document.getElementById('hdr').getBoundingClientRect().bottom)`;
+  await b("set", "viewport", "1440", "900");
+  await b("open", (await host.open(rv)).url);
+  await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded && document.querySelectorAll('[atl-ui=top] [data-atl=nav]').length===4");
+  await fixCheck("2.15.0-review-reserve-adds-to-page-padding", async () => {
+    assert.deepEqual(await js("[getComputedStyle(document.documentElement).paddingTop, Math.round(document.getElementById('hdr').getBoundingClientRect().top)]"), ["24px", 60], "the Page's 24px padding stays, below the 36px bar");
+  });
+  await fixCheck("2.15.0-review-nav-lands-below-sticky-header", async () => {
+    await click('[atl-ui=top] [data-atl=nav][data-i="2"]');
+    await until(`${underHdr(2)} >= 0 && ${underHdr(2)} < 2`);
+    assert.equal(await js("(()=>{const r=document.getElementById('s2').getBoundingClientRect();return document.elementFromPoint(r.left + 8, r.top + 2).closest('#s2') !== null})()"), true, "the target's top is not covered by the bar or the header");
+  });
+  await fixCheck("2.15.0-review-selector-thread-counts-in-its-section", async () => {
+    host.postHuman(rv, { type: "comment", selector: { sel: "#para", snap: "A paragraph" }, text: "On the paragraph" });
+    await until("atelier.state().open===1");
+    assert.equal(await js("document.querySelector('[atl-ui=top] [data-atl=nav][data-i=\"0\"] .atl-cn')?.textContent"), "1", "the section's count includes its selector thread");
+  });
+  await fixCheck("2.15.0-review-nav-focus-stays-and-moves-to-target", async () => {
+    await js("document.querySelector('[atl-ui=top] [data-atl=nav][data-i=\"1\"]').focus(); true");
+    const before = await js("document.activeElement.outerHTML.length");
+    host.postHuman(rv, { type: "comment", key: "k1", text: "Counted on k1" });
+    await until("document.querySelector('[atl-ui=top] [data-atl=nav][data-i=\"1\"] .atl-cn')?.textContent==='1'");
+    assert.equal(await js("document.activeElement.matches('[atl-ui=top] [data-atl=nav][data-i=\"1\"]')"), true, `focus stays on the item whose count changed (was ${before})`);
+    await js("document.querySelector('[atl-ui=top] [data-atl=nav][data-i=\"0\"]').focus(); true");
+    await b("press", "Enter");
+    await until("document.activeElement?.id==='s0'");
+    assert(Math.abs(await js(underHdr(0))) < 2, "Enter lands the unkeyed section below the header");
+  });
+  await fixCheck("2.15.0-review-long-labels-readable-at-1440-and-390", async () => {
+    const fits = `(()=>{const t=document.querySelector('[atl-ui=top]'),r=(s)=>t.querySelector(s)?.getBoundingClientRect(),c=r('.atl-conn'),n=t.querySelector('.atl-nav'),w=innerWidth;return {collapsed:t.classList.contains('atl-collapse'),conn:c.left>=0&&c.right<=w,nav:n.scrollWidth<=n.clientWidth+1,menu:r('.atl-navmenu').width>0,labels:[...t.querySelectorAll('.atl-navi')].map((b,i)=>b.title.startsWith(${JSON.stringify(heads)}[i])&&b.querySelector('.atl-nl').getBoundingClientRect().width<=170)}})()`;
+    let f = await js(fits);
+    assert.deepEqual(f, { collapsed: false, conn: true, nav: true, menu: false, labels: [true, true, true, true] }, "1440: every item fits beside the counts, each label capped with its full text in the title");
+    await b("set", "viewport", "390", "844"); await sleep(300);
+    f = await js(fits);
+    assert.deepEqual([f.collapsed, f.conn, f.menu], [true, true, true], `390: the items fold into Sections, the connection stays visible: ${JSON.stringify(f)}`);
+    assert.equal(await js("document.documentElement.scrollWidth - document.documentElement.clientWidth"), 0, "the bar never widens the Page at 390px");
+    await click("[atl-ui=top] [data-atl=navmenu]");
+    assert.deepEqual(await js("[...document.querySelectorAll('[atl-ui=top] .atl-navi')].map((b)=>{const r=b.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth})"), [true, true, true, true], "the open menu lists every item inside the screen");
+    await click('[atl-ui=top] [data-atl=nav][data-i="3"]');
+    await until(`Math.abs(${underHdr(3)}) < 2 && !document.querySelector('[atl-ui=top]').classList.contains('atl-menu-open')`);
+    await b("set", "viewport", "1440", "900");
+  });
+  await fixCheck("2.15.0-review-full-height-app-stays-in-viewport", async () => {
+    const app = path.join(dir, "app.html");
+    await writeFile(app, `<!doctype html><html lang="en"><meta charset="utf-8"><title>App</title>
+<style>html,body{height:100%;overflow:hidden}body{margin:0}.app{height:100%;display:flex;flex-direction:column}.app>div{flex:1}</style>
+<body><div class="app"><div>Content</div><button id="go" onclick="window.went=true">Bottom action</button></div>
+<script type="module" src="atelier.js"></script></body></html>`);
+    await b("open", (await host.open(app)).url);
+    await until("document.querySelector('.atl-conn')?.textContent==='live' && atelier.state().loaded");
+    assert.equal(await js("Math.round(document.getElementById('go').getBoundingClientRect().bottom) <= innerHeight"), true, "the bottom button stays inside the viewport");
+    await click("#go");
+    assert.equal(await js("window.went === true"), true, "the bottom button is clickable");
+  });
+  assert.deepEqual(fails, [], "every 2.7.1, 2.8.0, 2.8.1, 2.10.1, 2.11.0, 2.12.0, 2.13.0, 2.14.0, 2.14.1, 2.14.2, 2.14.3, 2.15.0 and 2.15.0 review 1 fix holds");
 
-  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen; 2.14.0: a retracted ask leaves the live Page; 2.14.1: an answer that crossed the retract shows folded with the reason; 2.14.2: a delayed answer to a withdrawn question never answers the re-asked one, also when its image was still uploading; such an answer keeps the material version its click saw, a replacement inside the undo window is one request and a refused or unreachable one keeps the answer it would replace and one whose response is lost shows what the host saved, and an opened in flight for a withdrawn ask leaves the re-asked one its own; 2.15.0: one top bar on every Page, through Updates, lists the atl-nav items with what needs the human under each, opens a hidden tab and lands below the bar, covers no content, never widens a phone Page, and sends batched Comments.");
+  console.log("PASS Kernel browser check: palette, a Key Comment floating beside its button without scrolling, an atl-comment Page button opening its Key's Comment beside it, thread markers that open the thread floating (read, reply, close, Esc, focus back), an Event Log from Kernel 2.3, hover button, composer, selection, keyboard, Decision replaced inside its undo window, required note, one undo row, dock, public state, Update keeps one body, its attributes and the human's details, a reply in a floating thread whose quote is rewritten, Tab to a plain-text Key, test-host mark, selection Comment at the selection, a Decision's note and picked and pasted images, an own answer through Other… on an asked and a declared Decision, the answer box below the options, a Comment's image, thread parts 6px apart, a refused image leaves the answer, a wide comment box on a narrow Key at 1440 and 390 px, Key UI that spans a grid or flex-row Key, a region under construction locks its Decisions until an Update unmarks it, change marks stay until Seen, opened and closed, or Mark all seen, the panel in a sticky column scrolls inside after Updates and under a transform, Other… after an abandoned required note, images still being read wait for Save and an answer, a saving Comment box is locked, a Decision is locked while its images upload, a failed image read posts nothing; 2.7.1: an atl-wip label follows an inner scroll and stays inside the right edge, a Page-wide atl-wip locks Decisions without a Key, Enter while composing posts nothing, Mark all seen renders once; 2.8.0: an answered Decision folds to one line that opens and closes it; 2.8.1: thread chips never cover Page text, never widen the Page, and follow a sideways container; 2.10.0: the bar names the receiver and follows a takeover live; 2.10.1: a thread that needs the human keeps a badge at rest where its chip row has no spot; 2.11.0: next ↓ opens the nested tabs that hide an open item and announces atelier:reveal, an answered ask stays done when its Key changes, a Page's Decision on a changed Key starts Version 2 with its earlier answer beneath, and Decisions carry new / changed / done; 2.12.0: atl-wip-lock=\"off\" dims and labels without locking; 2.13.0: open asks and unread agent replies are marked on load, the hidden one on its tab, until answered or Seen; 2.14.0: a retracted ask leaves the live Page; 2.14.1: an answer that crossed the retract shows folded with the reason; 2.14.2: a delayed answer to a withdrawn question never answers the re-asked one, also when its image was still uploading; such an answer keeps the material version its click saw, a replacement inside the undo window is one request and a refused or unreachable one keeps the answer it would replace and one whose response is lost shows what the host saved, and an opened in flight for a withdrawn ask leaves the re-asked one its own; 2.15.0: one top bar on every Page, through Updates, lists the atl-nav items with what needs the human under each, opens a hidden tab and lands below the bar, covers no content, never widens a phone Page, and sends batched Comments; review 1: the bar adds to the Page's padding and keeps a full-height app's bottom button on screen, an item lands below a sticky Page header, keeps focus through a count change and moves it to an unkeyed target, counts a selector thread, and folds long labels into a Sections menu on a phone.");
 } finally {
   await b("close").catch(() => {}); host.stop(); await rm(dir, { recursive: true, force: true });
 }

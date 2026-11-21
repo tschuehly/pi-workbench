@@ -57,6 +57,10 @@ const FIXTURES = {
   "sticky-clear": sticky("transparent"),
   // 2.15.0: a sticky header at top 0 sits under the Kernel's top bar.
   "sticky-under-bar": sticky("white", "0"),
+  // 2.15.0 review: the Kernel's empty Decisions container takes a 36px <body> grid row, as high as the top bar: still a FAIL.
+  "bar-height-shift": bare("CONTENT", "body{display:grid;grid-auto-rows:36px}").replace("<html lang=\"en\">", '<html lang="en" style="padding-top:0">'),
+  // A full-height app: the bar moves <main> down and shortens it by its height, and that alone passes.
+  "app-full-height": bare('<button style="position:absolute;bottom:8px">Bottom</button>', "html,body{height:100%;overflow:hidden}main{height:100%;position:relative}"),
   inline: bare('<p>FIRST WORDS <span style="position:relative;left:-100px">SECOND WORDS</span></p>'),
   // Finding 7: a nested view, one reached again by reload (Away hides Outer), and a control that shows nothing.
   nested: bare(`<button aria-controls="outer" ${show("outer")}>Outer</button><button aria-controls="nowhere">Dead</button>
@@ -436,6 +440,9 @@ test("the Page check flags each real defect by its measured check and passes the
     assert.deepEqual([failing(results["sticky-under-bar"]), warned(results["sticky-under-bar"])], [[], ["Top bar"]], why("sticky-under-bar"));
     assert.match(why("sticky-under-bar"), /- WARN {2}Top bar: 1 fixed or sticky Page element\(s\) sit under the Kernel top bar: header\. .* Inspect: \S+view-00\.png/);
     assert.match(why("good"), /- pass {2}Kernel layout: Kernel elements in <body> take no layout space; the top bar reserves 36px/);
+    assert.deepEqual(failing(results["bar-height-shift"]), ["Kernel layout"], why("bar-height-shift"));
+    assert.match(why("bar-height-shift"), /move Page content: main 0,0 \d+×36 → 0,36 /);
+    assert.deepEqual(failing(results["app-full-height"]), [], why("app-full-height"));
     assert.match(why("inline"), /1 possible text overlap\(s\): p × span/);
     // Finding 7
     assert.deepEqual(results.nested.views.map((v) => `${v.label}:${v.status}`), ["initial view:pass", "Outer:pass", "Outer › Inner:warn", "Outer › Away:pass", "Outer › Again:pass"], why("nested"));
