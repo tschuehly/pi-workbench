@@ -546,7 +546,7 @@ test("crash row question: an open set survives a kill, a stale answer is refused
 	assert.equal(integrity(store), "ok");
 });
 
-test("ask_user: a question without detail is refused; a 4000-character detail is accepted and numbering is stripped; the guidance is legacy's", async () => {
+test("ask_user: a question without detail is refused; a 4000-character detail is accepted and numbering is stripped; the description puts all explanation in the set", async () => {
 	const { store, cwd } = family("ask-detail");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
@@ -564,9 +564,7 @@ test("ask_user: a question without detail is refused; a 4000-character detail is
 	await host.close();
 	const { workbenchExtension } = await import("../src/workbench.ts");
 	const description = (workbenchExtension({ chatId: "x", signal: () => {} }) as unknown as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "ask_user")!.description;
-	assert.match(description, /The set carries all explanation; your Chat message only says that questions were posted\./);
-	assert.match(description, /Put all explanation into the ask_user set and none into your Chat message, which only says that questions were posted: the panel covers the Chat\. `context` holds what all questions share; each question's `detail` says what the item is, gives an example, and where it stands; each option's `detail` states its consequence, and the recommended option is marked\. Do not number the question text; the panel numbers it\./);
-	assert.doesNotMatch(description, /five short lines/);
+	assert.match(description, /The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted\./);
 });
 
 test("ask_user partial send: one answer is delivered, the rest stays open at the new revision across a kill, and answering it closes the set", async () => {

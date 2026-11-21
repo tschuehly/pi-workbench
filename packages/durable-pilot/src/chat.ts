@@ -8,7 +8,7 @@ import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-
 import type { Provider } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { getDocsPath, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
@@ -16,6 +16,7 @@ import { createEditTool, createReadTool, createWriteTool } from "@earendil-works
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { checkpointExtension } from "./checkpoint.ts";
 import { ChildDoc, delegationExtension } from "./delegation.ts";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { router } from "./faux.ts";
@@ -149,7 +150,17 @@ export type ChatHost = Host & {
  */
 function codemodeExtension(sandbox: CodemodeSandbox, inlineBudget: number | undefined): Extension {
 	const extension = createCodemodeExtension({ sandbox, ...(inlineBudget === undefined ? {} : { inlineBudget }) });
-	return { ...extension, tools: extension.tools?.map((tool) => ({ ...tool, replay: "unsafe" as const })) };
+	const docs = join(getDocsPath(), "codemode.md");
+	if (!statSync(docs).isFile()) throw new Error(`Expected codemode documentation at ${docs}`);
+	const modelsBlock = /^`models` \(all functions return promises\):[\s\S]*?^At most 4 classify\/generateImages calls run at once; more wait\.$/m;
+	return {
+		...extension,
+		tools: extension.tools?.map((tool) => ({
+			...tool,
+			replay: "unsafe" as const,
+			...(tool.name === "codemode" ? { description: tool.description?.replace(modelsBlock, () => `- \`models\`: classifiers and image generation. Read ${docs} first.`) } : {}),
+		})),
+	};
 }
 
 /** Pi's `codemode.inlineBudget` setting, read as the Pi CLI's codemode extension reads it; `undefined` keeps the library default. */

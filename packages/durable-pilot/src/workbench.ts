@@ -284,37 +284,28 @@ const questionRef = (askId: string, questionId: string) => `${askId.slice(0, 3)}
 const refs = (ask: PendingAsk) => ask.questions.map((q) => questionRef(ask.askId, q.id)).join(", ");
 
 const OptionParams = obj({
-	value: str({ maxLength: ID_MAX, description: "Stable machine value reported back to you when the user picks this option." }),
-	label: str({ maxLength: TEXT_MAX, description: "Short label the user reads, ideally a few words." }),
-	detail: opt(str({ maxLength: TEXT_MAX, description: "Optional clarification shown under the label." })),
-	recommended: opt(bool({ description: "Mark the option you recommend." })),
+	value: str({ maxLength: ID_MAX, description: "Machine value reported back." }),
+	label: str({ maxLength: TEXT_MAX, description: "Short label." }),
+	detail: opt(str({ maxLength: TEXT_MAX, description: "Its consequence." })),
+	recommended: opt(bool({ description: "Mark your recommendation." })),
 }, { open: true });
 const QuestionParams = obj({
-	id: str({ maxLength: ID_MAX, description: "Unique within this call; used as the answer key reported back to you." }),
-	question: str({ maxLength: TEXT_MAX, description: "The question itself, as one plain-text line. Do not number it; the panel numbers the questions." }),
-	detail: str({ maxLength: DETAIL_MAX, description: "Markdown shown under the question: what the item is, an example, and where it stands, so the question is answerable from the set alone." }),
-	options: opt(arr(OptionParams, { maxItems: OPTION_LIMIT, description: "Options to choose from. Omit when free text is the whole answer; the browser always adds a Custom choice." })),
-	multiple: opt(bool({ description: "Allow several options at once. Default: one answer per question." })),
+	id: str({ maxLength: ID_MAX, description: "Answer key, unique in this call." }),
+	question: str({ maxLength: TEXT_MAX, description: "One plain-text line; do not number it." }),
+	detail: str({ maxLength: DETAIL_MAX, description: "Markdown under the question: what the item is, an example, where it stands." }),
+	options: opt(arr(OptionParams, { maxItems: OPTION_LIMIT, description: "Omit for free text; a Custom choice is always added." })),
+	multiple: opt(bool({ description: "Allow several options." })),
 }, { open: true });
 const AskParams = obj({
-	context: opt(str({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown shown above the questions: what all the questions share, so the user can answer without reading the Chat. Put each question's specifics in its `detail` and each option's consequence in the option's `detail`." })),
-	questions: opt(arr(QuestionParams, { minItems: 1, maxItems: QUESTION_LIMIT, description: "Required for a new set: the questions in reading order. Every question may be left unanswered." })),
-	update: opt(str({ maxLength: ID_MAX, description: "askId of an open set to revise in place. Given context/questions replace the old ones; send neither to confirm the set is still current." })),
-	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to withdraw because it no longer matters. Send nothing else." })),
+	context: opt(str({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown above the questions: what they all share." })),
+	questions: opt(arr(QuestionParams, { minItems: 1, maxItems: QUESTION_LIMIT, description: "Required for a new set, in reading order." })),
+	update: opt(str({ maxLength: ID_MAX, description: "askId of an open set to revise; given context/questions replace the old ones." })),
+	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to drop. Send nothing else." })),
 }, { open: true });
 
-// PI WEB askUserTool.ts description and prompt guidelines (Durable tools carry no separate guideline field).
-const ASK_DESCRIPTION = [
-	"Post a self-contained question set, shown as question chips above the user's composer, and return immediately. The set carries all explanation; your Chat message only says that questions were posted. Answers arrive later as a follow-up message; the user may leave any question unanswered. Pass update: <askId> to revise or confirm an open set, or withdraw: <askId> to drop one.",
-	"Use ask_user to batch the decisions you need from the user into one question set rather than asking in prose. It returns immediately: keep working on anything that does not depend on the answers, and end your turn if nothing does. The answers come back as a follow-up message that wakes you; do not poll or repost.",
-	"Put all explanation into the ask_user set and none into your Chat message, which only says that questions were posted: the panel covers the Chat. `context` holds what all questions share; each question's `detail` says what the item is, gives an example, and where it stands; each option's `detail` states its consequence, and the recommended option is marked. Do not number the question text; the panel numbers it.",
-	"Keep open ask_user sets current: when the facts change, call ask_user with update: <askId> (no other fields just confirms it) or withdraw: <askId>.",
-].join("\n\n");
+const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them, and do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
 
-const ATTENTION_DESCRIPTION = [
-	"Notify the user that this Chat needs them and mark it until they look, then return immediately. Use when you need the user but have no decision to ask: finished work that needs their review, a login or credential, a manual check only they can do, or being blocked. Decisions go to ask_user instead.",
-	"Do not call request_attention for routine progress or after every turn. Write the reason so the user can act without reading the Chat: what you need from them and why, in one short line.",
-].join("\n\n");
+const ATTENTION_DESCRIPTION = "Mark this Chat as needing the user and return immediately. Use when you need them but have no decision to ask: finished work to review, a login or credential, a manual check, or being blocked. Decisions go to ask_user. Not for routine progress.";
 
 /** Host-side events for PI WEB, emitted after the commit they describe. */
 export type WorkbenchSignal =
@@ -411,7 +402,7 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 	const attention = defineTool({
 		name: "request_attention",
 		description: ATTENTION_DESCRIPTION,
-		parameters: obj({ reason: str({ description: "One short, self-contained line: what you need from the user and why, readable without the Chat." }) }, { open: true }),
+		parameters: obj({ reason: str({ description: "One short line: what you need from the user and why, readable without the Chat." }) }, { open: true }),
 		replay: "safe",
 		execute: async (args, api, c) => {
 			// Bounded after sanitizing: a cut through a secret leaves a fragment no later redaction recognizes.

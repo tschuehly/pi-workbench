@@ -3,9 +3,11 @@
 // here this test standing in for the daemon, to start an independent Chat and reports the answer).
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, mock, test } from "node:test";
 import { openChatHost } from "../src/chat.ts";
+import { context } from "../src/host.ts";
 import { SessionSpawner } from "../src/spawn-session.ts";
 import { ChatHost, family, live, logged, type Message, textOf, type UiEvent } from "./chat-proc.ts";
 import { cleanup } from "./runner.ts";
@@ -31,13 +33,14 @@ test("P062 codemode: offered to the lead by default; a script calls the Chat's t
 	writeFileSync(join(cwd, "secrets.env"), `TOKEN_LINE=${SECRET}\n`);
 	const host = new ChatHost(store, cwd);
 	await host.ready;
-	const code = "const a = await tools.read({ path: 'secrets.env' }); const b = await tools.bash({ command: 'echo from-bash', description: 'echo', foreground: true }); return [a, JSON.stringify(b)].join('\\n');";
+	const code = "const a = await tools.read({ path: 'secrets.env' }); const b = await tools.bash({ command: 'echo from-bash', description: 'echo', foreground: true }); return [a, JSON.stringify(b), 'models: ' + [typeof models.classify, typeof models.generateImages, typeof models.getModelsOfType].join(',')].join('\\n');";
 	await host.call("prompt", { operationId: "op-1", text: call("codemode", { code }) });
 	const result = await host.until(isResult("codemode"), "the codemode result");
 	await host.idle(1);
 	const output = textOf((result.message as Message).content);
 	assert.match(output, /TOKEN_LINE=\[REDACTED:env:PILOT_CODEMODE_TOKEN\]/, output);
 	assert.match(output, /from-bash/);
+	assert.match(output, /models: function,function,function/, "the script still has the models capability");
 	assert.notEqual((result.message as Message).isError, true);
 	assert.ok(logged(store)[0]!.tools!.includes("codemode"), "the lead's first request offers codemode");
 	await host.close();
@@ -48,6 +51,44 @@ test("P062 codemode: offered to the lead by default; a script calls the Chat's t
 		assert.equal(h.registry.snapshot().tools().find(({ tool }) => tool.name === "codemode")?.tool.replay, "unsafe", "a restart never reruns a script: it is reconciled by the owner");
 	} finally {
 		await h.close();
+	}
+});
+
+test("lead tool descriptions and parameter docs are shorter than before the startup trim", async () => {
+	const { store, cwd } = family("tool-texts");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: "tool schema check" });
+	await host.idle(1);
+	await host.close();
+	const db = new DatabaseSync(join(store, "session.sqlite"), { readOnly: true });
+	try {
+		const row = db.prepare("SELECT record FROM entries WHERE json_extract(record, '$.kind') = 'pi.system' ORDER BY id LIMIT 1").get()!;
+		const { toolsAdded } = JSON.parse(String(row.record)).model[0] as { toolsAdded: { name: string; description: string; parameters: object }[] };
+		const oldSizes = { ask_user: 3483, request_attention: 740, bash: 1733, compact_and_continue: 1386 };
+		for (const [name, size] of Object.entries(oldSizes)) {
+			const tool = toolsAdded.find((tool) => tool.name === name);
+			assert.ok(tool, `${name} is offered`);
+			assert.ok(JSON.stringify(tool).length < size, `${name} definition (including parameter docs) is shorter than ${size} characters`);
+			if (name === "ask_user") assert.match(JSON.stringify(tool.parameters), /"description":"Its consequence\."/, "option details must tell the user the consequence");
+		}
+	} finally {
+		db.close();
+	}
+});
+
+test("P062 codemode points to the installed models docs instead of spelling out the API", async () => {
+	const { store, cwd } = family("codemode-model-docs");
+	const host = await openChatHost({ dir: store, cwd, model: "faux" });
+	try {
+		const tool = (await host.root.agent(context)).tools.find((tool) => tool.name === "codemode");
+		assert.ok(tool?.description, "codemode has a description");
+		assert.doesNotMatch(tool.description, /models\.classify\(/);
+		const pointer = /^- `models`: classifiers and image generation\. Read (.+) first\.$/m.exec(tool.description)?.[1];
+		assert.ok(pointer && isAbsolute(pointer) && pointer.endsWith("/docs/codemode.md"), "the description points to absolute codemode docs");
+		assert.ok(statSync(pointer).isFile(), "the installed docs exist");
+	} finally {
+		await host.close();
 	}
 });
 

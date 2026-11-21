@@ -124,7 +124,9 @@ test("P089 background Subagent: routed fresh child with its allowlist and own id
 	const transcript = await host.call<Transcript>("transcript");
 	assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 1, "one completion wake");
 
-	const child = logged(store).filter((l) => (l as { model?: string }).model === "openai/gpt-6-luna");
+	const requests = logged(store);
+	assert.ok(!requests.find((l) => l.label === "parent-only context")!.tools!.includes("report_status"), "report_status is not offered to the lead");
+	const child = requests.filter((l) => (l as { model?: string }).model === "openai/gpt-6-luna");
 	assert.equal(child[0]!.messages, 1, "the child starts without the parent transcript");
 	assert.deepEqual(child[0]!.tools, ["bash", "compact_and_continue", "find", "grep", "ls", "read", "report_status"], "scout allowlist: no write, edit or delegation tools");
 	await host.close();

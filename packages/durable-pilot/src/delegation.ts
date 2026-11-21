@@ -1088,6 +1088,7 @@ export function delegationExtension(options: DelegationOptions) {
 
 	const reportStatus = defineTool({
 		name: "report_status",
+		deferred: true,
 		description: "Set your one-line status on the delegate roster the lead and owner see; it replaces your previous report. The roster already shows your latest tool call, so report only when your phase changes: starting, reading code, editing a named part, running tests, fixing failures, waiting on a review, merging, blocked. Send it in the same batch as your next real tool call, never alone; after each wait (at most 15 min) send one with your next tool call.",
 		parameters: obj({
 			status: str({ minLength: 1, maxLength: 200, description: "One short present-tense line describing what you are doing right now" }),
