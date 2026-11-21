@@ -7,7 +7,7 @@ description: "Show the human an interactive HTML review Page (Atelier) and act o
 
 A Page is one HTML file in the project. You write it; the human comments, decides and requests work on it in the
 browser; each of his events reaches you as a notification line starting `[atelier] Human input on …`. The plugin's
-monitor starts the Atelier daemon with the session; its first line is `[atelier] Ready for session …`.
+monitor starts the Atelier daemon the first time this skill runs in a session; its first line is `[atelier] Ready for session …`.
 
 ## CLI
 
@@ -27,9 +27,9 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/atelier.mjs" <action> <page.html> [flags]
 | `status` | `--request <n> --state queued\|running\|done\|failed\|cancelled [--text note]` | Moves Request #n. |
 | `check` | | Runs the Page check (needs `agent-browser`; otherwise reports "unchecked"). `open` and `update` run it too. |
 
-The CLI finds this session's daemon through `$CLAUDE_CODE_SESSION_ID`. If it says there is no daemon, add
-`--session <id>` from the Ready line; if no Ready line came, the monitor did not start: tell the human to run
-`/reload-plugins` or restart the session.
+The CLI finds this session's daemon by itself, also after `/clear`. If it says there is no daemon, add `--session <id>`
+from the Ready line; if no Ready line came, the monitor did not start: tell the human to run `/reload-plugins` or
+restart the session (monitors need an interactive session, not `claude -p`).
 
 ## Rules
 

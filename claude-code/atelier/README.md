@@ -25,9 +25,9 @@ Then restart the session or run `/reload-plugins`.
 
 ## First use
 
-1. Start Claude Code in your project. A line `Monitor event: [atelier] Ready for session …` appears.
+1. Start Claude Code in your project.
 2. Ask: "Use the atelier skill: put the three options for X on a Page and ask me which one to take."
-   Claude writes the Page, opens it and gives you a `http://127.0.0.1:…` link.
+   Claude loads the skill (a line `Monitor event: [atelier] Ready for session …` appears), writes the Page, opens it and gives you a `http://127.0.0.1:…` link.
 3. Open the link, pick an option or leave a Comment. A few seconds later Claude gets it and carries on.
 
 Your input is kept in `<page>.html.events.jsonl` beside the Page. Commit or ignore it as you like. It survives

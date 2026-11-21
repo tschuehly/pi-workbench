@@ -19,9 +19,10 @@ test("the plugin's copies match their pi-workbench sources (run node claude-code
 });
 
 let dir, home, daemon, lines = [];
-const env = () => ({ ...process.env, ATELIER_HOME: home, ATELIER_PAGE_CHECK: "off", CLAUDE_CODE_SESSION_ID: "test-session" });
+const env = (extra = {}) => ({ ...process.env, ATELIER_HOME: home, ATELIER_PAGE_CHECK: "off", CLAUDE_CODE_SESSION_ID: "test-session", CLAUDE_PID: String(process.pid), ...extra });
 const cli = async (...args) => {
-  try { const r = await promisify(execFile)(process.execPath, [path.join(bin, "atelier.mjs"), ...args], { cwd: dir, env: env() }); return { code: 0, out: r.stdout }; }
+  const extra = typeof args[0] === "object" ? args.shift() : {};
+  try { const r = await promisify(execFile)(process.execPath, [path.join(bin, "atelier.mjs"), ...args], { cwd: dir, env: env(extra) }); return { code: 0, out: r.stdout }; }
   catch (error) { return { code: error.code, out: error.stderr }; }
 };
 const waitFor = async (ok, ms = 8000) => { const end = Date.now() + ms; while (!ok()) { if (Date.now() > end) throw new Error(`timeout; stdout: ${lines.join("\n")}`); await new Promise((r) => setTimeout(r, 50)); } };
@@ -89,4 +90,19 @@ test("a second daemon for the same session exits instead of serving twice", asyn
   const code = await new Promise((r) => second.on("exit", r));
   assert.equal(code, 0);
   assert.match(out, /Already running/);
+});
+
+test("after /clear (new session id, same Claude Code process) the CLI still reaches its daemon, also beside another session's", async () => {
+  const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+  const other = spawn(process.execPath, [path.join(bin, "daemon.mjs")], { cwd: dir, env: env({ CLAUDE_CODE_SESSION_ID: "other-session", CLAUDE_PID: String(sleeper.pid) }), stdio: ["ignore", "pipe", "inherit"] });
+  await new Promise((r) => other.stdout.once("data", r));
+  const cleared = await cli({ CLAUDE_CODE_SESSION_ID: "cleared-new-id" }, "update", "page.html");
+  assert.equal(cleared.code, 0, cleared.out);
+  const theirs = await cli({ CLAUDE_CODE_SESSION_ID: "cleared-too", CLAUDE_PID: String(sleeper.pid) }, "update", "page.html");
+  assert.match(theirs.out, /Open page\.html first/); // the other daemon, which never opened it
+  // The daemon ends with its Claude Code process, even if the shell between them stays.
+  sleeper.kill("SIGKILL");
+  const code = await new Promise((r) => other.on("exit", r));
+  assert.equal(code, 0);
+  assert.throws(() => readFileSync(path.join(home, "sessions", "other-session.json")));
 });

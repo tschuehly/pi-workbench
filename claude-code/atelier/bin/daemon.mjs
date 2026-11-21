@@ -16,6 +16,8 @@ const { createHost, readLog } = await import("../lib/host.ts");
 const { derive } = await import("../lib/kernel/atelier.js");
 
 const session = process.env.CLAUDE_CODE_SESSION_ID || randomUUID().slice(0, 8);
+// The Claude Code process: it keeps its pid across /clear, which gives the session a new id but keeps this monitor.
+const claude = Number(process.env.CLAUDE_PID) || undefined;
 const file = sessionFile(session);
 const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "atelier.mjs").split(path.sep).join("/");
 const say = (line) => process.stdout.write(`${line.replace(/\r?\n/g, " ")}\n`); // one notification per line
@@ -62,7 +64,7 @@ const run = async (p) => {
     return checked([`Page open: ${opened.url}`, "Give the human this link.", ...notes,
       opened.replayed ? `${opened.replayed} message(s) of undelivered human input from an earlier session follow as [atelier] notifications.` : ""].filter(Boolean).join("\n"));
   }
-  if (!host.isOpen(page)) throw new Error(`Open ${p.page} first (atelier open).`);
+  if (!host.isOpen(page)) throw new Error(`Open ${host.rel(page)} first (atelier open).`);
   const entries = readLog(page);
   if (p.action === "update") {
     const source = readFileSync(page);
@@ -118,7 +120,7 @@ await new Promise((resolve) => control.listen(0, "127.0.0.1", resolve));
 
 mkdirSync(sessionsDir(), { recursive: true, mode: 0o700 });
 const tmp = `${file}.${process.pid}.tmp`;
-writeFileSync(tmp, JSON.stringify({ pid: process.pid, root, port: control.address().port, token }), { mode: 0o600 });
+writeFileSync(tmp, JSON.stringify({ pid: process.pid, claude: claude ?? null, root, port: control.address().port, token }), { mode: 0o600 });
 renameSync(tmp, file);
 
 let stopped = false;
@@ -132,9 +134,9 @@ const stop = () => {
 };
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, stop);
 process.stdout.on("error", stop); // Claude Code closed the pipe
-// Exit with the session: when the process that started us goes, our parent changes.
+// Exit with the session: Claude Code's process is gone, or (without CLAUDE_PID) the process that started us is.
 const parent = process.ppid;
-setInterval(() => { if (process.ppid !== parent || !alive(parent)) stop(); }, 2000).unref();
+setInterval(() => { if (claude ? !alive(claude) : process.ppid !== parent || !alive(parent)) stop(); }, 2000).unref();
 setInterval(() => {}, 1 << 30); // keep running while no Page is open
 
 say(`[atelier] Ready for session ${session}. Run Atelier with Bash: node "${cli}" <open|update|ask|retract|answer|status|check> <page.html> [flags]. It finds this daemon by $CLAUDE_CODE_SESSION_ID; if it says no daemon, add --session ${session}. Human input arrives as [atelier] lines.`);

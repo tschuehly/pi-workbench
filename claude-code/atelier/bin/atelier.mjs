@@ -2,8 +2,8 @@
 // Atelier CLI for Claude Code: sends one action to this session's daemon (bin/daemon.mjs) and prints its result.
 //   node atelier.mjs <open|update|ask|retract|answer|status|check> <page.html> [--text T] [--decision JSON]
 //                    [--id ID] [--comment N] [--request N] [--state S] [--session ID]
-// The daemon is found by --session, else $CLAUDE_CODE_SESSION_ID (Claude Code sets it in Bash), else the only
-// running daemon for this directory.
+// The daemon is found by --session, else $CLAUDE_CODE_SESSION_ID (Claude Code sets it in Bash), else the daemon of
+// this Claude Code process ($CLAUDE_PID, which survives /clear), else the only running daemon for this directory.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -30,11 +30,17 @@ function daemon() {
   if (id) { const d = read(sessionFile(id)); if (d || v.session) return d; }
   let names = [];
   try { names = readdirSync(sessionsDir()).filter((n) => n.endsWith(".json")); } catch { /* none */ }
-  const here = names.map((n) => read(path.join(sessionsDir(), n))).filter((d) => d && (process.cwd() === d.root || process.cwd().startsWith(d.root + path.sep)));
+  const live = names.map((n) => read(path.join(sessionsDir(), n))).filter(Boolean);
+  // After /clear the session id is new but Claude Code's process, and its daemon, are the same.
+  const mine = live.filter((d) => d.claude && String(d.claude) === process.env.CLAUDE_PID);
+  if (mine.length === 1) return mine[0];
+  const here = live.filter((d) => process.cwd() === d.root || process.cwd().startsWith(d.root + path.sep));
   return here.length === 1 ? here[0] : undefined;
 }
-const d = daemon();
-if (!d) fail("No Atelier daemon for this Claude Code session. It starts with the session (plugin monitor); if the [atelier] Ready line named a session id, pass --session <id>. Restart the session or run /reload-plugins if none is running.");
+// The monitor starts the daemon when the atelier skill first runs; give it a moment.
+let d = daemon();
+for (let i = 0; !d && i < 25; i++) { await new Promise((r) => setTimeout(r, 200)); d = daemon(); }
+if (!d) fail("No Atelier daemon for this Claude Code session. The plugin monitor starts it when the atelier skill first runs: invoke the skill (/atelier:atelier) if you have not. If the [atelier] Ready line named a session id, pass --session <id>.");
 
 let res;
 try {
