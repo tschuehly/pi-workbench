@@ -26,6 +26,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Pi CLI activity presentation | `extensions/activity/` |
 | Atelier Pages: Kernel, page server, Delivery of human events | `extensions/atelier/`, `skills/atelier/`, decisions 129-156 in `docs/foundation/decisions.md` |
 | Per-session scratch folder (`PI_TMP`) and its cleanup | `extensions/pi-tmp/` |
+| Ponytail block in `APPEND_SYSTEM.md`, regenerated from the installed package | `extensions/ponytail-sync/` |
 | Low-disk nudges for agents (below 50 GB) | `extensions/storage-guard/`, `docs/plans/storage-aware-agents.md` |
 | Secret redaction of tool output, assistant text, and context | `extensions/secret-redaction/` |
 | Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
