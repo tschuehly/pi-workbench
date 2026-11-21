@@ -24,8 +24,9 @@
   Fix each real one and look at both screenshots.
 - Load the Kernel: `<script type="module" src="atelier.js"></script>`. `open` copies `atelier.js`
   and `idiomorph.js` beside the Page; let it, rather than copying them by hand.
-- `atl-key="name"` on every element the human judges. Nested Keys form an address such as
-  `run-12/turn-3`; use domain ids, and keep them stable across Updates.
+- `atl-key="name"` on every element the human judges, down to each table row, list item, chart and figure
+  inside a section, not only the section: he comments on one row, not the whole table. Nested Keys form an
+  address such as `tools/ask_user` or `run-12/turn-3`; use domain ids, and keep them stable across Updates.
 - `atl-ver="…"` on content that changes, such as a build SHA or a content hash. Events record it,
   and older events show as "on an earlier version". An answer to the Key's `atl-decide` (or to an `ask` that names
   `material`) holds for the version it was given on. On another version the Decision shows "Version 2" (3, …:
@@ -99,12 +100,13 @@
   `--atl-warn` to match a Page.
 - `atl-nav="Label"` on a section makes it an item in the Kernel's top bar (empty: its first heading's text); a click
   reveals it like "next ↓" (tabs, `atelier:reveal`), and the item counts what needs the human under it and dots its
-  changes. The bar, fixed at the top on every Page, also holds "next ↓", "to answer", Send and the receiver; the Kernel
+  changes. The bar, fixed at the top on every Page, also holds "next ↓", "to answer", Send, the receiver, and a
+  Requests menu (with the count not yet accepted or cancelled; accept or rework there); the Kernel
   reserves its height, `--atl-top`, as a top border on `:root` (the Page's own padding stays), so a Page's own sticky or
   fixed header uses `top: var(--atl-top, 0)`; a bar item lands its target below that header. A full-height app sizes
   `html, body` with `height: 100%` (not `100vh`), or uses `calc(100dvh - var(--atl-top, 0px))`. Long labels shorten
   with an ellipsis (full text in the tooltip); items that do not fit fold into a Sections menu.
-- The Kernel panel floats at the bottom right with undo, notices, Requests and threads on text or without a Key;
+- The Kernel panel floats at the bottom right with undo, notices, and threads on text or without a Key;
   with nothing to show it hides. Where it would cover content, put an empty `<div atl-dock></div>` where it
   should sit in the Page's layout (a sidebar, a header row), or move it with `--atl-dock-right` and `--atl-dock-bottom`. Placed anywhere but directly in `<body>`, the panel
   takes its container's width (up to 760px) and scrolls inside when the Page limits its height.
