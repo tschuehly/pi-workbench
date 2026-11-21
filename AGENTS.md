@@ -25,6 +25,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Harness distribution and skills | `docs/contracts/harness.md`, `skills/`, `extensions/`, `prompts/` |
 | Pi CLI activity presentation | `extensions/activity/` |
 | Atelier Pages: Kernel, page server, Delivery of human events | `extensions/atelier/`, `skills/atelier/`, decisions 129-156 in `docs/foundation/decisions.md` |
+| Atelier as a Claude Code plugin (copies synced from `extensions/atelier`) | `claude-code/`, `.claude-plugin/marketplace.json` |
 | Per-session scratch folder (`PI_TMP`) and its cleanup | `extensions/pi-tmp/` |
 | Ponytail block in `APPEND_SYSTEM.md`, regenerated from the installed package | `extensions/ponytail-sync/` |
 | Low-disk nudges for agents (below 50 GB) | `extensions/storage-guard/`, `docs/plans/storage-aware-agents.md` |

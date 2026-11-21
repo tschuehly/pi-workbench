@@ -1,0 +1,8 @@
+{
+  "name": "atelier",
+  "version": "0.1.0",
+  "description": "Atelier review Pages: write an HTML Page, the human comments, decides and requests work in the browser, and each event reaches Claude as a notification.",
+  "author": { "name": "Thomas Schühly" },
+  "repository": "https://github.com/tschuehly/pi-workbench",
+  "license": "MIT"
+}

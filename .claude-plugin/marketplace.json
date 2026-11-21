@@ -1,0 +1,11 @@
+{
+  "name": "pi-workbench",
+  "owner": { "name": "Thomas Schühly" },
+  "plugins": [
+    {
+      "name": "atelier",
+      "source": "./claude-code/atelier",
+      "description": "Atelier review Pages for Claude Code: comments, Decisions and Requests from the browser reach Claude as notifications."
+    }
+  ]
+}
