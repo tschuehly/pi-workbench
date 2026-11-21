@@ -17,7 +17,7 @@ LABEL=com.pi-workbench.auto-upgrade
 PLIST=$HOME/Library/LaunchAgents/$LABEL.plist
 # Held back for the analysis Chat: PI WEB and the Durable hosts run from a versioned Cellar node path.
 HELD_FORMULAS=(node)
-PAH=$HOME/.pi/agent/npm/node_modules/ping-a-human-pi/bin/cli.mjs
+PAH=$HOME/.pi/agent/npm/node_modules/ping-a-human-pi/bin/pah
 
 snapshot() {
 	echo "## npm -g"; npm ls -g --depth=0 2>/dev/null | tail -n +2
@@ -50,7 +50,7 @@ upgrade_npm() { local pkgs; pkgs=$(npm_outdated); [[ -z $pkgs ]] && { echo "up t
 
 upgrade_brew() {
 	brew update || return
-	local pkgs; pkgs=$(brew outdated --formula -q | grep -vxF -f <(printf '%s\n' "${HELD_FORMULAS[@]}"))
+	local pkgs; pkgs=$(brew outdated --formula -q | grep -vxF -f <(printf '%s\n' "${HELD_FORMULAS[@]}"; brew list --pinned))
 	[[ -z $pkgs ]] && { echo "up to date"; return 0; }
 	# Keep old kegs (a held formula may still link them) and leave held dependents alone; the analysis Chat cleans up.
 	HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew upgrade --formula $pkgs
@@ -89,7 +89,7 @@ run() {
 	find "$STATE" -name '20*.*' -mtime +30 -delete
 
 	if ((${#failed[@]})); then
-		node "$PAH" ping "auto-upgrade: ${failed[*]} failed on $(hostname -s); log $log" || echo "!! telegram ping failed"
+		"$PAH" ping "auto-upgrade: ${failed[*]} failed on $(hostname -s); log $log" || echo "!! telegram ping failed"
 	fi
 	[[ -s $changes || ${#failed[@]} -gt 0 || -n $held ]] || { echo "nothing changed"; return; }
 	local prompt="Automatic tooling upgrade ran ($today). Analyze it and report.
@@ -105,7 +105,7 @@ run() {
 Report briefly. Call request_attention only if something needs Thomas."
 	local id; id=$(open_chat "$prompt") && echo "analysis Chat: $id" || {
 		echo "!! could not open the analysis Chat at $PIWEB"
-		node "$PAH" ping "auto-upgrade: changes need review but PI WEB was unreachable; log $log" || true
+		"$PAH" ping "auto-upgrade: changes need review but PI WEB was unreachable; log $log" || true
 	}
 }
 
