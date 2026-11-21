@@ -41,6 +41,14 @@ wording precision and trigger quality against Workbench's implemented setup.
    After a second miss, record a gap. A gap does not count as a pass." `skills/arena/SKILL.md` sets
    the grading list before candidates start. **Adapted** into
    [`checking.md`](../../../skills/model-orchestration/references/checking.md) ("Panel results").
+4. **A guard is a fix only when the state it handles is legitimate.** pstack
+   `principle-fix-root-causes`. **Adopted** into the vendored `diagnosing-bugs` Phase 5 and 6
+   (skill-incubator). The older Ponytail text in `~/.pi/agent/APPEND_SYSTEM.md` recommends "one
+   guard in the shared function"; the current Ponytail package says "fix the root cause once in
+   the shared code", which agrees.
+5. **Pin behaviour before moving structure.** pstack `playbooks/refactoring.md`: "Type check and
+   lint are not a pin." **Adapted** into the vendored `codebase-design/DEEPENING.md`
+   (skill-incubator).
 
 ## Candidates not yet applied
 
@@ -48,12 +56,7 @@ wording precision and trigger quality against Workbench's implemented setup.
   smaller than the spread "no difference" (pstack `skills/benchmark-checklist/SKILL.md`). Check: a
   report over 5 trials per arm prints median and range.
 - **Adapt, `diagnosing-bugs`:** after two failed fixes sharing one premise, test the premise first
-  (`principle-attack-the-premise`). Also: "A guard is a fix only when the state it handles is
-  legitimate" (`principle-fix-root-causes`). This contradicts the always-on Ponytail line "one
-  guard in the shared function", which needs reconciling first.
-- **Adapt, `codebase-design`:** before moving structure, pin current behaviour with a
-  characterization test ("Type check and lint are not a pin"), and revert a refactor that does not
-  lower reader load (`playbooks/refactoring.md`).
+  (`principle-attack-the-premise`).
 - **Adapt, retro and workflow:** a rule-to-enforcement table where every invariant names its test
   or says "unenforced", and a new check must fail on the commit that made the mistake
   (`skills/correct/SKILL.md`).
