@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activityText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
+import { activityText, recordProgress, renderProgressLog, reportedStatusText, runningPhase, STUCK_IDLE_MS } from "./progress-log.mjs";
 
 const startedAt = Date.parse("2026-08-07T20:00:00.000Z");
 
@@ -53,4 +53,17 @@ test("extracts a child's own report_status call, distinct from ordinary tool act
   assert.equal(reportedStatusText({ type: "tool_progress", detail: { toolName: "bash", action: "running npm test" } }), undefined);
   assert.equal(reportedStatusText({ type: "tool_start", detail: { toolName: "report_status", action: "" } }), undefined);
   assert.equal(reportedStatusText({ type: "thinking_progress" }), undefined);
+});
+
+test("flags a child idle past the stuck threshold unless it is inside wait-until", () => {
+  const at = "2026-08-07T20:00:00.000Z";
+  const late = startedAt + STUCK_IDLE_MS + 1_000;
+  const edit = { type: "tool_end", at, detail: { toolName: "edit", action: "editing src/a.ts" } };
+  assert.equal(runningPhase(edit, at, startedAt + 30_000), "editing src/a.ts · idle 30s");
+  assert.equal(runningPhase(edit, at, late), "editing src/a.ts · idle 10m 01s · possibly stuck");
+  const waiting = { type: "tool_start", at, detail: { toolName: "bash", action: "running wait-until" } };
+  assert.equal(runningPhase(waiting, at, late), "running wait-until · idle 10m 01s");
+  const report = { type: "tool_start", at, detail: { toolName: "report_status", action: "running tests" } };
+  assert.equal(runningPhase(report, at, startedAt), "running tests · idle 0s");
+  assert.equal(runningPhase(undefined, at, late), "no activity yet · idle 10m 01s · possibly stuck");
 });

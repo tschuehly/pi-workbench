@@ -371,3 +371,9 @@ test("counts each carried section, not only the result text, against the budget"
   wakeup.rearm();
   assert.deepEqual(sent[0].message.details.collect, ["exec-2-with-a-long-identifier-that-takes-room"]);
 });
+
+test("the notice lists each still-running child's phase", () => {
+  const { wakeup, sent } = harness({ running: () => ["exec-2 — editing src/a.ts · idle 12m 00s · possibly stuck"] });
+  wakeup.notify(subagent);
+  assert.match(sent[0].message.content, /Still running:\n- exec-2 — editing src\/a\.ts · idle 12m 00s · possibly stuck/);
+});

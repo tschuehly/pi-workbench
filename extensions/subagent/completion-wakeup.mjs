@@ -11,7 +11,7 @@ const AUTHORITY = "This notice authorizes no retry, relaunch, publication, or ac
  * named for subagent_collect. The first result is always carried: the adapter already bounds it.
  * Durable Chats (packages/durable-pilot/src/delegation.ts) compose theirs with it too.
  */
-export function composeNotice(ready, maxChars = NOTICE_MAX_CHARS) {
+export function composeNotice(ready, maxChars = NOTICE_MAX_CHARS, running = []) {
   const delivered = [];
   const collect = [];
   const sections = [];
@@ -35,6 +35,7 @@ export function composeNotice(ready, maxChars = NOTICE_MAX_CHARS) {
     "Then resume the run that launched them at its next incomplete step.",
     AUTHORITY,
   ].filter((note) => note !== "");
+  if (running.length > 0) sections.push(`Still running:\n${running.map((line) => `- ${line}`).join("\n")}`);
   return {
     content: [notes.join(" "), ...sections].join("\n\n"),
     details: { attention: NORMAL_ATTENTION, delivered, collect },
@@ -54,7 +55,7 @@ export function isNormalCompletionAttention(message) {
  * compact results that fit its budget; delivery reports them through `onDelivered`, which marks
  * them collected. A child that finishes after the signal was composed is signalled at its delivery.
  */
-export function createCompletionWakeup({ sendMessage: send, onDelivered = () => {}, maxChars = NOTICE_MAX_CHARS }) {
+export function createCompletionWakeup({ sendMessage: send, onDelivered = () => {}, maxChars = NOTICE_MAX_CHARS, running = () => [] }) {
   // A displayed custom message is persisted before any redaction hook sees it (that hook covers
   // tool results and assistant text), and child results can quote credentials, so redact here.
   const sendMessage = (message, options) => send({ ...message, content: redact(message.content), details: redactDeep(message.details) }, options);
@@ -74,7 +75,7 @@ export function createCompletionWakeup({ sendMessage: send, onDelivered = () => 
     queued = true;
     resent = resend;
     sendMessage(
-      { customType: CUSTOM_TYPE, display: true, ...composeNotice(undelivered, maxChars) },
+      { customType: CUSTOM_TYPE, display: true, ...composeNotice(undelivered, maxChars, running()) },
       { deliverAs: "steer", triggerTurn: true },
     );
   };

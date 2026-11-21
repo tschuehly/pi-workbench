@@ -126,7 +126,7 @@ test("a reload hands running children to the next instance, which re-attaches ro
     assert.equal(second.roster.get(`delegate:${id}`).name, "Sleeper");
 
     const status = await second.run("subagent_status", {});
-    assert.match(status.content[0].text, new RegExp(`1 running, 0 terminal and uncollected, 1 launched this session[\\s\\S]*${id} \\[running\\]`));
+    assert.match(status.content[0].text, new RegExp(`1 running, 0 terminal and uncollected, 1 launched this session[\\s\\S]*${id} \\[running\\].* — now: .*idle .*possibly stuck`));
     assert.doesNotMatch(status.content[0].text, /interrupted/);
     assert.match((await second.run("subagent_collect", { executionId: id })).content[0].text, /\[running\]/);
     await second.run("subagent_steer", { executionId: id, message: "Hurry up" });

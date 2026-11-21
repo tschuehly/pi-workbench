@@ -15,7 +15,7 @@ import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs"
 import { nodeBin } from "../background-bash/node-bin.mjs";
 import { latestAssistantToolCallCount } from "../context-checkpoint/coordinator.mjs";
 import { createCompletionWakeup, receiptSafeResult, settleWorkerReceipt } from "./completion-wakeup.mjs";
-import { activityText, progressText, recordProgress, renderProgressLog, reportedStatusText } from "./progress-log.mjs";
+import { activityText, progressText, recordProgress, renderProgressLog, reportedStatusText, runningPhase } from "./progress-log.mjs";
 import { STATUS_STATES, leadStatusWrite, workerStatusFile, writeStatusFile } from "./status-file.mjs";
 import { COGNITIVE_ROLES, INDEPENDENT_ROLES, LEAF_PROFILES, MODEL_EFFORTS, NO_NESTED_WORKERS, PROFILES, RESOLVER as resolver, ROLE_GUIDE, STATUS_INSTRUCTION, UPDATE_REQUEST, WEB_TOOLS, WORKER_PROFILES, WORKER_ROLES, collectAll, providerOf, resolveBinding } from "./core.mjs";
 
@@ -198,6 +198,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
       "Use one invocation for one bounded assignment while the user is attending.",
       "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output with the evidence to show; a result missing that evidence is a gap, not a pass. Do not add 'think carefully' lines; Model Effort controls thinking.",
+      "While background children run, open each reply or wakeup with one line per child: its phase and idle time from subagent_status or the completion notice. For one marked possibly stuck, call subagent_steer with requestUpdate; if no report arrives, cancel it with subagent_cancel.",
       "Adjust a running child with subagent_steer; when the assignment itself changes, cancel it and launch a new child. Do not imply managed authority, recovery, or durable background work that survives the session.",
       "Read the model in the launch result; it must match the tier you intended. Use modelOverride for an owner-requested model, for Fable as the second member of a frontier panel on the hardest problems, or for the other family's strong model when reviewing frontier work. Effort is a ceiling the role sets; frontier and review default to high and never go below medium.",
       "If an independent child fails to launch or complete, disclose that failure; never present the parent's own review as independent.",
@@ -373,9 +374,8 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         let status;
         try { status = adapter.status(params.executionId); } catch (error) { return failure("outcome_unknown", errorMessage(error)); }
         if (status.running) {
-          const latest = status.latestObservation === undefined ? "no activity yet" : (activityText(status.latestObservation) ?? progressText(status.latestObservation));
           return {
-            content: [{ type: "text", text: `${params.executionId} [running] ${status.provider}/${status.model}:${status.effort} — ${latest}\nStill running; end this turn—the completion signal wakes the lead for the next turn.` }],
+            content: [{ type: "text", text: `${params.executionId} [running] ${status.provider}/${status.model}:${status.effort} — ${runningPhase(status.latestObservation, status.acceptedAt, Date.now())}\nStill running; end this turn—the completion signal wakes the lead for the next turn.` }],
             details: status,
           };
         }
@@ -423,7 +423,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         try { status = adapter.status(params.executionId); } catch (error) { return failure("outcome_unknown", errorMessage(error)); }
         const meta = launched.get(params.executionId);
         const state = status.running ? "running" : (status.outcome ?? "finished");
-        const line = status.latestObservation === undefined ? "no activity yet" : progressText(status.latestObservation);
+        const line = status.running ? runningPhase(status.latestObservation, status.acceptedAt, Date.now()) : status.latestObservation === undefined ? "no activity yet" : progressText(status.latestObservation);
         return {
           content: [{ type: "text", text: `${params.executionId} [${state}] ${status.provider}/${status.model}:${status.effort} — ${line}${meta ? `\nTask: ${meta.taskPreview}` : ""}` }],
           details: { ...status, taskPreview: meta?.taskPreview },
@@ -446,7 +446,9 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       const lines = summaries.map((s) => {
         const meta = launched.get(s.executionId);
         const state = s.running ? "running" : `${s.outcome ?? "finished"}${collected.has(s.executionId) ? ", collected" : ", uncollected"}`;
-        return `- ${s.executionId} [${state}] ${s.kind} · ${s.profile} · ${s.cognitiveRole}${meta?.workerName !== undefined ? ` · worker \"${meta.workerName}\"` : ""}${meta ? ` — ${meta.taskPreview}` : ""}`;
+        const status = s.running ? adapter.status(s.executionId) : undefined;
+        const phase = status === undefined ? "" : ` — now: ${runningPhase(status.latestObservation, status.acceptedAt, Date.now())}`;
+        return `- ${s.executionId} [${state}] ${s.kind} · ${s.profile} · ${s.cognitiveRole}${meta?.workerName !== undefined ? ` · worker \"${meta.workerName}\"` : ""}${meta ? ` — ${meta.taskPreview}` : ""}${phase}`;
       });
       for (const child of keptShown) lines.push(`- ${retainedLine(child, collected.has(child.executionId))}${child.taskPreview ? ` — ${child.taskPreview}` : ""}`);
       return { content: [{ type: "text", text: `${counts}\n${lines.join("\n")}` }], details: { children: [...summaries, ...keptShown.map((child) => ({ ...child, outcome: child.status, retained: true }))], running, uncollected, total } };
@@ -839,9 +841,14 @@ function createSessionState(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, ba
     dismissedActivity.add(executionId);
     removeActivity(host, `delegate:${executionId}`);
   };
+  const adapters = [adapter];
+  const running = () => adapters.flatMap((own) => own.list().filter((s) => s.running).map((s) => {
+    const status = own.status(s.executionId);
+    return `${s.executionId} — ${runningPhase(status.latestObservation, status.acceptedAt, Date.now())}`;
+  }));
   return {
     host,
-    adapters: [adapter],
+    adapters,
     launched: new Map<string, LaunchMeta>(),
     collected,
     foreground: new Map<string, ForegroundDispatch>(),
@@ -852,7 +859,7 @@ function createSessionState(pi: ExtensionAPI, adapter: PiRpcExecutionAdapter, ba
     pendingWorkerCompletions: new Set<Promise<unknown>>(),
     pendingSubagentCompletions: new Set<Promise<unknown>>(),
     nudged: new Set<string>(),
-    completionWakeup: createCheckpointAwareWakeup(host, barrierFor, delivered),
+    completionWakeup: createCheckpointAwareWakeup(host, barrierFor, delivered, running),
   };
 }
 type SessionState = ReturnType<typeof createSessionState>;
@@ -1215,9 +1222,10 @@ export function reservePending(roster: { executionId: string; running: boolean }
  * A completion signal asks for a turn. While a context checkpoint is pending or compacting, the
  * session's barrier queues that signal instead and releases it exactly once after the checkpoint settles.
  */
-export function createCheckpointAwareWakeup(pi: any, barrierFor: () => { defer(send: () => void, key?: string): boolean } | undefined, onDelivered?: (executionId: string) => void) {
+export function createCheckpointAwareWakeup(pi: any, barrierFor: () => { defer(send: () => void, key?: string): boolean } | undefined, onDelivered?: (executionId: string) => void, running?: () => string[]) {
   return createCompletionWakeup({
     onDelivered,
+    running,
     sendMessage: (message: any, options: any) => {
       const send = () => pi.sendMessage(message, options);
       // The coalesced normal signal holds one stable key so a later one replaces it; a

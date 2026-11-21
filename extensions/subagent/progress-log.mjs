@@ -1,4 +1,6 @@
 const DEFAULT_MAX_ENTRIES = 10;
+// A child this long without activity may be stuck; `wait-until` blocks silently up to 55 min by design.
+export const STUCK_IDLE_MS = 10 * 60_000;
 
 export function recordProgress(entries, observation, maxEntries = DEFAULT_MAX_ENTRIES) {
   const entry = {
@@ -64,6 +66,14 @@ export function activityText(observation) {
   if (observation.type === "startup_timeout") return "timed out";
   if (["launch", "binding_verified", "continuation_verified", "quota_degraded"].includes(observation.type)) return "starting";
   return undefined;
+}
+
+/** One line for a running child: its phase, idle time, and a possibly-stuck marker outside wait-until. */
+export function runningPhase(latest, acceptedAt, now) {
+  const phase = latest === undefined ? "no activity yet" : (reportedStatusText(latest) ?? activityText(latest) ?? progressText(latest));
+  const idleMs = Math.max(0, now - Date.parse(latest?.at ?? acceptedAt));
+  const waiting = latest !== undefined && latest.type !== "tool_end" && latest.detail?.action === "running wait-until";
+  return `${phase} · idle ${formatDuration(idleMs)}${idleMs >= STUCK_IDLE_MS && !waiting ? " · possibly stuck" : ""}`;
 }
 
 function progressKey(observation) {
