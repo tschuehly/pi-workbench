@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Unattended upgrade of the owner's tooling, at most once a day: Pi and its packages (pi-update), global npm CLIs,
+# skills (npx skills), and Homebrew formulas. When anything changed or failed, it opens a PI WEB Chat that analyzes
+# the run; a failed step also pings Telegram. Logs: ~/.pi-workbench/auto-upgrade/<date>.log.
+#
+# Usage: auto-upgrade run [--force]   upgrade now (--force ignores today's earlier run)
+#        auto-upgrade install         launchd job: at login and daily 05:00 (a Mac asleep then runs it on wake)
+#        auto-upgrade uninstall
+set -uo pipefail
+export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.pi/agent/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+STATE=${PI_AUTO_UPGRADE_DIR:-$HOME/.pi-workbench/auto-upgrade}
+PIWEB=${PI_AUTO_UPGRADE_PI_WEB:-http://127.0.0.1:8506}
+CHAT_CWD=${PI_AUTO_UPGRADE_CWD:-$HOME/IdeaProjects/pi-workbench}
+SELF=$HOME/IdeaProjects/pi-workbench.durable-installed/scripts/auto-upgrade
+LABEL=com.pi-workbench.auto-upgrade
+PLIST=$HOME/Library/LaunchAgents/$LABEL.plist
+# Held back for the analysis Chat: PI WEB and the Durable hosts run from a versioned Cellar node path.
+HELD_FORMULAS=(node)
+PAH=$HOME/.pi/agent/npm/node_modules/ping-a-human-pi/bin/cli.mjs
+
+snapshot() {
+	echo "## npm -g"; npm ls -g --depth=0 2>/dev/null | tail -n +2
+	echo "## pi npm packages"; npm ls --prefix "$HOME/.pi/agent/npm" --depth=0 2>/dev/null | tail -n +2
+	echo "## pi git packages"; for d in "$HOME"/.pi/agent/git/*/*/*; do echo "${d#"$HOME"/.pi/agent/git/} $(git -C "$d" rev-parse --short HEAD 2>/dev/null)"; done
+	echo "## skills"; node -e 'const s=require(process.argv[1]).skills;for(const[k,v]of Object.entries(s))console.log(k,v.source,v.skillFolderHash)' "$HOME/.agents/.skill-lock.json" 2>/dev/null
+	echo "## brew"; brew list --formula --versions 2>/dev/null
+}
+
+# Outdated global npm packages, except npm-linked checkouts and pi itself (pi-update owns it).
+npm_outdated() {
+	npm outdated -g --json 2>/dev/null | node -e '
+		const fs = require("fs"), path = require("path"), root = process.argv[1];
+		const out = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+		for (const [name, info] of Object.entries(out)) {
+			if (name === "@earendil-works/pi-coding-agent") continue;
+			try { if (fs.lstatSync(path.join(root, name)).isSymbolicLink()) continue; } catch { continue; }
+			console.log(`${name}@${info.latest}`);
+		}' "$(npm root -g)"
+}
+
+failed=()
+step() {
+	local name=$1; shift
+	echo "== $name: $*"
+	"$@" || { echo "!! $name failed (exit $?)"; failed+=("$name"); }
+}
+
+upgrade_npm() { local pkgs; pkgs=$(npm_outdated); [[ -z $pkgs ]] && { echo "up to date"; return 0; }; npm install -g $pkgs; }
+
+upgrade_brew() {
+	brew update || return
+	local pkgs; pkgs=$(brew outdated --formula -q | grep -vxF -f <(printf '%s\n' "${HELD_FORMULAS[@]}"))
+	[[ -z $pkgs ]] && { echo "up to date"; return 0; }
+	# Keep old kegs (a held formula may still link them) and leave held dependents alone; the analysis Chat cleans up.
+	HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew upgrade --formula $pkgs
+}
+
+open_chat() { # $1 = prompt text; prints the new Chat id
+	local body id
+	body=$(node -e 'console.log(JSON.stringify({cwd: process.argv[1], runtime: "durable"}))' "$CHAT_CWD")
+	id=$(curl -fsS -X POST "$PIWEB/api/sessions" -H 'content-type: application/json' -d "$body" |
+		node -e 'const s=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(s.id??s.sessionId??"")') || return
+	[[ -n $id ]] || return 1
+	body=$(node -e 'console.log(JSON.stringify({cwd: process.argv[1], text: process.argv[2]}))' "$CHAT_CWD" "$1")
+	curl -fsS -X POST "$PIWEB/api/sessions/$id/prompt" -H 'content-type: application/json' -d "$body" >/dev/null || return
+	echo "$id"
+}
+
+run() {
+	mkdir -p "$STATE"
+	local today; today=$(date +%F)
+	[[ ${1:-} != --force && "$(cat "$STATE/last-run" 2>/dev/null)" == "$today" ]] && exit 0
+	mkdir "$STATE/lock" 2>/dev/null || { [[ -n $(find "$STATE/lock" -maxdepth 0 -mmin +180) ]] && rm -rf "$STATE/lock" && mkdir "$STATE/lock"; } || exit 0
+	trap 'rm -rf "$STATE/lock"' EXIT
+	local log=$STATE/$today.log changes=$STATE/$today.changes
+	exec >>"$log" 2>&1
+	echo "### auto-upgrade $(date -Iseconds)"
+
+	snapshot >"$STATE/before"
+	step pi pi-update
+	step npm upgrade_npm
+	step skills npx -y skills update -g -y
+	step brew upgrade_brew
+	snapshot >"$STATE/after"
+	diff "$STATE/before" "$STATE/after" >"$changes"
+	local held; held=$(brew outdated --formula -q 2>/dev/null | grep -xF -f <(printf '%s\n' "${HELD_FORMULAS[@]}") | tr '\n' ' ')
+	echo "$today" >"$STATE/last-run"
+	find "$STATE" -name '20*.*' -mtime +30 -delete
+
+	if ((${#failed[@]})); then
+		node "$PAH" ping "auto-upgrade: ${failed[*]} failed on $(hostname -s); log $log" || echo "!! telegram ping failed"
+	fi
+	[[ -s $changes || ${#failed[@]} -gt 0 || -n $held ]] || { echo "nothing changed"; return; }
+	local prompt="Automatic tooling upgrade ran ($today). Analyze it and report.
+- Log: $log
+- Version changes (diff of before/after): $changes
+- Failed steps: ${failed[*]:-none}
+- Held back for you to handle: ${held:-none}
+
+1. For each changed package, read its changelog for the versions crossed. Flag breaking changes that affect Pi Workbench extensions, skills, the Durable host (packages/durable-pilot) or PI WEB, and verify the suspicious ones against the code.
+2. If @earendil-works/pi-coding-agent moved past the Durable host's pinned @earendil-works versions in packages/durable-pilot/package.json, say so; that bump is manual.
+3. For a failed step, diagnose it from the log and fix it if the fix is safe and local; otherwise say what is needed.
+4. For a held formula (node): PI WEB and the Durable hosts run from a versioned Cellar node path. Propose the upgrade path (upgrade, keep the old keg until the services move by promotion, then brew cleanup) and do it only after Thomas agrees.
+Report briefly. Call request_attention only if something needs Thomas."
+	local id; id=$(open_chat "$prompt") && echo "analysis Chat: $id" || {
+		echo "!! could not open the analysis Chat at $PIWEB"
+		node "$PAH" ping "auto-upgrade: changes need review but PI WEB was unreachable; log $log" || true
+	}
+}
+
+install() {
+	[[ -x $SELF ]] || { echo "missing $SELF (promote a build that has it first)" >&2; exit 1; }
+	mkdir -p "$STATE"
+	cat >"$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+	<key>Label</key><string>$LABEL</string>
+	<key>ProgramArguments</key><array><string>/bin/bash</string><string>$SELF</string><string>run</string></array>
+	<key>RunAtLoad</key><true/>
+	<key>StartCalendarInterval</key><dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>0</integer></dict>
+	<key>StandardOutPath</key><string>$STATE/launchd.log</string>
+	<key>StandardErrorPath</key><string>$STATE/launchd.log</string>
+</dict></plist>
+EOF
+	launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
+	launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "installed $LABEL ($PLIST)"
+}
+
+uninstall() { launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null; rm -f "$PLIST"; echo "removed $LABEL"; }
+
+case ${1:-} in
+	run) shift; run "$@" ;;
+	install) install ;;
+	uninstall) uninstall ;;
+	*) sed -n 2,8p "$0" >&2; exit 2 ;;
+esac
