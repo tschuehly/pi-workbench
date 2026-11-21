@@ -1,6 +1,6 @@
 ---
 name: analyze-source-for-workbench
-description: Analyze an external library, repository, article, paper, talk, tweet, or social thread for lessons relevant to Pi Workbench. Use when the user asks what Pi Workbench can learn from a source, whether the source is better or worse than the current setup, which ideas to adopt or reject, or how to apply a source's mechanisms to the Workbench architecture or workflow.
+description: "Judge what Pi Workbench can learn from an external library, repo, article, paper, talk or thread: compare it with the current setup and decide which ideas to adopt, reject or apply."
 ---
 
 # Analyze a source for Pi Workbench
