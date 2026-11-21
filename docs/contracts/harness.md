@@ -56,9 +56,12 @@ A change goes live by promotion: merge into the integration branch, trial it in 
 A pi-workbench change that leaves the PI WEB server plugin untouched can go live without that
 restart: `scripts/promote-installed switch-workbench <workbench-rev>` builds the revision and
 atomically repoints only `pi-workbench.installed`. Open sessions keep the code they loaded; new
-sessions and `/reload` load the new revision, so reload a session before relying on changed tools
-or roles in it. Its running Subagents and Workers survive the reload and finish on the code that
-launched them. It prints the command that switches back.
+sessions load the new revision. Move an open session to it before relying on changed tools or roles
+in it. On the legacy instance `/reload` does that, and running Subagents and Workers survive the
+reload and finish on the code that launched them. The Durable instance has no `/reload`: each Chat
+stays pinned to its build until **Upgrade host** in the Chat, or the automatic upgrade once only
+work that survives a restart remains (no running turn, queued input or children;
+`docs/plans/pi-durable-cutover-runbook.md`). It prints the command that switches back.
 
 A PI WEB change that leaves the session daemon's code and dependencies untouched (browser client or
 web/API server only) goes live with `scripts/promote-installed switch-web <pi-web-rev>`. It restarts
