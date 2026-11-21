@@ -5,7 +5,10 @@
 // The child run sets PI_WORKBENCH_EXECUTION_KIND like the adapter, so child-only extension behavior applies.
 // ponytail: child = lead minus tools not on the scout allowlist; the per-task profile text (~100 tokens) is not included.
 //
-// Usage: node scripts/context-usage.mjs [--cwd DIR] [--model provider/id] [--json] [-- extra pi args, e.g. -e ext.ts]
+// --pi-web measures a fresh PI WEB Durable Chat instead (live instance, --pi-web-url, default :8506); --json adds an
+// estimated per-part breakdown. The total includes the prompt and any nudge PI WEB injected before it (listed, ~tens of tokens).
+//
+// Usage: node scripts/context-usage.mjs [--cwd DIR] [--model provider/id] [--json] [--pi-web [--pi-web-url URL]] [-- extra pi args, e.g. -e ext.ts]
 import { spawnSync } from "node:child_process";
 import { CHILD_TOOLS as childTools } from "../extensions/subagent/core.mjs";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -31,6 +34,14 @@ function measure(extraArgs, env = process.env) {
     }
     throw new Error("no assistant usage in session");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+if (process.argv.includes("--pi-web")) {
+  const { measurePiWeb } = await import("./context-usage-pi-web.mjs");
+  const r = { cwd, model, measuredAt: new Date().toISOString(), ...(await measurePiWeb({ cwd, model, url: arg("--pi-web-url") })) };
+  console.log(process.argv.includes("--json") ? JSON.stringify(r) : `PI WEB startup context (${model}, ${cwd})\n  lead: ${r.total} tokens (includes ${r.includedMessages.map((m) => `${m.kind} ${m.chars} chars`).join(", ")})\n  chat ${r.chatId}: ${r.cleanup}`);
+  if (r.cleanup !== "deleted") process.exitCode = 2;
+  process.exit();
 }
 
 const result = { cwd, model, measuredAt: new Date().toISOString(), lead: measure([]), child: measure(["--tools", childTools.join(",")], { ...process.env, PI_WORKBENCH_EXECUTION_KIND: "subagent" }) };
