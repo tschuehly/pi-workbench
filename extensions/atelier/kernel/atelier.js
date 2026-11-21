@@ -1,4 +1,4 @@
-// Atelier Kernel 2.14.2: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.14.3: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -1601,6 +1601,8 @@ function boot() {
     extra.hidden = !open;
     const ownRow = extra.querySelector(".atl-own");
     if (ownRow) ownRow.hidden = !own;
+    const note = extra.querySelector(".atl-note");
+    if (note && ownRow) note.hidden = own && !note.value.trim(); // an own answer explains itself; a note already typed stays (2.14.3)
     const button = extra.previousElementSibling;
     if (button?.dataset.atl !== "addnote") return; // a Comment box's images
     button.setAttribute("aria-expanded", String(open));
@@ -1700,7 +1702,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui] button.atl-rec{border-color:var(--atl-accent);border-style:dashed}
 [atl-ui] button.atl-chosen{background:var(--atl-accent);border-color:var(--atl-accent);border-style:solid;color:#fff}
 [atl-ui] button.atl-chosen .atl-dim{color:inherit}
-.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate{flex-basis:100%}.atl-dstate:empty{display:none}
+.atl-dopts{display:inline-flex;flex-wrap:wrap;gap:4px}.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate{flex-basis:100%}.atl-dstate:empty{display:none}
 [atl-ui] button.atl-other{color:var(--atl-muted);border-style:dashed}[atl-ui] .atl-opts>button.atl-other{justify-self:start}[atl-ui] button.atl-other.atl-chosen{color:#fff}
 .atl-own{display:flex;flex:1 1 100%;gap:4px;align-items:center}.atl-own .atl-ownans{flex:1 1 14em;width:auto}
 .atl-receipt{display:grid;gap:3px;justify-self:start;box-sizing:border-box;width:fit-content;max-width:min(100%,64ch);border:1px solid var(--atl-line);border-radius:6px;padding:5px 8px;background:var(--atl-bg)}
