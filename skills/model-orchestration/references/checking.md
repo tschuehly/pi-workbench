@@ -54,5 +54,13 @@ It prints `unknown` when the snapshot is missing, empty or unreadable, has no Mu
 window reading. Then launch Ember anyway, since a rate-limit failure still triggers the fallback,
 and record "Muse quota unknown" in the report.
 
-**Complete when:** the checking plan names its consequence, each reviewer's family and lens, and
-any reviewer that could not be launched.
+## Panel results
+
+Before launching any panel, write its grading list: three to six checks a result must address.
+Every reviewer brief names the commit SHA under review and how to check it (the command to run or
+the evidence to read), and asks the reviewer to report both. Drop a result that leaves out the SHA
+or method and relaunch that reviewer once. After a second miss, record a gap. A gap never counts
+as a pass, so a panel with a gap does not meet its required review.
+
+**Complete when:** the checking plan names its consequence, its grading list, each reviewer's
+family and lens, and any reviewer that could not be launched or left a gap.

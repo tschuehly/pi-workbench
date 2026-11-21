@@ -350,6 +350,10 @@ test("invalid commands change nothing", async () => {
   s.session.dispose();
 });
 
+test("Test and Challenge require seeing each new check fail", () => {
+  for (const value of ["Test", "Challenge"]) assert.match(axes.checking.values[value], /check failing on the unfixed or deliberately broken code, or say why you could not/);
+});
+
 test("Challenge names the blind review pair, author swaps, and the Muse fallback", () => {
   const text = axes.checking.values.Challenge;
   assert.match(text, /two background `review` subagents with the same brief, blind to each other/);
