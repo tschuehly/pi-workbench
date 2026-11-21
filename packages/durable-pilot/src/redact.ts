@@ -379,7 +379,7 @@ export function redactingTool<T extends ToolRegistration>(tool: T, inner: Saniti
 				return typeof value === "function" ? value.bind(target) : value;
 			},
 		});
-		let result: ToolExecutionResult;
+		let result: Awaited<ReturnType<typeof tool.execute>>;
 		try {
 			result = await tool.execute(args as never, proxy as never, context);
 		} catch (error) {
@@ -393,6 +393,7 @@ export function redactingTool<T extends ToolRegistration>(tool: T, inner: Saniti
 		}
 		flush();
 		if (failed) throw new Error(FAILED);
+		if ("sleep" in result || "wait" in result) return result; // A park has no output to redact.
 		try {
 			const { details, ...rest } = result;
 			return { ...sanitizeDeep(rest, sanitize), ...(details === undefined ? {} : { details: sanitizeDeep(details, strict(sanitize)) }) };

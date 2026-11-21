@@ -73,6 +73,7 @@ export function warningTool<T extends ToolRegistration>(tool: T): T {
 	if (tool.name !== "bash") return tool;
 	const execute: ToolRegistration["execute"] = async (args, api, c) => {
 		const result = await tool.execute(args as never, api, c);
+		if ("sleep" in result || "wait" in result) return result; // A park has no output yet.
 		const warning = warnTmpBash((args as { command?: unknown }).command) as string | undefined;
 		if (warning === undefined) return result;
 		const output = result.output ?? [{ type: "text" as const, text: api.retainedOutput().text }];
