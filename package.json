@@ -18,7 +18,7 @@
     "typebox": "*"
   },
   "scripts": {
-    "test": "npm run test:model-routing && npm run test:promote-installed && npm run test:background-bash-extension && npm run test:secret-redaction-extension && npm run test:pi-tmp-extension && npm run test:storage-guard-extension && npm run test:atelier-extension && npm run test:quota-startup && npm run test:lead-fallback && npm run test:ponytail-sync-extension && npm run test:activity-extension && npm run test:telemetry-extension && npm run test:subagent-extension && npm run test:context-checkpoint-extension && npm run test:autonomous-grill-extension && npm run test:working-mode-extension && npm run test:tool-groups-extension && npm run test:agent-audit-extension && npm run test:pi-execution-adapter && npm run test:worker-registry && npm run test:workstream-store && npm run test:workstreams-skill && npm run test:workstream-session-coordination && npm run test:pi-web-integration",
+    "test": "npm run test:model-routing && npm run test:promote-installed && npm run test:background-bash-extension && npm run test:secret-redaction-extension && npm run test:pi-tmp-extension && npm run test:storage-guard-extension && npm run test:atelier-extension && npm run test:quota-startup && npm run test:lead-fallback && npm run test:ponytail-sync-extension && npm run test:activity-extension && npm run test:telemetry-extension && npm run test:subagent-extension && npm run test:context-checkpoint-extension && npm run test:skill-router && npm run test:autonomous-grill-extension && npm run test:working-mode-extension && npm run test:tool-groups-extension && npm run test:agent-audit-extension && npm run test:pi-execution-adapter && npm run test:worker-registry && npm run test:workstream-store && npm run test:workstreams-skill && npm run test:workstream-session-coordination && npm run test:pi-web-integration",
     "test:model-routing": "node skills/model-orchestration/scripts/resolve-runtime-binding.test.mjs",
     "test:background-bash-extension": "node --test extensions/background-bash/*.test.mjs",
     "test:secret-redaction-extension": "node --test extensions/secret-redaction/*.test.mjs",
@@ -30,6 +30,7 @@
     "test:telemetry-extension": "node --test extensions/telemetry/*.test.mjs",
     "test:subagent-extension": "node --test extensions/subagent/*.test.mjs",
     "test:context-checkpoint-extension": "node --test extensions/context-checkpoint/*.test.mjs",
+    "test:skill-router": "node --test scripts/skill-router.test.mjs",
     "test:autonomous-grill-extension": "node --test extensions/autonomous-grill/*.test.mjs",
     "test:working-mode-extension": "node --test extensions/working-mode/*.test.mjs",
     "test:tool-groups-extension": "node --test extensions/tool-groups/*.test.mjs",

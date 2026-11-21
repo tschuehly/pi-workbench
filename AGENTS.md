@@ -34,6 +34,7 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Owner re-entry orientation for Chats and Workstreams | `skills/orient/` |
 | Lead-session provider-input and skill-access audit | `extensions/agent-audit/`, `tools/agent-audit/` |
 | Pi and PI WEB configuration templates | `config/` |
+| Collapse a large skill bundle into one router skill (startup context) | `scripts/skill-router.mjs`, `scripts/context-usage.mjs` |
 | Attended human–Pi work | `docs/contracts/execution.md`, `docs/contracts/workstreams.md` |
 | Child Pi execution and durable workers | `docs/plans/level-1-subagents.md`, `docs/plans/level-1-durable-workers.md`, `extensions/subagent/`, `packages/pi-execution-adapter/`, `packages/worker-registry/` |
 | Subagent and Worker evaluation | `docs/plans/subagent-worker-iterative-improvement.md`, `docs/plans/model-role-evaluation.md`, `scripts/pi-eval.mjs` |
