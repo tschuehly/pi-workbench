@@ -11,13 +11,16 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { measure } from "./context-usage.mjs";
 
-const GROWTH = 1000, MAX_TOTAL = 30_000, MAX_DESC = 400, PACK = 20;
+const GROWTH = 1000, MAX_TOTAL = 30_000, MAX_DESC = 400, PACK = 10;
 
 const unescape = (s) => s.replace(/&(lt|gt|quot|apos|amp);/g, (_, e) => ({ lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" })[e]);
 
 export function parseSkills(section = "") {
   return [...section.matchAll(/<skill>\s*<name>([\s\S]*?)<\/name>\s*<description>([\s\S]*?)<\/description>\s*<location>([\s\S]*?)<\/location>/g)]
-    .map(([, name, desc, location]) => ({ name: unescape(name.trim()), descLen: unescape(desc.trim()).length, location: location.trim() }));
+    .map(([, name, desc, location]) => {
+      const description = unescape(desc.trim());
+      return { name: unescape(name.trim()), desc: description, descLen: description.length, location: location.trim() };
+    });
 }
 
 // An extension tool also appears as mcp__<extension>__<tool>; built-in tools have no such alias.
@@ -40,18 +43,20 @@ export function upfrontMcp(globalCfg, projectCfg) {
 }
 
 export function compare(prev, cur) {
+  if (!prev) return [];
   const flags = [];
-  if (prev && cur.total - prev.total >= GROWTH) flags.push(`startup grew by ${cur.total - prev.total} tokens (${prev.total} → ${cur.total})`);
-  if (cur.total > MAX_TOTAL) flags.push(`startup is ${cur.total} tokens, over ${MAX_TOTAL}`);
-  if (prev) {
-    const had = new Set(prev.skills.map((s) => s.name)), hadTools = new Set(prev.tools.map((t) => t.name));
-    for (const s of cur.skills) if (!had.has(s.name)) flags.push(`new skill \`${s.name}\` (${s.location})`);
-    for (const t of cur.tools) if (!hadTools.has(t.name)) flags.push(`new tool \`${t.name}\` (from ${t.source})`);
+  if (cur.total - prev.total >= GROWTH) flags.push(`startup grew by ${cur.total - prev.total} tokens (${prev.total} → ${cur.total})`);
+  if (prev.total <= MAX_TOTAL && cur.total > MAX_TOTAL) flags.push(`startup is ${cur.total} tokens, over ${MAX_TOTAL}`);
+  const oldSkills = new Map(prev.skills.map((s) => [s.name, s])), hadTools = new Set(prev.tools.map((t) => t.name));
+  const newByParent = Map.groupBy(cur.skills.filter((s) => !oldSkills.has(s.name)), (s) => path.dirname(path.dirname(s.location)));
+  for (const s of cur.skills) {
+    const old = oldSkills.get(s.name);
+    if (!old) flags.push(`new skill \`${s.name}\` (${s.location})`);
+    if (s.descLen > MAX_DESC && (!old || (old.desc === undefined ? old.descLen !== s.descLen : old.desc !== s.desc))) flags.push(`skill \`${s.name}\` description is ${s.descLen} characters (${s.location})`);
   }
-  for (const s of cur.skills) if (s.descLen > MAX_DESC) flags.push(`skill \`${s.name}\` description is ${s.descLen} characters (${s.location})`);
-  const byParent = Map.groupBy(cur.skills, (s) => path.dirname(path.dirname(s.location)));
-  for (const [dir, list] of byParent) if (list.length >= PACK) flags.push(`${list.length} skills listed from ${dir} (a pack without a router)`);
-  for (const name of cur.upfrontMcp) flags.push(`MCP server \`${name}\` loads its tools upfront`);
+  for (const t of cur.tools) if (!hadTools.has(t.name)) flags.push(`new tool \`${t.name}\` (from ${t.source})`);
+  for (const [dir, list] of newByParent) if (list.length >= PACK) flags.push(`${list.length} new skills from ${dir} (a pack install)`);
+  for (const name of cur.upfrontMcp) if (!prev.upfrontMcp.includes(name)) flags.push(`MCP server \`${name}\` loads its tools upfront`);
   return flags;
 }
 
