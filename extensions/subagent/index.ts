@@ -55,7 +55,10 @@ const Params = Type.Object({
   excludeFamilies: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Additional model families to reject during cross-family independent routing; propagated unchanged as repeatable exclusions and unavailable under distinct-model overlays" })),
   telemetryConcept: Type.Optional(Type.String({ minLength: 1, description: "Exact Studio concept slug when this execution is concept-bound" })),
   background: Type.Optional(Type.Boolean({ description: "Return immediately; a completion signal arrives later." })),
+  continueFrom: Type.Optional(Type.String({ minLength: 1, description: "executionId of a finished, failed, cancelled or interrupted Subagent of this session: its saved session resumes with task as the next message, so the brief states only what is new. Not for a running child (subagent_steer), a Worker (worker_dispatch), or review roles (always fresh)." })),
 });
+
+const CONTINUE_PREAMBLE = "This launch continues your earlier session: the conversation above is your own prior work. Build on what you already know; re-read only what may have changed since.";
 
 const CollectParams = Type.Object({ executionId: Type.Optional(Type.String({ minLength: 1, description: "One execution to inspect or collect; omit to reconcile every terminal child that is not yet collected" })) });
 const StatusParams = Type.Object({
@@ -107,7 +110,7 @@ type WorkerReceipt = { workerId: string; settled: Promise<{ error: unknown } | u
 type ChildRecord = {
   executionId: string; kind?: string; name?: string; profile?: string; cognitiveRole?: string; model?: string;
   taskPreview?: string; launchedAt?: string; workerId?: string; workerName?: string; status?: string; text?: string; truncated?: boolean;
-  diagnostic?: string; childSessionId?: string; collected?: boolean;
+  diagnostic?: string; childSessionId?: string; collected?: boolean; continuedFrom?: string;
 };
 
 export default function subagentExtension(pi: ExtensionAPI, options: { adapter?: PiRpcExecutionAdapter; resolverPath?: string; reloadClaimMs?: number } = {}) {
@@ -145,6 +148,22 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
     record({ executionId, collected: true });
   };
   const retainedOnly = (executionId: string) => launched.has(executionId) ? undefined : retained.get(executionId);
+  // The saved child session a `continueFrom` launch resumes, from this runtime's adapter or an earlier runtime's record.
+  const continuable = (executionId: string): { sessionId: string; profile?: string } | { error: string } => {
+    const live = launched.get(executionId);
+    const child = live === undefined ? retained.get(executionId) : undefined;
+    if (live === undefined && child === undefined) return { error: `No Subagent ${executionId} was launched from this session.` };
+    if ((live ?? child)!.workerId !== undefined) return { error: `${executionId} is a Worker dispatch; continue a Worker with worker_dispatch.` };
+    if (live === undefined) {
+      return child!.childSessionId === undefined
+        ? { error: `${executionId} has no recorded child session; launch a fresh child.` }
+        : { sessionId: child!.childSessionId, profile: child!.profile };
+    }
+    let status;
+    try { status = adapter.status(executionId); } catch { return { error: `${executionId} is no longer known to this runtime; launch a fresh child.` }; }
+    if (status.running) return { error: `${executionId} is still running; use subagent_steer to give it more work.` };
+    return status.sessionId === undefined ? { error: `${executionId} never started a session; launch a fresh child.` } : { sessionId: status.sessionId, profile: live.profile };
+  };
   pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
     sessionId = ctx.sessionManager.getSessionId?.() ?? sessionId;
     claimHandoff();
@@ -191,11 +210,11 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Launch one fresh attended child Pi for one bounded assignment. Prefer background:true, finish genuinely independent work, then end the turn; the completion signal starts the next turn. Never sleep, poll, or collect to wait. Omit background only when the result is the immediate next input and nothing useful can happen first.",
-    promptSnippet: "Delegate one bounded attended assignment to a fresh child Pi",
+    description: "Launch one attended child Pi for one bounded assignment, fresh or continuing a finished Subagent's saved session (continueFrom). Prefer background:true, finish genuinely independent work, then end the turn; the completion signal starts the next turn. Never sleep, poll, or collect to wait. Omit background only when the result is the immediate next input and nothing useful can happen first.",
+    promptSnippet: "Delegate one bounded attended assignment to a fresh or continued child Pi",
     promptGuidelines: [
       "Delegate execution only after the assignment's direction and verification are established. Use a subagent when context isolation, mechanical volume, parallelism, or genuinely independent judgment materially improves the result; work inline while the task needs continuous owner steering or is smaller than a handoff brief.",
-      "Use a durable worker only when repeated assignments in one stable semantic scope demonstrably benefit from preserved context; otherwise use fresh subagents.",
+      "For a follow-up to a finished, failed, cancelled or interrupted Subagent's own work (fixing review findings, the next round, resuming after a restart), pass continueFrom with its executionId and brief only what is new. Use a durable worker only for a named scope that many dispatches will reuse.",
       "Use one invocation for one bounded assignment while the user is attending.",
       "Write every brief with the task, 'Done means …' as a checkable finish line, 'Stop and ask only if …', and the expected output with the evidence to show; a result missing that evidence is a gap, not a pass. Do not add 'think carefully' lines; Model Effort controls thinking.",
       "While background children run, open each reply or wakeup with one line per child: its phase and idle time from subagent_status or the completion notice. For one marked possibly stuck, call subagent_steer with requestUpdate; if no report arrives, cancel it with subagent_cancel.",
@@ -225,6 +244,11 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       if (needsIndependence && independentOfProvider === undefined && independentOfModel === undefined) {
         return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' requires an author provider or model for independent routing.`);
       }
+      if (needsIndependence && params.continueFrom !== undefined) {
+        return failure("preflight_failed", `Cognitive Role '${params.cognitiveRole}' needs fresh context; continueFrom is only for non-review roles.`);
+      }
+      const prior = params.continueFrom === undefined ? undefined : continuable(params.continueFrom);
+      if (prior !== undefined && "error" in prior) return failure("preflight_failed", prior.error);
       if (needsIndependence && independentOfModel !== undefined && providerOf(independentOfModel) === undefined) {
         return failure("preflight_failed", `independentOfModel must be '<provider>/<model>', got '${independentOfModel}'.`);
       }
@@ -238,7 +262,10 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
 
       const parentSessionId = ctx.sessionManager.getSessionId();
       sessionId = parentSessionId;
-      const childTask = [profile.instruction, STATUS_INSTRUCTION, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
+      // A continued child already holds its profile instruction unless its profile changed.
+      const childTask = prior === undefined
+        ? [profile.instruction, STATUS_INSTRUCTION, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n")
+        : [CONTINUE_PREAMBLE, prior.profile === params.profile ? "" : profile.instruction, STATUS_INSTRUCTION, `Assignment:\n${params.task}`].filter(Boolean).join("\n\n");
       const telemetryConcept = params.telemetryConcept ?? inheritedConcept();
       let receipt;
       try {
@@ -252,6 +279,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
           parentSessionId,
           ...parentSessionFile(ctx),
           kind: "subagent",
+          ...(prior === undefined ? {} : { continuation: { sessionId: prior.sessionId } }),
           ...(params.name === undefined ? {} : { name: params.name }),
           ...(telemetryConcept === undefined ? {} : { telemetryConcept }),
         });
@@ -273,7 +301,9 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
         launchedAt: receipt.acceptedAt,
       };
       launched.set(receipt.executionId, meta);
-      record({ executionId: receipt.executionId, kind: "subagent", name: taskLabel(params.name ?? params.task), ...meta, model: `${binding.provider}/${binding.model}:${binding.effort}`, status: "running" });
+      record({ executionId: receipt.executionId, kind: "subagent", name: taskLabel(params.name ?? params.task), ...meta, model: `${binding.provider}/${binding.model}:${binding.effort}`, status: "running", ...(params.continueFrom === undefined ? {} : { continuedFrom: params.continueFrom }) });
+      // Record the session as soon as it is verified, so a child interrupted by a restart can still be continued.
+      void watchChildSession(adapter, receipt.executionId, (childSessionId) => record({ executionId: receipt.executionId, childSessionId }));
       const activity = {
         id: `delegate:${receipt.executionId}`,
         kind: "subagent",
@@ -322,7 +352,7 @@ export default function subagentExtension(pi: ExtensionAPI, options: { adapter?:
       pendingSubagentCompletions.add(tracked);
       void tracked.then(() => pendingSubagentCompletions.delete(tracked));
       const backgroundResult = (verb: string) => ({
-        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId} in the background on ${binding.provider}/${binding.model}:${binding.effort}${binding.fallback ? ` (fallback from ${binding.fallback.from}: ${binding.fallback.reason})` : ""} (${params.profile} · ${params.cognitiveRole}).` }],
+        content: [{ type: "text" as const, text: `${verb} subagent ${receipt.executionId}${params.continueFrom === undefined ? "" : ` continuing ${params.continueFrom}`} in the background on ${binding.provider}/${binding.model}:${binding.effort}${binding.fallback ? ` (fallback from ${binding.fallback.from}: ${binding.fallback.reason})` : ""} (${params.profile} · ${params.cognitiveRole}).` }],
         details: { outcome: "launched", executionId: receipt.executionId, profile: params.profile, cognitiveRole: params.cognitiveRole, acceptedAt: receipt.acceptedAt },
       });
       if (backgrounded) return backgroundResult("Launched");
@@ -988,6 +1018,19 @@ export function keepChildWebToolsLazy(pi: Pick<ExtensionAPI, "on" | "getActiveTo
   pi.on("turn_end", narrow);
 }
 
+/** Reports the child's Pi session once the adapter verified it; best effort, silent if the child ends first. */
+export async function watchChildSession(adapter: Pick<PiRpcExecutionAdapter, "observe" | "status">, executionId: string, onSession: (sessionId: string) => void) {
+  try {
+    for await (const observation of adapter.observe(executionId)) {
+      if (observation.type === "terminal") return;
+      if (observation.type !== "binding_verified") continue;
+      const sessionId = adapter.status(executionId).sessionId;
+      if (sessionId !== undefined) onSession(sessionId);
+      return;
+    }
+  } catch {}
+}
+
 export async function watchActivity(
   pi: Pick<ExtensionAPI, "events">,
   adapter: Pick<PiRpcExecutionAdapter, "observe">,
@@ -1197,7 +1240,7 @@ export function retainedResult(child: ChildRecord) {
   const outcome = child.status ?? "interrupted";
   const locator = child.childSessionId ? ` \u00b7 child session ${child.childSessionId}` : "";
   const summary = outcome === "interrupted"
-    ? `interrupted: ${child.executionId} was still running when an earlier runtime of this session ended (session shutdown, or a reload that could not hand it over). That runtime cancelled it; it is not resumed or relaunched. Launch a new child if the work is still needed.`
+    ? `interrupted: ${child.executionId} was still running when an earlier runtime of this session ended (session shutdown, or a reload that could not hand it over). That runtime cancelled it; it is not resumed or relaunched. If the work is still needed, ${child.childSessionId ? `continue it with subagent continueFrom: "${child.executionId}"` : "launch a new child"}.`
     : outcome === "success"
       ? child.text || "Child completed without a text result."
       : `${outcome}: ${child.diagnostic ?? child.text ?? "No diagnostic was reported."}`;

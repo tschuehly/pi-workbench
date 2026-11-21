@@ -18,6 +18,10 @@ Test your own brief to choose the role:
 | The finish line, but not the approach | `implementation` | standard | Weigh sources and recommend one option; build a specified change |
 | Neither: only a symptom or an open question | `frontier` | strong | "Reports keep opening with meta-commentary; find out why and fix it" |
 
+`frontier` is only for open-ended design or diagnosis. Counting, extracting, or tallying is
+`routine` however much data it covers, and a mechanical join of files or logs is a script you
+write, not a model shard.
+
 A brief that is a checklist plus a final judgment is two assignments: a `routine` child collects,
 then you decide or launch an `implementation` child. A topic that feels important does not widen
 the brief; a sharper brief or an accepted plan moves the same work to a lighter tier.
@@ -53,6 +57,10 @@ applies. Size how many reviewers a conclusion needs with [Checking](references/c
 `light-review` is the same family check on the light tier at `high`. Use it only for PR text,
 documentation, comment replies, and classifying findings; every code diff, including a one-line
 fix, gets `review`.
+
+To fix the findings, continue the author: `subagent` with `continueFrom: <author's executionId>`
+and only the findings as the task, so it keeps its context instead of re-reading the change. A
+re-review is a new fresh `review` child.
 
 **Complete when:** every reviewer's receipt shows a family different from the author's, or the
 missing independence is reported.
