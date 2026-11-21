@@ -173,6 +173,47 @@ class PiWebLogsTest(unittest.TestCase):
                 self.assertEqual(json.loads(result.stdout)["id"], chat_id)
                 self.assertIn(str(bad), result.stderr)
 
+    def test_export_writes_pi_jsonl(self):
+        chat_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        time = 1789344000000  # 2026-09-14T00:00:00Z
+        with tempfile.TemporaryDirectory(dir=os.environ.get("PI_TMP")) as directory:
+            root = Path(directory) / "durable"
+            path = root / chat_id / "session.sqlite"
+            path.parent.mkdir(parents=True)
+            (Path(directory) / "session-runtimes.json").write_text(
+                json.dumps({"version": 1, "chats": {chat_id: {"cwd": "/project"}}}))
+            with closing(sqlite3.connect(path)) as db:
+                db.executescript("""
+                    CREATE TABLE durable_schema(singleton INTEGER PRIMARY KEY, version INTEGER);
+                    INSERT INTO durable_schema VALUES (1, 2);
+                    CREATE TABLE conversations(id INTEGER PRIMARY KEY, owner_conversation_id INTEGER,
+                                               owner_task_id INTEGER, record TEXT);
+                    INSERT INTO conversations VALUES (1, NULL, NULL, '{"id":1}');
+                    INSERT INTO conversations VALUES (4, 1, 9, '{"id":4}');
+                    CREATE TABLE entries(id INTEGER PRIMARY KEY, conversation_id INTEGER, head INTEGER,
+                                         commit_seq INTEGER, record TEXT);
+                """)
+                for id, conversation, kind, role in ((10, 1, "pi.user", "user"), (11, 1, "pi.system", "system"),
+                                                     (12, 1, "pi.assistant", "assistant"),
+                                                     (15, 4, "pi.user", "user")):
+                    record = {"kind": kind, "model": [{"role": role, "content": f"text {id}", "timestamp": time + id}]}
+                    db.execute("INSERT INTO entries VALUES (?, ?, NULL, ?, ?)", (id, conversation, id, json.dumps(record)))
+                db.commit()
+            out = Path(directory) / "export"
+            result = subprocess.run([sys.executable, cli.__file__, "--pi-web-root", str(root), "export", str(out)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lead = [json.loads(line) for line in (out / f"{chat_id}.jsonl").read_text().splitlines()]
+            self.assertEqual(lead[0], {"type": "session", "version": 3, "id": chat_id, "cwd": "/project",
+                                       "timestamp": "2026-09-14T00:00:00.010000+00:00"})
+            self.assertEqual([(e["type"], e["message"]["role"]) for e in lead[1:]],
+                             [("message", "user"), ("message", "assistant")])
+            self.assertEqual(lead[2]["timestamp"], "2026-09-14T00:00:00.012000+00:00")
+            child = [json.loads(line) for line in (out / f"{chat_id}_4.jsonl").read_text().splitlines()]
+            self.assertEqual((child[0]["parentSession"], child[1]["message"]["content"]),
+                             (str((out / f"{chat_id}.jsonl").resolve()), "text 15"))
+            self.assertEqual((out / f"{chat_id}.jsonl").stat().st_mtime, (time + 12) / 1000)
+
 
 if __name__ == "__main__":
     unittest.main()

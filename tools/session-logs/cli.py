@@ -268,8 +268,48 @@ def print_transcript(path, args, records=None):
                 print(f"[omitted {item['omittedChars']} characters]")
 
 
+def iso(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat()
+
+
+def export_web(path, db, out, cwd):
+    """One Pi-format JSONL per conversation, so JSONL-only tools (e.g. backpass) can read PI WEB chats."""
+    conversations = web_conversations(db, path.parent.name)
+    files = {key: (out / f"{key.replace(':', '_')}.jsonl").resolve() for key in conversations}
+    for key, (header, parents) in conversations.items():
+        body = [e for _, e in web_entries(db, parents) if e["type"] != "metadata" and e.get("timestamp")]
+        if not body:
+            continue
+        for entry in body:
+            entry["timestamp"] = iso(entry["timestamp"])
+        session = {"type": "session", "version": 3, "id": key, "cwd": cwd, "timestamp": body[0]["timestamp"]}
+        if header.get("parentSession"):
+            session["parentSession"] = str(files[header["parentSession"]])
+        files[key].write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in [session, *body]))
+        last = timestamp(body[-1]["timestamp"]).timestamp()
+        os.utime(files[key], (last, last))  # Tools that window by file date see the chat's last activity.
+
+
 def run_web(root, args):
     stores = sorted(root.glob("*/session.sqlite"))
+    if args.command == "export":
+        out = args.directory.expanduser()
+        out.mkdir(parents=True, exist_ok=True)
+        runtimes = root.parent / "session-runtimes.json"
+        chats = json.loads(runtimes.read_text()).get("chats", {}) if runtimes.is_file() else {}
+        failed = False
+        for path in stores:
+            cwd = (chats.get(path.parent.name) or {}).get("cwd")
+            if not cwd:
+                print(f"{path}: no cwd in {runtimes}; skipped", file=sys.stderr)
+                continue
+            try:
+                with web_snapshot(path) as db:
+                    export_web(path, db, out, cwd)
+            except (OSError, ValueError) as error:
+                print(error, file=sys.stderr)
+                failed = True
+        return int(failed)
     if args.command == "read":
         wanted, sep, child = args.session.partition(":")
         matches = [p for p in stores if wanted in p.parent.name]
@@ -310,6 +350,8 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     listing = commands.add_parser("list", help="Inventory, filtered by entry activity, not file dates")
     reading = commands.add_parser("read", help="Text-only history with source entry IDs and line numbers")
+    exporting = commands.add_parser("export", help="PI WEB only: write each chat as Pi-format JSONL into DIRECTORY")
+    exporting.add_argument("directory", type=Path)
     for command in (listing, reading):
         command.add_argument("--since", type=timestamp, help="Inclusive ISO date/time; UTC if no offset")
         command.add_argument("--until", type=timestamp, help="Exclusive ISO date/time; UTC if no offset")
@@ -322,7 +364,7 @@ def main():
     reading.add_argument("--max-chars", type=int, help="Per-record text cap; omissions are reported")
     reading.add_argument("--format", choices=("jsonl", "text"), default="text")
     args = parser.parse_args()
-    if args.since and args.until and args.since >= args.until:
+    if getattr(args, "since", None) and args.until and args.since >= args.until:
         parser.error("--since must precede --until")
     if args.command == "read" and args.max_chars is not None and args.max_chars < 1:
         parser.error("--max-chars must be positive")
@@ -331,6 +373,8 @@ def main():
         if not root.is_dir():
             parser.error(f"PI WEB durable root is not a directory: {root}")
         return run_web(root, args)
+    if args.command == "export":
+        parser.error("export needs --pi-web or --pi-web-root")
     root = args.root.expanduser()
     if args.command == "list":
         if not root.is_dir():
