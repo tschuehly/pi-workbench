@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { claudeAliases, claudePayload } from "../src/claude.ts";
-import { openChatHost } from "../src/chat.ts";
+import { codemodeInlineBudget, openChatHost } from "../src/chat.ts";
 import { ChatSession } from "../src/chat-session.ts";
 import { readLog } from "../src/faux.ts";
 import { context } from "../src/host.ts";
@@ -443,6 +443,15 @@ test("without --packages no package code runs: tools and commands stay unavailab
 	assert.equal(end.isError, true);
 	await host.close();
 	assert.ok(!existsSync(f.pingLog));
+});
+
+test("the codemode section's inline budget comes from Pi's settings, as in the Pi CLI (0: no tool declarations inline)", () => {
+	const root = scratch("codemode-budget");
+	const agentDir = join(root, "agent");
+	mkdirSync(agentDir, { recursive: true });
+	assert.equal(codemodeInlineBudget(root, agentDir), undefined, "no setting: the library default");
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ codemode: { inlineBudget: 0 } }));
+	assert.equal(codemodeInlineBudget(root, agentDir), 0);
 });
 
 test("every tool a Durable Chat registers is behind the redacting wrapper: delegation, checkpoint, tool groups, Atelier, bash, Workbench and package tools, and a later install", async () => {

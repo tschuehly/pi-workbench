@@ -8,6 +8,7 @@ import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-
 import type { Provider } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
@@ -146,9 +147,14 @@ export type ChatHost = Host & {
  * restart-surviving form. Marked replay-unsafe all the same: a restart never reruns a script, whose nested calls may
  * have had effects; the owner reconciles it. Its output goes behind the redacting wrapper like every tool's.
  */
-function codemodeExtension(sandbox: CodemodeSandbox): Extension {
-	const extension = createCodemodeExtension({ sandbox });
+function codemodeExtension(sandbox: CodemodeSandbox, inlineBudget: number | undefined): Extension {
+	const extension = createCodemodeExtension({ sandbox, ...(inlineBudget === undefined ? {} : { inlineBudget }) });
 	return { ...extension, tools: extension.tools?.map((tool) => ({ ...tool, replay: "unsafe" as const })) };
+}
+
+/** Pi's `codemode.inlineBudget` setting, read as the Pi CLI's codemode extension reads it; `undefined` keeps the library default. */
+export function codemodeInlineBudget(cwd: string, agentDir: string): number | undefined {
+	return SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getSettings().codemode?.inlineBudget;
 }
 
 /** pi-ai's per-API compat flags for adding tools mid-conversation without resending the transcript. */
@@ -198,6 +204,9 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const workbenchBash = bash.extension();
 	const spawner = new SessionSpawner(chatId);
 	const sandbox = new CodemodeSandbox();
+	const agentDir = options.packages?.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	// Like the packages: only a Chat that runs the user's Pi settings (PI WEB's `--packages`) reads them.
+	const inlineBudget = options.packages === undefined || options.readOnly === true ? undefined : codemodeInlineBudget(options.cwd, agentDir);
 	// Tool groups defer the group tools of every extension before them. The Workbench bash, installed after the core
 	// tools, replaces their bash.
 	const extensions: Extension[] = [
@@ -211,7 +220,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		workbenchBash,
 		atelier.extension(),
 		spawner.extension(),
-		codemodeExtension(sandbox),
+		codemodeExtension(sandbox, inlineBudget),
 	];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
 	const aliases = claudeAliases("pi");
@@ -223,7 +232,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		: await PiPackages.load({
 				cwd: options.cwd,
 				chatId,
-				agentDir: options.packages.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+				agentDir,
 				scratch: join(options.dir, "pi-packages"),
 				emit: emitPackage,
 			});
