@@ -71,9 +71,10 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
   `node scripts/context-usage.mjs` before and after, and report the lead and child token change to
   Thomas. Explain any increase.
 - Commit each coherent unit after it is complete and needs no further human input.
+  Before committing, check that the staged diff contains only that unit. This rule does not authorize merging or pushing.
 - Change Pi Workbench and PI WEB code only in a development worktree you own, on its own branch.
   The `*.installed` checkouts and the integration checkouts are what the owner runs; changes reach
-  them only by merge and owner-approved promotion.
+  them only by merge and owner-approved promotion. Verify the target path is in that worktree before the first edit.
 - Before changing sibling PI WEB, fetch `upstream` and the `origin` fork. Work on a fork branch and
   never push to upstream directly.
 - Keep sibling PI WEB `main` as a clean fast-forward mirror of `upstream/main`. Use `pi-workbench`
