@@ -10,6 +10,10 @@ This is a same-session, lossy context checkpoint. The focus directs Pi's summari
 
 When a session that can call `compact_and_continue` crosses 200,000 context tokens, the `turn_end` hook adds one visible `context-ceiling` entry to the context (a boundary entry, so it starts no turn) that tells the model to carry on with the current phase and to compact once it is done with `compact_and_continue`, naming what the summary must keep and the next phase. Each further 50,000 tokens adds a one-line follow-up until a compaction drops the context; it fires again at the next step above wherever the context lands. Subagent and Worker children receive the tool too; `packages/pi-execution-adapter/` keeps a child running across the settle an accepted checkpoint causes.
 
+## Startup budget
+
+A lead session's first reply reports how big its prompt was before the first message (input plus cache read and write, the number `scripts/context-usage.mjs` measures). Above 20,000 tokens (`STARTUP_BUDGET_TOKENS`), the owner sees a one-line warning naming the size and the command that breaks it down; the model never sees it. It fires once per session, not for resumed sessions or Subagent and Worker children.
+
 ## Checkpoint barrier
 
 `checkpoint-barrier.mjs` makes the checkpoint atomic against background children. A background Subagent or Worker can reach terminal completion after `compact_and_continue` is accepted but before `agent_settled` fires, and its wakeup asks for a turn. The barrier blocks turn-triggering child wakes from acceptance through compaction, delivers the checkpoint result first, then releases every queued wake exactly once at the resumed turn's first `agent_start` or `agent_settled`. Releasing in the same tick as the result would race its turn start: Pi marks the session streaming only after the async `before_agent_start`, so a second triggered send runs a concurrent prompt that throws and leaves the session wedged. A failed compaction still releases them; session shutdown drops them instead of delivering them late.

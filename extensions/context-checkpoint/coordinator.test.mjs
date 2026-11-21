@@ -215,3 +215,13 @@ test("nudges at the ceiling and every step above it, and re-arms after it drops"
   assert.equal(turnEnd(80_000), undefined);
   assert.equal(turnEnd(400_000), undefined, "no nudge toward a tool this session cannot call");
 });
+
+test("startup budget: notice only for a first reply above the budget", async () => {
+  const { startupBudgetNotice } = await import("./coordinator.mjs");
+  const reply = (input, cacheRead = 0, cacheWrite = 0) => ({ role: "assistant", usage: { input, cacheRead, cacheWrite } });
+  assert.match(startupBudgetNotice(reply(100, 30_000, 20_500), 0), /started at 51k tokens, above the 20k startup budget/);
+  assert.equal(startupBudgetNotice(reply(100, 19_000), 0), undefined, "under budget");
+  assert.equal(startupBudgetNotice(reply(100, 60_000), 1), undefined, "not the session's first reply (resumed)");
+  assert.equal(startupBudgetNotice({ role: "user", usage: { input: 90_000 } }, 0), undefined, "not an assistant reply");
+  assert.equal(startupBudgetNotice(reply(100, 60_000), 0, 70_000), undefined, "budget is a parameter");
+});

@@ -6,6 +6,7 @@ import {
   latestAssistantToolCallCount,
   MAX_NEXT_PHASE_CHARS,
   MAX_SUMMARY_FOCUS_CHARS,
+  startupBudgetNotice,
   validateCheckpointRequest,
 } from "./coordinator.mjs";
 import { checkpointBarrier } from "./checkpoint-barrier.mjs";
@@ -123,6 +124,19 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
     const entry = ceiling(ctx.getContextUsage()?.tokens);
     // Pi replaces the chained boundary entries with the returned list: keep earlier handlers' entries.
     return entry === undefined ? undefined : { entries: [...(event.entries ?? []), entry] };
+  });
+
+  // Leads only: children start from a profile, and the owner reads the lead's notice.
+  const budgetChecked = new Set<string>();
+  pi.on("message_end", (event, ctx) => {
+    const message = event.message as any;
+    const id = ctx.sessionManager.getSessionId();
+    if (process.env.PI_WORKBENCH_EXECUTION_KIND || message.role !== "assistant" || !message.usage || budgetChecked.has(id)) return;
+    budgetChecked.add(id);
+    const earlier = ctx.sessionManager.getBranch().filter((e: any) =>
+      e.type === "message" && e.message?.role === "assistant" && e.message.timestamp !== message.timestamp).length;
+    const notice = startupBudgetNotice(message, earlier);
+    if (notice && ctx.hasUI) ctx.ui.notify(notice, "warning");
   });
 
   pi.on("agent_start", (_event, ctx) => {

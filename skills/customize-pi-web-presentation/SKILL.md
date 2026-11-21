@@ -1,5 +1,6 @@
 ---
 name: customize-pi-web-presentation
+disable-model-invocation: true
 description: Customize PI WEB's spacing and layout through validated presentation profiles. Use when the user asks to change PI WEB density, control or row sizing, panel or message spacing, toolbar gaps, or content width, or to create or repair an agent-authored presentation profile.
 ---
 

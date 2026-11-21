@@ -129,3 +129,17 @@ export function compactionInstructions(request) {
     "Do not call generated notes or summaries authoritative state, a durable checkpoint, a Continuation Artifact, or a cross-session handoff.",
   ].join("\n");
 }
+
+// Owner budget (2026-11-21): a lead should start below 20k tokens; above it, the next config slip is visible.
+export const STARTUP_BUDGET_TOKENS = 20_000;
+
+/** The first reply's prompt (input + cache read + cache write) is what the session loaded before its first message. */
+export function startupBudgetNotice(message, earlierReplies, budget = STARTUP_BUDGET_TOKENS) {
+  if (message?.role !== "assistant" || earlierReplies !== 0) return undefined;
+  const u = message.usage ?? {};
+  const tokens = (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+  if (tokens <= budget) return undefined;
+  return `This session started at ${Math.round(tokens / 1000)}k tokens, above the ${Math.round(budget / 1000)}k startup budget. `
+    + "Find what grew: node ~/IdeaProjects/pi-workbench.durable-installed/scripts/context-usage.mjs --cwd <dir>, "
+    + "then again with -- --no-mcp, --no-skills or --no-context-files.";
+}
