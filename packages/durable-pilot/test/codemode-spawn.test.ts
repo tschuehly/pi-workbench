@@ -3,9 +3,11 @@
 // here this test standing in for the daemon, to start an independent Chat and reports the answer).
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, mock, test } from "node:test";
 import { openChatHost } from "../src/chat.ts";
+import { context } from "../src/host.ts";
 import { SessionSpawner } from "../src/spawn-session.ts";
 import { ChatHost, family, live, logged, type Message, textOf, type UiEvent } from "./chat-proc.ts";
 import { cleanup } from "./runner.ts";
@@ -31,13 +33,14 @@ test("P062 codemode: offered to the lead by default; a script calls the Chat's t
 	writeFileSync(join(cwd, "secrets.env"), `TOKEN_LINE=${SECRET}\n`);
 	const host = new ChatHost(store, cwd);
 	await host.ready;
-	const code = "const a = await tools.read({ path: 'secrets.env' }); const b = await tools.bash({ command: 'echo from-bash', description: 'echo', foreground: true }); return [a, JSON.stringify(b)].join('\\n');";
+	const code = "const a = await tools.read({ path: 'secrets.env' }); const b = await tools.bash({ command: 'echo from-bash', description: 'echo', foreground: true }); return [a, JSON.stringify(b), 'models: ' + [typeof models.classify, typeof models.generateImages, typeof models.getModelsOfType].join(',')].join('\\n');";
 	await host.call("prompt", { operationId: "op-1", text: call("codemode", { code }) });
 	const result = await host.until(isResult("codemode"), "the codemode result");
 	await host.idle(1);
 	const output = textOf((result.message as Message).content);
 	assert.match(output, /TOKEN_LINE=\[REDACTED:env:PILOT_CODEMODE_TOKEN\]/, output);
 	assert.match(output, /from-bash/);
+	assert.match(output, /models: function,function,function/, "the script still has the models capability");
 	assert.notEqual((result.message as Message).isError, true);
 	assert.ok(logged(store)[0]!.tools!.includes("codemode"), "the lead's first request offers codemode");
 	await host.close();
@@ -48,6 +51,90 @@ test("P062 codemode: offered to the lead by default; a script calls the Chat's t
 		assert.equal(h.registry.snapshot().tools().find(({ tool }) => tool.name === "codemode")?.tool.replay, "unsafe", "a restart never reruns a script: it is reconciled by the owner");
 	} finally {
 		await h.close();
+	}
+});
+
+test("lead tool descriptions and parameter docs keep the pre-trim rules in fewer characters", async (t) => {
+	const { store, cwd } = family("tool-texts");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: "tool schema check" });
+	await host.idle(1);
+	await host.close();
+	const db = new DatabaseSync(join(store, "session.sqlite"), { readOnly: true });
+	try {
+		const row = db.prepare("SELECT record FROM entries WHERE json_extract(record, '$.kind') = 'pi.system' ORDER BY id LIMIT 1").get()!;
+		const { toolsAdded } = JSON.parse(String(row.record)).model[0] as { toolsAdded: { name: string; description: string; parameters: object }[] };
+		// Key phrases for the rules in the pre-trim descriptions and parameter help.
+		const rules = {
+			ask_user: {
+				size: 3483,
+				description: ["chips above the user's composer", "return immediately", "follow-up message that wakes you", "any question may stay unanswered", "Batch the decisions", "instead of asking in prose", "keep working on what does not depend on them", "end your turn if nothing does", "Do not poll or repost", "put all explanation into the set", "only say that questions were posted", "When the facts change", "update: <askId> (no other fields confirms the set)", "withdraw: <askId>"],
+				parameters: ["what they all share", "what the item is, an example, where it stands", "Its consequence.", "Mark your recommendation", "do not number it", "Stable machine value", "Default: one answer per question", "Custom choice is always added", "Send nothing else"],
+			},
+			request_attention: {
+				size: 740,
+				description: ["until they look", "return immediately", "finished work to review", "login or credential", "manual check", "being blocked", "Decisions go to ask_user", "routine progress or after every turn"],
+				parameters: ["One short line", "what you need from the user and why", "readable without the Chat"],
+			},
+			bash: {
+				size: 1733,
+				description: ["Background by default", "job ID at once", "delivers exit status and output in a new message", "never infer success from the job ID", "foreground=true for short commands", "up to 30 seconds", "continues in the background", "continue independent work or end the turn", "do not launch conflicting writes", "bash_status shows elapsed time and output size", "bash_cancel stops a job", "survive host restarts", "stop at their timeout or after 12 hours"],
+				parameters: ["Shown to the user instead of the command", "Timeout in seconds", "default false"],
+			},
+			compact_and_continue: {
+				size: 1386,
+				description: ["completed phase", "compact older context", "start the named next phase in this session", "alone as the final action", "after saving and verifying work", "next phase is concrete", "gains from a smaller context", "never to avoid hard reasoning or unfinished work", "Do not create a progress file", "authoritative", "durable checkpoints", "Continuation Artifacts", "cross-session handoffs"],
+				parameters: ["directive to the summarizer", "not a handoff summary", "at most 1200 characters", "existing evidence paths instead of restating history", "concrete next phase to begin after compaction"],
+			},
+		};
+		for (const [name, rule] of Object.entries(rules)) {
+			await t.test(name, () => {
+				const tool = toolsAdded.find((tool) => tool.name === name);
+				assert.ok(tool, `${name} is offered`);
+				assert.ok(JSON.stringify(tool).length < rule.size, `${name} definition (including parameter docs) is shorter than ${rule.size} characters`);
+				const parameters = JSON.stringify(tool.parameters);
+				const missing = [...rule.description.filter((phrase) => !tool.description.includes(phrase)), ...rule.parameters.filter((phrase) => !parameters.includes(phrase))];
+				assert.deepEqual(missing, [], `Missing ${name} rules`);
+			});
+		}
+	} finally {
+		db.close();
+	}
+});
+
+test("P062 codemode points to the installed models docs instead of spelling out the API", async () => {
+	const { store, cwd } = family("codemode-model-docs");
+	const host = await openChatHost({ dir: store, cwd, model: "faux" });
+	try {
+		const tool = (await host.root.agent(context)).tools.find((tool) => tool.name === "codemode");
+		assert.ok(tool?.description, "codemode has a description");
+		assert.doesNotMatch(tool.description, /models\.classify\(/);
+		const pointer = /^- `models`: classifiers and image generation\. Read (.+) first\.$/m.exec(tool.description)?.[1];
+		assert.ok(pointer && isAbsolute(pointer) && pointer.endsWith("/docs/codemode.md"), "the description points to absolute codemode docs");
+		assert.ok(statSync(pointer).isFile(), "the installed docs exist");
+	} finally {
+		await host.close();
+	}
+});
+
+test("P062 codemode keeps the upstream models help when the installed docs are missing", async (t) => {
+	const { store, cwd } = family("codemode-missing-docs");
+	const packageDir = process.env.PI_PACKAGE_DIR;
+	process.env.PI_PACKAGE_DIR = cwd;
+	t.after(() => {
+		if (packageDir === undefined) delete process.env.PI_PACKAGE_DIR;
+		else process.env.PI_PACKAGE_DIR = packageDir;
+	});
+	const host = await openChatHost({ dir: store, cwd, model: "faux" });
+	try {
+		const tool = (await host.root.agent(context)).tools.find((tool) => tool.name === "codemode");
+		assert.ok(tool?.description);
+		assert.match(tool.description, /models\.classify\(/);
+		assert.doesNotMatch(tool.description, /Read .*codemode\.md first\./);
+		assert.equal(host.registry.snapshot().tools().find(({ tool }) => tool.name === "codemode")?.tool.replay, "unsafe");
+	} finally {
+		await host.close();
 	}
 });
 
@@ -117,15 +204,44 @@ test("P064 spawn_session: the answer timeout only runs while a daemon is connect
 	}
 });
 
-test("P064 spawn_session without PI WEB's spawn support fails visibly instead of waiting", async () => {
-	const { store, cwd } = family("spawn-off");
-	const host = new ChatHost(store, cwd);
+test("P064 only offers spawn_session while PI WEB enables it, without changing the worker tools", async () => {
+	const { store, cwd } = family("spawn-toggle");
+	let host = new ChatHost(store, cwd);
 	await host.ready;
-	await host.call("prompt", { operationId: "op-1", text: call("spawn_session", { prompt: "Fix the build" }) });
-	const result = await host.until(isResult("spawn_session"), "the spawn_session result");
+	const probe = async (n: number, text: string) => {
+		await host.call("prompt", { operationId: `op-${n}`, text });
+		await host.idle(n);
+		return logged(store).find((request) => request.label === text.slice(0, 40))!.tools!;
+	};
+	assert.ok(!(await probe(1, "default state")).includes("spawn_session"));
+	await host.call("configure", { resources: {}, spawnSessions: true });
+	await host.call("mode", { args: "orchestration Workers" });
+	const enabled = await probe(2, "enabled with Workers");
+	assert.ok(enabled.includes("spawn_session"));
+	assert.ok(enabled.includes("worker_create"));
+	const { activeLeafId: enabledLeaf } = await host.call<{ activeLeafId: string }>("tree");
+
+	await host.call("configure", { resources: {}, spawnSessions: false });
+	const disabled = await probe(3, call("spawn_session", { prompt: "Fix the build" }));
+	assert.ok(!disabled.includes("spawn_session"));
+	assert.ok(disabled.includes("worker_create"));
+	const result = await host.until(isResult("spawn_session"), "the unoffered tool result");
 	assert.equal((result.message as Message).isError, true);
-	assert.match(textOf((result.message as Message).content), /Spawning sessions is disabled/);
+	assert.match(textOf((result.message as Message).content), /Tool spawn_session is not available/);
 	assert.ok(!host.events.some((e) => e.type === "durable.spawn"));
+
+	const { activeLeafId } = await host.call<{ activeLeafId: string }>("tree");
+	await host.call("navigate", { targetId: enabledLeaf, expectedLeafId: activeLeafId });
+	assert.ok(!(await probe(4, "earlier branch")).includes("spawn_session"), "history does not restore an old PI WEB setting");
+	await host.call("configure", { resources: {}, spawnSessions: true });
+	assert.ok((await probe(5, "enabled again")).includes("spawn_session"));
+	await host.close();
+
+	host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-6", text: "before daemon config" });
+	await host.idle(1);
+	assert.ok(!logged(store).find((request) => request.label === "before daemon config")!.tools!.includes("spawn_session"));
 	await host.close();
 });
 

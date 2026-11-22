@@ -124,7 +124,9 @@ test("P089 background Subagent: routed fresh child with its allowlist and own id
 	const transcript = await host.call<Transcript>("transcript");
 	assert.equal(customs(transcript.messages, "pi-workbench:child-completion").length, 1, "one completion wake");
 
-	const child = logged(store).filter((l) => (l as { model?: string }).model === "openai/gpt-6-luna");
+	const requests = logged(store);
+	assert.ok(!requests.find((l) => l.label === "parent-only context")!.tools!.includes("report_status"), "report_status is not offered to the lead");
+	const child = requests.filter((l) => (l as { model?: string }).model === "openai/gpt-6-luna");
 	assert.equal(child[0]!.messages, 1, "the child starts without the parent transcript");
 	assert.deepEqual(child[0]!.tools, ["bash", "compact_and_continue", "find", "grep", "ls", "read", "report_status"], "scout allowlist: no write, edit or delegation tools");
 	await host.close();
@@ -411,6 +413,7 @@ test("P095–P098 Workers: create starts nothing; busy dispatch fails preflight;
 	assert.match(dispatched, /^Dispatched worker \S+ \(worker "Scope keeper", first dispatch\) in the background on anthropic\/claude-opus-5-5:medium \(coordinator · coordination\)/);
 	const firstId = launchedId(dispatched);
 	await waitFor(() => logged(store).some((l) => l.label.startsWith("call:bash")), "the leaf's request");
+	assert.ok(logged(store).find((l) => l.label.startsWith("call:subagent"))?.tools?.includes("report_status"), "the first Worker dispatch is offered report_status");
 	await prompt(host, call("worker_dispatch", { workerId, task: "second", cognitiveRole: "coordination", background: true }));
 	assert.match(await toolResult(host, "worker_dispatch", 2), new RegExp(`^preflight_failed: Worker ${workerId} is busy with dispatch ${firstId}; one dispatch at a time\\.$`), "a busy Worker refuses instead of queueing");
 	const collected = textOf((await notice(host)).content);
@@ -459,7 +462,7 @@ test("P095–P098 Workers: create starts nothing; busy dispatch fails preflight;
 		assert.equal(leaves.length, 1);
 		assert.equal(leaves[0]!.collected, true);
 		assert.equal((await h.harness.snapshot(ChildDoc, leaves[0]!.conversationId as ConversationId, context))?.depth, 2, "lead → Worker → leaf");
-		assert.deepEqual(logged(store).find((l) => l.label.startsWith("call:bash"))?.tools, ["bash", "compact_and_continue", "find", "grep", "ls", "read", "report_status"], "the leaf has no delegation tools");
+		assert.deepEqual(logged(store).find((l) => l.label.startsWith("call:bash"))?.tools, ["bash", "compact_and_continue", "find", "grep", "ls", "read", "report_status"], "the Worker's leaf is offered report_status but no delegation tools");
 	});
 });
 

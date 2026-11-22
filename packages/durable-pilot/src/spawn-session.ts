@@ -98,6 +98,7 @@ export class SessionSpawner {
 	extension() {
 		const tool = defineTool({
 			name: "spawn_session",
+			deferred: true,
 			description: "Start a fully independent session; its transcript and results are unavailable here. Use only when the user or active workflow explicitly requests a separate session.",
 			parameters: Params,
 			// Default `unsafe`: an interrupted call may have started a Chat, so it is reconciled by the owner, never rerun.

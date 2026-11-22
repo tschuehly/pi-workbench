@@ -8,6 +8,7 @@ import { clampThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-
 import type { Provider } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
+import { getDocsPath, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
@@ -15,6 +16,7 @@ import { createEditTool, createReadTool, createWriteTool } from "@earendil-works
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
 import { checkpointExtension } from "./checkpoint.ts";
 import { ChildDoc, delegationExtension } from "./delegation.ts";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { router } from "./faux.ts";
@@ -148,9 +150,30 @@ export type ChatHost = Host & {
  * restart-surviving form. Marked replay-unsafe all the same: a restart never reruns a script, whose nested calls may
  * have had effects; the owner reconciles it. Its output goes behind the redacting wrapper like every tool's.
  */
-function codemodeExtension(sandbox: CodemodeSandbox): Extension {
-	const extension = createCodemodeExtension({ sandbox });
-	return { ...extension, tools: extension.tools?.map((tool) => ({ ...tool, replay: "unsafe" as const })) };
+function codemodeExtension(sandbox: CodemodeSandbox, inlineBudget: number | undefined): Extension {
+	const extension = createCodemodeExtension({ sandbox, ...(inlineBudget === undefined ? {} : { inlineBudget }) });
+	const docs = join(getDocsPath(), "codemode.md");
+	let hasDocs = false;
+	try {
+		hasDocs = statSync(docs).isFile();
+	} catch {
+		// Keep the built-in help if the docs cannot be found.
+	}
+	const modelsBlock = /^`models` \(all functions return promises\):[\s\S]*?^At most 4 classify\/generateImages calls run at once; more wait\.$/m;
+	return {
+		...extension,
+		tools: extension.tools?.map((tool) => ({
+			...tool,
+			replay: "unsafe" as const,
+			...(tool.name === "codemode" && hasDocs ? { description: tool.description?.replace(modelsBlock, () => `- \`models\`: classifiers and image generation. Read ${docs} first.`) } : {}),
+		})),
+	};
+}
+
+/** Pi's `codemode.inlineBudget` setting, read as the Pi CLI's codemode extension reads it; `undefined` keeps the library default. */
+export function codemodeInlineBudget(cwd: string, agentDir: string): number | undefined {
+	const budget = SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getSettings().codemode?.inlineBudget;
+	return typeof budget === "number" && Number.isFinite(budget) && budget >= 0 ? budget : undefined;
 }
 
 /** pi-ai's per-API compat flags for adding tools mid-conversation without resending the transcript. */
@@ -200,6 +223,9 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const workbenchBash = bash.extension();
 	const spawner = new SessionSpawner(chatId);
 	const sandbox = new CodemodeSandbox();
+	const agentDir = options.packages?.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	// Like the packages: only a Chat that runs the user's Pi settings (PI WEB's `--packages`) reads them.
+	const inlineBudget = options.packages === undefined || options.readOnly === true ? undefined : codemodeInlineBudget(options.cwd, agentDir);
 	// Tool groups defer the group tools of every extension before them. The Workbench bash, installed after the core
 	// tools, replaces their bash.
 	const extensions: Extension[] = [
@@ -213,7 +239,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		workbenchBash,
 		atelier.extension(),
 		spawner.extension(),
-		codemodeExtension(sandbox),
+		codemodeExtension(sandbox, inlineBudget),
 	];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
 	const aliases = claudeAliases("pi");
@@ -225,7 +251,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		: await PiPackages.load({
 				cwd: options.cwd,
 				chatId,
-				agentDir: options.packages.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+				agentDir,
 				scratch: join(options.dir, "pi-packages"),
 				emit: emitPackage,
 			});

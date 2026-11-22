@@ -5,6 +5,7 @@ import { OutputBuffer, sanitizeOutput } from "@earendil-works/chord/output";
 import { withCancel } from "@earendil-works/chord/context";
 import { type AssistantMessage, clampThinkingLevel, getSupportedThinkingLevels, type ImageContent, type Message, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
+	AgentDoc,
 	CompactionEntry,
 	type CompactionSettings,
 	type ConversationView,
@@ -15,6 +16,7 @@ import {
 	type SubmissionId,
 	type TaskId,
 	type ToolSlot,
+	type Tx,
 	UsageDoc,
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
@@ -350,6 +352,7 @@ export class ChatSession {
 		if (this.#chat !== undefined) {
 			this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
 			this.#chat.spawner?.attach((event) => this.#emit(event));
+			await this.#host.harness.commit((tx) => this.#syncSpawnTool(tx), context);
 			this.#chat.workbench.record = (type, data) => {
 				this.#record(type, data);
 				// A child is its own telemetry session, as a legacy child Pi process is: its start names the lead as its parent,
@@ -1036,6 +1039,18 @@ export class ChatSession {
 		this.#emit({ type: "command.output", level: "error", message: "Couldn’t compact history. Try again." });
 	}
 
+	/** PI WEB's setting is host-wide; a rewound agent may still have a different model tool list. */
+	async #syncSpawnTool(tx: Tx): Promise<void> {
+		const spawner = this.#chat?.spawner;
+		if (spawner === undefined) return;
+		const agent = await tx.doc(AgentDoc, this.#host.root.id);
+		const modelTools = agent.modelTools;
+		if (Array.isArray(modelTools)) return; // Never edit a child's explicit allowlist.
+		const add = modelTools?.add ?? [];
+		if (add.includes("spawn_session") === spawner.enabled) return;
+		agent.modelTools = { ...modelTools, add: spawner.enabled ? [...add, "spawn_session"] : add.filter((name) => name !== "spawn_session") };
+	}
+
 	/** Resources PI WEB resolved with Pi's loader; their sources are recorded when they change. Compaction: Pi's settings. */
 	async configure(resources: Resources, settings: { compaction?: CompactionSettings; spawnSessions?: boolean } = {}): Promise<void> {
 		if (this.#chat === undefined) return;
@@ -1046,6 +1061,7 @@ export class ChatSession {
 		await this.#host.harness.commit(async (tx) => {
 			const doc = await tx.doc(ResourcesDoc);
 			if (JSON.stringify(doc.sources) !== JSON.stringify(sources)) doc.sources = sources;
+			await this.#syncSpawnTool(tx);
 		}, context);
 	}
 
@@ -1289,6 +1305,7 @@ export class ChatSession {
 			const next = await commitNavigation(harness, this.#host.root, plan);
 			await this.#stop?.();
 			this.#host.root = next;
+			if (this.#chat !== undefined) await harness.commit((tx) => this.#syncSpawnTool(tx), context);
 			await this.#watch();
 			this.#record("session.tree", { entryId: null, newLeafId: plan.newLeafId, oldLeafId: plan.oldLeafId });
 			this.#emit({ type: "session.tree.changed" });
