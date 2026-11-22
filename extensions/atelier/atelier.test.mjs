@@ -8,7 +8,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import atelierExtension, { appendLog, claimPage, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
+import atelierExtension, { appendLog, claimPage, claimSteps, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
 import { compose, derive, diffPreview, keyTexts, palette, threadLayout, wordDiff } from "./kernel/atelier.js";
 
 process.env.ATELIER_PAGE_CHECK = "off"; // the browser Page check has its own test (page-check.test.mjs)
@@ -1223,6 +1223,49 @@ test("receiver: the lock changes only under its claim guard, which a live claima
     assert.throws(() => claimPage(page, "d", "d", 7, false, { ended: { pid: Number(dead), session: "gone", generation: 7 } }), /changed since generation 7/);
     assert.equal(lock().session, "newer");
   } finally { c.host.stop(); p.done(); }
+});
+
+test("receiver: a stale guard is broken without ever removing a live claimant's guard, under the staged race (review 3: 2)", () => {
+  const p = project();
+  const { page, lock } = sessions(p);
+  const file = `${page}.events.jsonl.lock`, guard = `${file}.claim`;
+  const dead = spawnSync(process.execPath, ["-e", "console.log(process.pid)"], { encoding: "utf8" }).stdout.trim();
+  const claims = [];
+  const claim = (id) => { try { claims.push(claimPage(page, id)); } catch (error) { assert.match(String(error), /claiming this Page just now/); } };
+  try {
+    // A finds a dead claimant's guard; before A breaks it, a releaser removes it and B (live, another process) takes it.
+    writeFileSync(guard, dead);
+    claimSteps.at = (step) => { if (step === "break") { claimSteps.at = undefined; rmSync(guard); writeFileSync(guard, String(process.ppid)); } };
+    claim("a");
+    assert.equal(readFileSync(guard, "utf8"), String(process.ppid), "B's guard is left in place");
+    claim("c");
+    assert.equal(readFileSync(guard, "utf8"), String(process.ppid), "C does not take B's guard either");
+    assert.deepEqual(claims, [], "while B holds the guard nobody else claims");
+    // B finishes; a guard released between A's failed link and its read is just retried.
+    claimSteps.at = (step) => { if (step === "read") { claimSteps.at = undefined; rmSync(guard); } };
+    writeFileSync(guard, dead);
+    claim("a");
+    assert.deepEqual(claims, [1], "exactly one claim succeeds");
+    assert.equal(lock().session, "a");
+    assert.deepEqual(readdirSync(p.root).filter((f) => /\.claim/.test(f)), [], "no guard left behind");
+  } finally { claimSteps.at = undefined; p.done(); }
+});
+
+test("receiver: the lock and its guards, which carry the release token, are never served to the Page (review 3: 1)", async () => {
+  const p = project();
+  const host = createHost({ root: p.root, sessionId: "s", send: () => {}, release: () => undefined });
+  try {
+    const { url } = await host.open(path.join(host.root, "page.html"));
+    const lockFile = path.join(host.root, "page.html.events.jsonl.lock");
+    assert.ok(JSON.parse(readFileSync(lockFile, "utf8")).release.token, "the lock names a release token");
+    writeFileSync(`${lockFile}.claim`, "1");
+    for (const name of ["page.html.events.jsonl.lock", "PAGE.HTML.EVENTS.JSONL.LOCK", "page.html.events.jsonl.lock.claim", "page.html.events.jsonl.lock%2Eclaim"]) {
+      const res = await fetch(new URL(name, url));
+      assert.equal(res.status, 404, name);
+      assert.doesNotMatch(await res.text(), /token/, name);
+    }
+    assert.equal((await fetch(url)).status, 200, "the Page itself is served");
+  } finally { host.stop(); p.done(); }
 });
 
 test("receiver: a live receiver of an older Atelier (lock without generation) is never fenced; close or /reload it first (review 1)", async () => {

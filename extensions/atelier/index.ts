@@ -13,7 +13,7 @@ import { DESCRIPTION } from "./description.mjs";
 
 // Atelier extension (decisions 129-156): the `atelier` tool, and Delivery of human events from a Page's Event Log
 // into this Pi session through the page server in host.ts. The Page side lives in kernel/atelier.js.
-export { KERNEL_FILES, appendLog, claimPage, copyKernel, createHost, dueMessages, imagesDir, inside, logPath, readLog } from "./host.ts";
+export { KERNEL_FILES, appendLog, claimPage, claimSteps, copyKernel, createHost, dueMessages, imagesDir, inside, logPath, readLog } from "./host.ts";
 
 
 export default function atelierExtension(pi: ExtensionAPI) {

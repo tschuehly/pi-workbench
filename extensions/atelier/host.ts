@@ -89,29 +89,39 @@ function readLock(page: string): Lock {
 }
 const named = (lock: Lock) => lock.label ?? lock.session ?? "no session";
 
+/** Creates `file` holding this pid, exclusively and whole (linked from a written temp file); false if it exists. */
+function take(file: string) {
+  const tmp = `${file}.${process.pid}.${randomUUID()}`;
+  writeFileSync(tmp, String(process.pid));
+  try { linkSync(tmp, file); return true; } catch (error: any) {
+    if (error.code !== "EEXIST") throw error;
+    return false;
+  } finally { rmSync(tmp, { force: true }); }
+}
+
+/** Test seam: runs at each step of `exclusive` so a test can stage another claimant in between. */
+export const claimSteps: { at?: (step: "read" | "break") => void } = {};
+
 /**
  * Runs `fn` holding `<lock>.claim`, created exclusively, so reading the lock and replacing it is one step across processes:
- * nobody changes the lock between the check and the write. A guard whose process is gone is broken once.
+ * nobody changes the lock between the check and the write. A guard whose process is gone is removed only while holding
+ * `<lock>.claim.break` and after reading it dead again there, so a live claimant's guard is never moved or removed.
  */
 function exclusive<T>(page: string, fn: () => T): T {
-  const guard = `${lockPath(page)}.claim`, busy = () => new Error(`Another Pi session is claiming this Page just now (${guard}). Try again.`);
-  for (let attempt = 0; ; attempt++) {
-    const tmp = `${guard}.${process.pid}.${randomUUID()}`;
-    writeFileSync(tmp, String(process.pid));
-    try { linkSync(tmp, guard); } catch (error: any) {
-      if (error.code !== "EEXIST") throw error;
-      let owner = "";
-      try { owner = readFileSync(guard, "utf8"); } catch { /* released meanwhile */ }
-      if (attempt > 0 || (owner && alive(Number(owner)))) throw busy();
-      // shortcut: a guard re-created between this read and the rename is put back only if its path is still free; only a claimant's crash inside its synchronous claim leaves one.
-      const moved = `${guard}.${randomUUID()}`;
-      try { renameSync(guard, moved); } catch { continue; }
-      if (readFileSync(moved, "utf8") !== owner) { try { linkSync(moved, guard); } catch { /* another took it */ } rmSync(moved, { force: true }); throw busy(); }
-      rmSync(moved, { force: true });
-      continue;
-    } finally { rmSync(tmp, { force: true }); }
-    try { return fn(); } finally { rmSync(guard, { force: true }); }
+  const guard = `${lockPath(page)}.claim`, breaker = `${guard}.break`;
+  const busy = (file = guard) => new Error(`Another Pi session is claiming this Page just now (${file}). Try again; if this persists and no Pi session is opening this Page, delete ${file}.`);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (take(guard)) { try { return fn(); } finally { rmSync(guard, { force: true }); } }
+    claimSteps.at?.("read");
+    let owner: string;
+    try { owner = readFileSync(guard, "utf8"); } catch { continue; } // released meanwhile
+    if (alive(Number(owner))) throw busy();
+    claimSteps.at?.("break");
+    if (!take(breaker)) throw busy(breaker);
+    // Under the breaker only the guard's owner removes it, and a dead one cannot: the guard read dead here is still dead.
+    try { let now = ""; try { now = readFileSync(guard, "utf8"); } catch { /* gone */ } if (now && !alive(Number(now))) rmSync(guard, { force: true }); } finally { rmSync(breaker, { force: true }); }
   }
+  throw busy();
 }
 
 /** Replaces the lock (inside `exclusive`). */
@@ -527,7 +537,8 @@ export function createHost(options: {
     let decoded: string;
     try { decoded = decodeURIComponent(pathname); } catch { return json(res, 400, { error: "Bad path" }); }
     const file = resolve(decoded.slice(1));
-    if (!file || !statSync(file).isFile()) return json(res, 404, { error: "Not found" });
+    // The receiver lock and its guards (and their temp files) carry the release token: never readable by a Page.
+    if (!file || /\.events\.jsonl\.lock(\.|$)/i.test(path.basename(file)) || !statSync(file).isFile()) return json(res, 404, { error: "Not found" });
     const size = statSync(file).size;
     const headers: Record<string, string | number> = { "content-type": TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream", "cache-control": "no-store", "accept-ranges": "bytes" };
     // Byte ranges so <video> seeks (Review Studio 11f5d33c9).
