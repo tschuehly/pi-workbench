@@ -1,0 +1,11 @@
+{
+  "name": "atelier-mine",
+  "owner": { "name": "Me" },
+  "plugins": [
+    {
+      "name": "atelier",
+      "source": "./atelier",
+      "description": "My own copy of Atelier review Pages for Claude Code, from tschuehly/pi-workbench at 63fbf36."
+    }
+  ]
+}

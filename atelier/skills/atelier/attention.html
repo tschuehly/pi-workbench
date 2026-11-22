@@ -1,0 +1,344 @@
+<!-- Attention areas: paste this whole block into the Page's <head>, before the Kernel's <script type="module" src="atelier.js">.
+     It reads atelier.state() and, for every top-level section (an atl-key element with no atl-key ancestor and an <h2>):
+     - puts a "Needs you" or "Done" pill right after the <h2> title;
+     - folds a Done section to one line ("✓ answer · show details"); opened again it stays open until "fold" is clicked;
+     - fills <div data-att-bar></div> with a sticky "‹ 3 / 11 ›" stepper through every question, change and new reply
+       that needs me, in Page order (hidden when nothing does);
+     - if the Page has <nav data-att-outline></nav>: numbers the question sections (1, 1.1, 2.1.1), indents each follow-up
+       (a section with data-follows="<parent atl-key>", placed after its parent) under its parent with a coloured left border,
+       a connector and a "Level 2 · Follow-up to 1" caption, and fills the nav with a live outline and a one-line colour key.
+       <nav data-att-outline atl-key="outline"> also gets a "Comment on this list" button.
+       Put the nav and the sections in <div class="att-layout"> so the outline sits on the left. -->
+<style>
+  .att-t::before { content:attr(data-t); }
+  .att-pill { display:inline-block; vertical-align:middle; margin-left:8px; font-size:12px; font-weight:600; line-height:1.6;
+              padding:0 9px; border-radius:999px; background:#f1efeb; color:#6b665e; white-space:nowrap; }
+  .att-pill.needs { background:var(--accent, #b4552d); color:#fff; }
+  .att-link { margin-left:8px; font-size:13px; font-weight:400; color:var(--accent, #b4552d); text-decoration:underline; cursor:pointer; background:none; border:0; padding:0; }
+  .att-folded > :not(h2):not(.att-line):not(.att-cap):not([atl-ui=pin]) { display:none !important; } /* the pin keeps its Comment button */
+  .att-line { display:none; align-items:center; gap:8px; flex-wrap:wrap; margin-top:4px; }
+  .att-folded > .att-line { display:flex; }
+  .att-line .muted { color:var(--atl-muted, #6b665e); }
+  [data-att-bar] { display:none; }
+  [data-att-bar].on { display:flex; align-items:center; gap:8px; margin:0 0 14px; padding:4px 10px; border-radius:8px;
+                      position:sticky; top:calc(var(--atl-top, 0px) + 4px); z-index:5;
+                      background:var(--accent, #b4552d); color:#fff; font-weight:600; }
+  [data-att-bar] button { font:inherit; font-size:18px; line-height:1; padding:2px 10px; border:1px solid rgba(255,255,255,.5); border-radius:6px;
+                          background:none; color:#fff; cursor:pointer; }
+  [data-att-bar] button:hover { background:rgba(255,255,255,.15); }
+  .att-pos { min-width:52px; text-align:center; font-variant-numeric:tabular-nums; }
+  .att-what { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; font-weight:400; }
+  .att-here { animation:att-here 1.6s ease-out; }
+  @keyframes att-here { from { box-shadow:0 0 0 4px var(--accent, #b4552d); } to { box-shadow:0 0 0 4px transparent; } }
+  /* shortcut: hides the Kernel's own "N open · next" and "N to answer" (non-public markup); the bar above replaces them */
+  [atl-ui=top] [data-atl=next], [atl-ui=top] .atl-bar > span.atl-tag:not(.atl-warn) { display:none !important; }
+  /* question tree */
+  .att-layout { display:grid; grid-template-columns:minmax(200px, 250px) minmax(0, 1fr); gap:20px; align-items:start; }
+  [data-att-outline] { position:sticky; top:calc(var(--atl-top, 0px) + 12px); max-height:calc(100vh - var(--atl-top, 0px) - 24px); overflow:auto;
+                       background:var(--card, #fff); border:1px solid var(--line, #e4dfd6); border-radius:10px; padding:12px; font-size:13px; }
+  /* when the list has comments, their button gets a strip above the heading */
+  html:has([atl-ui=pin][data-key="outline"] [data-atl=thread]) [data-att-outline] { padding-top:34px; }
+  @media (max-width:600px) { .att-layout { grid-template-columns:1fr; } [data-att-outline] { position:relative; top:auto; } }
+  [data-att-outline]:empty { display:none; }
+  [data-att-outline] h2 { margin:0 0 8px; font-size:14px; }
+  [data-att-outline] ul { list-style:none; margin:0; padding:0; }
+  .att-count { font-weight:400; color:var(--muted, #6b665e); font-size:12px; margin-left:4px; }
+  .att-item { display:flex; align-items:baseline; gap:6px; margin:2px 0; }
+  .att-item a { flex:1; min-width:0; }
+  .att-item.done a { color:var(--muted, #6b665e); }
+  .att-item.att-l2 { margin-left:9px; padding-left:12px; border-left:2px solid var(--line, #e4dfd6); }
+  .att-item.att-l3 { margin-left:30px; padding-left:12px; border-left:2px solid var(--line, #e4dfd6); }
+  .att-item a { color:inherit; text-decoration:none; }
+  .att-item a:hover { text-decoration:underline; }
+  .att-item .n { display:inline-block; min-width:34px; color:var(--muted, #6b665e); font-variant-numeric:tabular-nums; }
+  .att-item .att-pill { flex:none; margin-left:0; font-size:10px; padding:0 6px; }
+  .att-legend { display:flex; flex-wrap:wrap; align-items:center; gap:4px 5px; margin:0 0 10px; font-size:12px; color:var(--muted, #6b665e); }
+  .att-legend .att-dot { margin-left:6px; }
+  .att-comment { display:block; margin:-4px 0 8px; font-size:12px; }
+  .att-hide { position:absolute; top:10px; right:10px; border:0; background:none; padding:0; cursor:pointer; font:inherit; font-size:12px;
+              color:var(--muted, #6b665e); }
+  .att-hide:hover { color:var(--fg, #1f1d1a); }
+  .att-layout.att-hidden { grid-template-columns:34px minmax(0, 1fr); }
+  .att-hidden [data-att-outline] { padding:10px 0; overflow:visible; }
+  .att-hidden [data-att-outline] > :not(.att-hide) { display:none; }
+  .att-hidden .att-hide { position:static; display:block; margin:0 auto; writing-mode:vertical-rl; font-weight:600; color:var(--accent, #b4552d); }
+  @media (max-width:600px) {
+    .att-layout.att-hidden { grid-template-columns:1fr; }
+    .att-hidden [data-att-outline] { padding:8px 12px; }
+    .att-hidden .att-hide { writing-mode:horizontal-tb; margin:0; }
+  }
+  .att-sw { width:5px; height:16px; border-radius:2px; flex:none; }
+  .att-dot { width:8px; height:8px; border-radius:50%; flex:none; }
+  .att-node { position:relative; border-left:5px solid var(--accent, #b4552d) !important; }
+  .att-node.att-l2 { margin-left:40px; border-left-color:#c98e5f !important; }
+  .att-node.att-l3 { margin-left:80px; border-left-color:#e0c2a6 !important; }
+  .att-node:not(.att-l1)::before { content:""; position:absolute; left:-27px; top:-15px; width:20px; height:36px;
+                                   border-left:2px solid var(--line, #e4dfd6); border-bottom:2px solid var(--line, #e4dfd6); border-bottom-left-radius:8px; }
+  /* My choice: of the Kernel's change marks keep only blue "reworded"; no green "new" marks (Needs you covers new
+     questions) and no rail of dots on the right edge.
+     shortcut: hides Kernel elements by their attributes, which are not a public API; recheck after a Kernel update. */
+  [atl-ui=rail], [atl-ui=mark].atl-k-added, [atl-ui=dot].atl-k-added { display:none !important; }
+  .att-wait { display:none !important; }
+  /* shortcut: the comment grouping below styles the Kernel's non-public pin/chip markup; recheck after a Kernel update.
+     Several threads on one element show as one button; the others appear only while open. */
+  .atl-prow > [data-atl=thread] ~ [data-atl=thread]:not([aria-expanded=true]) { display:none !important; }
+  .atl-prow > [data-att-group] .atl-ct, .atl-prow > [data-att-group] .atl-cn, .atl-prow > [data-att-group] .atl-nd { display:none !important; }
+  .atl-prow > [data-att-group]::after { content:attr(data-att-group); margin-left:4px; }
+  .atl-prow > [data-att-group].att-unread::after { content:attr(data-att-group) " ●"; }
+  .att-group { position:fixed; z-index:2147483100; width:min(320px, calc(100vw - 24px)); max-height:60vh; overflow:auto; padding:4px;
+               background:var(--card, #fff); border:1px solid var(--line, #e4dfd6); border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,.15); font-size:13px; }
+  .att-group h3 { margin:6px 8px 4px; font-size:13px; }
+  .att-titem { display:block; width:100%; text-align:left; font:inherit; font-size:13px; background:none; border:0; border-radius:6px; padding:6px 8px; cursor:pointer; color:inherit; }
+  .att-titem:hover, .att-titem:focus-visible { background:var(--bg, #faf8f5); }
+  .att-titem span, .att-titem small { display:block; }
+  .att-titem small { color:var(--muted, #6b665e); }
+  .att-titem.closed { opacity:.6; }
+  .att-titem .att-tnew { float:right; width:8px; height:8px; margin-top:5px; border-radius:50%; background:#0969da; }
+  /* closed comments on removed sections fold to one line in the Kernel's corner box; click it to show them */
+  html:not(.att-show-gone) .att-gone-card { display:none !important; }
+  [atl-ui=panel] .atl-h-un h4 { cursor:pointer; }
+  [atl-ui=panel] .atl-h-un h4::after { content:" · show"; font-weight:400; color:var(--muted, #6b665e); }
+  html.att-show-gone [atl-ui=panel] .atl-h-un h4::after { content:" · hide"; }
+  .att-titem .att-tnew { float:right; width:8px; height:8px; margin-top:5px; border-radius:50%; background:#0969da; }
+  .att-cap { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted, #6b665e); margin-bottom:2px; }
+</style>
+<script>
+(() => {
+  const store = "att-open:" + location.pathname;
+  const opened = new Set(JSON.parse(sessionStorage.getItem(store) || "[]")); // sections she reopened stay open
+  const hideKey = "att-list-hidden:" + location.pathname;
+  const save = () => sessionStorage.setItem(store, JSON.stringify([...opened]));
+  let last = null;
+
+  const addr = el => { const p = []; for (let e = el; e; e = e.parentElement?.closest("[atl-key]")) p.unshift(e.getAttribute("atl-key")); return p.join("/"); };
+  const sections = () => [...document.querySelectorAll("[atl-key]")].filter(el => !el.parentElement.closest("[atl-key]") && el.querySelector(":scope > h2"));
+  const find = key => { let el = document; for (const k of key.split("/")) el = el?.querySelector(`[atl-key="${CSS.escape(k)}"]`); return el; };
+  const answer = d => String(d.answer ?? "").replace(/^[A-D] · /, ""); // an own answer arrives as d.answer too (d.custom is only true/false)
+  const title = key => find(key)?.querySelector("h1,h2,h3,h4,h5,h6")?.textContent.trim() || (key === "outline" ? "Question list" : key.split("/").pop());
+
+  const make = (tag, text, cls) => Object.assign(document.createElement(tag), { textContent: text || "", className: cls || "" });
+  // Inside a section the words go in CSS, not the text: the Kernel compares a section's text on each Page update,
+  // and words we add would mark every answered section as changed (blue dot).
+  const tag = (name, text, cls) => { const e = make(name, "", cls + " att-t"); e.dataset.t = text; if (name === "button") e.setAttribute("aria-label", text); return e; };
+  // [answer text, how many other answers]; a section's own latest answer wins, else its cards' liked ones
+  function summary(key) {
+    const answered = last.decisions.filter(d => d.key === key && d.state === "done");
+    const own = answered.find(d => d.declared) || answered.pop(); // the section's own question beats extra asks on it
+    if (own) return [answer(own), 0];
+    const mine = last.decisions.filter(d => d.key.startsWith(key + "/"));
+    const liked = mine.filter(d => d.answer === d.options?.[0]); // first option is the positive one (Interested, Keep, Yes)
+    return [liked.map(d => title(d.key)).join(", ") || "none liked", mine.length - liked.length];
+  }
+
+  function line(key) {
+    const el = make("div", "", "att-line"), [text, others] = summary(key);
+    el.append(tag("b", "✓ " + text, ""));
+    if (others) el.append(tag("span", `+${others} others`, "muted"));
+    const more = tag("button", others ? "show all" : "show details", "att-link");
+    more.onclick = () => { opened.add(key); save(); apply(); };
+    el.append(more);
+    return el;
+  }
+
+  const isQ = s => { const k = last.keys?.[addr(s)]; return k && (k.new || k.changed || k.done); };
+  const isDone = s => { const k = last.keys?.[addr(s)]; return k && !k.new && !k.changed && k.done > 0; };
+
+  // Going to a question from the outline counts as having seen what changed in it (its blue and green dots clear).
+  // shortcut: clicks the Kernel's own Seen buttons, which are not a public API; recheck after a Kernel update.
+  function seenUnder(s) {
+    const key = addr(s), under = x => x === key || x.startsWith(key + "/");
+    // clicks every Seen button for a change in this section; returns the changes that had none
+    const clear = () => [...document.querySelectorAll('[data-atl="chrail"][data-addr]')].map(b => b.dataset.addr).filter(under)
+      .filter(x => { const b = document.querySelector(`[data-atl="chseen"][data-addr="${CSS.escape(x)}"]`); b?.click(); return !b; });
+    // a change inside a folded section has no Seen button while hidden: open the section, then clear once the Kernel redraws
+    if (clear().length && s.classList.contains("att-folded")) { opened.add(key); save(); apply(); setTimeout(clear, 150); }
+  }
+
+  function tree() {
+    const nav = document.querySelector("[data-att-outline]");
+    if (!nav) return;
+    const info = new Map(); let top = 0;
+    for (const s of sections().filter(isQ)) {
+      // a follow-up waits, hidden, until I've answered the question it follows (one I already answered stays)
+      const pEl = s.dataset.follows && find(s.dataset.follows), k = last.keys[addr(s)];
+      if (pEl && (pEl.classList.contains("att-wait") || (info.has(pEl) && !isDone(pEl))) && !k.done && !k.changed) { s.classList.add("att-wait"); continue; }
+      const p = pEl && info.get(pEl);
+      const n = p ? `${p.n}.${p.kids = (p.kids || 0) + 1}` : String(++top);
+      const lvl = p ? Math.min(p.lvl + 1, 3) : 1;
+      info.set(s, { n, lvl, kids: 0 });
+      s.classList.add("att-node", "att-l" + lvl);
+      s.querySelector(":scope > h2").before(tag("div", `Level ${lvl} · ` + (p ? `Follow-up to ${p.n}` : `Question ${n}`), "att-cap"));
+      if (!s.id) s.id = "att-" + addr(s);
+    }
+    // every word the block adds goes in data-t: the outline may be a Key (atl-key) so I can comment on it
+    if (!nav.querySelector(".att-list")) nav.insertAdjacentHTML("afterbegin", `<h2><span class="att-t" data-t="Questions"></span> <span class="att-count att-t"></span></h2>
+      <div class="att-legend">
+        <span class="att-sw" style="background:var(--accent, #b4552d)"></span><span class="att-t" data-t="Level 1"></span>
+        <span class="att-sw" style="background:#c98e5f"></span><span class="att-t" data-t="2"></span>
+        <span class="att-sw" style="background:#e0c2a6"></span><span class="att-t" data-t="3"></span>
+        <span class="att-dot" style="background:#0969da"></span><span class="att-t" data-t="changed"></span>
+      </div><ul class="att-list"></ul>`);
+    // a button folds the list away to a thin strip on the left; remembered for this Page
+    const shut = localStorage.getItem(hideKey) === "1";
+    nav.closest(".att-layout")?.classList.toggle("att-hidden", shut);
+    let hide = nav.querySelector(":scope > .att-hide");
+    if (!hide) {
+      hide = tag("button", "", "att-hide"); nav.prepend(hide);
+      hide.onclick = () => { localStorage.setItem(hideKey, localStorage.getItem(hideKey) === "1" ? "0" : "1"); apply(); };
+    }
+    hide.dataset.t = shut ? "Questions ›" : "‹ Hide";
+    hide.setAttribute("aria-label", shut ? "Show the question list" : "Hide the question list");
+    hide.setAttribute("aria-expanded", String(!shut));
+    if (nav.hasAttribute("atl-key") && !nav.querySelector("[atl-comment]")) {
+      const b = tag("button", "Comment on this list", "att-link att-comment"); b.setAttribute("atl-comment", ""); nav.querySelector(":scope > h2").after(b); // at the top: the list below may scroll
+    }
+    const list = nav.querySelector(".att-list"); list.replaceChildren();
+    let done = 0;
+    for (const [s, { n, lvl }] of info) {
+      const li = make("li", "", "att-item att-l" + lvl), a = make("a");
+      a.href = "#" + s.id;
+      a.onclick = () => seenUnder(s);
+      a.append(tag("span", n, "n"), tag("span", s.querySelector(":scope > h2").textContent.trim(), ""));
+      // one line per question: its pill at the end, no answer, so the tree stays short
+      const d = isDone(s); if (d) done++;
+      li.classList.toggle("done", d); li.append(a);
+      if (last.keys[addr(s)]?.changed) { const dot = make("span", "", "att-dot"); dot.style.background = "#0969da"; dot.title = "Changed since you last looked"; dot.setAttribute("role", "img"); dot.setAttribute("aria-label", dot.title); li.append(dot); }
+      li.append(tag("span", d ? "Done" : "Needs you", "att-pill" + (d ? "" : " needs"))); list.append(li);
+    }
+    nav.querySelector(".att-count").dataset.t = `${done} of ${info.size} done`;
+  }
+
+  // Comments stay on their element; several threads on one element become one button that lists them.
+  let group = null, passing = null;
+  const closeGroup = () => { group?.remove(); group = null; };
+  function threadsUi() {
+    if (!last) return; // before the Kernel's first state
+    for (const row of document.querySelectorAll(".atl-prow")) {
+      const chips = [...row.querySelectorAll(":scope > [data-atl=thread]")], first = chips[0];
+      if (!first) continue;
+      if (chips.length > 1) {
+        if (first.dataset.attGroup !== `${chips.length} comments`) first.dataset.attGroup = `${chips.length} comments`;
+        first.classList.toggle("att-unread", chips.some(c => c.classList.contains("atl-unread")));
+      } else delete first.dataset.attGroup;
+    }
+    // closed threads whose section is gone: marked so they fold (see the CSS)
+    const gone = new Set((last.threads || []).filter(t => t.closed && !(t.key && find(t.key))).map(t => "t:" + t.seq));
+    for (const c of document.querySelectorAll("[atl-ui=panel] .atl-un > .atl-card")) c.classList.toggle("att-gone-card", gone.has(c.dataset.id));
+    drawBar(); // new replies count in the bar
+  }
+  function openGroup(chip) {
+    closeGroup();
+    const pin = chip.closest("[atl-ui=pin]"), chips = [...chip.parentElement.querySelectorAll(":scope > [data-atl=thread]")];
+    group = make("div", "", "att-group"); group.setAttribute("role", "dialog");
+    group.append(make("h3", "Comments on " + title(pin?.dataset.key || "")));
+    for (const c of chips) {
+      const label = c.getAttribute("aria-label") || "", closed = / · Closed/.test(label);
+      const it = make("button", "", "att-titem" + (closed ? " closed" : "")); it.type = "button";
+      if (c.classList.contains("atl-unread")) it.append(make("span", "", "att-tnew"));
+      it.append(make("span", label.replace(/^Thread #\d+: /, "").split(" · ")[0]), make("small", label.split(" · ").slice(1).join(" · ")));
+      // opened after this click ends, else the Kernel reads the same click as "outside the thread" and closes it
+      it.onclick = () => { closeGroup(); passing = c.dataset.seq; setTimeout(() => { document.querySelector(`[data-atl=thread][data-seq="${passing}"]`)?.click(); passing = null; }); };
+      group.append(it);
+    }
+    document.body.append(group);
+    const r = chip.getBoundingClientRect(), w = group.offsetWidth;
+    group.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + "px";
+    group.style.top = Math.min(r.bottom + 6, innerHeight - group.offsetHeight - 12) + "px";
+    group.querySelector("button")?.focus();
+  }
+  document.addEventListener("click", e => {
+    const chip = e.target.closest?.("[data-att-group]");
+    if (chip && !passing) { e.preventDefault(); e.stopImmediatePropagation(); return group ? closeGroup() : openGroup(chip); }
+    if (group && !group.contains(e.target)) closeGroup();
+    if (e.target.closest?.("[atl-ui=panel] .atl-h-un h4")) document.documentElement.classList.toggle("att-show-gone");
+  }, true);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeGroup(); });
+  addEventListener("scroll", closeGroup, { passive: true });
+  // the Kernel redraws its chips on its own (hover, focus); re-mark them each time
+  new MutationObserver(() => threadsUi()).observe(document.documentElement, { childList: true, subtree: true });
+
+  const pending = new Set(); // answered just now: stays open for the 3-second undo window, then folds
+  let seen = null;           // sections already Done at the previous state
+
+  function apply() {
+    if (!last) return;
+    for (const s of sections()) {
+      s.querySelectorAll(":scope > .att-line, :scope > .att-cap, :scope > h2 > .att-pill, :scope > h2 > .att-link").forEach(e => e.remove());
+      s.classList.remove("att-folded", "att-node", "att-l1", "att-l2", "att-l3", "att-wait");
+    }
+    tree(); // reads the clean titles, so it runs before the pills go in
+    for (const s of sections()) {
+      const key = addr(s), h = s.querySelector(":scope > h2");
+      if (!isQ(s)) continue; // no Decisions: reference, no pill
+      const done = isDone(s);
+      h.append(tag("span", done ? "Done" : "Needs you", "att-pill" + (done ? "" : " needs")));
+      if (!done) { opened.delete(key); continue; }
+      if (opened.has(key)) {
+        const fold = tag("button", "fold", "att-link");
+        fold.onclick = () => { opened.delete(key); save(); apply(); };
+        h.append(fold);
+        continue;
+      }
+      if (pending.has(key)) continue;
+      s.append(line(key));
+      s.classList.add("att-folded");
+    }
+    drawBar();
+  }
+
+  // The bar steps through everything that needs me, in Page order, like a diff view: "‹ 3 / 11 ›".
+  let here = null; // id of the item I'm on
+  function todo() {
+    const out = [], top = el => el && sections().find(s => s.contains(el));
+    for (const s of sections()) {
+      if (s.classList.contains("att-wait") || !last.keys[addr(s)]) continue;
+      const q = (last.toAnswer || []).some(id => top(find(last.decisions.find(d => d.id === id)?.key || "")) === s);
+      const kinds = [q && "Question", last.keys[addr(s)].changed && "Changed"].filter(Boolean);
+      if (kinds.length) out.push({ id: "s:" + addr(s), el: s, what: kinds.join(", "), name: title(addr(s)) });
+    }
+    for (const c of document.querySelectorAll("[atl-ui=pin] [data-atl=thread].atl-unread")) {
+      const key = c.closest("[atl-ui=pin]").dataset.key, el = find(key);
+      if (el && !el.closest(".att-wait")) out.push({ id: "t:" + c.dataset.seq, el, seq: c.dataset.seq, what: "New reply", name: title(key) });
+    }
+    return out.sort((a, b) => a.el === b.el ? (a.seq ? 1 : -1) : a.el.compareDocumentPosition(b.el) & 2 ? 1 : -1);
+  }
+  function drawBar() {
+    const bar = document.querySelector("[data-att-bar]");
+    if (!bar) return;
+    const items = todo(), i = items.findIndex(t => t.id === here), cur = items[i];
+    bar.classList.toggle("on", items.length > 0);
+    if (!bar.querySelector(".att-pos")) {
+      bar.innerHTML = '<button type="button" class="att-prev" aria-label="Previous">‹</button><span class="att-pos"></span><button type="button" class="att-next" aria-label="Next">›</button><span class="att-what"></span>';
+      bar.querySelector(".att-prev").onclick = () => step(-1);
+      bar.querySelector(".att-next").onclick = () => step(1);
+    }
+    // set text only when it differs: the comment code watches the Page for changes and calls this again
+    const put = (sel, t) => { const e = bar.querySelector(sel); if (e.textContent !== t) e.textContent = t; };
+    put(".att-pos", `${cur ? i + 1 : "–"} / ${items.length}`);
+    put(".att-what", cur ? `${cur.what}: ${cur.name}` : `${items.length === 1 ? "thing needs" : "things need"} you · › to start`);
+  }
+  function step(d) {
+    const items = todo();
+    if (!items.length) return;
+    const i = items.findIndex(t => t.id === here), t = items[i < 0 ? (d > 0 ? 0 : items.length - 1) : (i + d + items.length) % items.length];
+    here = t.id; drawBar();
+    t.el.scrollIntoView({ behavior: "smooth", block: "center" });
+    t.el.classList.remove("att-here"); void t.el.offsetWidth; t.el.classList.add("att-here");
+    if (t.seq) { passing = t.seq; setTimeout(() => { document.querySelector(`[data-atl=thread][data-seq="${t.seq}"]`)?.click(); passing = null; }, 400); }
+  }
+
+  document.addEventListener("atelier:state", e => {
+    last = e.detail;
+    if (!last.loaded) return;
+    const done = sections().filter(isDone).map(addr);
+    if (seen) for (const key of done) if (!seen.has(key) && !pending.has(key)) {
+      pending.add(key);
+      setTimeout(() => { pending.delete(key); apply(); }, 3000);
+    }
+    seen = new Set(done);
+    apply();
+    requestAnimationFrame(threadsUi); // after the Kernel has drawn its thread buttons
+  });
+  document.addEventListener("atelier:update", () => apply());
+})();
+</script>

@@ -1,0 +1,8 @@
+[
+  {
+    "name": "atelier",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/daemon.mjs\"",
+    "description": "Atelier: human input from open Pages",
+    "when": "on-skill-invoke:atelier:atelier"
+  }
+]

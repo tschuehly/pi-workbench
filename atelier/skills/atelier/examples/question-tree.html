@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telling apart what needs you</title>
+<style>
+  :root { --bg:#faf8f5; --fg:#1f1d1a; --muted:#6b665e; --line:#e4dfd6; --card:#fff; --accent:#b4552d; --tint:#fbefe8; --done:#f1efeb;
+          --atl-bg:#fff; --atl-fg:#1f1d1a; --atl-muted:#6b665e; --atl-line:#e4dfd6; --atl-accent:#b4552d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, -apple-system, sans-serif; }
+  .wrap { padding:16px 24px 80px; }
+  header h1 { margin:0 0 4px; font-size:22px; }
+  header p { margin:0 0 14px; color:var(--muted); max-width:75ch; }
+  .tabs { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 14px; }
+  .tabs [role=tab] { font:inherit; font-size:14px; padding:6px 12px; border:1px solid var(--line); border-radius:999px; background:var(--card); color:var(--fg); cursor:pointer; }
+  .tabs [role=tab][aria-selected=true] { background:var(--fg); color:#fff; border-color:var(--fg); }
+  .panel[hidden] { display:none; }
+  .panel > p { margin:0 0 12px; max-width:75ch; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; }
+  @media (max-width:760px) { .pair { grid-template-columns:1fr; } }
+  .pair h3 { margin:0 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .frame { border:1px solid var(--line); border-radius:12px; background:var(--bg); padding:14px; }
+  .pair [atl-slot] { margin-top:10px; }
+
+  /* ---- the mocked trip Page ---- */
+  .m { font-size:13px; line-height:1.45; }
+  .m h4 { margin:0 0 2px; font-size:16px; }
+  .m h5 { margin:0 0 4px; font-size:14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .m p { margin:0; }
+  .m .sub { color:var(--muted); margin-bottom:10px; }
+  .m .box { background:var(--card); border:1px solid var(--line); border-radius:9px; padding:10px; margin-bottom:12px; }
+  .m .box.open { border:2px solid var(--accent); }
+  .m .steps { list-style:none; margin:6px 0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .m .steps li { border:1px solid var(--line); border-radius:6px; padding:5px 6px; }
+  .m .steps b { color:var(--accent); font-variant-numeric:tabular-nums; margin-right:4px; }
+  .m .btns { display:flex; gap:6px; margin-top:6px; }
+  .m .btn { border:1px solid var(--line); border-radius:6px; padding:2px 9px; background:#fff; }
+  .m .btn.on { background:var(--fg); color:#fff; border-color:var(--fg); }
+  .m table { width:100%; border-collapse:collapse; }
+  .m td, .m th { text-align:left; padding:3px 5px; border-top:1px solid var(--line); }
+  .m thead th { border-top:0; }
+  .m td:first-child { color:var(--muted); }
+  .m .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; }
+  .m .trip { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px; }
+  .m .trip h6 { margin:0 0 2px; font-size:13px; }
+  .m .zone-h { display:none; }
+  .m .line { display:none; }
+  .m .pill { font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; background:var(--done); color:var(--muted); }
+  .m .pill.turn { background:var(--accent); color:#fff; }
+  .m .pill.ref { background:transparent; border:1px solid var(--line); }
+  .m .labels-only { display:none; }
+  .m .tips { margin:6px 0 0; padding-left:16px; color:var(--muted); }
+
+  /* 1 order: zones with headings */
+  .m.order .zone-h { display:block; margin:18px 0 6px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .m.order .zone-h.turn { color:var(--accent); margin-top:4px; }
+  /* 2 tint */
+  .m.tint .box.open { background:var(--tint); border:1px solid #efcdbb; }
+  .m.tint .box.done { background:var(--done); color:#5d5850; }
+  .m.tint .box.done .trip { background:#f7f5f2; }
+  /* 3 labels */
+  .m.labels .labels-only { display:inline; }
+  /* 4 shrink */
+  .m .short { display:none; }
+  .m.shrink .box.done .full { display:none; }
+  .m.shrink .box.done .short { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .m .short .more { color:var(--accent); text-decoration:underline; }
+  .m .chip { border:1px solid var(--line); border-radius:999px; padding:1px 8px; background:#fff; }
+  .m .chip.no { color:var(--muted); text-decoration:line-through; }
+  /* 5 stripe */
+  .m.stripe .box { border-left-width:6px; }
+  .m.stripe .box.open { border:1px solid var(--line); border-left:6px solid var(--accent); }
+  .m.stripe .box.done { border-left-color:#c9c3b8; }
+  .m.stripe .box.ref { border-left-width:1px; }
+  /* 6 space */
+  .m.space .box { margin-bottom:0; }
+  .m.space .line { display:flex; align-items:center; gap:10px; margin:34px 0 10px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .m.space .line::after { content:""; flex:1; border-top:2px solid var(--line); }
+  .m.space .line.first { margin-top:6px; }
+  .m.space .line.turn { color:var(--accent); }
+  .m.space .line.turn::after { border-color:var(--accent); }
+  .m.space .grid { gap:6px; }
+
+  /* ---- round 2: question tree ---- */
+  .round2 { display:grid; grid-template-columns:230px 1fr; gap:24px; align-items:start; margin-bottom:40px; }
+  @media (max-width:760px) { .round2 { grid-template-columns:1fr; } .outline { position:static; } }
+  .outline { position:sticky; top:calc(var(--atl-top, 0px) + 12px); background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; font-size:13px; }
+  .outline h2 { margin:0 0 8px; font-size:14px; }
+  .outline ul { list-style:none; margin:0; padding:0; }
+  .outline ul ul { margin-left:9px; padding-left:12px; border-left:2px solid var(--line); }
+  .outline li { margin:3px 0; }
+  .outline a { color:var(--fg); text-decoration:none; }
+  .outline a:hover { text-decoration:underline; }
+  .outline .n { display:inline-block; min-width:34px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .outline [atl-slot] { margin-top:10px; }
+  .outline .count { font-weight:400; color:var(--muted); font-size:12px; margin-left:4px; }
+  .outline .st { display:block; margin:1px 0 4px 34px; font-size:12px; color:var(--muted); }
+  .outline li li .st { margin-left:34px; }
+  .outline .ans { color:var(--fg); }
+  .pill { font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; background:var(--done); color:var(--muted); white-space:nowrap; }
+  .pill.turn { background:var(--accent); color:#fff; }
+  .legend { margin:0 0 10px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+  .legend summary { cursor:pointer; font-weight:600; font-size:12px; }
+  .legend ul { margin:6px 0 0; }
+  .legend li { display:flex; align-items:center; gap:6px; margin:4px 0; font-size:12px; }
+  .legend .sw { width:5px; height:16px; border-radius:2px; flex:none; }
+  .legend .dot { width:8px; height:8px; border-radius:50%; flex:none; }
+  .tree { display:flex; flex-direction:column; gap:14px; }
+  .node { --indent:calc((var(--lvl) - 1) * 40px); margin-left:var(--indent); background:var(--card); border:1px solid var(--line); border-left:5px solid var(--lc); border-radius:10px; padding:12px 14px; position:relative; }
+  .node[style*="--lvl:1"] { --lc:var(--accent); }
+  .node[style*="--lvl:2"] { --lc:#c98e5f; }
+  .node[style*="--lvl:3"] { --lc:#e0c2a6; }
+  .node:not([style*="--lvl:1"])::before { content:""; position:absolute; left:-27px; top:-15px; width:20px; height:36px; border-left:2px solid var(--line); border-bottom:2px solid var(--line); border-bottom-left-radius:8px; }
+  .node .lvl { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .node h3 { margin:2px 0 4px; font-size:16px; }
+  .node > p { margin:0 0 10px; max-width:75ch; color:var(--muted); }
+  .opts { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px; }
+  .opt { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--bg); }
+  .opt figcaption { font-size:12px; font-weight:700; color:var(--muted); margin-bottom:6px; }
+  .node [atl-slot] { margin-top:10px; }
+  /* mini visuals */
+  .v h5 { margin:0 0 4px; font-size:14px; display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+  .v .pill { font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; background:var(--done); color:var(--muted); }
+  .v .pill.turn { background:var(--accent); color:#fff; }
+  .v .txt { font-size:12px; font-weight:700; color:var(--muted); }
+  .v .txt.turn { color:var(--accent); }
+  .v .over { display:block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:1px; }
+  .v .over.turn { color:var(--accent); }
+  .v .row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .v .ico { display:inline-flex; align-items:center; gap:3px; font-size:12px; font-weight:600; color:var(--muted); }
+  .v .ico.turn { color:var(--accent); }
+  .v .fold { display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-size:13px; background:var(--card); border:1px solid var(--line); border-radius:7px; padding:6px 8px; margin-bottom:6px; }
+  .v .chip { border:1px solid var(--line); border-radius:999px; padding:0 7px; background:#fff; font-size:12px; }
+  .v .chip.no { color:var(--muted); text-decoration:line-through; }
+  .v .more { color:var(--accent); text-decoration:underline; font-size:12px; }
+  .v .card { background:var(--card); border:1px solid var(--line); border-radius:7px; padding:6px 8px; margin-bottom:6px; font-size:13px; }
+  .v .card.open { border:2px solid var(--accent); }
+  .v .zone { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:8px 0 3px; }
+  .v .zone.turn { color:var(--accent); margin-top:0; }
+  .v .bar { font-size:12px; background:var(--accent); color:#fff; border-radius:6px; padding:3px 8px; margin-bottom:6px; }
+  .v .rule { border-top:2px solid var(--line); margin:8px 0; }
+  .v .muted { color:var(--muted); font-size:12px; }
+  .v .btn { border:1px solid var(--line); border-radius:6px; padding:1px 7px; background:#fff; font-size:12px; }
+  .v .btn.on { background:var(--fg); color:#fff; }
+  .round1 h2 { margin:0 0 6px; font-size:18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header atl-key="intro">
+    <h1>Telling apart what needs you</h1>
+    <p>You like status labels (3) and folding what's done (4), and you're unsure about ordering (1). These questions dig into those three; follow-ups sit indented under the question they belong to.</p>
+  </header>
+
+  <div class="round2">
+    <nav class="outline" atl-key="tree-view" atl-nav="Questions" atl-decide="Keep this tree view|Change" atl-note="Change">
+      <h2>Question tree <span class="count" id="tree-count"></span></h2>
+      <details class="legend" open>
+        <summary>Colour key</summary>
+        <ul>
+          <li><span class="sw" style="background:var(--accent)"></span>Level 1 question</li>
+          <li><span class="sw" style="background:#c98e5f"></span>Level 2 follow-up</li>
+          <li><span class="sw" style="background:#e0c2a6"></span>Level 3 follow-up</li>
+          <li><span class="pill turn">Needs you</span> not answered yet</li>
+          <li><span class="pill">Done</span> answered</li>
+          <li><span class="dot" style="background:#1a7f37"></span>New since you last looked</li>
+          <li><span class="dot" style="background:#0969da"></span>Changed since you last looked</li>
+        </ul>
+      </details>
+      <ul>
+        <li><a href="#q1"><span class="n">1</span>Label style</a>
+          <ul>
+            <li><a href="#q1-1"><span class="n">1.1</span>Label words</a></li>
+            <li><a href="#q1-2"><span class="n">1.2</span>Label position</a></li>
+          </ul></li>
+        <li><a href="#q2"><span class="n">2</span>Folded line</a>
+          <ul>
+            <li><a href="#q2-1"><span class="n">2.1</span>When to fold</a>
+              <ul><li><a href="#q2-1-1"><span class="n">2.1.1</span>After reopening</a></li></ul></li>
+            <li><a href="#q2-2"><span class="n">2.2</span>Many small answers</a></li>
+          </ul></li>
+        <li><a href="#q3"><span class="n">3</span>How much ordering</a></li>
+      </ul>
+      <div atl-slot></div>
+    </nav>
+
+    <div class="tree">
+      <section class="node" id="q1" style="--lvl:1" atl-key="q-label-style" atl-decide="A · Filled pill|B · Coloured word|C · Icon and word">
+        <div class="lvl">Level 1 · Question 1</div>
+        <h3>How should a status label look?</h3>
+        <p>The same two headings in each style: one waiting for you, one decided.</p>
+        <div class="opts">
+          <figure class="opt v"><figcaption>A · Filled pill</figcaption><h5>Your plan: Esslingen <span class="pill turn">Your turn</span></h5><h5>Lake Constance or Esslingen? <span class="pill">Decided</span></h5></figure>
+          <figure class="opt v"><figcaption>B · Coloured word</figcaption><h5>Your plan: Esslingen <span class="txt turn">· Your turn</span></h5><h5>Lake Constance or Esslingen? <span class="txt">· Decided</span></h5></figure>
+          <figure class="opt v"><figcaption>C · Icon and word</figcaption><h5>Your plan: Esslingen <span class="ico turn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>Your turn</span></h5><h5>Lake Constance or Esslingen? <span class="ico"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>Decided</span></h5></figure>
+        </div>
+        <div atl-slot></div>
+      </section>
+
+      <section class="node" id="q1-1" style="--lvl:2" atl-key="q-label-words" atl-decide="A · Your turn / Decided|B · Needs you / Done|C · To decide / Settled">
+        <div class="lvl">Level 2 · Follow-up to 1</div>
+        <h3>Which words should the labels use?</h3>
+        <p>Each set also has a word for background areas you only read.</p>
+        <div class="opts">
+          <figure class="opt v"><figcaption>A</figcaption><h5><span class="pill turn">Your turn</span><span class="pill">Decided</span><span class="pill">For reference</span></h5></figure>
+          <figure class="opt v"><figcaption>B</figcaption><h5><span class="pill turn">Needs you</span><span class="pill">Done</span><span class="pill">Info</span></h5></figure>
+          <figure class="opt v"><figcaption>C</figcaption><h5><span class="pill turn">To decide</span><span class="pill">Settled</span><span class="pill">Background</span></h5></figure>
+        </div>
+        <div atl-slot></div>
+      </section>
+
+      <section class="node" id="q1-2" style="--lvl:2" atl-key="q-label-place" atl-decide="A · After the title|B · Above the title|C · Far right">
+        <div class="lvl">Level 2 · Follow-up to 1</div>
+        <h3>Where should the label sit?</h3>
+        <div class="opts">
+          <figure class="opt v"><figcaption>A · After the title</figcaption><h5>Your plan: Esslingen <span class="pill turn">Your turn</span></h5></figure>
+          <figure class="opt v"><figcaption>B · Above the title</figcaption><span class="over turn">Your turn</span><h5>Your plan: Esslingen</h5></figure>
+          <figure class="opt v"><figcaption>C · Far right of the heading row</figcaption><div class="row"><h5>Your plan: Esslingen</h5><span class="pill turn">Your turn</span></div></figure>
+        </div>
+        <div atl-slot></div>
+      </section>
+
+      <section class="node" id="q2" style="--lvl:1" atl-key="q-fold-line" atl-decide="A · Answer only|B · Answer and what it beat|C · All options as chips">
+        <div class="lvl">Level 1 · Question 2</div>
+        <h3>What should a folded area show?</h3>
+        <p>Your Lake Constance or Esslingen comparison after you picked Esslingen.</p>
+        <div class="opts">
+          <figure class="opt v"><figcaption>A · Answer only</figcaption><div class="fold">✓ <b>Esslingen</b> <span class="more">show details</span></div></figure>
+          <figure class="opt v"><figcaption>B · Answer and what it beat</figcaption><div class="fold">✓ <b>Esslingen</b> over Lake Constance <span class="more">show details</span></div></figure>
+          <figure class="opt v"><figcaption>C · All options as chips</figcaption><div class="fold">Lake Constance or Esslingen? <span class="chip">✓ Esslingen</span><span class="chip no">Lake Constance</span> <span class="more">show details</span></div></figure>
+        </div>
+        <div atl-slot></div>
+      </section>
+
+      <section class="node" id="q2-1" style="--lvl:2" atl-key="q-fold-when" atl-decide="A · Right after I answer|B · When I press Fold|C · When Claude updates the Page">
+        <div class="lvl">Level 2 · Follow-up to 2</div>
+        <h3>When should an area fold?</h3>
+        <div class="opts">
+          <figure class="opt v"><figcaption>A · Right after you answer</figcaption><div class="card"><span class="btn on">Esslingen</span> <span class="muted">→ a few seconds later:</span></div><div class="fold">✓ <b>Esslingen</b> <span class="more">show details</span></div></figure>
+          <figure class="opt v"><figcaption>B · When you press Fold</figcaption><div class="card"><span class="btn on">Esslingen</span> <span class="btn">Fold ▴</span></div><p class="muted">Stays open until you fold it.</p></figure>
+          <figure class="opt v"><figcaption>C · On Claude's next update</figcaption><div class="card"><span class="btn on">Esslingen</span></div><p class="muted">Folds when Claude next changes the Page.</p></figure>
+        </div>
+        <div atl-slot></div>
+      </section>
+
+      <section class="node" id="q2-1-1" style="--lvl:3" atl-key="q-fold-reopen" atl-decide="A · Stays open|B · Folds again on the next update">
+        <div class="lvl">Level 3 · Follow-up to 2.1</div>
+        <h3>You open a folded area again. What then?</h3>
+        <div class="opts">
+          <figure class="opt v"><figcaption>A · Stays open until you close it</figcaption><div class="card">Lake Constance or Esslingen? <span class="btn on">Esslingen</span> <span class="more">fold</span></div></figure>
+          <figure class="opt v"><figcaption>B · Folds again when Claude updates</figcaption><div class="fold">✓ <b>Esslingen</b> <span class="more">show details</span></div></figure>
+        </div>
+        <div atl-slot></div>
+      </section>
+
+      <section class="node" id="q2-2" style="--lvl:2" atl-key="q-fold-many" atl-decide="A · One row of chips|B · Grouped by answer|C · Only the liked ones">
+        <div class="lvl">Level 2 · Follow-up to 2</div>
+        <h3>How should many small answers fold?</h3>
+        <p>Your five rated trip ideas.</p>
+        <div class="opts">
+          <figure class="opt v"><figcaption>A · One row of chips</figcaption><div class="fold"><span class="chip">✓ Christmas market</span><span class="chip">✓ Lake Constance</span><span class="chip">? Black Forest</span><span class="chip no">Thermal spa</span><span class="chip no">Palatinate</span></div></figure>
+          <figure class="opt v"><figcaption>B · Grouped by answer</figcaption><div class="fold" style="display:block"><div><b>Interested:</b> Christmas market, Lake Constance</div><div><b>Maybe:</b> Black Forest</div><div class="muted"><b>Not for me:</b> Thermal spa, Palatinate</div></div></figure>
+          <figure class="opt v"><figcaption>C · Only the liked ones</figcaption><div class="fold">✓ <b>Christmas market</b>, <b>Lake Constance</b> <span class="muted">+3 others</span> <span class="more">show all</span></div></figure>
+        </div>
+        <div atl-slot></div>
+      </section>
+
+      <section class="node" id="q3" style="--lvl:1" atl-key="q-order-amount" atl-decide="A · Full zones|B · Pin only what needs me|C · Jump bar, nothing moves|D · No ordering">
+        <div class="lvl">Level 1 · Question 3</div>
+        <h3>How much should the Page reorder itself?</h3>
+        <p>Four amounts, from moving everything to moving nothing.</p>
+        <div class="opts">
+          <figure class="opt v"><figcaption>A · Full zones (as in round 1)</figcaption><div class="zone turn">Your turn</div><div class="card open">Your plan</div><div class="zone">Decided</div><div class="card">Comparison</div><div class="card">Ideas</div><div class="zone">For reference</div><div class="card">Tips</div></figure>
+          <figure class="opt v"><figcaption>B · Pin only what needs you</figcaption><div class="zone turn">Your turn</div><div class="card open">Your plan</div><div class="rule"></div><div class="card">Comparison</div><div class="card">Ideas</div><div class="card">Tips</div></figure>
+          <figure class="opt v"><figcaption>C · Jump bar, nothing moves</figcaption><div class="bar">1 question waiting · go there ↓</div><div class="card">Comparison</div><div class="card open">Your plan</div><div class="card">Ideas</div></figure>
+          <figure class="opt v"><figcaption>D · No ordering</figcaption><div class="card open">Your plan</div><div class="card">Comparison</div><div class="card">Ideas</div><div class="card">Tips</div><p class="muted">Labels and folding do the work.</p></figure>
+        </div>
+        <div atl-slot></div>
+      </section>
+
+    </div>
+  </div>
+
+  <h2 class="round1" style="margin:0 0 6px;font-size:18px">Round 1: the six ideas on your trip Page</h2>
+
+  <section atl-key="ideas" atl-nav="Round 1">
+    <div class="tabs" role="tablist">
+      <button role="tab" id="t-order" aria-controls="p-order" aria-selected="true">1 · Order by what's needed</button>
+      <button role="tab" id="t-tint" aria-controls="p-tint" aria-selected="false">2 · Coloured tint</button>
+      <button role="tab" id="t-labels" aria-controls="p-labels" aria-selected="false">3 · Status labels</button>
+      <button role="tab" id="t-shrink" aria-controls="p-shrink" aria-selected="false">4 · Shrink what's done</button>
+      <button role="tab" id="t-stripe" aria-controls="p-stripe" aria-selected="false">5 · Stripe on the left</button>
+      <button role="tab" id="t-space" aria-controls="p-space" aria-selected="false">6 · More space between</button>
+      <button role="tab" id="t-combo" aria-controls="p-combo" aria-selected="false">1 + 3 + 4 together</button>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-order" aria-labelledby="t-order" atl-key="order" atl-decide="Want this|Maybe|Not for me">
+      <p>Open questions go to the top under "Your turn"; settled ones move under "Decided", and background under "For reference".</p>
+      <div class="pair"><div><h3>Today</h3><div class="frame" data-mock=""></div></div><div><h3>With this idea</h3><div class="frame" data-mock="order"></div><div atl-slot></div></div></div>
+    </div>
+    <div class="panel" role="tabpanel" id="p-tint" aria-labelledby="t-tint" atl-key="tint" atl-decide="Want this|Maybe|Not for me" hidden>
+      <p>What needs you sits on a soft warm background; decided areas turn light grey and a little faded.</p>
+      <div class="pair"><div><h3>Today</h3><div class="frame" data-mock=""></div></div><div><h3>With this idea</h3><div class="frame" data-mock="tint"></div><div atl-slot></div></div></div>
+    </div>
+    <div class="panel" role="tabpanel" id="p-labels" aria-labelledby="t-labels" atl-key="labels" atl-decide="Want this|Maybe|Not for me" hidden>
+      <p>Each heading gets a small label saying where it stands, so scanning the headings is enough.</p>
+      <div class="pair"><div><h3>Today</h3><div class="frame" data-mock=""></div></div><div><h3>With this idea</h3><div class="frame" data-mock="labels"></div><div atl-slot></div></div></div>
+    </div>
+    <div class="panel" role="tabpanel" id="p-shrink" aria-labelledby="t-shrink" atl-key="shrink" atl-decide="Want this|Maybe|Not for me" hidden>
+      <p>Once you've decided, the area folds into one line with your answer and a way to open it again.</p>
+      <div class="pair"><div><h3>Today</h3><div class="frame" data-mock=""></div></div><div><h3>With this idea</h3><div class="frame" data-mock="shrink"></div><div atl-slot></div></div></div>
+    </div>
+    <div class="panel" role="tabpanel" id="p-stripe" aria-labelledby="t-stripe" atl-key="stripe" atl-decide="Want this|Maybe|Not for me" hidden>
+      <p>A thick left edge marks each area: orange when it's your turn, grey when it's done.</p>
+      <div class="pair"><div><h3>Today</h3><div class="frame" data-mock=""></div></div><div><h3>With this idea</h3><div class="frame" data-mock="stripe"></div><div atl-slot></div></div></div>
+    </div>
+    <div class="panel" role="tabpanel" id="p-space" aria-labelledby="t-space" atl-key="space" atl-decide="Want this|Maybe|Not for me" hidden>
+      <p>Large gaps and a named line between areas, tight spacing inside them. No extra colour.</p>
+      <div class="pair"><div><h3>Today</h3><div class="frame" data-mock=""></div></div><div><h3>With this idea</h3><div class="frame" data-mock="space"></div><div atl-slot></div></div></div>
+    </div>
+    <div class="panel" role="tabpanel" id="p-combo" aria-labelledby="t-combo" atl-key="combo" atl-decide="Want this|Maybe|Not for me" atl-rec="Want this" hidden>
+      <p>My suggestion: order by what's needed, label each heading, and fold what's done. It works without relying on colour.</p>
+      <div class="pair"><div><h3>Today</h3><div class="frame" data-mock=""></div></div><div><h3>With this idea</h3><div class="frame" data-mock="order labels shrink"></div><div atl-slot></div></div></div>
+    </div>
+  </section>
+  <div atl-dock></div>
+</div>
+
+<script>
+  const check = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  const plan = (l) => `
+    <div class="box open">
+      <h5>Your plan: Esslingen Christmas market <span class="labels-only pill turn">Your turn</span></h5>
+      <p>One Saturday afternoon and evening, home by bedtime.</p>
+      <ol class="steps"><li><b>14:00</b>S-Bahn S1</li><li><b>14:30</b>Old town</li><li><b>15:45</b>Castle walls</li><li><b>17:00</b>Market</li><li><b>18:30</b>Dinner</li><li><b>21:00</b>Home</li></ol>
+      <div class="btns"><span class="btn">Keep this plan</span><span class="btn">Change</span></div>
+    </div>`;
+  const compare = `
+    <div class="box done">
+      <div class="full">
+        <h5>Lake Constance or Esslingen? <span class="labels-only pill">Decided: Esslingen</span></h5>
+        <table><thead><tr><th></th><th>Lake Constance</th><th>Esslingen</th></tr></thead>
+        <tbody><tr><td>Train</td><td>About 2 h 15</td><td>About 15 min</td></tr><tr><td>Overnight</td><td>One or two nights</td><td>Not needed</td></tr><tr><td>Cost</td><td>Train and hotel</td><td>Almost nothing</td></tr></tbody></table>
+        <div class="btns"><span class="btn">Lake Constance</span><span class="btn on">Esslingen</span></div>
+      </div>
+      <div class="short">${check} <b>Esslingen</b> over Lake Constance <span class="labels-only pill">Decided</span> <span class="more">show details</span></div>
+    </div>`;
+  const trips = [["Christmas market city break","Interested"],["Thermal spa reset","Not for me"],["Black Forest walk","Maybe"],["Lake Constance off-season","Interested"],["Palatinate wine villages","Not for me"]];
+  const ideas = `
+    <div class="box done">
+      <div class="full">
+        <h5>Ideas <span class="labels-only pill">Rated: 2 interested</span></h5>
+        <div class="grid">${trips.map(([t,a]) => `<div class="trip"><h6>${t}</h6><span class="btn on">${a}</span></div>`).join("")}</div>
+      </div>
+      <div class="short">${check} <b>Ideas rated</b> ${trips.map(([t,a]) => `<span class="chip${a==="Not for me"?" no":""}">${a==="Maybe"?"? ":""}${t.split(" ").slice(0,2).join(" ")}</span>`).join("")} <span class="labels-only pill">Rated</span> <span class="more">show details</span></div>
+    </div>`;
+  const tips = `<div class="box ref"><h5>Tips <span class="labels-only pill ref">For reference</span></h5><ul class="tips"><li>Bring cash; some stalls don't take cards.</li><li>Saturday evenings get crowded.</li></ul></div>`;
+  function mock(style) {
+    const s = style.split(" ");
+    const head = `<h4>Weekend trip ideas</h4><p class="sub">From Stuttgart by train, up to about 2 hours.</p>`;
+    if (s.includes("order")) return head +
+      `<div class="zone-h turn">Your turn</div>${plan()}<div class="zone-h">Decided</div>${compare}${ideas}<div class="zone-h">For reference</div>${tips}`;
+    if (s.includes("space")) return head +
+      `<div class="line turn first">Your turn</div>${plan()}<div class="line">Decided</div>${compare}<div style="height:8px"></div>${ideas}<div class="line">For reference</div>${tips}`;
+    return head + plan() + compare + ideas + tips;
+  }
+  function render() {
+    for (const el of document.querySelectorAll("[data-mock]")) {
+      el.innerHTML = `<div class="m ${el.dataset.mock}">${mock(el.dataset.mock)}</div>`;
+    }
+  }
+  function tabs() {
+    for (const tab of document.querySelectorAll("[role=tab]")) tab.onclick = () => {
+      for (const t of document.querySelectorAll("[role=tab]")) {
+        const on = t === tab; t.setAttribute("aria-selected", on);
+        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      }
+    };
+  }
+  // Outline status: each item shows Needs you or Done with the answer, from atelier.state().
+  let last = null;
+  function outline() {
+    if (!last) return;
+    const byKey = new Map(last.decisions.map(d => [d.key, d]));
+    let done = 0, all = 0;
+    for (const a of document.querySelectorAll(".outline a[href^='#']")) {
+      const d = byKey.get(document.getElementById(a.getAttribute("href").slice(1))?.getAttribute("atl-key"));
+      if (!d) continue;
+      all++;
+      const answered = d.state === "done" && (d.answer || d.custom);
+      if (answered) done++;
+      let st = a.parentElement.querySelector(":scope > .st");
+      if (!st) { st = document.createElement("span"); st.className = "st"; a.after(st); }
+      st.innerHTML = answered
+        ? `<span class="pill">Done</span> <span class="ans"></span>`
+        : `<span class="pill turn">Needs you</span>`;
+      if (answered) st.querySelector(".ans").textContent = String(d.custom || d.answer).replace(/^[A-D] · /, "");
+    }
+    document.getElementById("tree-count").textContent = all ? `${done} of ${all} done` : "";
+  }
+  document.addEventListener("atelier:state", e => { last = e.detail; outline(); });
+  render(); tabs();
+  document.addEventListener("atelier:update", () => { render(); tabs(); outline(); });
+</script>
+<script type="module" src="atelier.js"></script>
+</body>
+</html>

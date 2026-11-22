@@ -1,0 +1,1989 @@
+// Atelier Kernel 2.16.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
+// a copy is a Contribution: raise it as a pull request against pi-workbench (136).
+//
+// Page contract (mechanics only, decision 139):
+//   <script type="module" src="atelier.js"></script>   the Kernel; idiomorph.js sits beside it
+//   atl-key="turn-3"           an element the human judges; nested Keys form the address run-12/turn-3 (140)
+//   atl-ver="sha-or-rev"       version of the content under it; every event records it (149). On a version other than the
+//                              one its atl-decide (or an ask naming material) was answered on, the Decision shows
+//                              "Version 2" with no option chosen and the earlier answer beneath; other asks stay answered
+//   atl-decide="A|B|C"        a Decision on a keyed element; its id is the Key address (155). Optional:
+//     atl-rec="A"              the recommended option
+//     atl-note="Redo"          options that need a note before they post. Any answer may carry a note and images
+//                              (paste, pick or drop; PNG, JPEG, WebP or GIF up to 10 MB each, at most four); each uploads
+//                              to the host, which stores it in <page>.images/, before the decide event names them in `images`.
+//                              Every Decision also offers "Other…": the human's own answer, posted with `custom: true`.
+//                              Comments and replies take images the same way.
+//     atl-delivery="record|send|immediate" (default immediate); atl-material="key" counts as opened (135)
+//   atl-slot                   inside a Decision: where its options render, e.g. one table cell; else at the end
+//   atl-request="job"          a button or form that asks the agent for a typed job; form fields become its input (130)
+//   atl-group                  on a keyed element: its batched Comments get their own "Send (n)" (150)
+//   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (156)
+//   atl-wip="Reworking scene 3"  on a Key or any element: under construction while an agent reworks it; the Kernel
+//                              dims it, labels it and locks its Decisions (answers stay shown, Comments stay open)
+//     atl-wip-lock="off"       dims and labels without locking: work in progress around Decisions he still answers
+//   atl-changes="off"          anywhere on the Page: no change indicators after Updates. Otherwise a mark stays until the
+//                              human opens and closes its changes, clicks its "Seen", or "Mark all seen" (156). On load (2.13.0)
+//                              the Kernel marks each open ask and each thread whose last message is an agent reply, until he
+//                              answers, replies, closes it or marks it seen; Seen records a `seen` event naming those agent events
+//   atl-dock                   an empty element where the Kernel panel sits in the Page's layout; else it floats at the
+//                              bottom right, offset by --atl-dock-right and --atl-dock-bottom. Outside <body>'s own children
+//                              (atl-dock, or a Page script moving it) the panel takes its container's width up to 760px;
+//                              where the Page limits its height, it scrolls inside, so no control is cut off
+//   atl-nav="Label"            an item in the Kernel's top bar that reveals and scrolls to the element; empty: its first heading.
+//                              The bar is fixed at the top, --atl-top high, reserved as a top border on :root; a Page's own sticky
+//                              or fixed header sits below it with top: var(--atl-top, 0). Items that do not fit fold into a menu
+//   parts (2.16.0): Alt+click (or a touch long press) inside a Key comments on its tbody row, li, p, figure, dt/dd, pre or
+//                              SVG g with a direct <title>; the comment carries part {kind, text} beside the Key and re-finds it
+//                              by both after an Update, else shows on the Key. A part with its own atl-key is that Key
+//   tabs: a hidden panel with an id and a visible [aria-controls=id] tab lets a change inside it mark the tab; "next ↓",
+//                              Show and the changes rail click that tab (outermost first, so nested tabs open too)
+//   document "atelier:reveal"  fires with detail {key} when the Kernel reveals an item, before it scrolls there
+//   document "atelier:update"  fires after each Update, so page scripts re-read their data files (152)
+//   window.atelier.state()     read-only Kernel state (Decisions with state new/changed/done, round and history, answers,
+//                              threads, Requests, per-Key counts); document "atelier:state" carries it in detail whenever it changes.
+//                              Kernel markup is not an API.
+// Human state lives only in <page>.events.jsonl, never in the HTML (147).
+// Kernel controls take the Page's colours: override --atl-bg, --atl-fg, --atl-muted, --atl-line, --atl-accent, --atl-warn.
+//
+// Icons: Lucide (lucide-static 1.52.0), ISC License, Copyright (c) 2026 Lucide Icons and Contributors.
+// Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby
+// granted, provided that the above copyright notice and this permission notice appear in all copies. THE SOFTWARE IS
+// PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES
+// OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR
+// CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
+// CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+import { Idiomorph } from "./idiomorph.js";
+
+export const UNDO_MS = 3_000; // decision 151 (owner 2026-10-21: 10 s → 3 s)
+// Delivery class per human event type (150). `boundary` is the Send that releases drafts; `control` is undo.
+// A Comment goes out when saved, after its undo window (156); a Page opts into batching with atl-delivery="send".
+export const CLASSES = {
+  comment: "immediate", decide: "immediate", request: "immediate", cancel: "immediate", rework: "immediate",
+  accept: "record", opened: "record", close: "record", still: "record", seen: "record", send: "boundary", undo: "control",
+};
+export const REQUEST_STATES = ["queued", "running", "done", "failed", "cancelled"];
+
+export const inGroup = (key, group) => !group || key === group || (typeof key === "string" && key.startsWith(`${group}/`));
+
+const pipe = (s) => String(s ?? "").split("|").map((x) => x.trim()).filter(Boolean);
+// A Page-declared Decision (155): its id and Key are the element's address; it has no question beyond the Page.
+const declaredDecision = (id, options, rec, extra = {}) => ({ id, key: id, declared: true, options: pipe(options).map((label) => ({ label, recommended: label === rec })), ...extra });
+
+/**
+ * Replays the Event Log into the state the Page shows. `currentVer(key)` reads atl-ver on the live Page (149);
+ * `declared` lists the Page's atl-decide Decisions, so unanswered ones count as to answer (155).
+ */
+export function derive(entries, currentVer = () => null, declared = []) {
+  const undone = new Set(entries.filter((e) => e.type === "undo").map((e) => e.target));
+  const live = entries.filter((e) => e.type !== "undo" && !undone.has(e.seq));
+  const delivered = new Set(), received = new Set(), unconfirmed = new Set();
+  for (const e of entries) {
+    if (e.type === "delivered") e.of.forEach((s) => delivered.add(s));
+    if (e.type === "unconfirmed") e.of.forEach((s) => unconfirmed.add(s));
+    if (e.type === "received") e.of.forEach((s) => { received.add(s); unconfirmed.delete(s); });
+  }
+  const bySeq = new Map(live.map((e) => [e.seq, e]));
+  // A draft (Send class) belongs to the first later Send whose group covers it (Review Studio's "Offene senden" flush boundary).
+  const sentBy = new Map();
+  for (const s of live.filter((e) => e.type === "send")) {
+    for (const d of live) if (d.delivery === "send" && d.seq < s.seq && !sentBy.has(d.seq) && inGroup(d.key, s.key)) sentBy.set(d.seq, s.seq);
+  }
+  const status = (e) => {
+    if (e.local) return "local";
+    if (e.origin !== "human") return "agent";
+    if (e.delivery === "record") return "recorded";
+    if (e.delivery === "send" && !sentBy.has(e.seq)) return "draft"; // unsent drafts carry no state (Review Studio b0a391aee)
+    if (received.has(e.seq)) return "delivered";
+    if (unconfirmed.has(e.seq)) return "unconfirmed";
+    if (delivered.has(e.seq)) return "queued";
+    return "pending"; // inside the undo window, or waiting for a session to open the Page
+  };
+  const rootOf = (seq) => { let e = bySeq.get(seq); while (e?.thread < e?.seq && bySeq.has(e.thread)) e = bySeq.get(e.thread); return e?.seq; };
+  const stale = (key, ver) => { const now = key ? currentVer(key) : null; return ver != null && now != null && ver !== now; };
+
+  // withdrawn: each ask the agent retracted or asked anew, by its seq, so a late answer naming it lands there (2.14.2).
+  const threads = new Map(), decisions = new Map(), requests = new Map(), withdrawn = new Map(), lastAsk = new Map();
+  // The ask an answer or an opened names (2.14.2); one without (older Event Logs) names the id's latest ask.
+  const askOf = (e) => { const cur = decisions.get(e.decision); return cur && (e.ask == null || cur.askSeq === e.ask) ? cur : withdrawn.get(e.ask ?? lastAsk.get(e.decision)); };
+  for (const d of declared) if (!decisions.has(d.id)) decisions.set(d.id, { ...d, answer: null, opened: false });
+  for (const [i, e] of live.entries()) {
+    if (e.type === "comment") {
+      const root = e.thread < e.seq ? threads.get(rootOf(e.thread)) : undefined;
+      if (root) { root.msgs.push(e); root.closed = false; }
+      else threads.set(e.seq, { root: e, msgs: [e], closed: false, ver: e.ver ?? null, key: e.key ?? null });
+    } else if (e.type === "answer") threads.get(rootOf(e.target))?.msgs.push(e);
+    else if (e.type === "close") { const t = threads.get(rootOf(e.target)); if (t) { t.closed = true; t.closedAt = e.seq; if (e.ver !== undefined) t.ver = e.ver; } } // closed on the version the human saw
+    else if (e.type === "still") { const t = threads.get(rootOf(e.target)); if (t) { t.ver = e.ver ?? null; t.closed = false; } }
+    // askAt: where this ask starts in the log; answers before it belong to an earlier question with the same id (2.14.1).
+    else if (e.type === "ask") {
+      const old = decisions.get(e.decision.id);
+      if (old?.askSeq && !withdrawn.has(old.askSeq)) withdrawn.set(old.askSeq, { ...old, retracted: "asked again" });
+      decisions.set(e.decision.id, { ...e.decision, askSeq: e.seq, askAt: i, answer: null, opened: false }); lastAsk.set(e.decision.id, e.seq);
+    } else if (e.type === "retract") {
+      // The agent settled an unanswered ask; its card leaves the Page (2.14.0). An answered one keeps the human's answer (2.14.1).
+      const d = decisions.get(e.decision);
+      if (d && !d.declared && d.answer === null) { decisions.delete(e.decision); withdrawn.set(d.askSeq, { ...d, retracted: e.reason ?? "" }); }
+    }
+    // An opened names the ask its tab showed (2.14.2); one without marks the id's current ask, as before.
+    else if (e.type === "opened") { const d = e.ask == null ? decisions.get(e.decision) : askOf(e); if (d) d.opened = true; }
+    else if (e.type === "decide") {
+      // A Page-declared answer carries its options, so the Decision replays even where the Page is not loaded.
+      if (!decisions.has(e.decision) && e.options) decisions.set(e.decision, { ...declaredDecision(e.decision, e.options, e.rec), answer: null, opened: false });
+      // An answer that crossed a retract lands on the withdrawn question with the reason it is no longer asked (2.14.1);
+      // its card returns unless the id is asked anew, then only the agent hears it (ponytail: one card per id on the Page).
+      const cur = decisions.get(e.decision), d = askOf(e);
+      if (d && !cur) decisions.set(e.decision, d);
+      if (d) d.answer = e; // the newest answer counts; the human may change it any time (155)
+    }
+    else if (e.type === "request") requests.set(e.seq, { req: e, state: null, revision: 1, note: null, cancel: false, accepted: false, rework: null });
+    else if (e.type === "status") {
+      // agentclick's revision: a status written for an earlier revision is stale and ignored.
+      const r = requests.get(e.target);
+      if (r && (e.revision ?? r.revision) === r.revision) { r.state = e.state; r.note = e.note ?? null; }
+    } else if (e.type === "rework") {
+      // agentclick pending → rewriting → pending(revision+1): rework clears the result and raises the revision.
+      const r = requests.get(e.target);
+      if (r) Object.assign(r, { revision: r.revision + 1, state: null, note: null, rework: e, accepted: false });
+    } else if (e.type === "cancel") { const r = requests.get(e.target); if (r) r.cancel = true; }
+    else if (e.type === "accept") { const r = requests.get(e.target); if (r) r.accepted = true; }
+  }
+  // Decision 149: a close or an answer holds for the version it was made on; a newer version reopens it.
+  for (const t of threads.values()) { t.stale = stale(t.key, t.ver); if (t.stale) t.closed = false; }
+  // Only an answer that judged the Key's content goes stale with it: a Page's atl-decide, or an ask naming material.
+  // An asked question merely sits on its Key; its answer records the Key's version but stays answered (2.11.0).
+  // Such an answer holds while the Key shows the version it was given on (149); on any other version the Decision
+  // asks again as "Version N" (owner 2026-10-22: "the decision should reset or show version 2"). From the first answer
+  // on, versions are numbered in the order events on the Key recorded them, then the one the Page shows now; an
+  // Update records none, so a version no event saw gets no number. `history` keeps the last answer on each other
+  // version. An answer without a version, or on a Key not on the Page, stays as it is in round 1.
+  // state: "new" (never answered), "changed" (answered on another version), "done"; toAnswer is every one not done.
+  const keyOfEvent = (e) => e.key ?? (e.type === "close" || e.type === "still" ? threads.get(rootOf(e.target))?.key : undefined);
+  const rounds = (d, key) => {
+    const now = key ? currentVer(key) : null;
+    // A withdrawn question keeps its late answer on any version: nothing asks it again (2.14.2).
+    if ((!d.declared && !d.material) || d.retracted != null || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
+    // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
+    // Answers naming another ask are left out: a late one to a withdrawn ask with the same id is not its history;
+    // one naming no ask (older Event Logs) counts here (2.14.2).
+    const mine = (e) => e.type === "decide" && e.decision === d.id && (e.ask == null || e.ask === d.askSeq);
+    const first = live.findIndex((e, i) => i > (d.askAt ?? -1) && mine(e)), vers = [], last = new Map();
+    for (const e of live.slice(first)) {
+      if (e.ver == null || (!mine(e) && (e.decision === d.id || keyOfEvent(e) !== key))) continue;
+      if (!vers.includes(e.ver)) vers.push(e.ver);
+      if (mine(e)) last.set(e.ver, e);
+    }
+    if (!vers.includes(now)) vers.push(now);
+    return {
+      round: vers.indexOf(now) + 1, current: d.answer.ver === now,
+      history: vers.flatMap((v, i) => v !== now && last.has(v) ? [{ round: i + 1, ver: v, answer: last.get(v).option, custom: !!last.get(v).custom, note: last.get(v).note ?? null }] : []),
+    };
+  };
+  for (const d of decisions.values()) {
+    const { current, ...round } = rounds(d, d.key ?? d.answer?.key);
+    d.stale = d.answer !== null && !current;
+    d.state = d.answer === null ? "new" : d.stale ? "changed" : "done";
+    Object.assign(d, round);
+  }
+  const drafts = live.filter((e) => status(e) === "draft");
+  return {
+    threads: [...threads.values()], decisions: [...decisions.values()],
+    requests: [...requests.values()], drafts, status, withdrawn,
+    openThreads: [...threads.values()].filter((t) => !t.closed && status(t.root) !== "draft"),
+    toAnswer: [...decisions.values()].filter((d) => d.state !== "done"),
+  };
+}
+
+// Per Key address: the Decisions by state and the open threads on it and under it, so a tab or card needs no recount.
+function keyCounts(st) {
+  const keys = new Map(); // a Map, so a Key named __proto__ or constructor is data like any other
+  const add = (key, field) => {
+    if (typeof key !== "string" || !key) return;
+    const parts = key.split("/");
+    for (let i = 1; i <= parts.length; i++) {
+      const addr = parts.slice(0, i).join("/");
+      if (!keys.has(addr)) keys.set(addr, { new: 0, changed: 0, done: 0, threads: 0 });
+      keys.get(addr)[field]++;
+    }
+  };
+  for (const d of st.decisions) add(d.key, d.state);
+  for (const t of st.openThreads) add(t.root.key, "threads");
+  return Object.fromEntries(keys);
+}
+
+/**
+ * The Kernel state a Page script may rely on, as plain data: window.atelier.state() returns it and the document
+ * event "atelier:state" carries it in `detail` whenever it changes. Kernel markup is not an API. `loaded` turns true
+ * once the Event Log has been read (or there is no session to read it from). `wip` lists the atl-wip regions as {key, text}.
+ * Each Decision's `state` is "new", "changed" (answered on an earlier version; `answer` is what the human said) or "done";
+ * `toAnswer` lists the ones not done. `round` is the number of the version the Key shows ("Version 2"), counted from the
+ * first answer in the order the Event Log saw them; `history` keeps the last answer on each other version as
+ * {round, ver, answer, custom, note}. `retracted` is the agent's reason when an answer crossed its retract (2.14.1) or answered an ask asked anew ("asked again", 2.14.2), else null. `keys` maps each Key address holding Decisions or open threads, and every Key
+ * around it, to {new, changed, done, threads}.
+ */
+export function publicState(st, { conn = "no session", loaded = false, wip = [] } = {}) {
+  const status = (e) => e ? st.status(e) : null;
+  return {
+    conn, loaded, wip, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
+    decisions: st.decisions.map((d) => ({
+      id: d.id, key: d.key ?? null, declared: !!d.declared, options: d.options.map((o) => o.label), recommended: d.options.find((o) => o.recommended)?.label ?? null,
+      answer: d.answer?.option ?? null, custom: !!d.answer?.custom, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, state: d.state, round: d.round, history: d.history, opened: !!d.opened, retracted: d.retracted ?? null,
+    })),
+    keys: keyCounts(st),
+    threads: st.threads.map((t) => ({ seq: t.root.seq, key: t.root.key ?? null, closed: t.closed, stale: !!t.stale, messages: t.msgs.length, status: status(t.root) })),
+    requests: st.requests.map((r) => ({ seq: r.req.seq, job: r.req.job, key: r.req.key ?? null, state: r.state, revision: r.revision, accepted: r.accepted, cancel: r.cancel })),
+  };
+}
+
+const quote = (s) => JSON.stringify(String(s ?? ""));
+const clip = (s, n) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t; };
+// Where an event sits, with enough of the Page that the agent need not open it: the quoted selection, else the Key's text.
+const at = (e, excerpt) => {
+  const text = e.key && !e.quote ? clip(excerpt?.(e.key), 120) : "";
+  const where = e.quote ? `on the text ${quote(clip(e.quote.exact, 120))}${e.key ? ` in ${e.key}` : ""}` : e.key && e.part ? `on the ${e.part.kind} ${quote(e.part.text)} in ${e.key}` : e.key ? `on ${e.key}${text ? ` (${quote(text)})` : ""}` : e.selector ? `on ${e.selector.sel}` : "on the Page";
+  return [where, e.t != null ? `at ${Number(e.t).toFixed(1)} s` : "", e.ver ? `(version ${e.ver})` : ""].filter(Boolean).join(" ");
+};
+
+const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+const ENTITY = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", mdash: "—", ndash: "–", hellip: "…", middot: "·", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", rarr: "→", larr: "←" };
+/**
+ * The text under each Key address in a Page's HTML source, for excerpts in Delivery. Keys a page script
+ * renders later are not in the source and get none.
+ */
+// ponytail: a tag-stack scan, not an HTML parser; implied end tags (an unclosed <p>) can blur an excerpt, every
+// tag counts as a word break, and only common named entities decode. Use parse5 if excerpts must be exact.
+export function keyTexts(html) {
+  const texts = new Map(), stack = [];
+  const re = /<!--[\s\S]*?-->|<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>|<(\/?)([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|([^<]+)/gi;
+  for (const [, , close, tag, attrs, text] of String(html).matchAll(re)) {
+    if (text === undefined) for (const f of stack) if (f.addr) f.text += " ";
+    if (text !== undefined) {
+      const t = text.replace(/&(#x?[0-9a-f]+|\w+);/gi, (m, c) => c[0] === "#" ? String.fromCodePoint(c[1].toLowerCase() === "x" ? parseInt(c.slice(2), 16) : +c.slice(1)) : ENTITY[c] ?? m);
+      for (const f of stack) if (f.addr && f.text.length < 400) f.text += t;
+    } else if (tag && close) {
+      const i = stack.findLastIndex((f) => f.tag === tag.toLowerCase());
+      if (i >= 0) for (const f of stack.splice(i)) if (f.addr && !texts.has(f.addr)) texts.set(f.addr, f.text);
+    } else if (tag && !VOID.has(tag.toLowerCase()) && !attrs.trimEnd().endsWith("/")) {
+      const key = /\satl-key\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
+      const parent = stack.findLast((f) => f.addr)?.addr;
+      const own = key ? key[1] ?? key[2] ?? key[3] : undefined;
+      stack.push({ tag: tag.toLowerCase(), addr: own === undefined ? undefined : parent ? `${parent}/${own}` : own, text: "" });
+    }
+  }
+  for (const f of stack) if (f.addr && !texts.has(f.addr)) texts.set(f.addr, f.text);
+  return texts;
+}
+
+/** Which messages a thread card shows: none of a closed one until opened; all of a short thread; of a long one the first, a fold, and the last two. */
+export function threadLayout(msgs, expanded = false, closed = false) {
+  if (closed && !expanded) return { head: [], folded: msgs, tail: [] };
+  if (expanded || msgs.length <= 4) return { head: msgs, folded: [], tail: [] };
+  return { head: msgs.slice(0, 1), folded: msgs.slice(1, -2), tail: msgs.slice(-2) };
+}
+
+/** One line per human event, numbered like the Page's markers (pi-artifacts `[annotationId]`, Plannotator numbering). */
+// Images name the files the host stored, so the agent can read them; one only a browser holds says so.
+const imagesText = (e, file) => e.images?.length ? `image${e.images.length > 1 ? "s" : ""} ${e.images.map((x) => x.startsWith("data:") ? "(kept in the browser only)" : quote(file ? file(x) : x)).join(", ")}` : "";
+export function describe(e, entries, excerpt, file) {
+  const ask = (id) => [...entries].reverse().find((x) => x.type === "ask" && (e.ask != null ? x.seq === e.ask : x.decision.id === id))?.decision;
+  const withImages = (line) => e.images?.length ? `${line}; ${imagesText(e, file)}` : line;
+  switch (e.type) {
+    case "comment": {
+      if (e.thread === undefined) return withImages(`#${e.seq} Comment ${at(e, excerpt)}: ${quote(e.text)}`);
+      // A reply carries the thread so far, oldest first, so it reads without the Page.
+      const earlier = derive(entries).threads.find((t) => t.msgs.some((m) => m.seq === e.seq))?.msgs.filter((m) => m.seq < e.seq) ?? [];
+      const context = earlier.map((m) => `${m.origin === "agent" ? "Agent" : "You"}: ${quote(clip(m.text, 200))}`).join(" · ");
+      return withImages(`#${e.seq} Reply in thread #${e.thread}${context ? ` (${context})` : ""}: ${quote(e.text)}`);
+    }
+    case "decide": {
+      const d = ask(e.decision) ?? (e.options ? declaredDecision(e.decision, e.options, e.rec) : undefined);
+      const rec = d?.options.find((o) => o.recommended)?.label;
+      // html-plan's decision receipt: changed / kept / not opened; an unopened default is not agreement.
+      const receipt = rec === undefined ? "" : e.option === rec ? "kept the recommendation" : `changed from the recommendation ${quote(rec)}`;
+      const opened = d?.material || typeof e.opened === "boolean" ? (e.opened ? "material opened" : "material NOT opened; do not read this as agreement") : "";
+      // A changed answer names the one it replaces (155): "Revise → Promote".
+      // "Other…": none of the options; the human wrote his own answer.
+      const option = e.custom ? `own answer: ${quote(e.option)}` : e.option;
+      const choice = e.previous != null ? `${e.previous} → ${option}` : option;
+      // An answer that crossed a retract names the reason, so the agent can acknowledge it (2.14.1).
+      const upTo = derive(entries.slice(0, entries.findIndex((x) => x.seq === e.seq) + 1));
+      const answered = [...upTo.decisions, ...upTo.withdrawn.values()].find((x) => x.answer === e);
+      const gone = answered?.retracted != null ? `no longer asked: ${quote(answered.retracted)}${answered.question ? ` (question ${quote(answered.question)})` : ""}` : "";
+      return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", imagesText(e, file), gone].filter(Boolean).join("; ")}`;
+    }
+    case "retract": return `#${e.seq} Retracted Decision ${e.decision}: ${quote(e.reason)}`;
+    case "request": return `#${e.seq} Request ${quote(e.job)} ${at(e, excerpt)}${e.input && Object.keys(e.input).length ? ` with input ${JSON.stringify(e.input)}` : ""}`;
+    case "rework": return `#${e.seq} Rework requested for Request #${e.target}${e.note ? `: ${quote(e.note)}` : ""}`;
+    case "cancel": return `#${e.seq} Cancel requested for Request #${e.target}`;
+    default: return `#${e.seq} ${e.type} ${at(e, excerpt)}`;
+  }
+}
+
+/**
+ * The session message for a batch of human events: one header line, then one line per event. The rules for
+ * acting on them (data not instruction, answer in place, only the human closes) live in the tool description.
+ */
+export function compose(page, url, events, entries, { replay = false, doubt, group, excerpt, file } = {}) {
+  // A legacy line the Kernel cannot describe is named, not fatal, so Delivery and Copy still carry the rest.
+  const lines = events.map((e) => { try { return describe(e, entries, excerpt, file); } catch { return `#${e.seq} ${e.type} could not be rendered; read it in the Event Log`; } });
+  // Chat UIs show only the first line until expanded, so it names what happened (ISSUE-102): "Atelier query/x: Approve".
+  const headline = lines.map((line) => line.replace(/^#\d+ (Decision )?/, "").replace(/ \(version [^)]*\)/, "").split("; ")[0]).join(" · ");
+  return [
+    `Atelier ${headline}`,
+    // doubt: events an earlier receiver was sent but never confirmed, so a replay may repeat them.
+    [`${String(page).split("/").pop()}${url ? ` (${url})` : ""}`, group ? `Comments on ${group}` : "", replay ? "replayed from an earlier session" : "", doubt ?? ""].filter(Boolean).join(" · "),
+    ...lines.map((line) => `- ${line}`),
+  ].join("\n");
+}
+
+const LIGHT = "--atl-bg:#fff;--atl-fg:#1f2328;--atl-muted:#59636e;--atl-line:#d1d9e0;--atl-accent:#0969da;--atl-warn:#9a6700;--atl-ch-reworded:#0969da;--atl-ch-added:#1a7f37;--atl-ch-removed:#818b98;--atl-ch-needs:#bf8700";
+const DARK = "--atl-bg:#151b23;--atl-fg:#e6edf3;--atl-muted:#9198a1;--atl-line:#3d444d;--atl-accent:#4493f8;--atl-warn:#d29922;--atl-ch-reworded:#4493f8;--atl-ch-added:#3fb950;--atl-ch-removed:#9198a1;--atl-ch-needs:#d29922";
+/**
+ * The Kernel palette follows the Page, not the OS: light unless the Page declares dark through
+ * <meta name="color-scheme"> or :root color-scheme; a Page declaring both follows prefers-color-scheme.
+ * :where keeps it overridable by any Page rule that sets the variables.
+ */
+export function palette(declared = "") {
+  const light = `:where(:root){${LIGHT}}`, dark = `:where(:root){${DARK}}`;
+  if (!/\bdark\b/.test(declared)) return light;
+  return /\blight\b/.test(declared) ? `${light}@media (prefers-color-scheme:dark){${dark}}` : dark;
+}
+
+// Lucide icons (licence above): one size and stroke everywhere, always aria-hidden beside a label.
+const ICONS = {
+  comment: '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>',
+  "comment-plus": '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="M12 8v6"/><path d="M9 11h6"/>',
+  send: '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  list: '<path d="M13 5h8"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="m3 17 2 2 4-4"/><rect x="3" y="4" width="6" height="6" rx="1"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  chevron: '<path d="m9 18 6-6-6-6"/>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  paperclip: '<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/>',
+  image: '<path d="M16 5h6"/><path d="M19 2v6"/><path d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/><circle cx="9" cy="9" r="2"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+};
+/** Word diff (LCS) of two texts as [op, words] runs, op "=", "-" or "+". */
+// ponytail: O(n·m) table; above 250k cells the whole text counts as replaced.
+export function wordDiff(a, b) {
+  const x = a ? String(a).split(" ") : [], y = b ? String(b).split(" ") : [];
+  if (x.length * y.length > 250_000) return [["-", x.join(" ")], ["+", y.join(" ")]].filter(([, w]) => w);
+  const L = Array.from({ length: x.length + 1 }, () => new Uint16Array(y.length + 1));
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [], push = (op, w) => { const last = out[out.length - 1]; if (last?.[0] === op) last[1] += ` ${w}`; else out.push([op, w]); };
+  let i = 0, j = 0;
+  while (i < x.length && j < y.length) { if (x[i] === y[j]) { push("=", x[i]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) push("-", x[i++]); else push("+", y[j++]); }
+  while (i < x.length) push("-", x[i++]);
+  while (j < y.length) push("+", y[j++]);
+  return out;
+}
+/** One line for a tooltip: the first change with three words before it, "…was → is…". */
+export function diffPreview(parts) {
+  const k = parts.findIndex(([op]) => op !== "=");
+  if (k < 0) return "";
+  const ctx = k > 0 ? parts[k - 1][1].split(" ").slice(-3).join(" ") : "";
+  const del = parts[k][0] === "-" ? parts[k][1] : "", ins = parts[k][0] === "+" ? parts[k][1] : parts[k + 1]?.[0] === "+" ? parts[k + 1][1] : "";
+  return clip(`…${ctx} ${del && ins ? `${del} → ${ins}` : del ? `${del} (removed)` : ins}…`, 100);
+}
+
+const icon = (name) => `<svg class="atl-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+
+// ---------------------------------------------------------------- browser side
+function boot() {
+  const page = decodeURIComponent(location.pathname.replace(/^\//, ""));
+  const online = location.protocol.startsWith("http");
+  const q = `?page=${encodeURIComponent(page)}`;
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  // Every Decision takes an optional note and images (owner rule 2026-10-13), behind one quiet button; atl-note options
+  // still require the note. The host checks the bytes again and stores the images beside the Page.
+  const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"], IMAGE_MAX = 10 * 1024 * 1024, IMAGES_MAX = 4;
+  const EXTRA = `<button type="button" data-atl="addnote" class="atl-addnote" aria-expanded="false" aria-label="Add a note or image" title="Add a note or image">${icon("paperclip")}</button><span class="atl-extra" hidden><span class="atl-own" hidden><input class="atl-ownans" aria-label="Your own answer" placeholder="Your own answer"><button type="button" data-atl="decideown" class="atl-primary">${icon("check")} Answer</button></span><input class="atl-note" aria-label="Note" placeholder="Optional note"><button type="button" data-atl="pickimg" aria-label="Attach an image" title="Attach an image; paste or drop one too">${icon("image")}</button><input type="file" class="atl-file" accept="${IMAGE_TYPES.join(",")}" multiple hidden><span class="atl-attached"></span></span>`;
+  // A Comment or reply takes images the same way (2.7.0): its box carries its own .atl-extra without the note.
+  const IMAGES = `<span class="atl-extra atl-cimg"><button type="button" data-atl="pickimg" aria-label="Attach an image" title="Attach an image; paste or drop one too">${icon("image")}</button><input type="file" class="atl-file" accept="${IMAGE_TYPES.join(",")}" multiple hidden><span class="atl-attached"></span></span>`;
+  // The answer of the Decision's current round: none while it waits for an answer on a changed Key (2.11.0).
+  const current = (d) => d.stale ? null : d.answer;
+  // "Other…": the human's own answer beside the options, on every Decision (2.7.0).
+  const otherHtml = (d, lock) => `<button type="button" data-atl="other" data-id="${esc(d.id)}" class="atl-other${current(d)?.custom ? " atl-chosen" : ""}" aria-pressed="${!!current(d)?.custom}"${locked(lock)}>Other…</button>`;
+  const attached = new WeakMap(); // .atl-extra -> data: URLs of the images waiting for an answer or a Comment
+  const imgSrc = (x) => x.startsWith("data:") ? x : x.split("/").map(encodeURIComponent).join("/"); // stored beside the Page
+  const thumbs = (list, removable) => list.map((x, i) => `<span class="atl-thumb"><a href="${esc(imgSrc(x))}" target="_blank" rel="noopener"><img src="${esc(imgSrc(x))}" alt="Image ${i + 1}"></a>${removable ? `<button type="button" data-atl="dropimg" data-i="${i}" aria-label="Remove image ${i + 1}">${icon("x")}</button>` : ""}</span>`).join("");
+  const readKey = `atelier-read:${page}`;
+  const read = JSON.parse(localStorage.getItem(readKey) || "{}");
+  let cursor = 0, entries = [], local = [], conn = online ? "connecting" : "no session", es = null, mtime = null, composer = null, nextIndex = 0, testHost = false;
+  // The session that receives this Page's input, from the host: { label, generation }, null for none, undefined from an older host.
+  let receiver;
+  const expanded = new Set(); // threads whose folded middle the human opened
+  const unfolded = new Set(); // answered asked Decisions the human opened from their one-line fold (2.8.0)
+  const sourceOpen = new WeakMap(); // <details> -> open as the Page's source last said, to tell the human's toggles apart
+  const held = new WeakSet(); // <details> the human opened or closed: his state wins over every later source
+  const tabbed = new WeakSet(); // Keys the Kernel made focusable, so the keyboard reaches their Comment button
+  const chipsAt = new Map(); // Key address -> the markers of its threads, for the Comment button made on hover
+  const spots = new Map(); // thread seq -> its marker at a quote or a selector-anchored element
+  const BLOCK = "p,li,dd,dt,td,th,blockquote,pre,figcaption,h1,h2,h3,h4,h5,h6";
+  const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), cards = new Map(), wipLabels = new Map();
+  let hot = null, savedRange = null, thread = null; // thread: the one open in the floating thread box
+
+  const isUi = (n) => n.closest?.("[atl-ui]");
+  const keyOf = (el) => { const parts = []; for (let n = el?.closest?.("[atl-key]"); n; n = n.parentElement?.closest("[atl-key]")) if (!isUi(n)) parts.unshift(n.getAttribute("atl-key")); return parts.join("/") || undefined; };
+  const keyed = () => [...document.querySelectorAll("[atl-key]")].filter((el) => !isUi(el));
+  // ponytail: the Key map is rebuilt once per render; fine for hundreds of Keys.
+  let keyMap = null;
+  const findKey = (addr) => {
+    if (!keyMap) { keyMap = new Map(); for (const el of keyed()) { const k = keyOf(el); if (!keyMap.has(k)) keyMap.set(k, el); } }
+    return addr ? keyMap.get(addr) : undefined;
+  };
+  // Parts (2.16.0): what Alt+click names inside the nearest Key, by kind and its first words; never a cell, header or word.
+  const UNIT = "tbody tr, li, p, figure, dt, dd, pre, svg g:has(> title)";
+  const partKind = (el) => el.matches("tr") ? "row" : el.matches("li") ? "item" : el.matches("p") ? "paragraph" : el.matches("figure") ? "figure" : el.matches("dt, dd") ? "definition" : el.matches("pre") ? "code" : "chart bar";
+  const words = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
+  function ident(el) { // its text without Kernel UI, so a marker inside a part never renames it
+    if (el.matches("tr")) return words(el.cells[0] && keyText(el.cells[0]));
+    if (el.matches("figure")) { const c = el.querySelector("figcaption"); return words(c ? keyText(c) : el.querySelector("[aria-label]")?.getAttribute("aria-label")); }
+    if (el.matches("dd")) { let t = el.previousElementSibling; while (t && !t.matches("dt")) t = t.previousElementSibling; return words(t && keyText(t)); }
+    if (el.matches("pre")) return words(keyText(el).split("\n")[0]);
+    if (el.matches("g")) return words(el.querySelector(":scope > title").textContent);
+    const t = words(keyText(el)); return t.length > 40 ? `${t.slice(0, 40).trimEnd()}…` : t;
+  }
+  // What the pointer is on: a part ({el, key, part, label}), its Key when the part has its own atl-key or there is none, or null outside any Key.
+  function partAt(target) {
+    if (!target?.closest || isUi(target)) return null;
+    let keyEl = target.closest("[atl-key]");
+    while (keyEl && isUi(keyEl)) keyEl = keyEl.parentElement?.closest("[atl-key]");
+    if (!keyEl) return null;
+    const unit = target.closest(UNIT);
+    if (unit && unit !== keyEl && keyEl.contains(unit)) {
+      const key = keyOf(keyEl), part = { kind: partKind(unit), text: ident(unit) };
+      return { el: unit, key, part, label: `${key} › ${part.kind} ${part.text}` };
+    }
+    const key = keyOf(keyEl); return { el: keyEl, key, label: `Key ${key}` };
+  }
+  // Where a part is now: the same kind and text inside its Key, wherever it moved; else null.
+  const findPart = (keyEl, part) => [...keyEl.querySelectorAll(UNIT)].find((u) => !isUi(u) && u.closest("[atl-key]") === keyEl && partKind(u) === part.kind && ident(u) === part.text) ?? null;
+  const partWhere = (r) => r.part ? `${r.key} › ${r.part.kind} ${r.part.text}` : r.key;
+  const partGone = (r) => r.part && findKey(r.key) && !findPart(findKey(r.key), r.part) ? `${r.part.kind} “${r.part.text}” is gone; shown on Key ${r.key}` : "";
+  const verOf = (el) => el?.closest("[atl-ver]")?.getAttribute("atl-ver") ?? null;
+  const currentVer = (addr) => verOf(findKey(addr));
+  // Decisions the Page declares with atl-decide (155); the first element at an address wins, like findKey.
+  const declared = () => keyed().filter((el) => el.hasAttribute("atl-decide")).map((el) => {
+    const id = keyOf(el);
+    return declaredDecision(id, el.getAttribute("atl-decide"), el.getAttribute("atl-rec"), { note: pipe(el.getAttribute("atl-note")), material: el.getAttribute("atl-material") ?? undefined, delivery: el.getAttribute("atl-delivery") ?? undefined });
+  });
+  const all = () => [...entries, ...local];
+  const state = () => derive(all(), currentVer, declared());
+  let loaded = !online, published = null;
+  // atl-wip: a region an agent is reworking; its text labels it and locks the Decisions inside it, unless
+  // atl-wip-lock="off" (2.12.0), so a Page-wide "in progress" mark leaves the Decisions he still owes answerable.
+  const wips = () => [...document.querySelectorAll("[atl-wip]")].filter((el) => !isUi(el));
+  const wipText = (el) => el.getAttribute("atl-wip") || "Work in progress";
+  const lockOf = (el) => { const w = el.closest("[atl-wip]:not([atl-wip-lock=off])"); return w ? wipText(w) : null; };
+  const wipState = () => wips().map((el) => ({ key: keyOf(el) ?? null, text: wipText(el) }));
+  globalThis.atelier = Object.freeze({ state: () => publicState(state(), { conn, loaded, wip: wipState() }) });
+  const now = () => Date.now();
+
+  // ---- UI roots. Everything the Kernel draws carries atl-ui and is lifted out before each morph.
+  const panel = h(`<aside atl-ui="panel" aria-label="Atelier"><style class="atl-palette"></style><style>${STYLE}</style><div class="atl-undo" aria-live="polite"></div><div class="atl-list"></div></aside>`);
+  // The top bar (2.15.0): the Page's atl-nav items on the left, the counts and Send on the right; outside <body>, so no Update lifts it.
+  // The bar's help card (2.16.0): how to comment, the keys, and what happens next, in plain words.
+  const ALT = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? "") ? "⌥ Option" : "Alt";
+  const HELP = `<b>How to comment</b><ul><li>Point at a section and press its Comment button.</li><li>${ALT}+click a row, item, chart bar or paragraph to comment on just that part.</li><li>Select text, then press Comment.</li><li>On a phone, press and hold a part.</li></ul><b>Keys</b><ul><li>Esc closes a box or menu.</li><li>Enter in a Decision's note sends it.</li></ul><b>What happens next</b><p>Your comments reach the agent the next time it reads the Page.</p>`;
+  const topBar = h(`<div atl-ui="top" class="atl-top"><button type="button" data-atl="navmenu" class="atl-navmenu" aria-expanded="false" hidden>Sections</button><div class="atl-nav" role="navigation" aria-label="Page sections"></div><button type="button" data-atl="reqmenu" class="atl-reqmenu" aria-expanded="false" aria-controls="atl-reqs" hidden>Requests</button><div class="atl-reqs" id="atl-reqs" role="region" aria-label="Requests" hidden></div><div class="atl-bar"></div><button type="button" data-atl="helpmenu" class="atl-helpmenu" aria-expanded="false" aria-controls="atl-help" aria-label="Help" title="Help">${icon("help")}</button><div class="atl-help" id="atl-help" role="region" aria-label="Help" hidden>${HELP}</div></div>`);
+  const navs = () => [...document.querySelectorAll("[atl-nav]")].filter((el) => !isUi(el));
+  // A thread opened from its marker floats beside it, outside <body> like every Comment box, so no Update lifts it.
+  const tpop = h(`<div atl-ui="thread" class="atl-pop atl-tpop" role="dialog" tabindex="-1"><div class="atl-tbar"><span class="atl-label"></span><button type="button" data-atl="hidethread" aria-label="Close this box" title="Close (Esc)">${icon("x")}</button></div><div class="atl-tcard"></div><div class="atl-slot"></div></div>`);
+  const orphans = h(`<section atl-ui="orphans" aria-label="Decisions"></section>`);
+  // Shown beside a text selection on the Page; pointerdown keeps the selection it comments on.
+  const selBtn = h(`<button atl-ui="sel" class="atl-selbtn" data-atl="selcomment" hidden>${icon("comment-plus")} Comment</button>`);
+  selBtn.addEventListener("pointerdown", (ev) => ev.preventDefault());
+  const rail = h(`<nav atl-ui="rail" class="atl-rail" aria-label="Changes" hidden></nav>`);
+  const allSeen = h(`<button data-atl="chall" class="atl-allseen" title="Clear every change mark">${icon("check")} Mark all seen</button>`);
+  // The panel docks where the Page puts an atl-dock element, else it floats at the bottom right.
+  const dock = () => [...document.querySelectorAll("[atl-dock]")].find((d) => !isUi(d)) ?? document.body;
+  document.body.prepend(orphans);
+  dock().append(panel);
+  document.body.append(selBtn, rail);
+  document.documentElement.append(topBar);
+
+  function h(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
+  function set(el, html) { if (el && el.__html !== html) { el.__html = html; el.innerHTML = html; } }
+  // Keyed reconcile: an item's node survives while its id stays, so focus and typed notes survive (Review Studio review-studio-focus.test.mjs).
+  function reconcile(container, items) {
+    const keep = new Set(items.map((i) => i.id));
+    for (const child of [...container.children]) if (!keep.has(child.dataset.id)) child.remove();
+    items.forEach((item, i) => {
+      let node = cards.get(item.id);
+      if (!node) { node = h(`<div class="atl-card" tabindex="-1" data-id="${esc(item.id)}"><div class="atl-c"></div>${item.extra ?? ""}</div>`); cards.set(item.id, node); }
+      const had = node.contains(document.activeElement);
+      set(node.firstElementChild, item.html);
+      // A Decision that folds or unfolds under focus hands it to its fold line, so the keyboard keeps its place.
+      if (had && !node.contains(document.activeElement)) node.querySelector("[data-atl=fold]")?.focus({ preventScroll: true });
+      node.classList.toggle("atl-open-item", !!item.open);
+      node.classList.toggle("atl-folded", !!item.folded);
+      if (container.children[i] !== node) container.insertBefore(node, container.children[i] ?? null);
+    });
+  }
+
+  // ---- talking to the page server. A pull and a POST can return the same entry, so entries merge by seq.
+  function add(list) {
+    const known = new Set(entries.map((e) => e.seq));
+    const fresh = list.filter((e) => !known.has(e.seq));
+    if (fresh.length) { entries.push(...fresh); entries.sort((a, b) => a.seq - b.seq); }
+    return fresh;
+  }
+  let first = true;
+  async function pull() {
+    if (!online) return;
+    try {
+      // Only a pull moves the cursor: a POST's own entry may be newer than another tab's unfetched one.
+      const r = await fetch(`/.atelier/events${q}&since=${cursor}`, { cache: "no-store" });
+      if (!r.ok) throw new Error((await r.json()).error);
+      const list = (await r.json()).entries;
+      cursor = list.reduce((max, e) => Math.max(max, e.seq), cursor);
+      const fresh = add(list);
+      if (fresh.length || first) { first = false; loaded = true; render(); }
+      return true;
+    } catch { conn = "no session"; loaded = true; render(); return false; }
+  }
+
+  async function post(body) {
+    if (online) {
+      try {
+        const r = await fetch(`/.atelier/events${q}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        const j = await r.json();
+        if (r.ok) { add(j.undone ? [j.undone, j.entry] : [j.entry]); render(); return j.entry; }
+        if (r.status !== 404) { flash(j.error ?? "Rejected"); return; }
+      } catch {
+        // The response is lost, so the host may have saved the change: its undo and the new answer share one write.
+        flash("Couldn't confirm the change; checking…");
+        if (await pull()) { // the host answers, so the session is there: only this change missed it
+          if (body.replaces == null) { flash("Couldn't confirm the change; the Page shows what the host saved."); return; }
+          const undo = entries.find((e) => e.type === "undo" && e.target === body.replaces);
+          const saved = undo && entries.find((e) => e.seq === undo.seq + 1 && e.type === "decide" && e.decision === body.decision);
+          // Another tab may have replaced it first: only this submission's own answer counts as saved.
+          const same = (k) => JSON.stringify(saved[k] ?? null) === JSON.stringify(body[k] ?? null);
+          if (saved && ["option", "custom", "opened", "note", "images"].every(same)) return saved;
+          if (saved) { flash("Another answer was saved first; your answer stays."); return; }
+          flash("Your change didn't reach the host; your answer stays."); return;
+        }
+      }
+      conn = "no session";
+    }
+    // A Seen counts only once the host saved it: kept here it would hide the mark and never reach the log.
+    if (body.type === "seen") { flash("Could not save Seen; the mark stays."); return; }
+    // A replacement only the host can make: kept here, the answer it replaces would still be delivered.
+    if (body.replaces != null) { flash("No session took the change; your answer stays."); return; }
+    // No session serves this Page: keep the event here and offer Copy (decision 131; pi-artifacts' 503 + Copy).
+    if (body.type === "undo") { local = local.filter((e) => e.seq !== body.target); render(); return; }
+    const e = { ...body, seq: Math.min(0, ...local.map((x) => x.seq)) - 1, at: now(), origin: "human", local: true, delivery: body.delivery ?? CLASSES[body.type] };
+    local.push(e); render(); return e;
+  }
+
+  // Each image goes to the host on its own (POST /.atelier/image) before the answer that names it. null: one was
+  // refused or unreachable, so nothing posts. Only a Page with no server (file://) keeps them in this browser.
+  async function upload(images, kept = "Your answer did not change.") {
+    if (!online) return images;
+    const names = [];
+    for (const x of images) {
+      let r;
+      try { r = await fetch(`/.atelier/image${q}`, { method: "POST", body: Uint8Array.from(atob(x.slice(x.indexOf(",") + 1)), (c) => c.charCodeAt(0)) }); }
+      catch { flash(`Could not upload the image. ${kept}`); return null; }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { flash(`${j.error ?? "Image refused."} ${kept}`); return null; }
+      names.push(j.name);
+    }
+    return names;
+  }
+
+  function connect() {
+    if (!online || es) return;
+    es = new EventSource(`/.atelier/stream${q}`);
+    es.addEventListener("hello", (m) => { const d = JSON.parse(m.data); if (mtime !== null && d.mtime !== mtime) morph(); mtime = d.mtime; testHost = !!d.test; receiver = d.receiver; conn = "live"; render(); pull(); });
+    es.addEventListener("receiver", (m) => { receiver = JSON.parse(m.data).receiver; flash(receiver ? `Your input now goes to ${receiver.label}.` : "No Pi session receives your input now; it is kept until one opens this Page."); render(); });
+    es.addEventListener("log", pull);
+    es.addEventListener("update", (m) => { const d = JSON.parse(m.data); mtime = d.mtime; pendingNote = d.note ?? null; morph(); });
+    es.onerror = () => { conn = "reconnecting"; render(); };
+  }
+  // pi-artifacts 1.5.0: one EventSource per tab, closed while hidden, so many tabs never starve the connection limit.
+  document.addEventListener("visibilitychange", () => { if (document.hidden) { es?.close(); es = null; } else connect(); });
+
+  // ---- Update (145): morph the body with idiomorph and keep the human's open input.
+  async function morph() {
+    const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const before = changesOn() ? snapshot() : null;
+    const active = document.activeElement;
+    const range = active && "selectionStart" in active ? [active.selectionStart, active.selectionEnd] : null;
+    // Lift out only top-level Kernel nodes; those inside a Key's UI travel with it.
+    document.body.querySelectorAll("[atl-ui]").forEach((n) => { if (!n.parentElement.closest("[atl-ui]")) n.remove(); });
+    const sheet = (d) => [...d.head.querySelectorAll("style,link[rel=stylesheet]")];
+    if (sheet(document).map((n) => n.outerHTML).join() !== sheet(doc).map((n) => n.outerHTML).join()) {
+      sheet(document).forEach((n) => n.remove());
+      sheet(doc).forEach((n) => document.head.append(document.importNode(n, true)));
+    }
+    document.title = doc.title;
+    // idiomorph keeps node identity only through ids, so Keys lend theirs for the morph: a keyed element
+    // survives even among same-tag siblings, and with it any state the page script holds on it.
+    const lend = (root) => root.querySelectorAll("[atl-key]:not([id])").forEach((el) => { if (!isUi(el)) el.id = `atl-key:${keyOf(el)}`; });
+    lend(document); lend(doc);
+    // The new body's children, not the body: idiomorph would nest a second <body> inside the first.
+    Idiomorph.morph(document.body, doc.body.childNodes, {
+      morphStyle: "innerHTML", ignoreActiveValue: true, restoreFocus: true,
+      callbacks: {
+        beforeAttributeUpdated: (name, el, type) => {
+          if (name === "tabindex" && tabbed.has(el)) { if (type === "remove") return false; tabbed.delete(el); } // the source now sets its own
+          return !(touched.has(el) && /^(value|checked|selected)$/.test(name));
+        },
+        // A <details> the human opened or closed keeps his state through every later Update, even once the source
+        // has said the same; one he never touched follows the new source.
+        beforeNodeMorphed: (old, next) => {
+          if (old.localName === "details" && next.localName === "details") {
+            const said = next.hasAttribute("open");
+            if (held.has(old) || (sourceOpen.has(old) && old.open !== sourceOpen.get(old))) { held.add(old); next.open = old.open; }
+            sourceOpen.set(old, said);
+          }
+          return true;
+        },
+      },
+    });
+    document.querySelectorAll('[id^="atl-key:"]').forEach((el) => el.removeAttribute("id"));
+    // The morph covers the body's children; <html> and <body> take the new source's attributes (class, style, data-*).
+    for (const [mine, theirs] of [[document.documentElement, doc.documentElement], [document.body, doc.body]]) {
+      for (const a of [...mine.attributes]) if (!theirs.hasAttribute(a.name)) mine.removeAttribute(a.name);
+      for (const a of theirs.attributes) if (mine.getAttribute(a.name) !== a.value) mine.setAttribute(a.name, a.value);
+    }
+    document.body.prepend(orphans);
+    dock().append(panel);
+    document.body.append(selBtn, rail);
+    keyMap = null;
+    if (before) diffMarks(before);
+    pendingNote = null;
+    render();
+    if (active?.isConnected && document.activeElement !== active) { active.focus({ preventScroll: true }); if (range) active.setSelectionRange(...range); }
+    document.dispatchEvent(new CustomEvent("atelier:update"));
+  }
+
+  // ---- text anchors: quote fallback (pi-artifacts {exact,prefix,suffix}) painted with the CSS Custom Highlight API
+  function textIndex() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, { acceptNode: (n) => isUi(n.parentElement) || n.parentElement.closest("script,style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    const nodes = []; let text = "";
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) { nodes.push({ n, start: text.length }); text += n.data; }
+    return { text, nodes };
+  }
+  const offsetOf = (idx, node, off) => (idx.nodes.find((x) => x.n === node)?.start ?? -1) + off;
+  function rangeAt(idx, start, end) {
+    const pos = (o) => { const x = [...idx.nodes].reverse().find((y) => y.start <= o); return x ? [x.n, Math.min(o - x.start, x.n.data.length)] : null; };
+    const a = pos(start), b = pos(end); if (!a || !b) return null;
+    const r = document.createRange(); r.setStart(...a); r.setEnd(...b); return r;
+  }
+  function findQuote(qt, idx) {
+    // Plannotator's rule: verify the text itself; ambiguous or missing quotes fail closed into Unanchored.
+    const hits = []; for (let i = idx.text.indexOf(qt.exact); i >= 0 && hits.length < 50; i = idx.text.indexOf(qt.exact, i + 1)) hits.push(i);
+    const best = hits.find((i) => idx.text.slice(Math.max(0, i - qt.prefix.length), i).endsWith(qt.prefix) && idx.text.slice(i + qt.exact.length).startsWith(qt.suffix)) ?? (hits.length === 1 ? hits[0] : undefined);
+    return best === undefined ? null : rangeAt(idx, best, best + qt.exact.length);
+  }
+  // A verified selector for unkeyed spots (decision 140): unique match plus a text snapshot, else Unanchored.
+  function selectorFor(el) {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const parts = [];
+    for (let n = el; n && n !== document.body; n = n.parentElement) parts.unshift(`${n.localName}:nth-of-type(${[...n.parentElement.children].filter((c) => c.localName === n.localName).indexOf(n) + 1})`);
+    return `body > ${parts.join(" > ")}`;
+  }
+  function findSelector(s) { try { const hits = document.querySelectorAll(s.sel); return hits.length === 1 && !isUi(hits[0]) && hits[0].textContent.trim().startsWith(s.snap) ? hits[0] : null; } catch { return null; } }
+
+  // Where a thread is drawn: its Key, else its quote or selector, else Unanchored (140).
+  // A Key's own text without Kernel UI, for the excerpt a copied message carries.
+  function keyText(el) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => isUi(n.parentElement) || n.parentElement.closest("script,style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    let text = ""; for (let n = walker.nextNode(); n && text.length < 400; n = walker.nextNode()) text += n.data;
+    return text;
+  }
+  function placeThread(t, idx) {
+    const r = t.root;
+    if (r.key && r.part && findKey(r.key)) { const el = findPart(findKey(r.key), r.part); if (el) return { where: "text", el }; }
+    if (r.key && findKey(r.key)) return { where: "key", el: findKey(r.key) };
+    if (r.quote) { const range = findQuote(r.quote, idx); if (range) return { where: "text", range }; }
+    if (r.selector) { const el = findSelector(r.selector); if (el) return { where: "text", el }; }
+    return { where: "unanchored" };
+  }
+
+  // ---- rendering
+  const STATUS = { draft: "draft, not sent", pending: "waiting", queued: "queued for the agent", delivered: "delivered", unconfirmed: "not confirmed: Copy it", local: "no session: Copy it", recorded: "recorded" };
+  const left = (e) => Math.ceil((e.at + UNDO_MS - now()) / 1000);
+  const statusText = (st, e) => { const s = st.status(e); return s === "pending" && left(e) > 0 ? `sends in ${left(e)} s` : testHost && s === "delivered" ? "printed by the test host" : STATUS[s] ?? ""; };
+
+  const unreadIn = (t) => t.msgs.filter((m) => m.origin === "agent" && m.seq > (read[t.root.seq] ?? 0)).length;
+  // A thread's marker: a chip titled with the first words of its first message and its reply count; compact (no
+  // title) at a quote, where it would cover the text. New agent replies show as a dot.
+  function chipHtml(t, st, compact = false) {
+    const seq = t.root.seq, unread = unreadIn(t), replies = t.msgs.length - 1, draft = st.status(t.root) === "draft";
+    const label = `Thread #${seq}: ${clip(t.root.text, 80)} · ${t.closed ? "Closed" : "Open"}, ${replies} repl${replies === 1 ? "y" : "ies"}${unread ? `, ${unread} new` : ""}${t.stale ? ", on an earlier version" : ""}${draft ? ", not sent" : ""}`;
+    const cls = ["atl-chip", compact && "atl-compact", !t.closed && !draft && "atl-open-item", t.closed && "atl-closed", unread && "atl-unread", t.stale && "atl-stale", draft && "atl-draft"].filter(Boolean).join(" ");
+    return `<button type="button" data-atl="thread" data-seq="${seq}" class="${cls}" aria-haspopup="dialog" aria-expanded="${thread?.seq === seq}" aria-label="${esc(label)}" title="${esc(label)}">${icon("comment")}${compact ? "" : `<span class="atl-ct">${esc(clip(t.root.text, 24))}</span>`}${replies ? `<span class="atl-cn">${replies}</span>` : ""}${unread ? `<span class="atl-nd"></span>` : ""}</button>`;
+  }
+
+  // inPop: the thread opened from its marker, which shows its messages even when closed and needs no Show.
+  function threadHtml(t, st, inPop = false) {
+    const unread = unreadIn(t);
+    const msg = (m) => `<div class="atl-msg ${m.origin === "agent" ? "atl-agent" : "atl-you"}"><div class="atl-who"><b>${m.origin === "agent" ? "Agent" : "You"}</b> <span class="atl-dim">#${m.seq}${m.origin === "human" ? ` · ${esc(statusText(st, m))}` : ""}</span></div><div class="atl-mt">${esc(m.text)}</div>${m.images?.length ? `<div class="atl-thumbs">${thumbs(m.images)}</div>` : ""}</div>`;
+    const open = expanded.has(t.root.seq);
+    const { head, folded, tail } = threadLayout(t.msgs, open, t.closed && !inPop);
+    if (t.closed && !open && !inPop) { // a closed thread collapses to its head; its messages open on demand
+      const anchor = t.root.quote ? `“${esc(t.root.quote.exact.slice(0, 80))}”` : esc(String(t.root.text ?? "").slice(0, 80));
+      return `<div class="atl-head"><span class="atl-tag">closed</span>${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}<button data-atl="expand" data-seq="${t.root.seq}" class="atl-earlier">${folded.length} message${folded.length === 1 ? "" : "s"}</button></div><div class="atl-dim">${anchor}</div>`;
+    }
+    const gone = partGone(t.root), anchor = (t.root.quote ? `<div class="atl-quote">“${esc(t.root.quote.exact.slice(0, 140))}”</div>` : t.root.t != null ? `<div class="atl-dim">at ${Number(t.root.t).toFixed(1)} s</div>` : "") + (gone ? `<div class="atl-dim atl-moved">${icon("alert")} ${esc(gone)}</div>` : "");
+    return `<div class="atl-head">${inPop && !t.closed ? "" : `<span class="atl-tag">${t.closed ? "closed" : "open"}</span>`}${t.closed && !inPop ? `<button data-atl="collapse" data-seq="${t.root.seq}" class="atl-earlier">Collapse</button>` : ""}${t.stale ? `<span class="atl-tag atl-warn">${icon("alert")} on an earlier version</span>` : ""}${unread ? `<span class="atl-tag atl-new">${unread} new</span>` : ""}</div>${anchor}
+      ${head.map(msg).join("")}${folded.length ? `<button data-atl="expand" data-seq="${t.root.seq}" class="atl-earlier">${folded.length} earlier</button>` : ""}${tail.map(msg).join("")}
+      <div class="atl-actions"><button data-atl="reply" data-seq="${t.root.seq}">${icon("pencil")} Reply</button>${t.stale && !t.closed ? `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Fixed: close</button><button data-atl="still" data-seq="${t.root.seq}">Still applies</button>` : t.closed ? "" : `<button data-atl="close" data-seq="${t.root.seq}">${icon("check")} Close</button>`}${!inPop && (t.root.key || t.root.quote || t.root.selector) ? `<button data-atl="jump" data-seq="${t.root.seq}">${icon("eye")} Show</button>` : ""}</div>`;
+  }
+
+  // `lock`: the atl-wip text of a region holding the Decision; its options are disabled with that text as their title.
+  const locked = (lock) => lock == null ? "" : ` disabled title="${esc(lock)}"`;
+  // An answered asked Decision folds to one line, its question and the answer, once its undo window has closed (2.8.0);
+  // the line opens and closes the full Decision. A stale answer stays open: it needs answering again; so does one whose
+  // note box is open, so a note being typed is never hidden under the human.
+  const foldable = (d) => !!d.answer && !d.stale && !(d.answer.origin === "human" && left(d.answer) > 0);
+  const noting = (d) => cards.get(`d:${d.id}`)?.querySelector(".atl-extra")?.hidden === false;
+  const folded = (d) => foldable(d) && !unfolded.has(d.id) && !noting(d);
+  function decisionHtml(d, st, lock = null) {
+    const a = current(d);
+    // An answer that crossed a retract shows why the agent no longer asks (2.14.1).
+    const gone = d.retracted != null ? `<span class="atl-tag atl-gone">no longer asked: ${esc(clip(d.retracted, 80))}</span>` : "";
+    const line = foldable(d) ? `<button type="button" data-atl="fold" data-id="${esc(d.id)}" class="atl-fold" aria-expanded="${!folded(d)}" title="${esc(d.question)}">${icon("chevron")}<span class="atl-tag">answered</span><span class="atl-fq">${esc(d.question)}</span><b>${esc(clip(a.option, 60))}</b>${gone}</button>` : "";
+    if (line && folded(d)) return line;
+    const opts = d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}"${locked(lock)} class="atl-opt${o.recommended ? " atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"><b>${esc(o.label)}</b>${o.recommended ? ` <span class="atl-tag">recommended</span>` : ""}<span class="atl-dim">${esc(o.consequence)}</span></button>`).join("");
+    return `<div class="atl-head">${line || `<span class="atl-tag">${a ? "answered" : "to answer"}</span>${gone}`}${roundTag(d)}</div>
+      <div class="atl-q">${esc(d.question)}</div>${d.detail ? `<div class="atl-dim">${esc(d.detail)}</div>` : ""}
+      ${materialHtml(d)}<div class="atl-opts">${opts}${otherHtml(d, lock)}</div>${receiptHtml(d, st)}`;
+  }
+  // A Decision whose Key changed since its first answer shows the version's number, "Version 2", with no option chosen
+  // until he answers on it; the last answer on each other version sits beneath it (owner 2026-10-22, 2.11.0).
+  const roundTag = (d) => d.round > 1 || d.history?.length ? `<span class="atl-tag atl-round${d.stale ? " atl-warn" : ""}">Version ${d.round}</span>` : "";
+  const historyHtml = (d) => d.history?.length ? `<div class="atl-hist atl-dim">${d.history.map((x) => `Version ${x.round}: ${esc(clip(x.answer, 40))}`).join(" · ")}</div>` : "";
+  const materialHtml = (d) => d.material ? `<button data-atl="material" data-id="${esc(d.id)}">${d.opened ? `${icon("check")} Material opened` : `${icon("eye")} Open the material`}</button>` : "";
+  // The current answer, what it changed from, and the recommendation receipt; always editable (155). A small box below
+  // the options (2.7.0): the answer, its note and images, then the status line.
+  function receiptHtml(d, st) {
+    const a = current(d);
+    if (!a) return historyHtml(d);
+    const rec = d.options.find((o) => o.recommended)?.label;
+    const meta = [a.previous != null ? `changed from ${esc(a.previous)}` : "", rec === undefined ? "" : a.option === rec ? "kept the recommendation" : "not the recommendation", d.material ? `material ${a.opened ? "opened" : "not opened"}` : "", esc(statusText(st, a))].filter(Boolean).join(" · ");
+    return `<div class="atl-receipt"><div class="atl-ans">${a.custom ? "Your own answer" : "Your answer"}: <b>${esc(a.option)}</b></div>${a.note ? `<p class="atl-rnote">${esc(a.note)}</p>` : ""}${a.images?.length ? `<div class="atl-thumbs">${thumbs(a.images)}</div>` : ""}${meta ? `<div class="atl-dim">${meta}</div>` : ""}</div>${historyHtml(d)}`;
+  }
+
+  // A Page-declared Decision renders as a row of options in its atl-slot, or at the end of its element (155).
+  function declaredHtml(d, st, lock = null) {
+    const a = current(d);
+    return d.options.map((o) => `<button data-atl="decide" data-id="${esc(d.id)}" data-label="${esc(o.label)}" aria-pressed="${a?.option === o.label}" class="${o.recommended ? "atl-rec" : ""}${a?.option === o.label ? " atl-chosen" : ""}"${lock != null ? locked(lock) : o.recommended ? ` title="Recommended"` : ""}>${esc(o.label)}${o.recommended ? `<span class="atl-sr"> (recommended)</span>` : ""}</button>`).join("")
+      + otherHtml(d, lock) + materialHtml(d) + roundTag(d);
+  }
+
+  function requestHtml(r, st) {
+    const last = r.rework ?? r.req;
+    const state = r.state ?? (st.status(last) === "delivered" || st.status(last) === "queued" ? "queued" : statusText(st, last));
+    const terminal = ["done", "failed", "cancelled"].includes(r.state);
+    return `<div><b>${esc(r.req.job)}</b> <span class="atl-dim">#${r.req.seq}${r.req.key ? ` · ${esc(r.req.key)}` : ""}${r.revision > 1 ? ` · revision ${r.revision}` : ""}</span></div>
+      <div><span class="atl-tag atl-state-${esc(r.state ?? "wait")}">${esc(state)}</span>${r.accepted ? ` <span class="atl-tag">accepted</span>` : ""}${r.cancel && !terminal ? ` <span class="atl-dim">cancel requested</span>` : ""} ${r.note ? `<span>${esc(r.note)}</span>` : ""}</div>
+      ${r.rework?.note ? `<div class="atl-dim">Rework: ${esc(r.rework.note)}</div>` : ""}
+      <div class="atl-actions">${!terminal && !r.cancel ? `<button data-atl="cancel" data-seq="${r.req.seq}">Cancel</button>` : ""}${r.state === "done" && !r.accepted ? `<button data-atl="accept" data-seq="${r.req.seq}">Accept</button><button data-atl="rework" data-seq="${r.req.seq}">Rework…</button>` : ""}</div>`;
+  }
+
+  // A Key's UI goes inside it, except where children would not show: after media and void elements, into a row's last cell.
+  // A Key's UI (its asked Decisions) spans a grid or flex-row Key rather than squeeze into one cell (2.3.2: 280px of a
+  // 1374px 3-column row): CSS spans the grid columns, a wrapping row gives them a line of their own, and a nowrap
+  // row, which no child can break, gets them after the Key like media.
+  function place(ui, el) {
+    const s = ui.matches("[atl-ui=key]") && getComputedStyle(el), row = s && s.display.endsWith("flex") && !s.flexDirection.startsWith("column");
+    const after = el.matches("img,video,audio,canvas,iframe,input,textarea,select,svg,hr,br") || (row && s.flexWrap === "nowrap");
+    if (s) { ui.classList.toggle("atl-after", after); ui.classList.toggle("atl-row", row && !after); }
+    if (after) { if (el.nextSibling !== ui) el.after(ui); }
+    else { const box = el.matches("tr") ? el.lastElementChild ?? el : el; if (ui.parentElement !== box) box.append(ui); }
+  }
+
+  function render() {
+    keyMap = null;
+    const st = state();
+    set(panel.querySelector(".atl-palette"), palette(`${document.querySelector('meta[name="color-scheme"]')?.content ?? ""} ${getComputedStyle(document.documentElement).colorScheme ?? ""}`));
+    const idx = textIndex();
+    const placed = new Map(st.threads.map((t) => [t.root.seq, placeThread(t, idx)]));
+    const seen = new Set(), kept = new Set(), atText = [];
+    for (const el of keyed()) {
+      const addr = keyOf(el);
+      if (seen.has(addr)) continue; seen.add(addr);
+      let ui = keyUis.get(addr);
+      if (!ui) { ui = h(`<div atl-ui="key" data-key="${esc(addr)}"><div class="atl-khead"></div><div class="atl-kbody"></div></div>`); keyUis.set(addr, ui); }
+      // Threads take no space in the Page's flow: each is a marker, a chip on its Key, or at its quote when it
+      // was made on selected text (Fix 6: never at the end of a long Key). A Key that only marks a slot has no pin.
+      const onKey = st.threads.filter((t) => {
+        if (placed.get(t.root.seq).where !== "key" || t.root.key !== addr) return false;
+        const range = t.root.quote && findQuote(t.root.quote, idx);
+        if (range && el.contains(range.commonAncestorContainer)) { atText.push({ t, at: range }); return false; }
+        if (el.hasAttribute("atl-slot")) { atText.push({ t, at: el }); return false; }
+        return true;
+      });
+      // A Decision renders before the threads, so its options stay where the Page put them.
+      const d = el.hasAttribute("atl-decide") ? st.decisions.find((x) => x.id === addr && x.declared) : undefined;
+      if (d) {
+        let dec = decUis.get(addr);
+        if (!dec) { dec = h(`<span atl-ui="decide" data-key="${esc(addr)}" class="atl-decide" role="group" aria-label="Decision on ${esc(addr)}"><span class="atl-dopts"></span>${EXTRA}<span class="atl-dstate"></span></span>`); decUis.set(addr, dec); }
+        const slot = [...el.querySelectorAll("[atl-slot]")].find((s) => !isUi(s) && s.closest("[atl-decide]") === el);
+        if (slot) { if (dec.parentElement !== slot) slot.append(dec); } else place(dec, el);
+        set(dec.firstElementChild, declaredHtml(d, st, lockOf(el)));
+        set(dec.lastElementChild, receiptHtml(d, st));
+        dec.classList.toggle("atl-open-item", !d.answer || d.stale);
+        kept.add(dec);
+      }
+      place(ui, el);
+      // The Comment button: only the hovered or focused Key has one, not every Key; its thread markers stay.
+      // A Key that only marks a Decision's slot gets none.
+      if (!el.hasAttribute("atl-slot")) {
+        // A Key with nothing focusable in itself takes a tab stop, so Tab reaches it and then its Comment button.
+        if (!el.hasAttribute("tabindex") && el.tabIndex < 0) { el.tabIndex = 0; tabbed.add(el); }
+        // The threads that need the human (open, or with unread replies) keep a badge at rest when the row has no spot (2.10.1).
+        const need = onKey.filter((t) => unreadIn(t) || (!t.closed && st.status(t.root) !== "draft")), news = need.some(unreadIn);
+        const label = `${need.length} thread${need.length === 1 ? "" : "s"} need${need.length === 1 ? "s" : ""} you on ${addr}${news ? ", new replies" : ""}: show`;
+        chipsAt.set(addr, { chips: onKey.map((t) => chipHtml(t, st)).join(""), badge: need.length ? `<button type="button" data-atl="tuck" class="atl-chip atl-compact atl-badge${news ? " atl-unread" : ""}" aria-label="${esc(label)}" title="${esc(label)}">${icon("comment")}<span class="atl-cn">${need.length}</span>${news ? `<span class="atl-nd"></span>` : ""}</button>` : "" });
+        if (onKey.length || addr === hot || composer?.pinKey === addr || pins.get(addr)?.contains(document.activeElement)) kept.add(pinFor(addr, el));
+      }
+      const groupDrafts = el.hasAttribute("atl-group") ? st.drafts.filter((x) => inGroup(x.key, addr)).length : 0;
+      set(ui.firstElementChild, groupDrafts ? `<button data-atl="send" data-key="${esc(addr)}" class="atl-primary">${icon("send")} Send (${groupDrafts})</button>` : "");
+      reconcile(ui.children[1], st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st, lockOf(el)), open: !x.answer || x.stale, folded: folded(x), extra: `<div class="atl-dextra">${EXTRA}</div>` })));
+    }
+    for (const map of [pins, decUis]) for (const [addr, node] of map) if (!kept.has(node)) { node.remove(); map.delete(addr); }
+    for (const [addr, ui] of keyUis) if (!seen.has(addr)) { ui.remove(); keyUis.delete(addr); }
+    // Markers at a quote (inside the block that holds it) or on a selector-anchored element; the panel lists these too.
+    for (const t of st.threads) { const p = placed.get(t.root.seq); if (p.where === "text") atText.push({ t, at: p.range ?? p.el }); }
+    const spotted = new Set();
+    for (const { t, at } of atText) {
+      const start = at instanceof Range ? at.startContainer.parentElement : at, host = at instanceof Range ? start?.closest(BLOCK) ?? start : at.ownerSVGElement ?? at; // HTML never renders inside an SVG
+      if (!host || isUi(host)) continue;
+      let s = spots.get(t.root.seq);
+      if (!s) { s = h(`<span atl-ui="spot" class="atl-pin atl-spot"></span>`); spots.set(t.root.seq, s); }
+      s.at = at; place(s, host); set(s, chipHtml(t, st, true)); spotted.add(t.root.seq);
+    }
+    for (const [seq, s] of spots) if (!spotted.has(seq)) { s.remove(); spots.delete(seq); }
+    if (thread) {
+      const t = st.threads.find((x) => x.root.seq === thread.seq);
+      if (!t) closeThread(false, false); // undone, or gone from the log
+      else {
+        const where = t.root.quote ? `“${clip(t.root.quote.exact, 40)}”` : t.root.key ? partWhere(t.root) : t.root.selector?.sel ?? "the Page";
+        set(tpop.querySelector(".atl-label"), `Thread on ${esc(where)}`);
+        tpop.setAttribute("aria-label", `Thread on ${where}`);
+        reconcile(tpop.querySelector(".atl-tcard"), [{ id: `p:${t.root.seq}`, html: threadHtml(t, st, true) }]);
+      }
+    }
+
+    // Decisions with no Key on the Page sit in the reading path, capped at 50vh (Review Studio a41040901).
+    reconcile(orphans, st.decisions.filter((d) => !d.declared && !findKey(d.key)).map((d) => ({ id: `d:${d.id}`, html: decisionHtml(d, st, lockOf(orphans)), open: !d.answer || d.stale, folded: folded(d), extra: `<div class="atl-dextra">${EXTRA}</div>` })));
+
+    const onText = st.threads.filter((t) => placed.get(t.root.seq).where === "text");
+    const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
+    const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
+    const open = st.openThreads.length + st.toAnswer.length;
+    set(topBar.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")}<span> Test host, no Pi session</span></span>` : receiver ? `<span class="atl-dim atl-recv" title="Your input goes to this Pi session">→ ${esc(receiver.label)}</span>` : receiver === null ? `<span class="atl-tag atl-warn atl-recv" title="No Pi session receives your input now; it is kept until one opens this Page">no receiver</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
+    renderUndo(undoable());
+    const section = (title, items) => items.length ? `<h4>${title}</h4>` : "";
+    const list = panel.querySelector(".atl-list");
+    if (!list.firstChild) list.append(h(`<div><div class="atl-h-copy"></div><div class="atl-h-text"></div><div class="atl-text"></div><div class="atl-h-un"></div><div class="atl-un"></div></div>`));
+    set(list.querySelector(".atl-h-copy"), notDelivered.length ? `<p class="atl-warn">${icon("alert")} ${notDelivered.length} not delivered to a session. <button data-atl="copy">Copy</button></p>` : "");
+    // Requests live in the top bar's menu (2.15.1); the count is what still needs him: not accepted, not cancelled, not failed (he has no button for those).
+    const reqBtn = topBar.querySelector(".atl-reqmenu"), reqNeed = st.requests.filter((r) => !r.accepted && r.state !== "cancelled" && r.state !== "failed").length;
+    reqBtn.hidden = !st.requests.length;
+    if (!st.requests.length) closeMenus();
+    set(reqBtn, `${icon("list")}<span class="atl-rl">Requests</span>${reqNeed ? `<span class="atl-cn">${reqNeed}</span>` : ""}`);
+    const reqTip = `Requests${reqNeed ? `, ${reqNeed} need${reqNeed === 1 ? "s" : ""} you` : ""}`;
+    reqBtn.setAttribute("aria-label", reqTip); reqBtn.title = reqTip;
+    reconcile(topBar.querySelector(".atl-reqs"), st.requests.map((r) => ({ id: `r:${r.req.seq}`, html: requestHtml(r, st), open: !r.accepted && r.state !== "cancelled" })));
+    set(list.querySelector(".atl-h-text"), section("On the text", onText));
+    reconcile(list.querySelector(".atl-text"), onText.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed })));
+    set(list.querySelector(".atl-h-un"), section(`Unanchored (${unanchored.length})`, unanchored));
+    reconcile(list.querySelector(".atl-un"), unanchored.map((t) => ({ id: `t:${t.root.seq}`, html: threadHtml(t, st), open: !t.closed })));
+    if (globalThis.Highlight && CSS.highlights) {
+      const ranges = st.threads.filter((t) => !t.closed && t.root.quote).map((t) => findQuote(t.root.quote, idx)).filter(Boolean);
+      CSS.highlights.set("atl-quote", new Highlight(...ranges));
+    }
+    for (const d of document.querySelectorAll("details")) if (!sourceOpen.has(d)) sourceOpen.set(d, d.open); // new from the source or a page script
+    // html-plan: a closed parent shows how many decisions wait inside it.
+    document.querySelectorAll("[atl-ui=badge]").forEach((b) => b.remove());
+    for (const d of document.querySelectorAll("details:not([open])")) {
+      if (isUi(d)) continue;
+      const n = d.querySelectorAll(".atl-open-item").length;
+      if (n) d.querySelector("summary")?.append(h(`<span atl-ui="badge" class="atl-tag">${n} open</span>`));
+    }
+    for (const el of keyed()) io.observe(el);
+    // Each atl-wip region gets its label outside <body> (like the popped composer), so neither its dimming nor an
+    // Update touches it; an Update that drops the attribute drops the label.
+    const wipNow = wips();
+    for (const [el, label] of wipLabels) if (!wipNow.includes(el)) { label.remove(); wipLabels.delete(el); }
+    for (const el of wipNow) {
+      const label = wipLabels.get(el) ?? wipLabels.set(el, h(`<span atl-ui="wip" class="atl-wip"></span>`)).get(el);
+      if (label.textContent !== wipText(el)) label.textContent = wipText(el);
+      if (!label.isConnected) document.documentElement.append(label);
+    }
+    syncNeeds(st);
+    lastSt = st; lastPlaced = placed;
+    renderMarks();
+    tidyPanel();
+    positionPins();
+    const pub = publicState(st, { conn, loaded, wip: wipState() }), json = JSON.stringify(pub);
+    if (json !== published) { published = json; document.dispatchEvent(new CustomEvent("atelier:state", { detail: pub })); }
+  }
+
+  // The panel shows only toasts, undo and its cards; the top bar carries the rest (2.15.0).
+  const tidyPanel = () => { panel.hidden = !panel.querySelector(".atl-toast,.atl-card,.atl-list p"); };
+  // Each atl-nav item counts what needs the human under it (Decisions not done, open threads where they are drawn) and
+  // dots its unseen changes. One button per target, updated in place, so keyboard focus survives a count change.
+  let lastSt = null, lastPlaced = new Map();
+  const navButtons = new Map();
+  function renderNav(st = lastSt) {
+    const items = navs(), box = topBar.querySelector(".atl-nav"), menu = topBar.querySelector(".atl-navmenu");
+    if (!st) return;
+    for (const [el, b] of navButtons) if (!items.includes(el)) { b.remove(); navButtons.delete(el); }
+    box.querySelector(".atl-title")?.remove();
+    menu.hidden = !items.length;
+    if (!items.length) { box.append(h(`<span class="atl-title">${esc(document.title)}</span>`)); topBar.classList.remove("atl-collapse", "atl-menu-open"); return; }
+    const marked = [...traces].filter(([, t]) => !t.fading).map(([addr, t]) => [t.kind === "removed" ? t.nodes.gone : findKey(addr), t.kind]);
+    const at = (t) => { const p = lastPlaced.get(t.root.seq); return p?.el ?? p?.range?.commonAncestorContainer ?? null; };
+    let total = 0;
+    items.forEach((el, i) => {
+      const label = clip(el.getAttribute("atl-nav").trim() || el.querySelector("h1,h2,h3,h4,h5,h6")?.textContent || `Section ${i + 1}`, 80);
+      const under = (n) => !!n && el.contains(n);
+      const need = st.toAnswer.filter((d) => under(findKey(d.key))).length + st.openThreads.filter((t) => under(at(t))).length;
+      const kind = marked.filter(([n]) => under(n)).reduce((best, [, k]) => !best || RANK[k] > RANK[best] ? k : best, null);
+      const tip = [label, need ? `${need} need${need === 1 ? "s" : ""} you` : "", kind ? KIND[kind] : ""].filter(Boolean).join(", ");
+      total += need;
+      let b = navButtons.get(el);
+      if (!b) { b = h(`<button type="button" data-atl="nav" class="atl-navi"></button>`); navButtons.set(el, b); }
+      b.dataset.i = i; b.setAttribute("aria-label", tip); b.title = tip;
+      set(b, `<span class="atl-nl">${esc(label)}</span>${need ? `<span class="atl-cn">${need}</span>` : ""}${kind ? `<span class="atl-dot atl-k-${kind}"></span>` : ""}`);
+      if (box.children[i] !== b) box.insertBefore(b, box.children[i] ?? null); // moves only a button out of place
+    });
+    set(menu, `Sections${total ? `<span class="atl-cn">${total}</span>` : ""}`);
+    fitNav();
+  }
+  // Items that do not fit beside the counts and Send shrink their labels, then fold into the Sections menu (a phone).
+  function fitNav() {
+    const box = topBar.querySelector(".atl-nav");
+    if (!navButtons.size) return;
+    const open = topBar.classList.contains("atl-menu-open");
+    topBar.classList.remove("atl-collapse", "atl-menu-open");
+    // Labels shrink first; below ~5em of text each they fold.
+    const over = box.scrollWidth > box.clientWidth + 1 || [...box.querySelectorAll(".atl-nl")].some((n) => n.scrollWidth > n.clientWidth && n.clientWidth < 64);
+    topBar.classList.toggle("atl-collapse", over); topBar.classList.toggle("atl-menu-open", over && open);
+    topBar.querySelector(".atl-navmenu").setAttribute("aria-expanded", String(over && open));
+  }
+  addEventListener("resize", fitNav);
+  // The bar's two menus (Sections, Requests) close on a pick, Esc, or a click outside them; focus goes back to the button.
+  const menuOpen = () => topBar.classList.contains("atl-menu-open") || !topBar.querySelector(".atl-reqs").hidden || !topBar.querySelector(".atl-help").hidden;
+  function closeMenus(except = null) {
+    const help = topBar.querySelector(".atl-help");
+    if (except !== "help" && !help.hidden) {
+      const had = help.contains(document.activeElement);
+      help.hidden = true; topBar.querySelector(".atl-helpmenu").setAttribute("aria-expanded", "false");
+      if (had) topBar.querySelector(".atl-helpmenu").focus({ preventScroll: true });
+    }
+    const nav = topBar.querySelector(".atl-navmenu"), req = topBar.querySelector(".atl-reqmenu"), reqs = topBar.querySelector(".atl-reqs");
+    if (except !== "nav") { topBar.classList.remove("atl-menu-open"); nav.setAttribute("aria-expanded", "false"); }
+    if (except !== "req" && !reqs.hidden) {
+      const had = reqs.contains(document.activeElement);
+      reqs.hidden = true; req.setAttribute("aria-expanded", "false");
+      if (had && !req.hidden) req.focus({ preventScroll: true });
+    }
+  }
+
+  // ---- the floating Comment button: at the top-right of the innermost hovered or focused Key, taking no layout space,
+  // after the Key's thread markers, which stay without hover
+  function pinFor(addr, el = findKey(addr)) {
+    if (!el) return null;
+    let pin = pins.get(addr);
+    if (!pin) { pin = h(`<span atl-ui="pin" class="atl-pin" data-key="${esc(addr)}"></span>`); pins.set(addr, pin); }
+    const { chips = "", badge = "" } = chipsAt.get(addr) ?? {};
+    place(pin, el);
+    set(pin, `${chips ? `<span class="atl-prow">${chips}</span>` : ""}<button type="button" data-atl="comment" data-key="${esc(addr)}" class="atl-add" aria-label="Comment on ${esc(addr)}" title="Comment on ${esc(addr)}">${icon("comment-plus")}</button>${badge}`);
+    pin.classList.toggle("atl-has", !!chips);
+    return pin;
+  }
+  // A quote's marker sits just above the end of the quote; a selector-anchored element's at its top-right corner.
+  function spotAt(s) {
+    const b = s.firstElementChild, rects = s.at?.getClientRects?.();
+    if (!b || !rects?.length) return;
+    s.style.translate = "";
+    const p = s.getBoundingClientRect(), r = s.at instanceof Range ? rects[rects.length - 1] : s.at.getBoundingClientRect();
+    const x = s.at instanceof Range ? r.right + 2 : r.right - b.offsetWidth - 4, y = s.at instanceof Range ? r.top - b.offsetHeight + 4 : r.top + 4;
+    s.style.translate = `${Math.round(Math.min(x, document.documentElement.clientWidth - b.offsetWidth - 4) - p.left)}px ${Math.round(y - p.top)}px`;
+  }
+  // The Comment button sits at the top-right corner of the Key's visible part. Its thread chips never cover the Page
+  // (2.8.1, owner 2026-10-21: chips over body text and a status label): they take the first free slot, left of the
+  // button in the top band, in the margin right of the Key, beside a shorter line further down, or above the Key; then
+  // the same slots with compact chips (icon and count). Obstacles are the visible Page content there (text, media,
+  // controls, the Kernel's in-flow Decisions) and other chip rows. With no free slot the compact row shows only while
+  // its Key is hovered or focused, like the Comment button; threads that need the human never wait for hover (2.10.1, owner
+  // 2026-10-21): a badge with their count stays at rest, in a free slot or else at the Key's top-right corner, and opens
+  // the row. A pin keeps inside its Key's scroll containers and the
+  // viewport; a Key scrolled out of its container (a sideways storyboard) shows none, so a pin never widens the Page.
+  const SOLID = "img,video,canvas,svg,iframe,object,embed,input,select,textarea,button,a[href],hr,progress,meter"; // a summary counts by its text and icons
+  const FLOAT = "[atl-ui=part],[atl-ui=pin],[atl-ui=spot],[atl-ui=mark],[atl-ui=sel],[atl-ui=panel],[atl-ui=rail],[atl-ui=composer],[atl-ui=thread],[atl-ui=wip],script,style,template";
+  const shown = (el) => el.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) ?? true;
+  const meets = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  // The visible content in the area, and the boxes of the elements there that neither hold nor sit in the Key.
+  // ponytail: an element is skipped when its box misses the area, so content overflowing its box there is missed.
+  function contentIn(area, key) {
+    const out = [], beside = [], range = document.createRange();
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, { acceptNode(n) {
+      if (n.nodeType === 3) return n.data.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      if (n.matches(FLOAT)) return NodeFilter.FILTER_REJECT;
+      const r = n.getBoundingClientRect();
+      if ((r.width || r.height) && !meets(r, area)) return NodeFilter.FILTER_REJECT;
+      if (r.width && r.height && !n.contains(key) && !key.contains(n)) beside.push(r);
+      if (!n.matches(SOLID)) return NodeFilter.FILTER_SKIP;
+      if (r.width && r.height && shown(n)) out.push(r);
+      return NodeFilter.FILTER_REJECT;
+    } });
+    for (let n; (n = walk.nextNode());) {
+      if (!shown(n.parentElement)) continue;
+      range.selectNodeContents(n);
+      for (const r of range.getClientRects()) if (r.width && meets(r, area)) out.push(r);
+    }
+    return { out, beside };
+  }
+  // The part of the viewport's width and the Key's scroll containers a pin may use. Inside the Key (2.10.1) only an element
+  // that holds the pin's containing block clips it, as a positioned Key with overflow:hidden does; the absolute pin
+  // escapes the others (an unpositioned narrow cell). ponytail: the CSS properties that make a containing block for an
+  // absolute box, as of 2026; a new one would let chips sit outside a clipping Key until it is added here.
+  function clipOf(el, pin) {
+    const c = { left: 0, top: -scrollY, right: document.documentElement.clientWidth, bottom: Infinity }; // never above the document
+    let cb = null;
+    for (let p = pin.parentElement; p && el.contains(p) && !cb; p = p.parentElement) {
+      const s = getComputedStyle(p);
+      if (s.position !== "static" || [s.transform, s.translate, s.rotate, s.scale, s.filter, s.backdropFilter, s.perspective].some((v) => v && v !== "none")
+        || /paint|layout|strict|content/.test(s.contain) || s.contentVisibility === "auto" || /transform|translate|rotate|scale|filter|perspective|contain/.test(s.willChange)) cb = p;
+    }
+    for (let p = pin.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (el.contains(p) && !p.contains(cb)) continue;
+      const s = getComputedStyle(p), paint = /paint|strict|content/.test(s.contain) || s.contentVisibility === "auto"; // paint containment clips like overflow
+      if (s.overflowX === "visible" && s.overflowY === "visible" && !paint) continue;
+      const r = p.getBoundingClientRect();
+      if (paint) { c.left = Math.max(c.left, r.left); c.right = Math.min(c.right, r.right); c.top = Math.max(c.top, r.top); c.bottom = Math.min(c.bottom, r.bottom); }
+      if (s.overflowX !== "visible") { c.left = Math.max(c.left, r.left); c.right = Math.min(c.right, r.right); }
+      if (s.overflowY !== "visible") { c.top = Math.max(c.top, r.top); c.bottom = Math.min(c.bottom, r.bottom); }
+    }
+    return c;
+  }
+  const CONTROLS = "button,a[href],input,select,textarea,summary";
+  const controlsIn = (el) => [...el.querySelectorAll(CONTROLS)].filter((c) => !isUi(c) || c.closest("[atl-ui=decide]")).map((c) => c.getBoundingClientRect()).filter((c) => c.width); // the Page's, and its Decision options
+  const SEARCH = 400; // px below the Key's top searched for a slot, so the chips stay near the Key's start
+  const GX = 10, GY = 3, MARGIN = 24; // clearance from content, and the free width a margin slot needs beyond the row
+  // ponytail: rescans the content near each pin with chips on every placement; fine for a few hundred pins.
+  function pinAt(pin) {
+    const el = findKey(pin.dataset.key), b = pin.querySelector(".atl-add"), row = pin.querySelector(".atl-prow");
+    if (!el || !b) return;
+    pin.style.translate = ""; pin.style.display = "";
+    const k = el.getBoundingClientRect(), c = clipOf(el, pin);
+    const r = { left: Math.max(k.left, c.left), right: Math.min(k.right, c.right), top: Math.max(k.top, c.top), bottom: Math.min(k.bottom, c.bottom) };
+    if (r.right - r.left < b.offsetWidth + 8 || r.bottom <= r.top) { pin.style.display = "none"; return; }
+    const p = pin.getBoundingClientRect(), x0 = r.right - b.offsetWidth - 4, top = r.top + 4;
+    pin.style.translate = `${Math.round(x0 - p.left)}px ${Math.round(top - p.top)}px`;
+    if (!row) return;
+    row.classList.remove("atl-tight", "atl-tuck");
+    row.style.maxWidth = `${Math.round(c.right - c.left - 8)}px`;
+    const area = { left: c.left, right: c.right, top: Math.max(c.top, k.top - row.offsetHeight - 12), bottom: Math.min(r.bottom, top + SEARCH) }; // the full row is the tallest
+    const near = [...pins.values()].filter((o) => o !== pin && o.style.display !== "none").flatMap((o) => [...o.querySelectorAll(".atl-prow,.atl-badge")]);
+    const boxes = (list) => list.map((x) => x.getBoundingClientRect()).filter((x) => x.width), others = boxes(near);
+    const { out, beside } = contentIn(area, el), obs = [...out, ...others, { left: x0, right: x0 + b.offsetWidth, top, bottom: top + b.offsetHeight }], margin = [...obs, ...beside], lo = r.left + 4;
+    const slot = (it = row, avoid = null) => {
+      const w = it.offsetWidth, h = it.offsetHeight;
+      // A row keeps GX px from content beside it and GY px above and below, so it never touches a line.
+      const hits = (x, y, list = obs, ww = w) => list.filter((o) => o.left < x + ww + GX && o.right > x - GX && o.top < y + h + GY && o.bottom > y - GY);
+      // The rightmost free x on line y between left and right, stepping left past each obstacle.
+      const scan = (y, right, list = obs) => { let x = right - w; for (let hit; x >= lo && (hit = hits(x, y, list)).length;) x = Math.min(...hit.map((o) => o.left)) - GX - w - 1; return x >= lo ? [x, y] : null; };
+      const ys = [...new Set(obs.flatMap((o) => [Math.ceil(o.top), Math.ceil(o.bottom) + GY + 1]))].filter((y) => y > top && y + h <= area.bottom).sort((a, b) => a - b);
+      // Outside the Key only on free margin, where no other element's box is (right of the Key not in a narrow gap
+      // before a neighbour), so a row never reads as a neighbour's.
+      if (avoid) { for (let y = top; y + h <= r.bottom; y += h + GY) { const got = scan(y, r.right - 4, avoid); if (got) return got; } return null; } // down the Key, line by line
+      return scan(top, r.right - 4) ?? (r.right + 8 + w + MARGIN <= c.right && !hits(r.right + 8, top, margin, w + MARGIN).length ? [r.right + 8, top] : null)
+        ?? ys.reduce((got, y) => got ?? scan(y, r.right - 4), null) ?? (k.top - h - 4 >= c.top ? scan(k.top - h - 4, r.right - 4, margin) : null);
+    };
+    let at = slot();
+    if (!at) { row.classList.add("atl-tight"); at = slot(); }
+    if (!at) { row.classList.add("atl-tuck"); at = [Math.max(c.left + 4, x0 - 4 - row.offsetWidth), top]; }
+    row.style.left = `${Math.round(at[0] - x0)}px`; row.style.top = `${Math.round(at[1] - top)}px`;
+    const badge = row.classList.contains("atl-tuck") && pin.querySelector(".atl-badge");
+    if (!badge) return;
+    // No free slot: from the Key's top-right corner leftwards, then line by line down the Key, over Page content but clear of other pins' shown chips and
+    // badges (nested Keys with one box; a hidden tucked row does not count), else the corner itself. ponytail: covering a little content beats hiding the thread.
+    const bat = slot(badge) ?? slot(badge, boxes(near.filter((x) => x.checkVisibility({ visibilityProperty: true })))) ?? [r.right - 4 - badge.offsetWidth, top];
+    badge.style.left = `${Math.round(bat[0] - x0)}px`; badge.style.top = `${Math.round(bat[1] - top)}px`;
+  }
+  function positionPins() { for (const pin of pins.values()) if (pin.matches(".atl-has,.atl-hot,:focus-within")) pinAt(pin); for (const s of spots.values()) spotAt(s); positionMarks(); placePops(); positionWip(); }
+  // At the region's top-left corner, kept inside the right edge so a long label never scrolls the Page sideways.
+  function positionWip() {
+    const vw = document.documentElement.clientWidth;
+    for (const [el, label] of wipLabels) {
+      const r = el.getBoundingClientRect();
+      label.hidden = !r.width && !r.height;
+      label.style.left = `${Math.round(scrollX + Math.max(0, Math.min(r.left, vw - label.offsetWidth - 4)))}px`; label.style.top = `${Math.round(scrollY + r.top)}px`;
+    }
+  }
+  function setHot(target) {
+    const el = target?.closest?.("[atl-key]:not([atl-slot])");
+    const addr = el && !isUi(el) ? keyOf(el) : null;
+    if (addr === hot) return;
+    pins.get(hot)?.classList.remove("atl-hot");
+    hot = addr;
+    for (const [a, pin] of pins) if (a !== hot && !pin.classList.contains("atl-has") && !pin.contains(document.activeElement) && composer?.pinKey !== a) { pin.remove(); pins.delete(a); }
+    const pin = addr && pinFor(addr);
+    if (pin) { pin.classList.add("atl-hot"); pinAt(pin); }
+  }
+  // Kernel UI inside a Key (its Decision options, its threads) counts as the Key; the button itself keeps it.
+  document.addEventListener("pointerover", (ev) => { if (!ev.target.closest?.("[atl-ui=pin]")) setHot(ev.target); });
+  document.documentElement.addEventListener("pointerleave", () => setHot(null));
+  document.addEventListener("focusin", (ev) => { const pin = ev.target.closest?.("[atl-ui=pin]"); if (pin) pinAt(pin); else setHot(ev.target); });
+  addEventListener("resize", positionPins);
+  new ResizeObserver(() => positionPins()).observe(document.body);
+
+  // ---- the floating selection button: a Comment on the selected Page text (the bar button is the keyboard path)
+  function pageRange() {
+    const sel = getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount || document.activeElement?.matches("input,textarea")) return null;
+    const r = sel.getRangeAt(0), node = r.commonAncestorContainer, el = node.nodeType === 1 ? node : node.parentElement;
+    return el && document.body.contains(el) && !isUi(el) && r.toString().trim() ? r : null;
+  }
+  function placeSel() {
+    const r = pageRange();
+    if (r) savedRange = r.cloneRange();
+    selBtn.hidden = !r;
+    if (!r) return;
+    const rects = r.getClientRects(), last = rects[rects.length - 1] ?? r.getBoundingClientRect();
+    selBtn.style.left = `${Math.max(4, Math.min(innerWidth - selBtn.offsetWidth - 4, last.right + 4))}px`;
+    selBtn.style.top = `${Math.max(topBar.offsetHeight + 4, Math.min(innerHeight - selBtn.offsetHeight - 4, last.bottom + 6))}px`;
+  }
+  let selQueued = false;
+  document.addEventListener("selectionchange", () => { if (!selQueued) { selQueued = true; requestAnimationFrame(() => { selQueued = false; placeSel(); }); } });
+  // A floating box or an atl-wip label follows its anchor through any scroll, the Page's or an inner container's.
+  // A pin follows its Key through an inner container's scroll (2.8.1); the Page's own scroll moves it with the Key.
+  let popQueued = false, pinsQueued = false; const scrolled = new Set();
+  addEventListener("scroll", (ev) => {
+    if (!selBtn.hidden) placeSel();
+    if (ev.target !== document && !isUi(ev.target) && (pins.size || spots.size)) {
+      scrolled.add(ev.target);
+      if (!pinsQueued) {
+        pinsQueued = true;
+        requestAnimationFrame(() => {
+          pinsQueued = false;
+          const near = (n) => [...scrolled].some((t) => t.contains(n) || n.contains(t)); // in the scroller, or a Key around it
+          for (const pin of pins.values()) { const key = findKey(pin.dataset.key); if (key && near(key)) pinAt(pin); }
+          for (const s of spots.values()) if (near(s)) spotAt(s);
+          scrolled.clear();
+        });
+      }
+    }
+    if ((composer || thread || wipLabels.size) && !popQueued) { popQueued = true; requestAnimationFrame(() => { popQueued = false; placePops(); positionWip(); }); }
+  }, { capture: true, passive: true });
+
+  const undoable = () => all().filter((e) => e.origin === "human" && e.type !== "undo" && e.type !== "seen" && left(e) > 0 && !all().some((u) => u.type === "undo" && u.target === e.seq));
+  function renderUndo(list) {
+    // Decision 151: every interaction can be undone for 3 seconds, with a visible countdown. One row for all of them,
+    // so a batch of answers never stacks rows over the Page (k-buttons).
+    const label = (e) => ({ comment: "Comment saved", decide: e.previous != null ? `Changed ${e.previous} → ${clip(e.option, 40)}` : `${e.custom ? "Answered" : "Chose"} ${clip(e.option, 40)}`, request: `Requested ${e.job}`, send: "Comments sent", close: "Closed", still: "Marked still applies", opened: "Material opened", cancel: "Cancel requested", accept: "Accepted", rework: "Rework requested" })[e.type] ?? e.type;
+    const e = list.at(-1), more = list.length - 1;
+    set(panel.querySelector(".atl-undo"), e ? `<div class="atl-toast">${esc(label(e))}${more ? ` and ${more} more` : ""} <button data-atl="undo" data-seq="${e.seq}">${icon("undo")} Undo (${left(e)} s)</button>${more ? `<button data-atl="undoall">Undo all ${list.length}</button>` : ""}</div>` : "");
+  }
+  setInterval(() => { if (panel.querySelector(".atl-toast") || panel.innerHTML.includes("sends in")) render(); }, 1000);
+
+  // ---- change indicators (156): what an Update changed, marked on the spot, in the Page's navigation and on a
+  // right-edge rail, until the human says he has seen it: he opens and closes its changes, clicks its "Seen", or
+  // "Mark all seen" on the rail. No timer clears a mark (2.5.0). One trace per Key accumulates every Update since.
+  // ponytail: traces live in memory only, so a reload drops what an Update changed; what needs the human (open asks,
+  // unread agent replies) is derived from the Event Log on load and stays until a `seen` event or his answer (2.13.0).
+  const changesOn = () => !document.querySelector('[atl-changes="off"]');
+  const traces = new Map(), everSeen = new Set();
+  const RANK = { needs: 4, added: 3, removed: 2, reworded: 1 };
+  const KIND = { needs: "Needs you", added: "New", removed: "Removed", reworded: "Reworded" };
+  let pendingNote = null;
+  const inView = (x) => x.isIntersecting && (x.intersectionRatio >= 0.5 || x.intersectionRect.height >= innerHeight * 0.4);
+  const io = new IntersectionObserver((list) => {
+    for (const x of list) if (inView(x) && !isUi(x.target)) everSeen.add(keyOf(x.target));
+  }, { threshold: [0, 0.25, 0.5, 0.75, 1] });
+  // A Key's own words, without nested Keys, so a change marks the innermost Key that changed.
+  function ownText(el) {
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => isUi(n.parentElement) || n.parentElement.closest("script,style") || n.parentElement.closest("[atl-key]") !== el ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    let t = ""; for (let n = w.nextNode(); n; n = w.nextNode()) t += `${n.data} `;
+    return t.replace(/\s+/g, " ").trim();
+  }
+  // ponytail: clones every Key before each Update so a removed one can be shown; fine for hundreds of Keys.
+  function snapshot() {
+    const snap = new Map();
+    for (const el of keyed()) {
+      const addr = keyOf(el); if (snap.has(addr)) continue;
+      let next = el.nextElementSibling; while (next && (isUi(next) || !next.hasAttribute("atl-key"))) next = next.nextElementSibling;
+      const old = el.cloneNode(true); old.querySelectorAll("[atl-ui]").forEach((n) => n.remove());
+      snap.set(addr, { text: ownText(el), old, title: titleOf(el, addr), parent: keyOf(el.parentElement), next: next ? keyOf(next) : undefined });
+    }
+    return snap;
+  }
+  const parentAddr = (addr) => addr.includes("/") ? addr.slice(0, addr.lastIndexOf("/")) : null;
+  const titleOf = (el, addr) => clip(el?.querySelector?.("h1,h2,h3,h4,h5,h6,summary,figcaption,caption")?.textContent || (el ? ownText(el) : "") || addr, 60);
+  function mark(addr, kind, extra = {}, note = pendingNote) {
+    const t = traces.get(addr) ?? { kinds: new Set(), notes: [], nodes: {}, seqs: new Set() };
+    t.kinds.add(kind);
+    t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0];
+    if (note && t.notes[0] !== note) t.notes.unshift(note);
+    for (const [k, v] of Object.entries(extra)) if (!(k in t) || k === "after") t[k] = v; // the baseline is what the human last saw
+    t.fading = false;
+    traces.set(addr, t);
+  }
+  function diffMarks(before) {
+    const after = new Map();
+    for (const el of keyed()) { const a = keyOf(el); if (!after.has(a)) after.set(a, ownText(el)); }
+    for (const [addr, text] of after) {
+      const b = before.get(addr), p = parentAddr(addr);
+      if (!b) { if (!p || before.has(p)) mark(addr, "added"); } // only the outermost new Key
+      else if (b.text !== text && (everSeen.has(addr) || traces.has(addr))) {
+        mark(addr, "reworded", { before: b.text, after: text });
+        const t = traces.get(addr);
+        if (t.kinds.size === 1 && t.before === text) { removeTrace(addr); } // changed back to what the human saw
+      }
+    }
+    for (const [addr, b] of before) {
+      const p = parentAddr(addr);
+      if (!after.has(addr) && everSeen.has(addr) && (!p || after.has(p))) mark(addr, "removed", { old: b.old, title: b.title, parent: b.parent, next: b.next });
+    }
+  }
+  // An agent reply or a new Decision needs the human, even where nothing on the Page changed (2.13.0): an ask still
+  // open, or a thread whose last message is an agent reply he has not answered, closed or marked seen. Agent event
+  // seq -> the Key it marks; a mark remembers the seqs behind it, so Seen can record them.
+  function needs(st) {
+    const seen = new Set(all().filter((e) => e.type === "seen").flatMap((e) => e.of)), out = new Map();
+    for (const d of st.decisions) if (d.askSeq && d.state !== "done" && !seen.has(d.askSeq)) out.set(d.askSeq, { key: d.key, note: `New Decision: ${clip(d.question, 80)}` });
+    for (const t of st.threads) {
+      const m = t.msgs.at(-1);
+      if (m.type === "answer" && m.origin === "agent" && !seen.has(m.seq) && !(t.closedAt < 0 || t.closedAt > m.seq)) out.set(m.seq, { key: t.root.key, note: `Agent replied: ${clip(m.text, 80)}` });
+    }
+    return out;
+  }
+  // Every render reconciles the Needs you marks with the Event Log: his answer, reply or close takes a mark away (one
+  // that also shows a change keeps that), and each agent event that needs him gets one once its Key is on the Page,
+  // unless he cleared it here and its seen event is on its way. A Key gone from the Page drops its Needs you, so a
+  // removal notice on it stays.
+  const dismissed = new Set();
+  function syncNeeds(st) {
+    if (!changesOn()) return;
+    const need = needs(st), marked = new Set();
+    for (const [addr, t] of traces) {
+      if (!t.seqs.size) continue;
+      if (!t.fading) {
+        const here = !!findKey(addr);
+        for (const s of t.seqs) if (!here || !need.has(s)) t.seqs.delete(s);
+        if (!t.seqs.size) { t.kinds.delete("needs"); if (!t.kinds.size) { clearTrace(addr); continue; } t.kind = [...t.kinds].sort((a, b) => RANK[b] - RANK[a])[0]; }
+      }
+      t.seqs.forEach((s) => marked.add(s));
+    }
+    for (const [seq, n] of need) if (!marked.has(seq) && !dismissed.has(seq) && n.key && findKey(n.key)) { mark(n.key, "needs", {}, n.note); traces.get(n.key).seqs.add(seq); }
+  }
+  // Seen saves what he cleared in events of at most 1000 seqs (the host's limit); a refused one keeps its marks.
+  async function saveSeen(seqs) {
+    seqs.forEach((s) => dismissed.add(s));
+    for (let i = 0; i < seqs.length; i += 1000) {
+      const part = seqs.slice(i, i + 1000);
+      if (await post({ type: "seen", of: part })) continue;
+      part.forEach((s) => dismissed.delete(s));
+      for (const t of traces.values()) if (t.fading && part.some((s) => t.seqs.has(s))) { t.fading = false; nodesOf(t).forEach((n) => n.classList.remove("atl-fade")); }
+      render(); // a mark already gone comes back through syncNeeds
+    }
+  }
+  // Where a change shows on the Page: the Key itself, else the tab or summary that hides it, else a visible ancestor.
+  // The Key itself may be the hidden panel; visibility:hidden counts as hidden (2.13.0), like jumpTo's tabs.
+  function visibleSpot(el) {
+    if (visible(el)) return el;
+    for (let p = el; p; p = p.parentElement) {
+      if (p.id) { const tab = [...document.querySelectorAll(`[aria-controls~="${CSS.escape(p.id)}"]`)].find((t) => !p.contains(t) && visible(t)); if (tab) return tab; }
+      if (p.matches("details:not([open])")) { const s = p.querySelector(":scope > summary"); if (s && visible(s)) return s; }
+      if (p !== el && visible(p)) return p;
+    }
+    return el;
+  }
+  const navDots = new Map(); // in-page link -> its dot; one per link, coloured by its strongest change
+  const nodesOf = (t) => [t.nodes.mark, t.nodes.gone, t.nodes.diff, t.nodes.rail].filter(Boolean);
+  function removeTrace(addr) { const t = traces.get(addr); if (t) nodesOf(t).forEach((n) => n.remove()); traces.delete(addr); }
+  // Fades them all, renders once, removes them together: "Mark all seen" on n marks is one render, not n.
+  function clearTraces(addrs) {
+    const fading = addrs.map((a) => [a, traces.get(a)]).filter(([, t]) => t && !t.fading);
+    if (!fading.length) return;
+    for (const [, t] of fading) { t.fading = true; nodesOf(t).forEach((n) => n.classList.add("atl-fade")); }
+    const seen = fading.flatMap(([, t]) => [...t.seqs]);
+    if (seen.length) saveSeen(seen); // the human saw these agent events: no mark for them on the next load
+    renderMarks(); // a nav dot fades when every change under it fades
+    setTimeout(() => {
+      const gone = fading.filter(([a, t]) => traces.get(a) === t && t.fading);
+      gone.forEach(([a]) => removeTrace(a));
+      if (gone.length) renderMarks();
+    }, 600);
+  }
+  const clearTrace = (addr) => clearTraces([addr]);
+  function tipOf(addr, t) {
+    const parts = t.before != null && t.after != null ? wordDiff(t.before, t.after) : [];
+    return [`${KIND[t.kind]}: ${t.title ?? titleOf(findKey(addr), addr)}`, ...t.notes.map((n) => `• ${n}`), diffPreview(parts)].filter(Boolean).join("\n");
+  }
+  function renderMarks() {
+    rail.hidden = !traces.size;
+    if (rail.firstElementChild !== allSeen) rail.prepend(allSeen);
+    const links = traces.size ? [...document.querySelectorAll('a[href^="#"]')].filter((a) => !isUi(a) && a.hash.length > 1) : [];
+    const height = document.documentElement.scrollHeight || 1, nav = new Map();
+    for (const [addr, t] of [...traces]) {
+      const n = t.nodes, cls = `atl-k-${t.kind}`, tip = tipOf(addr, t);
+      let el;
+      if (t.kind === "removed") {
+        n.gone ??= h(`<div atl-ui="gone" class="atl-gone"><button data-atl="chgone" data-addr="${esc(addr)}">Removed · show</button><button data-atl="chseen" data-addr="${esc(addr)}">Seen</button><div class="atl-old" hidden></div></div>`);
+        if (!n.gone.lastElementChild.firstChild) n.gone.lastElementChild.append(t.old);
+        n.gone.firstElementChild.title = tip;
+        const next = t.next && findKey(t.next), parent = t.parent && findKey(t.parent);
+        if (next) { if (next.previousElementSibling !== n.gone) next.before(n.gone); }
+        else if (parent) { if (n.gone.parentElement !== parent) parent.append(n.gone); }
+        else { removeTrace(addr); continue; }
+        el = n.gone;
+        io.observe(el);
+      } else {
+        el = findKey(addr);
+        if (!el) { removeTrace(addr); continue; }
+        const spot = visibleSpot(el), bar = spot === el;
+        n.mark ??= h(`<span atl-ui="mark"></span>`);
+        n.mark.className = `atl-mark ${cls} ${bar ? "atl-mark-bar" : "atl-mark-dot"}`;
+        set(n.mark, bar ? `<button data-atl="chmark" data-addr="${esc(addr)}" aria-label="${esc(tip)}" title="${esc(tip)}${t.before != null ? "\n(click: show changes)" : ""}"></button><button data-atl="chseen" data-addr="${esc(addr)}" class="atl-seen" title="Mark this change as seen">${icon("check")} Seen</button>` : `<span class="atl-dot" title="${esc(tip)}"></span>`);
+        if (n.mark.parentElement !== spot) place(n.mark, spot);
+        if (t.open && n.diff && n.diff.parentElement !== el) place(n.diff, el);
+      }
+      // The Page's own navigation: the in-page link to the innermost section that holds the change.
+      const hits = links.map((a) => ({ a, to: document.getElementById(decodeURIComponent(a.hash.slice(1))) })).filter(({ a, to }) => to && to.contains(el) && !to.contains(a));
+      for (const { a, to } of hits) if (!hits.some((o) => o.to !== to && to.contains(o.to))) nav.set(a, [...nav.get(a) ?? [], { t, tip }]);
+      n.rail ??= h(`<button data-atl="chrail" data-addr="${esc(addr)}"></button>`);
+      n.rail.className = cls; n.rail.title = tip; n.rail.setAttribute("aria-label", tip);
+      const top = (t.kind === "removed" ? el : visibleSpot(el)).getBoundingClientRect().top + scrollY;
+      n.rail.style.top = `${Math.min(98, Math.max(0, (top / height) * 100)).toFixed(2)}%`;
+      if (n.rail.parentElement !== rail) rail.append(n.rail);
+    }
+    for (const [a, dot] of navDots) if (!nav.has(a)) { dot.remove(); navDots.delete(a); }
+    for (const [a, list] of nav) {
+      const dot = navDots.get(a) ?? h(`<span atl-ui="dot"></span>`);
+      const best = list.reduce((x, y) => RANK[y.t.kind] > RANK[x.t.kind] ? y : x);
+      dot.className = `atl-dot atl-k-${best.t.kind}${list.every((x) => x.t.fading) ? " atl-fade" : ""}`;
+      dot.title = list.map((x) => x.tip).join("\n\n");
+      navDots.set(a, dot);
+      if (dot.parentElement !== a) a.append(dot);
+    }
+    positionMarks();
+    renderNav();
+  }
+  function positionMarks() {
+    for (const [addr, t] of traces) {
+      const m = t.nodes.mark, el = findKey(addr);
+      if (!m?.classList.contains("atl-mark-bar") || !el || !m.isConnected) continue;
+      m.style.translate = "";
+      const p = m.getBoundingClientRect(), r = el.getBoundingClientRect();
+      m.style.translate = `${Math.round(Math.max(2, r.left - 10) - p.left)}px ${Math.round(r.top - p.top)}px`;
+      m.firstElementChild.style.height = `${Math.round(r.height)}px`;
+      // "Seen" sits in the gutter left of the bar; without room there, above the Key's top edge at the bar.
+      // ponytail: above the Key can touch the element before it on a Page with no gap; move it if that bites.
+      const s = m.lastElementChild; s.classList.remove("atl-seen-up");
+      if (s.getBoundingClientRect().left < 2) s.classList.add("atl-seen-up");
+    }
+  }
+  // A tab switch or an opened details moves the in-page mark.
+  document.addEventListener("click", () => { if (traces.size) requestAnimationFrame(renderMarks); });
+  document.addEventListener("toggle", () => { if (traces.size) requestAnimationFrame(renderMarks); }, true);
+  function toggleDiff(addr) {
+    const t = traces.get(addr), el = findKey(addr);
+    if (!t || !el) return;
+    if (t.before == null) { clearTrace(addr); return; } // New or Needs you: a click acknowledges it
+    if (t.open) { t.open = false; clearTrace(addr); return; } // seen once the human closes the changes
+    t.open = true;
+    const diff = wordDiff(t.before, t.after).map(([op, w]) => op === "=" ? esc(w) : op === "+" ? `<ins>${esc(w)}</ins>` : `<del>${esc(w)}</del>`).join(" ");
+    t.nodes.diff?.remove();
+    t.nodes.diff = h(`<div atl-ui="diff" class="atl-diff"><div class="atl-dim">Changes since you last saw it${t.notes.length ? `: ${esc(t.notes.join(" · "))}` : ""}</div><div>${diff}</div><button data-atl="chmark" data-addr="${esc(addr)}">${icon("x")} Hide changes</button></div>`);
+    place(t.nodes.diff, el);
+  }
+
+  // ---- composer: one at a time, persistent while open so typing survives every render and morph. Every Comment box
+  // floats right beside what opened it (a Key's Comment button, the selection, a panel card), outside <body> so no
+  // Update lifts it, and never scrolls the Page; a reply opens inside its floating thread. `from` gets focus back.
+  function closeComposer(back = false) {
+    const c = composer;
+    if (!c) return;
+    c.node.remove(); composer = null; CSS.highlights?.delete("atl-pending");
+    const to = !back ? null : c.inline ? tpop : c.from?.isConnected ? c.from : c.pinKey && pins.get(c.pinKey)?.querySelector(".atl-add");
+    if (to?.isConnected) to.focus({ preventScroll: true });
+  }
+  // Under its anchor (above where there is no room), inside the viewport; it stays put while the anchor has no box.
+  // Opened from a pin, it also clears the Page's own controls beside the pin (a Decision's options in the same row).
+  function placeNear(node, at) {
+    if (!at || !node.isConnected) return;
+    const r = at.getBoundingClientRect(), w = node.offsetWidth, ht = node.offsetHeight, vw = document.documentElement.clientWidth;
+    if (!r.width && !r.height) return; // the text or Key went away in an Update: stay where it was
+    const key = at.closest?.("[atl-ui=pin]") && findKey(at.closest("[atl-ui=pin]").dataset.key);
+    const bottom = Math.max(r.bottom, ...(key ? controlsIn(key) : []).filter((c) => c.bottom > r.top && c.top < r.bottom).map((c) => c.bottom));
+    const below = bottom + 6 + ht <= innerHeight || r.top - 6 - ht < 0, top = below ? bottom + 6 : r.top - 6 - ht;
+    node.style.left = `${Math.round(scrollX + Math.max(4, Math.min(vw - w - 4, r.left)))}px`;
+    node.style.top = `${Math.round(scrollY + Math.max(4, Math.min(innerHeight - ht - 4, top)))}px`;
+  }
+  const markerOf = (seq) => document.querySelector(`[data-atl=thread][data-seq="${seq}"]`);
+  function placePops() {
+    if (composer && !composer.inline) placeNear(composer.node, composer.spec.range ?? composer.at?.());
+    if (thread) placeNear(tpop, markerOf(thread.seq));
+  }
+  // A thread opens from its marker into the floating box; closing it puts focus back on the marker (Esc, ×, a click
+  // elsewhere) and counts its replies as read.
+  function openThread(seq) {
+    if (composer && (composer.inline || !composer.node.querySelector("textarea").value.trim())) closeComposer();
+    if (thread && thread.seq !== seq) markRead(thread.seq);
+    thread = { seq };
+    document.documentElement.append(tpop);
+    render();
+    tpop.focus({ preventScroll: true });
+  }
+  function closeThread(back = true, rerender = true) {
+    if (!thread) return;
+    const { seq } = thread;
+    thread = null;
+    if (composer?.inline) closeComposer();
+    tpop.remove(); markRead(seq);
+    if (rerender) render();
+    // A marker in a row shown only on hover or focus (2.8.1) gets its Key's hover state back first, so it can take focus.
+    const pin = back && markerOf(seq)?.closest("[atl-ui=pin]");
+    if (pin) setHot(findKey(pin.dataset.key));
+    if (back) markerOf(seq)?.focus({ preventScroll: true });
+  }
+  function openComposer(spec, { at, inside, from, pinKey } = {}) {
+    closeComposer();
+    if (!inside) closeThread(false);
+    const node = h(`<form atl-ui="composer" class="atl-composer${inside ? "" : " atl-pop"}"><div class="atl-label">${esc(spec.label)}</div><textarea required rows="5" aria-label="${esc(spec.label)}"></textarea><div class="atl-actions"><button type="submit" class="atl-primary">${icon("check")} Save</button><button type="button" data-atl="dismiss">${icon("x")} Cancel</button>${spec.kind === "rework" ? "" : IMAGES}</div></form>`);
+    composer = { spec, node, at, from, pinKey, inline: !!inside };
+    if (inside) inside.append(node);
+    else { document.documentElement.append(node); placePops(); }
+    if (spec.range && globalThis.Highlight && CSS.highlights) CSS.highlights.set("atl-pending", new Highlight(spec.range)); // the quote stays marked
+    node.querySelector("textarea").focus({ preventScroll: true });
+    node.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const ta = node.querySelector("textarea"), extra = node.querySelector(".atl-extra");
+      if (!ta.value.trim() || node.dataset.busy) return;
+      // Locked while it saves (Cancel stays), so what posts is what the box shows: images still being read, the upload,
+      // then the event. It closes only once the event is saved (or kept in this tab with no host); a refused image or
+      // event unlocks the box with the text and images as typed.
+      const lock = (on) => { ta.readOnly = on; node.querySelector("[type=submit]").disabled = on; if (on) node.dataset.busy = "1"; else delete node.dataset.busy; };
+      lock(true);
+      const read = await reads(extra);
+      if (!read) flash("Your Comment was not saved.");
+      const text = ta.value.trim(), images = (extra && attached.get(extra)) ?? [], names = !read ? null : images.length ? await upload(images, "Your Comment was not saved.") : [];
+      if (!node.isConnected) return; // cancelled while saving
+      // A Page batches Comments only where it declares atl-delivery="send" (150, 156).
+      const delivery = findKey(spec.anchor?.key)?.closest("[atl-delivery]")?.getAttribute("atl-delivery") === "send" ? "send" : undefined;
+      const saved = names && await post(spec.kind === "rework" ? { type: "rework", target: spec.target, note: text } : { type: "comment", ...spec.anchor, text, delivery, images: names.length ? names : undefined });
+      lock(false);
+      if (!saved) { if (node.isConnected) ta.focus(); return; }
+      if (composer?.node === node) closeComposer(true);
+    });
+  }
+  const mediaTime = (el) => { const m = el?.querySelector("video,audio"); return m ? Math.round(m.currentTime * 10) / 10 : undefined; };
+  function anchorForKey(addr) { const el = findKey(addr); return { key: addr, ver: verOf(el), t: mediaTime(el) }; }
+
+  // Reveals a hidden target, outermost first: opens each closed <details> around it and clicks the visible tab
+  // ([aria-controls~=id]) of each hidden panel around it, so nested tabs open in turn (2.11.0); a Page that shows the
+  // panel later gets a few frames before the next one. Then "atelier:reveal" names the target's Key, for navigation
+  // of the Page's own, before the Kernel scrolls there. Kernel UI names its Key in data-key, as it may sit beside it.
+  const visible = (n) => n.checkVisibility?.({ visibilityProperty: true }) ?? n.getClientRects().length > 0;
+  async function jumpTo(el, key = el && (el.closest("[atl-ui][data-key]")?.dataset.key ?? keyOf(el)), block = "center") {
+    if (!el) return;
+    const around = []; for (let p = el; p && p !== document.body; p = p.parentElement) around.unshift(p);
+    for (const p of around) {
+      if (p.matches("details:not([open])")) p.open = true;
+      if (!p.id || visible(p)) continue;
+      const tab = [...document.querySelectorAll(`[aria-controls~="${CSS.escape(p.id)}"]`)].find((t) => !p.contains(t) && visible(t));
+      if (!tab) continue;
+      tab.click();
+      // ponytail: waits at most 5 frames for a panel the Page shows after its click; a slower Page needs atelier:reveal.
+      for (let i = 0; i < 5 && !visible(p); i++) await new Promise((r) => requestAnimationFrame(r));
+    }
+    document.dispatchEvent(new CustomEvent("atelier:reveal", { detail: { key: key ?? null } }));
+    if (block === "start") landBelowCover(el); else el.scrollIntoView({ block, behavior: "smooth" }); // :root scroll-padding keeps it below the top bar
+    el.classList.add("atl-flash"); setTimeout(() => el.classList.remove("atl-flash"), 1200);
+    if (el.tabIndex >= -1 && el.focus) el.focus({ preventScroll: true });
+  }
+  // Scrolls el to the top, then below whatever fixed or sticky layer covers its top edge there (the bar, a Page header).
+  function landBelowCover(el) {
+    const margin = el.style.scrollMarginTop;
+    let extra = 0;
+    for (let i = 0; i < 3; i++) {
+      el.scrollIntoView({ block: "start", behavior: "instant" });
+      const r = el.getBoundingClientRect(), x = Math.min(innerWidth - 1, Math.max(0, r.left + 8)), y = Math.max(0, r.top + 1);
+      let bottom = r.top;
+      for (const n of document.elementsFromPoint(x, y)) {
+        if (n === el || el.contains(n) || n.contains(el)) break;
+        for (let p = n; p && p !== document.documentElement; p = p.parentElement) {
+          if (p.contains(el)) break;
+          if (/fixed|sticky/.test(getComputedStyle(p).position)) { bottom = Math.max(bottom, p.getBoundingClientRect().bottom); break; }
+        }
+      }
+      if (bottom - r.top <= 0.01) break;
+      extra += Math.ceil(bottom - r.top); // whole pixels, so a fractional header edge never covers the target
+      el.style.scrollMarginTop = `calc(${margin || "0px"} + ${extra}px)`;
+    }
+    el.style.scrollMarginTop = margin;
+  }
+  function markRead(seq) { const st = state(); const t = st.threads.find((x) => x.root.seq === seq); if (t) { read[seq] = Math.max(...t.msgs.map((m) => m.seq)); localStorage.setItem(readKey, JSON.stringify(read)); } }
+
+  const deciding = new Set();
+  async function decide(b) {
+    let st = state(), d = st.decisions.find((x) => x.id === b.dataset.id);
+    if (!d || b.disabled) return; // locked by atl-wip, also against Enter in a required note
+    // The ask and the material version the click saw, also when either changes while its images upload (2.14.2).
+    const ask = d.askSeq, ver = d.key ? currentVer(d.key) : undefined;
+    const extra = b.closest(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra"), note = extra?.querySelector(".atl-note"), own = extra?.querySelector(".atl-ownans");
+    // "Other…": the human's own text is the answer; one that equals an option is that option.
+    const label = b.dataset.atl === "decideown" ? own?.value.trim() : b.dataset.label, custom = b.dataset.atl === "decideown" && !d.options.some((o) => o.label === label);
+    if (!label) { own?.focus(); flash("Write your own answer first."); return; }
+    if (!await reads(extra)) { flash("Your answer did not change."); return false; } // an image picked just before the click goes with this answer
+    const text = note?.value.trim(), images = (extra && attached.get(extra)) ?? [];
+    if (d.answer?.option === label && !d.stale && !text && !images.length) return; // already the answer
+    // atl-note: these options need a reason; the Kernel asks for it and posts nothing without it.
+    if (d.note?.includes(label) && !text) {
+      openExtra(extra, true, false);
+      note.placeholder = `Why ${label}? (required)`;
+      note.dataset.pending = label; note.setAttribute("aria-invalid", "true"); note.focus();
+      flash(`${label} needs a note.`);
+      return;
+    }
+    // Images upload first: a refused one leaves the current answer and the Event Log as they are.
+    const names = images.length ? await upload(images) : [];
+    if (!names) return false;
+    st = state(); d = st.decisions.find((x) => x.id === b.dataset.id && x.askSeq === ask) ?? st.withdrawn.get(ask); // the log may have moved during the upload
+    if (!d) return;
+    // Always editable (155): a change is a new answer that names the one it replaces.
+    let previous = d.answer && !d.stale && d.answer.option !== label ? d.answer.option : undefined, replaced; // a new round replaces nothing
+    // A change inside the undo window replaces the unsent answer, so only the last one is delivered (156). One
+    // request names it (replaces): the host undoes it and logs this one together, or refuses both.
+    const a = current(d);
+    if (a?.origin === "human" && left(a) > 0 && ["pending", "local"].includes(st.status(a))) {
+      if (a.previous === label && !text && !images.length) { // back to the delivered answer: nothing new to send
+        if (await post({ type: "undo", target: a.seq }) !== undefined || a.local) return; // else the window closed: post the change
+      } else { previous = a.previous; replaced = a; }
+    }
+    const page = d.declared ? { options: d.options.map((o) => o.label).join("|"), rec: d.options.find((o) => o.recommended)?.label, delivery: d.delivery } : {};
+    // The replaced answer was never delivered, so its note and images stay with the Decision unless new ones replace them.
+    const posted = await post({ type: "decide", decision: d.id, option: label, custom: custom || undefined, previous, opened: d.material ? d.opened : null, note: text || replaced?.note || undefined, images: names.length ? names : replaced?.images, ask: d.askSeq, key: d.key, ver, replaces: replaced && !replaced.local ? replaced.seq : undefined, ...page });
+    if (!posted) return false; // refused: the note and images stay for another try
+    if (replaced?.local) { local = local.filter((e) => e.seq !== replaced.seq); render(); } // kept only in this browser
+    if (extra) { note.value = ""; if (own) own.value = ""; note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending; attached.delete(extra); renderAttached(extra); openExtra(extra, false); }
+  }
+
+  const actions = {
+    comment: (b) => { const key = b.dataset.key; openComposer({ label: `Comment on ${key}`, anchor: anchorForKey(key) }, { at: () => pins.get(key)?.querySelector(".atl-add") ?? findKey(key), from: b instanceof Element ? b : null, pinKey: key }); },
+    reply: (b) => {
+      const seq = +b.dataset.seq, root = all().find((e) => e.seq === seq), inside = b.closest("[atl-ui=thread]")?.querySelector(".atl-slot");
+      markRead(seq);
+      openComposer({ label: `Reply in thread #${seq}`, anchor: { thread: seq, key: root?.key, ver: root?.key ? currentVer(root.key) : undefined } }, inside ? { inside } : { at: () => cards.get(`t:${seq}`), from: b });
+    },
+    thread: (b) => { const seq = +b.dataset.seq; if (thread?.seq === seq) closeThread(); else openThread(seq); },
+    hidethread: () => closeThread(),
+    close: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "close", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : undefined }); },
+    still: (b) => { const root = all().find((e) => e.seq === +b.dataset.seq); post({ type: "still", target: +b.dataset.seq, ver: root?.key ? currentVer(root.key) : null }); },
+    jump: (b) => { const t = state().threads.find((x) => x.root.seq === +b.dataset.seq); const p = t && placeThread(t, textIndex()); markRead(+b.dataset.seq); jumpTo(p?.range ? p.range.startContainer.parentElement : p?.el); },
+    // One submission per Decision at a time: a click while an earlier one uploads or posts is ignored, so a slow
+    // upload can never land after, and overwrite, a later choice. Locked like a saving Comment box, so what posts is
+    // what it shows; a refused image unlocks it with the note, own answer and images as typed, focus back in them.
+    decide: async (b) => {
+      if (deciding.has(b.dataset.id)) return;
+      deciding.add(b.dataset.id);
+      const box = b.closest(".atl-card,[atl-ui=decide]"), fields = [...(box?.querySelectorAll(".atl-note,.atl-ownans") ?? [])];
+      const lock = (on) => { for (const f of fields) f.readOnly = on; if (!box) return; if (on) box.dataset.busy = "1"; else delete box.dataset.busy; };
+      lock(true);
+      let refused;
+      try { refused = await decide(b) === false; } finally { lock(false); deciding.delete(b.dataset.id); }
+      if (refused) box.querySelector(b.dataset.atl === "decideown" ? ".atl-ownans" : ".atl-note")?.focus();
+    },
+    addnote: (b) => { const extra = b.nextElementSibling, open = extra.hidden; openExtra(extra, open); if (open) extra.querySelector(".atl-note").focus(); },
+    // "Other…": opens the own-answer field with the note and images; the current own answer comes back to edit.
+    other: (b) => {
+      const extra = extraAt(b), own = extra?.querySelector(".atl-own");
+      if (!own) return;
+      const open = own.hidden || extra.hidden;
+      openExtra(extra, open, open);
+      if (!open) return;
+      const note = extra.querySelector(".atl-note"); // an option that asked for a note is abandoned
+      note.placeholder = "Optional note"; note.removeAttribute("aria-invalid"); delete note.dataset.pending;
+      const d = state().decisions.find((x) => x.id === b.dataset.id), input = own.querySelector(".atl-ownans");
+      if (!input.value && d?.answer?.custom) input.value = d.answer.option;
+      input.focus();
+    },
+    decideown: (b) => {
+      const other = b.closest(".atl-card,[atl-ui=decide]")?.querySelector("[data-atl=other]");
+      if (!other || other.disabled) return; // locked by atl-wip since the field opened
+      b.dataset.id = other.dataset.id;
+      actions.decide(b);
+    },
+    pickimg: (b) => b.nextElementSibling.click(),
+    dropimg: (b) => { const extra = b.closest(".atl-extra"); attached.get(extra)?.splice(+b.dataset.i, 1); renderAttached(extra); },
+    material: (b) => { const d = state().decisions.find((x) => x.id === b.dataset.id); jumpTo(findKey(d?.material)); if (d && !d.opened) markOpened(d); },
+    send: (b) => post({ type: "send", key: b.dataset.key || undefined }),
+    undo: (b) => post({ type: "undo", target: +b.dataset.seq }),
+    undoall: async () => { for (const e of undoable().reverse()) await post({ type: "undo", target: e.seq }); },
+    cancel: (b) => { closeMenus(); post({ type: "cancel", target: +b.dataset.seq }); },
+    accept: (b) => { closeMenus(); post({ type: "accept", target: +b.dataset.seq }); },
+    // The menu closes, so the rework box floats beside the bar's Requests button.
+    rework: (b) => { const at = topBar.querySelector(".atl-reqmenu"); closeMenus(); openComposer({ label: `What should change in Request #${b.dataset.seq}?`, kind: "rework", target: +b.dataset.seq }, { at: () => at, from: at }); },
+    expand: (b) => { expanded.add(+b.dataset.seq); render(); },
+    fold: (b) => {
+      const id = b.dataset.id, extra = b.closest(".atl-card")?.querySelector(".atl-extra");
+      if (b.getAttribute("aria-expanded") === "true") { unfolded.delete(id); if (extra) openExtra(extra, false); } else unfolded.add(id);
+      render();
+    },
+    collapse: (b) => { expanded.delete(+b.dataset.seq); render(); },
+    nav: async (b) => {
+      const el = navs()[+b.dataset.i];
+      closeMenus();
+      if (!el) return;
+      // As an in-page anchor would: focus moves to the target, made focusable (tabindex=-1) when it is not.
+      if (!el.matches("a[href],button,input,select,textarea,[tabindex],[contenteditable]")) el.setAttribute("tabindex", "-1");
+      await jumpTo(el, undefined, "start");
+    },
+    navmenu: (b) => { closeMenus("nav"); const open = topBar.classList.toggle("atl-menu-open"); b.setAttribute("aria-expanded", String(open)); },
+    helpmenu: (b) => { closeMenus("help"); const help = topBar.querySelector(".atl-help"); help.hidden = !help.hidden; b.setAttribute("aria-expanded", String(!help.hidden)); if (!help.hidden) b.focus({ preventScroll: true }); },
+    reqmenu: (b) => { closeMenus("req"); const reqs = topBar.querySelector(".atl-reqs"); reqs.hidden = !reqs.hidden; b.setAttribute("aria-expanded", String(!reqs.hidden)); },
+    chmark: (b) => toggleDiff(b.dataset.addr),
+    chseen: (b) => clearTrace(b.dataset.addr),
+    chall: () => clearTraces([...traces.keys()]),
+    chgone: (b) => {
+      const t = traces.get(b.dataset.addr), old = b.parentElement.querySelector(".atl-old");
+      if (!t) return;
+      if (t.open) { t.open = false; clearTrace(b.dataset.addr); return; }
+      t.open = true; old.hidden = false; b.textContent = "Removed · hide";
+    },
+    chrail: (b) => {
+      const addr = b.dataset.addr, t = traces.get(addr), el = t && (t.kind === "removed" ? t.nodes.gone : findKey(addr));
+      if (!el) return;
+      jumpTo(el, addr); // opens the tab that hides it
+    },
+    dismiss: () => closeComposer(true),
+    tuck: (b) => { // a tucked row's badge: the Key's hover state shows the row, focus goes to the first thread that needs the human
+      const pin = b.closest("[atl-ui=pin]");
+      setHot(findKey(pin.dataset.key));
+      pin.querySelector(".atl-prow .atl-unread,.atl-prow .atl-open-item")?.focus({ preventScroll: true });
+    },
+    next: async () => {
+      const items = [...document.querySelectorAll(".atl-open-item")];
+      if (!items.length) return;
+      const el = items[nextIndex++ % items.length];
+      await jumpTo(el);
+      if (el.dataset.atl === "thread") openThread(+el.dataset.seq); // a thread's marker opens the thread
+    },
+    toastx: (b) => { b.closest(".atl-toast")?.remove(); tidyPanel(); },
+    selcomment: () => {
+      const r = pageRange() ?? savedRange, idx = textIndex();
+      selBtn.hidden = true; savedRange = null;
+      if (!r) { flash("Select text on the Page first."); return; }
+      const start = offsetOf(idx, r.startContainer, r.startOffset), end = offsetOf(idx, r.endContainer, r.endOffset);
+      const exact = idx.text.slice(start, end).trim();
+      if (start < 0 || !exact) { flash("Select text on the Page first."); return; }
+      const key = keyOf(r.commonAncestorContainer.nodeType === 1 ? r.commonAncestorContainer : r.commonAncestorContainer.parentElement);
+      const anchor = { quote: { exact: exact.slice(0, 500), prefix: idx.text.slice(Math.max(0, start - 32), start), suffix: idx.text.slice(end, end + 32) }, ...(key ? anchorForKey(key) : {}) };
+      openComposer({ label: `Comment on “${exact.slice(0, 60)}”`, anchor, range: r.cloneRange() });
+    },
+    copy: async () => {
+      const st = state();
+      const events = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
+      const text = compose(page, location.href, events, all(), { excerpt: (k) => { const el = findKey(k); return el && keyText(el); } });
+      try { await navigator.clipboard.writeText(text); flash("Copied. Paste it into the Pi session."); } catch { prompt("Copy this into the Pi session:", text); }
+    },
+  };
+
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest?.("[data-atl]");
+    if (b && isUi(b)) { ev.preventDefault(); if (b.dataset.atl !== "dismiss" && b.closest("[data-busy]")) return; actions[b.dataset.atl]?.(b); return; } // a saving box keeps Cancel only
+    const req = ev.target.closest?.("[atl-request]:not(form)");
+    if (req && !isUi(req)) { ev.preventDefault(); post({ type: "request", job: req.getAttribute("atl-request"), key: keyOf(req), ver: verOf(req), input: {} }); return; }
+    // A Page button with atl-comment opens a Comment on its Key, floating beside that button (e.g. in a sticky bar).
+    const pc = ev.target.closest?.("[atl-comment]");
+    if (pc && !isUi(pc) && keyOf(pc)) { ev.preventDefault(); const key = keyOf(pc); openComposer({ label: `Comment on ${key}`, anchor: anchorForKey(key) }, { at: () => pc, from: pc }); return; }
+    // Alt+click comments on the part under it in the nearest Key (2.16.0), on that Key, or on a verified selector where there is none.
+    if (ev.altKey && !isUi(ev.target)) {
+      ev.preventDefault();
+      const p = partAt(ev.target);
+      if (p) commentOn(p);
+      else { const target = ev.target; openComposer({ label: `Comment on ${target.localName}`, anchor: { selector: { sel: selectorFor(target), snap: target.textContent.trim().slice(0, 80) } } }, { at: () => target }); }
+    }
+  });
+  function commentOn(p) {
+    hidePart();
+    if (!p.part) { actions.comment({ dataset: { key: p.key } }); return; }
+    const el = p.el; openComposer({ label: `Comment on ${p.label}`, anchor: { ...anchorForKey(p.key), part: p.part } }, { at: () => el.isConnected ? el : findKey(p.key) });
+  }
+  // Holding Alt (Option) outlines the part under the mouse with its name; a mouse only, never touch or pen.
+  const partBox = h(`<div atl-ui="part" class="atl-partbox" aria-hidden="true"><span></span></div>`);
+  let partTarget = null;
+  function hidePart() { partBox.remove(); }
+  function showPart(target) {
+    const p = partAt(target);
+    if (!p) { hidePart(); return; }
+    const r = p.el.getBoundingClientRect();
+    Object.assign(partBox.style, { left: `${r.left - 2}px`, top: `${r.top - 2}px`, width: `${r.width + 4}px`, height: `${r.height + 4}px` });
+    partBox.firstElementChild.textContent = p.label;
+    if (!partBox.isConnected) document.documentElement.append(partBox);
+  }
+  document.addEventListener("pointermove", (ev) => {
+    if (ev.pointerType !== "mouse") return;
+    partTarget = ev.target;
+    if (ev.altKey && !composer) showPart(ev.target); else hidePart();
+  }, { passive: true });
+  addEventListener("keydown", (ev) => { if (ev.key === "Alt" && partTarget && !composer) showPart(partTarget); });
+  addEventListener("keyup", (ev) => { if (ev.key === "Alt") hidePart(); });
+  addEventListener("blur", hidePart);
+  addEventListener("scroll", hidePart, { capture: true, passive: true });
+  // On touch, a long press (500 ms, cancelled by moving more than 8 px) comments like Alt+click, inside a Key only and never on a control.
+  let press = null;
+  const unpress = () => { if (press) { clearTimeout(press.timer); press = null; } };
+  document.addEventListener("pointerdown", (ev) => {
+    unpress();
+    if (ev.pointerType !== "touch" || !ev.isPrimary || ev.target.closest?.(CONTROLS + ",label,[contenteditable]")) return;
+    const p = partAt(ev.target);
+    if (!p) return;
+    press = { x: ev.clientX, y: ev.clientY, timer: setTimeout(() => { press = null; pressed = true; getSelection()?.removeAllRanges(); commentOn(p); }, 500) };
+  });
+  let pressed = false; // the click and context menu a long press ends with must not act on the Page
+  document.addEventListener("pointermove", (ev) => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 8) unpress(); });
+  for (const t of ["pointerup", "pointercancel"]) document.addEventListener(t, unpress);
+  document.addEventListener("contextmenu", (ev) => { if (pressed || press) ev.preventDefault(); });
+  document.addEventListener("click", (ev) => { if (pressed) { pressed = false; if (!isUi(ev.target)) { ev.preventDefault(); ev.stopPropagation(); } } }, true);
+  document.addEventListener("pointerdown", () => { if (!press) pressed = false; }, true);
+  // Esc closes the Comment box first, then the floating thread; a click elsewhere closes the thread unless a reply is typed.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape" || (!composer && !thread && !menuOpen())) return;
+    ev.preventDefault();
+    if (composer) closeComposer(true); else if (thread) closeThread(); else closeMenus();
+  });
+  document.addEventListener("pointerdown", (ev) => {
+    const inNav = ev.target.closest?.(".atl-nav,[data-atl=navmenu]"), inReq = ev.target.closest?.(".atl-reqs,[data-atl=reqmenu]"), inHelp = ev.target.closest?.(".atl-help,[data-atl=helpmenu]");
+    if (menuOpen()) closeMenus(inNav ? "nav" : inReq ? "req" : inHelp ? "help" : null);
+    if (!thread || tpop.contains(ev.target) || ev.target.closest?.("[data-atl=thread]")) return;
+    if (composer?.inline && composer.node.querySelector("textarea").value.trim()) return;
+    closeThread(false);
+  });
+  document.addEventListener("submit", (ev) => {
+    const form = ev.target.closest?.("form[atl-request]");
+    if (!form || isUi(form)) return;
+    ev.preventDefault();
+    post({ type: "request", job: form.getAttribute("atl-request"), key: keyOf(form), ver: verOf(form), input: Object.fromEntries(new FormData(form)) });
+  });
+  document.addEventListener("input", (ev) => { if (!isUi(ev.target)) touched.add(ev.target); }, true);
+  // Enter in a Decision's note posts: the own answer while "Other…" is open, else the option that asked for the note.
+  document.addEventListener("keydown", (ev) => {
+    const note = ev.target.closest?.("[atl-ui] .atl-note"), own = note?.parentElement.querySelector(".atl-own:not([hidden]) [data-atl=decideown]");
+    if (!note || ev.isComposing || ev.key !== "Enter" || !(own || note.dataset.pending)) return;
+    ev.preventDefault();
+    if (own) { own.click(); return; }
+    const b = [...note.closest(".atl-card,[atl-ui=decide]").querySelectorAll("[data-atl=decide]")].find((x) => x.dataset.label === note.dataset.pending);
+    if (b) actions.decide(b);
+  });
+  // Enter in the own-answer field of "Other…" posts it.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.isComposing || ev.key !== "Enter" || !ev.target.matches?.("[atl-ui] .atl-ownans")) return;
+    ev.preventDefault();
+    ev.target.nextElementSibling.click();
+  });
+  // ---- a Decision's note and images: picked, pasted or dropped onto the Decision, posted with its next answer
+  // own: the own-answer field of "Other…" shows too; opening the paperclip alone hides it.
+  function openExtra(extra, open = true, own = open && !extra.querySelector(".atl-own")?.hidden) {
+    extra.hidden = !open;
+    const ownRow = extra.querySelector(".atl-own");
+    if (ownRow) ownRow.hidden = !own;
+    const note = extra.querySelector(".atl-note");
+    if (note && ownRow) note.hidden = own && !note.value.trim(); // an own answer explains itself; a note already typed stays (2.14.3)
+    const button = extra.previousElementSibling;
+    if (button?.dataset.atl !== "addnote") return; // a Comment box's images
+    button.setAttribute("aria-expanded", String(open));
+    button.classList.toggle("atl-has", !open && !!(extra.querySelector(".atl-note").value.trim() || attached.get(extra)?.length)); // closed, still attached
+  }
+  const renderAttached = (extra) => set(extra.querySelector(".atl-attached"), thumbs(attached.get(extra) ?? [], true));
+  // Reads still running per .atl-extra: Save and an answer wait for them, so an image picked just before is not lost.
+  // false: one of them failed, so nothing posts (the image it could not read is not attached).
+  const reading = new WeakMap();
+  const reads = async (extra) => { let ok = true; while (extra && reading.get(extra)?.size) for (const r of await Promise.allSettled(reading.get(extra))) ok &&= r.status === "fulfilled"; return ok; };
+  function addImages(extra, files) {
+    if (extra.closest("[data-busy]")) return; // a Comment box that is saving takes no more images
+    const set = reading.get(extra) ?? new Set(), p = readImages(extra, files), done = () => set.delete(p);
+    reading.set(extra, set.add(p)); p.then(done, done);
+  }
+  async function readImages(extra, files) {
+    const list = attached.get(extra) ?? [];
+    attached.set(extra, list);
+    let failed;
+    for (const f of files) {
+      if (!IMAGE_TYPES.includes(f.type)) { flash(`${f.name || "That file"} is not a PNG, JPEG, WebP or GIF image.`); continue; }
+      if (f.size > IMAGE_MAX) { flash(`${f.name || "That image"} is over 10 MB.`); continue; }
+      if (list.length >= IMAGES_MAX) { flash(`At most ${IMAGES_MAX} images per answer.`); break; }
+      try { list.push(await new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = fail; r.readAsDataURL(f); })); }
+      catch { failed = true; flash(`${f.name || "That image"} could not be read and is not attached. Pick it again.`); }
+    }
+    openExtra(extra); renderAttached(extra);
+    if (failed) throw new Error("image read failed");
+  }
+  const extraAt = (t) => t?.closest?.(".atl-composer")?.querySelector(".atl-extra") ?? t?.closest?.(".atl-card,[atl-ui=decide]")?.querySelector(".atl-extra");
+  const imageFiles = (dt) => [...(dt?.files ?? [])];
+  document.addEventListener("change", (ev) => { if (ev.target.matches?.("[atl-ui] .atl-file")) { addImages(ev.target.closest(".atl-extra"), [...ev.target.files]); ev.target.value = ""; } });
+  document.addEventListener("paste", (ev) => { const extra = extraAt(ev.target), files = imageFiles(ev.clipboardData); if (extra && files.length) { ev.preventDefault(); addImages(extra, files); } });
+  document.addEventListener("dragover", (ev) => { if (extraAt(ev.target) && ev.dataTransfer?.types.includes("Files")) ev.preventDefault(); });
+  document.addEventListener("drop", (ev) => { const extra = extraAt(ev.target), files = imageFiles(ev.dataTransfer); if (extra && files.length) { ev.preventDefault(); addImages(extra, files); } });
+
+  // Decision 135: only the human's own click or key on the material counts as opened (expanding and playing start
+  // with one). toggle and play also fire for the Page's own <details open>, Updates and autoplay, so they never count.
+  const opening = new Set(); // one POST in flight per ask of a Decision; after it, the log says whether it is opened
+  function markOpened(d) {
+    const k = `${d.id}\n${d.askSeq}`;
+    if (opening.has(k)) return;
+    opening.add(k);
+    post({ type: "opened", decision: d.id, ask: d.askSeq }).finally(() => opening.delete(k));
+  }
+  const opened = (ev) => {
+    if (!ev.isTrusted || isUi(ev.target) || (ev.type === "keydown" && ev.key !== "Enter" && ev.key !== " ")) return;
+    for (const d of state().decisions) if (!d.answer && !d.opened && d.material && findKey(d.material)?.contains(ev.target)) markOpened(d);
+  };
+  document.addEventListener("pointerdown", opened, true);
+  document.addEventListener("keydown", opened, true);
+
+  function flash(text) { const n = h(`<div class="atl-toast" role="status"><span>${esc(text)}</span><button data-atl="toastx" aria-label="Dismiss">${icon("x")}</button></div>`); panel.querySelector(".atl-undo").before(n); tidyPanel(); setTimeout(() => { n.remove(); tidyPanel(); }, 4000); }
+
+  // Pages render keyed rows from their data files after load (152); draw their Kernel UI once the page settles.
+  let queued = false;
+  new MutationObserver((records) => {
+    const pageChange = records.some((r) => !isUi(r.target) && [...r.addedNodes, ...r.removedNodes].some((n) => n.nodeType === 1 && !n.hasAttribute("atl-ui")));
+    if (pageChange && !queued) { queued = true; requestAnimationFrame(() => { queued = false; render(); }); }
+  }).observe(document.body, { childList: true, subtree: true });
+
+  render();
+  if (online) { connect(); pull(); }
+}
+
+// Every control is styled from the --atl-* palette, never from system colours, so the Kernel matches the Page.
+const STYLE = `
+[atl-ui]{font:13px/1.4 system-ui,sans-serif;color:var(--atl-fg)}
+[atl-ui][hidden],[atl-ui] [hidden]{display:none!important}
+[atl-ui=panel]{box-sizing:border-box;width:100%;max-width:760px;min-height:0;overflow:auto;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;padding:8px}
+body>[atl-ui=panel]{position:fixed;right:var(--atl-dock-right,12px);bottom:var(--atl-dock-bottom,12px);z-index:2147483000;width:max-content;max-width:min(340px,calc(100vw - 24px));max-height:70vh;box-shadow:0 4px 18px #0002}
+body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
+/* A border, so a Page's own padding stays; border-box, so an html height:100% app still ends at the viewport bottom.
+   shortcut: a body sized 100vh still overflows by the bar; such a Page uses height:100% or calc(100dvh - var(--atl-top,0px)) */
+:where(:root){--atl-top:36px;box-sizing:border-box}:root{border-top:var(--atl-top) solid transparent;scroll-padding-top:var(--atl-top)}
+[atl-nav][tabindex="-1"]:focus{outline:none}
+.atl-top{position:fixed;top:0;left:0;right:0;z-index:2147482900;box-sizing:border-box;height:var(--atl-top);display:flex;align-items:center;gap:8px;padding:0 8px;background:var(--atl-bg);border-bottom:1px solid var(--atl-line);overflow:hidden}
+.atl-nav{flex:1 1 40%;min-width:0;display:flex;gap:2px;align-items:center;overflow-x:auto;scrollbar-width:none}
+.atl-top>.atl-bar{flex:0 0 auto;margin-left:auto;flex-wrap:nowrap}.atl-top button,.atl-top .atl-tag{flex:none;white-space:nowrap}
+[atl-ui=top] button{min-height:26px}[atl-ui] button.atl-navi{border-color:transparent;background:none;padding:0 8px}[atl-ui] button.atl-navi:hover{border-color:var(--atl-line)}
+.atl-top .atl-cn{min-width:16px;padding:0 4px;border-radius:8px;background:var(--atl-accent);color:#fff;font-size:11px;line-height:16px;text-align:center;box-sizing:border-box}.atl-navi .atl-dot{margin:0}
+.atl-top button.atl-navi{flex:0 1 auto;min-width:0}.atl-nl{max-width:12em;overflow:hidden;text-overflow:ellipsis}.atl-top .atl-cn{flex:none}.atl-top .atl-recv{max-width:14em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.atl-top .atl-navmenu{display:none}.atl-collapse .atl-navmenu{display:inline-flex}.atl-collapse>.atl-nav{display:none}
+.atl-collapse.atl-menu-open>.atl-nav{display:flex;position:fixed;top:var(--atl-top);left:4px;flex-direction:column;align-items:stretch;max-width:calc(100vw - 8px);max-height:70vh;overflow:auto;padding:4px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:8px;box-shadow:0 4px 18px #0002}
+.atl-top button.atl-helpmenu{padding:0 4px;border-color:transparent;background:none;color:var(--atl-muted)}.atl-top button.atl-helpmenu[aria-expanded=true]{color:var(--atl-accent)}
+.atl-help{position:fixed;top:var(--atl-top);right:4px;width:340px;max-width:calc(100vw - 8px);max-height:70vh;overflow:auto;box-sizing:border-box;padding:8px 12px;background:var(--atl-bg);color:var(--atl-fg);border:1px solid var(--atl-line);border-radius:8px;box-shadow:0 4px 18px #0002;font:13px/1.45 system-ui,sans-serif}.atl-help ul{margin:2px 0 8px;padding-left:18px}.atl-help p{margin:2px 0 0}
+.atl-reqs{position:fixed;top:var(--atl-top);right:4px;width:340px;max-width:calc(100vw - 8px);max-height:70vh;overflow:auto;box-sizing:border-box;padding:4px 8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:8px;box-shadow:0 4px 18px #0002}
+.atl-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+@media (max-width:600px){.atl-rl,.atl-test>span,.atl-top .atl-bar>.atl-tag:not(.atl-warn){display:none}.atl-top .atl-recv{max-width:7em}}
+[atl-ui=orphans]:not(:empty){max-height:50vh;overflow:auto;margin:8px;display:grid;gap:8px}
+[atl-wip]:not([atl-ui]){opacity:.55;outline:2px dashed var(--atl-warn);outline-offset:2px}
+.atl-wip{position:absolute;z-index:2147481500;translate:0 -50%;max-width:min(40ch,calc(100vw - 16px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;padding:0 6px;border:1px solid var(--atl-warn);border-radius:4px;background:var(--atl-bg);color:var(--atl-warn);pointer-events:none}
+[atl-ui=key]{margin:4px 0}[atl-key]>[atl-ui=key]:not(.atl-after){grid-column:1/-1}[atl-ui=key].atl-row{flex-basis:100%}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
+.atl-i{width:14px;height:14px;flex:none}
+[atl-ui] button,button[atl-ui]{font:inherit;line-height:1.2;display:inline-flex;align-items:center;gap:5px;box-sizing:border-box;min-height:28px;padding:0 10px;border:1px solid var(--atl-line);border-radius:6px;background:var(--atl-bg);color:var(--atl-fg);cursor:pointer}
+[atl-ui] button:hover:not(:disabled),button[atl-ui]:hover{border-color:var(--atl-muted)}
+[atl-ui] button.atl-primary:not(:disabled){background:var(--atl-accent);border-color:var(--atl-accent);color:#fff}
+[atl-ui] button:disabled{opacity:.5;cursor:default}
+[atl-ui] :focus-visible,[atl-ui]:focus-visible{outline:2px solid var(--atl-accent);outline-offset:1px}
+[atl-ui] textarea,[atl-ui] input{font:inherit;color:var(--atl-fg);background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:8px;padding:7px 9px;box-sizing:border-box;width:100%;margin:0}
+[atl-ui] textarea{display:block;min-height:76px;resize:vertical}
+[atl-ui] textarea:focus,[atl-ui] input:focus{outline:none;border-color:var(--atl-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--atl-accent) 22%,transparent)}
+[atl-ui] [aria-invalid=true]{border-color:var(--atl-warn)}
+[atl-ui] ::placeholder{color:var(--atl-muted);opacity:1}
+.atl-bar,.atl-khead,.atl-actions,.atl-head{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.atl-c>.atl-actions:empty{display:none}
+.atl-card{border:1px solid var(--atl-line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--atl-bg);display:grid;gap:6px}
+.atl-c{display:grid;gap:6px}.atl-head:empty{display:none}[atl-ui] .atl-c>button{justify-self:start}
+.atl-card.atl-open-item{border-left:3px solid var(--atl-accent)}
+.atl-card.atl-folded{padding:2px 6px}.atl-card.atl-folded>.atl-dextra{display:none}
+[atl-ui] button.atl-fold{display:flex;width:100%;min-width:0;min-height:24px;padding:0 4px;border-color:transparent;background:none;text-align:left}
+.atl-fold .atl-fq{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--atl-muted)}.atl-fold>b{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.atl-fold .atl-gone{flex:0 1 auto;min-width:0;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.atl-fold .atl-i{flex:none;transition:transform .15s}.atl-fold[aria-expanded=true] .atl-i{transform:rotate(90deg)}
+.atl-opts{display:grid;gap:4px}[atl-ui] button.atl-opt{display:grid;justify-items:start;text-align:left;padding:4px 10px}
+[atl-ui] button.atl-rec{border-color:var(--atl-accent);border-style:dashed}
+[atl-ui] button.atl-chosen{background:var(--atl-accent);border-color:var(--atl-accent);border-style:solid;color:#fff}
+[atl-ui] button.atl-chosen .atl-dim{color:inherit}
+.atl-dopts{display:inline-flex;flex-wrap:wrap;gap:4px}.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate{flex-basis:100%}.atl-dstate:empty{display:none}
+[atl-ui] button.atl-other{color:var(--atl-muted);border-style:dashed}[atl-ui] .atl-opts>button.atl-other{justify-self:start}[atl-ui] button.atl-other.atl-chosen{color:#fff}
+.atl-own{display:flex;flex:1 1 100%;gap:4px;align-items:center}.atl-own .atl-ownans{flex:1 1 14em;width:auto}
+.atl-receipt{display:grid;gap:3px;justify-self:start;box-sizing:border-box;width:fit-content;max-width:min(100%,64ch);border:1px solid var(--atl-line);border-radius:6px;padding:5px 8px;background:var(--atl-bg)}
+.atl-receipt .atl-rnote{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.atl-dextra{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+[atl-ui] button.atl-addnote{min-height:24px;padding:0 5px;border-color:transparent;background:none;color:var(--atl-muted)}
+[atl-ui] button.atl-addnote[aria-expanded=true],[atl-ui] button.atl-addnote.atl-has{color:var(--atl-accent)}
+.atl-extra{display:flex;flex:1 1 100%;flex-wrap:wrap;gap:4px;align-items:center}.atl-extra .atl-note{width:auto;flex:1 1 14em}.atl-composer .atl-extra{flex:1 1 auto}
+.atl-thumbs,.atl-attached{display:flex;flex-wrap:wrap;gap:6px}.atl-attached:empty{display:none}
+.atl-thumb{position:relative;display:inline-block}.atl-thumb img{display:block;height:48px;max-width:96px;object-fit:cover;border:1px solid var(--atl-line);border-radius:4px}
+[atl-ui] .atl-thumb button{position:absolute;top:-6px;right:-6px;min-height:0;width:18px;height:18px;padding:0;justify-content:center;border-radius:50%}
+.atl-pin{position:absolute;width:0;height:0;z-index:2147482000}
+.atl-pin .atl-add,.atl-spot>button{position:absolute;left:0;top:0}.atl-prow{position:absolute;display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:max-content}
+.atl-prow.atl-tight{gap:4px}.atl-prow.atl-tight .atl-ct{display:none}.atl-prow.atl-tight .atl-chip{padding:0 6px}
+.atl-prow.atl-tuck{visibility:hidden}.atl-pin.atl-hot .atl-prow.atl-tuck,.atl-pin:focus-within:not(:has(.atl-badge:focus)) .atl-prow.atl-tuck,.atl-prow.atl-tuck:has([aria-expanded=true]){visibility:visible}
+.atl-pin .atl-badge{position:absolute;display:none}.atl-prow.atl-tuck~.atl-badge{display:inline-flex}.atl-pin.atl-hot .atl-badge,.atl-pin:has(.atl-prow:focus-within,.atl-prow [aria-expanded=true]) .atl-badge{visibility:hidden}
+.atl-pin .atl-add{min-height:0;height:24px;padding:0 5px;gap:3px;color:var(--atl-muted);box-shadow:0 1px 3px #0002;opacity:0;pointer-events:none;transition:opacity .12s}
+.atl-pin.atl-hot .atl-add,.atl-pin .atl-add:focus-visible{opacity:1!important;pointer-events:auto!important}
+.atl-pin .atl-add:hover{color:var(--atl-accent)}
+[atl-ui] button.atl-chip{min-height:0;height:22px;max-width:220px;padding:0 8px;gap:4px;border-radius:11px;font-size:12px;border-color:color-mix(in srgb,var(--atl-accent) 45%,var(--atl-line));box-shadow:0 1px 3px #0002}
+[atl-ui] button.atl-chip.atl-compact{height:16px;padding:0 4px;gap:2px;font-size:11px}.atl-chip.atl-compact .atl-i{width:10px;height:10px}
+.atl-chip .atl-i{width:12px;height:12px;color:var(--atl-accent)}
+.atl-ct{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.atl-cn{color:var(--atl-muted);font-variant-numeric:tabular-nums}
+.atl-nd{width:8px;height:8px;border-radius:50%;background:var(--atl-accent);flex:none;box-shadow:0 0 0 2px var(--atl-bg)}
+[atl-ui] button.atl-chip.atl-unread{font-weight:600}
+[atl-ui] button.atl-chip.atl-closed{border-color:var(--atl-line);color:var(--atl-muted);box-shadow:none}.atl-chip.atl-closed .atl-i{color:var(--atl-muted)}
+[atl-ui] button.atl-chip.atl-stale{border-color:var(--atl-warn)}[atl-ui] button.atl-chip.atl-draft{border-style:dashed}
+[atl-ui] button.atl-chip[aria-expanded=true]{border-color:var(--atl-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--atl-accent) 40%,transparent)}
+.atl-selbtn{position:fixed;z-index:2147483001;box-shadow:0 2px 8px #0003}
+.atl-partbox{position:fixed;z-index:2147483000;pointer-events:none;box-sizing:border-box;border:2px solid var(--atl-accent);border-radius:4px}.atl-partbox>span{position:absolute;left:-2px;bottom:100%;max-width:min(420px,90vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:4px 4px 0 0;background:var(--atl-accent);color:#fff;font:12px/1.5 system-ui,sans-serif}.atl-moved{display:flex;gap:4px;align-items:center}
+.atl-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;border:1px solid var(--atl-line);border-radius:9px;padding:0 6px;color:var(--atl-muted)}
+.atl-warn,.atl-tag.atl-warn{color:var(--atl-warn)}.atl-tag.atl-new{background:var(--atl-accent);border-color:var(--atl-accent);color:#fff}
+.atl-dim,.atl-label{color:var(--atl-muted);font-size:12px}
+.atl-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.atl-msg{border:1px solid var(--atl-line);border-radius:6px;padding:5px 8px;background:var(--atl-bg)}.atl-msg>.atl-mt{white-space:pre-wrap;overflow-wrap:anywhere}.atl-msg>.atl-thumbs{margin-top:4px}
+.atl-agent{background:color-mix(in srgb,var(--atl-accent) 7%,var(--atl-bg));border-color:color-mix(in srgb,var(--atl-accent) 28%,var(--atl-line))}.atl-agent .atl-who b{color:var(--atl-accent)}.atl-who{font-size:12px}
+[atl-ui] button.atl-earlier{justify-self:start;min-height:22px;font-size:12px;color:var(--atl-muted);border-style:dashed}
+.atl-quote{font-style:italic;border-left:3px solid var(--atl-warn);padding-left:6px}
+.atl-toast{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:2px 0}
+.atl-composer{display:grid;gap:6px;margin:6px 0}[data-busy] .atl-extra,[data-busy] [data-atl=decide]{opacity:.5;pointer-events:none}
+.atl-pop{position:absolute;z-index:2147483001;box-sizing:border-box;width:min(560px,calc(100vw - 8px));max-height:calc(100vh - 8px);overflow:auto;margin:0;padding:8px;background:var(--atl-bg);border:1px solid var(--atl-line);border-radius:10px;box-shadow:0 4px 18px #0003}
+.atl-tpop{display:grid;gap:4px}.atl-tbar{display:flex;align-items:center;justify-content:space-between;gap:6px}
+[atl-ui] .atl-tbar button{min-height:24px;padding:0 5px;border-color:transparent;background:none;color:var(--atl-muted)}
+.atl-tpop .atl-card{border:0;padding:0;margin:0}.atl-tpop>.atl-slot:empty{display:none}.atl-tpop .atl-composer{margin:0}
+.atl-flash{outline:3px solid var(--atl-accent);outline-offset:2px}
+::highlight(atl-quote),::highlight(atl-pending){background:#fde68a;color:#000}
+.atl-k-reworded{--atl-ch:var(--atl-ch-reworded)}.atl-k-added{--atl-ch:var(--atl-ch-added)}.atl-k-removed{--atl-ch:var(--atl-ch-removed)}.atl-k-needs{--atl-ch:var(--atl-ch-needs)}
+.atl-mark-bar{position:absolute;width:0;height:0;z-index:2147481000}
+[atl-ui].atl-mark-bar>button{position:absolute;left:0;top:0;width:4px;min-height:0;padding:0;border:0;border-radius:2px;background:var(--atl-ch);cursor:pointer}
+[atl-ui].atl-mark-bar>button:hover{width:6px}
+[atl-ui].atl-mark-bar>button.atl-seen,[atl-ui].atl-rail>button.atl-allseen{display:flex;align-items:center;gap:3px;width:auto;min-height:0;padding:1px 6px;border:1px solid var(--atl-line);border-radius:9px;background:var(--atl-bg);color:var(--atl-muted);font:11px/16px system-ui,sans-serif;white-space:nowrap;cursor:pointer}
+[atl-ui].atl-mark-bar>button.atl-seen{left:auto;right:4px}[atl-ui].atl-mark-bar>button.atl-seen.atl-seen-up{right:auto;left:0;top:auto;bottom:0}
+[atl-ui].atl-mark-bar>button.atl-seen:hover,[atl-ui].atl-rail>button.atl-allseen:hover{width:auto;color:var(--atl-fg)}
+[atl-ui].atl-rail>button.atl-allseen{top:0;right:16px;height:auto;pointer-events:auto}
+.atl-seen svg,.atl-allseen svg{width:12px;height:12px}
+.atl-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--atl-ch);margin:0 0 0 6px;vertical-align:middle}
+.atl-rail{position:fixed;top:calc(var(--atl-top,0px) + 8px);bottom:8px;right:3px;width:12px;z-index:2147482500;pointer-events:none}
+[atl-ui].atl-rail>button{position:absolute;right:0;width:12px;height:12px;min-height:0;padding:0;border-radius:50%;border:2px solid var(--atl-bg);background:var(--atl-ch);pointer-events:auto}
+.atl-gone{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0}.atl-gone::before{content:"";flex:1;border-top:1px solid var(--atl-ch-removed)}
+[atl-ui].atl-gone>button{min-height:0;border:0;padding:0 2px;font-size:11px;color:var(--atl-muted);background:none;text-decoration:underline}
+.atl-old{flex-basis:100%;opacity:.55;text-decoration:line-through;font-size:.9em}
+.atl-diff{border:1px solid var(--atl-line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--atl-bg);display:grid;gap:6px;justify-items:start}
+.atl-diff ins{background:color-mix(in srgb,var(--atl-ch-added) 22%,transparent);text-decoration:none}
+.atl-diff del{background:color-mix(in srgb,#cf222e 16%,transparent)}
+.atl-fade{transition:opacity .6s;opacity:0!important}
+[atl-ui] h4{margin:8px 0 2px;font-size:12px}
+`;
+
+if (typeof document !== "undefined" && !globalThis.__atelierKernel) {
+  globalThis.__atelierKernel = true;
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
+}
