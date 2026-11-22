@@ -8,7 +8,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import atelierExtension, { appendLog, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
+import atelierExtension, { appendLog, claimPage, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
 import { compose, derive, diffPreview, keyTexts, palette, threadLayout, wordDiff } from "./kernel/atelier.js";
 
 process.env.ATELIER_PAGE_CHECK = "off"; // the browser Page check has its own test (page-check.test.mjs)
@@ -1111,7 +1111,7 @@ test("receiver: a lock from an ended session of this process is stale; another p
     writeFileSync(file, JSON.stringify({ pid: process.pid, session: "ended", generation: 3 }));
     assert.equal((await a.host.open(page)).generation, 4, "same process, no live runtime: stale");
     a.host.stop();
-    assert.equal(existsSync(file), false, "released");
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { generation: 4 }, "released, keeping its generation");
     assert.equal((await b.host.open(page)).generation, 5, "the process keeps counting generations");
     b.host.stop();
     const far = JSON.stringify({ pid: process.ppid, session: "far", label: "Chat far", generation: 5 });
@@ -1123,53 +1123,106 @@ test("receiver: a lock from an ended session of this process is stale; another p
   } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
 });
 
-// A stand-in Durable Chat host: a process whose command line is chat-host-main.ts with its --session-id, ending on SIGTERM.
-async function fakeHost(dir, args) {
-  const main = path.join(dir, "chat-host-main.ts");
-  writeFileSync(main, `process.on("SIGTERM", () => setTimeout(() => process.exit(0), 100)); setInterval(() => {}, 1000); console.log("ready");`);
-  const child = spawn(process.execPath, [main, ...args], { stdio: ["ignore", "pipe", "ignore"] });
-  await new Promise((resolve) => child.stdout.once("data", resolve));
+// A stand-in Durable Chat host in its own process: it opens the Page and, asked to release it, stops its Atelier and exits;
+// `refuse` makes its release answer that reason instead (a host still starting), `none` gives it no release at all.
+async function farHost(root, page, { refuse, none } = {}) {
+  const script = `import { createHost } from ${JSON.stringify(new URL("./index.ts", import.meta.url).href)};
+const [root, page, refuse, none] = process.argv.slice(1);
+const host = createHost({ root, sessionId: "chat-far", label: "Chat far", send: () => {},
+  ...(none ? {} : { release: () => refuse || (setImmediate(() => { host.stop(); process.exit(0); }), undefined) }) });
+console.log(JSON.stringify({ generation: (await host.open(page)).generation }));`;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, root, page, refuse ?? "", none ? "1" : ""], { stdio: ["ignore", "pipe", "inherit"] });
   const exited = new Promise((resolve) => child.once("exit", resolve));
-  return { pid: child.pid, exited, kill: () => child.kill("SIGKILL") };
+  const { generation } = JSON.parse(await new Promise((resolve) => child.stdout.once("data", resolve)));
+  return { pid: child.pid, generation, exited, kill: () => child.kill("SIGKILL") };
 }
 
-test("receiver: a Page another Durable Chat's host receives is taken over by stopping that host, only at the generation shown", async () => {
+test("receiver: a Page another Durable Chat receives is taken over by asking that Chat to release it, only at the generation shown", async () => {
   const p = project();
   const { page, make, lock } = sessions(p);
-  const file = `${page}.events.jsonl.lock`;
-  const far = await fakeHost(p.root, ["--store", p.root, "--session-id", "chat-far", "--packages"]);
+  const far = await farHost(p.root, page);
   const c = make("c");
   try {
-    writeFileSync(file, JSON.stringify({ pid: far.pid, session: "chat-far", label: "Chat far", generation: 5 }));
-    await assert.rejects(c.host.open(page), /Chat far, a Durable Chat in another process[\s\S]*action takeover and generation 5/, "open offers the takeover");
-    await assert.rejects(c.host.takeover(page, 4), /changed since generation 4[\s\S]*generation 5/, "another generation is refused");
+    assert.equal(far.generation, 1);
+    await assert.rejects(c.host.open(page), /Chat far, a Durable Chat in another process[\s\S]*action takeover and generation 1/, "open offers the takeover");
+    await assert.rejects(c.host.takeover(page, 0), /changed since generation 0[\s\S]*generation 1/, "another generation is refused");
     assert.equal(lock().pid, far.pid, "its lock is untouched");
-    const taken = await c.host.takeover(page, 5);
-    assert.equal(await far.exited, 0, "the host ran its orderly shutdown");
+    const taken = await c.host.takeover(page, 1);
+    assert.equal(await far.exited, 0, "the host ran its orderly close");
     assert.equal(taken.ended, far.pid);
-    assert.equal(taken.generation, 6);
-    assert.deepEqual(lock(), { pid: process.pid, session: "c", generation: 6, label: "Chat c" });
+    assert.equal(taken.generation, 2);
+    assert.deepEqual(lock(), { pid: process.pid, session: "c", generation: 2, label: "Chat c" });
     assert.match(taken.url, /^http:\/\/127\.0\.0\.1:\d+\/page\.html$/);
   } finally { far.kill(); c.host.stop(); p.done(); }
 });
 
-test("receiver: a holder process that is not a Durable Chat host for the lock's session is never stopped", async () => {
+test("receiver: no process is ever signalled; a holder without release, a forged release, or one still starting keeps the Page (review 2: 1, 2, 5)", async () => {
   const p = project();
-  const { page, make } = sessions(p);
+  const { page, make, lock } = sessions(p);
   const file = `${page}.events.jsonl.lock`;
   const plain = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-  const other = await fakeHost(p.root, ["--store", p.root, "--session-id", "chat-other"]);
+  const c = make("c");
+  let far;
+  try {
+    // A process that never wrote the lock, whatever its command line: no release named, so it is refused.
+    const held = JSON.stringify({ pid: plain.pid, session: "chat-far", label: "Chat far", generation: 5 });
+    writeFileSync(file, held);
+    await assert.rejects(c.host.takeover(page, 5), /held by session Chat far in another process[\s\S]*close or \/reload it first/);
+    // A lock naming a release where no Atelier holds the Page at that generation: the request is refused there.
+    far = await farHost(p.root, path.join(p.root, "other.html"));
+    const port = JSON.parse(readFileSync(path.join(p.root, "other.html.events.jsonl.lock"), "utf8")).release.port;
+    writeFileSync(file, JSON.stringify({ pid: plain.pid, session: "chat-far", label: "Chat far", generation: 5, release: { port, token: "guess" } }));
+    await assert.rejects(c.host.takeover(page, 5), /Chat far kept this Page: it no longer holds this Page at that generation/);
+    assert.doesNotThrow(() => process.kill(plain.pid, 0), "the lock's process still runs");
+    far.kill();
+    assert.equal(await far.exited, null, "the other host was still running: not closed either");
+    // A real holder that cannot close yet answers why; one without release is refused before any request.
+    rmSync(file);
+    far = await farHost(p.root, page, { refuse: "it is still starting; try again in a moment." });
+    await assert.rejects(c.host.takeover(page, lock().generation), /Chat far kept this Page: it is still starting/);
+    far.kill(); await far.exited;
+    far = await farHost(p.root, page, { none: true });
+    await assert.rejects(c.host.takeover(page, lock().generation), /held by session Chat far in another process/);
+    assert.equal(lock().pid, far.pid, "its lock is untouched");
+  } finally { plain.kill("SIGKILL"); far?.kill(); c.host.stop(); p.done(); }
+});
+
+test("receiver: a released lock keeps its generation, so an approval for an earlier receiver never matches a later one (review 2: 3)", async () => {
+  const p = project();
+  const { page, make, lock } = sessions(p);
+  const far = await farHost(p.root, page);
+  const c = make("c"), d = make("d");
+  try {
+    const taken = await c.host.takeover(page, far.generation);
+    c.host.stop();
+    assert.deepEqual(lock(), { generation: taken.generation }, "released: only the generation stays");
+    const next = await farHost(p.root, page);
+    assert.equal(next.generation, taken.generation + 1, "the next receiver, in a fresh process, counts on");
+    await assert.rejects(d.host.takeover(page, far.generation), /changed since generation 1/, "the old approval does not stop it");
+    next.kill(); await next.exited;
+  } finally { far.kill(); c.host.stop(); d.host.stop(); p.done(); }
+});
+
+test("receiver: the lock changes only under its claim guard, which a live claimant holds and a dead one's is broken (review 2: 4)", async () => {
+  const p = project();
+  const { page, make, lock } = sessions(p);
+  const file = `${page}.events.jsonl.lock`, guard = `${file}.claim`;
+  const dead = spawnSync(process.execPath, ["-e", "console.log(process.pid)"], { encoding: "utf8" }).stdout.trim();
   const c = make("c");
   try {
-    for (const [pid, session] of [[plain.pid, "chat-far"], [other.pid, "chat-far"]]) {
-      const held = JSON.stringify({ pid, session, label: "Chat far", generation: 5 });
-      writeFileSync(file, held);
-      await assert.rejects(c.host.open(page), /held by session Chat far in another process[\s\S]*close or \/reload it first/);
-      await assert.rejects(c.host.takeover(page, 5), /held by session Chat far in another process[\s\S]*close or \/reload it first/);
-      assert.equal(readFileSync(file, "utf8"), held, "its lock is untouched");
-      assert.doesNotThrow(() => process.kill(pid, 0), "its process still runs");
-    }
-  } finally { plain.kill("SIGKILL"); other.kill(); c.host.stop(); p.done(); }
+    writeFileSync(file, JSON.stringify({ pid: Number(dead), session: "gone", generation: 5 }));
+    writeFileSync(guard, String(process.ppid));
+    await assert.rejects(c.host.open(page), /Another Pi session is claiming this Page just now/, "a live claimant holds the guard");
+    assert.equal(lock().session, "gone", "the stale lock is untouched meanwhile");
+    writeFileSync(guard, dead);
+    assert.equal((await c.host.open(page)).generation, 6, "a dead claimant's guard is broken once");
+    assert.equal(existsSync(guard), false, "the guard is gone after the claim");
+    // The exact stale lock a takeover checked: another claimant's newer lock is never overwritten.
+    c.host.stop();
+    writeFileSync(file, JSON.stringify({ pid: process.pid, session: "newer", generation: 8 }));
+    assert.throws(() => claimPage(page, "d", "d", 7, false, { ended: { pid: Number(dead), session: "gone", generation: 7 } }), /changed since generation 7/);
+    assert.equal(lock().session, "newer");
+  } finally { c.host.stop(); p.done(); }
 });
 
 test("receiver: a live receiver of an older Atelier (lock without generation) is never fenced; close or /reload it first (review 1)", async () => {

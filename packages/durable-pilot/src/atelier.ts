@@ -8,7 +8,8 @@
 //   records it, even when the kernel batches it with events that fell due while the host was down (those are batched anew);
 // - kill after the receipt: nothing is due.
 // Receiver takeover stays the kernel's: generation-checked. A Durable Chat host is its own process, so a takeover from
-// another Chat's live receiver stops that Chat's host (SIGTERM, its orderly shutdown) and serves the Page here anew.
+// another Chat's live receiver asks that Chat (over its page server) to release the Page; it checks it still holds it at
+// that generation, then closes its host in order (`release`), and the Page is served here anew.
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
@@ -58,7 +59,7 @@ type PageHost = {
 	stop(): void;
 };
 type Kernel = {
-	createHost(options: { root: string; sessionId: string; label: string; send: (message: Message, done: (idle: boolean) => void, failed: () => void) => void; handoff: (message: Message) => void; idle: () => boolean; port?: number }): PageHost;
+	createHost(options: { root: string; sessionId: string; label: string; send: (message: Message, done: (idle: boolean) => void, failed: () => void) => void; handoff: (message: Message) => void; idle: () => boolean; port?: number; release?: () => string | undefined }): PageHost;
 	readLog(page: string): Entry[];
 };
 type Check = { checkPage(page: string, options: { root: string; source?: Buffer; signal?: AbortSignal; tmp?: string }): Promise<unknown>; formatCheck(check: unknown): string };
@@ -70,7 +71,7 @@ const { checkPage, formatCheck } = (await import(new URL("../../../extensions/at
 const text = (value: string) => [{ type: "text" as const, text: value }];
 const pageHash = (page: string) => createHash("sha256").update(page).digest("hex").slice(0, 16);
 export const ATELIER_STATUS = "pi-workbench:atelier";
-export type AtelierOptions = { readonly chatId: string; readonly cwd: string; readonly rootId: () => ConversationId | undefined };
+export type AtelierOptions = { readonly chatId: string; readonly cwd: string; readonly rootId: () => ConversationId | undefined; readonly release?: () => string | undefined };
 
 export class Atelier {
 	readonly #options: AtelierOptions;
@@ -101,6 +102,7 @@ export class Atelier {
 			// The only session of this process: no takeover from here waits for it.
 			idle: () => true,
 			...(port === undefined ? {} : { port }),
+			...(this.#options.release ? { release: this.#options.release } : {}),
 		});
 		return this.#host;
 	}

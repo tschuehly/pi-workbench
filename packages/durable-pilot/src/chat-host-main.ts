@@ -86,6 +86,8 @@ const send = (message: unknown) => {
 
 const tps = values["faux-tps"] === undefined ? undefined : Number(values["faux-tps"]);
 const chatId = values["session-id"] ?? values.store;
+/** Set once the orderly shutdown below is in place: an Atelier takeover from another Chat closes this host only then. */
+let releasable = false;
 const host = await openChatHost({
 	dir: values.store,
 	cwd: values.cwd,
@@ -96,6 +98,8 @@ const host = await openChatHost({
 	...(values.thinking === undefined ? {} : { thinkingLevel: values.thinking }),
 	...(values.packages === true ? { packages: {} } : {}),
 	...(values["read-transcript"] === true ? { readOnly: true } : {}),
+	// Only a PI WEB Chat (its own --session-id) gives a Page up to another Chat; the close comes after the release answer.
+	...(values["session-id"] === undefined ? {} : { release: () => (releasable ? (setImmediate(shutdown), undefined) : "it is still starting; try again in a moment.") }),
 	// Tests and trials: also by environment, so PI WEB's isolated e2e daemon can ask for it without a new host argument.
 	...(values["scripted-providers"] === true || process.env.PI_DURABLE_SCRIPTED_PROVIDERS === "1" ? { scriptedProviders: true } : {}),
 });
@@ -305,6 +309,7 @@ function exit(code: number): void {
 }
 process.on("disconnect", shutdown);
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, shutdown);
+releasable = true;
 
 /** The revision folder this host's code runs from (an installed `pi-workbench-<rev>` folder, never a `*.installed` link). */
 const REVISION = realpathSync(fileURLToPath(new URL("../../..", import.meta.url)));

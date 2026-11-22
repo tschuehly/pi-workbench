@@ -1,6 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
@@ -20,7 +19,7 @@ export const KERNEL_VERSION = "2.16.0";
 export const WATCHDOG_MS = 15_000;
 // How long a takeover waits for the receiving session to finish its run before it refuses.
 export const QUIESCE_MS = 10_000;
-// How long a takeover from another Durable Chat waits for that Chat's host process to exit after SIGTERM.
+// How long a takeover from another Durable Chat waits for that Chat to release the Page after agreeing to.
 export const END_HOST_MS = 10_000;
 // A Decision's answer, a Comment or a reply may name up to four images, each uploaded on its own (POST /.atelier/image) before the answer
 // posts, so an event body stays small.
@@ -76,11 +75,12 @@ const lockPath = (page: string) => `${logPath(page)}.lock`;
 const alive = (pid: unknown) => { try { process.kill(Number(pid), 0); return true; } catch (error: any) { return error.code === "EPERM"; } };
 
 /**
- * The receiver lock `<page>.events.jsonl.lock`, present while a session receives the Page: its process, session and
- * receiver generation. It keeps other processes out; moving the receiver between sessions happens inside one
- * process (PI WEB's sessiond), through REG, or from a Durable Chat host by ending that process (takeover).
+ * The receiver lock `<page>.events.jsonl.lock`: its process, session and receiver generation while a session receives the
+ * Page, then only the last generation once it is released, so a generation is never given out twice. It keeps other
+ * processes out; moving the receiver between sessions happens inside one process (PI WEB's sessiond), through REG, or
+ * from a Durable Chat, which names in `release` where it takes a request to let the Page go (takeover).
  */
-type Lock = { pid?: number; session?: string; generation?: number; label?: string };
+type Lock = { pid?: number; session?: string; generation?: number; label?: string; release?: { port: number; token: string } };
 function readLock(page: string): Lock {
   try { return JSON.parse(readFileSync(lockPath(page), "utf8")); } catch (error: any) {
     if (error.code === "ENOENT") return {};
@@ -90,25 +90,35 @@ function readLock(page: string): Lock {
 const named = (lock: Lock) => lock.label ?? lock.session ?? "no session";
 
 /**
- * Whether the lock's process is a Durable Chat host (packages/durable-pilot chat-host-main.ts) for exactly the lock's
- * session: such a host runs one Chat and records its `--session-id` as the lock's session, so ending it ends only that Chat.
- * shortcut: splits ps's command line on whitespace, so a host path with spaces is never matched (refused as today).
+ * Runs `fn` holding `<lock>.claim`, created exclusively, so reading the lock and replacing it is one step across processes:
+ * nobody changes the lock between the check and the write. A guard whose process is gone is broken once.
  */
-export function durableHost(lock: Lock): boolean {
-  if (!Number.isInteger(lock.pid) || !lock.session) return false;
-  let args: string[];
-  try { args = execFileSync("ps", ["-ww", "-o", "command=", "-p", String(lock.pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split(/\s+/); } catch { return false; }
-  const rest = args.slice(args.findIndex((a) => path.basename(a) === "chat-host-main.ts") + 1);
-  return rest.length < args.length && rest.some((a, i) => (a === "--session-id" && rest[i + 1] === lock.session) || a === `--session-id=${lock.session}`);
+function exclusive<T>(page: string, fn: () => T): T {
+  const guard = `${lockPath(page)}.claim`, busy = () => new Error(`Another Pi session is claiming this Page just now (${guard}). Try again.`);
+  for (let attempt = 0; ; attempt++) {
+    const tmp = `${guard}.${process.pid}.${randomUUID()}`;
+    writeFileSync(tmp, String(process.pid));
+    try { linkSync(tmp, guard); } catch (error: any) {
+      if (error.code !== "EEXIST") throw error;
+      let owner = "";
+      try { owner = readFileSync(guard, "utf8"); } catch { /* released meanwhile */ }
+      if (attempt > 0 || (owner && alive(Number(owner)))) throw busy();
+      // shortcut: a guard re-created between this read and the rename is put back only if its path is still free; only a claimant's crash inside its synchronous claim leaves one.
+      const moved = `${guard}.${randomUUID()}`;
+      try { renameSync(guard, moved); } catch { continue; }
+      if (readFileSync(moved, "utf8") !== owner) { try { linkSync(moved, guard); } catch { /* another took it */ } rmSync(moved, { force: true }); throw busy(); }
+      rmSync(moved, { force: true });
+      continue;
+    } finally { rmSync(tmp, { force: true }); }
+    try { return fn(); } finally { rmSync(guard, { force: true }); }
+  }
 }
 
-/** SIGTERM starts a Durable Chat host's orderly shutdown (its store closes, background jobs stay); waits for the exit. */
-async function endHost(lock: Lock, waitMs: number) {
-  try { process.kill(lock.pid!, "SIGTERM"); } catch { /* already gone */ }
-  for (const deadline = Date.now() + waitMs; alive(lock.pid);) {
-    if (Date.now() >= deadline) throw new Error(`Chat ${named(lock)} (pid ${lock.pid}) did not exit within ${waitMs / 1000} s of being asked to stop; its Page stays with it. Try again, or close that Chat first.`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+/** Replaces the lock (inside `exclusive`). */
+function writeLock(page: string, lock: Lock) {
+  const tmp = `${lockPath(page)}.${process.pid}.${randomUUID()}`;
+  writeFileSync(tmp, JSON.stringify(lock));
+  try { renameSync(tmp, lockPath(page)); } finally { rmSync(tmp, { force: true }); }
 }
 
 // Process-wide, so sessions sharing one process see each other: the Pages served here, the sessions whose Atelier
@@ -119,9 +129,8 @@ const REG: { served: Map<string, Served>; live: Set<string>; generation: Map<str
 
 /**
  * Live: a running session of this process. Elsewhere: a live session of another process (taken over only from a Durable
- * Chat host, by ending that process). Legacy: an older Atelier's
- * lock (no generation), whose running code no lock change can fence. Stale: its process is gone, or it is this
- * process and its session's Atelier no longer runs.
+ * Chat, by asking it to release the Page). Legacy: an older Atelier's lock (no generation), whose running code no lock
+ * change can fence. Stale: its process is gone, or it is this process and its session's Atelier no longer runs.
  */
 function holder(lock: Lock) {
   if (!lock.session) return "free";
@@ -134,44 +143,51 @@ function holder(lock: Lock) {
 /**
  * One session receives a Page's human events (131, 143). `open` (no `takeover`) claims a free or stale lock and never
  * steals; `takeover` moves it from a live session of this process, or (check, then again with `ended`, the lock of the
- * Durable Chat host the caller ended) from another Durable Chat, only from the generation the caller was shown.
- * Returns the receiver generation; `check` only validates. Synchronous, so nothing in this process runs between the
- * check and the write.
+ * Durable Chat that released it on request) from another Durable Chat, only from the generation the caller was shown.
+ * `release`: where this session takes such requests. Returns the receiver generation; `check` only validates. Synchronous
+ * and inside `exclusive`, so nothing runs between the check and the write.
  */
-export function claimPage(page: string, session: string, label = session, takeover?: number, check = false, ended?: Lock): number {
+export function claimPage(page: string, session: string, label = session, takeover?: number, check = false, extra: { ended?: Lock; release?: Lock["release"] } = {}): number {
+  if (!check) return exclusive(page, () => decide(page, session, label, takeover, false, extra));
+  return decide(page, session, label, takeover, true, extra);
+}
+function decide(page: string, session: string, label: string, takeover: number | undefined, check: boolean, { ended, release }: { ended?: Lock; release?: Lock["release"] }): number {
   const file = lockPath(page), lock = readLock(page), state = holder(lock);
-  const generation = Math.max(lock.generation ?? 0, REG.generation.get(page) ?? 0, ended?.generation ?? 0);
+  const generation = Math.max(lock.generation ?? 0, REG.generation.get(page) ?? 0);
   if (lock.session === session && lock.pid === process.pid && state !== "legacy") return lock.generation!;
   const reload = "close or /reload it first";
   if (state === "legacy") throw new Error(`This Page is held by session ${named(lock)}, which runs an older Atelier that cannot hand it over; ${reload}. If it is gone, delete ${file}.`);
   if (state === "elsewhere") {
-    const durable = durableHost(lock);
-    if (durable && takeover === undefined) throw new Error(`This Page's input goes to ${named(lock)}, a Durable Chat in another process (pid ${lock.pid}). To move its input here, call atelier with action takeover and generation ${generation}; that stops the other Chat's host process (its Chat reopens when the human returns to it) and serves the Page here under a new link.`);
+    const durable = !!lock.release;
+    if (durable && takeover === undefined) throw new Error(`This Page's input goes to ${named(lock)}, a Durable Chat in another process (pid ${lock.pid}). To move its input here, call atelier with action takeover and generation ${generation}; that closes the other Chat's host process (its background jobs keep running, and it reopens when the human returns to it) and serves the Page here under a new link.`);
     if (durable && takeover !== generation) throw new Error(`The receiver changed since generation ${takeover}: this Page's input now goes to ${named(lock)} (generation ${generation}). Ask the human before taking it over again.`);
     if (!durable || !check) throw new Error(`This Page is held by session ${named(lock)} in another process (pid ${lock.pid}); ${reload}. Atelier moves a Page's input between processes only from a Durable Chat.`);
     return generation;
   }
-  // After ending the Durable Chat host: its lock is released, or left stale exactly as it was.
-  const moved = !!ended && takeover === generation && (state === "free" || (state === "stale" && lock.pid === ended.pid && lock.session === ended.session && lock.generation === ended.generation));
+  // After the Durable Chat let it go: released at that generation, or left stale exactly as it was.
+  const moved = !!ended && takeover === generation && lock.generation === ended.generation && (state === "free" || (state === "stale" && lock.pid === ended.pid && lock.session === ended.session));
   if (takeover !== undefined && !moved && (state !== "live" || takeover !== generation)) throw new Error(`The receiver changed since generation ${takeover}: this Page's input now goes to ${state === "live" ? named(lock) : "no session"} (generation ${generation}). ${state === "live" ? "Ask the human before taking it over again." : "Open it instead."}`);
   if (takeover === undefined && state === "live") throw new Error(`This Page's input goes to another live Pi session (${named(lock)}). To move its input here, call atelier with action takeover and generation ${generation}.`);
   if (check) return generation;
-  const next = { pid: process.pid, session, generation: generation + 1, label };
-  const tmp = `${file}.${process.pid}.${randomUUID()}`;
-  writeFileSync(tmp, JSON.stringify(next));
-  try {
-    if (state === "free") linkSync(tmp, file); // exclusive: another process claiming at once gets EEXIST
-    else renameSync(tmp, file); // ponytail: two processes breaking one dead process's lock can race; only a crash leaves one
-  } catch (error: any) {
-    if (error.code === "EEXIST") throw new Error(`Another Pi session claimed this Page just now (${file}). Try again.`);
-    throw error;
-  } finally { rmSync(tmp, { force: true }); }
-  REG.generation.set(page, next.generation);
-  return next.generation;
+  const next: Lock = { pid: process.pid, session, generation: generation + 1, label, ...(release ? { release } : {}) };
+  writeLock(page, next);
+  REG.generation.set(page, next.generation!);
+  return next.generation!;
 }
 
+/** Keeps the last generation in the lock, so the next receiver's is higher and an approval for this one never matches it. */
 function releasePage(page: string, session: string, generation: number) {
-  try { const lock = readLock(page); if (lock.pid === process.pid && lock.session === session && lock.generation === generation) unlinkSync(lockPath(page)); } catch { /* gone */ }
+  try { exclusive(page, () => { const lock = readLock(page); if (lock.pid === process.pid && lock.session === session && lock.generation === generation) writeLock(page, { generation }); }); } catch { /* gone, or busy: then stale, as after a crash */ }
+}
+
+/** Asks the Durable Chat holding the Page, at the lock's `release`, to let it go at `generation`; it checks it still holds it there. */
+async function requestRelease(page: string, lock: Lock) {
+  const { port, token } = lock.release!;
+  let res: Response;
+  try {
+    res = await fetch(`http://127.0.0.1:${port}/.atelier/release?${new URLSearchParams({ file: page, generation: String(lock.generation), token })}`, { method: "POST", signal: AbortSignal.timeout(5000) });
+  } catch (error) { throw new Error(`Chat ${named(lock)} did not answer the request to release this Page (${String(error)}); its Page stays with it. Try again, or close that Chat first.`); }
+  if (!res.ok) throw new Error(`Chat ${named(lock)} kept this Page: ${String(((await res.json().catch(() => ({}))) as any).error ?? res.status)}`);
 }
 
 /**
@@ -303,7 +319,7 @@ function storedImage(page: string, name: string) {
 
 export type Host = ReturnType<typeof createHost>;
 type Send = (message: Message, done: (idle: boolean) => void, failed: () => void) => void;
-type Receiver = { session: string; label: string; generation: number; send: Send; handoff?: (message: Message) => void; idle?: () => boolean };
+type Receiver = { session: string; label: string; generation: number; send: Send; handoff?: (message: Message) => void; idle?: () => boolean; release?: { token: string; close: () => string | undefined } };
 /**
  * A served Page: its serving endpoint (the page server that gave the tab its URL, its connected tabs, its undo
  * timers) and its current receiver session. A takeover inside the process swaps only the receiver.
@@ -341,6 +357,11 @@ export function createHost(options: {
   test?: boolean;
   /** The port to serve on when free, else any. */
   port?: number;
+  /**
+   * A Durable Chat host: on a takeover request at its current generation, starts its orderly close (background jobs keep
+   * running), whose stop releases its Pages; returns why not instead while it cannot (it is still starting).
+   */
+  release?: () => string | undefined;
 }) {
   const root = realpathSync(options.root);
   const sessionId = options.sessionId ?? randomUUID();
@@ -356,6 +377,7 @@ export function createHost(options: {
   let server: Server | undefined;
   let ready: Promise<void> | undefined;
   let port = 0;
+  const releaseToken = randomUUID(); // in this session's locks only, so a web page cannot ask it to release a Page
 
   const later = (ms: number, fn: () => void) => {
     const t = setTimeout(() => { timers.delete(t); try { fn(); } catch { /* a late timer must never crash the session */ } }, ms);
@@ -526,6 +548,14 @@ export function createHost(options: {
     if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) return json(res, 403, { error: "Use http://127.0.0.1" });
     let u: URL;
     try { u = new URL(req.url ?? "/", `http://127.0.0.1:${port}`); } catch { return json(res, 400, { error: "Bad request target" }); }
+    if (u.pathname === "/.atelier/release" && req.method === "POST") {
+      // A takeover from another process: release only a Page this process's receiver holds at the generation the caller was shown.
+      const page = u.searchParams.get("file") ?? "", r = REG.served.get(page)?.receiver, lock = (() => { try { return readLock(page); } catch { return {} as Lock; } })();
+      const held = !!r?.release && r.release.token === u.searchParams.get("token") && String(r.generation) === u.searchParams.get("generation") && lock.pid === process.pid && lock.session === r.session && lock.generation === r.generation;
+      if (!held) return json(res, 409, { error: "it no longer holds this Page at that generation." });
+      const why = r!.release!.close();
+      return why === undefined ? json(res, 200, { released: true }) : json(res, 409, { error: why });
+    }
     if (u.pathname.startsWith("/.atelier/")) {
       const page = resolve(u.searchParams.get("page") ?? ""), rec = page ? served(page) : undefined;
       if (!page || !rec) return json(res, 404, { error: "No Pi session has this Page open. Ask the agent to open it." });
@@ -608,6 +638,8 @@ export function createHost(options: {
    * this process, else on this one. From the claim to the receiver switch nothing awaits, so no delivery, receipt or
    * takeover in this process runs in between.
    */
+  // Where a Durable Chat takes release requests, named in its lock when its own page server serves the Page.
+  const releasing = (page: string) => options.release && (REG.served.get(page)?.ep ?? ep) === ep ? { port, token: releaseToken } : undefined;
   async function bind(page: string, claim: (check?: boolean) => number) {
     if (!REG.served.has(page)) { claim(true); await listen(); } // a refused claim starts no server
     const generation = claim();
@@ -617,7 +649,7 @@ export function createHost(options: {
     const previous = rec.receiver;
     if (previous?.session !== sessionId || previous.generation !== generation) {
       // Sends the previous receiver queued but never confirmed are replayed here, flagged; the rest it held are dropped.
-      rec.receiver = { session: sessionId, label, generation, send: options.send, handoff: options.handoff, idle: options.idle };
+      rec.receiver = { session: sessionId, label, generation, send: options.send, handoff: options.handoff, idle: options.idle, ...(options.release ? { release: { token: releaseToken, close: options.release } } : {}) };
       rec.inFlight.clear(); rec.seen.clear(); rec.awaiting.length = 0;
       rec.ep.broadcast(page, "receiver", { receiver: receiverInfo(rec.receiver) });
     }
@@ -646,22 +678,29 @@ export function createHost(options: {
   /**
    * A takeover waits until the receiving session is between runs (its `idle`), checking every 50 ms up to quiesceMs,
    * then claims and switches in one synchronous step; it never forces a busy session. Takeovers of one Page queue in REG.
-   * A receiver in another Durable Chat's host process is taken by stopping that process (SIGTERM, orderly shutdown) instead.
+   * A receiver in another Durable Chat is asked over its page server to release the Page (it checks it still holds it at
+   * that generation, then closes its host in order); the Page is claimed here once its lock is released at that generation.
    */
   function takeover(page: string, generation: number) {
     const wait = options.quiesceMs ?? QUIESCE_MS;
     const run = async () => {
       const held = readLock(page);
       if (holder(held) === "elsewhere") {
-        claimPage(page, sessionId, label, generation, true); // a Durable Chat host at the generation the caller saw? else throws why
-        await endHost(held, END_HOST_MS);
-        return { ...await bind(page, (check) => claimPage(page, sessionId, label, generation, check, held)), ended: held.pid };
+        claimPage(page, sessionId, label, generation, true); // a Durable Chat at the generation the caller saw? else throws why
+        await requestRelease(page, held);
+        for (const deadline = Date.now() + END_HOST_MS; ;) {
+          const lock = readLock(page);
+          if (lock.generation !== held.generation || lock.session !== held.session || holder(lock) !== "elsewhere") break;
+          if (Date.now() >= deadline) throw new Error(`Chat ${named(held)} agreed to release this Page but did not within ${END_HOST_MS / 1000} s; its Page stays with it. Try again, or close that Chat first.`);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return { ...await bind(page, (check) => claimPage(page, sessionId, label, generation, check, { ended: held, release: releasing(page) })), ended: held.pid };
       }
       const deadline = Date.now() + wait;
       for (;;) {
         const lock = readLock(page), r = REG.served.get(page)?.receiver;
         const busy = r && r.session === lock.session && r.session !== sessionId && r.idle && !safe(r.idle);
-        if (!busy) return { ...await bind(page, (check) => claimPage(page, sessionId, label, generation, check)), ended: undefined as number | undefined };
+        if (!busy) return { ...await bind(page, (check) => claimPage(page, sessionId, label, generation, check, { release: releasing(page) })), ended: undefined as number | undefined };
         claimPage(page, sessionId, label, generation, true); // still the generation the caller saw? else throws why
         if (Date.now() >= deadline) throw new Error(`Session ${r!.label} is busy: its run did not end within ${wait / 1000} s. Try again when it is idle.`);
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -688,8 +727,8 @@ export function createHost(options: {
     /** False once the Page was handed over: a send this session still holds must not go out. */
     current: (details: { page?: string; seqs?: number[]; generation?: number }) => !!mineFor(details),
     /** Serves the Page, copies the Kernel, and hands undelivered events to this session (131). Never takes the Page from another live receiver. */
-    async open(page: string) { return bind(page, (check) => claimPage(page, sessionId, label, undefined, check)); },
-    /** Moves the Page's receiver here from a live session of this process, at the generation the caller was shown, once that session is idle; the URL and open tabs stay. From another Durable Chat it stops that Chat's host process (`ended`: its pid) and serves the Page here under a new URL. */
+    async open(page: string) { return bind(page, (check) => claimPage(page, sessionId, label, undefined, check, { release: releasing(page) })); },
+    /** Moves the Page's receiver here from a live session of this process, at the generation the caller was shown, once that session is idle; the URL and open tabs stay. From another Durable Chat it has that Chat's host close in order (`ended`: its pid) and serves the Page here under a new URL. */
     takeover,
     agent(page: string, entry: Record<string, unknown>) { return receiving(page).ep.append(page, { ...entry, origin: "agent" }); },
     /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */

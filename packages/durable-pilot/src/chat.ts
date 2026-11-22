@@ -116,6 +116,8 @@ export type ChatHostOptions = {
 	readonly readOnly?: boolean;
 	/** Run the bound installed Pi packages (`packages.ts`) from this agent directory's settings. */
 	readonly packages?: { readonly agentDir?: string };
+	/** The host process's orderly close for an Atelier takeover from another Chat (`createHost` `release`); none: refused. */
+	readonly release?: () => string | undefined;
 };
 
 /** A Chat host plus the Workbench state PI WEB feeds (resources) and reads (signals). */
@@ -194,7 +196,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	let opened: Host | undefined;
 	// The lead is the active branch: history navigation may select another.
 	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id });
-	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id });
+	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, ...(options.release ? { release: options.release } : {}) });
 	const workbenchBash = bash.extension();
 	const spawner = new SessionSpawner(chatId);
 	const sandbox = new CodemodeSandbox();
