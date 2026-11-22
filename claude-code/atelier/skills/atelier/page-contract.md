@@ -49,6 +49,10 @@
   Every Decision lets the human add a note and up to four images (PNG, JPEG, WebP, GIF, 10 MB each);
   the Delivery names each image's absolute path, so read it. Every Decision also offers "Other…": the human's
   own answer, delivered as `own answer: "…"`. It answers the Decision like an option; act on its text.
+- `atl-task` on a keyed element marks a Task the human does himself (log in, click, test on the phone): its
+  id is the Key address. He marks it Done, or Stuck with a note on what is in the way, and can reopen it; each
+  change arrives as `Task done on <key>`, `Task stuck on <key>: "<note>"` or `Task reopened on <key>`. Open Tasks
+  count in the top bar ("to do"). Use it for checklist steps, never `atl-decide="Done|Need help"`; help a stuck one.
 - Decisions with consequences per option go through `ask`. Recommend one option when you have a
   basis; none for ratings or gates without evidence. Once a Page is open, ask every question there, not in the
   Chat: a reply that offers choices, or free text you need settled, becomes an `ask` at its Key ("Other…" covers
@@ -167,6 +171,9 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
   pinch-to-zoom, not a new tab. Portrait shots fit one row of cards; wide shots get at most two per row;
   for a small change, crop to the changed region and keep the full shot behind the modal. Highlights come
   from the changed element's measured bounds, or are left out; a wrong mark is worse than none.
+- **Dark/light switch on every Page.** A button in the header toggles `data-theme="dark|light"` on `<html>`;
+  dark by default unless `prefers-color-scheme: light`, the choice kept in `localStorage`, re-applied on
+  `atelier:update`. Each theme sets `color-scheme` and the `--atl-*` colours, so Kernel controls follow.
 - **A builder needs real content and direction.** A brief says what the Page is for, what Thomas must see or
   decide, and supplies the real content; a thin brief gets padded with text. It quotes Thomas, adds no design
   constraint he did not give, and lets the builder run `serve.mjs`.

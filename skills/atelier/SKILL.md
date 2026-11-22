@@ -71,6 +71,10 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   Every Decision lets the human add a note and up to four images (PNG, JPEG, WebP, GIF, 10 MB each);
   the Delivery names each image's absolute path, so read it. Every Decision also offers "Other…": the human's
   own answer, delivered as `own answer: "…"`. It answers the Decision like an option; act on its text.
+- `atl-task` on a keyed element marks a Task the human does himself (log in, click, test on the phone): its
+  id is the Key address. He marks it Done, or Stuck with a note on what is in the way, and can reopen it; each
+  change arrives as `Task done on <key>`, `Task stuck on <key>: "<note>"` or `Task reopened on <key>`. Open Tasks
+  count in the top bar ("to do"). Use it for checklist steps, never `atl-decide="Done|Need help"`; help a stuck one.
 - Decisions with consequences per option go through `ask`. Recommend one option when you have a
   basis; none for ratings or gates without evidence. Once a Page is open, ask every question there, not in the
   Chat: a reply that offers choices, or free text you need settled, becomes an `ask` at its Key ("Other…" covers
@@ -209,7 +213,7 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 
 | Entry | Kind | Source |
 | --- | --- | --- |
-| Kernel 2.16.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
+| Kernel 2.17.0 | Kernel | `extensions/atelier/kernel/` (`atelier.js`, `idiomorph.js` 0.8.0) |
 
 No Components or Patterns yet; they enter only after real use proves them. A change to a copied
 Kernel is a Contribution: raise it as a pull request against pi-workbench. Verify a Kernel change on a copy of

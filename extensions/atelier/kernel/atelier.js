@@ -1,4 +1,4 @@
-// Atelier Kernel 2.16.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
+// Atelier Kernel 2.17.0: the Page side of Atelier (pi-workbench extensions/atelier, decisions 129-156).
 // A dependency-free ES module with no build step (142), copied beside each Page (133). A change made in
 // a copy is a Contribution: raise it as a pull request against pi-workbench (136).
 //
@@ -17,6 +17,9 @@
 //                              Comments and replies take images the same way.
 //     atl-delivery="record|send|immediate" (default immediate); atl-material="key" counts as opened (135)
 //   atl-slot                   inside a Decision: where its options render, e.g. one table cell; else at the end
+//   atl-task                   on a keyed element: a Task the human does himself (log in, test on the phone); its id is
+//                              the Key address. He marks it Done, or Stuck with a note, and can reopen it; each change is
+//                              a `task` event {key, state: open|done|stuck, note} delivered at once (2.17.0)
 //   atl-request="job"          a button or form that asks the agent for a typed job; form fields become its input (130)
 //   atl-group                  on a keyed element: its batched Comments get their own "Send (n)" (150)
 //   atl-delivery="send"        on a keyed element: Comments inside it wait for Send instead of going out when saved (156)
@@ -60,7 +63,7 @@ export const UNDO_MS = 3_000; // decision 151 (owner 2026-10-21: 10 s → 3 s)
 // Delivery class per human event type (150). `boundary` is the Send that releases drafts; `control` is undo.
 // A Comment goes out when saved, after its undo window (156); a Page opts into batching with atl-delivery="send".
 export const CLASSES = {
-  comment: "immediate", decide: "immediate", request: "immediate", cancel: "immediate", rework: "immediate",
+  comment: "immediate", decide: "immediate", task: "immediate", request: "immediate", cancel: "immediate", rework: "immediate",
   accept: "record", opened: "record", close: "record", still: "record", seen: "record", send: "boundary", undo: "control",
 };
 export const REQUEST_STATES = ["queued", "running", "done", "failed", "cancelled"];
@@ -73,9 +76,10 @@ const declaredDecision = (id, options, rec, extra = {}) => ({ id, key: id, decla
 
 /**
  * Replays the Event Log into the state the Page shows. `currentVer(key)` reads atl-ver on the live Page (149);
- * `declared` lists the Page's atl-decide Decisions, so unanswered ones count as to answer (155).
+ * `declared` lists the Page's atl-decide Decisions, so unanswered ones count as to answer (155); `taskKeys` the
+ * addresses of its atl-task Tasks, so an untouched one counts as to do (2.17.0).
  */
-export function derive(entries, currentVer = () => null, declared = []) {
+export function derive(entries, currentVer = () => null, declared = [], taskKeys = []) {
   const undone = new Set(entries.filter((e) => e.type === "undo").map((e) => e.target));
   const live = entries.filter((e) => e.type !== "undo" && !undone.has(e.seq));
   const delivered = new Set(), received = new Set(), unconfirmed = new Set();
@@ -108,6 +112,8 @@ export function derive(entries, currentVer = () => null, declared = []) {
   // The ask an answer or an opened names (2.14.2); one without (older Event Logs) names the id's latest ask.
   const askOf = (e) => { const cur = decisions.get(e.decision); return cur && (e.ask == null || cur.askSeq === e.ask) ? cur : withdrawn.get(e.ask ?? lastAsk.get(e.decision)); };
   for (const d of declared) if (!decisions.has(d.id)) decisions.set(d.id, { ...d, answer: null, opened: false });
+  // A Task's state is its newest task event; one with none is open. Events on a Key no longer on the Page still replay.
+  const tasks = new Map(taskKeys.map((key) => [key, { key, state: "open", event: null }]));
   for (const [i, e] of live.entries()) {
     if (e.type === "comment") {
       const root = e.thread < e.seq ? threads.get(rootOf(e.thread)) : undefined;
@@ -137,6 +143,7 @@ export function derive(entries, currentVer = () => null, declared = []) {
       if (d && !cur) decisions.set(e.decision, d);
       if (d) d.answer = e; // the newest answer counts; the human may change it any time (155)
     }
+    else if (e.type === "task") { const t = tasks.get(e.key) ?? tasks.set(e.key, { key: e.key }).get(e.key); t.state = e.state; t.event = e; }
     else if (e.type === "request") requests.set(e.seq, { req: e, state: null, revision: 1, note: null, cancel: false, accepted: false, rework: null });
     else if (e.type === "status") {
       // agentclick's revision: a status written for an earlier revision is stale and ignored.
@@ -188,7 +195,8 @@ export function derive(entries, currentVer = () => null, declared = []) {
   }
   const drafts = live.filter((e) => status(e) === "draft");
   return {
-    threads: [...threads.values()], decisions: [...decisions.values()],
+    threads: [...threads.values()], decisions: [...decisions.values()], tasks: [...tasks.values()],
+    toDo: [...tasks.values()].filter((t) => t.state === "open"),
     requests: [...requests.values()], drafts, status, withdrawn,
     openThreads: [...threads.values()].filter((t) => !t.closed && status(t.root) !== "draft"),
     toAnswer: [...decisions.values()].filter((d) => d.state !== "done"),
@@ -225,7 +233,8 @@ function keyCounts(st) {
 export function publicState(st, { conn = "no session", loaded = false, wip = [] } = {}) {
   const status = (e) => e ? st.status(e) : null;
   return {
-    conn, loaded, wip, open: st.openThreads.length + st.toAnswer.length, toAnswer: st.toAnswer.map((d) => d.id), drafts: st.drafts.length,
+    conn, loaded, wip, open: st.openThreads.length + st.toAnswer.length + st.toDo.length, toAnswer: st.toAnswer.map((d) => d.id), toDo: st.toDo.map((t) => t.key), drafts: st.drafts.length,
+    tasks: st.tasks.map((t) => ({ key: t.key, state: t.state, note: t.event?.note ?? null, status: status(t.event) })),
     decisions: st.decisions.map((d) => ({
       id: d.id, key: d.key ?? null, declared: !!d.declared, options: d.options.map((o) => o.label), recommended: d.options.find((o) => o.recommended)?.label ?? null,
       answer: d.answer?.option ?? null, custom: !!d.answer?.custom, previous: d.answer?.previous ?? null, note: d.answer?.note ?? null, images: d.answer?.images ?? [], status: status(d.answer), stale: !!d.stale, state: d.state, round: d.round, history: d.history, opened: !!d.opened, retracted: d.retracted ?? null,
@@ -313,6 +322,7 @@ export function describe(e, entries, excerpt, file) {
       return `#${e.seq} Decision ${e.decision}${e.ver ? ` (version ${e.ver})` : ""}: ${[choice, receipt, opened, e.note ? `note ${quote(e.note)}` : "", imagesText(e, file), gone].filter(Boolean).join("; ")}`;
     }
     case "retract": return `#${e.seq} Retracted Decision ${e.decision}: ${quote(e.reason)}`;
+    case "task": return `#${e.seq} Task ${e.state === "open" ? "reopened" : e.state} ${at(e, excerpt)}${e.note ? `: ${quote(e.note)}` : ""}`;
     case "request": return `#${e.seq} Request ${quote(e.job)} ${at(e, excerpt)}${e.input && Object.keys(e.input).length ? ` with input ${JSON.stringify(e.input)}` : ""}`;
     case "rework": return `#${e.seq} Rework requested for Request #${e.target}${e.note ? `: ${quote(e.note)}` : ""}`;
     case "cancel": return `#${e.seq} Cancel requested for Request #${e.target}`;
@@ -424,7 +434,7 @@ function boot() {
   const chipsAt = new Map(); // Key address -> the markers of its threads, for the Comment button made on hover
   const spots = new Map(); // thread seq -> its marker at a quote or a selector-anchored element
   const BLOCK = "p,li,dd,dt,td,th,blockquote,pre,figcaption,h1,h2,h3,h4,h5,h6";
-  const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), cards = new Map(), wipLabels = new Map();
+  const touched = new WeakSet(), keyUis = new Map(), pins = new Map(), decUis = new Map(), taskUis = new Map(), cards = new Map(), wipLabels = new Map();
   let hot = null, savedRange = null, thread = null; // thread: the one open in the floating thread box
 
   const isUi = (n) => n.closest?.("[atl-ui]");
@@ -472,8 +482,9 @@ function boot() {
     const id = keyOf(el);
     return declaredDecision(id, el.getAttribute("atl-decide"), el.getAttribute("atl-rec"), { note: pipe(el.getAttribute("atl-note")), material: el.getAttribute("atl-material") ?? undefined, delivery: el.getAttribute("atl-delivery") ?? undefined });
   });
+  const taskKeys = () => [...new Set(keyed().filter((el) => el.hasAttribute("atl-task")).map(keyOf))];
   const all = () => [...entries, ...local];
-  const state = () => derive(all(), currentVer, declared());
+  const state = () => derive(all(), currentVer, declared(), taskKeys());
   let loaded = !online, published = null;
   // atl-wip: a region an agent is reworking; its text labels it and locks the Decisions inside it, unless
   // atl-wip-lock="off" (2.12.0), so a Page-wide "in progress" mark leaves the Decisions he still owes answerable.
@@ -781,6 +792,14 @@ function boot() {
       + otherHtml(d, lock) + materialHtml(d) + roundTag(d);
   }
 
+  // A Task (2.17.0): Done and Stuck… toggle; a pressed one reopens it. Stuck asks what is in the way first.
+  function taskHtml(t, lock) {
+    const k = esc(t.key), dis = locked(lock);
+    return `<button type="button" data-atl="task" data-key="${k}" data-state="${t.state === "done" ? "open" : "done"}" aria-pressed="${t.state === "done"}" class="${t.state === "done" ? "atl-chosen" : ""}"${dis}>${icon("check")} Done</button>`
+      + `<button type="button" data-atl="stuck" data-key="${k}" aria-pressed="${t.state === "stuck"}" class="${t.state === "stuck" ? "atl-chosen" : ""}"${dis}>Stuck…</button>`;
+  }
+  const taskStateHtml = (t, st) => t.state === "open" ? "" : `<span class="atl-dim">${t.state === "done" ? "Done" : `Stuck${t.event?.note ? `: ${esc(t.event.note)}` : ""}`} · ${esc(statusText(st, t.event))}</span>`;
+
   function requestHtml(r, st) {
     const last = r.rework ?? r.req;
     const state = r.state ?? (st.status(last) === "delivered" || st.status(last) === "queued" ? "queued" : statusText(st, last));
@@ -796,7 +815,7 @@ function boot() {
   // 1374px 3-column row): CSS spans the grid columns, a wrapping row gives them a line of their own, and a nowrap
   // row, which no child can break, gets them after the Key like media.
   function place(ui, el) {
-    const s = ui.matches("[atl-ui=key]") && getComputedStyle(el), row = s && s.display.endsWith("flex") && !s.flexDirection.startsWith("column");
+    const s = ui.matches("[atl-ui=key],[atl-ui=decide],[atl-ui=task]") && getComputedStyle(el), row = s && s.display.endsWith("flex") && !s.flexDirection.startsWith("column");
     const after = el.matches("img,video,audio,canvas,iframe,input,textarea,select,svg,hr,br") || (row && s.flexWrap === "nowrap");
     if (s) { ui.classList.toggle("atl-after", after); ui.classList.toggle("atl-row", row && !after); }
     if (after) { if (el.nextSibling !== ui) el.after(ui); }
@@ -836,6 +855,16 @@ function boot() {
         dec.classList.toggle("atl-open-item", !d.answer || d.stale);
         kept.add(dec);
       }
+      const task = el.hasAttribute("atl-task") ? st.tasks.find((x) => x.key === addr) : undefined;
+      if (task) {
+        let tu = taskUis.get(addr);
+        if (!tu) { tu = h(`<span atl-ui="task" data-key="${esc(addr)}" class="atl-task" role="group" aria-label="Task ${esc(addr)}"><span class="atl-topts"></span><span class="atl-stuckbox" hidden><input class="atl-tnote" aria-label="What is in the way?" placeholder="What is in the way?"><button type="button" data-atl="stucksend" data-key="${esc(addr)}" class="atl-primary">${icon("send")} Send</button></span><span class="atl-tstate"></span></span>`); taskUis.set(addr, tu); }
+        place(tu, el);
+        set(tu.firstElementChild, taskHtml(task, lockOf(el)));
+        set(tu.lastElementChild, taskStateHtml(task, st));
+        tu.classList.toggle("atl-open-item", task.state === "open");
+        kept.add(tu);
+      }
       place(ui, el);
       // The Comment button: only the hovered or focused Key has one, not every Key; its thread markers stay.
       // A Key that only marks a Decision's slot gets none.
@@ -852,7 +881,7 @@ function boot() {
       set(ui.firstElementChild, groupDrafts ? `<button data-atl="send" data-key="${esc(addr)}" class="atl-primary">${icon("send")} Send (${groupDrafts})</button>` : "");
       reconcile(ui.children[1], st.decisions.filter((x) => !x.declared && x.key === addr).map((x) => ({ id: `d:${x.id}`, html: decisionHtml(x, st, lockOf(el)), open: !x.answer || x.stale, folded: folded(x), extra: `<div class="atl-dextra">${EXTRA}</div>` })));
     }
-    for (const map of [pins, decUis]) for (const [addr, node] of map) if (!kept.has(node)) { node.remove(); map.delete(addr); }
+    for (const map of [pins, decUis, taskUis]) for (const [addr, node] of map) if (!kept.has(node)) { node.remove(); map.delete(addr); }
     for (const [addr, ui] of keyUis) if (!seen.has(addr)) { ui.remove(); keyUis.delete(addr); }
     // Markers at a quote (inside the block that holds it) or on a selector-anchored element; the panel lists these too.
     for (const t of st.threads) { const p = placed.get(t.root.seq); if (p.where === "text") atText.push({ t, at: p.range ?? p.el }); }
@@ -882,8 +911,8 @@ function boot() {
     const onText = st.threads.filter((t) => placed.get(t.root.seq).where === "text");
     const unanchored = st.threads.filter((t) => placed.get(t.root.seq).where === "unanchored");
     const notDelivered = all().filter((e) => ["local", "unconfirmed"].includes(st.status(e)));
-    const open = st.openThreads.length + st.toAnswer.length;
-    set(topBar.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")}<span> Test host, no Pi session</span></span>` : receiver ? `<span class="atl-dim atl-recv" title="Your input goes to this Pi session">→ ${esc(receiver.label)}</span>` : receiver === null ? `<span class="atl-tag atl-warn atl-recv" title="No Pi session receives your input now; it is kept until one opens this Page">no receiver</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
+    const open = st.openThreads.length + st.toAnswer.length + st.toDo.length;
+    set(topBar.querySelector(".atl-bar"), `<button data-atl="next" ${open ? "" : "disabled"}>${open} open${open ? " · next ↓" : ""}</button>${st.toAnswer.length ? `<span class="atl-tag">${st.toAnswer.length} to answer</span>` : ""}${st.toDo.length ? `<span class="atl-tag">${st.toDo.length} to do</span>` : ""}${st.drafts.length ? `<button data-atl="send" class="atl-primary">${icon("send")} Send (${st.drafts.length})</button>` : ""}${testHost ? `<span class="atl-tag atl-warn atl-test" title="Served by serve.mjs on a copy of the Page: events go to a test log and reach no Pi session">${icon("alert")}<span> Test host, no Pi session</span></span>` : receiver ? `<span class="atl-dim atl-recv" title="Your input goes to this Pi session">→ ${esc(receiver.label)}</span>` : receiver === null ? `<span class="atl-tag atl-warn atl-recv" title="No Pi session receives your input now; it is kept until one opens this Page">no receiver</span>` : ""}<span class="atl-dim atl-conn">${esc(conn)}</span>`);
     renderUndo(undoable());
     const section = (title, items) => items.length ? `<h4>${title}</h4>` : "";
     const list = panel.querySelector(".atl-list");
@@ -951,7 +980,7 @@ function boot() {
     items.forEach((el, i) => {
       const label = clip(el.getAttribute("atl-nav").trim() || el.querySelector("h1,h2,h3,h4,h5,h6")?.textContent || `Section ${i + 1}`, 80);
       const under = (n) => !!n && el.contains(n);
-      const need = st.toAnswer.filter((d) => under(findKey(d.key))).length + st.openThreads.filter((t) => under(at(t))).length;
+      const need = st.toAnswer.filter((d) => under(findKey(d.key))).length + st.toDo.filter((t) => under(findKey(t.key))).length + st.openThreads.filter((t) => under(at(t))).length;
       const kind = marked.filter(([n]) => under(n)).reduce((best, [, k]) => !best || RANK[k] > RANK[best] ? k : best, null);
       const tip = [label, need ? `${need} need${need === 1 ? "s" : ""} you` : "", kind ? KIND[kind] : ""].filter(Boolean).join(", ");
       total += need;
@@ -1187,7 +1216,7 @@ function boot() {
   function renderUndo(list) {
     // Decision 151: every interaction can be undone for 3 seconds, with a visible countdown. One row for all of them,
     // so a batch of answers never stacks rows over the Page (k-buttons).
-    const label = (e) => ({ comment: "Comment saved", decide: e.previous != null ? `Changed ${e.previous} → ${clip(e.option, 40)}` : `${e.custom ? "Answered" : "Chose"} ${clip(e.option, 40)}`, request: `Requested ${e.job}`, send: "Comments sent", close: "Closed", still: "Marked still applies", opened: "Material opened", cancel: "Cancel requested", accept: "Accepted", rework: "Rework requested" })[e.type] ?? e.type;
+    const label = (e) => ({ comment: "Comment saved", decide: e.previous != null ? `Changed ${e.previous} → ${clip(e.option, 40)}` : `${e.custom ? "Answered" : "Chose"} ${clip(e.option, 40)}`, task: { done: "Marked done", stuck: "Marked stuck", open: "Reopened" }[e.state], request: `Requested ${e.job}`, send: "Comments sent", close: "Closed", still: "Marked still applies", opened: "Material opened", cancel: "Cancel requested", accept: "Accepted", rework: "Rework requested" })[e.type] ?? e.type;
     const e = list.at(-1), more = list.length - 1;
     set(panel.querySelector(".atl-undo"), e ? `<div class="atl-toast">${esc(label(e))}${more ? ` and ${more} more` : ""} <button data-atl="undo" data-seq="${e.seq}">${icon("undo")} Undo (${left(e)} s)</button>${more ? `<button data-atl="undoall">Undo all ${list.length}</button>` : ""}</div>` : "");
   }
@@ -1621,6 +1650,21 @@ function boot() {
       b.dataset.id = other.dataset.id;
       actions.decide(b);
     },
+    task: (b) => { if (!b.disabled) post({ type: "task", key: b.dataset.key, state: b.dataset.state }); },
+    stuck: (b) => {
+      if (b.disabled) return;
+      if (b.getAttribute("aria-pressed") === "true") { post({ type: "task", key: b.dataset.key, state: "open" }); return; }
+      const box = b.closest("[atl-ui=task]").querySelector(".atl-stuckbox");
+      box.hidden = !box.hidden; b.setAttribute("aria-expanded", String(!box.hidden));
+      if (!box.hidden) box.querySelector(".atl-tnote").focus();
+    },
+    stucksend: async (b) => {
+      const tu = b.closest("[atl-ui=task]"), input = tu.querySelector(".atl-tnote"), note = input.value.trim();
+      if (tu.querySelector("[data-atl=stuck]")?.disabled) return; // locked by atl-wip since the box opened
+      if (!note) { input.focus(); flash("Say what is in the way first."); return; }
+      if (!await post({ type: "task", key: b.dataset.key, state: "stuck", note })) return; // refused: the note stays
+      input.value = ""; tu.querySelector(".atl-stuckbox").hidden = true; tu.querySelector("[data-atl=stuck]")?.setAttribute("aria-expanded", "false");
+    },
     pickimg: (b) => b.nextElementSibling.click(),
     dropimg: (b) => { const extra = b.closest(".atl-extra"); attached.get(extra)?.splice(+b.dataset.i, 1); renderAttached(extra); },
     material: (b) => { const d = state().decisions.find((x) => x.id === b.dataset.id); jumpTo(findKey(d?.material)); if (d && !d.opened) markOpened(d); },
@@ -1774,6 +1818,13 @@ function boot() {
     post({ type: "request", job: form.getAttribute("atl-request"), key: keyOf(form), ver: verOf(form), input: Object.fromEntries(new FormData(form)) });
   });
   document.addEventListener("input", (ev) => { if (!isUi(ev.target)) touched.add(ev.target); }, true);
+  // Enter in a Task's Stuck note sends it.
+  document.addEventListener("keydown", (ev) => {
+    const input = ev.target.closest?.("[atl-ui=task] .atl-tnote");
+    if (!input || ev.isComposing || ev.key !== "Enter") return;
+    ev.preventDefault();
+    actions.stucksend(input.parentElement.querySelector("[data-atl=stucksend]"));
+  });
   // Enter in a Decision's note posts: the own answer while "Other…" is open, else the option that asked for the note.
   document.addEventListener("keydown", (ev) => {
     const note = ev.target.closest?.("[atl-ui] .atl-note"), own = note?.parentElement.querySelector(".atl-own:not([hidden]) [data-atl=decideown]");
@@ -1889,7 +1940,7 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui=orphans]:not(:empty){max-height:50vh;overflow:auto;margin:8px;display:grid;gap:8px}
 [atl-wip]:not([atl-ui]){opacity:.55;outline:2px dashed var(--atl-warn);outline-offset:2px}
 .atl-wip{position:absolute;z-index:2147481500;translate:0 -50%;max-width:min(40ch,calc(100vw - 16px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;padding:0 6px;border:1px solid var(--atl-warn);border-radius:4px;background:var(--atl-bg);color:var(--atl-warn);pointer-events:none}
-[atl-ui=key]{margin:4px 0}[atl-key]>[atl-ui=key]:not(.atl-after){grid-column:1/-1}[atl-ui=key].atl-row{flex-basis:100%}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
+[atl-ui=key]{margin:4px 0}[atl-key]>:is([atl-ui=key],[atl-ui=decide],[atl-ui=task]):not(.atl-after){grid-column:1/-1}:is([atl-ui=key],[atl-ui=decide],[atl-ui=task]).atl-row{flex-basis:100%}[atl-ui=key]:not(:has(.atl-card,form,button)){display:none}.atl-khead:empty,.atl-kbody:empty{display:none}
 .atl-i{width:14px;height:14px;flex:none}
 [atl-ui] button,button[atl-ui]{font:inherit;line-height:1.2;display:inline-flex;align-items:center;gap:5px;box-sizing:border-box;min-height:28px;padding:0 10px;border:1px solid var(--atl-line);border-radius:6px;background:var(--atl-bg);color:var(--atl-fg);cursor:pointer}
 [atl-ui] button:hover:not(:disabled),button[atl-ui]:hover{border-color:var(--atl-muted)}
@@ -1909,11 +1960,11 @@ body>[atl-ui=panel]:has(.atl-card,.atl-warn){width:340px}
 [atl-ui] button.atl-fold{display:flex;width:100%;min-width:0;min-height:24px;padding:0 4px;border-color:transparent;background:none;text-align:left}
 .atl-fold .atl-fq{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--atl-muted)}.atl-fold>b{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.atl-fold .atl-gone{flex:0 1 auto;min-width:0;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .atl-fold .atl-i{flex:none;transition:transform .15s}.atl-fold[aria-expanded=true] .atl-i{transform:rotate(90deg)}
-.atl-opts{display:grid;gap:4px}[atl-ui] button.atl-opt{display:grid;justify-items:start;text-align:left;padding:4px 10px}
+.atl-opts{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start}[atl-ui] button.atl-opt{display:grid;justify-items:start;text-align:left;padding:4px 10px;max-width:100%}
 [atl-ui] button.atl-rec{border-color:var(--atl-accent);border-style:dashed}
 [atl-ui] button.atl-chosen{background:var(--atl-accent);border-color:var(--atl-accent);border-style:solid;color:#fff}
 [atl-ui] button.atl-chosen .atl-dim{color:inherit}
-.atl-dopts{display:inline-flex;flex-wrap:wrap;gap:4px}.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate{flex-basis:100%}.atl-dstate:empty{display:none}
+.atl-dopts{display:inline-flex;flex-wrap:wrap;gap:4px}.atl-decide{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin:2px 0}.atl-dstate{flex-basis:100%}.atl-dstate:empty{display:none}.atl-task,.atl-topts,.atl-stuckbox:not([hidden]){display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center}.atl-task{margin:2px 0}.atl-tstate{flex-basis:100%}.atl-tstate:empty{display:none}.atl-tnote{min-width:min(24ch,100%)}
 [atl-ui] button.atl-other{color:var(--atl-muted);border-style:dashed}[atl-ui] .atl-opts>button.atl-other{justify-self:start}[atl-ui] button.atl-other.atl-chosen{color:#fff}
 .atl-own{display:flex;flex:1 1 100%;gap:4px;align-items:center}.atl-own .atl-ownans{flex:1 1 14em;width:auto}
 .atl-receipt{display:grid;gap:3px;justify-self:start;box-sizing:border-box;width:fit-content;max-width:min(100%,64ch);border:1px solid var(--atl-line);border-radius:6px;padding:5px 8px;background:var(--atl-bg)}

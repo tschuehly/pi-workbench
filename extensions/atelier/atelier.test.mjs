@@ -308,7 +308,7 @@ test("the Kernel copy is stamped and never overwrites a local change", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "atelier-copy-"));
   try {
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["copied", "copied"]);
-    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.16\.0 sha256:[0-9a-f]{64}/);
+    assert.match(readFileSync(path.join(dir, "atelier.js"), "utf8"), /^\/\/ atelier-copy 2\.17\.0 sha256:[0-9a-f]{64}/);
     assert.deepEqual(copyKernel(dir).map((c) => c.outcome), ["current", "current"]);
     const file = path.join(dir, "atelier.js");
     const edited = `${readFileSync(file, "utf8")}\n// local fix\n`;
@@ -1483,4 +1483,47 @@ test("receiver (g): a connected tab learns the receiver at hello and on every tr
     b.host.stop();
     assert.deepEqual(await s.next("receiver"), { receiver: null }, "no receiver while the endpoint still serves");
   } finally { s.close(); a.host.stop(); b.host.stop(); p.done(); }
+});
+
+test("a Task replays from the Event Log: open until marked, its newest state counts, an undone change is gone (2.17.0)", async () => {
+  const { publicState } = await import("./kernel/atelier.js");
+  const log = [
+    { seq: 1, type: "task", key: "admin", state: "done", origin: "human", delivery: "immediate" },
+    { seq: 2, type: "task", key: "phone", state: "stuck", note: "no app", origin: "human", delivery: "immediate" },
+    { seq: 3, type: "task", key: "admin", state: "open", origin: "human", delivery: "immediate" },
+    { seq: 4, type: "undo", target: 3, origin: "human" },
+    { seq: 5, type: "task", key: "gone", state: "done", origin: "human", delivery: "immediate" },
+  ];
+  const st = derive(log, () => null, [], ["admin", "phone", "mac"]);
+  assert.deepEqual(st.tasks.map((t) => [t.key, t.state]), [["admin", "done"], ["phone", "stuck"], ["mac", "open"], ["gone", "done"]]);
+  assert.deepEqual(st.toDo.map((t) => t.key), ["mac"], "only an open Task needs the human");
+  const pub = publicState(st);
+  assert.equal(pub.open, 1);
+  assert.deepEqual(pub.toDo, ["mac"]);
+  assert.deepEqual(pub.tasks.find((t) => t.key === "phone"), { key: "phone", state: "stuck", note: "no app", status: "pending" });
+  assert.doesNotMatch(JSON.stringify(pub.decisions), /admin|phone/, "a Task is no Decision");
+});
+
+test("a Task change reaches the agent as one Delivery line without Decision wording; a stuck one needs its note (2.17.0)", async () => {
+  const p = project();
+  const { host, page, sent, tick, human } = await hostOn(p);
+  try {
+    assert.equal(human({ type: "task", key: "a", state: "stuck" }).status, 400, "stuck without a note");
+    assert.equal(human({ type: "task", key: "a", state: "maybe" }).status, 400, "unknown state");
+    assert.equal(human({ type: "task", key: "a", state: "done" }).status, 200);
+    tick(UNDO);
+    assert.equal(host.deliverDue(page), 1);
+    assert.equal(sent[0].message.customType, "atelier:immediate");
+    assert.match(sent[0].message.content, /^Atelier Task done on a \("A"\)\n/);
+    assert.match(sent[0].message.content, /\n- #\d+ Task done on a \("A"\)$/);
+    assert.equal(human({ type: "task", key: "a", state: "stuck", note: "Login fails" }).status, 200);
+    tick(UNDO);
+    assert.equal(host.deliverDue(page), 1);
+    assert.match(sent[1].message.content, /- #\d+ Task stuck on a \("A"\): "Login fails"$/);
+    assert.equal(human({ type: "task", key: "a", state: "open" }).status, 200);
+    tick(UNDO);
+    host.deliverDue(page);
+    assert.match(sent[2].message.content, /- #\d+ Task reopened on a \("A"\)$/);
+    for (const s of sent) assert.doesNotMatch(s.message.content, /recommend|Other|Version|Decision/);
+  } finally { host.stop(); p.done(); }
 });

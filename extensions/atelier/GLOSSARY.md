@@ -16,7 +16,7 @@ address, such as `run-12/turn-3`.
 _Avoid_: Region, id, selector
 
 **Kernel**:
-The small script and Pi extension that carry Comments, Decisions, Requests and Updates between a
+The small script and Pi extension that carry Comments, Decisions, Tasks, Requests and Updates between a
 Page and the agent.
 _Avoid_: core, runtime, SDK, kit
 
@@ -40,6 +40,11 @@ human; it leaves the Page, and the Event Log keeps the reason. An answered Decis
 the retract still lands, folded with the reason it is no longer asked. Each answer names the ask it answered, so a late
 answer to a withdrawn question never answers a later ask with the same id.
 _Avoid_: grade, score, proposal, approval
+
+**Task**:
+A step the human does himself, declared on a Key with `atl-task`: open until he marks it done, or stuck with a
+note on what is in the way; he can reopen it. It has no options, recommendation or versions.
+_Avoid_: todo, checklist Decision
 
 **Request**:
 A typed job the human asks the agent to do from a Page, with a status: queued, running, done,
