@@ -37,7 +37,7 @@ import { COMMANDS } from "./extensions.ts";
 import { redact, sealed } from "./redact.ts";
 import { BackgroundBash } from "./background-bash.ts";
 import { setDelegationHold } from "./delegation.ts";
-import { type Attachment, CAPABILITIES, ChatSession, storedMessages, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
+import { type Attachment, CAPABILITIES, ChatSession, piWebChatTitle, storedMessages, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
 import type { SpawnResult } from "./spawn-session.ts";
 
@@ -123,7 +123,7 @@ if (holds.size > 0)
 	});
 // A socket host has no daemon until one connects: spawn_session answer timeouts wait for it.
 if (socketPath !== undefined) host.spawner.disconnected();
-const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder });
+const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder, title: () => piWebChatTitle(values.store!, chatId) });
 await session.start();
 
 let closing: Promise<void> | undefined;

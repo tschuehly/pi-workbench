@@ -31,11 +31,26 @@ import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BashJobsDoc } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
-import { basename } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 type WorkingModeDetailsLike = Record<string, unknown>;
 /** Battery state and alarm for the AFK battery alarm (`chat` names the Chat in the alert). */
 export type Power = { onBattery: () => Promise<boolean>; alarm: (chat: { id: string; label: string }) => void; everyMs: number };
+
+/**
+ * The Chat's title as PI WEB keeps it: its runtime locator `<data dir>/session-runtimes.json`, beside the `durable/`
+ * folder holding the Chat's store. Undefined when PI WEB names none or the file is not there.
+ * shortcut: reads PI WEB's own file (format version 1) because the host is never told the title; use the name PI WEB sends once it does.
+ */
+export function piWebChatTitle(store: string, chatId: string): string | undefined {
+	try {
+		const name: unknown = JSON.parse(readFileSync(join(dirname(dirname(resolve(store))), "session-runtimes.json"), "utf8"))?.chats?.[chatId]?.name;
+		return typeof name === "string" && name.trim() !== "" ? name : undefined;
+	} catch {
+		return undefined;
+	}
+}
 // Legacy Working Mode's own checks, loaded by URL as `atelier.ts` loads the kernel: tsc would check the extension's .ts as CommonJS.
 const { AFK_BATTERY_WARNING, batteryAlarm, onBattery } = (await import(new URL("../../../extensions/working-mode/index.ts", import.meta.url).href)) as {
 	AFK_BATTERY_WARNING: string;
@@ -318,13 +333,17 @@ export class ChatSession {
 	#closed = false;
 	#cwd = "";
 
-	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder; power?: Partial<Power> } = {}) {
+	/** The Chat's title for the AFK alarm, read when it sounds (a rename shows on the next one). */
+	readonly #title: () => string | undefined;
+
+	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder; power?: Partial<Power>; title?: () => string | undefined } = {}) {
 		this.#host = host;
 		this.#chat = "workbench" in host ? host : undefined;
 		this.#emit = emit;
 		this.#chatId = options.chatId ?? "durable";
 		this.#telemetry = options.telemetry;
 		this.#power = { onBattery, alarm: batteryAlarm, everyMs: 60_000, ...options.power };
+		this.#title = options.title ?? (() => undefined);
 	}
 
 	async start(): Promise<void> {
@@ -451,12 +470,13 @@ export class ChatSession {
 		const afk = await afkActive(this.#host.harness, this.#host.root).catch(() => false);
 		if (!afk || this.#closed) return this.#stopPower();
 		if (this.#powerTimer !== undefined || !arm) return;
-		// shortcut: the host does not know PI WEB's Chat name, so the alert names the folder (as an unnamed legacy session); pass the name in when PI WEB sends it.
-		const chat = { id: this.#chatId, label: basename(this.#cwd) || this.#chatId };
+		// As legacy alarmSession: the Chat's title and its folder, or the folder alone.
+		const folder = basename(this.#cwd) || this.#chatId;
+		const chat = () => { const title = this.#title(); return { id: this.#chatId, label: title === undefined ? folder : `${title} (${folder})` }; };
 		const check = async () => {
 			try {
 				const battery = (await this.#power.onBattery()) && !this.#closed && (await afkActive(this.#host.harness, this.#host.root));
-				if (battery) this.#power.alarm(chat);
+				if (battery) this.#power.alarm(chat());
 				if (battery && !this.#warnedOnBattery) this.#emit({ type: "durable.notification", severity: "error", message: AFK_BATTERY_WARNING });
 				this.#warnedOnBattery = battery;
 			} catch {

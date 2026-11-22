@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
-import { ChatSession } from "../src/chat-session.ts";
+import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
 import { fakeAgentDir } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
@@ -464,9 +464,11 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 	const alarms: { id: string; label: string }[] = [];
 	const events: UiEvent[] = [];
 	let wake = () => {};
+	let title: string | undefined;
 	// Injected battery state and alarm: the test never sounds the real one.
 	const session = new ChatSession(h, (event) => (events.push(event), wake()), {
 		chatId: "chat-afk",
+		title: () => title,
 		power: { onBattery: async () => true, alarm: (chat) => (alarms.push(chat), wake()), everyMs: 10 },
 	});
 	const until = async (done: () => boolean, what: string) => {
@@ -485,7 +487,9 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 		assert.equal(alarms.length, 0, "AFK selected but no turn yet: quiet");
 		await session.prompt({ operationId: "op-1", text: "hello" });
 		await until(() => alarms.length >= 3 && runs() >= 1, "repeated alarm after an AFK turn on battery");
-		assert.deepEqual(alarms[0], { id: "chat-afk", label: "workspace" }, "the alarm names the Chat");
+		assert.deepEqual(alarms[0], { id: "chat-afk", label: "workspace" }, "an untitled Chat: the alarm names its folder");
+		title = "Battery Chat";
+		await until(() => alarms.at(-1)?.label === "Battery Chat (workspace)", "the alarm naming the Chat's title");
 		assert.equal(events.filter((e) => e.type === "durable.notification" && e.severity === "error").length, 1, "one notification per unplug");
 
 		await session.mode("attention default");
@@ -504,6 +508,18 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 	const closed = alarms.length;
 	await pause(150);
 	assert.equal(alarms.length, closed, "closing the host stops the alarm");
+});
+
+test("the AFK alarm's Chat title is PI WEB's name for the Chat in <data dir>/session-runtimes.json, else none", () => {
+	const data = scratch("chat-pi-web-data");
+	mkdirSync(join(data, "durable", "chat-t"), { recursive: true });
+	const store = join(data, "durable", "chat-t");
+	assert.equal(piWebChatTitle(store, "chat-t"), undefined, "no locator file");
+	writeFileSync(join(data, "session-runtimes.json"), JSON.stringify({ version: 1, chats: { "chat-t": { id: "chat-t", runtime: "durable", name: "Fix the alarm" }, "chat-u": { id: "chat-u", runtime: "durable" } } }));
+	assert.equal(piWebChatTitle(store, "chat-t"), "Fix the alarm");
+	assert.equal(piWebChatTitle(store, "chat-u"), undefined, "an untitled Chat");
+	writeFileSync(join(data, "session-runtimes.json"), "{ torn");
+	assert.equal(piWebChatTitle(store, "chat-t"), undefined, "an unreadable file");
 });
 
 test("crash row question: an open set survives a kill, a stale answer is refused, one answer is delivered once, a retried answer returns the same outcome", async () => {
