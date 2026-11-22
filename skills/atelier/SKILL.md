@@ -62,8 +62,8 @@ Update whenever the Page file changes. Drive it in a real browser before reporti
   `material`) holds for the version it was given on. On another version the Decision shows "Version 2" (3, …:
   versions numbered from the first answer, in the order the Event Log recorded them) with no option chosen and
   the answers on other versions beneath ("Version 1: Approve"), and is to answer again; back on the answered
-  version, that answer holds again. Other answered `ask`s stay answered: a question is not a judgement of the Key
-  it sits on.
+  version, that answer holds again. A Key without `atl-ver` counts as one version too: adding `atl-ver` later asks
+  again. Other answered `ask`s stay answered: a question is not a judgement of the Key it sits on.
 - `atl-decide="1|2|3|4|5"` or `"Confirm|Redo"` on a keyed element declares a Decision; its id is the
   Key address. Optional: `atl-rec="Confirm"` (recommended option), `atl-note="Redo"` (options that
   need a note), `atl-delivery="record|send|immediate"` (default immediate), `atl-material="key"`.

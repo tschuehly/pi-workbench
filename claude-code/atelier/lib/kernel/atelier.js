@@ -164,20 +164,22 @@ export function derive(entries, currentVer = () => null, declared = [], taskKeys
   // asks again as "Version N" (owner 2026-10-22: "the decision should reset or show version 2"). From the first answer
   // on, versions are numbered in the order events on the Key recorded them, then the one the Page shows now; an
   // Update records none, so a version no event saw gets no number. `history` keeps the last answer on each other
-  // version. An answer without a version, or on a Key not on the Page, stays as it is in round 1.
+  // version. An answer recorded with no version (ver null: the Key had no atl-ver yet) was given on an unnumbered
+  // version, so a Key that gains atl-ver asks again (#19). An answer whose event lacks ver (older Event Logs), or on a
+  // Key not on the Page, stays as it is in round 1.
   // state: "new" (never answered), "changed" (answered on another version), "done"; toAnswer is every one not done.
   const keyOfEvent = (e) => e.key ?? (e.type === "close" || e.type === "still" ? threads.get(rootOf(e.target))?.key : undefined);
   const rounds = (d, key) => {
     const now = key ? currentVer(key) : null;
     // A withdrawn question keeps its late answer on any version: nothing asks it again (2.14.2).
-    if ((!d.declared && !d.material) || d.retracted != null || d.answer === null || d.answer.ver == null || now == null) return { round: 1, history: [], current: true };
+    if ((!d.declared && !d.material) || d.retracted != null || d.answer === null || d.answer.ver === undefined || now == null) return { round: 1, history: [], current: true };
     // From the first answer on, in the log's order: answers kept in the browser have falling negative seqs.
     // Answers naming another ask are left out: a late one to a withdrawn ask with the same id is not its history;
     // one naming no ask (older Event Logs) counts here (2.14.2).
     const mine = (e) => e.type === "decide" && e.decision === d.id && (e.ask == null || e.ask === d.askSeq);
     const first = live.findIndex((e, i) => i > (d.askAt ?? -1) && mine(e)), vers = [], last = new Map();
     for (const e of live.slice(first)) {
-      if (e.ver == null || (!mine(e) && (e.decision === d.id || keyOfEvent(e) !== key))) continue;
+      if (e.ver === undefined || (!mine(e) && (e.decision === d.id || keyOfEvent(e) !== key))) continue;
       if (!vers.includes(e.ver)) vers.push(e.ver);
       if (mine(e)) last.set(e.ver, e);
     }

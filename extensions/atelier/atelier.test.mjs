@@ -255,6 +255,10 @@ test("a Page's Decision on a changed Key starts a new round: Version N, earlier 
   assert.deepEqual(round([...v2, decide(5, "Approve", "v1")], "v1"), ["done", 1, [{ round: 2, ver: "v2", answer: "Rework", custom: false, note: null }]], "content back on v1 is Version 1 again");
   // Before any answer, and in Event Logs whose answers carry no version, there is one round.
   assert.deepEqual(round([{ seq: 1, at: 0, origin: "human", type: "comment", key: "shot", ver: "v0", text: "x" }, decide(2, "Approve", undefined)], "v9"), ["done", 1, []]);
+  // #19: an answer given while the Key had no atl-ver (ver null) asks again once the Key gains one: Version 2.
+  assert.deepEqual(round([decide(1, "Other", null)], "2"), ["changed", 2, [{ round: 1, ver: null, answer: "Other", custom: false, note: null }]]);
+  assert.deepEqual(round([decide(1, "Other", null)], null), ["done", 1, []], "still no atl-ver: the answer holds");
+  assert.deepEqual(round([decide(1, "Other", null), decide(2, "Done", "2")], "2").slice(0, 2), ["done", 2]);
   const ask = [
     { seq: 1, at: 0, origin: "agent", type: "ask", decision: { id: "q", key: "shot", question: "?", options: [{ label: "A" }, { label: "B" }] } },
     { seq: 2, at: 0, origin: "human", type: "decide", decision: "q", option: "A", key: "shot", ver: "v1", delivery: "immediate" },
