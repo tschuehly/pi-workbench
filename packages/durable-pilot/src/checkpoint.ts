@@ -166,7 +166,7 @@ export function checkpointExtension(harness: () => Harness) {
 
 	const tool = defineTool({
 		name: "compact_and_continue",
-		description: "End the run at a completed phase, compact older context, and start the named next phase in this session. Call it alone as the final action, after saving and verifying work that must survive compaction, and only when the next phase is concrete and gains from a smaller context, never to avoid hard reasoning or unfinished work. Do not create a progress file for it, or call the generated notes a durable checkpoint or handoff.",
+		description: "End the run at a completed phase, compact older context, and start the named next phase in this session. Call it alone as the final action, after saving and verifying work that must survive compaction, and only when the next phase is concrete and gains from a smaller context, never to avoid hard reasoning or unfinished work. Do not create a progress file for it or call the generated notes authoritative, durable checkpoints, Continuation Artifacts, or cross-session handoffs.",
 		parameters: obj({
 			summaryFocus: str({ minLength: 1, description: `Short directive to the summarizer, not a handoff summary; at most ${MAX_SUMMARY_FOCUS_CHARS} characters; point to existing evidence paths instead of restating history` }),
 			nextPhase: str({ minLength: 1, description: `One concrete next phase to begin after compaction; at most ${MAX_NEXT_PHASE_CHARS} characters` }),

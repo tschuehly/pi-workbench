@@ -151,21 +151,27 @@ export type ChatHost = Host & {
 function codemodeExtension(sandbox: CodemodeSandbox, inlineBudget: number | undefined): Extension {
 	const extension = createCodemodeExtension({ sandbox, ...(inlineBudget === undefined ? {} : { inlineBudget }) });
 	const docs = join(getDocsPath(), "codemode.md");
-	if (!statSync(docs).isFile()) throw new Error(`Expected codemode documentation at ${docs}`);
+	let hasDocs = false;
+	try {
+		hasDocs = statSync(docs).isFile();
+	} catch {
+		// Keep the built-in help if the docs cannot be found.
+	}
 	const modelsBlock = /^`models` \(all functions return promises\):[\s\S]*?^At most 4 classify\/generateImages calls run at once; more wait\.$/m;
 	return {
 		...extension,
 		tools: extension.tools?.map((tool) => ({
 			...tool,
 			replay: "unsafe" as const,
-			...(tool.name === "codemode" ? { description: tool.description?.replace(modelsBlock, () => `- \`models\`: classifiers and image generation. Read ${docs} first.`) } : {}),
+			...(tool.name === "codemode" && hasDocs ? { description: tool.description?.replace(modelsBlock, () => `- \`models\`: classifiers and image generation. Read ${docs} first.`) } : {}),
 		})),
 	};
 }
 
 /** Pi's `codemode.inlineBudget` setting, read as the Pi CLI's codemode extension reads it; `undefined` keeps the library default. */
 export function codemodeInlineBudget(cwd: string, agentDir: string): number | undefined {
-	return SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getSettings().codemode?.inlineBudget;
+	const budget = SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getSettings().codemode?.inlineBudget;
+	return typeof budget === "number" && Number.isFinite(budget) && budget >= 0 ? budget : undefined;
 }
 
 /** pi-ai's per-API compat flags for adding tools mid-conversation without resending the transcript. */

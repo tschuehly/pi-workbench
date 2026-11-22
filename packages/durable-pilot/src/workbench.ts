@@ -284,7 +284,7 @@ const questionRef = (askId: string, questionId: string) => `${askId.slice(0, 3)}
 const refs = (ask: PendingAsk) => ask.questions.map((q) => questionRef(ask.askId, q.id)).join(", ");
 
 const OptionParams = obj({
-	value: str({ maxLength: ID_MAX, description: "Machine value reported back." }),
+	value: str({ maxLength: ID_MAX, description: "Stable machine value reported back." }),
 	label: str({ maxLength: TEXT_MAX, description: "Short label." }),
 	detail: opt(str({ maxLength: TEXT_MAX, description: "Its consequence." })),
 	recommended: opt(bool({ description: "Mark your recommendation." })),
@@ -294,7 +294,7 @@ const QuestionParams = obj({
 	question: str({ maxLength: TEXT_MAX, description: "One plain-text line; do not number it." }),
 	detail: str({ maxLength: DETAIL_MAX, description: "Markdown under the question: what the item is, an example, where it stands." }),
 	options: opt(arr(OptionParams, { maxItems: OPTION_LIMIT, description: "Omit for free text; a Custom choice is always added." })),
-	multiple: opt(bool({ description: "Allow several options." })),
+	multiple: opt(bool({ description: "Allow several options. Default: one answer per question." })),
 }, { open: true });
 const AskParams = obj({
 	context: opt(str({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown above the questions: what they all share." })),
@@ -303,9 +303,9 @@ const AskParams = obj({
 	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to drop. Send nothing else." })),
 }, { open: true });
 
-const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them, and do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
+const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them and end your turn if nothing does. Do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
 
-const ATTENTION_DESCRIPTION = "Mark this Chat as needing the user and return immediately. Use when you need them but have no decision to ask: finished work to review, a login or credential, a manual check, or being blocked. Decisions go to ask_user. Not for routine progress.";
+const ATTENTION_DESCRIPTION = "Mark this Chat as needing the user until they look, and return immediately. Use when you need them but have no decision to ask: finished work to review, a login or credential, a manual check, or being blocked. Decisions go to ask_user. Not for routine progress or after every turn.";
 
 /** Host-side events for PI WEB, emitted after the commit they describe. */
 export type WorkbenchSignal =

@@ -54,7 +54,7 @@ test("P062 codemode: offered to the lead by default; a script calls the Chat's t
 	}
 });
 
-test("lead tool descriptions and parameter docs are shorter than before the startup trim", async () => {
+test("lead tool descriptions and parameter docs keep the pre-trim rules in fewer characters", async (t) => {
 	const { store, cwd } = family("tool-texts");
 	const host = new ChatHost(store, cwd);
 	await host.ready;
@@ -65,12 +65,38 @@ test("lead tool descriptions and parameter docs are shorter than before the star
 	try {
 		const row = db.prepare("SELECT record FROM entries WHERE json_extract(record, '$.kind') = 'pi.system' ORDER BY id LIMIT 1").get()!;
 		const { toolsAdded } = JSON.parse(String(row.record)).model[0] as { toolsAdded: { name: string; description: string; parameters: object }[] };
-		const oldSizes = { ask_user: 3483, request_attention: 740, bash: 1733, compact_and_continue: 1386 };
-		for (const [name, size] of Object.entries(oldSizes)) {
-			const tool = toolsAdded.find((tool) => tool.name === name);
-			assert.ok(tool, `${name} is offered`);
-			assert.ok(JSON.stringify(tool).length < size, `${name} definition (including parameter docs) is shorter than ${size} characters`);
-			if (name === "ask_user") assert.match(JSON.stringify(tool.parameters), /"description":"Its consequence\."/, "option details must tell the user the consequence");
+		// Key phrases for the rules in the pre-trim descriptions and parameter help.
+		const rules = {
+			ask_user: {
+				size: 3483,
+				description: ["chips above the user's composer", "return immediately", "follow-up message that wakes you", "any question may stay unanswered", "Batch the decisions", "instead of asking in prose", "keep working on what does not depend on them", "end your turn if nothing does", "Do not poll or repost", "put all explanation into the set", "only say that questions were posted", "When the facts change", "update: <askId> (no other fields confirms the set)", "withdraw: <askId>"],
+				parameters: ["what they all share", "what the item is, an example, where it stands", "Its consequence.", "Mark your recommendation", "do not number it", "Stable machine value", "Default: one answer per question", "Custom choice is always added", "Send nothing else"],
+			},
+			request_attention: {
+				size: 740,
+				description: ["until they look", "return immediately", "finished work to review", "login or credential", "manual check", "being blocked", "Decisions go to ask_user", "routine progress or after every turn"],
+				parameters: ["One short line", "what you need from the user and why", "readable without the Chat"],
+			},
+			bash: {
+				size: 1733,
+				description: ["Background by default", "job ID at once", "delivers exit status and output in a new message", "never infer success from the job ID", "foreground=true for short commands", "up to 30 seconds", "continues in the background", "continue independent work or end the turn", "do not launch conflicting writes", "bash_status shows elapsed time and output size", "bash_cancel stops a job", "survive host restarts", "stop at their timeout or after 12 hours"],
+				parameters: ["Shown to the user instead of the command", "Timeout in seconds", "default false"],
+			},
+			compact_and_continue: {
+				size: 1386,
+				description: ["completed phase", "compact older context", "start the named next phase in this session", "alone as the final action", "after saving and verifying work", "next phase is concrete", "gains from a smaller context", "never to avoid hard reasoning or unfinished work", "Do not create a progress file", "authoritative", "durable checkpoints", "Continuation Artifacts", "cross-session handoffs"],
+				parameters: ["directive to the summarizer", "not a handoff summary", "at most 1200 characters", "existing evidence paths instead of restating history", "concrete next phase to begin after compaction"],
+			},
+		};
+		for (const [name, rule] of Object.entries(rules)) {
+			await t.test(name, () => {
+				const tool = toolsAdded.find((tool) => tool.name === name);
+				assert.ok(tool, `${name} is offered`);
+				assert.ok(JSON.stringify(tool).length < rule.size, `${name} definition (including parameter docs) is shorter than ${rule.size} characters`);
+				const parameters = JSON.stringify(tool.parameters);
+				const missing = [...rule.description.filter((phrase) => !tool.description.includes(phrase)), ...rule.parameters.filter((phrase) => !parameters.includes(phrase))];
+				assert.deepEqual(missing, [], `Missing ${name} rules`);
+			});
 		}
 	} finally {
 		db.close();
@@ -87,6 +113,26 @@ test("P062 codemode points to the installed models docs instead of spelling out 
 		const pointer = /^- `models`: classifiers and image generation\. Read (.+) first\.$/m.exec(tool.description)?.[1];
 		assert.ok(pointer && isAbsolute(pointer) && pointer.endsWith("/docs/codemode.md"), "the description points to absolute codemode docs");
 		assert.ok(statSync(pointer).isFile(), "the installed docs exist");
+	} finally {
+		await host.close();
+	}
+});
+
+test("P062 codemode keeps the upstream models help when the installed docs are missing", async (t) => {
+	const { store, cwd } = family("codemode-missing-docs");
+	const packageDir = process.env.PI_PACKAGE_DIR;
+	process.env.PI_PACKAGE_DIR = cwd;
+	t.after(() => {
+		if (packageDir === undefined) delete process.env.PI_PACKAGE_DIR;
+		else process.env.PI_PACKAGE_DIR = packageDir;
+	});
+	const host = await openChatHost({ dir: store, cwd, model: "faux" });
+	try {
+		const tool = (await host.root.agent(context)).tools.find((tool) => tool.name === "codemode");
+		assert.ok(tool?.description);
+		assert.match(tool.description, /models\.classify\(/);
+		assert.doesNotMatch(tool.description, /Read .*codemode\.md first\./);
+		assert.equal(host.registry.snapshot().tools().find(({ tool }) => tool.name === "codemode")?.tool.replay, "unsafe");
 	} finally {
 		await host.close();
 	}

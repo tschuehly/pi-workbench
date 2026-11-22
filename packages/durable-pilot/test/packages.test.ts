@@ -445,13 +445,54 @@ test("without --packages no package code runs: tools and commands stay unavailab
 	assert.ok(!existsSync(f.pingLog));
 });
 
-test("the codemode section's inline budget comes from Pi's settings, as in the Pi CLI (0: no tool declarations inline)", () => {
+test("the codemode inline budget accepts only finite nonnegative numbers, as in the Pi CLI", async (t) => {
 	const root = scratch("codemode-budget");
 	const agentDir = join(root, "agent");
 	mkdirSync(agentDir, { recursive: true });
 	assert.equal(codemodeInlineBudget(root, agentDir), undefined, "no setting: the library default");
-	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ codemode: { inlineBudget: 0 } }));
-	assert.equal(codemodeInlineBudget(root, agentDir), 0);
+	for (const [json, expected] of [["-5", undefined], ['"abc"', undefined], ['"0"', undefined], ["null", undefined], ["1e999", undefined], ["0", 0], ["42", 42]] as const) {
+		await t.test(`inlineBudget: ${json}`, () => {
+			writeFileSync(join(agentDir, "settings.json"), `{"codemode":{"inlineBudget":${json}}}`);
+			assert.equal(codemodeInlineBudget(root, agentDir), expected);
+		});
+	}
+});
+
+test("the Chat host renders zero inline tool declarations only with packages enabled and a writable store", async (t) => {
+	const f = family("codemode-host-budget");
+	const agentDir = f.env.PI_CODING_AGENT_DIR;
+	const settings = join(agentDir, "settings.json");
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	t.after(() => {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+	});
+	const chat = { dir: f.store, cwd: f.cwd, model: "faux" };
+	const packages = { agentDir };
+	const section = async (options: Parameters<typeof openChatHost>[0]) => {
+		const host = await openChatHost(options);
+		try {
+			const agent = await host.root.agent(context);
+			const codemode = agent.sections.find(({ key }) => key === "codemode");
+			assert.ok(codemode);
+			const text = await codemode.render({ conversationId: host.root.id, agent, env: undefined, shown: {}, read: host.harness }, context);
+			assert.ok(text, "the codemode section is present");
+			return text;
+		} finally {
+			await host.packages?.close();
+			await host.close();
+		}
+	};
+	writeFileSync(settings, JSON.stringify({ packages: [] }));
+	const defaultSection = await section({ ...chat, packages });
+	assert.match(defaultSection, /^### `/m, "the default inlines tool declarations");
+	writeFileSync(settings, JSON.stringify({ packages: [], codemode: { inlineBudget: 0 } }));
+	const zeroSection = await section({ ...chat, packages });
+	assert.doesNotMatch(zeroSection, /^### `/m, "a zero budget omits all inline tool declarations");
+	assert.match(zeroSection, /find them with `searchTools\(\)`/);
+	assert.equal(await section(chat), defaultSection, "without packages the host ignores the setting");
+	assert.equal(await section({ ...chat, packages, readOnly: true }), defaultSection, "a read-only host ignores the setting");
 });
 
 test("every tool a Durable Chat registers is behind the redacting wrapper: delegation, checkpoint, tool groups, Atelier, bash, Workbench and package tools, and a later install", async () => {
