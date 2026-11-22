@@ -7,7 +7,8 @@
      - if the Page has <nav data-att-outline></nav>: numbers the question sections (1, 1.1, 2.1.1), indents each follow-up
        (a section with data-follows="<parent atl-key>", placed after its parent) under its parent with a coloured left border,
        a connector and a "Level 2 · Follow-up to 1" caption, and fills the nav with a live outline and a one-line colour key.
-       <nav data-att-outline atl-key="outline"> also gets a "Comment on this list" button.
+       <nav data-att-outline atl-key="outline"> also gets a "Comment on this list" button and "Comment on several…":
+       tick sections (in the list or at their titles), then one Comment on the list starts "About 2 Which town?, 3 Your plan: ".
        Put the nav and the sections in <div class="att-layout"> so the outline sits on the left. -->
 <style>
   .att-t::before { content:attr(data-t); }
@@ -100,6 +101,17 @@
   [atl-ui=panel] .atl-h-un h4::after { content:" · show"; font-weight:400; color:var(--muted, #6b665e); }
   html.att-show-gone [atl-ui=panel] .atl-h-un h4::after { content:" · hide"; }
   .att-titem .att-tnew { float:right; width:8px; height:8px; margin-top:5px; border-radius:50%; background:#0969da; }
+  /* "Comment on several…": tick sections, then one Comment names them all */
+  .att-pick { width:18px; height:18px; margin:0 6px 0 0; vertical-align:-3px; flex:none; cursor:pointer; accent-color:var(--accent, #b4552d); }
+  .att-pickbar { position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom, 0px)); transform:translateX(-50%); z-index:2147482500; display:flex; align-items:center; gap:8px;
+                 max-width:calc(100vw - 24px); padding:6px 6px 6px 16px; border-radius:999px; background:var(--fg, #1f1d1a); color:#fff;
+                 box-shadow:0 6px 20px rgba(0,0,0,.25); font-size:14px; white-space:nowrap; }
+  .att-pickbar button { font:inherit; border:0; border-radius:999px; padding:7px 14px; cursor:pointer; }
+  .att-pickbar .att-go { background:var(--accent, #b4552d); color:#fff; }
+  .att-pickbar .att-go:disabled { opacity:.5; cursor:default; }
+  .att-pickbar .att-x { background:none; color:#fff; }
+  .att-hidden [data-att-outline] > .att-pickbar { display:flex; }
+  html:has(form[atl-ui=composer]) .att-pickbar { visibility:hidden; } /* the Comment box takes its place while open */
   .att-cap { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted, #6b665e); margin-bottom:2px; }
 </style>
 <script>
@@ -112,6 +124,8 @@
   const hideKey = "att-list-hidden:" + location.pathname;
   const save = () => sessionStorage.setItem(store, JSON.stringify([...opened]));
   let last = null;
+  let picking = false, multi = false; // "Comment on several…": ticking sections; a Comment on them is open
+  const picked = new Set(), nums = new Map(); // ticked section keys; key -> outline number
 
   const addr = el => { const p = []; for (let e = el; e; e = e.parentElement?.closest("[atl-key]")) p.unshift(e.getAttribute("atl-key")); return p.join("/"); };
   const sections = () => [...document.querySelectorAll("[atl-key]")].filter(el => !el.parentElement.closest("[atl-key]") && el.querySelector(":scope > h2"));
@@ -157,9 +171,33 @@
     if (clear().length && s.classList.contains("att-folded")) { opened.add(key); save(); apply(); setTimeout(clear, 150); }
   }
 
+  function pickBox(key) {
+    const b = make("input", "", "att-pick"); b.type = "checkbox"; b.dataset.key = key; b.checked = picked.has(key);
+    b.setAttribute("aria-label", "Select " + title(key));
+    b.onchange = () => { b.checked ? picked.add(key) : picked.delete(key); syncPick(); };
+    return b;
+  }
+  function syncPick() {
+    for (const b of document.querySelectorAll(".att-pick")) b.checked = picked.has(b.dataset.key);
+    const n = document.querySelector(".att-pickn"), go = document.querySelector(".att-pickbar .att-go");
+    if (n && n.dataset.t !== `${picked.size} selected`) n.dataset.t = `${picked.size} selected`;
+    if (go) go.disabled = !picked.size;
+  }
+  // The Kernel's Comment box opens on the list; its text starts with the ticked sections, so the agent knows them all.
+  // shortcut: fills the Kernel's Comment box, which is not a public API; recheck after a Kernel update.
+  function prefill() {
+    const ta = document.querySelector("form[atl-ui=composer] textarea");
+    if (!ta || ta.value) return;
+    const keys = sections().map(addr).filter(k => picked.has(k));
+    ta.value = `About ${keys.map(k => (nums.has(k) ? nums.get(k) + " " : "") + title(k)).join(", ")}: `;
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+  const stopPicking = () => { picking = multi = false; picked.clear(); apply(); };
+
   function tree() {
     const nav = document.querySelector("[data-att-outline]");
     if (!nav) return;
+    nums.clear();
     const info = new Map(); let top = 0;
     for (const s of sections().filter(isQ)) {
       // a follow-up waits, hidden, until I've answered the question it follows (one I already answered stays)
@@ -195,10 +233,31 @@
     if (nav.hasAttribute("atl-key") && !nav.querySelector("[atl-comment]")) {
       const b = tag("button", "Comment on this list", "att-link att-comment"); b.setAttribute("atl-comment", ""); nav.querySelector(":scope > h2").after(b); // at the top: the list below may scroll
     }
+    if (nav.hasAttribute("atl-key")) {
+      let sel = nav.querySelector(".att-several");
+      if (!sel) {
+        sel = tag("button", "", "att-link att-comment att-several"); nav.querySelector("[atl-comment]").after(sel);
+        sel.onclick = () => picking ? stopPicking() : (picking = true, apply());
+      }
+      const t = picking ? "Stop selecting" : "Comment on several…";
+      if (sel.dataset.t !== t) { sel.dataset.t = t; sel.setAttribute("aria-label", t); }
+      // the bar sits inside the list (the Key its Comment goes on) but floats at the bottom of the window
+      let bar = nav.querySelector(":scope > .att-pickbar");
+      if (picking && !bar) {
+        bar = make("div", "", "att-pickbar"); bar.setAttribute("role", "toolbar"); bar.setAttribute("aria-label", "Comment on several");
+        const go = tag("button", "Comment on these", "att-go"), x = tag("button", "Cancel", "att-x");
+        go.type = x.type = "button"; go.setAttribute("atl-comment", "");
+        go.addEventListener("click", () => { multi = true; setTimeout(prefill); });
+        x.onclick = stopPicking;
+        bar.append(tag("span", "", "att-pickn"), go, x); nav.append(bar);
+      } else if (!picking) bar?.remove();
+    }
     const list = nav.querySelector(".att-list"); list.replaceChildren();
     let done = 0;
     for (const [s, { n, lvl }] of info) {
       const li = make("li", "", "att-item att-l" + lvl), a = make("a");
+      nums.set(addr(s), n);
+      if (picking) li.append(pickBox(addr(s)));
       a.href = "#" + s.id;
       a.onclick = () => seenUnder(s);
       a.append(tag("span", n, "n"), tag("span", s.querySelector(":scope > h2").textContent.trim(), ""));
@@ -254,7 +313,10 @@
     if (chip && !passing) { e.preventDefault(); e.stopImmediatePropagation(); return group ? closeGroup() : openGroup(chip); }
     if (group && !group.contains(e.target)) closeGroup();
     if (e.target.closest?.("[atl-ui=panel] .atl-h-un h4")) document.documentElement.classList.toggle("att-show-gone");
+    if (e.target.closest?.("form[atl-ui=composer] [data-atl=dismiss]")) multi = false;
   }, true);
+  // a Comment on the ticked sections was saved: untick them all
+  document.addEventListener("submit", e => { if (multi && e.target.matches?.("form[atl-ui=composer]")) setTimeout(stopPicking, 500); }, true);
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeGroup(); });
   addEventListener("scroll", closeGroup, { passive: true });
   // the Kernel redraws its chips on its own (hover, focus); re-mark them each time
@@ -266,12 +328,13 @@
   function apply() {
     if (!last) return;
     for (const s of sections()) {
-      s.querySelectorAll(":scope > .att-line, :scope > .att-cap, :scope > h2 > .att-pill, :scope > h2 > .att-link").forEach(e => e.remove());
+      s.querySelectorAll(":scope > .att-line, :scope > .att-cap, :scope > h2 > .att-pill, :scope > h2 > .att-link, :scope > h2 > .att-pick").forEach(e => e.remove());
       s.classList.remove("att-folded", "att-node", "att-l1", "att-l2", "att-l3", "att-wait");
     }
     tree(); // reads the clean titles, so it runs before the pills go in
     for (const s of sections()) {
       const key = addr(s), h = s.querySelector(":scope > h2");
+      if (picking && !s.matches("[data-att-outline]")) h.prepend(pickBox(key)); // the list itself has 'Comment on this list'
       if (!isQ(s)) continue; // no Decisions: reference, no pill
       const done = isDone(s);
       h.append(tag("span", done ? "Done" : "Needs you", "att-pill" + (done ? "" : " needs")));
@@ -286,6 +349,7 @@
       s.append(line(key));
       s.classList.add("att-folded");
     }
+    syncPick();
     drawBar();
   }
 

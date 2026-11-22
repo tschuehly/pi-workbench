@@ -80,6 +80,10 @@ Every Page shows at a glance what still needs me and what is done. Nothing moves
      that opens a small list of them (first words, replies, a blue dot for new replies), and picking one opens
      that thread right there. Closed comments on a removed section fold to one line in the corner box
      ("Unanchored (N) · show");
+   - "Comment on several…" under the list heading lets me tick several sections (in the list or at their titles)
+     and write one Comment about all of them. It arrives as a Comment on `outline` whose text starts
+     "About 2 Which town?, 3 Your plan: " (outline numbers and titles). Treat it as about each named section: change
+     each one it asks for, and answer once in that thread, naming what changed where;
    - "‹ Hide" folds the list to a thin "Questions ›" strip on the left (a bar on a phone); the Page remembers it;
    - the outline stays in view while I scroll, beside the questions, down to phone width, where it moves on top;
    - of the Kernel's change marks only the blue one shows: no green "new" marks and no dots on the right edge.
