@@ -76,8 +76,10 @@ _Avoid_: owner, holder
 **Takeover**:
 Moving the Receiver to another session of the same process, checked against the receiver generation the caller
 was shown, once the earlier Receiver is idle. The Page's URL, open tabs and undo windows stay; the earlier Receiver
-is fenced off, and both learn the unfinished Requests. A session in another process, or one running an older
-Atelier, must be closed or reloaded instead.
+is fenced off, and both learn the unfinished Requests. A Receiver in another Durable Chat (its own host process)
+is taken over by asking that Chat to release the Page: it checks it still receives it at that generation, then closes
+its host in order (background jobs keep running); the Page is then served here under a new URL. Any other session in another
+process, or one running an older Atelier, must be closed or reloaded instead.
 _Avoid_: steal, claim, reassign
 
 ## Registry

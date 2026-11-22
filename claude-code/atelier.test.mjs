@@ -36,7 +36,11 @@ before(async () => {
   daemon.stdout.on("data", (c) => { buf += c; const parts = buf.split("\n"); buf = parts.pop(); lines.push(...parts); });
   await waitFor(() => lines.length > 0);
 });
-after(() => { daemon?.kill("SIGTERM"); rmSync(dir, { recursive: true, force: true }); });
+// Wait for the daemon's exit: its stop still writes the released lock beside the Page.
+after(async () => {
+  if (daemon && daemon.exitCode === null && daemon.signalCode === null) { const exited = new Promise((resolve) => daemon.once("exit", resolve)); daemon.kill("SIGTERM"); await exited; }
+  rmSync(dir, { recursive: true, force: true });
+});
 
 test("daemon + CLI round trip: open, ask, a human decide printed as one line, answer, status, update", async () => {
   assert.match(lines[0], /^\[atelier\] Ready for session test-session\. .*atelier\.mjs/);

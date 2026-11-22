@@ -13,7 +13,7 @@ import { DESCRIPTION } from "./description.mjs";
 
 // Atelier extension (decisions 129-156): the `atelier` tool, and Delivery of human events from a Page's Event Log
 // into this Pi session through the page server in host.ts. The Page side lives in kernel/atelier.js.
-export { KERNEL_FILES, appendLog, claimPage, copyKernel, createHost, dueMessages, imagesDir, inside, logPath, readLog } from "./host.ts";
+export { KERNEL_FILES, appendLog, claimPage, claimSteps, copyKernel, createHost, dueMessages, imagesDir, inside, logPath, readLog } from "./host.ts";
 
 
 export default function atelierExtension(pi: ExtensionAPI) {
@@ -117,7 +117,8 @@ export default function atelierExtension(pi: ExtensionAPI) {
           : outcome === "symlink" ? [`${file} beside the Page is a symlink and was left alone.`] : []);
         return checked([
           `Page open: ${opened.url}`,
-          params.action === "takeover" ? `Its human input now goes to this session (generation ${opened.generation}), handed over within this process, so the link and open tabs stay.` : "Link it in the Chat.",
+          params.action === "takeover" && opened.ended !== undefined ? `Its human input now goes to this session (generation ${opened.generation}): the Durable Chat that held it was stopped (pid ${opened.ended}; it reopens when the human returns to it), so its old link no longer works. Link this one in the Chat.`
+          : params.action === "takeover" ? `Its human input now goes to this session (generation ${opened.generation}), handed over within this process, so the link and open tabs stay.` : "Link it in the Chat.",
           ...(opened.unfinished.length ? ["Unfinished, left by the earlier receiver; check their state before repeating work:", ...opened.unfinished.map((u) => `- ${u}`)] : []),
           ...notes,
           opened.replayed ? `${opened.replayed} message(s) of undelivered human events from an earlier session follow.` : "",

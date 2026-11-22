@@ -256,6 +256,34 @@ test("survival: a kill after admitting one event, with a second falling due whil
 	await second.close();
 });
 
+test("a second Chat takes over a Page another Chat's host receives at the generation shown: that host shuts down in order, and human input reaches the new receiver", async () => {
+	const shared = join(ROOT, "takeover", "workspace");
+	const a = family("takeover-a", shared);
+	const b = { store: join(ROOT, "takeover-b", "family") };
+	const first = new ChatHost(a.store, shared, { args: ["--session-id", "chat-takeover-a"] });
+	await first.ready;
+	await open(first, 1);
+	await first.idle(2);
+	const second = new ChatHost(b.store, shared, { args: ["--session-id", "chat-takeover-b"] });
+	await second.ready;
+	await enable(second);
+	await second.call("prompt", { operationId: "open-1", text: call({ action: "open", page: "page.html" }) });
+	assert.match(String((await toolEnd(second, 1)).text), /a Durable Chat in another process[\s\S]*action takeover and generation 1/);
+	await second.call("prompt", { operationId: "takeover-0", text: call({ action: "takeover", page: "page.html", generation: 0 }) });
+	assert.match(String((await toolEnd(second, 2)).text), /changed since generation 0/, "another generation is refused");
+	await second.call("prompt", { operationId: "takeover-1", text: call({ action: "takeover", page: "page.html", generation: 1 }) });
+	const taken = await toolEnd(second, 3);
+	assert.equal(taken.isError, false, String(taken.text));
+	assert.match(String(taken.text), /Durable Chat that held it was stopped/);
+	assert.equal(await first.exited, 0, "the old host's orderly shutdown");
+	assert.equal((taken.details as { generation?: number }).generation, 2);
+	const url = pageUrl(taken.text);
+	await second.idle(4);
+	assert.equal((await post(url, { type: "comment", key: "a", text: "after takeover" })).status, 200);
+	await second.until(() => atelierRequests(b.store) === 1, "delivery to the new receiver");
+	await second.close();
+});
+
 test("survival: a kill after the receipt delivers nothing again", async () => {
 	const { store, cwd } = family("kill-received");
 	const first = new ChatHost(store, cwd, { env: { PI_DURABLE_CRASH_AT: "atelier.received" } });
@@ -288,7 +316,7 @@ test("survival: a second Chat cannot open or take over a Page a live Chat receiv
 	await second.call("prompt", { operationId: "open-1", text: call({ action: "open", page: "page.html" }) });
 	assert.match(String((await toolEnd(second, 1)).text), /held by session .* in another process/);
 	await second.call("prompt", { operationId: "takeover-1", text: call({ action: "takeover", page: "page.html", generation: 1 }) });
-	assert.match(String((await toolEnd(second, 2)).text), /in another process/, "no takeover across processes, whatever the generation");
+	assert.match(String((await toolEnd(second, 2)).text), /in another process/, "no takeover from a host without --session-id (not a PI WEB Chat), whatever the generation");
 	await first.kill();
 	await second.call("prompt", { operationId: "open-2", text: call({ action: "open", page: "page.html" }) });
 	const reopened = await toolEnd(second, 3);

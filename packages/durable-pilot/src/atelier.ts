@@ -7,8 +7,9 @@
 // - kill after admission, before the Event Log records it: the replay finds each event's admitted submission and only
 //   records it, even when the kernel batches it with events that fell due while the host was down (those are batched anew);
 // - kill after the receipt: nothing is due.
-// Receiver takeover stays the kernel's: generation-checked, inside one process. A Durable Chat host is its own process,
-// so another Chat's live receiver refuses an open or takeover here with the kernel's "another process" reason.
+// Receiver takeover stays the kernel's: generation-checked. A Durable Chat host is its own process, so a takeover from
+// another Chat's live receiver asks that Chat (over its page server) to release the Page; it checks it still holds it at
+// that generation, then closes its host in order (`release`), and the Page is served here anew.
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
@@ -41,7 +42,7 @@ export const AtelierDoc = defineDoc<{ pages: string[]; port?: number; admitting?
 
 type Entry = { seq: number; op?: string; [field: string]: unknown };
 type Message = { customType: string; content: string; display: true; details: { page: string; seqs: number[]; replay: boolean; generation?: number } };
-type Opened = { url: string; kernel: { file: string; outcome: string }[]; replayed: number; generation: number; unfinished: string[] };
+type Opened = { url: string; kernel: { file: string; outcome: string }[]; replayed: number; generation: number; unfinished: string[]; /** takeover: the pid of the Durable Chat host it stopped */ ended?: number };
 /** The part of extensions/atelier/host.ts `createHost` this binding uses. */
 type PageHost = {
 	readonly root: string;
@@ -58,7 +59,7 @@ type PageHost = {
 	stop(): void;
 };
 type Kernel = {
-	createHost(options: { root: string; sessionId: string; label: string; send: (message: Message, done: (idle: boolean) => void, failed: () => void) => void; handoff: (message: Message) => void; idle: () => boolean; port?: number }): PageHost;
+	createHost(options: { root: string; sessionId: string; label: string; send: (message: Message, done: (idle: boolean) => void, failed: () => void) => void; handoff: (message: Message) => void; idle: () => boolean; port?: number; release?: () => string | undefined }): PageHost;
 	readLog(page: string): Entry[];
 };
 type Check = { checkPage(page: string, options: { root: string; source?: Buffer; signal?: AbortSignal; tmp?: string }): Promise<unknown>; formatCheck(check: unknown): string };
@@ -70,7 +71,7 @@ const { checkPage, formatCheck } = (await import(new URL("../../../extensions/at
 const text = (value: string) => [{ type: "text" as const, text: value }];
 const pageHash = (page: string) => createHash("sha256").update(page).digest("hex").slice(0, 16);
 export const ATELIER_STATUS = "pi-workbench:atelier";
-export type AtelierOptions = { readonly chatId: string; readonly cwd: string; readonly rootId: () => ConversationId | undefined };
+export type AtelierOptions = { readonly chatId: string; readonly cwd: string; readonly rootId: () => ConversationId | undefined; readonly release?: () => string | undefined };
 
 export class Atelier {
 	readonly #options: AtelierOptions;
@@ -101,6 +102,7 @@ export class Atelier {
 			// The only session of this process: no takeover from here waits for it.
 			idle: () => true,
 			...(port === undefined ? {} : { port }),
+			...(this.#options.release ? { release: this.#options.release } : {}),
 		});
 		return this.#host;
 	}
@@ -260,7 +262,8 @@ export class Atelier {
 						: outcome === "symlink" ? [`${file} beside the Page is a symlink and was left alone.`] : []);
 					return checked([
 						`Page open: ${opened.url}`,
-						params.action === "takeover" ? `Its human input now goes to this session (generation ${opened.generation}), handed over within this process, so the link and open tabs stay.` : "Link it in the Chat.",
+						params.action === "takeover" && opened.ended !== undefined ? `Its human input now goes to this session (generation ${opened.generation}): the Durable Chat that held it was stopped (pid ${opened.ended}; it reopens when the human returns to it), so its old link no longer works. Link this one in the Chat.`
+						: params.action === "takeover" ? `Its human input now goes to this session (generation ${opened.generation}), handed over within this process, so the link and open tabs stay.` : "Link it in the Chat.",
 						...(opened.unfinished.length ? ["Unfinished, left by the earlier receiver; check their state before repeating work:", ...opened.unfinished.map((u: string) => `- ${u}`)] : []),
 						...notes,
 						opened.replayed ? `${opened.replayed} message(s) of undelivered human events from an earlier session follow.` : "",
