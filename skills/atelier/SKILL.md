@@ -189,6 +189,9 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
   pinch-to-zoom, not a new tab. Portrait shots fit one row of cards; wide shots get at most two per row;
   for a small change, crop to the changed region and keep the full shot behind the modal. Highlights come
   from the changed element's measured bounds, or are left out; a wrong mark is worse than none.
+- **Dark/light switch on every Page.** A button in the header toggles `data-theme="dark|light"` on `<html>`;
+  dark by default unless `prefers-color-scheme: light`, the choice kept in `localStorage`, re-applied on
+  `atelier:update`. Each theme sets `color-scheme` and the `--atl-*` colours, so Kernel controls follow.
 - **A builder needs real content and direction.** A brief says what the Page is for, what Thomas must see or
   decide, and supplies the real content; a thin brief gets padded with text. It quotes Thomas, adds no design
   constraint he did not give, and lets the builder run `serve.mjs`.
