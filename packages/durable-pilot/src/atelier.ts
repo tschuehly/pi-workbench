@@ -7,8 +7,8 @@
 // - kill after admission, before the Event Log records it: the replay finds each event's admitted submission and only
 //   records it, even when the kernel batches it with events that fell due while the host was down (those are batched anew);
 // - kill after the receipt: nothing is due.
-// Receiver takeover stays the kernel's: generation-checked, inside one process. A Durable Chat host is its own process,
-// so another Chat's live receiver refuses an open or takeover here with the kernel's "another process" reason.
+// Receiver takeover stays the kernel's: generation-checked. A Durable Chat host is its own process, so a takeover from
+// another Chat's live receiver stops that Chat's host (SIGTERM, its orderly shutdown) and serves the Page here anew.
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
@@ -41,7 +41,7 @@ export const AtelierDoc = defineDoc<{ pages: string[]; port?: number; admitting?
 
 type Entry = { seq: number; op?: string; [field: string]: unknown };
 type Message = { customType: string; content: string; display: true; details: { page: string; seqs: number[]; replay: boolean; generation?: number } };
-type Opened = { url: string; kernel: { file: string; outcome: string }[]; replayed: number; generation: number; unfinished: string[] };
+type Opened = { url: string; kernel: { file: string; outcome: string }[]; replayed: number; generation: number; unfinished: string[]; /** takeover: the pid of the Durable Chat host it stopped */ ended?: number };
 /** The part of extensions/atelier/host.ts `createHost` this binding uses. */
 type PageHost = {
 	readonly root: string;
@@ -260,7 +260,8 @@ export class Atelier {
 						: outcome === "symlink" ? [`${file} beside the Page is a symlink and was left alone.`] : []);
 					return checked([
 						`Page open: ${opened.url}`,
-						params.action === "takeover" ? `Its human input now goes to this session (generation ${opened.generation}), handed over within this process, so the link and open tabs stay.` : "Link it in the Chat.",
+						params.action === "takeover" && opened.ended !== undefined ? `Its human input now goes to this session (generation ${opened.generation}): the Durable Chat that held it was stopped (pid ${opened.ended}; it reopens when the human returns to it), so its old link no longer works. Link this one in the Chat.`
+						: params.action === "takeover" ? `Its human input now goes to this session (generation ${opened.generation}), handed over within this process, so the link and open tabs stay.` : "Link it in the Chat.",
 						...(opened.unfinished.length ? ["Unfinished, left by the earlier receiver; check their state before repeating work:", ...opened.unfinished.map((u: string) => `- ${u}`)] : []),
 						...notes,
 						opened.replayed ? `${opened.replayed} message(s) of undelivered human events from an earlier session follow.` : "",

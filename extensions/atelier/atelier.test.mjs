@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import fs from "node:fs";
@@ -1121,6 +1121,55 @@ test("receiver: a lock from an ended session of this process is stale; another p
     assert.equal(readFileSync(file, "utf8"), far, "its lock is untouched");
     assert.deepEqual(readdirSync(p.root).filter((f) => f.endsWith(".claim")), [], "no claim file");
   } finally { a.host.stop(); b.host.stop(); c.host.stop(); p.done(); }
+});
+
+// A stand-in Durable Chat host: a process whose command line is chat-host-main.ts with its --session-id, ending on SIGTERM.
+async function fakeHost(dir, args) {
+  const main = path.join(dir, "chat-host-main.ts");
+  writeFileSync(main, `process.on("SIGTERM", () => setTimeout(() => process.exit(0), 100)); setInterval(() => {}, 1000); console.log("ready");`);
+  const child = spawn(process.execPath, [main, ...args], { stdio: ["ignore", "pipe", "ignore"] });
+  await new Promise((resolve) => child.stdout.once("data", resolve));
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  return { pid: child.pid, exited, kill: () => child.kill("SIGKILL") };
+}
+
+test("receiver: a Page another Durable Chat's host receives is taken over by stopping that host, only at the generation shown", async () => {
+  const p = project();
+  const { page, make, lock } = sessions(p);
+  const file = `${page}.events.jsonl.lock`;
+  const far = await fakeHost(p.root, ["--store", p.root, "--session-id", "chat-far", "--packages"]);
+  const c = make("c");
+  try {
+    writeFileSync(file, JSON.stringify({ pid: far.pid, session: "chat-far", label: "Chat far", generation: 5 }));
+    await assert.rejects(c.host.open(page), /Chat far, a Durable Chat in another process[\s\S]*action takeover and generation 5/, "open offers the takeover");
+    await assert.rejects(c.host.takeover(page, 4), /changed since generation 4[\s\S]*generation 5/, "another generation is refused");
+    assert.equal(lock().pid, far.pid, "its lock is untouched");
+    const taken = await c.host.takeover(page, 5);
+    assert.equal(await far.exited, 0, "the host ran its orderly shutdown");
+    assert.equal(taken.ended, far.pid);
+    assert.equal(taken.generation, 6);
+    assert.deepEqual(lock(), { pid: process.pid, session: "c", generation: 6, label: "Chat c" });
+    assert.match(taken.url, /^http:\/\/127\.0\.0\.1:\d+\/page\.html$/);
+  } finally { far.kill(); c.host.stop(); p.done(); }
+});
+
+test("receiver: a holder process that is not a Durable Chat host for the lock's session is never stopped", async () => {
+  const p = project();
+  const { page, make } = sessions(p);
+  const file = `${page}.events.jsonl.lock`;
+  const plain = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const other = await fakeHost(p.root, ["--store", p.root, "--session-id", "chat-other"]);
+  const c = make("c");
+  try {
+    for (const [pid, session] of [[plain.pid, "chat-far"], [other.pid, "chat-far"]]) {
+      const held = JSON.stringify({ pid, session, label: "Chat far", generation: 5 });
+      writeFileSync(file, held);
+      await assert.rejects(c.host.open(page), /held by session Chat far in another process[\s\S]*close or \/reload it first/);
+      await assert.rejects(c.host.takeover(page, 5), /held by session Chat far in another process[\s\S]*close or \/reload it first/);
+      assert.equal(readFileSync(file, "utf8"), held, "its lock is untouched");
+      assert.doesNotThrow(() => process.kill(pid, 0), "its process still runs");
+    }
+  } finally { plain.kill("SIGKILL"); other.kill(); c.host.stop(); p.done(); }
 });
 
 test("receiver: a live receiver of an older Atelier (lock without generation) is never fenced; close or /reload it first (review 1)", async () => {

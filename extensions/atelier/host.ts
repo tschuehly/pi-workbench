@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, constants, createReadStream, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -19,6 +20,8 @@ export const KERNEL_VERSION = "2.16.0";
 export const WATCHDOG_MS = 15_000;
 // How long a takeover waits for the receiving session to finish its run before it refuses.
 export const QUIESCE_MS = 10_000;
+// How long a takeover from another Durable Chat waits for that Chat's host process to exit after SIGTERM.
+export const END_HOST_MS = 10_000;
 // A Decision's answer, a Comment or a reply may name up to four images, each uploaded on its own (POST /.atelier/image) before the answer
 // posts, so an event body stays small.
 export const IMAGE_MAX = 10 * 1024 * 1024;
@@ -74,8 +77,8 @@ const alive = (pid: unknown) => { try { process.kill(Number(pid), 0); return tru
 
 /**
  * The receiver lock `<page>.events.jsonl.lock`, present while a session receives the Page: its process, session and
- * receiver generation. It keeps other processes out; moving the receiver between sessions happens only inside one
- * process (PI WEB's sessiond), through REG.
+ * receiver generation. It keeps other processes out; moving the receiver between sessions happens inside one
+ * process (PI WEB's sessiond), through REG, or from a Durable Chat host by ending that process (takeover).
  */
 type Lock = { pid?: number; session?: string; generation?: number; label?: string };
 function readLock(page: string): Lock {
@@ -86,6 +89,28 @@ function readLock(page: string): Lock {
 }
 const named = (lock: Lock) => lock.label ?? lock.session ?? "no session";
 
+/**
+ * Whether the lock's process is a Durable Chat host (packages/durable-pilot chat-host-main.ts) for exactly the lock's
+ * session: such a host runs one Chat and records its `--session-id` as the lock's session, so ending it ends only that Chat.
+ * shortcut: splits ps's command line on whitespace, so a host path with spaces is never matched (refused as today).
+ */
+export function durableHost(lock: Lock): boolean {
+  if (!Number.isInteger(lock.pid) || !lock.session) return false;
+  let args: string[];
+  try { args = execFileSync("ps", ["-ww", "-o", "command=", "-p", String(lock.pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split(/\s+/); } catch { return false; }
+  const rest = args.slice(args.findIndex((a) => path.basename(a) === "chat-host-main.ts") + 1);
+  return rest.length < args.length && rest.some((a, i) => (a === "--session-id" && rest[i + 1] === lock.session) || a === `--session-id=${lock.session}`);
+}
+
+/** SIGTERM starts a Durable Chat host's orderly shutdown (its store closes, background jobs stay); waits for the exit. */
+async function endHost(lock: Lock, waitMs: number) {
+  try { process.kill(lock.pid!, "SIGTERM"); } catch { /* already gone */ }
+  for (const deadline = Date.now() + waitMs; alive(lock.pid);) {
+    if (Date.now() >= deadline) throw new Error(`Chat ${named(lock)} (pid ${lock.pid}) did not exit within ${waitMs / 1000} s of being asked to stop; its Page stays with it. Try again, or close that Chat first.`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 // Process-wide, so sessions sharing one process see each other: the Pages served here, the sessions whose Atelier
 // runs, each Page's last receiver generation, and each Page's queue of takeovers. Versioned key: another Atelier
 // version in the process keeps its own.
@@ -93,7 +118,8 @@ const REG: { served: Map<string, Served>; live: Set<string>; generation: Map<str
   ((globalThis as any)[Symbol.for("pi-workbench.atelier.receivers.v2")] ??= { served: new Map(), live: new Set(), generation: new Map(), queue: new Map() });
 
 /**
- * Live: a running session of this process. Elsewhere: a live session of another process. Legacy: an older Atelier's
+ * Live: a running session of this process. Elsewhere: a live session of another process (taken over only from a Durable
+ * Chat host, by ending that process). Legacy: an older Atelier's
  * lock (no generation), whose running code no lock change can fence. Stale: its process is gone, or it is this
  * process and its session's Atelier no longer runs.
  */
@@ -107,18 +133,27 @@ function holder(lock: Lock) {
 
 /**
  * One session receives a Page's human events (131, 143). `open` (no `takeover`) claims a free or stale lock and never
- * steals; `takeover` moves it from a live session of this process, only from the generation the caller was shown.
+ * steals; `takeover` moves it from a live session of this process, or (check, then again with `ended`, the lock of the
+ * Durable Chat host the caller ended) from another Durable Chat, only from the generation the caller was shown.
  * Returns the receiver generation; `check` only validates. Synchronous, so nothing in this process runs between the
  * check and the write.
  */
-export function claimPage(page: string, session: string, label = session, takeover?: number, check = false): number {
+export function claimPage(page: string, session: string, label = session, takeover?: number, check = false, ended?: Lock): number {
   const file = lockPath(page), lock = readLock(page), state = holder(lock);
-  const generation = Math.max(lock.generation ?? 0, REG.generation.get(page) ?? 0);
+  const generation = Math.max(lock.generation ?? 0, REG.generation.get(page) ?? 0, ended?.generation ?? 0);
   if (lock.session === session && lock.pid === process.pid && state !== "legacy") return lock.generation!;
   const reload = "close or /reload it first";
   if (state === "legacy") throw new Error(`This Page is held by session ${named(lock)}, which runs an older Atelier that cannot hand it over; ${reload}. If it is gone, delete ${file}.`);
-  if (state === "elsewhere") throw new Error(`This Page is held by session ${named(lock)} in another process (pid ${lock.pid}); ${reload}. Atelier moves a Page's input only between sessions of one process.`);
-  if (takeover !== undefined && (state !== "live" || takeover !== generation)) throw new Error(`The receiver changed since generation ${takeover}: this Page's input now goes to ${state === "live" ? named(lock) : "no session"} (generation ${generation}). ${state === "live" ? "Ask the human before taking it over again." : "Open it instead."}`);
+  if (state === "elsewhere") {
+    const durable = durableHost(lock);
+    if (durable && takeover === undefined) throw new Error(`This Page's input goes to ${named(lock)}, a Durable Chat in another process (pid ${lock.pid}). To move its input here, call atelier with action takeover and generation ${generation}; that stops the other Chat's host process (its Chat reopens when the human returns to it) and serves the Page here under a new link.`);
+    if (durable && takeover !== generation) throw new Error(`The receiver changed since generation ${takeover}: this Page's input now goes to ${named(lock)} (generation ${generation}). Ask the human before taking it over again.`);
+    if (!durable || !check) throw new Error(`This Page is held by session ${named(lock)} in another process (pid ${lock.pid}); ${reload}. Atelier moves a Page's input between processes only from a Durable Chat.`);
+    return generation;
+  }
+  // After ending the Durable Chat host: its lock is released, or left stale exactly as it was.
+  const moved = !!ended && takeover === generation && (state === "free" || (state === "stale" && lock.pid === ended.pid && lock.session === ended.session && lock.generation === ended.generation));
+  if (takeover !== undefined && !moved && (state !== "live" || takeover !== generation)) throw new Error(`The receiver changed since generation ${takeover}: this Page's input now goes to ${state === "live" ? named(lock) : "no session"} (generation ${generation}). ${state === "live" ? "Ask the human before taking it over again." : "Open it instead."}`);
   if (takeover === undefined && state === "live") throw new Error(`This Page's input goes to another live Pi session (${named(lock)}). To move its input here, call atelier with action takeover and generation ${generation}.`);
   if (check) return generation;
   const next = { pid: process.pid, session, generation: generation + 1, label };
@@ -611,15 +646,22 @@ export function createHost(options: {
   /**
    * A takeover waits until the receiving session is between runs (its `idle`), checking every 50 ms up to quiesceMs,
    * then claims and switches in one synchronous step; it never forces a busy session. Takeovers of one Page queue in REG.
+   * A receiver in another Durable Chat's host process is taken by stopping that process (SIGTERM, orderly shutdown) instead.
    */
   function takeover(page: string, generation: number) {
     const wait = options.quiesceMs ?? QUIESCE_MS;
     const run = async () => {
+      const held = readLock(page);
+      if (holder(held) === "elsewhere") {
+        claimPage(page, sessionId, label, generation, true); // a Durable Chat host at the generation the caller saw? else throws why
+        await endHost(held, END_HOST_MS);
+        return { ...await bind(page, (check) => claimPage(page, sessionId, label, generation, check, held)), ended: held.pid };
+      }
       const deadline = Date.now() + wait;
       for (;;) {
         const lock = readLock(page), r = REG.served.get(page)?.receiver;
         const busy = r && r.session === lock.session && r.session !== sessionId && r.idle && !safe(r.idle);
-        if (!busy) return bind(page, (check) => claimPage(page, sessionId, label, generation, check));
+        if (!busy) return { ...await bind(page, (check) => claimPage(page, sessionId, label, generation, check)), ended: undefined as number | undefined };
         claimPage(page, sessionId, label, generation, true); // still the generation the caller saw? else throws why
         if (Date.now() >= deadline) throw new Error(`Session ${r!.label} is busy: its run did not end within ${wait / 1000} s. Try again when it is idle.`);
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -647,7 +689,7 @@ export function createHost(options: {
     current: (details: { page?: string; seqs?: number[]; generation?: number }) => !!mineFor(details),
     /** Serves the Page, copies the Kernel, and hands undelivered events to this session (131). Never takes the Page from another live receiver. */
     async open(page: string) { return bind(page, (check) => claimPage(page, sessionId, label, undefined, check)); },
-    /** Moves the Page's receiver here from a live session of this process, at the generation the caller was shown, once that session is idle; the URL and open tabs stay. */
+    /** Moves the Page's receiver here from a live session of this process, at the generation the caller was shown, once that session is idle; the URL and open tabs stay. From another Durable Chat it stops that Chat's host process (`ended`: its pid) and serves the Page here under a new URL. */
     takeover,
     agent(page: string, entry: Record<string, unknown>) { return receiving(page).ep.append(page, { ...entry, origin: "agent" }); },
     /** Shows the rewritten Page; the one-line note names what changed in the Page's change indicators (156). */
