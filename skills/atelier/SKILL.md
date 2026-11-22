@@ -192,8 +192,6 @@ Every trial Page failed on the same points. Before opening a Page, check it agai
 - **Dark/light switch on every Page.** A button in the header toggles `data-theme="dark|light"` on `<html>`;
   dark by default unless `prefers-color-scheme: light`, the choice kept in `localStorage`, re-applied on
   `atelier:update`. Each theme sets `color-scheme` and the `--atl-*` colours, so Kernel controls follow.
-- **Every task he must do gets a done button.** A row asking him to act (log in, click, test) carries
-  `atl-decide="Erledigt|Brauche Hilfe"` (in his language), `atl-rec` on done, `atl-note` on help.
 - **A builder needs real content and direction.** A brief says what the Page is for, what Thomas must see or
   decide, and supplies the real content; a thin brief gets padded with text. It quotes Thomas, adds no design
   constraint he did not give, and lets the builder run `serve.mjs`.
