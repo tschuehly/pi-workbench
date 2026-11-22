@@ -168,6 +168,9 @@
 </style>
 <script>
 (() => {
+  // Touch: lifting the finger fires pointerleave on <html>, and the Kernel then removes the Comment button the tap just
+  // showed. Keep it until the next tap lands elsewhere. shortcut: patches Kernel behaviour, drop once the Kernel fixes it.
+  addEventListener("pointerleave", (e) => { if (e.pointerType !== "mouse" && e.target === document.documentElement) e.stopImmediatePropagation(); }, true);
   const store = "att-open:" + location.pathname;
   const opened = new Set(JSON.parse(sessionStorage.getItem(store) || "[]")); // sections she reopened stay open
   const hideKey = "att-list-hidden:" + location.pathname;
