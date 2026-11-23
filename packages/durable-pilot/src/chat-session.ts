@@ -33,7 +33,7 @@ import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BACKGROUND_BASH_STATUS, BashJobsDoc } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
-import { type ChatListResult, type ChatMessageResult, type Delivery, type IncomingChatMessage, submitChatMessage } from "./chat-message.ts";
+import { CHAT_PAUSED, type ChatListResult, type ChatMessageResult, type Delivery, deliveredBefore, type IncomingChatMessage, submitChatMessage } from "./chat-message.ts";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -1102,13 +1102,19 @@ export class ChatSession {
 	}
 
 	/**
-	 * Another Chat's message, delivered by PI WEB: a host-side delivery (it waits for a paused restore, navigation and a
-	 * checkpoint, as Atelier input does). Resolves once committed, with how it was delivered.
+	 * Another Chat's message, delivered by PI WEB: a host-side delivery (it waits for navigation and a checkpoint, as
+	 * Atelier input does). A paused restore refuses it at once, so the sender learns now instead of a hidden later
+	 * delivery. A replay answers with the first delivery. Resolves once committed, with how it was delivered.
 	 */
 	async chatMessage(message: IncomingChatMessage): Promise<{ delivery: Delivery }> {
+		const earlier = await deliveredBefore(this.#host.harness, this.#host.root, message);
+		if (earlier !== undefined) return { delivery: earlier };
+		if (this.#paused()) throw new Error(CHAT_PAUSED);
 		return this.#deliver(async () => {
+			const again = await deliveredBefore(this.#host.harness, this.#host.root, message);
+			if (again !== undefined) return { delivery: again };
 			const delivery: Delivery = !message.wake ? "noted" : !this.#running ? "started" : message.urgent === true ? "steered" : "queued";
-			await submitChatMessage(this.#host.root, message);
+			await submitChatMessage(this.#host.root, message, delivery);
 			return { delivery };
 		});
 	}
