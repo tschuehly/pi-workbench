@@ -365,10 +365,10 @@ test("live reviewer message: labelled as the live reviewer's, no hop, and the ma
 	assert.deepEqual(lines.slice(2), ["src/a.ts:3 off by one"]);
 });
 
-test("chatMessage: the host takes a live review digest and a live reviewer's message, and records the kind; a malformed liveReview is refused", async () => {
+test("chatMessage: the host advertises liveReview, takes a live review digest and a live reviewer's message, and records the kind; a malformed liveReview is refused", async () => {
 	const { store, cwd } = family("chat-message-live-review");
 	const host = new ChatHost(store, cwd);
-	await host.ready;
+	assert.ok(((await host.ready) as { capabilities?: string[] }).capabilities?.includes("liveReview"), "the host advertises live review, so PI WEB pairs it");
 	assert.deepEqual(await host.call("chatMessage", { requestId: "digest-1", from, text: "Assistant: done", wake: true, liveReview: { kind: "digest", turn: 1, trigger: "edits", brief: "coach" } }), { delivery: "started" });
 	await host.idle(1);
 	assert.deepEqual(await host.call("chatMessage", { requestId: "rev-1", from, text: "fix line 3", wake: false, liveReview: { kind: "reviewer" } }), { delivery: "noted" });
