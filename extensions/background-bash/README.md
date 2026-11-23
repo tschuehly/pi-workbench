@@ -37,6 +37,11 @@ Owned commands carry an inherited identity marker. The runner finds their group,
 processes (including Playwright Chrome), verifies PID/start identity before signals, then TERM → 1-second grace → KILL.
 It records cleanup before the result; early shell exit with remaining descendants is an error, not a detached writer.
 This is trusted local supervision, not containment against deliberate environment clearing plus daemonization.
+A command may hand off a helper meant to outlive it (an SSH master) by starting it outside the runner's process group
+with `PI_MANAGED_COMMAND_RELEASED=<token>` in place of `PI_MANAGED_COMMAND_OWNER=<token>`, same value. The runner
+leaves it and its descendants running and lists them in the result's `cleanup.released` as PID/start identities only.
+A group member is never released, nor is a marker with another job's token. **Whoever releases a process bounds its
+lifetime** (for example `ControlPersist`); the runner does not.
 Legacy runner/group semantics are unchanged. The inherited marker is not a credential; process environments are never
 published or retained in the ownership receipt (`owned.json` contains only PID/start identities).
 

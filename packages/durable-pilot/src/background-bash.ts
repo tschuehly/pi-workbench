@@ -63,7 +63,7 @@ export const BashJobsDoc = defineDoc<{ jobs: Record<string, JobRef> }>({
 export type Job = {
 	id: string; command: string; description?: string; startedAt: number; logPath: string; dir: string; bytes: number;
 	executionId?: string;
-	state: "pending" | "running" | "complete" | "failed" | "cancelled"; pid?: number; exitCode?: number; error?: string; finishedAt?: number; expiresAt: number; lastOutputAt: number; owned?: boolean; cleanup?: { survivors: number[]; error?: string };
+	state: "pending" | "running" | "complete" | "failed" | "cancelled"; pid?: number; exitCode?: number; error?: string; finishedAt?: number; expiresAt: number; lastOutputAt: number; owned?: boolean; cleanup?: { survivors: number[]; released?: { pid: number; start: string }[]; error?: string };
 };
 export const readJob = (root: string, id: string) => readRecord(root, id) as Job | undefined;
 const cancelJob = (root: string, id: string) => cancelRecord(root, id) as Job | undefined;

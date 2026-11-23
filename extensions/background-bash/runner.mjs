@@ -45,6 +45,7 @@ function run(dir) {
 
 const exec = promisify(execFile);
 const OWNER = "PI_MANAGED_COMMAND_OWNER";
+const RELEASED = "PI_MANAGED_COMMAND_RELEASED";
 
 /** ps output is private: never retain or publish other processes' commands or environments. */
 async function processes() {
@@ -60,30 +61,46 @@ async function processes() {
 /** Trusted commands inherit this marker even into a detached browser group or after their shell exits.
  * ponytail: not a sandbox; a daemon clearing its environment and escaping the group needs OS-level containment.
  * macOS hides protected system binaries' environments, so group ownership and ancestry cover those too. */
-function ownedProcesses(table, token, known) {
-  const ids = new Set(table.filter((p) => p.pgid === process.pid || known.get(p.pid) === p.start || p.command.split(/\s+/).includes(`${OWNER}=${token}`)).map((p) => p.pid));
+function ownedProcesses(table, token, known, released) {
+  const ids = new Set(table.filter((p) => !released.has(p.pid) && (p.pgid === process.pid || known.get(p.pid) === p.start || p.command.split(/\s+/).includes(`${OWNER}=${token}`))).map((p) => p.pid));
   for (let changed = true; changed;) {
     changed = false;
-    for (const p of table) if (ids.has(p.ppid) && !ids.has(p.pid)) { ids.add(p.pid); changed = true; }
+    for (const p of table) if (ids.has(p.ppid) && !ids.has(p.pid) && !released.has(p.pid)) { ids.add(p.pid); changed = true; }
   }
   return table.filter((p) => p.pid !== process.pid && ids.has(p.pid));
+}
+
+/** A helper the command hands off on purpose (an SSH master meant to outlive it) carries RELEASED=<token> instead of
+ * OWNER=<token>, outside the runner's group; it and its descendants are left running. Whoever releases bounds it. */
+function releasedProcesses(table, token) {
+  const words = (p) => p.command.split(/\s+/);
+  const ids = new Set(table.filter((p) => p.pgid !== process.pid && words(p).includes(`${RELEASED}=${token}`) && !words(p).includes(`${OWNER}=${token}`)).map((p) => p.pid));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const p of table) if (ids.has(p.ppid) && !ids.has(p.pid) && p.pgid !== process.pid) { ids.add(p.pid); changed = true; }
+  }
+  return ids;
 }
 
 /** Enumerate detached descendants before touching parents; verify PID/start identity again before every signal. */
 async function cleanupOwned(job, dir) {
   const known = new Map();
+  const handedOff = new Map();
   let found = false;
   const grace = job.cleanupGraceMs ?? 1000;
   const until = Date.now() + grace + 2000;
   for (;;) {
     const table = await processes();
-    const owned = ownedProcesses(table, job.id, known);
+    const releasedIds = releasedProcesses(table, job.id);
+    for (const p of table) if (releasedIds.has(p.pid)) handedOff.set(p.pid, p.start);
+    const released = [...handedOff].map(([pid, start]) => ({ pid, start }));
+    const owned = ownedProcesses(table, job.id, known, releasedIds);
     for (const p of owned) known.set(p.pid, p.start);
     found ||= owned.length > 0;
     // An ownership receipt contains identities only, never ps environments or commands.
     writeFileSync(join(dir, "owned.json"), JSON.stringify([...known].map(([pid, start]) => ({ pid, start }))), { mode: 0o600 });
-    if (owned.length === 0) return { survivors: [], found };
-    if (Date.now() >= until) return { survivors: owned.map((p) => p.pid), found };
+    if (owned.length === 0) return { survivors: [], released, found };
+    if (Date.now() >= until) return { survivors: owned.map((p) => p.pid), released, found };
     const kill = Date.now() >= until - 2000;
     // Leaves first (including detached children); their parents can then reap them.
     const depth = (p) => { let n = 0; const seen = new Set(); while (!seen.has(p.pid)) { seen.add(p.pid); p = table.find((x) => x.pid === p.ppid); if (!p) break; n++; } return n; };
