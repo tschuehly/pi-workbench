@@ -125,8 +125,11 @@ if (holds.size > 0)
 			signal?.addEventListener("abort", () => reject(new Error(`hold ${name} aborted`)), { once: true });
 		});
 	});
-// A socket host has no daemon until one connects: spawn_session answer timeouts wait for it.
-if (socketPath !== undefined) host.spawner.disconnected();
+// A socket host has no daemon until one connects: spawn_session and send_chat_message answer timeouts wait for it.
+if (socketPath !== undefined) {
+	host.spawner.disconnected();
+	host.messenger.disconnected();
+}
 const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder, title: () => piWebChatTitle(values.store!, chatId) });
 await session.start();
 
@@ -205,6 +208,8 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		...(isObject(params.compaction) ? { compaction: params.compaction as CompactionSettings } : {}),
 		// PI WEB answers spawn_session requests (`durable.spawn` events) with `spawned`.
 		spawnSessions: params.spawnSessions === true,
+		// PI WEB answers send_chat_message requests (`durable.chat-message`, `durable.chat-list`) with `chatMessaged`.
+		chatMessages: params.chatMessages === true,
 	}),
 	spawned: (params) => {
 		const { result, error } = params;
@@ -212,6 +217,25 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		if (result !== undefined && !(isObject(result) && typeof result.sessionId === "string" && typeof result.cwd === "string" && (result.model === undefined || typeof result.model === "string")))
 			throw new Error("result must name sessionId and cwd");
 		return session.spawned({ requestId: text(params, "requestId"), ...(result === undefined ? {} : { result: result as SpawnResult }), ...(error === undefined ? {} : { error }) });
+	},
+	chatMessaged: (params) => {
+		const { result, error } = params;
+		if (error !== undefined && typeof error !== "string") throw new Error("error must be a string");
+		if (result !== undefined && !isObject(result)) throw new Error("result must be an object");
+		return session.chatMessaged({ requestId: text(params, "requestId"), ...(result === undefined ? {} : { result: result as never }), ...(error === undefined ? {} : { error }) });
+	},
+	// Another Chat's message; `from` is PI WEB's record of the sender.
+	chatMessage: (params) => {
+		const { from, wake, urgent, hop, held } = params;
+		if (!isObject(from) || typeof from.chatId !== "string" || typeof from.key !== "string" || typeof from.name !== "string") throw new Error("from must name chatId, key and name");
+		if (wake !== undefined && typeof wake !== "boolean") throw new Error("wake must be a boolean");
+		if (urgent !== undefined && typeof urgent !== "boolean") throw new Error("urgent must be a boolean");
+		if (held !== undefined && typeof held !== "boolean") throw new Error("held must be a boolean");
+		if (hop !== undefined && (typeof hop !== "number" || !Number.isInteger(hop) || hop < 1)) throw new Error("hop must be a positive integer");
+		return session.chatMessage({
+			requestId: text(params, "requestId"), from: { chatId: from.chatId, key: from.key, name: from.name }, text: text(params, "text"), wake: wake !== false,
+			...(urgent === true ? { urgent } : {}), ...(hop === undefined ? {} : { hop }), ...(held === true ? { held } : {}),
+		});
 	},
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
 	// One command list and dispatcher: host commands (/quota-check) and the bound Pi packages' commands.
@@ -335,6 +359,7 @@ else {
 			if (peer !== socket) return;
 			peer = undefined;
 			host.spawner.disconnected();
+			host.messenger.disconnected();
 		});
 		let buffer = "";
 		socket.on("data", (chunk: string) => {
@@ -353,8 +378,9 @@ else {
 			}
 		});
 		write(socket, ready());
-		// spawn_session requests the previous daemon may have missed or left unanswered.
+		// spawn_session and send_chat_message requests the previous daemon may have missed or left unanswered.
 		host.spawner.resend();
+		host.messenger.resend();
 	});
 	rmSync(socketPath, { force: true });
 	// Created 0600 (bind is synchronous inside listen), then the umask goes back for everything the host's tools create.

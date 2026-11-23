@@ -33,6 +33,7 @@ import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BACKGROUND_BASH_STATUS, BashJobsDoc } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
+import { CHAT_MESSAGE_TYPE, CHAT_PAUSED, type ChatListResult, type ChatMessageDelivery, type ChatMessageResult, type Delivery, deliveredBefore, type IncomingChatMessage, submitChatMessage } from "./chat-message.ts";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -252,19 +253,29 @@ function bashMessage(entry: EntryRecord): Record<string, unknown> {
 	return { role: "bashExecution", ...(entry.data as BashRecord), entryId: String(entry.id) };
 }
 
+/** Another Chat's queued message (`submitChatMessage`), by its entry. */
+function chatMessageEntry(entry: unknown): { fromKey?: string; fromChatId?: string } | undefined {
+	const { kind, data } = (entry ?? {}) as { kind?: string; data?: { customType?: string; details?: { fromKey?: string; fromChatId?: string } } };
+	return kind === PACKAGE_MESSAGE_ENTRY && data?.customType === CHAT_MESSAGE_TYPE ? (data.details ?? {}) : undefined;
+}
+
 /**
- * A queued input the owner sent (a prompt, with or without its Working Mode block), not a notice from background bash,
- * a child, a Page or a package: those wake the Chat but stay out of the queue the composer shows and edits, as legacy
- * Pi keeps custom messages out of its queue. The queue view and its edits use this one rule, so indices agree.
+ * A queued input the owner sent (a prompt, with or without its Working Mode block) or another Chat's message (the owner
+ * may remove or promote it), not a notice from background bash, a child, a Page or a package: those wake the Chat but
+ * stay out of the queue the composer shows and edits, as legacy Pi keeps custom messages out of its queue. The queue
+ * view and its edits use this one rule, so indices agree.
  */
 function ownerQueued<T extends { mode: string; entry?: unknown }>(item: T): item is T & { mode: "steer" | "followUp" } {
 	if (item.mode === "write") return false;
 	const kind = (item.entry as { kind?: string } | undefined)?.kind;
-	return kind === undefined || kind === PROMPT_ENTRY || kind === MODE_ENTRY;
+	return kind === undefined || kind === PROMPT_ENTRY || kind === MODE_ENTRY || chatMessageEntry(item.entry) !== undefined;
 }
 
 /** A queued input as the composer's queue shows it: the user's text (after a Working Mode block), and its images. */
 function queuedMessage(item: { id: number; mode: "steer" | "followUp"; content: unknown; entry?: unknown }): QueuedMessage {
+	const chat = chatMessageEntry(item.entry);
+	// Another Chat's message: its text after the label's two lines, under a short sender prefix.
+	if (chat !== undefined) return { id: item.id, kind: item.mode, text: `From ${chat.fromKey ?? chat.fromChatId ?? "another chat"}: ${textOfContent(item.content).split("\n").slice(2).join("\n")}` };
 	const parts = typeof item.content === "string" ? [{ type: "text", text: item.content }] : (item.content as { type: string; text?: string }[]);
 	const mode = (item.entry as { data?: { workingMode?: unknown } } | undefined)?.data?.workingMode !== undefined;
 	const texts = parts.filter((part) => part.type === "text").slice(mode ? 1 : 0);
@@ -352,6 +363,7 @@ export class ChatSession {
 		if (this.#chat !== undefined) {
 			this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
 			this.#chat.spawner?.attach((event) => this.#emit(event));
+			this.#chat.messenger?.attach((event) => this.#emit(event));
 			await this.#host.harness.commit((tx) => this.#syncSpawnTool(tx), context);
 			this.#chat.workbench.record = (type, data) => {
 				this.#record(type, data);
@@ -879,10 +891,11 @@ export class ChatSession {
 	 * Admit one input under its stable operation ID; resolves once committed. Sending resumes a paused restore, answers
 	 * an attention request, and carries a pending Working Mode block before the user's text (one input, one turn).
 	 */
-	async prompt(params: { operationId: string; text: string; mode?: "steer" | "followUp"; images?: ImageContent[]; attachments?: Attachment[] }): Promise<{ submissionId: SubmissionId }> {
+	async prompt(params: { operationId: string; text: string; mode?: "steer" | "followUp"; images?: ImageContent[]; attachments?: Attachment[] }): Promise<{ submissionId: SubmissionId; fresh: boolean }> {
 		await this.#resume();
 		const { root } = this.#host;
 		const existing = await root.commit((tx) => tx.submissionByRequest(root.id, params.operationId), context);
+		// shortcut: `fresh` is read before admission, so two overlapping calls with one operation ID may both say fresh and reset PI WEB's hop twice; read it from the admission if loops slip through.
 		// storage-guard: a new input that starts a lead run gets the low-disk notice first.
 		if (existing === undefined && this.#chat !== undefined && !this.#running) await storagePreflight(root);
 		// A retry keeps whatever the first attempt admitted; only a new operation picks up a pending block or reminder.
@@ -914,7 +927,8 @@ export class ChatSession {
 		if (existing === undefined) this.#record("prompt", { entryId: null, prompt: null, submissionId: String(submissionId) });
 		if (this.#chat !== undefined && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();
 		else if (block !== undefined) await this.#publishStatus();
-		return { submissionId };
+		// `fresh`: this call admitted a new input (PI WEB restarts the reply chain only then), not a replayed operation.
+		return { submissionId, fresh: existing === undefined };
 	}
 
 	/**
@@ -1061,23 +1075,25 @@ export class ChatSession {
 		this.#emit({ type: "command.output", level: "error", message: "Couldn’t compact history. Try again." });
 	}
 
-	/** PI WEB's setting is host-wide; a rewound agent may still have a different model tool list. */
+	/** PI WEB's settings are host-wide; a rewound agent may still have a different model tool list. */
 	async #syncSpawnTool(tx: Tx): Promise<void> {
-		const spawner = this.#chat?.spawner;
-		if (spawner === undefined) return;
 		const agent = await tx.doc(AgentDoc, this.#host.root.id);
-		const modelTools = agent.modelTools;
-		if (Array.isArray(modelTools)) return; // Never edit a child's explicit allowlist.
-		const add = modelTools?.add ?? [];
-		if (add.includes("spawn_session") === spawner.enabled) return;
-		agent.modelTools = { ...modelTools, add: spawner.enabled ? [...add, "spawn_session"] : add.filter((name) => name !== "spawn_session") };
+		for (const [requests, tool] of [[this.#chat?.spawner, "spawn_session"], [this.#chat?.messenger, "send_chat_message"]] as const) {
+			if (requests === undefined) continue;
+			const modelTools = agent.modelTools;
+			if (Array.isArray(modelTools)) return; // Never edit a child's explicit allowlist.
+			const add = modelTools?.add ?? [];
+			if (add.includes(tool) === requests.enabled) continue;
+			agent.modelTools = { ...modelTools, add: requests.enabled ? [...add, tool] : add.filter((name) => name !== tool) };
+		}
 	}
 
 	/** Resources PI WEB resolved with Pi's loader; their sources are recorded when they change. Compaction: Pi's settings. */
-	async configure(resources: Resources, settings: { compaction?: CompactionSettings; spawnSessions?: boolean } = {}): Promise<void> {
+	async configure(resources: Resources, settings: { compaction?: CompactionSettings; spawnSessions?: boolean; chatMessages?: boolean } = {}): Promise<void> {
 		if (this.#chat === undefined) return;
 		this.#chat.workbench.resources = resources;
 		if (this.#chat.spawner !== undefined) this.#chat.spawner.enabled = settings.spawnSessions === true;
+		if (this.#chat.messenger !== undefined) this.#chat.messenger.enabled = settings.chatMessages === true;
 		if (settings.compaction !== undefined) this.#chat.workbench.compaction = { ...DEFAULT_COMPACTION, ...settings.compaction };
 		const sources = [...(resources.sources ?? [])].map((s) => ({ path: s.path, sha256: s.sha256 }));
 		await this.#host.harness.commit(async (tx) => {
@@ -1090,6 +1106,31 @@ export class ChatSession {
 	/** PI WEB's answer to a spawn_session request: the started Chat, or why it refused. */
 	spawned(answer: { requestId: string; result?: SpawnResult; error?: string }): void {
 		this.#chat?.spawner?.settle(answer);
+	}
+
+	/** PI WEB's answer to a send_chat_message request: the delivery or chat list, or why it refused. */
+	chatMessaged(answer: { requestId: string; result?: ChatMessageResult | ChatListResult; error?: string }): void {
+		this.#chat?.messenger?.settle(answer);
+	}
+
+	/**
+	 * Another Chat's message, delivered by PI WEB: a host-side delivery (it waits for navigation and a checkpoint, as
+	 * Atelier input does). A paused restore refuses it at once, so the sender learns now instead of a hidden later
+	 * delivery. A replay answers `duplicate` with the first delivery, hop and held flag. Resolves once committed, with how
+	 * it was delivered.
+	 */
+	async chatMessage(message: IncomingChatMessage): Promise<ChatMessageDelivery> {
+		const earlier = await deliveredBefore(this.#host.harness, this.#host.root, message);
+		if (earlier !== undefined) return { ...earlier, duplicate: true };
+		if (this.#paused()) throw new Error(CHAT_PAUSED);
+		return this.#deliver(async () => {
+			const again = await deliveredBefore(this.#host.harness, this.#host.root, message);
+			if (again !== undefined) return { ...again, duplicate: true };
+			// shortcut: guessed before admission, so two concurrent sends to an idle chat may both say started though one queues; ask Durable for the submission's placement if that matters.
+			const delivery: Delivery = !message.wake ? "noted" : !this.#running ? "started" : message.urgent === true ? "steered" : "queued";
+			await submitChatMessage(this.#host.root, message, delivery);
+			return { delivery };
+		});
 	}
 
 	/**
@@ -1137,6 +1178,7 @@ export class ChatSession {
 				case "remove":
 					return { withdraw: [input], readmit: [] };
 				case "recall":
+					if (order.slice(request.index).some((item) => chatMessageEntry(item.entry) !== undefined)) throw new Error("A chat message from another chat cannot be recalled into the composer; remove it instead");
 					return { withdraw: order.slice(request.index), readmit: [] };
 				case "toggle":
 					return { withdraw: [input], readmit: [{ input, mode: flip }] };
