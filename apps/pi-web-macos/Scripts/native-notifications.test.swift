@@ -199,6 +199,9 @@ struct NativeNotificationTests {
         precondition(localRevealTarget(docx.path)?.lastPathComponent == "Plan.docx" && localRevealTarget(script.path) != nil && localRevealTarget(bundle.path) != nil, "any existing file or package can be revealed in Finder")
         precondition(localRevealTarget(docxAlias.path)?.lastPathComponent == "alias.docx" && localRevealTarget(alias.path) != nil, "a symlink is revealed itself")
         precondition(localRevealTarget(htmlDir.appendingPathComponent("missing.docx").path) == nil && localRevealTarget("rel.docx") == nil && localRevealTarget(42) == nil)
+        let home = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath().path
+        precondition(localOpenTarget("~")?.path == home && localOpenTarget("~/")?.hasDirectoryPath == true && localRevealTarget("~/")?.path == NSHomeDirectory(), "~ paths name the home folder")
+        precondition(localOpenTarget("~nobody-xyz/x") == nil && localRevealTarget("~/missing-\(UUID().uuidString).docx") == nil, "~user and missing ~ paths are refused")
         try? FileManager.default.removeItem(at: htmlDir)
 
         let desktop = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&workspace=w"), isOnActiveSpace: true)

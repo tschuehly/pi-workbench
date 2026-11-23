@@ -47,8 +47,15 @@ Object.defineProperty(window, "piWebNative", {
 
 /// An existing local HTML file (opens in the browser) or plain folder (opens in Finder), judged after resolving
 /// symlinks. Other files and packages such as `.app` bundles are refused: opening them could launch apps or scripts.
+/// `~` and `~/…` name the user's home, as Chat links write them; anything else must be absolute.
+func localAbsolutePath(_ value: Any) -> String? {
+    guard let raw = value as? String else { return nil }
+    let path = raw == "~" || raw.hasPrefix("~/") ? (raw as NSString).expandingTildeInPath : raw
+    return path.hasPrefix("/") ? path : nil
+}
+
 func localOpenTarget(_ value: Any) -> URL? {
-    guard let path = value as? String, path.hasPrefix("/") else { return nil }
+    guard let path = localAbsolutePath(value) else { return nil }
     let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
     var isDirectory: ObjCBool = false
     guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return nil }
@@ -58,7 +65,7 @@ func localOpenTarget(_ value: Any) -> URL? {
 
 /// Any existing local file or folder: revealing it in Finder only selects it, nothing opens.
 func localRevealTarget(_ value: Any) -> URL? {
-    guard let path = value as? String, path.hasPrefix("/"), FileManager.default.fileExists(atPath: path) else { return nil }
+    guard let path = localAbsolutePath(value), FileManager.default.fileExists(atPath: path) else { return nil }
     return URL(fileURLWithPath: path)
 }
 
