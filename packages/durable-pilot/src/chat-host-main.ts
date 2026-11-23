@@ -226,10 +226,15 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	},
 	// Another Chat's message; `from` is PI WEB's record of the sender.
 	chatMessage: (params) => {
-		const { from, wake } = params;
+		const { from, wake, urgent, hop } = params;
 		if (!isObject(from) || typeof from.chatId !== "string" || typeof from.key !== "string" || typeof from.name !== "string") throw new Error("from must name chatId, key and name");
 		if (wake !== undefined && typeof wake !== "boolean") throw new Error("wake must be a boolean");
-		return session.chatMessage({ requestId: text(params, "requestId"), from: { chatId: from.chatId, key: from.key, name: from.name }, text: text(params, "text"), wake: wake !== false });
+		if (urgent !== undefined && typeof urgent !== "boolean") throw new Error("urgent must be a boolean");
+		if (hop !== undefined && (typeof hop !== "number" || !Number.isInteger(hop) || hop < 1)) throw new Error("hop must be a positive integer");
+		return session.chatMessage({
+			requestId: text(params, "requestId"), from: { chatId: from.chatId, key: from.key, name: from.name }, text: text(params, "text"), wake: wake !== false,
+			...(urgent === true ? { urgent } : {}), ...(hop === undefined ? {} : { hop }),
+		});
 	},
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
 	// One command list and dispatcher: host commands (/quota-check) and the bound Pi packages' commands.

@@ -39,9 +39,9 @@ export class DaemonRequests<E extends { type: string; requestId: string }, R> {
 	readonly #pending = new Map<string, Pending<E, R>>();
 	/** Whether a daemon can hear requests: the answer timeout runs only then, so a request outlives any daemon outage. */
 	#connected = true;
-	readonly #names: { what: string; tool: string; disabled: string };
+	readonly #names: { what: string; tool: string; disabled: string; timedOut?: string };
 
-	constructor(names: { what: string; tool: string; disabled: string }) {
+	constructor(names: { what: string; tool: string; disabled: string; timedOut?: string }) {
 		this.#names = names;
 	}
 
@@ -69,7 +69,7 @@ export class DaemonRequests<E extends { type: string; requestId: string }, R> {
 
 	#arm(pending: Pending<E, R>): void {
 		clearTimeout(pending.timer);
-		if (this.#connected) pending.timer = setTimeout(() => pending.reject(new Error(`PI WEB did not answer the ${this.#names.what} request`)), ANSWER_TIMEOUT_MS);
+		if (this.#connected) pending.timer = setTimeout(() => pending.reject(new Error(this.#names.timedOut ?? `PI WEB did not answer the ${this.#names.what} request`)), ANSWER_TIMEOUT_MS);
 	}
 
 	/** PI WEB's answer to a request; one for a request nobody waits for (timed out, host restarted) is dropped. */

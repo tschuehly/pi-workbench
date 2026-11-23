@@ -1107,7 +1107,7 @@ export class ChatSession {
 	 */
 	async chatMessage(message: IncomingChatMessage): Promise<{ delivery: Delivery }> {
 		return this.#deliver(async () => {
-			const delivery: Delivery = !message.wake ? "noted" : this.#running ? "queued" : "started";
+			const delivery: Delivery = !message.wake ? "noted" : !this.#running ? "started" : message.urgent === true ? "steered" : "queued";
 			await submitChatMessage(this.#host.root, message);
 			return { delivery };
 		});
