@@ -94,6 +94,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         }
     }
 
+    /// Quitting saves the windows and leaves their Chats running (only a user's window close ends them),
+    /// so a restart is a quit plus a detached shell that reopens the app once this process is gone.
+    @objc private func restartApp(_ sender: Any?) {
+        let relaunch = Process()
+        relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+        relaunch.arguments = ["-c", "while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open \"$0\"", Bundle.main.bundlePath]
+        do { try relaunch.run() } catch { NSSound.beep(); return }
+        NSApp.terminate(nil)
+    }
     @objc private func newWindow(_ sender: Any?) { browser.openWindow() }
     @objc private func reload(_ sender: Any?) { browser.reloadKeyWindow() }
     @objc private func goBack(_ sender: Any?) { browser.goBackInKeyWindow() }
@@ -126,6 +135,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         appItem.submenu = appMenu
         appMenu.addItem(withTitle: "About Pi Workbench", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Restart Pi Workbench", action: #selector(restartApp(_:)), keyEquivalent: "")
         appMenu.addItem(withTitle: "Quit Pi Workbench", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         let fileItem = NSMenuItem()
