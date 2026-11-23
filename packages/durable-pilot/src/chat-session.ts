@@ -895,6 +895,7 @@ export class ChatSession {
 		await this.#resume();
 		const { root } = this.#host;
 		const existing = await root.commit((tx) => tx.submissionByRequest(root.id, params.operationId), context);
+		// shortcut: `fresh` is read before admission, so two overlapping calls with one operation ID may both say fresh and reset PI WEB's hop twice; read it from the admission if loops slip through.
 		// storage-guard: a new input that starts a lead run gets the low-disk notice first.
 		if (existing === undefined && this.#chat !== undefined && !this.#running) await storagePreflight(root);
 		// A retry keeps whatever the first attempt admitted; only a new operation picks up a pending block or reminder.

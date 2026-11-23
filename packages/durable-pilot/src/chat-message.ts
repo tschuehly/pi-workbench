@@ -155,6 +155,7 @@ export async function deliveredBefore(harness: Harness, conversation: Conversati
 			const entry = submission.entry === undefined ? (await tx.doc(InboxDoc, id)).items.find((item) => item.id === submission.id)?.entry : await tx.entry(submission.entry);
 			const { delivery, hop, held } = (entry?.data as { details?: { delivery?: unknown; hop?: unknown; held?: unknown } } | undefined)?.details ?? {};
 			// A message the owner withdrew from the queue keeps no entry: it was an input (never held) or a note.
+			// shortcut: a queue edit re-admits under a new submission, so a replay after it reports no hop and PI WEB uses its current hop; store the hop by request ID if that matters.
 			if (typeof delivery !== "string" || !(delivery in DELIVERED)) return { delivery: submission.type === "write" ? "noted" : "queued" };
 			return { delivery: delivery as Delivery, ...(typeof hop === "number" ? { hop } : {}), ...(held === true ? { held } : {}) };
 		}
