@@ -191,7 +191,8 @@ const DETAIL_MAX = 4_000;
 const CONTEXT_MAX = 4_000;
 
 type Option = { value: string; label: string; detail?: string; recommended?: boolean };
-type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean };
+type ShowIf = { question: string; values: string[] };
+type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean; showIf?: ShowIf };
 export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; questions: Question[] };
 type Outcome = JsonObject & { askId: string; reason: string };
 type Closed = { outcome: Outcome; operationId?: string; delivered: boolean };
@@ -240,11 +241,12 @@ function stripNumbering(value: string): string {
 function validateQuestions(questions: readonly Question[]): Question[] {
 	if (questions.length === 0) throw new AskError("An ask must contain at least one question");
 	if (questions.length > QUESTION_LIMIT) throw new AskError(`An ask must not contain more than ${QUESTION_LIMIT} questions`);
-	const ids = new Set<string>();
+	const earlier = new Map<string, Question>();
 	return questions.map((question) => {
 		const id = requireId(question.id, "question id");
-		if (ids.has(id)) throw new AskError(`Duplicate question id ${id}`);
-		ids.add(id);
+		if (earlier.has(id)) throw new AskError(`Duplicate question id ${id}`);
+		const showIf = question.showIf === undefined ? undefined : validateShowIf(question.showIf, id, earlier);
+		earlier.set(id, question);
 		if (question.options.length > OPTION_LIMIT) throw new AskError(`Question ${id} must not offer more than ${OPTION_LIMIT} options`);
 		const values = new Set<string>();
 		const options = question.options.map((option) => {
@@ -264,8 +266,20 @@ function validateQuestions(questions: readonly Question[]): Question[] {
 			...(question.detail === undefined ? {} : { detail: requireText(question.detail, `detail of question ${id}`, DETAIL_MAX) }),
 			options,
 			...(question.multiple === true ? { multiple: true } : {}),
+			...(showIf === undefined ? {} : { showIf }),
 		};
 	});
+}
+
+/** PI WEB `validateShowIf`: a condition names an earlier question of the set and only option values it offers. */
+function validateShowIf(showIf: ShowIf, id: string, earlier: ReadonlyMap<string, Question>): ShowIf {
+	const parent = earlier.get(showIf.question);
+	if (parent === undefined) throw new AskError(`showIf of question ${id} must name an earlier question of this set, not ${showIf.question}`);
+	if (showIf.values.length === 0) throw new AskError(`showIf of question ${id} must list at least one option value of question ${parent.id}`);
+	const offered = new Set(parent.options.map((option) => option.value));
+	const unknown = showIf.values.find((value) => !offered.has(value));
+	if (unknown !== undefined) throw new AskError(`showIf of question ${id}: question ${parent.id} has no option ${unknown}`);
+	return { question: parent.id, values: [...new Set(showIf.values)] };
 }
 
 function validateContext(value: string | undefined): string | undefined {
@@ -295,6 +309,10 @@ const QuestionParams = obj({
 	detail: str({ maxLength: DETAIL_MAX, description: "Markdown under the question: what the item is, an example, where it stands." }),
 	options: opt(arr(OptionParams, { maxItems: OPTION_LIMIT, description: "Omit for free text; a Custom choice is always added." })),
 	multiple: opt(bool({ description: "Allow several options. Default: one answer per question." })),
+	showIf: opt(obj({
+		question: str({ maxLength: ID_MAX, description: "id of an earlier question in this set." }),
+		values: arr(str({ maxLength: ID_MAX }), { minItems: 1, maxItems: OPTION_LIMIT, description: "Its option values that show this question." }),
+	}, { open: true, description: "Show only while that question has one of these picked; hidden, it is skipped." })),
 }, { open: true });
 const AskParams = obj({
 	context: opt(str({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown above the questions: what they all share." })),
@@ -303,7 +321,7 @@ const AskParams = obj({
 	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to drop. Send nothing else." })),
 }, { open: true });
 
-const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them and end your turn if nothing does. Do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
+const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Give a follow-up question `showIf` instead of writing 'If X:' in its text. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them and end your turn if nothing does. Do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
 
 const ATTENTION_DESCRIPTION = "Mark this Chat as needing the user until they look, and return immediately. Use when you need them but have no decision to ask: finished work to review, a login or credential, a manual check, or being blocked. Decisions go to ask_user. Not for routine progress or after every turn.";
 
@@ -315,13 +333,14 @@ export type WorkbenchSignal =
 
 type Signal = (signal: WorkbenchSignal) => void;
 
-function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean }): Question {
+function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean; showIf?: ShowIf }): Question {
 	return {
 		id: param.id,
 		question: param.question,
 		...(param.detail === undefined ? {} : { detail: param.detail }),
 		options: (param.options ?? []).map((o) => ({ value: o.value, label: o.label, ...(o.detail === undefined ? {} : { detail: o.detail }), ...(o.recommended === true ? { recommended: true } : {}) })),
 		...(param.multiple === undefined ? {} : { multiple: param.multiple }),
+		...(param.showIf === undefined ? {} : { showIf: { question: param.showIf.question, values: [...param.showIf.values] } }),
 	};
 }
 

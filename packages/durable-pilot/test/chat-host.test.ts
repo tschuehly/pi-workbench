@@ -604,6 +604,35 @@ test("ask_user: a question without detail is refused; a 4000-character detail is
 	assert.match(description, /The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted\./);
 });
 
+test("ask_user showIf: a condition on a later or unknown question or an unoffered option is refused; a valid one is posted; the description asks for it", async () => {
+	const { store, cwd } = family("ask-show-if");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const location = { id: "location", question: "Where should the browser run?", detail: "Home or VPS.", options: [{ value: "home", label: "Home" }, { value: "vps", label: "VPS" }] };
+	const machine = (showIf: { question: string; values: string[] }) => ({ id: "machine", question: "Which machine?", detail: "At home.", options: [{ value: "mini", label: "Mac mini" }], showIf });
+	const bad: [string, unknown[], RegExp][] = [
+		["op-unknown", [location, machine({ question: "nope", values: ["home"] })], /showIf of question machine must name an earlier question of this set, not nope/],
+		["op-later", [machine({ question: "location", values: ["home"] }), location], /must name an earlier question/],
+		["op-option", [location, machine({ question: "location", values: ["moon"] })], /question location has no option moon/],
+	];
+	for (const [n, [operationId, questions, error]] of bad.entries()) {
+		await host.call("prompt", { operationId, text: `call:ask_user ${JSON.stringify({ ...ASK, questions })}` });
+		await idle(host, n + 1);
+		const refused = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+		assert.equal(refused?.isError, true, operationId);
+		assert.match(textOf(refused?.content), error);
+	}
+	assert.equal((await host.call<Status>("status")).pendingAsks, undefined, "nothing was posted");
+	await host.call("prompt", { operationId: "op-ok", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [location, machine({ question: "location", values: ["home", "home"] })] })}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { questions: { showIf?: unknown }[] } };
+	assert.deepEqual(opened.ask.questions[1]!.showIf, { question: "location", values: ["home"] });
+	await idle(host, bad.length + 1);
+	await host.close();
+	const { workbenchExtension } = await import("../src/workbench.ts");
+	const description = (workbenchExtension({ chatId: "x", signal: () => {} }) as unknown as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "ask_user")!.description;
+	assert.match(description, /Give a follow-up question `showIf` instead of writing 'If X:' in its text\./);
+});
+
 test("ask_user partial send: one answer is delivered, the rest stays open at the new revision across a kill, and answering it closes the set", async () => {
 	const { store, cwd } = family("ask-partial");
 	const ask = { ...ASK, questions: [ASK.questions[0]!, { id: "when", question: "When?", detail: "The deploy window.", options: [{ value: "now", label: "Now" }] }] };
@@ -868,4 +897,12 @@ test("redaction: the open-questions reminder a prompt commits is sanitized, thou
 	assert.ok(carriers.length > 0, "the reminder is stored with the prompt");
 	assert.deepEqual(carriers.filter((row) => row.includes(secret)), [], "no stored reminder holds the plaintext");
 	db.close();
+});
+
+test("remainingAsk: a partial send's skipped dependents leave the set with its answered questions", async () => {
+	const { remainingAsk } = await import("../src/workbench.ts");
+	const q = (id: string) => ({ id, question: `${id}?`, options: [] });
+	const ask = { askId: "a1", askedAt: "", updatedAt: "", revision: "r1", turnsSinceUpdate: 0, questions: [q("location"), q("machine"), q("other")] };
+	const outcome = { partial: true, revision: "r2", questions: [{ question: q("location"), answered: true }, { question: q("machine"), answered: false, skipped: true }] };
+	assert.deepEqual(remainingAsk(ask, outcome)?.questions.map((question) => question.id), ["other"]);
 });
