@@ -31,7 +31,7 @@ import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePrefligh
 import { type ContributedResources, PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
-import { BashJobsDoc } from "./background-bash.ts";
+import { BACKGROUND_BASH_STATUS, BashJobsDoc } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -465,7 +465,7 @@ export class ChatSession {
 
 	/**
 	 * Legacy Working Mode's AFK battery alarm: once AFK has started and a turn runs under it (`arm`), every minute on
-	 * battery the alarm names this Chat, plus one error notification per unplug. Leaving AFK or closing the host stops
+	 * battery while work runs (`#working`) the alarm names this Chat, plus one error notification per unplug. Leaving AFK or closing the host stops
 	 * it; a restored idle Chat with an old AFK selection stays quiet until a turn runs.
 	 */
 	async #watchPower(arm: boolean): Promise<void> {
@@ -478,7 +478,7 @@ export class ChatSession {
 		const chat = () => { const title = this.#title(); return { id: this.#chatId, label: title === undefined ? folder : `${title} (${folder})` }; };
 		const check = async () => {
 			try {
-				const battery = (await this.#power.onBattery()) && !this.#closed && (await afkActive(this.#host.harness, this.#host.root));
+				const battery = (await this.#power.onBattery()) && !this.#closed && (await afkActive(this.#host.harness, this.#host.root)) && (await this.#working());
 				if (battery) this.#power.alarm(chat());
 				if (battery && !this.#warnedOnBattery) this.#emit({ type: "durable.notification", severity: "error", message: AFK_BATTERY_WARNING });
 				this.#warnedOnBattery = battery;
@@ -489,6 +489,28 @@ export class ChatSession {
 		this.#powerTimer = setInterval(() => void check(), this.#power.everyMs);
 		this.#powerTimer.unref?.();
 		void check();
+	}
+
+	/**
+	 * Whether work runs that sleep would cut short, as PI WEB's `familyBusy` minus an open question (waiting for the owner
+	 * is not work): a turn, compaction or `!` command, queued input, a running tool, a running child, background bash or
+	 * a watcher. An unparseable status line counts as work.
+	 */
+	async #working(): Promise<boolean> {
+		const status = await this.status();
+		if (status.isStreaming || status.isCompacting || status.isBashRunning || status.pendingMessageCount > 0 || (status.activeToolExecutions?.length ?? 0) > 0) return true;
+		const list = (key: string, field: string): unknown[] => {
+			const text = status.extensionStatuses?.[key];
+			if (text === undefined) return [];
+			try {
+				const items: unknown = (JSON.parse(text) as Record<string, unknown> | null)?.[field];
+				return Array.isArray(items) ? items : [undefined];
+			} catch {
+				return [undefined];
+			}
+		};
+		return list(ACTIVITY_STATUS_KEY, "items").some((item) => (item as { endedAt?: unknown } | undefined)?.endedAt === undefined)
+			|| list(BACKGROUND_BASH_STATUS, "jobs").length > 0 || list("pi-process-monitor:watchers", "watchers").length > 0;
 	}
 
 	#stopPower(): void {

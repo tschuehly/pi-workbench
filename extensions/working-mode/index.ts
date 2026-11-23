@@ -9,6 +9,8 @@ export const onBattery = () => new Promise<boolean>((resolve) =>
 
 export const AFK_BATTERY_WARNING = "AFK on battery power: plug in the Mac, or it may sleep or run out and stop this session.";
 const ALARM_TAG = "pi-workbench-afk-battery";
+// extensions/activity ACTIVITY_CHANNEL, inlined: the durable host imports this file without pi-tui.
+const ACTIVITY_CHANNEL = "pi-workbench:activity";
 
 /** Loud macOS alarm: sound and speech every call, plus one critical dialog per session until dismissed. */
 // ponytail: each AFK session sounds its own alarm; share one alarm process if several AFK sessions overlap.
@@ -70,10 +72,21 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   let queued: WorkingModeDetails | null = null;
   let powerTimer: ReturnType<typeof setInterval> | undefined;
   let warnedOnBattery = false;
+  // Activity rows not yet ended: Subagents, Workers, background bash jobs, monitors, running shell calls.
+  const activity = new Set<string>();
+  pi.events?.on?.(ACTIVITY_CHANNEL, (event: any) => {
+    const id = event?.type === "remove" ? event.id : event?.item?.id;
+    if (typeof id !== "string") return;
+    if (event.type === "upsert" && event.item.endedAt === undefined) activity.add(id);
+    else activity.delete(id);
+  });
+  // Work sleep would cut short, as PI WEB's familyBusy minus an open question: waiting for Thomas is not work.
+  // shortcut: process-monitor watchers publish no event a Pi CLI extension can read, so they do not count here; add them if it emits one.
+  const working = (ctx: ExtensionContext) => !ctx.isIdle() || ctx.hasPendingMessages() || activity.size > 0;
 
-  // Once AFK has started and a turn runs under it, sound the alarm every minute on battery until it is
-  // plugged in; the in-app notification appears once per unplug. `arm` is set only where a turn runs, so
-  // an idle session restored with an old AFK selection stays quiet.
+  // Once AFK has started and a turn runs under it, sound the alarm every minute on battery while work runs, until
+  // it is plugged in; the in-app notification appears once per unplug or start of work. `arm` is set only where a
+  // turn runs, so an idle session restored with an old AFK selection stays quiet.
   // ponytail: polls pmset every minute; subscribe to IOKit power notifications if latency matters.
   const afkActive = () => selected.attention === "AFK" && !afkPending(selected, aligned);
   function stopPower() {
@@ -89,9 +102,12 @@ export default function workingModeExtension(pi: ExtensionAPI) {
       // A session disposed without session_shutdown leaves a stale ctx whose getters throw: stop there.
       try { void ctx.hasUI; } catch { return stopPower(); }
       const battery = await onBattery() && afkActive();
-      if (battery) batteryAlarm(session);
-      if (battery && !warnedOnBattery && ctx.hasUI) ctx.ui.notify(AFK_BATTERY_WARNING, "error");
-      warnedOnBattery = battery;
+      let busy: boolean;
+      try { busy = battery && working(ctx); } catch { return stopPower(); }
+      if (!busy) { warnedOnBattery = false; return; }
+      batteryAlarm(session);
+      if (!warnedOnBattery && ctx.hasUI) ctx.ui.notify(AFK_BATTERY_WARNING, "error");
+      warnedOnBattery = true;
     };
     void check();
     powerTimer = setInterval(check, 60_000);
