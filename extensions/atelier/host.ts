@@ -511,11 +511,17 @@ export function createHost(options: {
     res.end(JSON.stringify(body));
   };
 
-  // One image per request, its raw bytes as the body. A refusal answers at once and closes the connection, so the
-  // rest of an oversized body is never received.
+  // One image per request, its raw bytes as the body. A refusal answers at once and closes the connection a second
+  // later, so the rest of an oversized body is never stored or received for long.
   let uploads = 0;
   function upload(page: string, req: IncomingMessage, res: ServerResponse) {
-    const refuse = (status: number, error: string) => { res.setHeader("connection", "close"); json(res, status, { error }); };
+    const refuse = (status: number, error: string) => {
+      json(res, status, { error });
+      // Closing at once (connection: close) with body bytes still unread makes TCP reset the connection, which can drop
+      // this answer before the client reads it: discard what still arrives for a second, then close.
+      req.resume();
+      setTimeout(() => req.destroy(), 1000).unref();
+    };
     if (uploads >= UPLOADS_MAX) return refuse(429, "Too many images uploading at once; try again.");
     uploads += 1;
     req.once("close", () => { uploads -= 1; });

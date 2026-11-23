@@ -930,8 +930,10 @@ function upload(host, page, chunks, { end = true } = {}) {
   const req = http.request(`${new URL(host.url(page)).origin}/.atelier/image?page=${encodeURIComponent(host.rel(page))}`, { method: "POST" });
   req.on("error", () => {}); // the host may close the connection after refusing
   const response = new Promise((resolve, reject) => {
-    req.on("response", (res) => { let body = ""; res.on("data", (c) => { body += c; }); res.on("end", () => resolve({ status: res.statusCode, json: JSON.parse(body) })); });
-    setTimeout(() => reject(new Error("no response while the body was still open")), 5000).unref();
+    const timer = setTimeout(() => reject(new Error("no response while the body was still open")), 5000).unref();
+    req.on("response", (res) => { clearTimeout(timer); let body = ""; res.on("data", (c) => { body += c; }); res.on("end", () => resolve({ status: res.statusCode, json: JSON.parse(body) })); });
+    // A request the test destroys never answers; settle it then, so its timer cannot reject after the test ends.
+    req.on("close", () => { if (!req.res) { clearTimeout(timer); resolve({ status: 0, json: null }); } });
   });
   for (const c of chunks) req.write(c);
   if (end) req.end();
