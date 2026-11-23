@@ -493,7 +493,9 @@ test("Working Mode metadata stays unobserved when no Working Mode event arrives"
 });
 
 test("actual installed Pi resource is distinct from injected preview harness evidence", async (t) => {
-  let pi; try { pi=realpathSync(execFileSync("which",["pi"],{encoding:"utf8"}).trim()); } catch { return t.skip("pi executable unavailable"); }
+  // The installed Pi, not the dev dependency a run script puts first on PATH (pnpm's node_modules/.bin/pi is a shell shim outside the package).
+  const PATH=(process.env.PATH??"").split(":").filter((dir)=>!dir.endsWith("/node_modules/.bin")).join(":");
+  let pi; try { pi=realpathSync(execFileSync("which",["pi"],{encoding:"utf8",env:{...process.env,PATH}}).trim()); } catch { return t.skip("pi executable unavailable"); }
   const packages=runtimePackages(pi); assert.equal(packages.piCodingAgent.runningProcess.status,"observed");
   assert.equal(packages.piCodingAgent.runningProcess.resolution,"process.argv[1] nearest matching package");
   const built=await loadPiBasePrompt({cwd:repo,skills:[],contextFiles:[],selectedTools:[]},pi);

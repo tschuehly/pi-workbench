@@ -28,7 +28,7 @@
     "test:matrix": "node --test --test-concurrency=1 --test-timeout=1800000 test/generation-tools.test.ts test/children-queue-questions.test.ts test/ownership-storage.test.ts test/credentials.test.ts",
     "test:upgrade": "node --test --test-concurrency=1 --test-timeout=1800000 test/upgrade-restart.test.ts",
     "test:spikes": "node --test --test-concurrency=1 test/redaction.test.ts test/redaction-split.test.ts test/redaction-boundaries.test.ts test/claude.test.ts test/providers.test.ts",
-    "test": "npm run typecheck && npm run test:matrix && npm run test:upgrade && npm run test:spikes && npm run test:chat && npm run test:extensions && npm run test:packages && npm run test:bash-atelier && npm run summary",
+    "test": "pnpm run typecheck && pnpm run test:matrix && pnpm run test:upgrade && pnpm run test:spikes && pnpm run test:chat && pnpm run test:extensions && pnpm run test:packages && pnpm run test:bash-atelier && pnpm run summary",
     "summary": "node scripts/summary.ts",
     "latency": "node scripts/commit-latency.ts",
     "baseline:queue-order": "node scripts/queue-order-baseline.ts",
