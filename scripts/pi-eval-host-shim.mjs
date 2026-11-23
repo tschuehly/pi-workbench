@@ -23,6 +23,10 @@ const proxy = process.env.PI_EVAL_PROXY;
 const env = {
   ...process.env, HTTPS_PROXY: proxy, HTTP_PROXY: proxy, https_proxy: proxy, http_proxy: proxy, NO_PROXY: "localhost,127.0.0.1", no_proxy: "localhost,127.0.0.1",
   NODE_USE_ENV_PROXY: "1", PI_TMP: tmp, PI_TMP_ROOT: tmp, TMPDIR: tmp,
+  // The Kotlin compile daemon cannot connect inside the sandbox (seen in trials): compile in process.
+  // Commit signing needs ~/.ssh, which the sandbox denies: commits in a trial go unsigned.
+  GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "false",
+  MAVEN_OPTS: `${process.env.MAVEN_OPTS ?? ""} -Dkotlin.compiler.execution.strategy=in-process -Dkotlin.compiler.daemon=false`.trim(),
   // macOS refuses setuid binaries (/bin/ps) in a sandbox; the bash runner's liveness and cleanup checks need ps.
   PATH: `${path.join(path.dirname(fileURLToPath(import.meta.url)), "pi-eval-ps")}:${process.env.PATH}`,
   // Job records stay in the trial, where its sandbox can read them (the default root is under ~/.pi-workbench).

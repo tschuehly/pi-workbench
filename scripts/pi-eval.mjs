@@ -250,6 +250,10 @@ async function runWebArm(c, arm, trialDir, { inst, campaign }) {
   return { ws, runs: r.runs.map(({ messages: _m, ...x }) => ({ ws, ...x })), pair: r.pair };
 }
 
+// The Kotlin compile daemon cannot connect inside the host sandbox; trials and the local build compile in process.
+export const KOTLIN_IN_PROCESS = "-Dkotlin.compiler.execution.strategy=in-process -Dkotlin.compiler.daemon=false";
+// Commit signing needs ~/.ssh, which the sandbox denies; commits in a trial (and in the case's tests) go unsigned.
+const NO_SIGNING = "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false";
 const shAsync = (cmd, { cwd, timeoutMs }) => new Promise((resolve) => {
   const child = spawn("bash", ["-c", cmd], { cwd, stdio: "ignore", detached: true });
   const timer = setTimeout(() => { try { process.kill(-child.pid, "SIGTERM"); } catch {} }, timeoutMs);
@@ -494,7 +498,7 @@ async function verifyCase(caseId, flags) {
     const started = Date.now();
     // The agent's temporary folder is inside its trial, as the host shim sets it (the default is under ~/.pi-workbench).
     mkdirSync(path.join(t, "pi-tmp"), { recursive: true });
-    const code = await shAsync(`TMPDIR=${JSON.stringify(path.join(t, "pi-tmp"))} sandbox-exec -f ${JSON.stringify(path.join(t, "host-sandbox.sb"))} bash -c ${JSON.stringify(c.localBuild)} > ${JSON.stringify(path.join(t, "local-build.log"))} 2>&1`, { cwd: ws, timeoutMs: 40 * 60_000 });
+    const code = await shAsync(`env ${["TMPDIR", "PI_TMP", "PI_TMP_ROOT"].map((k) => `${k}=${JSON.stringify(path.join(t, "pi-tmp"))}`).join(" ")} MAVEN_OPTS=${JSON.stringify(KOTLIN_IN_PROCESS)} ${NO_SIGNING} PATH=${JSON.stringify(`${path.join(ROOT, "scripts/pi-eval-ps")}:${process.env.PATH}`)} sandbox-exec -f ${JSON.stringify(path.join(t, "host-sandbox.sb"))} bash -c ${JSON.stringify(c.localBuild)} > ${JSON.stringify(path.join(t, "local-build.log"))} 2>&1`, { cwd: ws, timeoutMs: 40 * 60_000 });
     result.localBuild = { pass: code === 0, exitCode: code, minutes: +((Date.now() - started) / 60000).toFixed(1), log: path.join(t, "local-build.log") };
     rmSync(ws, { recursive: true, force: true });
   }
