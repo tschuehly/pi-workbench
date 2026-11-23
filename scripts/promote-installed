@@ -86,6 +86,10 @@ if [[ $instance == durable ]]; then
   fi
 fi
 
+ci_install() { # [--ignore-scripts]: clean install from the lockfile; revisions before the pnpm switch (rollbacks) keep npm
+  if [[ -f pnpm-lock.yaml ]]; then pnpm install --frozen-lockfile "$@"; else npm ci --no-audit --no-fund "$@"; fi
+}
+
 prepare_one() { # <repo-name> <rev> -> prints the prepared directory
   local name=$1 sha dir
   sha=$(git -C "$PROJECTS/$name" rev-parse --verify "$2^{commit}") || return 1
@@ -93,12 +97,12 @@ prepare_one() { # <repo-name> <rev> -> prints the prepared directory
   if [[ ! -e $dir.prepared ]]; then
     [[ -d $dir ]] || git -C "$PROJECTS/$name" worktree add --detach "$dir" "$sha" >&2 || return 1
     # Pi supplies pi-workbench's peer packages at load time; only PI WEB needs installing and building.
-    # npm 11 skips node-pty's unapproved install script, which makes spawn-helper executable (Terminal).
-    if [[ $name == pi-web ]]; then (cd "$dir" && npm ci --no-audit --no-fund && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && npm run build) >&2 || return 1; fi
+    # npm 11 and pnpm (allowBuilds) skip node-pty's install script, which makes spawn-helper executable (Terminal).
+    if [[ $name == pi-web ]]; then (cd "$dir" && ci_install && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper && npm run build) >&2 || return 1; fi
     # The Durable instance's session daemon starts the Durable host from this build: it needs its dependencies and
     # the peer packages of the Workbench extensions it imports (the root's).
     if [[ $name == pi-workbench && $instance == durable ]]; then
-      (cd "$dir" && npm ci --no-audit --no-fund --ignore-scripts && cd packages/durable-pilot && npm ci --no-audit --no-fund --ignore-scripts) >&2 || return 1
+      (cd "$dir" && ci_install --ignore-scripts && cd packages/durable-pilot && ci_install --ignore-scripts) >&2 || return 1
     fi
     touch "$dir.prepared" || return 1
   fi
@@ -157,7 +161,7 @@ sessiond_unchanged() { # <pi-web-dir> <pi-web-dir>: same relative-import closure
 const fs = require("fs"), path = require("path"), { createHash } = require("crypto");
 const hash = (root, file) => { try { return createHash("sha256").update(fs.readFileSync(path.join(root, file))).digest("hex"); } catch { return "missing"; } };
 const closure = (root) => {
-  const seen = new Map([["package-lock.json", hash(root, "package-lock.json")]]), todo = ["dist/server/sessiond.js"];
+  const seen = new Map(["package-lock.json", "pnpm-lock.yaml"].map((lock) => [lock, hash(root, lock)])), todo = ["dist/server/sessiond.js"];
   while (todo.length) {
     const file = todo.pop();
     if (seen.has(file)) continue;

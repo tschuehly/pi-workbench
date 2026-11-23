@@ -69,7 +69,7 @@ restart remains (no running turn, queued input or children; `docs/plans/pi-durab
 A PI WEB change that leaves the session daemon's code and dependencies untouched (browser client or
 web/API server only) goes live with `scripts/promote-installed switch-web <pi-web-rev>`. It restarts
 only the web service, so sessions and everything they started keep running while browsers
-reconnect. It refuses when any file the session daemon imports, or `package-lock.json`, differs
+reconnect. It refuses when any file the session daemon imports, or its lockfile (`pnpm-lock.yaml`), differs
 from the daemon's running build (`sessiond-unchanged` runs that check alone); use `switch` then. It
 restores the previous web service if the new one does not become healthy and prints the command
 that switches back. `switch` waits 10 seconds by default before restarting, enough for the calling

@@ -14,7 +14,7 @@ missing or unusable screen geometry falls back to a centered window.
 ## Install the app
 
 Keep PI WEB beside this repository. The installer prefers `../pi-web.durable-lifecycle` when present,
-then `../pi-web`; `PI_WEB_DIR` overrides both. Install PI WEB's dependencies with `npm install`, then
+then `../pi-web`; `PI_WEB_DIR` overrides both. Install PI WEB's dependencies with `pnpm install`, then
 run the full installer only when interrupting active sessions is acceptable. `install --dev`
 replaces services, including the session daemon. For an existing installation, prefer `--app-only`.
 

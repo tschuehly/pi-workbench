@@ -37,7 +37,7 @@ launchctl print gui/$(id -u)/com.pi-web.sessiond | grep -m1 'pid ='
 shasum ~/.pi/agent/settings.json ~/Library/LaunchAgents/com.pi-web.*.plist ~/.config/pi-web/config.json
 readlink ~/IdeaProjects/pi-workbench.installed ~/IdeaProjects/pi-web.installed
 
-$P --instance durable prepare $WB $PW    # builds both folders: pi-web npm ci + build; pi-workbench npm ci at the root and in packages/durable-pilot
+$P --instance durable prepare $WB $PW    # builds both folders: pi-web pnpm install + build; pi-workbench pnpm install at the root and in packages/durable-pilot
 $P --instance durable switch $WB $PW     # schedules the job in 10 s; prints its log path
 wait-until --timeout 600 --file ~/.pi-workbench/installed-durable/jobs/<stamp>/job.log --match 'promoted|rollback done|ROLLBACK FAILED|refused'
 ```

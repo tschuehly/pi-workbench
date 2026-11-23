@@ -5,15 +5,15 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const root = join(import.meta.dirname, "..");
-const lock = (file: string) => JSON.parse(readFileSync(join(root, file), "utf8")).packages as Record<string, { version?: string }>;
-const pinned = (packages: Record<string, { version?: string }>) =>
-	Object.fromEntries(Object.entries(packages).filter(([name]) => /@earendil-works\//.test(name)).map(([name, p]) => [name.replace(/^.*node_modules\//, ""), p.version]));
+// pnpm-lock.yaml lists each resolved package as a `  '<name>@<version>':` key.
+const pinned = (file: string) =>
+	Object.fromEntries([...readFileSync(join(root, file), "utf8").matchAll(/^ {2}'(@earendil-works\/[^@']+)@([^(':]+)/gm)].map(([, name, version]) => [name, version]));
 const db = new DatabaseSync(":memory:");
 const versions = {
 	node: process.version,
 	sqlite: (db.prepare("SELECT sqlite_version() AS v").get() as { v: string }).v,
-	pilot: pinned(lock("package-lock.json")),
-	legacy: pinned(lock("legacy-1.3/package-lock.json")),
+	pilot: pinned("pnpm-lock.yaml"),
+	legacy: pinned("legacy-1.3/pnpm-lock.yaml"),
 	piClaudeCodeUseRules: "2.2.1 (re-expressed in src/claude.ts)",
 	commit: execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root }).toString().trim(),
 };

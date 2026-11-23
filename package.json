@@ -58,5 +58,6 @@
     "prompts": [
       "./prompts"
     ]
-  }
+  },
+  "packageManager": "pnpm@12.21.0"
 }

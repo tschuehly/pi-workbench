@@ -165,7 +165,7 @@ function legacy(mode: "start" | "resume" | "open", dir: string) {
 	const next = (type: string) =>
 		new Promise<E>((resolve, reject) => {
 			child.on("message", (m: E) => (messages.push(m), m.type === type && resolve(m)));
-			// "close" waits for stderr, so a missing legacy-1.3/node_modules (run `npm run setup`) shows up in the error.
+			// "close" waits for stderr, so a missing legacy-1.3/node_modules (run `pnpm run setup`) shows up in the error.
 			child.on("close", () => reject(new Error(`1.3 host exited before ${type}: ${stderr.trim()}`)));
 		});
 	return { child, exited, next };
