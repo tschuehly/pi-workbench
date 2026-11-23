@@ -16,6 +16,8 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - For decision status or provenance, read `docs/foundation/decisions.md`.
 - For localized changes, begin with the routed code. Load more documentation only to resolve
   meaning, constraints, or intent.
+- Install dependencies with `pnpm install` (pnpm 12, pinned in `packageManager`; also in
+  `packages/durable-pilot`); never `npm install` or `npm ci`, which recreate `package-lock.json`.
 
 ## Route by task
 
