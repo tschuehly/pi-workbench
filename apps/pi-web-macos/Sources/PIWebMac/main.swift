@@ -673,6 +673,30 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     func reload() { webView.reload() }
     func goBack() { if webView.canGoBack { webView.goBack() } }
     func goForward() { if webView.canGoForward { webView.goForward() } }
+    /// Set while a close waits for the page to end the window's Chats; app quit closes windows without asking, so they restore.
+    private var closeDeadline: DispatchWorkItem?
+    /// Red button, ⌘W and File > Close let the page end this window's Chats as closing their tabs does (its own confirm
+    /// may keep the window); a page that does not answer in 10 s, confirms aside, leaves them running and the window closes.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard showsApplication else { return true }
+        guard closeDeadline == nil else { return false }
+        armCloseDeadline()
+        webView.callAsyncJavaScript(windowCloseScript, arguments: [:], in: nil, in: .page) { [weak self] result in
+            self?.finishClose((try? result.get()) as? Bool != false)
+        }
+        return false
+    }
+    private func armCloseDeadline() {
+        let deadline = DispatchWorkItem { [weak self] in self?.finishClose(true) }
+        closeDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: deadline)
+    }
+    private func finishClose(_ close: Bool) {
+        guard let deadline = closeDeadline else { return }
+        deadline.cancel()
+        closeDeadline = nil
+        if close { self.close() }
+    }
     func windowWillClose(_ notification: Notification) { onClose(self) }
     // The window turns key again whenever the app reactivates, so this covers app activation too.
     func windowDidBecomeKey(_ notification: Notification) { NativeNotificationBridge().clearChat(shown: shownURL) }
@@ -762,8 +786,14 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Confirm")
         alert.addButton(withTitle: "Cancel")
-        guard let window = webView.window else { completionHandler(alert.runModal() == .alertFirstButtonReturn); return }
-        alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) }
+        // The owner's answer to a closing window's confirm does not count against its deadline.
+        closeDeadline?.cancel()
+        let complete: (Bool) -> Void = { [weak self] answer in
+            if self?.closeDeadline != nil { self?.armCloseDeadline() }
+            completionHandler(answer)
+        }
+        guard let window = webView.window else { complete(alert.runModal() == .alertFirstButtonReturn); return }
+        alert.beginSheetModal(for: window) { complete($0 == .alertFirstButtonReturn) }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

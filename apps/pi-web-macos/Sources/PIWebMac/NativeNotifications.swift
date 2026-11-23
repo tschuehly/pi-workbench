@@ -215,6 +215,12 @@ window.dispatchEvent(new CustomEvent("pi-web:notification-open", { detail: { mac
 /// Called with `machineId` and `sessionId` as arguments; true when the page's window holds the Chat among its tabs
 /// (PI WEB's `NATIVE_NOTIFICATION_HOLDS_EVENT`). Asking from here wakes a window suspended on another Space,
 /// which would miss PI WEB's own requests between windows. Older pages hold nothing.
+/// Resolves whether the window may close; a page without the handler (not loaded, older PI WEB) closes at once.
+let windowCloseScript = """
+const event = new CustomEvent("pi-web:window-close", { cancelable: true, detail: {} });
+return window.dispatchEvent(event) ? true : await event.detail.closing;
+"""
+
 let notificationHoldsScript = """
 return !window.dispatchEvent(new CustomEvent("pi-web:notification-holds", { cancelable: true, detail: { machineId, sessionId } }));
 """
