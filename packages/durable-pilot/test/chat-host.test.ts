@@ -458,7 +458,7 @@ test("/mode unalign after alignment_reached delivers one block with aligned fals
 	await host.close();
 });
 
-test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm names the Chat every check; leaving AFK or closing the host stops it", async () => {
+test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm names the Chat every check while work runs; an idle Chat, leaving AFK or closing the host stops it", async () => {
 	const { store, cwd } = family("afk-battery");
 	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: "chat-afk" });
 	const alarms: { id: string; label: string }[] = [];
@@ -471,43 +471,64 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 		title: () => title,
 		power: { onBattery: async () => true, alarm: (chat) => (alarms.push(chat), wake()), everyMs: 10 },
 	});
-	const until = async (done: () => boolean, what: string) => {
-		const deadline = Date.now() + 10_000;
-		while (!done()) {
-			assert.ok(Date.now() < deadline, `no ${what} within 10 s`);
+	const until = async (done: () => boolean | Promise<boolean>, what: string) => {
+		const deadline = Date.now() + 20_000;
+		while (!(await done())) {
+			assert.ok(Date.now() < deadline, `no ${what} within 20 s`);
 			await new Promise<void>((resolve) => ((wake = resolve), setTimeout(resolve, 100)));
 		}
 	};
 	const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 	const runs = () => events.filter((e) => e.type === "agent.end").length;
+	const hold = (seconds: number) => `call:bash ${JSON.stringify({ command: `sleep ${String(seconds)}`, description: "Hold work open" })}`;
+	// No turn, queued input, tool, child or background bash job left.
+	const idle = async () => {
+		const status = await session.status();
+		return !status.isStreaming && status.pendingMessageCount === 0 && status.extensionStatuses?.["pi-workbench:background-bash"] === undefined;
+	};
+	const quiet = async (what: string) => {
+		await pause(50);
+		const before = alarms.length;
+		await pause(150);
+		assert.equal(alarms.length, before, what);
+	};
 	await session.start();
 	try {
 		await session.mode("attention afk");
 		await pause(100);
 		assert.equal(alarms.length, 0, "AFK selected but no turn yet: quiet");
-		await session.prompt({ operationId: "op-1", text: "hello" });
-		await until(() => alarms.length >= 3 && runs() >= 1, "repeated alarm after an AFK turn on battery");
+		// The turn ends at once; its background bash job keeps work running without a turn.
+		await session.prompt({ operationId: "op-1", text: hold(4) });
+		await until(async () => runs() >= 1 && !(await session.status()).isStreaming, "the launching turn's end");
+		const atEnd = alarms.length;
+		await until(() => alarms.length >= atEnd + 3, "repeated alarm while a background bash job runs");
 		assert.deepEqual(alarms[0], { id: "chat-afk", label: "workspace" }, "an untitled Chat: the alarm names its folder");
 		title = "Battery Chat";
 		await until(() => alarms.at(-1)?.label === "Battery Chat (workspace)", "the alarm naming the Chat's title");
-		assert.equal(events.filter((e) => e.type === "durable.notification" && e.severity === "error").length, 1, "one notification per unplug");
+		// One per start of work; the job's launch may leave one 10 ms check idle (the job is still pending) after the turn ends.
+		const notified = events.filter((e) => e.type === "durable.notification" && e.severity === "error").length;
+		assert.ok(notified >= 1 && notified <= 2, `one notification per start of work, got ${String(notified)}`);
+
+		// The job ends (its completion runs one more turn); then the Chat is idle and the alarm stops.
+		await until(async () => runs() >= 2 && (await idle()), "the completion turn's end");
+		await quiet("an idle AFK Chat on battery does not alarm");
+
+		// Work starting again alarms again.
+		const before = alarms.length;
+		await session.prompt({ operationId: "op-2", text: hold(4) });
+		await until(() => alarms.length > before && runs() >= 3, "alarm when work starts again");
 
 		await session.mode("attention default");
-		await pause(50);
-		const left = alarms.length;
-		await pause(150);
-		assert.equal(alarms.length, left, "leaving AFK stops the alarm");
+		await quiet("leaving AFK stops the alarm");
 
 		await session.mode("attention afk");
-		await session.prompt({ operationId: "op-2", text: "again" });
-		await until(() => alarms.length > left && runs() >= 2, "alarm after AFK is re-entered");
+		const left = alarms.length;
+		await session.prompt({ operationId: "op-3", text: "again" });
+		await until(() => alarms.length > left, "alarm after AFK is re-entered");
 	} finally {
 		await session.close();
 	}
-	await pause(50);
-	const closed = alarms.length;
-	await pause(150);
-	assert.equal(alarms.length, closed, "closing the host stops the alarm");
+	await quiet("closing the host stops the alarm");
 });
 
 test("the AFK alarm's Chat title is PI WEB's name for the Chat in <data dir>/session-runtimes.json, else none", () => {

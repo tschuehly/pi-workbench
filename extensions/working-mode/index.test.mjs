@@ -71,7 +71,7 @@ test("AFK on battery alarms once a turn runs; AC, preparing, restored, and non-A
     const warnings = [];
     workingMode({ on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, registerTool() {}, events: { emit() {} } });
     const ctx = {
-      mode: "rpc", hasUI: true, cwd: "/work/DataRecovery",
+      mode: "rpc", hasUI: true, cwd: "/work/DataRecovery", isIdle: () => false, hasPendingMessages: () => false,
       sessionManager: { getBranch: () => [], buildContextEntries: () => [], getSessionId: () => "s-1", getSessionName: () => 'Nightly "merge"' },
       ui: { setStatus() {}, notify: (text, level) => warnings.push([level, text]) },
     };
@@ -138,6 +138,80 @@ test("AFK on battery alarms once a turn runs; AC, preparing, restored, and non-A
     assert.equal(stopped.length, 1);
     handlers.get("session_shutdown")();
   } finally {
+    writeFileSync(power, "AC Power");
+  }
+});
+
+test("the AFK battery alarm sounds only while work runs: a turn, queued input, a delegate or a background bash job", async () => {
+  const alarms = () => readFileSync(calls, "utf8").split("\n").filter(Boolean).sort();
+  const loud = ["afplay", "osascript", "say"];
+  const sounded = async () => {
+    for (const until = Date.now() + 10_000; alarms().length < 3 && Date.now() < until;) await new Promise((resolve) => setTimeout(resolve, 50));
+    return alarms();
+  };
+  const quiet = async () => { await new Promise((resolve) => setTimeout(resolve, 300)); return alarms(); };
+  writeFileSync(calls, "");
+  const handlers = new Map();
+  const listeners = [];
+  let command;
+  const warnings = [];
+  workingMode({
+    on: (name, handler) => handlers.set(name, handler), registerCommand: (_name, value) => { command = value; }, registerTool() {},
+    events: { emit() {}, on: (channel, listener) => channel === "pi-workbench:activity" && listeners.push(listener) },
+  });
+  const activity = (event) => listeners.forEach((listener) => listener(event));
+  let idle = false;
+  let pending = false;
+  const ctx = {
+    mode: "rpc", hasUI: true, cwd: "/work/Idle", isIdle: () => idle, hasPendingMessages: () => pending,
+    sessionManager: { getBranch: () => [], buildContextEntries: () => [], getSessionId: () => "s-2", getSessionName: () => undefined },
+    ui: { setStatus() {}, notify: (text, level) => warnings.push([level, text]) },
+  };
+  const realSet = globalThis.setInterval;
+  let tick;
+  globalThis.setInterval = (fn, ms) => { tick = fn; return realSet(fn, ms); };
+  try {
+    writeFileSync(power, "Battery Power");
+    await command.handler("attention afk", ctx);
+    // (2) A running turn on battery alarms.
+    handlers.get("before_agent_start")({}, ctx);
+    assert.deepEqual(await sounded(), loud);
+    assert.equal(warnings.length, 1);
+
+    // (1) Idle after agent_end: the next tick stays quiet.
+    idle = true;
+    handlers.get("agent_end")();
+    writeFileSync(calls, "");
+    await tick();
+    assert.deepEqual(await quiet(), [], "an idle AFK session does not alarm");
+
+    // (3) A running delegate with no turn alarms; (4) its end stops the alarm.
+    activity({ type: "upsert", item: { id: "delegate:e-1", kind: "subagent", startedAt: "2026-11-23T00:00:00.000Z" } });
+    await tick();
+    assert.deepEqual(await sounded(), loud, "a running Subagent keeps the alarm");
+    assert.equal(warnings.length, 2, "the in-app warning re-arms when work starts again");
+    writeFileSync(calls, "");
+    activity({ type: "upsert", item: { id: "delegate:e-1", kind: "subagent", endedAt: "2026-11-23T00:01:00.000Z" } });
+    await tick();
+    assert.deepEqual(await quiet(), [], "an ended delegate does not count");
+
+    // (3) A background bash job with no turn alarms; (4) its removal stops the alarm.
+    activity({ type: "upsert", item: { id: "background-bash:job-1", kind: "shell", activity: "running" } });
+    await tick();
+    assert.deepEqual(await sounded(), loud, "a background bash job keeps the alarm");
+    writeFileSync(calls, "");
+    activity({ type: "remove", id: "background-bash:job-1" });
+    await tick();
+    assert.deepEqual(await quiet(), [], "a finished job does not count");
+
+    // Queued input counts as work.
+    pending = true;
+    await tick();
+    assert.deepEqual(await sounded(), loud, "queued input keeps the alarm");
+    pending = false;
+    handlers.get("session_shutdown")();
+  } finally {
+    globalThis.setInterval = realSet;
     writeFileSync(power, "AC Power");
   }
 });
