@@ -697,6 +697,8 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         closeDeadline = nil
         if close { self.close() }
     }
+    // The page's window.close(): its last Chats moved to another window, so nothing is left to end.
+    func webViewDidClose(_ webView: WKWebView) { close() }
     func windowWillClose(_ notification: Notification) { onClose(self) }
     // The window turns key again whenever the app reactivates, so this covers app activation too.
     func windowDidBecomeKey(_ notification: Notification) { NativeNotificationBridge().clearChat(shown: shownURL) }
