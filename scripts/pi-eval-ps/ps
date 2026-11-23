@@ -1,0 +1,97 @@
+#!/usr/bin/python3
+# A minimal non-setuid `ps` for pi-eval's sandboxed Durable hosts (scripts/pi-eval-host-shim.mjs puts this folder first
+# on PATH): macOS refuses to exec setuid binaries such as /bin/ps inside sandbox-exec, and the background bash runner
+# checks liveness and owned descendants with ps. It reads the same data through libproc and sysctl(KERN_PROCARGS2).
+# Supports the forms the runner uses (`-ww -o command= -p PID`, `-Eww -axo pid=,ppid=,pgid=,stat=,lstart=,command=`)
+# and other `-o` column lists, `-p`, `-a/-x/-A/-e`; anything else prints PID and COMMAND for every visible process.
+# shortcut: no TTY, CPU or memory columns; extend if an agent under test needs them.
+import ctypes, signal, struct, sys, time
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+libc = ctypes.CDLL("/usr/lib/libc.dylib", use_errno=True)
+libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+
+
+class BsdInfo(ctypes.Structure):
+    _fields_ = [("flags", ctypes.c_uint32), ("status", ctypes.c_uint32), ("xstatus", ctypes.c_uint32), ("pid", ctypes.c_uint32),
+                ("ppid", ctypes.c_uint32), ("uid", ctypes.c_uint32), ("gid", ctypes.c_uint32), ("ruid", ctypes.c_uint32),
+                ("rgid", ctypes.c_uint32), ("svuid", ctypes.c_uint32), ("svgid", ctypes.c_uint32), ("rfu", ctypes.c_uint32),
+                ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32), ("nfiles", ctypes.c_uint32), ("pgid", ctypes.c_uint32),
+                ("pjobc", ctypes.c_uint32), ("tdev", ctypes.c_uint32), ("tpgid", ctypes.c_uint32), ("nice", ctypes.c_int32),
+                ("start_sec", ctypes.c_uint64), ("start_usec", ctypes.c_uint64)]
+
+
+def pids():
+    n = libproc.proc_listallpids(None, 0)
+    buf = (ctypes.c_int * (n + 64))()
+    n = libproc.proc_listallpids(buf, ctypes.sizeof(buf))
+    return sorted(p for p in buf[:n] if p > 0)
+
+
+def info(pid):
+    b = BsdInfo()
+    if libproc.proc_pidinfo(pid, 3, 0, ctypes.byref(b), ctypes.sizeof(b)) != ctypes.sizeof(b):
+        return None
+    return b
+
+
+def args(pid, with_env):
+    mib = (ctypes.c_int * 3)(1, 49, pid)
+    size = ctypes.c_size_t(1 << 20)
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        return None
+    raw = buf.raw[:size.value]
+    argc = struct.unpack("i", raw[:4])[0]
+    rest = raw[4:]
+    end = rest.find(b"\0")
+    rest = rest[end:].lstrip(b"\0")
+    words = rest.split(b"\0")
+    argv, env = words[:argc], [w for w in words[argc:] if w] if with_env else []
+    return " ".join(w.decode("utf-8", "replace") for w in argv + env)
+
+
+STATUS = {1: "I", 2: "R", 3: "S", 4: "T", 5: "Z"}
+
+
+def column(name, pid, b, with_env):
+    if name == "pid": return str(pid)
+    if name == "ppid": return str(b.ppid)
+    if name == "pgid": return str(b.pgid)
+    if name == "stat": return STATUS.get(b.status, "?")
+    if name == "lstart": return time.strftime("%a %b %d %H:%M:%S %Y", time.localtime(b.start_sec))
+    if name in ("command", "args"): return args(pid, with_env) or "(" + b.comm.decode("utf-8", "replace") + ")"
+    if name in ("comm", "ucomm"): return b.comm.decode("utf-8", "replace")
+    if name == "uid": return str(b.uid)
+    return "-"
+
+
+def main(argv):
+    cols, only, with_env, header = None, None, False, True
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-o", "-O") or (a.startswith("-") and a.endswith("o") and len(a) > 2 and "o" not in a[1:-1]):
+            if a not in ("-o", "-O") and "E" in a: with_env = True
+            i += 1
+            cols = (cols or []) + [c for c in argv[i].split(",") if c]
+        elif a == "-p":
+            i += 1
+            only = [int(p) for p in argv[i].replace(",", " ").split()]
+        elif a.startswith("-"):
+            with_env = with_env or "E" in a
+        i += 1
+    names = [c.split("=")[0] for c in cols] if cols else ["pid", "command"]
+    header = not cols or any("=" not in c or c.split("=", 1)[1] for c in cols)
+    if header: print(" ".join(n.upper() for n in names))
+    found = False
+    for pid in (only if only is not None else pids()):
+        b = info(pid)
+        if b is None: continue
+        found = True
+        print(" ".join(column(n, pid, b, with_env) for n in names))
+    return 0 if found else 1
+
+
+sys.exit(main(sys.argv[1:]))
