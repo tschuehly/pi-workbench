@@ -226,14 +226,15 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	},
 	// Another Chat's message; `from` is PI WEB's record of the sender.
 	chatMessage: (params) => {
-		const { from, wake, urgent, hop } = params;
+		const { from, wake, urgent, hop, held } = params;
 		if (!isObject(from) || typeof from.chatId !== "string" || typeof from.key !== "string" || typeof from.name !== "string") throw new Error("from must name chatId, key and name");
 		if (wake !== undefined && typeof wake !== "boolean") throw new Error("wake must be a boolean");
 		if (urgent !== undefined && typeof urgent !== "boolean") throw new Error("urgent must be a boolean");
+		if (held !== undefined && typeof held !== "boolean") throw new Error("held must be a boolean");
 		if (hop !== undefined && (typeof hop !== "number" || !Number.isInteger(hop) || hop < 1)) throw new Error("hop must be a positive integer");
 		return session.chatMessage({
 			requestId: text(params, "requestId"), from: { chatId: from.chatId, key: from.key, name: from.name }, text: text(params, "text"), wake: wake !== false,
-			...(urgent === true ? { urgent } : {}), ...(hop === undefined ? {} : { hop }),
+			...(urgent === true ? { urgent } : {}), ...(hop === undefined ? {} : { hop }), ...(held === true ? { held } : {}),
 		});
 	},
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),

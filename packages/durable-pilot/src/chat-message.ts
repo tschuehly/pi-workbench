@@ -8,7 +8,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import { type Conversation, defineExtension, defineTool, type Harness, InboxDoc } from "@earendil-works/pi-durable";
 import { createUserLocalWorkstreamStore } from "../../workstream-store/src/index.js";
-import { BranchesDoc, context } from "./host.ts";
+import { admit, BranchesDoc, context } from "./host.ts";
 import { PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { redact } from "./redact.ts";
 import { DaemonRequests } from "./spawn-session.ts";
@@ -21,7 +21,9 @@ export type Delivery = "started" | "queued" | "steered" | "noted";
 export type ChatMessageResult = { chatId: string; key: string; name: string; delivery: Delivery; hop?: number; held?: boolean };
 export type ChatListResult = { chats: { id: string; key: string; title: string; cwd: string; state: string }[] };
 /** A message PI WEB delivers to this Chat; `from` is the daemon's record of the sender. */
-export type IncomingChatMessage = { requestId: string; from: { chatId: string; key: string; name: string }; text: string; wake: boolean; urgent?: boolean; hop?: number };
+export type IncomingChatMessage = { requestId: string; from: { chatId: string; key: string; name: string }; text: string; wake: boolean; urgent?: boolean; hop?: number; held?: boolean };
+/** The target's answer: a replay is `duplicate`, with the hop and held flag the first delivery was admitted with. */
+export type ChatMessageDelivery = { delivery: Delivery; hop?: number; held?: true; duplicate?: true };
 
 export const CHAT_MESSAGE_TYPE = "workbench:chat-message";
 const MAX_TEXT = 8000;
@@ -143,7 +145,7 @@ const submissionRequest = (message: IncomingChatMessage) => `chat-message:${mess
  * How this Chat took a message before, on any of its history branches (a submission's request ID is scoped to one
  * branch's conversation): the delivery recorded in its entry, so a replay gets the first answer instead of a new one.
  */
-export async function deliveredBefore(harness: Harness, conversation: Conversation, message: IncomingChatMessage): Promise<Delivery | undefined> {
+export async function deliveredBefore(harness: Harness, conversation: Conversation, message: IncomingChatMessage): Promise<Omit<ChatMessageDelivery, "duplicate"> | undefined> {
 	const requestId = submissionRequest(message);
 	const root = await harness.root(context);
 	return conversation.commit(async (tx) => {
@@ -151,9 +153,10 @@ export async function deliveredBefore(harness: Harness, conversation: Conversati
 			const submission = await tx.submissionByRequest(id, requestId);
 			if (submission === undefined) continue;
 			const entry = submission.entry === undefined ? (await tx.doc(InboxDoc, id)).items.find((item) => item.id === submission.id)?.entry : await tx.entry(submission.entry);
-			const delivery = ((entry?.data as { details?: { delivery?: unknown } } | undefined)?.details)?.delivery;
-			// A message the owner withdrew from the queue keeps no entry: it was an input or a note.
-			return typeof delivery === "string" && delivery in DELIVERED ? delivery as Delivery : submission.type === "write" ? "noted" : "queued";
+			const { delivery, hop, held } = (entry?.data as { details?: { delivery?: unknown; hop?: unknown; held?: unknown } } | undefined)?.details ?? {};
+			// A message the owner withdrew from the queue keeps no entry: it was an input (never held) or a note.
+			if (typeof delivery !== "string" || !(delivery in DELIVERED)) return { delivery: submission.type === "write" ? "noted" : "queued" };
+			return { delivery: delivery as Delivery, ...(typeof hop === "number" ? { hop } : {}), ...(held === true ? { held } : {}) };
 		}
 		return undefined;
 	}, context);
@@ -162,12 +165,17 @@ export async function deliveredBefore(harness: Harness, conversation: Conversati
 /**
  * Submit a delivered message as a visible custom message, under the sender's scoped request ID so a retried delivery is
  * the same input: an input that starts a turn (while one runs: steers it when urgent, else queued as a follow-up), or a
- * note for the next turn. Its entry records the delivery (`deliveredBefore`). Redacted before commit, as Atelier input is.
+ * note for the next turn. Its entry records the delivery, hop and held flag (`deliveredBefore`). An input is admitted
+ * like a prompt, so the owner's queue edits can move or remove it. Redacted before commit, as Atelier input is.
  */
 export async function submitChatMessage(conversation: Conversation, message: IncomingChatMessage, delivery: Delivery): Promise<void> {
 	const content = redact(chatMessageContent(message));
 	const requestId = submissionRequest(message);
-	const data = { customType: CHAT_MESSAGE_TYPE, display: true, details: { fromChatId: message.from.chatId, fromName: redact(message.from.name), requestId: message.requestId, delivery } };
-	if (message.wake) await conversation.submit({ type: "input", content, whenBusy: message.urgent === true ? "steer" : "followUp", requestId, entry: { kind: PACKAGE_MESSAGE_ENTRY, data } }, context);
+	const details = {
+		fromChatId: message.from.chatId, fromKey: redact(message.from.key), fromName: redact(message.from.name), requestId: message.requestId, delivery,
+		...(message.hop === undefined ? {} : { hop: message.hop }), ...(message.held === true ? { held: true } : {}),
+	};
+	const data = { customType: CHAT_MESSAGE_TYPE, display: true, details };
+	if (message.wake) await admit(conversation, { operationId: requestId, text: content, mode: message.urgent === true ? "steer" : "followUp", entry: { kind: PACKAGE_MESSAGE_ENTRY, data } });
 	else await conversation.submit({ type: "write", requestId, entry: { kind: PACKAGE_MESSAGE_ENTRY, data, model: [{ role: "user", content, timestamp: Date.now() }] } }, context);
 }
