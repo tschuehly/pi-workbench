@@ -69,8 +69,8 @@ test("lead tool descriptions and parameter docs keep the pre-trim rules in fewer
 		const rules = {
 			ask_user: {
 				size: 3483,
-				description: ["chips above the user's composer", "return immediately", "follow-up message that wakes you", "any question may stay unanswered", "Batch the decisions", "instead of asking in prose", "keep working on what does not depend on them", "end your turn if nothing does", "Do not poll or repost", "put all explanation into the set", "only say that questions were posted", "When the facts change", "update: <askId> (no other fields confirms the set)", "withdraw: <askId>"],
-				parameters: ["what they all share", "what the item is, an example, where it stands", "Its consequence.", "Mark your recommendation", "do not number it", "Stable machine value", "Default: one answer per question", "Custom choice is always added", "Send nothing else"],
+				description: ["chips above the user's composer", "return immediately", "follow-up message that wakes you", "any question may stay unanswered", "Batch the decisions", "instead of asking in prose", "keep working on what does not depend on them", "end your turn if nothing does", "Do not poll or repost", "put all explanation into the set", "only say that questions were posted", "When the facts change", "update: <askId> (no other fields confirms the set)", "withdraw: <askId>", "Give a follow-up question `showIf` instead of writing 'If X:' in its text"],
+				parameters: ["id of an earlier question in this set", "hidden, it is skipped", "what they all share", "what the item is, an example, where it stands", "Its consequence.", "Mark your recommendation", "do not number it", "Stable machine value", "Default: one answer per question", "Custom choice is always added", "Send nothing else"],
 			},
 			request_attention: {
 				size: 740,
