@@ -40,6 +40,7 @@ import { setDelegationHold } from "./delegation.ts";
 import { type Attachment, CAPABILITIES, ChatSession, piWebChatTitle, storedMessages, PROTOCOL, type QueueAction, type Recorder, type Resolution, type UiEvent } from "./chat-session.ts";
 import type { CloseAsk, Resources } from "./workbench.ts";
 import type { SpawnResult } from "./spawn-session.ts";
+import { isLiveReview } from "./chat-message.ts";
 
 type Request = { id: number; method: string; params?: Record<string, unknown> };
 
@@ -226,15 +227,16 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	},
 	// Another Chat's message; `from` is PI WEB's record of the sender.
 	chatMessage: (params) => {
-		const { from, wake, urgent, hop, held } = params;
+		const { from, wake, urgent, hop, held, liveReview } = params;
 		if (!isObject(from) || typeof from.chatId !== "string" || typeof from.key !== "string" || typeof from.name !== "string") throw new Error("from must name chatId, key and name");
 		if (wake !== undefined && typeof wake !== "boolean") throw new Error("wake must be a boolean");
 		if (urgent !== undefined && typeof urgent !== "boolean") throw new Error("urgent must be a boolean");
 		if (held !== undefined && typeof held !== "boolean") throw new Error("held must be a boolean");
 		if (hop !== undefined && (typeof hop !== "number" || !Number.isInteger(hop) || hop < 1)) throw new Error("hop must be a positive integer");
+		if (liveReview !== undefined && !isLiveReview(liveReview)) throw new Error("liveReview must be a reviewer or a digest with a positive turn, a trigger turn, turn5 or edits, and a brief silent or coach");
 		return session.chatMessage({
 			requestId: text(params, "requestId"), from: { chatId: from.chatId, key: from.key, name: from.name }, text: text(params, "text"), wake: wake !== false,
-			...(urgent === true ? { urgent } : {}), ...(hop === undefined ? {} : { hop }), ...(held === true ? { held } : {}),
+			...(urgent === true ? { urgent } : {}), ...(hop === undefined ? {} : { hop }), ...(held === true ? { held } : {}), ...(liveReview === undefined ? {} : { liveReview }),
 		});
 	},
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
