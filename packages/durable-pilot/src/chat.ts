@@ -29,6 +29,7 @@ import { redact, wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
+import { ChatMessenger } from "./chat-message.ts";
 import { BackgroundBash } from "./background-bash.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
@@ -143,6 +144,8 @@ export type ChatHost = Host & {
 	readonly atelier: Atelier;
 	/** spawn_session's requests to PI WEB and their answers. */
 	readonly spawner: SessionSpawner;
+	/** send_chat_message's requests to PI WEB and their answers. */
+	readonly messenger: ChatMessenger;
 };
 
 /**
@@ -222,6 +225,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, ...(options.release ? { release: options.release } : {}) });
 	const workbenchBash = bash.extension();
 	const spawner = new SessionSpawner(chatId);
+	const messenger = new ChatMessenger(chatId);
 	const sandbox = new CodemodeSandbox();
 	const agentDir = options.packages?.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	// Like the packages: only a Chat that runs the user's Pi settings (PI WEB's `--packages`) reads them.
@@ -239,6 +243,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		workbenchBash,
 		atelier.extension(),
 		spawner.extension(),
+		messenger.extension(),
 		codemodeExtension(sandbox, inlineBudget),
 	];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
@@ -325,6 +330,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		bash,
 		atelier,
 		spawner,
+		messenger,
 		...(packages === undefined ? {} : { packages }),
 		listenPackages: (listener: (event: PackageEvent) => void) => {
 			chat.onPackageEvent = listener;

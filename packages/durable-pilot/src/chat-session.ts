@@ -33,6 +33,7 @@ import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BACKGROUND_BASH_STATUS, BashJobsDoc } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
+import { type ChatListResult, type ChatMessageResult, type Delivery, type IncomingChatMessage, submitChatMessage } from "./chat-message.ts";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -352,6 +353,7 @@ export class ChatSession {
 		if (this.#chat !== undefined) {
 			this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
 			this.#chat.spawner?.attach((event) => this.#emit(event));
+			this.#chat.messenger?.attach((event) => this.#emit(event));
 			await this.#host.harness.commit((tx) => this.#syncSpawnTool(tx), context);
 			this.#chat.workbench.record = (type, data) => {
 				this.#record(type, data);
@@ -1061,23 +1063,25 @@ export class ChatSession {
 		this.#emit({ type: "command.output", level: "error", message: "Couldn’t compact history. Try again." });
 	}
 
-	/** PI WEB's setting is host-wide; a rewound agent may still have a different model tool list. */
+	/** PI WEB's settings are host-wide; a rewound agent may still have a different model tool list. */
 	async #syncSpawnTool(tx: Tx): Promise<void> {
-		const spawner = this.#chat?.spawner;
-		if (spawner === undefined) return;
 		const agent = await tx.doc(AgentDoc, this.#host.root.id);
-		const modelTools = agent.modelTools;
-		if (Array.isArray(modelTools)) return; // Never edit a child's explicit allowlist.
-		const add = modelTools?.add ?? [];
-		if (add.includes("spawn_session") === spawner.enabled) return;
-		agent.modelTools = { ...modelTools, add: spawner.enabled ? [...add, "spawn_session"] : add.filter((name) => name !== "spawn_session") };
+		for (const [requests, tool] of [[this.#chat?.spawner, "spawn_session"], [this.#chat?.messenger, "send_chat_message"]] as const) {
+			if (requests === undefined) continue;
+			const modelTools = agent.modelTools;
+			if (Array.isArray(modelTools)) return; // Never edit a child's explicit allowlist.
+			const add = modelTools?.add ?? [];
+			if (add.includes(tool) === requests.enabled) continue;
+			agent.modelTools = { ...modelTools, add: requests.enabled ? [...add, tool] : add.filter((name) => name !== tool) };
+		}
 	}
 
 	/** Resources PI WEB resolved with Pi's loader; their sources are recorded when they change. Compaction: Pi's settings. */
-	async configure(resources: Resources, settings: { compaction?: CompactionSettings; spawnSessions?: boolean } = {}): Promise<void> {
+	async configure(resources: Resources, settings: { compaction?: CompactionSettings; spawnSessions?: boolean; chatMessages?: boolean } = {}): Promise<void> {
 		if (this.#chat === undefined) return;
 		this.#chat.workbench.resources = resources;
 		if (this.#chat.spawner !== undefined) this.#chat.spawner.enabled = settings.spawnSessions === true;
+		if (this.#chat.messenger !== undefined) this.#chat.messenger.enabled = settings.chatMessages === true;
 		if (settings.compaction !== undefined) this.#chat.workbench.compaction = { ...DEFAULT_COMPACTION, ...settings.compaction };
 		const sources = [...(resources.sources ?? [])].map((s) => ({ path: s.path, sha256: s.sha256 }));
 		await this.#host.harness.commit(async (tx) => {
@@ -1090,6 +1094,23 @@ export class ChatSession {
 	/** PI WEB's answer to a spawn_session request: the started Chat, or why it refused. */
 	spawned(answer: { requestId: string; result?: SpawnResult; error?: string }): void {
 		this.#chat?.spawner?.settle(answer);
+	}
+
+	/** PI WEB's answer to a send_chat_message request: the delivery or chat list, or why it refused. */
+	chatMessaged(answer: { requestId: string; result?: ChatMessageResult | ChatListResult; error?: string }): void {
+		this.#chat?.messenger?.settle(answer);
+	}
+
+	/**
+	 * Another Chat's message, delivered by PI WEB: a host-side delivery (it waits for a paused restore, navigation and a
+	 * checkpoint, as Atelier input does). Resolves once committed, with how it was delivered.
+	 */
+	async chatMessage(message: IncomingChatMessage): Promise<{ delivery: Delivery }> {
+		return this.#deliver(async () => {
+			const delivery: Delivery = !message.wake ? "noted" : this.#running ? "queued" : "started";
+			await submitChatMessage(this.#host.root, message);
+			return { delivery };
+		});
 	}
 
 	/**
