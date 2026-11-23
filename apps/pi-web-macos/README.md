@@ -189,7 +189,9 @@ Same-origin links stay inside the app. Other links open in the default browser.
 ## Keyboard behavior
 
 - `Command-N` — open another independent Chat window
-- `Command-W` — close the current window
+- `Command-W` — close the current window; like the red button and File > Close, it first closes the window's Chats
+  as closing their tabs does (ending their hosts, asking first when work runs; Cancel keeps the window). Quit keeps
+  them for restoration.
 - `Command-R` — reload the current Chat
 - `Command-[` and `Command-]` — browser history
 
