@@ -720,6 +720,7 @@ test("ask_user showIf: a condition on a later or unknown question or an unoffere
 	const description = (workbenchExtension({ chatId: "x", signal: () => {} }) as unknown as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "ask_user")!.description;
 	assert.match(description, /Give a follow-up question `showIf` instead of writing 'If X:' in its text\./);
 	assert.match(description, /The user can edit the context; treat an edited context as his version, so put text for approval \(a plan, draft or message\) there\./);
+	assert.match(description, /Unlike ask_human \(Telegram, blocks until he replies\), it stays in this Chat\./);
 });
 
 test("ask_user partial send: one answer is delivered, the rest stays open at the new revision across a kill, and answering it closes the set", async () => {
