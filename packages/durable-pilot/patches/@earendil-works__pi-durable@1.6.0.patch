@@ -1,0 +1,41 @@
+diff --git a/dist/harness/prompt.js b/dist/harness/prompt.js
+index d9433a83bb9c548c5a4a87aa7bc9281acce47f15..17064a3e35a457345197aa18b6079590cb9a5535 100644
+--- a/dist/harness/prompt.js
++++ b/dist/harness/prompt.js
+@@ -72,19 +72,15 @@ export function planSystemEntries(view, desired, tools, timestamp) {
+     return sections.map((patch, index) => systemEntry(patch, index === sections.length - 1 ? changes : undefined, timestamp));
+ }
+ /**
+- * Tool changes from `offered` to `desired`. A changed declaration is removed and re-added. Replay keeps retained tools
+- * in place and appends additions; when that would not yield the desired order, every offered tool is removed and
+- * every desired tool re-added in order.
++ * Tool changes from `offered` to `desired`. A changed declaration is re-added under its name without a removal, which
++ * replaces it in place (`getCurrentTools`, and Anthropic's inline `tool_definition`): one block, so the cached prefix
++ * survives. Replay keeps retained tools in place and appends additions; when that would not yield the desired order,
++ * every offered tool is removed and every desired tool re-added in order.
+  */
+ function planTools(offered, desired) {
+     const wanted = new Map(desired.map((tool) => [tool.name, tool]));
+-    const kept = offered.filter((tool) => {
+-        const next = wanted.get(tool.name);
+-        return next !== undefined && declarationsEqual(tool, next);
+-    });
+-    const keptNames = new Set(kept.map((tool) => tool.name));
+-    const added = desired.filter((tool) => !keptNames.has(tool.name));
+-    const replayed = [...kept, ...added];
++    const shown = new Map(offered.map((tool) => [tool.name, tool]));
++    const replayed = [...offered.filter((tool) => wanted.has(tool.name)), ...desired.filter((tool) => !shown.has(tool.name))];
+     if (replayed.some((tool, index) => tool.name !== desired[index].name)) {
+         return {
+             toolsRemoved: offered.map((tool) => ({ name: tool.name })),
+@@ -92,8 +88,8 @@ function planTools(offered, desired) {
+         };
+     }
+     return {
+-        toolsRemoved: offered.filter((tool) => !keptNames.has(tool.name)).map((tool) => ({ name: tool.name })),
+-        toolsAdded: added.map(toToolDeclaration),
++        toolsRemoved: offered.filter((tool) => !wanted.has(tool.name)).map((tool) => ({ name: tool.name })),
++        toolsAdded: desired.filter((tool) => { const old = shown.get(tool.name); return old === undefined || !declarationsEqual(old, tool); }).map(toToolDeclaration),
+     };
+ }
+ /** Section patches: none, the minimal patch, or a remove-all/re-add-all pair when the order would differ. */
