@@ -55,7 +55,7 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
  * - `gen` → a long answer (stream slowly to observe partials);
  * - `call:<tool> <json args>` → call that tool;
  * - `spawn:<name> <message>` → call subagent spawn; `leaf:<message>` → call leaf;
- * - `ask:<text>` → call ask_user;
+ * - `ask:<text>` → call ask_user; `hand_back:<reason>` anywhere, while hand_back is offered → call it;
  * - `fail` → a non-retryable provider error;
  * - a compaction summary request → `Summary of <n> earlier messages.`, logged as `summarize` with its focus; a focus
  *   containing `slow` streams a long summary, one containing `fail` is a non-retryable error;
@@ -163,6 +163,9 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			});
 		const leaf = /^leaf:(.*)$/s.exec(text);
 		if (leaf !== null) return fauxAssistantMessage([fauxToolCall("leaf", { task: leaf[1]! })], { stopReason: "toolUse" });
+		// A cheap wake-up whose delivery says `hand_back:<reason>` hands back (only while the tool is offered).
+		const back = /hand_back:(.*)/.exec(text);
+		if (back !== null && offered(context).includes("hand_back")) return fauxAssistantMessage([fauxToolCall("hand_back", { reason: back[1]! })], { stopReason: "toolUse" });
 		const ask = /^ask:(.*)$/s.exec(text);
 		if (ask !== null) return fauxAssistantMessage([fauxToolCall("ask_user", { question: ask[1]! })], { stopReason: "toolUse" });
 		return fauxAssistantMessage([fauxText(`ok: ${text}`)]);
