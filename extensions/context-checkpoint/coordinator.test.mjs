@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   compactionInstructions,
   createCheckpointCoordinator,
+  createContextCeiling,
   latestAssistantToolCallCount,
   MAX_NEXT_PHASE_WORDS,
   MAX_SUMMARY_FOCUS_WORDS,
@@ -226,4 +227,15 @@ test("startup budget: notice only for a first reply above the budget", async () 
   assert.equal(startupBudgetNotice(reply(100, 60_000), 1), undefined, "not the session's first reply (resumed)");
   assert.equal(startupBudgetNotice({ role: "user", usage: { input: 90_000 } }, 0), undefined, "not an assistant reply");
   assert.equal(startupBudgetNotice(reply(100, 60_000), 0, 70_000), undefined, "budget is a parameter");
+});
+
+test("the ceiling note points a lead with a home Workstream to checkpoint_and_continue; wouldFire records nothing", () => {
+  const ceiling = createContextCeiling();
+  assert.equal(ceiling.wouldFire(150_000), false);
+  assert.equal(ceiling.wouldFire(210_000), true);
+  assert.equal(ceiling.wouldFire(210_000), true, "peeking does not record the level");
+  assert.match(ceiling(210_000, "ws-1").content, /write the checkpoint of this session's Workstream ws-1.*then call checkpoint_and_continue/);
+  assert.equal(ceiling.wouldFire(220_000), false, "same 50k step");
+  assert.match(ceiling(260_000, "ws-1").content, /Plan to checkpoint and continue/);
+  assert.match(createContextCeiling()(210_000).content, /compact with compact_and_continue/, "without a Workstream: the old note");
 });

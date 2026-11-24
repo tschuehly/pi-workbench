@@ -82,7 +82,8 @@ export async function batchSize(api: Pick<ToolExecutionApi, "taskId" | "getTask"
 }
 
 /** Extension of the checkpoint tool and task; `harness` is the host's, for the conversation-level operations. */
-export function checkpointExtension(harness: () => Harness) {
+/** `lead` names the Chat's lead conversation and its home Workstream: only the lead is offered checkpoint_and_continue. */
+export function checkpointExtension(harness: () => Harness, lead?: { rootId: () => ConversationId | undefined; workstream: () => Promise<string | undefined> }) {
 	const conversation = async (id: ConversationId, c: Parameters<Harness["conversation"]>[1]): Promise<Conversation> => (await harness().conversation(id, c))!;
 
 	const CheckpointTask = defineTask<{ request: Request }, Checkpoint, null>({
@@ -251,7 +252,10 @@ export function checkpointExtension(harness: () => Harness) {
 			const tokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 			if (tokens <= 0) return;
 			if (!ceilings.has(api.conversationId)) ceilings.set(api.conversationId, createContextCeiling());
-			const note = ceilings.get(api.conversationId)!(tokens);
+			const ceiling = ceilings.get(api.conversationId)!;
+			// Looked up only when a note may fire, so the store is read rarely (a throwing tail never blocks the note).
+			const workstream = lead !== undefined && api.conversationId === lead.rootId() && ceiling.wouldFire(tokens) ? await lead.workstream().catch(() => undefined) : undefined;
+			const note = ceiling(tokens, workstream);
 			if (note === undefined) return;
 			await (await conversation(api.conversationId, c)).submit({
 				type: "write",

@@ -81,9 +81,11 @@ export const CONTEXT_CEILING_STEP_TOKENS = 50_000;
 export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = CONTEXT_CEILING_STEP_TOKENS) {
   let lastLevel = -1;
   let shown = false;
-  return (tokens) => {
+  const levelOf = (tokens) => (tokens < threshold ? -1 : Math.floor((tokens - threshold) / step));
+  // workstream: the lead Chat's home Workstream id (Durable only), which points it to checkpoint_and_continue instead.
+  const ceiling = (tokens, workstream) => {
     if (typeof tokens !== "number") return undefined;
-    const level = tokens < threshold ? -1 : Math.floor((tokens - threshold) / step);
+    const level = levelOf(tokens);
     // A drop means a compaction summarized the earlier reminders away, so the next one is full again.
     if (level < lastLevel) shown = false;
     const crossed = level > lastLevel;
@@ -91,8 +93,11 @@ export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = 
     if (!crossed) return undefined;
     const k = Math.round(tokens / 1000);
     const content = shown
-      ? `Context is now at ${k}k tokens. Plan to compact when this phase ends.`
-      : `Context is at ${k}k tokens, with plenty of room left. Carry on with the current phase. Once it is done, compact with compact_and_continue, naming what the summary must keep and the next phase.`;
+      ? `Context is now at ${k}k tokens. Plan to ${workstream ? "checkpoint and continue" : "compact"} when this phase ends.`
+      : `Context is at ${k}k tokens, with plenty of room left. Carry on with the current phase. Once it is done, `
+        + (workstream
+          ? `write the checkpoint of this session's Workstream ${workstream} (everything the next phase needs), then call checkpoint_and_continue with the next phase.`
+          : "compact with compact_and_continue, naming what the summary must keep and the next phase.");
     shown = true;
     return {
       type: "custom_message",
@@ -102,6 +107,9 @@ export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = 
       details: { tokens, threshold, step },
     };
   };
+  /** Whether these tokens would add a note, without recording them. */
+  ceiling.wouldFire = (tokens) => typeof tokens === "number" && levelOf(tokens) > lastLevel;
+  return ceiling;
 }
 
 // Words, not characters or tokens: models estimate words best, and the code counts them exactly.
