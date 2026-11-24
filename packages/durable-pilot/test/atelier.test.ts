@@ -13,7 +13,7 @@ import { cleanup, scratch } from "./runner.ts";
 type Message = { role: string; customType?: string; content?: unknown; details?: Record<string, unknown> };
 type Entry = { seq: number; at: number; type: string; origin: string; of?: number[]; op?: string; text?: string };
 
-const ROOT = scratch("s4b-atelier");
+const ROOT = scratch("s4b-atelier", { repo: true });
 process.env.ATELIER_PAGE_CHECK = "off"; // the browser Page check has its own tests (extensions/atelier/page-check.test.mjs)
 process.env.PI_BACKGROUND_BASH_ROOT = join(ROOT, "jobs");
 process.env.PI_TMP_ROOT = join(ROOT, "pi-tmp");

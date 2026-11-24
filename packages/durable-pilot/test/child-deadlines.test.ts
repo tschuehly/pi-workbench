@@ -21,7 +21,7 @@ import { cancelJob, launchJob, readJob } from "../../../extensions/background-ba
 
 const test = (name: string, fn: () => Promise<void>) => nodeTest(name, { timeout: 30_000 }, fn);
 
-const ROOT = scratch("command-deadlines");
+const ROOT = scratch("command-deadlines", { repo: true });
 const JOBS = join(ROOT, "jobs");
 process.env.PI_BACKGROUND_BASH_ROOT = JOBS;
 process.env.PI_TMP_ROOT = join(ROOT, "tmp");

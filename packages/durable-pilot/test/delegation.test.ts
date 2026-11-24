@@ -4,7 +4,9 @@
 // stop the host at the reporter's named fault windows (PI_DURABLE_HOLD), reopen it, and check one assignment, one
 // report and one collection.
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { type ConversationId, type EntryRecord, InboxDoc } from "@earendil-works/pi-durable";
@@ -12,13 +14,20 @@ import { cancelJob, readJob } from "../../../extensions/background-bash/jobs.mjs
 import { openChatHost } from "../src/chat.ts";
 import { ChildDoc, DelegationDoc, type Execution, setDelegationHold, WorkersDoc } from "../src/delegation.ts";
 import { BranchesDoc, context } from "../src/host.ts";
-import { ChatHost, eventCopies, family, hideIn, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
+import { ChatHost, eventCopies, hideIn, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
 const TELEMETRY = scratch("delegation-telemetry");
 process.env.PI_TELEMETRY_DIR = TELEMETRY;
 // Worker status files land under HOME/.pi-workbench; keep them out of the real one.
 process.env.HOME = scratch("delegation-home");
+/** A Chat's store and workspace inside that HOME: the write fence grants a chat its checkout only inside the home folder. */
+function family(label: string): { store: string; cwd: string } {
+	const dir = mkdtempSync(join(process.env.HOME!, `chat-${label.replace(/[^a-z0-9]+/gi, "-")}-`));
+	execFileSync("git", ["init", "-q", dir]);
+	mkdirSync(join(dir, "workspace"));
+	return { store: join(dir, "family"), cwd: join(dir, "workspace") };
+}
 const QUOTA = join(scratch("delegation-quota"), "quota.json");
 process.env.PI_WORKBENCH_QUOTA_CACHE = QUOTA;
 const SECRET = "delegationSecret-7c1e4b9a2d6f0e35";
@@ -1855,4 +1864,46 @@ test("navigation: a managed no-progress notice marked before navigation follows 
 	await host.close();
 	assert.deepEqual(await kindCounts(store, cwd, "workbench.child-stuck"), { activeIsRoot: false, active: 1, root: 0 }, "one command notice, only on the new branch");
 	assert.equal(integrity(store), "ok");
+});
+
+test("/full-access: on only after Allow in the owner's dialog; then the lead's commands write outside the fence, a Subagent's never; off fences again", { skip: process.platform !== "darwin" && "the write fence applies on macOS only" }, async () => {
+	const { store, cwd } = family("full-access");
+	// Outside every grant: this account's own sandbox state, which no fence ever grants (sandbox.mjs).
+	const target = join(userInfo().homedir, ".pi-workbench", "sandbox", `full-access-test-${String(process.pid)}`);
+	mkdirSync(target, { recursive: true });
+	const answer = join(store, "..", "dialog-answer");
+	const dialog = join(store, "..", "fake-osascript");
+	writeFileSync(dialog, `#!/bin/sh\nprintf '%s' "$*" > "${answer}.asked"\nprintf 'button returned:%s\\n' "$(cat "${answer}")"\n`, { mode: 0o755 });
+	const host = open(store, cwd, { PI_SANDBOX_OSASCRIPT: dialog });
+	try {
+		await host.ready;
+		const fullAccess = (args: string) => host.call<{ message: string }>("command", { name: "full-access", args });
+		let bashes = 0;
+		const touch = async (name: string) => {
+			await prompt(host, call("bash", { command: `touch "${join(target, name)}" 2>/dev/null; true`, description: "Touch outside", foreground: true }));
+			await toolResult(host, "bash", ++bashes);
+			await quiet(host);
+			return existsSync(join(target, name));
+		};
+		assert.match((await fullAccess("")).message, /Full access is off/);
+		writeFileSync(answer, "Deny");
+		assert.match((await fullAccess("on")).message, /stays off/);
+		assert.equal(await touch("denied"), false, "Deny keeps the fence");
+		writeFileSync(answer, "Allow");
+		assert.match((await fullAccess("on")).message, /Full access is on/);
+		assert.match(readFileSync(`${answer}.asked`, "utf8"), /Allow full access for the Chat .* in .*workspace/);
+		assert.equal((await host.call<Status>("status")).extensionStatuses?.["workbench.full-access"], "full access");
+		assert.equal(await touch("lead"), true, "the lead's command ran without the fence");
+		await prompt(host, call("subagent", scout(call("bash", { command: `touch "${join(target, "child")}" 2>/dev/null; touch "${join(cwd, "child-ran")}"` }), { background: false, profile: "implementer" })));
+		await toolResult(host, "subagent");
+		await quiet(host);
+		assert.ok(existsSync(join(cwd, "child-ran")), "the Subagent's command ran");
+		assert.equal(existsSync(join(target, "child")), false, "a Subagent's command stays fenced");
+		assert.match((await fullAccess("off")).message, /Full access is off/);
+		assert.equal((await host.call<Status>("status")).extensionStatuses?.["workbench.full-access"], undefined);
+		assert.equal(await touch("after-off"), false, "off fences again");
+	} finally {
+		await host.close();
+		rmSync(target, { recursive: true, force: true });
+	}
 });

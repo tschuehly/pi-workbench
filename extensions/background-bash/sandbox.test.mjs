@@ -3,11 +3,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir, userInfo } from "node:os";
+import { dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
 import { launchJob, readJob } from "./jobs.mjs";
-import { alreadyFenced, grants } from "./sandbox.mjs";
+import { plan } from "./host-ops.mjs";
+import { alreadyFenced, grants, ownedWorktrees, workstreamId } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -135,4 +136,166 @@ test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a 
   assert.ok(grants({ cwd: h, home: h }).read.includes(`${h}/.gradle/gradle.properties`));
   assert.ok(grants({ cwd: h, home: h }).hidden.includes(`${h}/Desktop`));
   assert.deepEqual(grants({ cwd: h, home: h, temp: ["/private/tmp"] }).write.slice(0, 1), ["/private/tmp"]);
+});
+
+test("host operations: only `workstreams` (no @file) and `wt switch --create` with --base/--no-cd, never --execute or --clobber", () => {
+  assert.deepEqual(plan(["workstreams", "checkpoint", "ws-a", "--stdin"]), { file: "workstreams", args: ["checkpoint", "ws-a", "--stdin"] });
+  assert.deepEqual(plan(["workstreams", "append", "@-"]).args, ["append", "@-"]);
+  assert.deepEqual(plan(["wt", "switch", "-c", "feat", "-b", "main"]), { worktree: { branch: "feat", base: "main" } });
+  assert.deepEqual(plan(["wt", "switch", "--create", "feat", "--no-cd", "--base=dev"]), { worktree: { branch: "feat", base: "dev" } });
+  for (const argv of [["wt", "switch", "-c", "feat", "-x", "rm -rf ~"], ["wt", "switch", "-c", "feat", "--clobber"], ["wt", "switch", "-c"], ["wt", "remove", "feat"], ["git", "push"], ["wt", "switch", "-c", "feat", "-C", "/"], ["wt", "switch", "-c", "feat", "--base=--upload-pack=x"], ["workstreams", "append", "@/Users/x/Documents/secret"]])
+    assert.ok(plan(argv).error, argv.join(" "));
+});
+
+test("grants: a Workstream ID never leads out of scratch/, and a worktree whose .git was repointed gets no grant", () => {
+  assert.equal(workstreamId("ws-x/../../../Library/LaunchAgents"), undefined);
+  assert.equal(workstreamId("ws-a..b"), undefined);
+  assert.equal(workstreamId("ws-workbench-sandbox-20261124"), "ws-workbench-sandbox-20261124");
+  const h = "/Users/someone";
+  assert.deepEqual(grants({ cwd: h, home: h, scratch: `${h}/.pi-workbench/scratch/ws-x/../../../Library/LaunchAgents` }).write.filter((p) => p.includes("Library/LaunchAgents")), []);
+});
+
+// Fake programs the runner finds on the job's PATH: they write where no fence grants, proving they ran outside it.
+const fakeBin = join(root, "bin");
+mkdirSync(fakeBin, { recursive: true });
+writeFileSync(join(fakeBin, "workstreams"), '#!/bin/sh\nmkdir -p "$HOME/.pi-workbench/workstreams"\n{ echo "args=$* foo=$FOO"; cat; } > "$HOME/.pi-workbench/workstreams/record"\necho stored\n', { mode: 0o755 });
+// Never run by the host operation (it writes the owner record itself): this one would mark that it ran.
+writeFileSync(join(fakeBin, "mac-storage-workspaces"), '#!/bin/sh\necho "$@" > "$HOME/owner-script-ran"\n', { mode: 0o755 });
+const withFakes = { PATH: `${fakeBin}:${process.env.PATH}`, PI_SESSION_ID: "sandbox-test" };
+
+for (const owned of [false, true]) {
+  test(`${owned ? "child-agent" : "lead"} jobs: \`workstreams\` runs outside the fence with its arguments and stdin, never the command's environment`, { skip }, async () => {
+    const job = await run('touch "$HOME/.pi-workbench/workstreams-direct" 2>/dev/null; printf "{\\"what\\":1}" | FOO=agent workstreams checkpoint ws-a --stdin; workstreams append "@$HOME/Desktop/x" || echo at-file-refused', { owned, env: withFakes });
+    assert.equal(job.state, "complete", job.error);
+    assert.match(readFileSync(job.logPath, "utf8"), /stored[\s\S]*reads a file outside the sandbox[\s\S]*at-file-refused/);
+    assert.equal(readFileSync(join(home, ".pi-workbench", "workstreams", "record"), "utf8"), 'args=checkpoint ws-a --stdin foo=\n{"what":1}');
+    assert.equal(existsSync(join(home, ".pi-workbench", "workstreams-direct")), false, "the command itself still cannot write there");
+    rmSync(join(home, ".pi-workbench", "workstreams", "record"));
+  });
+}
+
+test("`wt switch --create` makes the sibling worktree outside the fence and records its owner; --execute and a repo outside ~/IdeaProjects are refused", { skip }, async () => {
+  // Its own repo: the rm -rf test above empties the shared one's .git, as it may inside the grant.
+  const tools = join(home, "IdeaProjects", "tools");
+  mkdirSync(tools);
+  git(tools, "init", "-q");
+  git(tools, "commit", "-q", "--allow-empty", "-m", "init");
+  // A repo the agent sets up in its temp folder, its hooks pointing at a script: never used outside the fence.
+  const planted = join(piTmp, "planted");
+  const job = await run([
+    'wt switch --create made-by-host --no-cd; echo "exit=$?"',
+    'wt switch --create other -x "touch $HOME/escaped"; echo "exit=$?"',
+    `git init -q "${planted}" && printf '#!/bin/sh\ntouch "$HOME/escaped"\n' > "${planted}/hook" && chmod +x "${planted}/hook" && git -C "${planted}" config core.hooksPath "${planted}" && cd "${planted}" && wt switch --create from-planted; echo "exit=$?"`,
+  ].join("; "), { cwd: tools, env: withFakes });
+  assert.equal(job.state, "complete", job.error);
+  const out = readFileSync(job.logPath, "utf8");
+  const tree = join(home, "IdeaProjects", "tools.made-by-host");
+  assert.ok(existsSync(join(tree, ".git")), out);
+  assert.match(out, /exit=0[\s\S]*-x is not available inside the sandbox[\s\S]*exit=2[\s\S]*run it inside a checkout under ~\/IdeaProjects[\s\S]*exit=2/);
+  const record = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "tools.made-by-host", "pi-owner.json"), "utf8"));
+  assert.deepEqual([record.branch, record.sessions], ["made-by-host", ["sandbox-test"]]);
+  assert.equal(existsSync(join(home, "owner-script-ran")), false, "no owner-record script ran");
+  assert.equal(existsSync(join(home, "escaped")), false);
+  assert.equal(git(tools, "branch", "--list", "other").trim(), "", "a refused call creates nothing");
+});
+
+test("a chat in its scratch folder may write the worktrees whose owner record names it; it cannot forge one", { skip }, async () => {
+  const main = join(home, "IdeaProjects", "lib");
+  const mine = join(home, "IdeaProjects", "lib.mine");
+  const theirs = join(home, "IdeaProjects", "lib.theirs");
+  mkdirSync(main);
+  git(main, "init", "-q");
+  git(main, "commit", "-q", "--allow-empty", "-m", "init");
+  git(main, "worktree", "add", "-q", "-b", "mine", mine);
+  git(main, "worktree", "add", "-q", "-b", "theirs", theirs);
+  const meta = join(main, ".git", "worktrees");
+  writeFileSync(join(meta, "lib.mine", "pi-owner.json"), JSON.stringify({ sessions: ["sandbox-test:child-1"], workstreams: [] }));
+  writeFileSync(join(meta, "lib.theirs", "pi-owner.json"), JSON.stringify({ sessions: ["another-chat"], workstreams: ["ws-other"] }));
+  const viaWorkstream = join(home, "IdeaProjects", "lib.ws");
+  git(main, "worktree", "add", "-q", "-b", "ws", viaWorkstream);
+  writeFileSync(join(meta, "lib.ws", "pi-owner.json"), JSON.stringify({ sessions: ["earlier-chat"], workstreams: ["ws-x"] }));
+  // A forged record: a worktree entry naming this chat, pointing at the main checkout (whose .git is a folder).
+  mkdirSync(join(meta, "forged"));
+  writeFileSync(join(meta, "forged", "gitdir"), `${join(main, ".git")}\n`);
+  writeFileSync(join(meta, "forged", "pi-owner.json"), JSON.stringify({ sessions: ["sandbox-test"] }));
+  assert.deepEqual(ownedWorktrees(home, ["sandbox-test"]).filter((p) => p.includes(`${sep}lib.`)), [mine], "a child's session counts as its chat; theirs and the forgery do not");
+  const scratchDir = join(home, ".pi-workbench", "scratch", "ws-x");
+  mkdirSync(scratchDir, { recursive: true });
+  const job = await run([
+    `cd "${mine}" && ${commit}`,
+    `cd "${viaWorkstream}" && ${commit}`,
+    `printf 'gitdir: ${join(main, ".git")}\n' > "${join(mine, ".git")}" 2>/dev/null`,
+    `touch "${join(theirs, "x")}" "${join(main, "x")}" "${join(meta, "lib.mine", "pi-owner.json")}" "${join(meta, "lib.mine", "gitdir")}" "${join(main, ".git", "pi-owner.json")}" 2>/dev/null`,
+    `mkdir "${join(meta, "planted")}" 2>/dev/null`,
+    `echo "{}" > "${join(meta, "lib.theirs", "pi-owner.json")}" 2>/dev/null`,
+    "true",
+  ].join("; "), { cwd: scratchDir, owned: true });
+  assert.equal(job.state, "complete", job.error);
+  assert.match(git(mine, "log", "-1", "--format=%s"), /fenced/, "a commit in the owned worktree works");
+  assert.match(git(viaWorkstream, "log", "-1", "--format=%s"), /fenced/, "a worktree of the Workstream whose scratch folder the chat started in");
+  assert.match(readFileSync(join(mine, ".git"), "utf8"), /worktrees\/lib\.mine/, "its .git file cannot be repointed");
+  for (const path of [join(theirs, "x"), join(main, "x"), join(main, ".git", "pi-owner.json"), join(meta, "planted")]) assert.equal(existsSync(path), false, path);
+  assert.match(readFileSync(join(meta, "lib.mine", "pi-owner.json"), "utf8"), /child-1/, "its own owner record is unchanged");
+  assert.match(readFileSync(join(meta, "lib.theirs", "pi-owner.json"), "utf8"), /another-chat/);
+});
+
+test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or another job's host operations", { skip }, async () => {
+  const { createServer } = await import("node:net");
+  const servers = [];
+  const listen = (where) => new Promise((resolve, reject) => { const server = createServer((socket) => socket.end("hello\n")); servers.push(server); server.once("error", reject); server.listen(where, () => resolve(server)); });
+  // A short socket path (the 104-byte limit): a stand-in PI WEB data folder in the system temp folder.
+  const dataDir = mkdtempSync(join(tmpdir(), "pw-"));
+  mkdirSync(join(dataDir, "hosts"));
+  const otherOps = join(userInfo().homedir, ".pi-workbench", "sandbox", "ops", `test-${process.pid}.sock`);
+  mkdirSync(dirname(otherOps), { recursive: true });
+  try {
+    const web = await listen(0);
+    await listen(join(dataDir, "hosts", "h.sock"));
+    await listen(otherOps);
+    const free = await listen(0);
+    const nc = (target) => `nc ${target} </dev/null 2>/dev/null | grep -q hello && echo REACHED || echo REFUSED`;
+    const job = await run([nc(`-w2 127.0.0.1 ${web.address().port}`), nc(`-U -w2 "${join(dataDir, "hosts", "h.sock")}"`), nc(`-U -w2 "${otherOps}"`), nc(`-w2 127.0.0.1 ${free.address().port}`)].join("; "), { env: { PI_WEB_PORT: String(web.address().port), PI_WEB_DATA_DIR: dataDir } });
+    assert.equal(job.state, "complete", job.error);
+    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "REFUSED", "REACHED"], "only the unrelated port answers");
+  } finally {
+    for (const server of servers) server.close();
+    rmSync(otherOps, { force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("signals reach only the command's own processes: no SIGUSR1 opens an unfenced Node debugger", { skip }, async () => {
+  const { spawn } = await import("node:child_process");
+  const outsider = spawn("sleep", ["30"], { stdio: "ignore" });
+  try {
+    const job = await run(`kill -USR1 ${outsider.pid} 2>/dev/null && echo OUTSIDER_SIGNALLED || echo OUTSIDER_REFUSED; sleep 30 & kill $! && echo OWN_KILLED`);
+    assert.equal(job.state, "complete", job.error);
+    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["OUTSIDER_REFUSED", "OWN_KILLED"]);
+    assert.equal(outsider.exitCode, null, "the outside process is untouched");
+  } finally { outsider.kill(); }
+});
+
+test("a planted commondir or a relative hooks folder never runs through the worktree host operation", { skip }, async () => {
+  const app = join(home, "IdeaProjects", "hooked");
+  const wtree = join(home, "IdeaProjects", "hooked.mine");
+  mkdirSync(app);
+  git(app, "init", "-q");
+  git(app, "commit", "-q", "--allow-empty", "-m", "init");
+  git(app, "worktree", "add", "-q", "-b", "mine", wtree);
+  git(app, "config", "core.hooksPath", ".githooks");
+  mkdirSync(join(app, ".githooks"));
+  writeFileSync(join(app, ".githooks", "post-checkout"), `#!/bin/sh\ntouch "${join(home, "hook-ran")}"\n`, { mode: 0o755 });
+  writeFileSync(join(app, ".git", "worktrees", "hooked.mine", "pi-owner.json"), JSON.stringify({ sessions: ["sandbox-test"] }));
+  // From its owned worktree the chat can write the shared git folder, but not plant a commondir there.
+  const job = await run(`printf '${piTmp}\\n' > "${join(app, ".git", "commondir")}" 2>/dev/null || echo COMMONDIR_REFUSED; wt switch --create via-host; echo "exit=$?"`, { cwd: wtree, env: withFakes });
+  assert.equal(job.state, "complete", job.error);
+  const out = readFileSync(job.logPath, "utf8");
+  assert.match(out, /COMMONDIR_REFUSED[\s\S]*exit=0/);
+  assert.ok(existsSync(join(home, "IdeaProjects", "hooked.via-host", ".git")), out);
+  assert.equal(existsSync(join(home, "hook-ran")), false, "no hook ran outside the fence");
+  // Planted by someone outside the fence: the host operation refuses the repo.
+  writeFileSync(join(app, ".git", "commondir"), `${piTmp}\n`);
+  const again = await run('wt switch --create second; echo "exit=$?"', { cwd: wtree, env: withFakes });
+  assert.match(readFileSync(again.logPath, "utf8"), /run it inside a checkout under ~\/IdeaProjects[\s\S]*exit=2/);
+  rmSync(join(app, ".git", "commondir"));
 });

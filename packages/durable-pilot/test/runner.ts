@@ -1,7 +1,7 @@
 // Parent side of the crash matrix: spawn a host process, wait for an explicit barrier, then hard-kill it (SIGKILL)
 // or ask it to close gracefully; reopen in a fresh process and collect evidence; check SQLite integrity.
 // Every iteration's evidence is appended to results/evidence/<window>.<mode>.jsonl.
-import { type ChildProcess, fork } from "node:child_process";
+import { type ChildProcess, execFileSync, fork } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -30,9 +30,12 @@ type Message = { type: string; name?: string; data?: unknown; evidence?: Record<
 const made = new Set<string>();
 
 /** A fresh scratch directory, removed by cleanup() unless an iteration failed in it. */
-export function scratch(label: string): string {
+export function scratch(label: string, { repo = false } = {}): string {
 	mkdirSync(RUNS, { recursive: true });
 	const dir = mkdtempSync(join(RUNS, `dp-${label.replace(/[^a-z0-9]+/gi, "-")}-`));
+	// `repo`: a git checkout, so the write fence grants its commands this folder as it grants a chat's repo (wherever
+	// RUNS is). Not by default: a listing of the folder would then hold `.git`.
+	if (repo) execFileSync("git", ["init", "-q", dir]);
 	made.add(dir);
 	return dir;
 }

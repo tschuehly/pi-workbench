@@ -136,7 +136,7 @@ const textOf = (content: unknown): string =>
 	typeof content === "string" ? content : Array.isArray(content) ? content.map((c: { text?: string }) => c.text ?? "").join("") : "";
 
 function family(label: string): { store: string; cwd: string } {
-	const dir = scratch(`chat-${label}`);
+	const dir = scratch(`chat-${label}`, { repo: true });
 	const cwd = join(dir, "workspace");
 	mkdirSync(cwd);
 	return { store: join(dir, "family"), cwd };

@@ -32,7 +32,7 @@ import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePrefligh
 import { type ContributedResources, PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
-import { BACKGROUND_BASH_STATUS, BashJobsDoc } from "./background-bash.ts";
+import { BACKGROUND_BASH_STATUS, BashJobsDoc, FULL_ACCESS_COMMAND } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
 import { CHAT_MESSAGE_TYPE, CHAT_PAUSED, type ChatListResult, type ChatMessageDelivery, type ChatMessageResult, type Delivery, deliveredBefore, type IncomingChatMessage, submitChatMessage } from "./chat-message.ts";
 import { readFileSync } from "node:fs";
@@ -772,7 +772,7 @@ export class ChatSession {
 
 	/** The Chat's slash commands: the host's own (`/quota-check`, `/fast`, `/back`), then the bound Pi packages'. */
 	commands(): { name: string; description?: string }[] {
-		return [...COMMANDS, ...(this.#chat === undefined ? [] : [FAST_COMMAND, BACK_COMMAND, CHECKPOINT_COMMAND]), ...(this.#chat?.packages?.commands() ?? [])];
+		return [...COMMANDS, ...(this.#chat === undefined ? [] : [FAST_COMMAND, BACK_COMMAND, CHECKPOINT_COMMAND]), ...(this.#chat?.bash === undefined ? [] : [FULL_ACCESS_COMMAND]), ...(this.#chat?.packages?.commands() ?? [])];
 	}
 
 	/**
@@ -785,6 +785,11 @@ export class ChatSession {
 		if (name === BACK_COMMAND.name && this.#chat !== undefined) return this.#back(operationId);
 		// A follow-up: queued behind a running turn, at once when idle.
 		if (name === CHECKPOINT_COMMAND.name && this.#chat !== undefined) return this.prompt({ operationId: `checkpoint:${operationId}`, text: checkpointPrompt(args.trim()), mode: "followUp" }).then(() => ({ type: "done" as const }));
+		if (name === FULL_ACCESS_COMMAND.name && this.#chat?.bash !== undefined) {
+			const result = await this.#chat.bash.fullAccess(args, `"${this.#title() ?? this.#chatId ?? "untitled"}" in ${this.#cwd}`);
+			await this.#publishStatus();
+			return result;
+		}
 		const packages = this.#chat?.packages;
 		if (packages === undefined) return { type: "unsupported", message: `/${name} is not available in Durable Chats yet` };
 		const result = await packages.command(args === "" ? `/${name}` : `/${name} ${args}`);

@@ -9,6 +9,7 @@
 //   submitted under a request ID derived from the job, so a crash before its receipt resubmits nothing new.
 // Completions are delivered by a host-side reporter, not a Durable task, so a reopened idle Chat delivers them at once
 // while a restore with interrupted work stays paused until the user resumes it (owner decision 2).
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -125,6 +126,20 @@ function sleep(ms: number, c: Context): Promise<void> {
 	});
 }
 
+export const FULL_ACCESS_STATUS = "workbench.full-access";
+export const FULL_ACCESS_COMMAND = { name: "full-access", description: "Run this Chat's own commands without the write fence (asks you to confirm). Usage: /full-access [on|off]" } as const;
+
+/** The owner's answer in a macOS dialog; anything but Allow (Deny, timeout, a killed dialog) is no. */
+function confirmDialog(text: string): Promise<boolean> {
+	// PI_SANDBOX_OSASCRIPT (set by the host, e.g. tests) replaces Apple's binary, never found on PATH.
+	const bin = process.env.PI_SANDBOX_OSASCRIPT || "/usr/bin/osascript";
+	const script = ["on run argv", 'display dialog (item 1 of argv) with title "Pi sandbox" buttons {"Deny", "Allow"} default button "Deny" cancel button "Deny" with icon caution giving up after 120', "end run"];
+	return new Promise((resolve) => {
+		execFile(bin, [...script.flatMap((line) => ["-e", line]), text], { encoding: "utf8", timeout: 130_000 }, (error, stdout) =>
+			resolve(error === null && /button returned:Allow/.test(stdout) && !/gave up:true/.test(stdout)));
+	});
+}
+
 type Hooks = { deliver: <T>(work: () => Promise<T>) => Promise<T>; changed: () => void };
 
 export type BackgroundBashOptions = {
@@ -149,6 +164,8 @@ export class BackgroundBash {
 	/** The lead: the Chat's active branch at each use (history navigation may select another). */
 	#conversation: (() => Conversation) | undefined;
 	#reader: DocumentReader | undefined;
+	/** The owner's full-access switch for the lead's commands: in memory only, so it ends with this host (Thomas, 24 Nov). */
+	#fullAccess = false;
 
 	constructor(options: BackgroundBashOptions) {
 		this.#options = options;
@@ -207,7 +224,7 @@ export class BackgroundBash {
 				launchJob({
 					root: this.#root, id, command: args.command, description: args.description, cwd, timeout: ref.timeout ?? args.timeout, expiresAt: ref.expiresAt ?? NaN, owned: !lead, ownerExecutionId: child?.executionId ?? "", progressLog: typeof args.progressLog === "string" ? args.progressLog : "",
 					env: { ...process.env, ...toolEnv(identity) }, sessionId: this.#options.chatId, shell, args: shellArgs, startedAt: ref.startedAt,
-					cancelled: this.#ending || (!this.#closing && c.abortSignal?.aborted === true),
+					cancelled: this.#ending || (!this.#closing && c.abortSignal?.aborted === true), fullAccess: lead && this.#fullAccess,
 				});
 				crashPoint("bash.spawned");
 				const logPath = readJob(this.#root, id)!.logPath;
@@ -358,16 +375,35 @@ export class BackgroundBash {
 	 * Running jobs for PI WEB's Activity, as the legacy extension publishes them, each with the `bash` call that launched
 	 * it: while that call runs, Activity shows the job once, not also as the running tool call.
 	 */
+	/**
+	 * `/full-access [on|off]`. Any local process can send a Chat a command through PI WEB, so turning it on needs the
+	 * owner's click in a macOS dialog the host shows; off needs nothing. Subagents' commands stay fenced.
+	 */
+	async fullAccess(args: string, chat: string, confirm: (text: string) => Promise<boolean> = confirmDialog): Promise<{ type: "done"; message: string }> {
+		const word = args.trim().toLowerCase();
+		if (word === "off") {
+			this.#fullAccess = false;
+			return { type: "done", message: "Full access is off: this Chat's commands run inside the write fence again." };
+		}
+		if (word !== "on") return { type: "done", message: `Full access is ${this.#fullAccess ? "on" : "off"}. Usage: /full-access [on|off]` };
+		if (this.#fullAccess) return { type: "done", message: "Full access is already on." };
+		const text = `Allow full access for the Chat ${chat}?\n\nIts own commands (not its Subagents') will run without the write fence until you send /full-access off or the Chat's host stops.`;
+		if (!(await confirm(text))) return { type: "done", message: "Full access stays off: the confirmation dialog was not answered with Allow." };
+		this.#fullAccess = true;
+		return { type: "done", message: "Full access is on for this Chat's own commands until /full-access off or the Chat's host stops." };
+	}
+
 	async status(): Promise<Record<string, string>> {
 		if (this.#conversation === undefined) return {};
+		const access: Record<string, string> = this.#fullAccess ? { [FULL_ACCESS_STATUS]: "full access" } : {};
 		const running = (await this.#read()).filter((job) => job.state === "running");
-		if (running.length === 0) return {};
+		if (running.length === 0) return access;
 		const refs = (await this.#reader!.snapshot(BashJobsDoc, this.#conversation().id, context))?.jobs ?? {};
 		const jobs = running.map((job) => {
 			const toolCallId = refs[job.id]?.callId;
 			return { id: job.id, elapsedSeconds: Math.floor((Date.now() - job.startedAt) / 1000), bytes: job.bytes, ...previewJob(job, 1200), ...(toolCallId === undefined ? {} : { toolCallId }) };
 		});
-		return { [BACKGROUND_BASH_STATUS]: JSON.stringify({ schemaVersion: 1, jobs }) };
+		return { ...access, [BACKGROUND_BASH_STATUS]: JSON.stringify({ schemaVersion: 1, jobs }) };
 	}
 
 	async #read(): Promise<Job[]> {

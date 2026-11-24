@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { opsPath, serve } from "./host-ops.mjs";
 import { confine } from "./sandbox.mjs";
 
 /** Create `path` holding `data` unless it already exists; readers never see a partial file. */
@@ -19,6 +20,9 @@ export function writeOnce(path, data) {
   finally { unlinkSync(temporary); }
 }
 
+/** Removes the job's host-operation socket; also before the runner's own SIGKILL at the deadline (no exit handler runs). */
+let closeOps = () => {};
+
 function run(dir) {
   // Claim the job before anything runs: a second runner for the same job (its host restarted between recording the
   // launch and the runner's start) exits here, and so does one whose job was cancelled before it started.
@@ -28,7 +32,19 @@ function run(dir) {
   const finish = (result) => writeOnce(join(dir, "exit"), JSON.stringify({ ...result, finishedAt: Date.now() }));
   const output = openSync(join(dir, "output.log"), "a", 0o600);
   // Both branches start the command only through the write fence; no fence, no command (sandbox.mjs).
-  void confine(job).then((launch) => {
+  void confine(job, process.env, { ownSocket: opsPath(dir) }).then(async (launch) => {
+    // A fenced command reaches the few writes beyond its grants (Workstreams, new worktrees) through this runner.
+    if (launch.fenced) {
+      let ops;
+      try { ops = await serve(dir, launch.env); } catch (error) {
+        closeSync(output);
+        finish({ error: `Sandbox host operations unavailable: ${error.message}; the command was not run`, ...(job.owned ? { cleanup: { survivors: [] } } : {}) });
+        process.exit(0);
+      }
+      process.once("exit", ops.close);
+      closeOps = ops.close;
+      launch = { ...launch, env: { ...launch.env, ...ops.env } };
+    }
     if (job.owned) {
       void runOwned(dir, job, output, finish, launch).catch((error) => {
         finish({ error: `Owned command supervision failed: ${String(error)}`, cleanup: { survivors: [], error: String(error) } });
@@ -49,6 +65,7 @@ function runLead(job, output, finish, launch) {
   child.once("exit", (code, signal) => { finish({ exitCode: code ?? 128 + (constants.signals[signal] ?? 0) }); process.exit(0); });
   setTimeout(() => {
     finish({ error: job.timeout === undefined ? `Stopped at the ${Math.round((job.expiresAt - job.startedAt) / 1000)}-second maximum lifetime` : `Timed out after ${job.timeout} seconds` });
+    closeOps();
     process.kill(-process.pid, "SIGKILL");
   }, Math.max(0, job.expiresAt - Date.now()));
 }

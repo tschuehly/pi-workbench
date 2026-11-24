@@ -88,19 +88,20 @@ const VANISHED = "The job runner ended without recording an exit status";
  * it runs the command (runner.mjs). Returns whether a runner was started. `cancelled`: record the job as cancelled
  * without starting a runner (its owner ended meanwhile).
  */
-export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false }) {
+export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false }) {
   if (!/^[\w-]+$/.test(id)) throw new Error(`Invalid job ID ${id}`);
   const dir = join(root, id);
   if (existsSync(join(dir, "claim")) || existsSync(join(dir, "exit"))) return false;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   closeSync(openSync(join(dir, "output.log"), "a", 0o600));
   // An admitted deadline is immutable, even when a host dies before the runner claims it.
-  if (!existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}) }));
+  if (!existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}), ...(fullAccess === true ? { fullAccess: true } : {}) }));
   if (cancelled) {
     writeOnce(join(dir, "exit"), JSON.stringify({ cancelled: true, finishedAt: Date.now(), ...(owned ? { cleanup: { survivors: [] } } : {}) }));
     return false;
   }
-  const runner = spawn(process.execPath, [runnerPath, dir], { cwd: dir, detached: true, stdio: "ignore", env });
+  // --disable-sigusr1: no debugger a signal could open in this unfenced process (the fence also denies such signals).
+  const runner = spawn(process.execPath, ["--disable-sigusr1", runnerPath, dir], { cwd: dir, detached: true, stdio: "ignore", env });
   runner.once("error", (error) => writeOnce(join(dir, "exit"), JSON.stringify({ error: `Runner could not start: ${String(error)}`, finishedAt: Date.now() })));
   runner.once("exit", () => {
     // No claim means no shell could have run. Never leave the blocking tool waiting on a dead pre-claim runner.

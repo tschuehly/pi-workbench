@@ -17,7 +17,7 @@ import { cleanup, scratch } from "./runner.ts";
 type Message = { role: string; customType?: string; content?: unknown; details?: Record<string, unknown>; isError?: boolean };
 type Status = { extensionStatuses?: Record<string, string>; warnings?: unknown[]; unresolvedEffects?: unknown[] };
 
-const ROOT = scratch("s4b-bash");
+const ROOT = scratch("s4b-bash", { repo: true });
 const JOBS = join(ROOT, "jobs");
 // Every host this file starts keeps its job registry, PI_TMP and telemetry in scratch.
 process.env.PI_BACKGROUND_BASH_ROOT = JOBS;

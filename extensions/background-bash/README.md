@@ -56,3 +56,24 @@ Cancel/end/settle require cleanup; normal host close is restart, not cancellatio
 Prove this with `npm --prefix packages/durable-pilot run test:bash-atelier` (install the pinned Playwright dev dependency
 and its Chromium once with `cd packages/durable-pilot && npx playwright install chromium`). Tests use seconds, disposable
 hosts, a real detached browser, an unrelated sentinel, restart fault windows, cancellation and Worker continuation.
+
+## Write fence (macOS)
+
+On macOS the runner starts every command under Apple's `/usr/bin/sandbox-exec` with a Seatbelt profile built in
+`sandbox.mjs` from the job record and the runner's own environment, never from files a command can write. No proven
+sandbox means the command does not start (`Sandbox unavailable: …; the command was not run`).
+
+- **Writable:** the chat's git checkout or linked worktree (its `hooks`, `config`, `info`, other worktrees' metadata,
+  owner records and `.git` link stay read-only), linked worktrees whose owner record names the chat (or, for a chat
+  started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP`, system temp and package
+  caches (not their credential or init files). Never home, `~/IdeaProjects`, or Pi's own state.
+- **Unreadable:** Desktop, Documents, Downloads, Pictures and other apps' data, so macOS never asks.
+- **Unreachable:** PI WEB's port and the sockets in its data folder (they run `!` commands and prompts unfenced), other
+  jobs' host-operation sockets, and Apple events.
+- **Host operations** (`host-ops.mjs`): shims first on the fenced PATH forward `workstreams` (no `@file` arguments) and
+  `wt switch --create <branch> [--base <ref>]` to the job's runner, which runs them outside the fence with its own
+  environment; the worktree is created with git in the main checkout under `~/IdeaProjects`, and the runner writes its
+  owner record.
+- **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
+  a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
+- A fenced command that starts Pi or this runner again runs under the outer fence (`alreadyFenced`).
