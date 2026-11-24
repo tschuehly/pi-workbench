@@ -163,13 +163,19 @@ function codemodeExtension(sandbox: CodemodeSandbox, inlineBudget: number | unde
 		// Keep the built-in help if the docs cannot be found.
 	}
 	const modelsBlock = /^`models` \(all functions return promises\):[\s\S]*?^At most 4 classify\/generateImages calls run at once; more wait\.$/m;
+	// The docs path names the build folder, which every promotion changes: in a tool description that change would make
+	// open Chats redefine their tools and lose the prompt cache; a changed prompt section is a small cached update.
 	return {
 		...extension,
 		tools: extension.tools?.map((tool) => ({
 			...tool,
 			replay: "unsafe" as const,
-			...(tool.name === "codemode" && hasDocs ? { description: tool.description?.replace(modelsBlock, () => `- \`models\`: classifiers and image generation. Read ${docs} first.`) } : {}),
+			...(tool.name === "codemode" && hasDocs ? { description: tool.description?.replace(modelsBlock, () => "- `models`: classifiers and image generation. Read the codemode docs (path in the system prompt's `codemode` section) first.") } : {}),
 		})),
+		sections: extension.sections?.map((section) => section.key !== "codemode" || !hasDocs ? section : {
+			...section,
+			render: async (input, c) => [await section.render(input, c), `Codemode docs: ${docs}`].filter((part) => part !== undefined).join("\n\n"),
+		}),
 	};
 }
 

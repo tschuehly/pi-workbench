@@ -107,10 +107,13 @@ test("P062 codemode points to the installed models docs instead of spelling out 
 	const { store, cwd } = family("codemode-model-docs");
 	const host = await openChatHost({ dir: store, cwd, model: "faux" });
 	try {
-		const tool = (await host.root.agent(context)).tools.find((tool) => tool.name === "codemode");
+		const agent = await host.root.agent(context);
+		const tool = agent.tools.find((tool) => tool.name === "codemode");
 		assert.ok(tool?.description, "codemode has a description");
 		assert.doesNotMatch(tool.description, /models\.classify\(/);
-		const pointer = /^- `models`: classifiers and image generation\. Read (.+) first\.$/m.exec(tool.description)?.[1];
+		assert.doesNotMatch(tool.description, /\/docs\/codemode\.md/, "no build path in the tool description: a promotion would redefine the tools");
+		const section = await agent.sections.find(({ key }) => key === "codemode")?.render({ conversationId: host.root.id, agent, env: undefined, shown: {}, read: host.harness }, context);
+		const pointer = /^Codemode docs: (.+)$/m.exec(section ?? "")?.[1];
 		assert.ok(pointer && isAbsolute(pointer) && pointer.endsWith("/docs/codemode.md"), "the description points to absolute codemode docs");
 		assert.ok(statSync(pointer).isFile(), "the installed docs exist");
 	} finally {
