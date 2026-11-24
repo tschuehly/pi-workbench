@@ -169,8 +169,8 @@ It polls only the typed `watch` operation and carries the last accepted sequence
 Link the Workbench `packages/` directory into PI WEB's local plugin directory:
 
 ```sh
-mkdir -p ~/.pi-web/plugins
-ln -s /path/to/pi-workbench/packages ~/.pi-web/plugins/pi-workbench
+mkdir -p ~/.pi-web-durable/plugins
+ln -s /path/to/pi-workbench/packages ~/.pi-web-durable/plugins/pi-workbench
 ```
 
 `packages/` is the declared plugin root. This lets browser modules in `pi-web-integration/` import the sibling shared coordination package while keeping repository metadata, skills, prompts, and machine-local files outside PI WEB's static asset root.

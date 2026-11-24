@@ -18,7 +18,7 @@ private struct PIWebConfiguration {
         }()
         let cliPath = environment["PI_WEB_CLI"] ?? bundleValues["CLIPath"] as? String
         let checkoutPath = environment["PI_WEB_DIR"] ?? bundleValues["CheckoutPath"] as? String
-        let urlValue = environment["PI_WEB_URL"] ?? bundleValues["ServerURL"] as? String ?? "http://127.0.0.1:8505"
+        let urlValue = environment["PI_WEB_URL"] ?? bundleValues["ServerURL"] as? String ?? "http://127.0.0.1:8506"
         guard
             let cliPath, !cliPath.isEmpty,
             let checkoutPath, !checkoutPath.isEmpty,
@@ -120,7 +120,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
 
     private func openLogs() {
         let logs = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".pi-web", isDirectory: true)
+            .appendingPathComponent(".pi-web-durable", isDirectory: true)
             .appendingPathComponent("logs", isDirectory: true)
         try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
         NSWorkspace.shared.open(logs)

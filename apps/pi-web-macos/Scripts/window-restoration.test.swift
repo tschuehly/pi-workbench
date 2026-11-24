@@ -2,12 +2,12 @@ import AppKit
 
 @main struct WindowRestorationTest {
     static func main() {
-        let server = URL(string: "http://127.0.0.1:8505/")!
-        let chat = URL(string: "http://127.0.0.1:8505/?project=p&workspace=w&session=s&view=chat")!
+        let server = URL(string: "http://127.0.0.1:8506/")!
+        let chat = URL(string: "http://127.0.0.1:8506/?project=p&workspace=w&session=s&view=chat")!
         let chooser = server
-        let selectedChooser = URL(string: "http://127.0.0.1:8505/?project=p&workspace=w")!
-        let folderChat = URL(string: "http://127.0.0.1:8505/?session=s&view=chat")!
-        let windowChat = URL(string: "http://127.0.0.1:8505/?session=s&view=chat&win=abc123")!
+        let selectedChooser = URL(string: "http://127.0.0.1:8506/?project=p&workspace=w")!
+        let folderChat = URL(string: "http://127.0.0.1:8506/?session=s&view=chat")!
+        let windowChat = URL(string: "http://127.0.0.1:8506/?session=s&view=chat&win=abc123")!
         assert(WindowRestoration.applicationURL(chat, server: server) != nil)
         assert(WindowRestoration.applicationURL(chooser, server: server) == chooser)
         assert(WindowRestoration.applicationURL(selectedChooser, server: server) != nil)
@@ -15,15 +15,15 @@ import AppKit
         assert(URLComponents(url: WindowRestoration.applicationURL(windowChat, server: server)!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "win" })?.value == "abc123")
         for text in [
             "http://evil.test/?project=p&workspace=w&session=s",
-            "http://127.0.0.1:8506/?project=p&workspace=w&session=s",
-            "http://127.0.0.1:8505/other?project=p&workspace=w&session=s",
-            "http://127.0.0.1:8505/?project=p&workspace=w&session=creating:token",
-            "http://127.0.0.1:8505/?project=p&workspace=w&session=s&token=secret",
-            "http://127.0.0.1:8505/?project=p&workspace=w&session=s&session=t",
-            "http://127.0.0.1:8505/?project=p&session=s",
-            "http://127.0.0.1:8505/?view=chat",
-            "http://127.0.0.1:8505/?project=p&workspace=w&session=s#secret",
-            "http://user:pass@127.0.0.1:8505/?project=p&workspace=w&session=s",
+            "http://127.0.0.1:8505/?project=p&workspace=w&session=s",
+            "http://127.0.0.1:8506/other?project=p&workspace=w&session=s",
+            "http://127.0.0.1:8506/?project=p&workspace=w&session=creating:token",
+            "http://127.0.0.1:8506/?project=p&workspace=w&session=s&token=secret",
+            "http://127.0.0.1:8506/?project=p&workspace=w&session=s&session=t",
+            "http://127.0.0.1:8506/?project=p&session=s",
+            "http://127.0.0.1:8506/?view=chat",
+            "http://127.0.0.1:8506/?project=p&workspace=w&session=s#secret",
+            "http://user:pass@127.0.0.1:8506/?project=p&workspace=w&session=s",
         ] {
             assert(WindowRestoration.applicationURL(URL(string: text)!, server: server) == nil, text)
         }
@@ -38,7 +38,7 @@ import AppKit
         WindowRestoration.save(windows, to: defaults)
         assert(WindowRestoration.read(from: defaults, server: server, screens: [screen]).count == 2)
         assert(WindowRestoration.read(from: defaults, server: server, screens: []).allSatisfy { $0.frame == nil })
-        assert(WindowRestoration.read(from: defaults, server: URL(string: "http://127.0.0.1:8506/")!, screens: [screen]).isEmpty)
+        assert(WindowRestoration.read(from: defaults, server: URL(string: "http://127.0.0.1:8505/")!, screens: [screen]).isEmpty)
         WindowRestoration.save([windows[1]], to: defaults) // closing the Chat removes only its record
         assert(WindowRestoration.read(from: defaults, server: server, screens: [screen]).first?.url == chooser)
         defaults.set([["url": "https://evil.test/", "frame": NSStringFromRect(screen)]], forKey: WindowRestoration.key)

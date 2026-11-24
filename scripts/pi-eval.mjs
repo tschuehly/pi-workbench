@@ -95,10 +95,10 @@ function prepareWorkspace(c, dir) {
 // A candidate has shell access, so it could read the source repositories, the case checks, earlier trials,
 // retained review evidence or session logs that discuss the answers, and it could reach GitHub as the owner.
 // macOS sandbox-exec denies those reads; later rules win, so the trial directory, Pi's local packages, the
-// promoted checkouts (~/.pi-workbench/installed) and run shims (~/.pi-workbench/run) stay readable.
+// promoted checkouts (~/.pi-workbench/installed-durable) and run shims (~/.pi-workbench/run) stay readable.
 // All of ~/.pi-workbench is denied (scratch, workstreams, tmp, background-bash, reviews, ...); runPi points
 // Pi's tmp and background-bash roots into the trial directory.
-// Rules match real paths, so every path is resolved: the `*.installed` links point into ~/.pi-workbench/installed.
+// Rules match real paths, so every path is resolved: the `*.durable-installed` links point into ~/.pi-workbench/installed-durable.
 // It also denies the login keychain, ~/.ssh, connecting to the SSH agent (launchd's socket is findable by
 // glob), and the tools that hand out stored credentials (gh, security, git's keychain helper); Pi's model
 // logins live in ~/.pi/agent/auth.json. A provider that probes the keychain (antigravity-acp) then falls
@@ -108,9 +108,9 @@ function sandboxProfile(trialDir) {
   const home = homedir();
   const projects = real(process.env.PI_EVAL_PROJECTS ?? path.join(home, "IdeaProjects"));
   const workbench = path.join(home, ".pi-workbench");
-  const deny = [projects, real(EVAL_HOME), workbench, ".pi/agent/sessions", ".pi-web", "Library/Keychains", ".ssh", ".claude/projects", ".codex/sessions"]
+  const deny = [projects, real(EVAL_HOME), workbench, ".pi/agent/sessions", ".pi-web-durable", "Library/Keychains", ".ssh", ".claude/projects", ".codex/sessions"]
     .map((p) => real(path.resolve(home, p)));
-  const allow = [...localPiPackages(), path.join(workbench, "installed"), path.join(workbench, "run"), trialDir].map(real);
+  const allow = [...localPiPackages(), path.join(workbench, "installed-durable"), path.join(workbench, "run"), trialDir].map(real);
   const rule = (verb, p) => `(${verb} file-read-data (subpath ${JSON.stringify(p)}))`;
   const which = (cmd) => sh(`command -v ${cmd}`).stdout.trim();
   const noExec = ["/usr/bin/security", which("gh"), path.join(sh("git --exec-path").stdout.trim(), "git-credential-osxkeychain")].filter(Boolean).map(real);

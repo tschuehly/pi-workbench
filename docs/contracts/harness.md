@@ -47,24 +47,18 @@ Runtime routing and the interactive startup check share a machine-local quota sn
 
 The owner uses Pi Workbench and PI WEB for daily work while they are developed. Running code and edited code therefore live in separate checkouts:
 
-- **Installed checkouts** — `~/IdeaProjects/pi-workbench.installed` and `pi-web.installed` link to immutable detached worktrees under `~/.pi-workbench/installed/`, one per promoted revision. Pi package settings, the PI WEB plugin link, and the launchd services load only these, and PI WEB runs its production services (`pi-web install`) on port 8505 rather than autoreloading dev servers. No session edits them. `scripts/promote-installed check-settings` fails when any Pi Workbench or PI WEB package path in `~/.pi/agent/settings.json`, or the plugin link, resolves outside `~/.pi-workbench/installed/`; `switch` rolls back and `switch-workbench` refuses on that failure. `prepare`, `switch`, and `switch-workbench` also link `~/.pi/agent/bin/workstreams` (on Pi's PATH) to the installed Workstreams CLI and `~/.pi/agent/bin/wait-until` to the children's blocking wait (`extensions/subagent/wait-until.mjs`).
+- **Installed checkouts** — `~/IdeaProjects/pi-workbench.durable-installed` and `pi-web.durable-installed` link to immutable detached worktrees under `~/.pi-workbench/installed-durable/`, one per promoted revision. The Durable PI WEB instance (data in `~/.pi-web-durable`, port 8506, launchd labels `com.pi-web-durable.*`) and its plugin link load only these, and it runs production services rather than autoreloading dev servers. No session edits them. `promote-installed` never touches `~/.pi/agent`; Pi's package settings name the `*.durable-installed` links.
 - **Integration branches** — pi-workbench `main` and PI WEB `pi-workbench` receive work only as merged commits. Keep their checkouts clean; no session edits them in place.
 - **Development worktrees** — each editing session owns one linked worktree on its own branch, created with `wt switch --create <branch>` and removed with `wt remove` after merge (worktrunk; user config `~/.config/worktrunk/config.toml` sets sibling paths, a pre-start hook that records the creating session and its Workstream in the new worktree's Git dir, and a pre-remove hook that rescues leftover `.scratch/`). One session per worktree.
 
-A change goes live by promotion: merge into the integration branch, trial it in a second PI WEB instance with its own `PI_WEB_DATA_DIR`, socket and port, and `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0` (or `pi -e <worktree>` for terminal checks). Without that switch the trial's session daemon writes its bundled package paths into the shared `~/.pi/agent/settings.json` at start, and `promote-installed check-settings` refuses every install. Keep the real agent profile: a separate `PI_CODING_AGENT_DIR` would lock `auth.json` at a different path and race production's token refresh, then run `scripts/promote-installed switch <workbench-rev> <pi-web-rev>`. Promotion builds both revisions in new worktrees (`prepare` does only this, safely at any time), then a detached launchd job repoints both links together and reinstalls both PI WEB services, because the session daemon keeps the code it loaded at start. The job restores the previous services if PI WEB does not become healthy; its log is under `~/.pi-workbench/installed/jobs/`. Restarting interrupts every open session and kills everything sessions started under the session daemon (subagents, workers, foreground commands, and servers they started), so promotion requires the owner's explicit go-ahead and time, and `switch` refuses while any such process runs, listing each one (`--force` overrides). Background `bash` jobs are the bounded exception: each runs under a detached runner in its own process group, owned by one session, stopped at its timeout or a 12-hour maximum lifetime, cancellable after the session reattaches it, and swept a week after finishing (`extensions/background-bash/README.md`). They survive the restart and do not block `switch`. Roll back by promoting the previous revisions. Each successful `switch`, `switch-workbench`, and `switch-web` then prunes `~/.pi-workbench/installed/` with `promote-installed prune --apply`: per product it keeps the live build, the build just switched away from (the rollback), builds the PI WEB services, Pi settings, or a Workstream name, builds a running process has as working directory or open file, and builds retired after the oldest running session daemon or Pi process started (Pi closes module files after loading, yet open sessions still spawn files such as the background bash runner from their build), and removes the rest with their Git worktree registrations. `promote-installed prune` alone lists the same decision without removing anything.
+A change goes live by promotion: merge into the integration branch, trial it in a throwaway Durable instance (`PI_PROMOTE_DURABLE_TRIAL`, `PI_PROMOTE_DURABLE_PORT`; folder, port, data, plists and `com.pi-workbench.durable-trial.*` labels of its own; or `pi -e <worktree>` for terminal checks). Keep the real agent profile: a separate `PI_CODING_AGENT_DIR` would lock `auth.json` at a different path and race production's token refresh. Then run `scripts/promote-installed switch <workbench-rev> <pi-web-rev>`. Promotion builds both revisions in new worktrees (`prepare` does only this, safely at any time), then a detached launchd job repoints both links together and restarts the two Durable services (`com.pi-web-durable.sessiond` and `.web`), because the session daemon keeps the code it loaded at start. Durable hosts (`com.pi-workbench.durable-host.<family>`) are separate launchd jobs that outlive the restart; `switch` refuses (exit 7, nothing changed) a PI WEB build whose daemon cannot reattach them. The job restores the previous services if PI WEB does not become healthy; its log is under `~/.pi-workbench/installed-durable/jobs/`. Restarting interrupts every open session and kills everything sessions started under the session daemon (subagents, workers, foreground commands, and servers they started), so promotion requires the owner's explicit go-ahead and time, and `switch` refuses while any such process runs, listing each one (`--force` overrides). Background `bash` jobs are the bounded exception: each runs under a detached runner in its own process group, owned by one session, stopped at its timeout or a 12-hour maximum lifetime, cancellable after the session reattaches it, and swept a week after finishing (`extensions/background-bash/README.md`). They survive the restart and do not block `switch`. Roll back by promoting the previous revisions. Each successful `switch`, `switch-workbench`, and `switch-web` then prunes `~/.pi-workbench/installed-durable/` with `promote-installed prune --apply`: per product it keeps the live build, the build just switched away from (the rollback), builds the PI WEB services, a Workstream or a Durable Chat name, builds a running process or Durable host has as working directory or open file, and builds retired after the oldest running session daemon or Pi process started (Pi closes module files after loading, yet open sessions still spawn files such as the background bash runner from their build), and removes the rest with their Git worktree registrations. `promote-installed prune` alone lists the same decision without removing anything.
 
-A pi-workbench change that leaves the PI WEB server plugin untouched can go live without that
-restart: `scripts/promote-installed switch-workbench <workbench-rev>` builds the revision and
-atomically repoints only `pi-workbench.installed`. Open sessions keep the code they loaded; new
-sessions load the new revision. Move an open session to it before relying on changed tools or roles
-in it. On the legacy instance `/reload` does that, and running Subagents and Workers survive the
-reload and finish on the code that launched them. It prints the command that switches back.
-
-The Durable instance has no `/reload`, and its `switch-workbench` reaches no Chat: the running daemon
-keeps the Durable host build it started with, for new Chats too. Use `switch <workbench-rev>
-<current pi-web-rev>` instead. Durable hosts outlive the daemon restart, and each open Chat then moves
-to the new build by **Upgrade host** or by the automatic upgrade once only work that survives a
-restart remains (no running turn, queued input or children; `docs/plans/pi-durable-cutover-runbook.md`).
+`switch-workbench <workbench-rev>` builds the revision and atomically repoints only
+`pi-workbench.durable-installed`. It reaches no Chat: the running daemon keeps the Durable host build
+it started with, for new Chats too. Use `switch <workbench-rev> <current pi-web-rev>` instead. Durable
+hosts outlive the daemon restart, and each open Chat then moves to the new build by **Upgrade host** or
+by the automatic upgrade once only work that survives a restart remains (no running turn, queued input
+or children; `docs/plans/pi-durable-cutover-runbook.md`). It prints the command that switches back.
 
 A PI WEB change that leaves the session daemon's code and dependencies untouched (browser client or
 web/API server only) goes live with `scripts/promote-installed switch-web <pi-web-rev>`. It restarts
@@ -75,28 +69,19 @@ restores the previous web service if the new one does not become healthy and pri
 that switches back. `switch` waits 10 seconds by default before restarting, enough for the calling
 session to finish its reply.
 
-Since 19 Nov 2026 the Durable instance is the one in use: `promote-installed` without `--instance` acts on
-it, and the commands above, which name `~/.pi-workbench/installed`, `*.installed` and :8505, need
-`promote-installed --instance legacy`. The legacy services are stopped and launchctl-disabled; to read old
-Chats, `launchctl enable gui/$(id -u)/com.pi-web.sessiond` (and `com.pi-web.web`), bootstrap both plists from
-`~/Library/LaunchAgents` and open http://127.0.0.1:8505/.
-
 A fresh Mac (or an update to the integration-branch tips) installs with `scripts/install` from the main
 pi-workbench checkout: it clones PI WEB beside it if missing, runs `promote-installed switch <origin/main>
-<origin/pi-workbench>` for the Durable instance and waits for the job (skipped when both links already point at
+<origin/pi-workbench>` and waits for the job (skipped when both links already point at
 those builds), then builds the native app with `--app-only` for :8506. `--dry-run` prints the plan;
 `PI_PROMOTE_DURABLE_ENV` passes through to the services (e.g. `GIT_CONFIG_GLOBAL` for an agent's git identity).
-Every later `promote-installed` switch keeps the extra keys of the current Durable plists (not the ones it sets itself)
+Every later `promote-installed` switch keeps the extra keys of the current plists (not the ones it sets itself)
 and merges its own `PI_PROMOTE_DURABLE_ENV` over them; `-KEY` in it removes a key. Chats already open keep their
 host's old environment until **Upgrade host**; restarting the daemon alone does not change it.
 
-The Durable instance (`docs/plans/pi-durable-cutover-spec.md`, B7) is a second installed PI WEB beside
-the legacy one: `promote-installed` (or `--instance durable`) runs `prepare`, `switch`, `switch-workbench`,
-`switch-web`, `prune` and `check-idle` on `~/IdeaProjects/*.durable-installed`, builds under
-`~/.pi-workbench/installed-durable/`, `PI_WEB_DATA_DIR` `~/.pi-web-durable`, port 8506 and launchd
-labels `com.pi-web-durable.*`, with `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_DURABLE_DEFAULT=1`, `PI_WEB_DURABLE_AUTO_UPGRADE=1` and the
-build's own Durable host. It writes its own plists and never changes `~/.pi/agent`, the legacy links,
-plists, data or builds; the legacy prune never sees its builds.
+`promote-installed` supports `prepare`, `switch`, `switch-workbench`, `switch-web`, `prune`, `check-idle`,
+`check-hosts` and `sessiond-unchanged` (`docs/plans/pi-durable-cutover-spec.md`, B7). The services run with
+`PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_DURABLE_DEFAULT=1`, `PI_WEB_DURABLE_AUTO_UPGRADE=1` and the
+build's own Durable host. `promote-installed` writes its own plists and never changes `~/.pi/agent`.
 
 ### Durable child command restart exception
 

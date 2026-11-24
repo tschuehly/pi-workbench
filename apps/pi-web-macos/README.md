@@ -26,7 +26,7 @@ The installer:
 
 1. builds the release `PIWebMac` executable;
 2. records the PI WEB checkout and CLI in the app bundle, keeping symlinks such as
-   `pi-web.installed` so the app follows promotions;
+   `pi-web.durable-installed` so the app follows promotions;
 3. installs the split development services through `pi-web install --dev`; and
 4. atomically replaces the previous app.
 
@@ -61,7 +61,7 @@ pi-web-mac
 
 `pi-web-mac` activates the installed bundle through macOS Launch Services. The app opens a window
 immediately and probes `/api/pi-web/version` through the configured UI URL. It loads
-`http://127.0.0.1:8505` only when both the web API and session daemon report available, not stale,
+`http://127.0.0.1:8506` only when both the web API and session daemon report available, not stale,
 and running from the configured checkout.
 If unavailable, it uses `pi-web status`'s exit code to decide whether to run `pi-web start`.
 It does not parse CLI display text or require the unsupported `status --json` option. PI WEB frontend changes continue
@@ -149,7 +149,7 @@ Two readiness limitations to distinguish:
   when it starts. `tsx watch` then waits for a file change instead of restarting, so the API stays
   unreachable while the UI serves 502s.
 - `pi-web status` reports service-manager process state, not API responsiveness. The wrapper now
-  checks the runtime endpoint instead. Check `curl -sf http://127.0.0.1:8505/api/pi-web/version`
+  checks the runtime endpoint instead. Check `curl -sf http://127.0.0.1:8506/api/pi-web/version`
   when the UI shows 502.
 
 Terminal diagnostics (no service mutation):
@@ -170,7 +170,7 @@ bash apps/pi-web-macos/Scripts/native-notifications.test.sh
 bash apps/pi-web-macos/Scripts/native-sleep-control.test.sh
 bash apps/pi-web-macos/Scripts/readiness.test.sh
 bash apps/pi-web-macos/Scripts/install-app.test.sh
-PI_WEB_TEST_URL=http://127.0.0.1:8505 bash apps/pi-web-macos/Scripts/readiness.test.sh
+PI_WEB_TEST_URL=http://127.0.0.1:8506 bash apps/pi-web-macos/Scripts/readiness.test.sh
 ```
 
 The optional live check probes readiness without starting or restarting services. Set

@@ -6,7 +6,7 @@ never commit credentials, sessions, or machine-specific paths.
 | Template | Live location |
 | --- | --- |
 | `pi-agent-settings.example.json` | `~/.pi/agent/settings.json` (global Pi agent settings) |
-| `pi-web.example.json` | `~/.config/pi-web/config.json`, or a repository-local `.pi-web/config.json` |
+| `pi-web.example.json` | `~/.pi-web-durable/config.json` (the Durable instance), or a repository-local `.pi-web/config.json` |
 | `workbench.example.json` | Workbench configuration template; no module consumes it yet |
 
 ## Pi agent settings

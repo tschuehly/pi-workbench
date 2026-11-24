@@ -12,7 +12,7 @@ else
   default_pi_web_dir="${sibling_root}/pi-web"
 fi
 pi_web_dir="${PI_WEB_DIR:-${default_pi_web_dir}}"
-pi_web_url="${PI_WEB_URL:-http://127.0.0.1:8505}"
+pi_web_url="${PI_WEB_URL:-http://127.0.0.1:8506}"
 app_name="${PI_WEB_APP_NAME:-}"
 bundle_id="${PI_WEB_APP_ID:-}"
 destination="${PI_WEB_APP_PATH:-${HOME}/Applications/Pi Workbench.app}"
@@ -58,7 +58,7 @@ bundle_id="${bundle_id:-works.pi.workbench}"
 absolute_executable() {
   local value="$1"
   local directory
-  # Keep symlinks (e.g. pi-web.installed) so the app follows promotions instead of pinning a revision.
+  # Keep symlinks (e.g. pi-web.durable-installed) so the app follows promotions instead of pinning a revision.
   directory="$(cd "$(dirname "${value}")" 2>/dev/null && pwd)" || return 1
   printf '%s/%s\n' "${directory}" "$(basename "${value}")"
 }

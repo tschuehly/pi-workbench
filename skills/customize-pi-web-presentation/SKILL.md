@@ -12,7 +12,7 @@ Set `SKILL_DIR` to this skill's directory before using its bundled tool.
 
 ## 1. Confirm the target
 
-Identify the PI WEB gateway the user intends to customize, especially when stable and development instances run together. Obtain the absolute global config path from **Settings → Appearance → Presentation profile configuration source** when the UI is available. Otherwise resolve it in this order:
+Identify the PI WEB gateway the user intends to customize, especially when a trial instance runs beside the Durable one (`~/.pi-web-durable/config.json`, set by `PI_WEB_CONFIG`). Obtain the absolute global config path from **Settings → Appearance → Presentation profile configuration source** when the UI is available. Otherwise resolve it in this order:
 
 1. the user's explicit path;
 2. `$PI_WEB_CONFIG`;

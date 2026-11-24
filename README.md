@@ -88,7 +88,7 @@ isolation, durable Run recovery, or managed execution describe unbuilt concepts.
 
 Keep a PI WEB source checkout at `../pi-web`.
 
-Machine-local state belongs outside this repository: `~/.config/pi-web`, `~/.pi-web`, and
+Machine-local state belongs outside this repository: `~/.pi-web-durable` and
 `~/.pi-workbench/workstreams`. Never commit credentials, authentication state, sessions, or
 machine-specific paths.
 

@@ -29,7 +29,7 @@ expect deny "~/.ssh read" "cat '$sshfile'"
 expect deny "ssh-add -l via launchd socket" "SSH_AUTH_SOCK='$sock' ssh-add -l"
 expect deny "gh auth token" "gh auth token"
 expect deny "security" "security find-generic-password -s github.com"
-expect allow "installed AGENTS.md" "cat '$HOME/IdeaProjects/pi-workbench.installed/AGENTS.md'"
+expect allow "installed AGENTS.md" "cat '$HOME/IdeaProjects/pi-workbench.durable-installed/AGENTS.md'"
 expect allow "trial dir file" "cat '$trial/probe.txt'"
 expect allow "git author identity" "cd '$trial' && git var GIT_AUTHOR_IDENT"
 expect allow "PI_TMP writable and readable" 'mkdir -p "$PI_TMP" && echo x > "$PI_TMP/f" && cat "$PI_TMP/f"'

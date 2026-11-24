@@ -145,16 +145,16 @@ struct NativeNotificationTests {
         NativeNotificationBridge(center: anchored).notify(["title": "Chat", "body": "B", "message": "entry:a"]) { result, error in
             precondition(result == nil && error != nil, "an anchor needs a Chat target")
         }
-        let server083 = URL(string: "http://127.0.0.1:8505")!
+        let server083 = URL(string: "http://127.0.0.1:8506")!
         let anchoredURL = notificationChatURL(serverURL: server083, machineId: "local", sessionId: "s", message: "ask:q-1")
-        precondition(anchoredURL?.absoluteString == "http://127.0.0.1:8505?machine=local&session=s&message=ask:q-1")
-        precondition(notificationChatURL(serverURL: server083, machineId: "local", sessionId: "s", message: "x y")?.absoluteString == "http://127.0.0.1:8505?machine=local&session=s", "an unsafe anchor is dropped")
+        precondition(anchoredURL?.absoluteString == "http://127.0.0.1:8506?machine=local&session=s&message=ask:q-1")
+        precondition(notificationChatURL(serverURL: server083, machineId: "local", sessionId: "s", message: "x y")?.absoluteString == "http://127.0.0.1:8506?machine=local&session=s", "an unsafe anchor is dropped")
         precondition(chatSessionId(of: anchoredURL) == "s")
-        precondition(WindowRestoration.applicationURL(anchoredURL!, server: server083)?.absoluteString == "http://127.0.0.1:8505?machine=local&session=s", "restoration strips the one-shot anchor")
+        precondition(WindowRestoration.applicationURL(anchoredURL!, server: server083)?.absoluteString == "http://127.0.0.1:8506?machine=local&session=s", "restoration strips the one-shot anchor")
         var anchoredRoute = WindowRoute()
         precondition(anchoredRoute.report(anchoredURL!, server: server083) && chatSessionId(of: anchoredRoute.restorable) == "s" && anchoredRoute.shown == anchoredURL)
-        let showingS = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?session=s&view=chat&win=w2"), isOnActiveSpace: false)
-        let showingT = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?session=t&win=w1"), isOnActiveSpace: true)
+        let showingS = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?session=s&view=chat&win=w2"), isOnActiveSpace: false)
+        let showingT = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?session=t&win=w1"), isOnActiveSpace: true)
         precondition(notificationRoute([showingT, showingS], machineId: "local", sessionId: "s", chatURL: anchoredURL) == .open(1), "the window showing the Chat gets the click, no reload")
         precondition(notificationRoute([showingT], machineId: "local", sessionId: "s", chatURL: anchoredURL) == .open(0), "a live page opens an unheld Chat itself, routed by PI WEB, never reloaded")
         precondition(notificationRoute([showingS], machineId: nil, sessionId: nil, chatURL: nil) == .focus(0), "no Chat only brings the window forward")
@@ -204,24 +204,24 @@ struct NativeNotificationTests {
         precondition(localOpenTarget("~nobody-xyz/x") == nil && localRevealTarget("~/missing-\(UUID().uuidString).docx") == nil, "~user and missing ~ paths are refused")
         try? FileManager.default.removeItem(at: htmlDir)
 
-        let desktop = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&workspace=w"), isOnActiveSpace: true)
-        let other = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&session=a&view=chat"), isOnActiveSpace: false)
-        let target = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?project=p&session=b&view=chat&workspace=w"), isOnActiveSpace: false)
-        let chatB = URL(string: "http://127.0.0.1:8505?machine=local&session=b")!
+        let desktop = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?project=p&workspace=w"), isOnActiveSpace: true)
+        let other = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?project=p&session=a&view=chat"), isOnActiveSpace: false)
+        let target = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?project=p&session=b&view=chat&workspace=w"), isOnActiveSpace: false)
+        let chatB = URL(string: "http://127.0.0.1:8506?machine=local&session=b")!
         precondition(notificationRoute([desktop, other, target], machineId: "local", sessionId: "b", chatURL: chatB) == .open(2), "the window showing the Chat wins over the active Space")
         precondition(notificationRoute([other, desktop], machineId: "local", sessionId: "z", chatURL: chatB) == .open(1), "an unopened Chat uses the window on the active Space")
         precondition(notificationRoute([other, target], machineId: nil, sessionId: nil, chatURL: nil) == .focus(0), "otherwise the frontmost window")
         precondition(notificationRoute([], machineId: "local", sessionId: "b", chatURL: chatB) == .newWindow(chatB), "no window means open one")
         // A Chat in a background tab of a window on another Space: that window's page says it holds it.
-        let backgroundTab = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?session=a&win=w2"), isOnActiveSpace: false, holdsChat: true)
+        let backgroundTab = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?session=a&win=w2"), isOnActiveSpace: false, holdsChat: true)
         precondition(notificationRoute([desktop, backgroundTab], machineId: "local", sessionId: "b", chatURL: chatB) == .open(1), "the window holding the Chat in a tab gets the click; the window here stays unchanged")
         // A Chat just moved to another window: the source still shows its URL but answers no; the destination answers yes.
-        let movedFrom = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?session=b&win=w1"), isOnActiveSpace: true, holdsChat: false)
+        let movedFrom = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?session=b&win=w1"), isOnActiveSpace: true, holdsChat: false)
         precondition(notificationRoute([movedFrom, backgroundTab], machineId: "local", sessionId: "b", chatURL: chatB) == .open(1), "a confirmed holder beats a stale shown URL")
         let movedFromAway = NotificationWindowCandidate(url: movedFrom.url, isOnActiveSpace: false, holdsChat: false)
         let desktopAnswered = NotificationWindowCandidate(url: desktop.url, isOnActiveSpace: true, holdsChat: false)
         precondition(notificationRoute([movedFromAway, desktopAnswered], machineId: "local", sessionId: "b", chatURL: chatB) == .open(1), "once pages answered, a stale URL alone holds nothing: the active Space wins")
-        let remoteB = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?machine=remote&session=b"), isOnActiveSpace: false)
+        let remoteB = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?machine=remote&session=b"), isOnActiveSpace: false)
         precondition(notificationRoute([remoteB, desktop], machineId: "local", sessionId: "b", chatURL: chatB) == .open(1), "the URL fallback compares the machine too")
         precondition(notificationRoute([desktop, remoteB], machineId: "remote", sessionId: "b", chatURL: chatB) == .open(1), "a remote Chat's window matches its machine")
 
@@ -260,19 +260,19 @@ struct NativeNotificationTests {
         precondition(hold.restore(after: second.click) == own, "the last delay restores the window's own behaviour")
         precondition(hold.lift([.fullScreenPrimary]).behavior == [.fullScreenPrimary] && hold.restore(after: 3) == [.fullScreenPrimary], "a later click captures afresh")
         // Only a window without a live page (native startup or failure page) loads, and keeps its window id.
-        let starting = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?session=a&win=w1"), isOnActiveSpace: true, showsApplication: false)
-        precondition(notificationRoute([starting], machineId: "local", sessionId: "b", chatURL: chatB) == .load(0, URL(string: "http://127.0.0.1:8505?machine=local&session=b&win=w1")!), "a load keeps the window's id")
+        let starting = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?session=a&win=w1"), isOnActiveSpace: true, showsApplication: false)
+        precondition(notificationRoute([starting], machineId: "local", sessionId: "b", chatURL: chatB) == .load(0, URL(string: "http://127.0.0.1:8506?machine=local&session=b&win=w1")!), "a load keeps the window's id")
         let startingFresh = NotificationWindowCandidate(url: nil, isOnActiveSpace: true, showsApplication: false)
         precondition(notificationRoute([startingFresh], machineId: "local", sessionId: "b", chatURL: chatB) == .load(0, chatB))
 
         // ISSUE-076: PI WEB adds `tool` (open panel) and other views to the route; restoration refuses them, routing must not.
-        let server = URL(string: "http://127.0.0.1:8505")!
+        let server = URL(string: "http://127.0.0.1:8506")!
         var route = WindowRoute()
-        precondition(route.report(URL(string: "http://127.0.0.1:8505?session=a&view=chat")!, server: server), "a plain Chat is restorable")
-        precondition(!route.report(URL(string: "http://127.0.0.1:8505?session=b&tool=workspace-files:files&view=chat")!, server: server), "a panel route is not restorable")
+        precondition(route.report(URL(string: "http://127.0.0.1:8506?session=a&view=chat")!, server: server), "a plain Chat is restorable")
+        precondition(!route.report(URL(string: "http://127.0.0.1:8506?session=b&tool=workspace-files:files&view=chat")!, server: server), "a panel route is not restorable")
         precondition(chatSessionId(of: route.restorable) == "a" && chatSessionId(of: route.shown) == "b", "restoration keeps the last safe route, routing follows the Chat on screen")
         let panelWindow = NotificationWindowCandidate(url: route.shown, isOnActiveSpace: false)
-        let staleWindow = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8505?session=a&view=chat"), isOnActiveSpace: true)
+        let staleWindow = NotificationWindowCandidate(url: URL(string: "http://127.0.0.1:8506?session=a&view=chat"), isOnActiveSpace: true)
         precondition(notificationRoute([staleWindow, panelWindow], machineId: "local", sessionId: "b", chatURL: chatB) == .open(1), "the window showing Chat b with a panel open wins")
         _ = route.report(URL(string: "about:blank")!, server: server)
         precondition(chatSessionId(of: route.shown) == "b", "the native startup page keeps the shown route")
@@ -288,15 +288,15 @@ struct NativeNotificationTests {
         precondition(tray.request?.content.threadIdentifier == "" && tray.shown.values.filter { $0 == threadS }.count == 2)
         precondition(tray.shown.filter { $0.value == threadS }.allSatisfy { $0.key.hasPrefix(threadS + "/") }, "identifiers carry their Chat")
         precondition(notificationThreadIdentifier(machineId: "a:b", sessionId: "c") != notificationThreadIdentifier(machineId: "a", sessionId: "b:c"), "Chat keys cannot collide")
-        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8505?session=s&view=chat")) == threadS, "a window URL omits the local machine")
-        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8505?machine=remote&session=s")) == notificationThreadIdentifier(machineId: "remote", sessionId: "s"))
-        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8505?project=p&workspace=w")) == nil && chatThreadIdentifier(of: nil) == nil)
-        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8505?project=p&workspace=w"))
+        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8506?session=s&view=chat")) == threadS, "a window URL omits the local machine")
+        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8506?machine=remote&session=s")) == notificationThreadIdentifier(machineId: "remote", sessionId: "s"))
+        precondition(chatThreadIdentifier(of: URL(string: "http://127.0.0.1:8506?project=p&workspace=w")) == nil && chatThreadIdentifier(of: nil) == nil)
+        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8506?project=p&workspace=w"))
         precondition(tray.removed.isEmpty, "the chooser clears nothing")
-        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8505?session=s&tool=workspace-files:files&view=chat"))
+        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8506?session=s&tool=workspace-files:files&view=chat"))
         precondition(tray.removed.count == 1 && tray.removed[0].count == 2 && tray.shown.count == 3, "viewing Chat s clears exactly its two notifications")
         precondition(!tray.shown.values.contains(threadS) && tray.shown.values.contains(notificationThreadIdentifier(machineId: "local", sessionId: "t")) && tray.shown.values.contains(notificationThreadIdentifier(machineId: "remote", sessionId: "s")) && tray.shown.values.contains(""), "other Chats and untargeted notifications stay")
-        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8505?session=s"))
+        trayBridge.clearChat(shown: URL(string: "http://127.0.0.1:8506?session=s"))
         precondition(tray.removed.count == 1, "nothing left to remove for Chat s")
 
         guard let context = JSContext() else { preconditionFailure("JavaScriptCore unavailable") }
