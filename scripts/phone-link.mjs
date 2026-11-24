@@ -2,6 +2,7 @@
 // Sends Thomas a Telegram link to the Chat whenever a Durable Chat opens an ask_user question set.
 // Listens on PI WEB's global event socket (`session.attention`, kind "ask", emitted once when a set opens),
 // so it needs no PI WEB or Durable host change. The link goes through the always-on Cloudflare tunnel.
+// Run by a launchd job in tschuehly-config (hosts/mac/phone-link.nix) from this path: keep it in sync when moving.
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";

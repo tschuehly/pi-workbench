@@ -29,7 +29,6 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 | Atelier Pages: Kernel, page server, Delivery of human events | `extensions/atelier/`, `skills/atelier/`, decisions 129-156 in `docs/foundation/decisions.md` |
 | Atelier as a Claude Code plugin (copies synced from `extensions/atelier`) | `claude-code/`, `.claude-plugin/marketplace.json` |
 | Pi lifecycle, usage, and child-lineage telemetry | `extensions/telemetry/`, `packages/pi-execution-adapter/` |
-| Phone link: Telegram ping with the tunnelled Chat link when a question set opens | `scripts/phone-link.mjs` (launchd job in tschuehly-config) |
 | Session-log inventory and conversation extraction | `tools/session-logs/README.md` |
 | Owner re-entry orientation for Chats and Workstreams | `skills/orient/` |
 | Lead-session provider-input and skill-access audit | `extensions/agent-audit/`, `tools/agent-audit/` |
