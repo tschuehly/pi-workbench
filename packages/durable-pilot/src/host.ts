@@ -39,6 +39,7 @@ import {
 	ToolTask,
 } from "@earendil-works/pi-durable";
 import { defineDoc } from "./store-schema.ts";
+import { endCheapTurnNow } from "./cheap-wake.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { redactingRegistry, wrapProvider } from "./redact.ts";
 import { type Faults, type OpenedStore, openStore, type Synchronous } from "./store.ts";
@@ -174,6 +175,8 @@ export async function admit(
 		const existing = doc.ops[request.operationId];
 		if (existing !== undefined && existing.hash !== hash) throw new PayloadMismatch(request.operationId);
 		doc.ops[request.operationId] ??= { hash };
+		// Owner input never joins a cheap wake-up turn on the cheap model.
+		await endCheapTurnNow(tx, conversation.id);
 	}, context);
 	await hooks.afterReceipt?.();
 	if (request.hold === true) {

@@ -31,7 +31,7 @@ import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
 import { ChatMessenger, homeWorkstream } from "./chat-message.ts";
 import { BackgroundBash } from "./background-bash.ts";
-import { cheapWakeExtension, submitWake } from "./cheap-wake.ts";
+import { cheapWakeExtension, endCheapTurnNow, submitWake } from "./cheap-wake.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
 export const PREAMBLE = [
@@ -212,6 +212,8 @@ export async function applyModel(host: Host, model?: { provider: string; modelId
 	const found = target === undefined ? undefined : host.models.getModel(target.provider, target.modelId);
 	const current = agent.thinkingLevel;
 	const thinkingLevel = found === undefined || current === undefined ? current : clampThinkingLevel(found, current);
+	// The owner's choice ends a cheap wake-up turn, which then never puts its own model back over it.
+	if (model !== undefined) await host.root.commit((tx) => endCheapTurnNow(tx, host.root.id, true), context);
 	if (model !== undefined || thinkingLevel !== current)
 		await host.root.configure({ ...(model === undefined ? {} : { model }), ...(thinkingLevel === current ? {} : { thinkingLevel }) }, context);
 	return thinkingLevel;
