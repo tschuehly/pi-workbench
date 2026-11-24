@@ -10,6 +10,7 @@ import { DEFAULT_COMPACTION, openChatHost } from "../src/chat.ts";
 import { CheapWakeDoc, cheapModel, submitWake } from "../src/cheap-wake.ts";
 import { ChatSession } from "../src/chat-session.ts";
 import { context } from "../src/host.ts";
+import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
 import { fakeAgentDir, logged } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
@@ -88,6 +89,19 @@ test("a delivery right after a compaction runs on the cheap model and restores t
 		assert.match(own.label, /^Background bash job-2/);
 		assert.equal(own.model, "anthropic/claude-opus-5-5", "no compaction just before: own model");
 		assert.ok(!own.tools.includes("hand_back"), "the lead is never offered hand_back");
+	} finally {
+		await close();
+	}
+});
+
+test("the idle compaction's marker entry after the summary still counts as right after a compaction", async () => {
+	const { h, say, compact, wake, requests, close } = await chat("cheap-after-idle-marker");
+	try {
+		for (const text of ["one", "two", "three"]) await say(text);
+		await compact();
+		await h.root.submit({ type: "write", entry: { kind: IDLE_COMPACTION_ENTRY, data: { task: 1 } } }, context);
+		await wake("job-1", "all tests passed");
+		assert.equal(requests().at(-1)!.model, "anthropic/claude-sonnet-5-5");
 	} finally {
 		await close();
 	}
