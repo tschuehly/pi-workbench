@@ -21,15 +21,8 @@ cat >"${fake_bin}/pi-web" <<'FAKE_CLI'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s\n' "$*" >>"${PI_WEB_FAKE_CLI_LOG}"
-case "${1:-}" in
-  install)
-    if [[ "${PI_WEB_FAKE_FAIL_INSTALL:-0}" == 1 ]]; then
-      echo "simulated install preflight failure" >&2
-      exit 42
-    fi
-    ;;
-  *) echo "unexpected lifecycle command: $*" >&2; exit 43 ;;
-esac
+echo "unexpected lifecycle command: $*" >&2
+exit 43
 FAKE_CLI
 chmod +x "${fake_bin}/pi-web"
 
@@ -52,7 +45,6 @@ run_installer() {
   PI_WEB_DATA_DIR="${test_root}/state" \
   PI_WEB_LAUNCH_AGENTS_DIR="${test_root}/launch-agents" \
   PI_WEB_FAKE_CLI_LOG="${fake_cli_log}" \
-  PI_WEB_FAKE_FAIL_INSTALL="${PI_WEB_FAKE_FAIL_INSTALL:-0}" \
     bash "${script_dir}/install-app.sh" "$@" "${app_path}" >/dev/null
 }
 
@@ -94,12 +86,12 @@ check_true "the detached shell launcher is not installed" test ! -e "${app_path}
 check_equal "bundle config records CLI" "${fake_bin}/pi-web" "$(/usr/libexec/PlistBuddy -c 'Print :CLIPath' "${bundle_config}")"
 check_equal "bundle config records checkout" "${fake_checkout}" "$(/usr/libexec/PlistBuddy -c 'Print :CheckoutPath' "${bundle_config}")"
 check_equal "bundle config records development URL" "http://127.0.0.1:8506" "$(/usr/libexec/PlistBuddy -c 'Print :ServerURL' "${bundle_config}")"
-check_equal "installer delegates directly to development install without a status-format gate" 'install --dev' "$(cat "${fake_cli_log}")"
+check_equal "installer invokes no lifecycle commands" '' "$(cat "${fake_cli_log}")"
 check_true "pi-web-mac command is installed" test -x "${command_dir}/pi-web-mac"
 
 PI_WEB_OPEN="${fake_bin}/open" PI_WEB_FAKE_OPEN_LOG="${fake_open_log}" "${command_dir}/pi-web-mac"
 check_equal "pi-web-mac activates only the installed app through open" "${app_path}" "$(cat "${fake_open_log}")"
-check_equal "pi-web-mac does not invoke lifecycle CLI" 'install --dev' "$(cat "${fake_cli_log}")"
+check_equal "pi-web-mac does not invoke lifecycle CLI" '' "$(cat "${fake_cli_log}")"
 
 printf 'replace-this-app\n' >"${app_path}/atomic-marker"
 : >"${fake_cli_log}"
@@ -125,13 +117,7 @@ check_equal "app-only refresh keeps the display name" "Pi Durable" "$(/usr/libex
 check_equal "app-only refresh keeps the bundle identifier" "works.pi.workbench.durable" "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${info_plist}")"
 PI_WEB_APP_NAME="Pi Workbench" PI_WEB_APP_ID="works.pi.workbench" run_installer --app-only
 
-printf 'preserve-existing-app\n' >"${app_path}/atomic-marker"
-if PI_WEB_FAKE_FAIL_INSTALL=1 run_installer 2>/dev/null; then
-  printf 'not ok - installer should fail when lifecycle install preflight fails\n' >&2
-  failures=$((failures + 1))
-fi
-check_true "failed lifecycle install leaves existing app intact" grep -Fxq 'preserve-existing-app' "${app_path}/atomic-marker"
-check_true "failed install leaves no staged app next to destination" bash -c '! compgen -G "$1/.Pi Workbench.app.stage.*" >/dev/null' _ "$(dirname "${app_path}")"
+check_true "install leaves no staged app next to destination" bash -c '! compgen -G "$1/.Pi Workbench.app.stage.*" >/dev/null' _ "$(dirname "${app_path}")"
 
 if (( failures > 0 )); then
   printf 'Installer contract failed with %d assertion(s).\n' "${failures}" >&2

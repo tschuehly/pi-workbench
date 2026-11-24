@@ -14,9 +14,8 @@ missing or unusable screen geometry falls back to a centered window.
 ## Install the app
 
 Keep PI WEB beside this repository. The installer prefers `../pi-web.durable-lifecycle` when present,
-then `../pi-web`; `PI_WEB_DIR` overrides both. Install PI WEB's dependencies with `pnpm install`, then
-run the full installer only when interrupting active sessions is acceptable. `install --dev`
-replaces services, including the session daemon. For an existing installation, prefer `--app-only`.
+then `../pi-web`; `PI_WEB_DIR` overrides both. The installer never installs or restarts PI WEB
+services; the Durable services come from `scripts/promote-installed switch`.
 
 ```sh
 ./apps/pi-web-macos/Scripts/install-app.sh
@@ -27,8 +26,7 @@ The installer:
 1. builds the release `PIWebMac` executable;
 2. records the PI WEB checkout and CLI in the app bundle, keeping symlinks such as
    `pi-web.durable-installed` so the app follows promotions;
-3. installs the split development services through `pi-web install --dev`; and
-4. atomically replaces the previous app.
+3. atomically replaces the previous app.
 
 The default destination is your user Applications folder. To choose another location:
 
@@ -42,14 +40,13 @@ If PI WEB is not at `../pi-web`, set its location for the installer:
 PI_WEB_DIR=/path/to/pi-web ./apps/pi-web-macos/Scripts/install-app.sh
 ```
 
-After changing native Swift code, replace only the app without touching running services:
+After changing native Swift code, refresh the app and keep its recorded binding:
 
 ```sh
 ./apps/pi-web-macos/Scripts/install-app.sh --app-only
 ```
 
 This preserves the existing bundle's checkout, CLI, and server URL unless explicitly overridden.
-The app-only option invokes no lifecycle commands.
 
 ## Open the development app
 
@@ -103,23 +100,6 @@ the state and rereads it from `pmset`. To restore normal sleep outside the app, 
 
 ```sh
 sudo /usr/bin/pmset -a disablesleep 0
-```
-
-## Compatibility entry point
-
-The older command still works:
-
-```sh
-./apps/pi-web-macos/Scripts/boot-dev.sh
-```
-
-It delegates installation and startup to `pi-web install --dev` and `pi-web start`, then activates
-the same app. It does not create another supervisor or session daemon.
-
-If PI WEB is not at `../pi-web`, set its location explicitly:
-
-```sh
-PI_WEB_DIR=/path/to/pi-web ./apps/pi-web-macos/Scripts/boot-dev.sh
 ```
 
 ## Lifecycle safety

@@ -79,14 +79,6 @@ resolve_cli() {
   absolute_executable "${candidate}"
 }
 
-run_cli() {
-  if [[ -x "${pi_web_cli}" ]]; then
-    (cd "${pi_web_dir}" && "${pi_web_cli}" "$@")
-  else
-    (cd "${pi_web_dir}" && node "${pi_web_cli}" "$@")
-  fi
-}
-
 cleanup() {
   [[ -z "${stage}" || ! -e "${stage}" ]] || rm -rf "${stage}"
   [[ -z "${command_stage}" || ! -e "${command_stage}" ]] || rm -f "${command_stage}"
@@ -166,12 +158,6 @@ bundle_config="${resources_dir}/PIWebConfig.plist"
 /usr/bin/plutil -insert ServerURL -string "${pi_web_url}" "${bundle_config}"
 /usr/bin/plutil -lint "${contents_dir}/Info.plist" "${bundle_config}" >/dev/null
 /usr/bin/codesign --force --sign - --timestamp=none "${stage}" >/dev/null
-
-if (( ! app_only )); then
-  if ! run_cli install --dev; then
-    fail "PI WEB development service installation failed; the existing app was not changed."
-  fi
-fi
 
 mkdir -p "${command_dir}"
 command_stage="$(mktemp "${command_dir}/.pi-web-mac.XXXXXX")"
