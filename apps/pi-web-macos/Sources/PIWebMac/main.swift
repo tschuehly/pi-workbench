@@ -739,7 +739,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         switch command {
         case "tabs", "plain": setTabsInTitlebar(command == "tabs")
         // The page's mousedown arrives after AppKit dispatched it; drag only while the button is still down.
-        case "drag": if let event = NSApp.currentEvent, NSEvent.pressedMouseButtons & 1 == 1 { window.performDrag(with: event) }
+        case "drag": if let event = NSApp.currentEvent, [.leftMouseDown, .leftMouseDragged].contains(event.type), NSEvent.pressedMouseButtons & 1 == 1 { window.performDrag(with: event) }
         case "zoom":
             switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
             case "Minimize": window.miniaturize(nil)
