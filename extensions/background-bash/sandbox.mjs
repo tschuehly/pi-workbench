@@ -280,7 +280,7 @@ export function alreadyFenced() {
 
 /**
  * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`, with the `owners` whose worktrees it may
- * write (and remove through the host operation). Throws when no proven sandbox is
+ * write. Throws when no proven sandbox is
  * available; the caller then records the failure and never starts the command.
  */
 export async function confine(job, env = process.env, { ownSocket } = {}) {

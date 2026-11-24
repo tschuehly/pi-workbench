@@ -141,14 +141,12 @@ test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a 
   assert.ok(!all.write.some((w) => w.startsWith("/private/") || w.startsWith("/var/")), "no shared system temp folder");
 });
 
-test("host operations: only `workstreams` (no @file), `wt switch --create` with --base/--no-cd and `wt remove`, never --execute, --clobber or --no-hooks", () => {
+test("host operations: only `workstreams` (no @file) and `wt switch --create` with --base/--no-cd, never --execute, --clobber or `wt remove`", () => {
   assert.deepEqual(plan(["workstreams", "checkpoint", "ws-a", "--stdin"]), { file: "workstreams", args: ["checkpoint", "ws-a", "--stdin"] });
   assert.deepEqual(plan(["workstreams", "append", "@-"]).args, ["append", "@-"]);
   assert.deepEqual(plan(["wt", "switch", "-c", "feat", "-b", "main"]), { worktree: { branch: "feat", base: "main" } });
   assert.deepEqual(plan(["wt", "switch", "--create", "feat", "--no-cd", "--base=dev"]), { worktree: { branch: "feat", base: "dev" } });
-  assert.deepEqual(plan(["wt", "remove", "feat", "--foreground", "-D"]), { remove: { branches: ["feat"], force: false, deleteBranch: "-D" } });
-  assert.deepEqual(plan(["wt", "remove", "-f", "--no-delete-branch", "-D"]), { remove: { branches: [], force: true, deleteBranch: undefined } });
-  for (const argv of [["wt", "switch", "-c", "feat", "-x", "rm -rf ~"], ["wt", "switch", "-c", "feat", "--clobber"], ["wt", "switch", "-c"], ["wt", "remove", "feat", "-x", "rm -rf ~"], ["wt", "remove", "--no-hooks"], ["git", "push"], ["wt", "switch", "-c", "feat", "-C", "/"], ["wt", "switch", "-c", "feat", "--base=--upload-pack=x"], ["workstreams", "append", "@/Users/x/Documents/secret"]])
+  for (const argv of [["wt", "switch", "-c", "feat", "-x", "rm -rf ~"], ["wt", "switch", "-c", "feat", "--clobber"], ["wt", "switch", "-c"], ["wt", "remove", "feat"], ["wt", "remove", "-f", "-D"], ["git", "push"], ["wt", "switch", "-c", "feat", "-C", "/"], ["wt", "switch", "-c", "feat", "--base=--upload-pack=x"], ["workstreams", "append", "@/Users/x/Documents/secret"]])
     assert.ok(plan(argv).error, argv.join(" "));
 });
 
@@ -166,6 +164,8 @@ mkdirSync(fakeBin, { recursive: true });
 writeFileSync(join(fakeBin, "workstreams"), '#!/bin/sh\nmkdir -p "$HOME/.pi-workbench/workstreams"\n{ echo "args=$* foo=$FOO"; cat; } > "$HOME/.pi-workbench/workstreams/record"\necho stored\n', { mode: 0o755 });
 // Never run by the host operation (it writes the owner record itself): this one would mark that it ran.
 writeFileSync(join(fakeBin, "mac-storage-workspaces"), '#!/bin/sh\necho "$@" > "$HOME/owner-script-ran"\n', { mode: 0o755 });
+// The real wt, reached only when the shim does not forward a call: it says so.
+writeFileSync(join(fakeBin, "wt"), '#!/bin/sh\necho "REAL_WT_RAN $*"\n', { mode: 0o755 });
 const withFakes = { PATH: `${fakeBin}:${process.env.PATH}`, PI_SESSION_ID: "sandbox-test" };
 
 for (const owned of [false, true]) {
@@ -206,39 +206,22 @@ test("`wt switch --create` makes the sibling worktree outside the fence and reco
   assert.equal(git(tools, "branch", "--list", "other").trim(), "", "a refused call creates nothing");
 });
 
-test("`wt remove` removes an owned worktree outside the fence with its merged branch; never the main checkout, another chat's worktree or one holding .scratch/", { skip }, async () => {
+test("`wt remove` is refused inside the sandbox, even for a clean merged worktree the chat created, and never falls through to the real wt", { skip }, async () => {
   const main = join(home, "IdeaProjects", "rm");
   mkdirSync(main);
   git(main, "init", "-q");
   git(main, "commit", "-q", "--allow-empty", "-m", "init");
-  const add = (name, owner) => {
-    const path = join(home, "IdeaProjects", `rm.${name}`);
-    git(main, "worktree", "add", "-q", "-b", name, path);
-    writeFileSync(join(main, ".git", "worktrees", `rm.${name}`, "pi-creator.json"), JSON.stringify({ sessions: [owner] }));
-    return path;
-  };
-  const [done, dirty, kept, theirs, scratchy] = [["done", "sandbox-test"], ["dirty", "sandbox-test:child-1"], ["kept", "sandbox-test"], ["theirs", "another-chat"], ["scratchy", "sandbox-test"]].map(([name, owner]) => add(name, owner));
-  writeFileSync(join(dirty, "untracked"), "x");
-  git(kept, "commit", "-q", "--allow-empty", "-m", "unmerged");
-  mkdirSync(join(scratchy, ".scratch"));
-  const job = await run([
-    'wt remove done --foreground; echo "exit=$?"',
-    'wt remove dirty; echo "exit=$?"',
-    'wt remove dirty --force; echo "exit=$?"',
-    `cd "${kept}" && wt remove; echo "exit=$?"`,
-    `cd "${main}"; wt remove theirs; echo "exit=$?"`,
-    'wt remove scratchy; echo "exit=$?"',
-    'wt remove; echo "exit=$?"',
-  ].join("; "), { cwd: main, env: withFakes });
+  const done = join(home, "IdeaProjects", "rm.done");
+  git(main, "worktree", "add", "-q", "-b", "done", done);
+  const receipt = join(main, ".git", "worktrees", "rm.done", "pi-creator.json");
+  writeFileSync(receipt, JSON.stringify({ branch: "done", sessions: ["sandbox-test"], workstreams: [] }));
+  const job = await run(['wt remove done --foreground; echo "exit=$?"', 'wt remove done --force -D; echo "exit=$?"', `cd "${done}" && wt remove; echo "exit=$?"`].join("; "), { cwd: main, env: withFakes });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
-  assert.match(out, /Removed worktree @ [^\n]*rm\.done\n.*Deleted branch done\nexit=0/, out);
-  assert.match(out, /pass --force[\s\S]*exit=128[\s\S]*rm\.dirty\n.*Deleted branch dirty\nexit=0/);
-  assert.match(out, /rm\.kept\n.*Kept branch kept: the branch 'kept' is not fully merged \(-D deletes an unmerged branch\)\nexit=0/);
-  assert.match(out, /rm\.theirs is not a worktree this Chat owns[^\n]*\nexit=2[\s\S]*holds \.scratch\/[^\n]*\nexit=2[\s\S]*rm is the main checkout\nexit=2/);
-  for (const path of [done, dirty, kept]) assert.equal(existsSync(path), false, path);
-  for (const path of [theirs, scratchy, main]) assert.ok(existsSync(join(path, ".git")), path);
-  assert.deepEqual(git(main, "branch", "--format=%(refname:short)").trim().split("\n").sort(), ["kept", "master", "scratchy", "theirs"].sort());
+  assert.equal(out.match(/wt remove is not available inside the sandbox[^\n]*\nexit=2/g)?.length, 3, out);
+  assert.ok(existsSync(join(done, ".git")) && existsSync(receipt), "tree and receipt stay");
+  assert.equal(git(main, "branch", "--list", "done", "--format=%(refname:short)").trim(), "done", "the branch stays");
+  assert.doesNotMatch(out, /REAL_WT_RAN/, "the real wt never ran");
 });
 
 test("a chat in its scratch folder may write the worktrees whose creation receipt names it; a cleanup owner record grants nothing; it cannot forge one", { skip }, async () => {
@@ -288,7 +271,7 @@ test("a chat in its scratch folder may write the worktrees whose creation receip
   assert.match(readFileSync(join(meta, "lib.mine", "pi-creator.json"), "utf8"), /child-1/, "its own creation receipt is unchanged");
   assert.match(readFileSync(join(meta, "lib.theirs", "pi-creator.json"), "utf8"), /another-chat/);
   const out = readFileSync(job.logPath, "utf8");
-  assert.match(out, /exit=0[\s\S]*lib\.adopted is not a worktree this Chat owns[^\n]*\nexit=2/, out);
+  assert.match(out, /exit=0[\s\S]*wt remove is not available inside the sandbox[^\n]*\nexit=2/, out);
   assert.ok(existsSync(join(adopted, ".git")), "a cleanup owner cannot remove it");
   // The receipt names the chat and only the Workstream whose scratch folder it started in, never every one it is linked to.
   const receipt = JSON.parse(readFileSync(join(meta, "lib.from-ws", "pi-creator.json"), "utf8"));
