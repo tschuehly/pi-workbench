@@ -4,7 +4,7 @@
 // delivered once as a follow-up), and the resources PI WEB resolves with Pi's own loader (AGENTS.md, APPEND_SYSTEM.md,
 // the skill catalog) as system-prompt sections in Pi's order.
 import { createHash } from "node:crypto";
-import { arr, bool, obj, opt, str } from "@earendil-works/pi-schema";
+import { arr, bool, int, num, obj, oneOf, opt, str, union } from "@earendil-works/pi-schema";
 import type { Context } from "@earendil-works/chord/context";
 import { type Conversation, type JsonObject, defineExtension, defineTool, type EntryRecord, GenerationTask, type Harness, hook, type ToolRegistration } from "@earendil-works/pi-durable";
 import { defineDoc, defineTask } from "./store-schema.ts";
@@ -202,10 +202,13 @@ const ID_MAX = 128;
 const TEXT_MAX = 1_000;
 const DETAIL_MAX = 4_000;
 const CONTEXT_MAX = 4_000;
+const ANSWER_MAX = 4_000;
+const KINDS = ["choice", "boolean", "text", "number", "date"] as const;
 
 type Option = { value: string; label: string; detail?: string; recommended?: boolean };
 type ShowIf = { question: string; values: string[] };
-type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean; showIf?: ShowIf };
+type Typed = { kind?: (typeof KINDS)[number]; default?: boolean | number | string; multiline?: boolean; minLength?: number; maxLength?: number; minimum?: number; maximum?: number; integer?: boolean };
+type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean; showIf?: ShowIf } & Typed;
 export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; questions: Question[] };
 type Outcome = JsonObject & { askId: string; reason: string };
 type Closed = { outcome: Outcome; operationId?: string; delivered: boolean };
@@ -279,18 +282,69 @@ export function validateQuestions(questions: readonly Question[]): Question[] {
 			...(question.detail === undefined ? {} : { detail: requireText(question.detail, `detail of question ${id}`, DETAIL_MAX) }),
 			options,
 			...(question.multiple === true ? { multiple: true } : {}),
+			...validateTyped(question, id),
 			...(showIf === undefined ? {} : { showIf }),
 		};
 	});
 }
 
-/** PI WEB `validateShowIf`: a condition names an earlier question of the set and only option values it offers. */
+/** PI WEB `askValueError`: why a value does not fit a typed question, or undefined. The host checks only defaults. */
+function valueError(question: Typed, value: unknown): string | undefined {
+	switch (question.kind) {
+		case "boolean":
+			return typeof value === "boolean" ? undefined : "must be true or false";
+		case "text":
+			if (typeof value !== "string") return "must be text";
+			if (value.length > (question.maxLength ?? ANSWER_MAX)) return `must be at most ${question.maxLength ?? ANSWER_MAX} characters`;
+			return question.minLength !== undefined && value.length < question.minLength ? `must be at least ${question.minLength} characters` : undefined;
+		case "number":
+			if (typeof value !== "number" || !Number.isFinite(value)) return "must be a number";
+			if (question.integer === true && !Number.isInteger(value)) return "must be a whole number";
+			if (question.minimum !== undefined && value < question.minimum) return `must be at least ${question.minimum}`;
+			return question.maximum !== undefined && value > question.maximum ? `must be at most ${question.maximum}` : undefined;
+		case "date":
+			return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().startsWith(value) ? undefined : "must be a date as YYYY-MM-DD";
+		default:
+			return undefined;
+	}
+}
+
+/** PI WEB `validateTyped`: a typed question's kind and the fields that kind takes; other fields are dropped. */
+function validateTyped(question: Question, id: string): Typed {
+	const kind = question.kind ?? "choice";
+	if (kind === "choice") return {};
+	if (!KINDS.includes(kind)) throw new AskError(`Question ${id} has unknown kind ${kind}`);
+	if (question.options.length > 0 || question.multiple === true) throw new AskError(`Question ${id} of kind ${kind} takes no options or multiple`);
+	const { minLength, maxLength, minimum, maximum } = question;
+	const typed: Typed = kind === "text"
+		? { kind, ...(question.multiline === true ? { multiline: true } : {}), ...(minLength === undefined ? {} : { minLength }), ...(maxLength === undefined ? {} : { maxLength }) }
+		: kind === "number"
+			? { kind, ...(minimum === undefined ? {} : { minimum }), ...(maximum === undefined ? {} : { maximum }), ...(question.integer === true ? { integer: true } : {}) }
+			: { kind };
+	for (const [field, bound] of Object.entries({ minLength: typed.minLength, maxLength: typed.maxLength })) {
+		if (bound !== undefined && !(Number.isInteger(bound) && bound >= 0 && bound <= ANSWER_MAX)) throw new AskError(`${field} of question ${id} must be a whole number from 0 to ${ANSWER_MAX}`);
+	}
+	for (const [field, bound] of Object.entries({ minimum: typed.minimum, maximum: typed.maximum })) {
+		if (bound !== undefined && !Number.isFinite(bound)) throw new AskError(`${field} of question ${id} must be a number`);
+	}
+	if ((typed.minLength ?? 0) > (typed.maxLength ?? Infinity)) throw new AskError(`minLength of question ${id} exceeds its maxLength`);
+	if ((typed.minimum ?? -Infinity) > (typed.maximum ?? Infinity)) throw new AskError(`minimum of question ${id} exceeds its maximum`);
+	if (question.default === undefined) return typed;
+	const error = valueError(typed, question.default);
+	if (error !== undefined) throw new AskError(`default of question ${id} ${error}`);
+	return { ...typed, default: question.default };
+}
+
+/** PI WEB `validateShowIf`: a condition names an earlier choice question of the set and only option values it offers ("true"/"false" for a boolean one). */
 function validateShowIf(showIf: ShowIf, id: string, earlier: ReadonlyMap<string, Question>): ShowIf {
 	const parent = earlier.get(showIf.question);
 	if (parent === undefined) throw new AskError(`showIf of question ${id} must name an earlier question of this set, not ${showIf.question}`);
 	if (showIf.values.length === 0) throw new AskError(`showIf of question ${id} must list at least one option value of question ${parent.id}`);
-	const offered = new Set(parent.options.map((option) => option.value));
+	const kind = parent.kind ?? "choice";
+	if (kind !== "choice" && kind !== "boolean") throw new AskError(`showIf of question ${id}: question ${parent.id} is a ${kind} question; showIf needs a choice or boolean question`);
+	const offered = new Set(kind === "boolean" ? ["true", "false"] : parent.options.map((option) => option.value));
 	const unknown = showIf.values.find((value) => !offered.has(value));
+	if (unknown !== undefined && kind === "boolean") throw new AskError(`showIf of question ${id}: question ${parent.id} is a boolean; use "true" or "false", not ${unknown}`);
 	if (unknown !== undefined) throw new AskError(`showIf of question ${id}: question ${parent.id} has no option ${unknown}`);
 	return { question: parent.id, values: [...new Set(showIf.values)] };
 }
@@ -324,8 +378,16 @@ const QuestionParams = obj({
 	multiple: opt(bool({ description: "Allow several options. Default: one answer per question." })),
 	showIf: opt(obj({
 		question: str({ maxLength: ID_MAX, description: "id of an earlier question in this set." }),
-		values: arr(str({ maxLength: ID_MAX }), { minItems: 1, maxItems: OPTION_LIMIT, description: "Its option values that show this question." }),
+		values: arr(str({ maxLength: ID_MAX }), { minItems: 1, maxItems: OPTION_LIMIT, description: "Its option values (boolean: \"true\"/\"false\") that show this question." }),
 	}, { open: true, description: "Show only while that question has one of these picked; hidden, it is skipped." })),
+	kind: opt(oneOf(KINDS, { description: "Default choice; other kinds take no options." })),
+	default: opt(union([bool(), num(), str({ maxLength: ANSWER_MAX })], { description: "Prefilled answer; date as YYYY-MM-DD." })),
+	multiline: opt(bool({ description: "text: a textarea." })),
+	minLength: opt(int({ minimum: 0, maximum: ANSWER_MAX })),
+	maxLength: opt(int({ minimum: 0, maximum: ANSWER_MAX })),
+	minimum: opt(num()),
+	maximum: opt(num()),
+	integer: opt(bool()),
 }, { open: true });
 const AskParams = obj({
 	context: opt(str({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown above the questions: what they all share." })),
@@ -346,7 +408,8 @@ export type WorkbenchSignal =
 
 type Signal = (signal: WorkbenchSignal) => void;
 
-export function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean; showIf?: ShowIf }): Question {
+export function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean; showIf?: ShowIf } & Typed): Question {
+	const { kind, multiline, minLength, maxLength, minimum, maximum, integer } = param;
 	return {
 		id: param.id,
 		question: param.question,
@@ -354,6 +417,15 @@ export function toQuestion(param: { id: string; question: string; detail?: strin
 		options: (param.options ?? []).map((o) => ({ value: o.value, label: o.label, ...(o.detail === undefined ? {} : { detail: o.detail }), ...(o.recommended === true ? { recommended: true } : {}) })),
 		...(param.multiple === undefined ? {} : { multiple: param.multiple }),
 		...(param.showIf === undefined ? {} : { showIf: { question: param.showIf.question, values: [...param.showIf.values] } }),
+		// Typed-kind fields copy as given; validateQuestions keeps those the kind takes.
+		...(kind === undefined ? {} : { kind }),
+		...(param.default === undefined ? {} : { default: param.default }),
+		...(multiline === undefined ? {} : { multiline }),
+		...(minLength === undefined ? {} : { minLength }),
+		...(maxLength === undefined ? {} : { maxLength }),
+		...(minimum === undefined ? {} : { minimum }),
+		...(maximum === undefined ? {} : { maximum }),
+		...(integer === undefined ? {} : { integer }),
 	};
 }
 

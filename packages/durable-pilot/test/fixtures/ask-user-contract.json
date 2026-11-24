@@ -1,5 +1,5 @@
 {
-  "note": "ask_user question rules contract, kept byte-identical in two repos: pi-workbench packages/durable-pilot/test/fixtures/ask-user-contract.json (host copy: src/workbench.ts toQuestion/validateQuestions) and pi-web src/server/sessions/askUserContract.fixture.json (copies: askUserTool.ts toQuestion/toOption, pendingAskStore.ts validateQuestion/validateOption). A field added to one copy must be added to the others and here.",
+  "note": "ask_user question rules contract, kept byte-identical in two repos: pi-workbench packages/durable-pilot/test/fixtures/ask-user-contract.json (host copy: src/workbench.ts toQuestion/validateQuestions) and pi-web src/server/sessions/askUserContract.fixture.json (copies: askUserTool.ts toQuestion/toOption, pendingAskStore.ts validateQuestion/validateOption/validateTyped). A field added to one copy must be added to the others and here.",
   "valid": {
     "input": {
       "context": "**Context** shared by every question.",
@@ -8,6 +8,7 @@
           "id": "db",
           "question": "1. Which database?",
           "detail": "Markdown detail of db.",
+          "kind": "choice",
           "options": [
             { "value": "pg", "label": "Postgres", "detail": "One store.", "recommended": true, "unknownOptionField": "dropped" },
             { "value": "sqlite", "label": "SQLite", "recommended": false }
@@ -30,7 +31,23 @@
           "id": "why",
           "question": "3) Why?",
           "detail": "Free text only."
-        }
+        },
+        { "id": "backup", "question": "Enable backup?", "detail": "A switch.", "kind": "boolean", "default": true, "options": [], "minimum": 1 },
+        {
+          "id": "folder",
+          "question": "Backup folder?",
+          "detail": "Text.",
+          "kind": "text",
+          "default": "~/Backups",
+          "multiline": true,
+          "minLength": 1,
+          "maxLength": 200,
+          "integer": true,
+          "showIf": { "question": "backup", "values": ["true", "true"] }
+        },
+        { "id": "count", "question": "How many copies?", "detail": "A number.", "kind": "number", "default": 7, "minimum": 1, "maximum": 10, "integer": true, "multiple": false, "maxLength": 3 },
+        { "id": "due", "question": "Due when?", "detail": "A date.", "kind": "date", "default": "2026-12-01", "multiline": true },
+        { "id": "plain", "question": "Note?", "detail": "One line.", "kind": "text", "multiline": false, "showIf": { "question": "backup", "values": ["false"] } }
       ]
     },
     "expected": {
@@ -61,7 +78,23 @@
           "question": "Why?",
           "detail": "Free text only.",
           "options": []
-        }
+        },
+        { "id": "backup", "question": "Enable backup?", "detail": "A switch.", "kind": "boolean", "default": true, "options": [] },
+        {
+          "id": "folder",
+          "question": "Backup folder?",
+          "detail": "Text.",
+          "kind": "text",
+          "default": "~/Backups",
+          "multiline": true,
+          "minLength": 1,
+          "maxLength": 200,
+          "options": [],
+          "showIf": { "question": "backup", "values": ["true"] }
+        },
+        { "id": "count", "question": "How many copies?", "detail": "A number.", "kind": "number", "default": 7, "minimum": 1, "maximum": 10, "integer": true, "options": [] },
+        { "id": "due", "question": "Due when?", "detail": "A date.", "kind": "date", "default": "2026-12-01", "options": [] },
+        { "id": "plain", "question": "Note?", "detail": "One line.", "kind": "text", "options": [], "showIf": { "question": "backup", "values": ["false"] } }
       ]
     }
   },
@@ -103,6 +136,43 @@
         { "id": "q", "question": "  ", "detail": "d" }
       ],
       "error": "text of question q must not be empty"
+    },
+    {
+      "name": "options on a boolean question",
+      "questions": [
+        { "id": "flag", "question": "On?", "detail": "d", "kind": "boolean", "options": [{ "value": "y", "label": "Yes" }] }
+      ],
+      "error": "Question flag of kind boolean takes no options or multiple"
+    },
+    {
+      "name": "a default out of range",
+      "questions": [
+        { "id": "n", "question": "How many?", "detail": "d", "kind": "number", "maximum": 10, "default": 11 }
+      ],
+      "error": "default of question n must be at most 10"
+    },
+    {
+      "name": "a bad date default",
+      "questions": [
+        { "id": "d", "question": "When?", "detail": "d", "kind": "date", "default": "2026-13-01" }
+      ],
+      "error": "default of question d must be a date as YYYY-MM-DD"
+    },
+    {
+      "name": "showIf on a text question",
+      "questions": [
+        { "id": "t", "question": "Name?", "detail": "d", "kind": "text" },
+        { "id": "b", "question": "More?", "detail": "d", "showIf": { "question": "t", "values": ["x"] } }
+      ],
+      "error": "showIf of question b: question t is a text question; showIf needs a choice or boolean question"
+    },
+    {
+      "name": "showIf on a boolean question with a value other than true or false",
+      "questions": [
+        { "id": "flag", "question": "On?", "detail": "d", "kind": "boolean" },
+        { "id": "b", "question": "More?", "detail": "d", "showIf": { "question": "flag", "values": ["yes"] } }
+      ],
+      "error": "showIf of question b: question flag is a boolean; use \"true\" or \"false\", not yes"
     }
   ]
 }
