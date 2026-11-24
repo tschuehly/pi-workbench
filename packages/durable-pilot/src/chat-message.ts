@@ -84,11 +84,14 @@ const oneLine = (field: string) => field.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ")
 /** The target host's answer to a message while its restore waits for the owner: refused, never delivered later. */
 export const CHAT_PAUSED = "The chat is paused until the owner resumes it; the message was not delivered";
 
+/** The user's Workstream store (`PI_WORKBENCH_WORKSTREAM_DIR` in tests). */
+export const userWorkstreamStore = () => createUserLocalWorkstreamStore(process.env.PI_WORKBENCH_WORKSTREAM_DIR === undefined ? {} : { directory: process.env.PI_WORKBENCH_WORKSTREAM_DIR });
+
 /** The Workstream each chat belongs to, from the user's Workstream store; a store that cannot be read gives none. */
 async function workstreamsOf(ids: readonly string[]): Promise<Map<string, string>> {
 	const found = new Map<string, string>();
 	try {
-		const store = createUserLocalWorkstreamStore(process.env.PI_WORKBENCH_WORKSTREAM_DIR === undefined ? {} : { directory: process.env.PI_WORKBENCH_WORKSTREAM_DIR });
+		const store = userWorkstreamStore();
 		for (const id of ids) {
 			const [home] = await store.list({ sessionId: id, includeClosed: true });
 			if (home !== undefined) found.set(id, home.id);
