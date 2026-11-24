@@ -159,6 +159,13 @@
       "error": "default of question d must be a date as YYYY-MM-DD"
     },
     {
+      "name": "a blank text default",
+      "questions": [
+        { "id": "t", "question": "Note?", "detail": "t", "kind": "text", "default": "   " }
+      ],
+      "error": "default of question t must not be blank"
+    },
+    {
       "name": "showIf on a text question",
       "questions": [
         { "id": "t", "question": "Name?", "detail": "d", "kind": "text" },

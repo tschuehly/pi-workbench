@@ -1004,4 +1004,5 @@ test("remainingAsk: a partial send's edited context becomes the set's context; n
 	const outcome = { partial: true, revision: "r2", questions: [{ question: q("db"), answered: true }] };
 	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "My plan" })?.context, "My plan");
 	assert.equal(remainingAsk(ask, outcome)?.context, "Agent's plan");
+	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "" })?.context, undefined, "a cleared context stays cleared");
 });

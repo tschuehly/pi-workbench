@@ -295,6 +295,7 @@ function valueError(question: Typed, value: unknown): string | undefined {
 			return typeof value === "boolean" ? undefined : "must be true or false";
 		case "text":
 			if (typeof value !== "string") return "must be text";
+			if (value.trim() === "") return "must not be blank";
 			if (value.length > (question.maxLength ?? ANSWER_MAX)) return `must be at most ${question.maxLength ?? ANSWER_MAX} characters`;
 			return question.minLength !== undefined && value.length < question.minLength ? `must be at least ${question.minLength} characters` : undefined;
 		case "number":
@@ -599,8 +600,11 @@ export function remainingAsk(ask: PendingAsk, outcome: unknown): PendingAsk | un
 	const { partial, revision, questions, editedContext } = (outcome ?? {}) as { partial?: unknown; revision?: unknown; questions?: { question?: { id?: string } }[]; editedContext?: unknown };
 	if (partial !== true || typeof revision !== "string") return undefined;
 	const sent = new Set((questions ?? []).map((record) => record.question?.id));
-	const context = typeof editedContext === "string" && editedContext.trim() !== "" && editedContext.length <= CONTEXT_MAX ? { context: editedContext } : {};
-	return { ...ask, revision, questions: ask.questions.filter((question) => !sent.has(question.id)), ...context };
+	const rest: PendingAsk = { ...ask, revision, questions: ask.questions.filter((question) => !sent.has(question.id)) };
+	// A blank edit means the user cleared the context; the open questions must not show the agent's original again.
+	if (editedContext === "") delete rest.context;
+	else if (typeof editedContext === "string" && editedContext.trim() !== "" && editedContext.length <= CONTEXT_MAX) rest.context = editedContext;
+	return rest;
 }
 
 /**
