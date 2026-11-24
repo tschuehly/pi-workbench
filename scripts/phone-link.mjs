@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Sends Thomas a Telegram link to the Chat whenever a Durable Chat opens an ask_user question set.
+// Sends Thomas a Telegram link to the Chat whenever a Durable Chat opens an ask_user question set. The message is a
+// fixed label and the Chat URL only: Chat names and model-written question text never leave the Mac through Telegram.
 // Listens on PI WEB's global event socket (`session.attention`, kind "ask", emitted once when a set opens),
 // so it needs no PI WEB or Durable host change. The link goes through the always-on Cloudflare tunnel.
 // An ask missed while the socket was down, or whose send failed, is found again through PI WEB's read-only
@@ -35,9 +36,7 @@ export function askMessage(event, base = PUBLIC_BASE) {
 	if (typeof event.id !== "string" || event.id === "" || typeof event.sessionId !== "string" || event.sessionId === "") return undefined;
 	const url = new URL(base);
 	url.searchParams.set("session", event.sessionId);
-	const name = typeof event.sessionName === "string" && event.sessionName !== "" ? event.sessionName : "Pi";
-	const question = typeof event.detail === "string" && event.detail !== "" ? event.detail : "Needs an answer";
-	return `${name}: ${question}\n${url.href}`;
+	return `Pi needs an answer\n${url.href}`;
 }
 
 /** Records an ask id; false when it was already sent. Keeps only the newest ids. */
@@ -129,8 +128,6 @@ async function eachLimited(items, limit, work) {
 	}));
 }
 
-const firstLine = (text) => (typeof text === "string" ? (text.trim().split(/\r?\n/u)[0] ?? "").slice(0, 120) : "");
-
 /**
  * Delivers each opened ask's link once. An id counts as delivered only after Telegram confirms it; while a send runs it
  * is only in flight, so a parallel success never saves it. Effects come in: `send(text)`, `getJson(path)` on PI WEB,
@@ -146,7 +143,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 
 	state.recheck ??= [];
 
-	async function deliver({ id, sessionId, cwd, name, text }) {
+	async function deliver({ id, sessionId, cwd, text }) {
 		if (state.delivered.includes(id) || inFlight.has(id)) return;
 		inFlight.add(id);
 		try {
@@ -157,7 +154,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 				} catch (error) {
 					if (!transient(error) || attempt >= retryDelays.length) {
 						if (!state.pending.some((ask) => ask.id === id)) {
-							state.pending.push({ id, sessionId, cwd, name });
+							state.pending.push({ id, sessionId, cwd });
 							save(state);
 						}
 						log(`could not send ask ${id}: ${describeError(error)}; retrying at the next reconcile`);
@@ -188,7 +185,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 		const wanted = only === undefined ? undefined : new Set(only);
 		const chats = new Map();
 		for (const ref of [...state.pending, ...state.recheck]) {
-			if (typeof ref.cwd === "string" && (wanted?.has(ref.sessionId) ?? true)) chats.set(ref.sessionId, { id: ref.sessionId, cwd: ref.cwd, name: ref.name });
+			if (typeof ref.cwd === "string" && (wanted?.has(ref.sessionId) ?? true)) chats.set(ref.sessionId, { id: ref.sessionId, cwd: ref.cwd });
 		}
 		if (only === undefined || only.some((id) => !chats.has(id))) {
 			const sessions = await getJson("/api/sessions/recent?limit=500");
@@ -196,7 +193,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 			const since = only !== undefined ? Infinity : state.checkedAt === undefined ? startedAt - BOOTSTRAP_WINDOW_MS : Date.parse(state.checkedAt) - RECONCILE_MARGIN_MS;
 			for (const chat of sessions) {
 				if (typeof chat?.id !== "string" || typeof chat.cwd !== "string" || !(wanted?.has(chat.id) || chats.has(chat.id) || Date.parse(chat.modified) >= since)) continue;
-				chats.set(chat.id, { id: chat.id, cwd: chat.cwd, name: typeof chat.name === "string" ? chat.name : chats.get(chat.id)?.name });
+				chats.set(chat.id, { id: chat.id, cwd: chat.cwd });
 			}
 		}
 		const sends = [];
@@ -209,7 +206,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 				const failures = (state.recheck.find((ref) => ref.sessionId === chat.id)?.failures ?? 0) + 1;
 				state.recheck = state.recheck.filter((ref) => ref.sessionId !== chat.id);
 				if (failures < MAX_READ_FAILURES) {
-					state.recheck.push({ sessionId: chat.id, cwd: chat.cwd, name: chat.name, failures });
+					state.recheck.push({ sessionId: chat.id, cwd: chat.cwd, failures });
 					log(`could not read the open asks of Chat ${chat.id}: ${describeError(error)}; retrying at the next reconcile`);
 				} else {
 					state.pending = state.pending.filter((ask) => ask.sessionId !== chat.id);
@@ -227,9 +224,8 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 				save(state);
 			}
 			for (const ask of open) {
-				const sessionName = typeof chat.name === "string" ? chat.name.slice(0, 120) : undefined;
-				const text = askMessage({ type: "session.attention", kind: "ask", id: ask.askId, sessionId: chat.id, sessionName, detail: firstLine(ask.questions?.[0]?.question) });
-				if (text !== undefined) sends.push(deliver({ id: ask.askId, sessionId: chat.id, cwd: chat.cwd, name: sessionName, text }));
+				const text = askMessage({ type: "session.attention", kind: "ask", id: ask.askId, sessionId: chat.id });
+				if (text !== undefined) sends.push(deliver({ id: ask.askId, sessionId: chat.id, cwd: chat.cwd, text }));
 			}
 		});
 		// A failed read stays in `recheck`, so the watermark may pass it.
@@ -244,7 +240,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 	/** The work an event starts, or undefined. A live Chat's `status.update` lists its open asks: one never seen is reconciled. */
 	function onEvent(event) {
 		const text = askMessage(event);
-		if (text !== undefined) return deliver({ id: event.id, sessionId: event.sessionId, cwd: event.cwd, name: event.sessionName, text });
+		if (text !== undefined) return deliver({ id: event.id, sessionId: event.sessionId, cwd: event.cwd, text });
 		const sessionId = event?.type === "status.update" ? event.status?.sessionId : undefined;
 		const asks = Array.isArray(event?.status?.pendingAsks) ? event.status.pendingAsks : [];
 		if (typeof sessionId !== "string" || reconciling.has(sessionId) || !asks.some((ask) => typeof ask?.askId === "string" && !known(ask.askId))) return undefined;

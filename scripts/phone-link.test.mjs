@@ -9,8 +9,8 @@ const TOKEN = "123456:SECRET-bot-token";
 
 const opened = { type: "session.attention", sessionId: "chat 1", cwd: "/w", sessionName: "Release", kind: "ask", id: "ask-1", detail: "Ship it?" };
 
-test("an opened question set becomes name, first question and the Chat link", () => {
-	assert.equal(askMessage(opened), "Release: Ship it?\nhttps://pi.tschuehly.de/?session=chat+1");
+test("an opened question set becomes a fixed label and the Chat link, never its name or question", () => {
+	assert.equal(askMessage(opened), "Pi needs an answer\nhttps://pi.tschuehly.de/?session=chat+1");
 });
 
 test("other events and attention kinds send nothing", () => {
@@ -20,8 +20,14 @@ test("other events and attention kinds send nothing", () => {
 	assert.equal(askMessage(null), undefined);
 });
 
-test("a missing name or question falls back to plain words", () => {
-	assert.equal(askMessage({ ...opened, sessionName: undefined, detail: "" }), "Pi: Needs an answer\nhttps://pi.tschuehly.de/?session=chat+1");
+test("live and recovery sends carry no Chat name or question text", async () => {
+	const { linker, sent } = harness({
+		sessions: [{ id: "s1", cwd: "/w", name: "Durable · Secret plan", modified: "2026-05-01T11:00:00Z" }],
+		asks: { s1: [{ askId: "r", questions: [{ id: "q", question: "Leak the key?" }] }] },
+	});
+	await linker.onEvent({ ...opened, sessionName: "Secret plan", detail: "Leak the key?" });
+	await linker.reconcile();
+	assert.deepEqual(sent, ["Pi needs an answer\nhttps://pi.tschuehly.de/?session=chat+1", "Pi needs an answer\nhttps://pi.tschuehly.de/?session=s1"]);
 });
 
 test("each ask id is sent once and the list stays bounded", () => {
@@ -91,10 +97,10 @@ function harness({ state = { delivered: [], pending: [] }, send, sessions = [], 
 
 test("a send that fails while another succeeds is never saved as delivered", async () => {
 	const gates = {};
-	const send = (text) => new Promise((resolve, reject) => { gates[text.includes("Question a?") ? "a" : "b"] = { resolve, reject }; });
+	const send = (text) => new Promise((resolve, reject) => { gates[text.endsWith("=sa") ? "a" : "b"] = { resolve, reject }; });
 	const { linker, state, saved } = harness({ send: (text) => send(text) });
-	const a = linker.onEvent(opening("a"));
-	const b = linker.onEvent(opening("b"));
+	const a = linker.onEvent(opening("a", "sa"));
+	const b = linker.onEvent(opening("b", "sb"));
 	await new Promise((resolve) => setImmediate(resolve));
 	gates.a.resolve();
 	await a;
@@ -128,7 +134,7 @@ test("a reconcile sends open asks missed or failed, once, and reads only changed
 		asks: { s1: [ask("new"), ask("old")], s2: [ask("failed")], s3: [ask("cold")] },
 	});
 	await linker.reconcile();
-	assert.deepEqual(sent.sort(), ["Durable · Fix: Question failed?\nhttps://pi.tschuehly.de/?session=s2", "Durable · Release: Question new?\nhttps://pi.tschuehly.de/?session=s1"]);
+	assert.deepEqual(sent.sort(), ["Pi needs an answer\nhttps://pi.tschuehly.de/?session=s1", "Pi needs an answer\nhttps://pi.tschuehly.de/?session=s2"]);
 	assert.ok(!reads.some((path) => path.includes("/s3/")), "a Chat unchanged since the last reconcile is not read");
 	assert.deepEqual(state.pending, []);
 	assert.equal(state.checkedAt, "2026-05-01T12:00:00.000Z");
@@ -152,8 +158,7 @@ test("an exhausted send waits for the next reconcile, and a status.update with a
 	await linker.onEvent({ type: "status.update", status: { sessionId: "s1", pendingAsks: [{ askId: "a" }, { askId: "z" }] } });
 	assert.deepEqual(state.delivered.sort(), ["a", "z"]);
 	assert.deepEqual(state.pending, []);
-	// The Chat's name comes from the failed send's saved ask, so its Chat needs no list read.
-	assert.equal(sent.at(-1), "Release: Needs an answer\nhttps://pi.tschuehly.de/?session=s1");
+	assert.equal(sent.at(-1), "Pi needs an answer\nhttps://pi.tschuehly.de/?session=s1");
 	assert.equal(linker.onEvent({ type: "status.update", status: { sessionId: "s1", pendingAsks: [{ askId: "z" }] } }), undefined);
 });
 
@@ -168,7 +173,7 @@ test("a first connect without a watermark sends the open asks of Chats changed i
 		asks: { s1: [ask("open")], s2: [ask("stale")] },
 	});
 	await linker.reconcile();
-	assert.deepEqual(sent, ["Durable · Release: Question open?\nhttps://pi.tschuehly.de/?session=s1"]);
+	assert.deepEqual(sent, ["Pi needs an answer\nhttps://pi.tschuehly.de/?session=s1"]);
 	assert.ok(!reads.some((path) => path.includes("/s2/")), "a Chat unchanged for days is not read");
 });
 
@@ -184,7 +189,7 @@ test("a failed ask read is retried at the next reconcile, though the watermark m
 	assert.deepEqual(sent, []);
 	failing.clear();
 	await linker.reconcile();
-	assert.deepEqual(sent, ["Durable · Release: Question a?\nhttps://pi.tschuehly.de/?session=s1"]);
+	assert.deepEqual(sent, ["Pi needs an answer\nhttps://pi.tschuehly.de/?session=s1"]);
 	assert.deepEqual(state.recheck, []);
 });
 
@@ -199,11 +204,11 @@ test("a Chat whose read keeps failing is given up with its pending asks", async 
 
 test("a pending ask of a Chat outside the recent list is read by its saved id and cwd", async () => {
 	const { linker, state, sent, reads } = harness({
-		state: { delivered: [], pending: [{ id: "p", sessionId: "far", cwd: "/x", name: "Durable · Far" }], checkedAt: "2026-05-01T11:00:00Z" },
+		state: { delivered: [], pending: [{ id: "p", sessionId: "far", cwd: "/x" }], checkedAt: "2026-05-01T11:00:00Z" },
 		asks: { far: [ask("p")] },
 	});
 	await linker.reconcile(["far"]);
-	assert.deepEqual(sent, ["Durable · Far: Question p?\nhttps://pi.tschuehly.de/?session=far"]);
+	assert.deepEqual(sent, ["Pi needs an answer\nhttps://pi.tschuehly.de/?session=far"]);
 	assert.ok(reads.includes("/api/sessions/far/asks?cwd=%2Fx"));
 	assert.ok(!reads.some((path) => path.startsWith("/api/sessions/recent")), "saved Chats need no Chat list");
 	assert.deepEqual(state.pending, []);
