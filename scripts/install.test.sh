@@ -57,6 +57,8 @@ check "fresh install: app built --app-only against :8506 from the installed PI W
 code=$(rc "$I" --no-app)
 check "rerun at the same tips: no switch, no app (--no-app), exit 0" test "$code" = 0 -a -z "$(calls)"
 grep -q "already installed" "$t/out" && ok "rerun: says already installed" || fail "rerun: says already installed"
+code=$(rc "$I" --dry-run --no-app)
+check "dry run at the same tips: plans no switch" bash -c "test $code = 0 && grep -q 'already installed' '$t/out' && ! grep -q 'promote' '$t/out'"
 
 echo two >>"$t/seed-pw/f"; git -C "$t/seed-pw" commit -qam two; git -C "$t/seed-pw" push -q origin HEAD:refs/heads/pi-workbench
 new_pw=$(git -C "$t/pw.git" rev-parse pi-workbench)

@@ -45,7 +45,7 @@ else pw_rev="origin/pi-workbench (after the clone)"; fi
 say "pi-workbench: $wb_rev"; say "pi-web:       $pw_rev"
 
 current() { [[ $(readlink "$projects/$1.durable-installed" 2>/dev/null) == "$store/$1-${2:0:12}" ]]; }
-if [[ $dry == 0 ]] && current pi-workbench "$wb_rev" && current pi-web "$pw_rev"; then
+if current pi-workbench "$wb_rev" && current pi-web "$pw_rev"; then
   say "already installed: both *.durable-installed links point at these builds; no switch"
 elif [[ $dry == 1 ]]; then
   run "$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" 0
