@@ -14,7 +14,7 @@ const plist = (entry) => `<string>exec node &apos;${entry}&apos;</string>\n`;
 function scenario({ healthy, daemonChanged = false }) {
   const root = mkdtempSync(join(tmpdir(), "promote-switch-web-"));
   const home = join(root, "home"), projects = join(root, "projects"), bin = join(root, "bin");
-  const store = join(home, ".pi-workbench/installed"), la = join(home, "Library/LaunchAgents");
+  const store = join(home, ".pi-workbench/installed-durable"), la = join(home, "Library/LaunchAgents");
   const old = join(store, "pi-web-000000000000"), next = join(store, `pi-web-${sha.slice(0, 12)}`);
   for (const dir of [old, next]) {
     put(join(dir, "dist/server/sessiond.js"), dir === next && daemonChanged ? "changed\n" : "daemon\n");
@@ -24,23 +24,23 @@ function scenario({ healthy, daemonChanged = false }) {
   const stale = join(store, "pi-web-111111111111");
   put(join(stale, "dist/server/index.js"), "web\n");
   put(`${stale}.prepared`, "");
-  put(join(la, "com.pi-web.sessiond.plist"), plist(`${old}/dist/server/sessiond.js`));
-  put(join(la, "com.pi-web.web.plist"), plist(`${old}/dist/server/index.js`));
+  put(join(la, "com.pi-web-durable.sessiond.plist"), plist(`${old}/dist/server/sessiond.js`));
+  put(join(la, "com.pi-web-durable.web.plist"), plist(`${old}/dist/server/index.js`));
   mkdirSync(join(projects, "pi-web"), { recursive: true });
-  symlinkSync(old, join(projects, "pi-web.installed"));
+  symlinkSync(old, join(projects, "pi-web.durable-installed"));
   const shim = (name, body) => { put(join(bin, name), `#!/bin/sh\n${body}\n`); spawnSync("chmod", ["+x", join(bin, name)]); };
   shim("git", `echo ${sha}`);
   shim("sleep", "exit 0");
   shim("launchctl", `echo "$*" >> "$HOME/launchctl.log"`);
   // Healthy only while the web plist points at the build that works.
-  shim("curl", `grep -q "${healthy ? next : old}" "$HOME/Library/LaunchAgents/com.pi-web.web.plist" || exit 1\necho '{"plugins":[{"id":"pi-workbench","server":{"state":"active","restartRequired":false}}]}'`);
-  const result = spawnSync("bash", [script, "--instance", "legacy", "switch-web", "HEAD"], {
+  shim("curl", `grep -q "${healthy ? next : old}" "$HOME/Library/LaunchAgents/com.pi-web-durable.web.plist" || exit 1\necho '{"plugins":[{"id":"pi-workbench","server":{"state":"active","restartRequired":false}}]}'`);
+  const result = spawnSync("bash", [script, "switch-web", "HEAD"], {
     encoding: "utf8",
     env: { ...process.env, HOME: home, PI_WORKBENCH_PROJECTS: projects, PI_PROMOTE_PATH: `${bin}:${process.env.PATH}` },
   });
-  const web = readFileSync(join(la, "com.pi-web.web.plist"), "utf8");
+  const web = readFileSync(join(la, "com.pi-web-durable.web.plist"), "utf8");
   const log = (() => { try { return readFileSync(join(home, "launchctl.log"), "utf8"); } catch { return ""; } })();
-  return { result, web, log, link: readlinkSync(join(projects, "pi-web.installed")), old, next, stale };
+  return { result, web, log, link: readlinkSync(join(projects, "pi-web.durable-installed")), old, next, stale };
 }
 
 test("switch-web restarts only the web service on the new build", () => {
