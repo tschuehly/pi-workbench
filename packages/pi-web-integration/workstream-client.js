@@ -76,6 +76,7 @@ function isWorkstreamSummary(value) {
   return isRecord(value)
     && isString(value.id)
     && isString(value.title)
+    && isOptionalShortTitle(value.shortTitle)
     && isPositiveInteger(value.revision)
     && isString(value.updatedAt)
     && isNonNegativeInteger(value.activeSessionCount)
@@ -101,6 +102,7 @@ function isWorkstreamSnapshot(value) {
   return isRecord(value)
     && isString(value.id)
     && isString(value.title)
+    && isOptionalShortTitle(value.shortTitle)
     && isPositiveInteger(value.revision)
     && isString(value.createdAt)
     && isString(value.updatedAt)
@@ -198,6 +200,11 @@ function isAnswerReceipt(value, taskId) {
 
 function sortSnapshots(snapshots) {
   return structuredClone(snapshots).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
+}
+
+// Absent on stores older than short-title.set; null when none was set.
+function isOptionalShortTitle(value) {
+  return value === undefined || value === null || isString(value);
 }
 
 function isRecord(value) {

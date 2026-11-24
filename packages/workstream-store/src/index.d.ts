@@ -5,6 +5,8 @@ export interface CreateWorkstream {
   workstreamId: WorkstreamId;
   idempotencyKey: string;
   title: string;
+  /** Optional 1-2 word tab label, trimmed, at most 24 characters, e.g. "Durable rebuild". */
+  shortTitle?: string;
   producer: string;
 }
 
@@ -43,7 +45,9 @@ export type WorkstreamRecord =
   /** Owner-chosen grouping label for chooser and dashboard lists, e.g. "Embabel". Latest wins. */
   | SemanticRecord<"group.set", { group: string }>
   /** Nonblank Workstream title, at most 200 characters. Stored verbatim; latest wins. */
-  | SemanticRecord<"title.set", { title: string }>;
+  | SemanticRecord<"title.set", { title: string }>
+  /** 1-2 word tab label for PI WEB, trimmed, at most 24 characters; null clears it. Latest wins. */
+  | SemanticRecord<"short-title.set", { shortTitle: string | null }>;
 
 export interface SemanticRecord<T extends string, P> {
   type: T;
@@ -166,6 +170,8 @@ export interface WorkstreamSession {
 export interface WorkstreamSnapshot {
   id: WorkstreamId;
   title: string;
+  /** 1-2 word tab label, or null when none was set. */
+  shortTitle: string | null;
   revision: Revision;
   createdAt: string;
   updatedAt: string;
@@ -181,6 +187,7 @@ export interface WorkstreamSnapshot {
 export interface WorkstreamSummary {
   id: WorkstreamId;
   title: string;
+  shortTitle: string | null;
   group: string | null;
   revision: Revision;
   createdAt: string;

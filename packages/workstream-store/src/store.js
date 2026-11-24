@@ -30,6 +30,7 @@ export class WorkstreamStore {
         type: "workstream.created",
         workstreamId: request.workstreamId,
         title: request.title,
+        ...(request.shortTitle === undefined ? {} : { shortTitle: request.shortTitle }),
         producer: request.producer,
         revision: 1,
         recordedAt,
@@ -363,6 +364,7 @@ function toSummary(snapshot) {
   return {
     id: snapshot.id,
     title: snapshot.title,
+    shortTitle: snapshot.shortTitle,
     group: snapshot.group,
     revision: snapshot.revision,
     createdAt: snapshot.createdAt,

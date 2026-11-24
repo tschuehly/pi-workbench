@@ -12,7 +12,7 @@ A Workstream is a sparse attention ledger, not a transcript, plan, workspace, or
 ## 1. Find, create, associate
 
 - `workstreams list` (add `--all`, `--closed`, `--fields`) and `workstreams show <id>` (add `--full` for complete text). Use `--closed` only when the user asks about history.
-- If none fits, `workstreams create <id> --title "…" --group "…"`; groups are `Embabel`, `PhotoQuest`, `Pi Workbench`, `Personal`, or one the user names. Then write its overview.
+- If none fits, `workstreams create <id> --title "…" --short "…" --group "…"`, where `--short` is a 1-2 word tab label such as `Durable rebuild`; groups are `Embabel`, `PhotoQuest`, `Pi Workbench`, `Personal`, or one the user names. Then write its overview.
 - `workstreams associate <id>` makes this session active there. A session has exactly one home Workstream; if the CLI names another one, stop and report the conflict.
 
 ## 2. Report status (read-only)

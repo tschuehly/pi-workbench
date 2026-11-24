@@ -19,7 +19,7 @@ export class DeterministicFakeWorkstreamClient {
     return this.mutate(request, () => {
       if (this.projection.snapshots.some((snapshot) => snapshot.id === request.workstreamId)) throw new Error(`Workstream ${request.workstreamId} already exists.`);
       const timestamp = fakeTimestamp(this.projection.sequence + 1);
-      this.projection.snapshots.push({ id: request.workstreamId, title: request.title, revision: 1, createdAt: timestamp, updatedAt: timestamp, sessions: [], humanTasks: [], links: [], closed: false, closedAt: null });
+      this.projection.snapshots.push({ id: request.workstreamId, title: request.title, shortTitle: request.shortTitle ?? null, revision: 1, createdAt: timestamp, updatedAt: timestamp, sessions: [], humanTasks: [], links: [], closed: false, closedAt: null });
       return { workstreamId: request.workstreamId, revision: 1, records: [{ type: "workstream.created" }] };
     });
   }
@@ -64,6 +64,7 @@ export class DeterministicFakeWorkstreamClient {
       .map((snapshot) => ({
         id: snapshot.id,
         title: snapshot.title,
+        shortTitle: snapshot.shortTitle ?? null,
         revision: snapshot.revision,
         updatedAt: snapshot.updatedAt,
         activeSessionCount: snapshot.sessions.filter((session) => session.status === "active").length,
@@ -123,6 +124,10 @@ function validateFakeRecord(record) {
       && (Object.keys(record.payload).length !== 1 || !isString(record.payload.title) || record.payload.title.length > 200)) {
     throw new Error("title.set requires only a non-empty title of at most 200 characters.");
   }
+  if (record.type === "short-title.set"
+      && (Object.keys(record.payload).length !== 1 || !(record.payload.shortTitle === null || isString(record.payload.shortTitle) && record.payload.shortTitle.length <= 24))) {
+    throw new Error("short-title.set requires only a shortTitle of at most 24 characters, or null.");
+  }
   if (record.type === "session.pending"
       && (record.payload.derivationKind !== undefined && !["checkpoint", "fork"].includes(record.payload.derivationKind))) {
     throw new Error("session.pending derivationKind must be checkpoint or fork.");
@@ -162,6 +167,7 @@ function completeLocation(value) {
 function applyFakeRecord(snapshot, record, metadata) {
   switch (record.type) {
     case "title.set": snapshot.title = record.payload.title; break;
+    case "short-title.set": snapshot.shortTitle = record.payload.shortTitle; break;
     case "link.upsert": upsert(snapshot.links, record.payload.link); break;
     case "link.removed": snapshot.links = snapshot.links.filter((link) => link.id !== record.payload.linkId); break;
     case "human-task.upsert": upsert(snapshot.humanTasks, projectHumanTask(record.payload.task, record)); break;

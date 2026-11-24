@@ -17,7 +17,7 @@ const SELF = fileURLToPath(import.meta.url);
 const STORE_DIR = process.env.PI_WORKBENCH_WORKSTREAM_DIR ?? join(homedir(), ".pi-workbench", "workstreams");
 const tilde = (path) => path.startsWith(homedir()) ? `~${path.slice(homedir().length)}` : path;
 const WAITING = ["owner", "agent", "external"];
-const SUMMARY_FIELDS = ["id", "title", "group", "revision", "createdAt", "updatedAt", "lastCheckpointAt", "next", "waitingOn", "activeSessionCount", "pendingSessionCount", "failedSessionCount", "unresolvedHumanTaskCount", "closed"];
+const SUMMARY_FIELDS = ["id", "title", "group", "shortTitle", "revision", "createdAt", "updatedAt", "lastCheckpointAt", "next", "waitingOn", "activeSessionCount", "pendingSessionCount", "failedSessionCount", "unresolvedHumanTaskCount", "closed"];
 const LIST_COLUMNS = ["id", "title", "group", "waitingOn", "updatedAt"];
 const LIST_LIMIT = 8;
 // Store limits (packages/workstream-store/src/model.js), checked here so errors name the flag.
@@ -58,17 +58,18 @@ Examples:
   },
   create: {
     args: ["id"],
-    flags: { title: "string", group: "string", owner: "bool" },
+    flags: { title: "string", short: "string", group: "string", owner: "bool" },
     required: ["title"],
-    help: `workstreams create <id> --title "…" [--group "…"] [--owner]
+    help: `workstreams create <id> --title "…" [--short "…"] [--group "…"] [--owner]
 
 Creates a Workstream. <id>: letters, digits, . _ : @ / - (max ${MAX.id}); start with ws-.
   --title           at most ${MAX.title} chars
+  --short           1-2 word tab label for PI WEB, at most 24 chars, e.g. "Durable rebuild"
   --group           grouping label, e.g. Embabel, PhotoQuest, Pi Workbench, Personal
 ${OWNER}
 Examples:
   workstreams create ws-tax-2025 --title "File the 2025 tax return" --group Personal --owner
-  workstreams create ws-cli-axi --title "Redesign the Workstreams CLI" --group "Pi Workbench"
+  workstreams create ws-cli-axi --title "Redesign the Workstreams CLI" --short "CLI redesign" --group "Pi Workbench"
 `,
   },
   associate: {
@@ -169,6 +170,20 @@ Examples:
   workstreams title ws-example "Redesign the Workstreams CLI"
 `,
   },
+  short: {
+    args: ["id", "short"],
+    minArgs: 1,
+    flags: { clear: "bool", owner: "bool" },
+    help: `workstreams short <id> ("<1-2 words>" | --clear) [--owner]
+
+Sets the short title PI WEB shows on tabs: 1-2 words, at most 24 chars.
+  --clear           remove the short title; tabs fall back to the title
+${OWNER}
+Examples:
+  workstreams short ws-example "Durable rebuild"
+  workstreams short ws-example --clear --owner
+`,
+  },
   group: {
     args: ["id", "group"],
     flags: { owner: "bool" },
@@ -241,7 +256,7 @@ const HELP = `workstreams — Pi Workbench Workstream ledger (store: ${STORE_DIR
 Usage: workstreams [<command> [args] [--json]]   (no command: home view)
 
 Read:   list, show <id>
-Write:  create, associate, checkpoint, overview, link, unlink, title, group, resolve-task, close
+Write:  create, associate, checkpoint, overview, link, unlink, title, short, group, resolve-task, close
 Raw:    append (rare records), watch (event batches)
 
 Run \`workstreams <command> --help\` for flags, limits, and examples.
@@ -300,7 +315,7 @@ async function parse(command, spec, tokens) {
   const names = spec.args ?? [];
   if (args[0]?.startsWith("{") && command !== "append") throw new Usage(`${command} takes arguments and flags, not JSON`, usageLine(command));
   if (args.length > names.length) throw new Usage(`unexpected argument ${JSON.stringify(args[names.length])} for ${command}`, usageLine(command));
-  if (args.length < names.length) throw new Usage(`${command} needs <${names[args.length]}>`, usageLine(command));
+  if (args.length < (spec.minArgs ?? names.length)) throw new Usage(`${command} needs <${names[args.length]}>`, usageLine(command));
   const missing = (spec.required ?? []).filter((name) => flags[name] === undefined);
   if (missing.length) throw new Usage(`${command} needs ${missing.map((name) => `--${name}`).join(", ")}`, usageLine(command));
   return { args, flags };
@@ -353,7 +368,8 @@ function row(summary, columns) {
     const value = summary[field];
     if (value === null || value === undefined) return "-";
     if (field.endsWith("At")) return value.slice(0, 10);
-    return field === "id" ? value : cut(String(value), field === "next" ? 160 : field === "title" ? 32 : 16);
+    if (field === "title" && summary.shortTitle) return cut(`${summary.shortTitle}: ${value}`, 32);
+    return field === "id" ? value : cut(String(value), field === "next" ? 160 : field === "title" ? 32 : field === "shortTitle" ? 24 : 16);
   }).join(" | ");
 }
 
@@ -365,7 +381,7 @@ async function show(store, [id], flags) {
   const sessions = [...snapshot.sessions].sort((a, b) => (b.latestCheckpoint?.recordedAt ?? "").localeCompare(a.latestCheckpoint?.recordedAt ?? ""));
   const newest = sessions.find((session) => session.latestCheckpoint)?.latestCheckpoint;
   const lines = [
-    `${snapshot.id} | ${snapshot.title} | ${snapshot.group ?? "-"} | rev ${snapshot.revision} | ${snapshot.closed ? `closed ${snapshot.closedAt.slice(0, 10)}` : "open"} | updated ${snapshot.updatedAt.slice(0, 10)}`,
+    `${snapshot.id} | ${snapshot.title}${snapshot.shortTitle ? ` (short: ${snapshot.shortTitle})` : ""} | ${snapshot.group ?? "-"} | rev ${snapshot.revision} | ${snapshot.closed ? `closed ${snapshot.closedAt.slice(0, 10)}` : "open"} | updated ${snapshot.updatedAt.slice(0, 10)}`,
     `waiting: ${newest?.waitingOn ?? "-"} | next: ${newest ? text(newest.next, 200) : "- (no checkpoint yet)"}`,
   ];
   const overview = snapshot.overview;
@@ -399,16 +415,19 @@ async function create(store, [id], flags) {
   checkLength("title", flags.title, MAX.title);
   if (flags.group !== undefined) checkLength("group", flags.group, MAX.title);
   checkId("id", id);
+  const short = flags.short?.trim();
   const existing = await store.inspect(id).catch((error) => error.code === "WORKSTREAM_NOT_FOUND" ? null : Promise.reject(error));
   if (existing && existing.title !== flags.title) throw new Usage(`${id} already exists as ${JSON.stringify(existing.title)}`, `pick another id, or workstreams show ${id}`);
-  if (existing && (flags.group === undefined || existing.group === flags.group)) return noop(`${id} already exists`);
+  if (existing && (flags.group === undefined || existing.group === flags.group) && (short === undefined || existing.shortTitle === short)) return noop(`${id} already exists`);
   const producer = flags.owner ? "owner" : "session";
-  let receipt = existing ? null : await store.create({ workstreamId: id, idempotencyKey: `cli-create-${hash([id, flags.title, producer])}`, title: flags.title, producer });
+  // The key omits an absent short title so retries of pre-short-title create commands still match.
+  let receipt = existing ? null : await store.create({ workstreamId: id, idempotencyKey: `cli-create-${hash([id, flags.title, producer, ...(short === undefined ? [] : [short])])}`, title: flags.title, ...(short === undefined ? {} : { shortTitle: short }), producer });
+  if (existing && short !== undefined && existing.shortTitle !== short) receipt = await write(store, existing, "short", [record("short-title.set", { shortTitle: short }, flags)]);
   if (flags.group !== undefined) {
     const snapshot = await store.inspect(id);
     if (snapshot.group !== flags.group) receipt = await write(store, snapshot, "group", [record("group.set", { group: flags.group }, flags)]);
   }
-  done(receipt, `${existing ? "regrouped" : "created"} ${id}`, [`workstreams overview ${id} --expect ${receipt.acceptedRevision} --help`, `workstreams associate ${id}`]);
+  done(receipt, `${existing ? "updated" : "created"} ${id}`, [`workstreams overview ${id} --expect ${receipt.acceptedRevision} --help`, `workstreams associate ${id}`]);
 }
 
 async function associate(store, [id]) {
@@ -499,6 +518,14 @@ async function title(store, [id, value], flags) {
   done(await write(store, snapshot, "title", [record("title.set", { title: value }, flags)]), `${id} renamed`);
 }
 
+async function short(store, [id, value], flags) {
+  if ((value === undefined) === !flags.clear) throw new Usage("short needs either a short title or --clear", usageLine("short"));
+  const shortTitle = flags.clear ? null : value.trim();
+  const snapshot = await store.inspect(id);
+  if (snapshot.shortTitle === shortTitle) return noop(`short title already is ${JSON.stringify(shortTitle)}`);
+  done(await write(store, snapshot, "short", [record("short-title.set", { shortTitle }, flags)]), shortTitle === null ? `${id} short title cleared` : `${id} short title set to ${shortTitle}`);
+}
+
 async function group(store, [id, value], flags) {
   checkLength("group", value, MAX.title);
   const snapshot = await store.inspect(id);
@@ -561,7 +588,7 @@ async function watch(store, _args, flags) {
   }));
 }
 
-const handlers = { list, show, create, associate, checkpoint, overview, link, unlink, title, group, "resolve-task": resolveTask, close, append, watch };
+const handlers = { list, show, create, associate, checkpoint, overview, link, unlink, title, short, group, "resolve-task": resolveTask, close, append, watch };
 
 // ---- helpers -----------------------------------------------------------------------------
 
@@ -599,7 +626,7 @@ function record(type, payload, flags) {
 function recordHelp(type) {
   const verb = {
     "checkpoint.replaced": "checkpoint", "checkpoint.visiting": "checkpoint", "overview.replaced": "overview", "link.upsert": "link", "link.removed": "unlink",
-    "title.set": "title", "group.set": "group", "human-task.resolved": "resolve-task", "session.pending": "associate", "session.confirmed": "associate",
+    "title.set": "title", "short-title.set": "short", "group.set": "group", "human-task.resolved": "resolve-task", "session.pending": "associate", "session.confirmed": "associate",
   }[type];
   return verb ? `use the verb instead: workstreams ${verb} --help` : "record shapes: packages/workstream-store/src/index.d.ts (WorkstreamRecord)";
 }

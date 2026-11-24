@@ -36,6 +36,7 @@ const RECORD_TYPES = new Set([
   "overview.replaced",
   "group.set",
   "title.set",
+  "short-title.set",
 ]);
 
 // Package-internal transaction option: the Store's inspect/list/watch callbacks never mutate or retain
@@ -72,6 +73,14 @@ function string(value, field, max, { optional = false } = {}) {
   }
 }
 
+// Tab label for PI WEB, e.g. "Durable rebuild": trimmed, 1-2 words, at most 24 characters.
+function shortTitle(value, field) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 24 || value !== value.trim()
+      || value.split(/\s+/).length > 2 || /\p{Cc}/u.test(value)) {
+    fail("INVALID_REQUEST", `${field} must be 1 or 2 words, trimmed, at most 24 characters, without control characters`);
+  }
+}
+
 function isTemporaryPath(value) {
   return /^(?:\/private)?\/(?:tmp|var\/tmp|var\/folders)(?:\/|$)/.test(value)
     || /^(?:[A-Za-z]:[\\/])(?:Users[\\/][^\\/]+[\\/]AppData[\\/]Local[\\/]Temp|Temp)(?:[\\/]|$)/i.test(value);
@@ -103,10 +112,11 @@ function keys(value, allowed, field) {
 
 export function validateCreate(request, limits) {
   object(request, "request");
-  keys(request, ["workstreamId", "idempotencyKey", "title", "producer"], "request");
+  keys(request, ["workstreamId", "idempotencyKey", "title", "shortTitle", "producer"], "request");
   id(request.workstreamId, "workstreamId", limits);
   id(request.idempotencyKey, "idempotencyKey", limits);
   string(request.title, "title", limits.maxTitleLength);
+  if (request.shortTitle !== undefined) shortTitle(request.shortTitle, "shortTitle");
   string(request.producer, "producer", limits.maxIdLength);
   validateMutationSize(request, limits);
 }
@@ -235,6 +245,10 @@ function validateRecord(record, limits, field) {
       keys(record.payload, ["title"], `${field}.payload`);
       string(record.payload.title, `${field}.payload.title`, limits.maxTitleLength);
     },
+    "short-title.set": () => {
+      keys(record.payload, ["shortTitle"], `${field}.payload`);
+      if (record.payload.shortTitle !== null) shortTitle(record.payload.shortTitle, `${field}.payload.shortTitle`);
+    },
     "overview.replaced": () => {
       keys(record.payload, ["overview"], `${field}.payload`);
       const overview = object(record.payload.overview, `${field}.payload.overview`);
@@ -358,6 +372,7 @@ export function emptySnapshot(created) {
   return {
     id: created.workstreamId,
     title: created.title,
+    shortTitle: created.shortTitle ?? null,
     revision: 0,
     createdAt: created.recordedAt,
     updatedAt: created.recordedAt,
@@ -556,6 +571,9 @@ export function rebuildSnapshot(ledger) {
         break;
       case "title.set":
         snapshot.title = payload.title;
+        break;
+      case "short-title.set":
+        snapshot.shortTitle = payload.shortTitle;
         break;
       case "overview.replaced":
         snapshot.overview = {

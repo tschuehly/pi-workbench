@@ -163,6 +163,41 @@ test("fake Workstream client accepts and projects latest-wins title records verb
   assert.equal((await client.inspect("ws-title")).revision, 3);
 });
 
+test("Workstream service projects shortTitle in inspect and list and accepts short-title.set through append", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-workbench-web-short-"));
+  const previous = process.env.PI_WORKBENCH_WORKSTREAM_DIR;
+  process.env.PI_WORKBENCH_WORKSTREAM_DIR = directory;
+  try {
+    // server-plugin.js delegates to this module; a query import gives it this test's store directory.
+    const service = (await import(`../workstream-service.js?short-${Date.now()}`)).default;
+    const client = createWorkbenchWorkstreamClient({ request: (operation, input) => service.handle({ operation, input }) });
+    await client.create({ workstreamId: "ws-short", idempotencyKey: "create-short", title: "Rebuild Pi Workbench on Pi Durable", producer: "owner" });
+    assert.equal((await client.inspect("ws-short")).shortTitle, null);
+    assert.equal((await client.list())[0].shortTitle, null);
+    await client.append({ workstreamId: "ws-short", expectedRevision: 1, idempotencyKey: "short-1", records: [{ type: "short-title.set", producer: "owner", payload: { shortTitle: "Durable rebuild" } }] });
+    assert.equal((await client.inspect("ws-short")).shortTitle, "Durable rebuild");
+    assert.equal((await client.list())[0].shortTitle, "Durable rebuild");
+    await assert.rejects(
+      client.append({ workstreamId: "ws-short", expectedRevision: 2, idempotencyKey: "short-bad", records: [{ type: "short-title.set", producer: "owner", payload: { shortTitle: "far too many words" } }] }),
+      (error) => error.code === "INVALID_REQUEST",
+    );
+    await client.append({ workstreamId: "ws-short", expectedRevision: 2, idempotencyKey: "short-clear", records: [{ type: "short-title.set", producer: "owner", payload: { shortTitle: null } }] });
+    assert.equal((await client.list())[0].shortTitle, null);
+  } finally {
+    if (previous === undefined) delete process.env.PI_WORKBENCH_WORKSTREAM_DIR;
+    else process.env.PI_WORKBENCH_WORKSTREAM_DIR = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("fake client projects short-title.set in inspect and list", async () => {
+  const client = new DeterministicFakeWorkstreamClient({ version: 1, sequence: 0, snapshots: [] });
+  await client.create({ workstreamId: "ws-short", idempotencyKey: "create-short", title: "Long title", shortTitle: "Tabs", producer: "owner" });
+  assert.equal((await client.list())[0].shortTitle, "Tabs");
+  await client.append({ workstreamId: "ws-short", expectedRevision: 1, idempotencyKey: "short-clear", records: [{ type: "short-title.set", producer: "owner", payload: { shortTitle: null } }] });
+  assert.equal((await client.inspect("ws-short")).shortTitle, null);
+});
+
 test("fake and typed clients project pending derivation and remove cancelled associations", async () => {
   const client = new DeterministicFakeWorkstreamClient({ version: 1, sequence: 0, snapshots: [] });
   await client.create({ workstreamId: "ws-derived", idempotencyKey: "create-derived", title: "Derived", producer: "owner" });

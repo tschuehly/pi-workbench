@@ -67,7 +67,7 @@ test("SKILL.md calls the PATH executable, not a script path", async () => {
 // 01a0c5a2: `create --help` failed with CLI_ERROR and the agent read index.d.ts for shapes.
 // 01a0c7e2: `append --help` failed with "Input is not valid JSON".
 test("every command has --help with flags and examples", () => {
-  for (const command of ["list", "show", "create", "associate", "checkpoint", "overview", "link", "unlink", "title", "group", "resolve-task", "close", "append", "watch"]) {
+  for (const command of ["list", "show", "create", "associate", "checkpoint", "overview", "link", "unlink", "title", "short", "group", "resolve-task", "close", "append", "watch"]) {
     const result = run(scratch, [command, "--help"]);
     assert.equal(result.status, 0, `${command}: ${result.stdout}`);
     assert.match(result.out, new RegExp(`^workstreams ${command}`), command);
@@ -191,6 +191,29 @@ test("list prints one compact row per Workstream and '-' for missing values", as
     assert.match(listed.out, /^ws-b \| No checkpoint yet \| - \| - \| \d{4}-\d\d-\d\d$/m);
     assert.match(run(directory, ["list", "--fields", "id,next"]).out, /^ws-b \| -$/m);
     assert.equal(JSON.parse(run(directory, ["list", "--json"]).out).find(({ id }) => id === "ws-b").next, null);
+  });
+});
+
+test("create --short and short set, show, and clear the tab label", async () => {
+  await withStore(async (directory) => {
+    const created = run(directory, ["create", "ws-s", "--title", "Rebuild Pi Workbench on Pi Durable", "--short", "Durable rebuild"]);
+    assert.equal(created.status, 0, created.out + created.stderr);
+    assert.equal(JSON.parse(run(directory, ["show", "ws-s", "--json"]).out).shortTitle, "Durable rebuild");
+    assert.match(run(directory, ["show", "ws-s"]).out, /^ws-s \| Rebuild Pi Workbench on Pi Durable \(short: Durable rebuild\) \|/);
+    assert.match(run(directory, ["list"]).out, /^ws-s \| Durable rebuild: Rebuild Pi Wor… \|/m);
+    assert.equal(JSON.parse(run(directory, ["list", "--json"]).out)[0].shortTitle, "Durable rebuild");
+    assert.match(run(directory, ["create", "ws-s", "--title", "Rebuild Pi Workbench on Pi Durable", "--short", "Durable rebuild"]).out, /no-op/);
+
+    assert.match(run(directory, ["short", "ws-s", "Tabs"]).out, /^ok: ws-s short title set to Tabs/);
+    assert.match(run(directory, ["short", "ws-s", "Tabs"]).out, /no-op/);
+    const bad = run(directory, ["short", "ws-s", "far too many words"]);
+    assert.equal(bad.status, 1);
+    assert.match(bad.out, /shortTitle must be 1 or 2 words/);
+    assert.equal(run(directory, ["short", "ws-s"]).status, 2);
+    assert.equal(run(directory, ["short", "ws-s", "Tabs", "--clear"]).status, 2);
+    assert.match(run(directory, ["short", "ws-s", "--clear"]).out, /short title cleared/);
+    assert.equal(JSON.parse(run(directory, ["show", "ws-s", "--json"]).out).shortTitle, null);
+    assert.match(run(directory, ["list"]).out, /^ws-s \| Rebuild Pi Workbench on Pi Dura… \|/m);
   });
 });
 

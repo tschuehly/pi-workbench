@@ -225,6 +225,34 @@ test("projects the latest valid title verbatim while retaining title history and
   assert.equal((await store.inspect("ws-1")).revision, 3);
 });
 
+test("projects an optional short title from create and short-title.set, null for legacy ledgers", async () => {
+  const legacy = rebuildSnapshot([{ type: "workstream.created", workstreamId: "ws-legacy", title: "Legacy", producer: "owner", revision: 1, recordedAt: "2025-01-01T00:00:00.000Z" }]);
+  assert.equal(legacy.shortTitle, null);
+
+  const { store } = memoryStore();
+  await store.create(createRequest);
+  assert.equal((await store.inspect("ws-1")).shortTitle, null);
+  assert.equal((await store.list())[0].shortTitle, null);
+  await store.create({ ...createRequest, workstreamId: "ws-2", idempotencyKey: "create-2", shortTitle: "Durable rebuild" });
+  assert.equal((await store.inspect("ws-2")).shortTitle, "Durable rebuild");
+
+  const set = (expectedRevision, idempotencyKey, shortTitle) => store.append({ workstreamId: "ws-1", expectedRevision, idempotencyKey, records: [{ type: "short-title.set", producer: "owner", payload: { shortTitle } }] });
+  await set(1, "short-1", "Tabs");
+  assert.equal((await store.inspect("ws-1")).shortTitle, "Tabs");
+  assert.equal((await store.list()).find((summary) => summary.id === "ws-1").shortTitle, "Tabs");
+  await set(2, "short-clear", null);
+  assert.equal((await store.inspect("ws-1")).shortTitle, null);
+
+  for (const [key, bad] of [["blank", ""], ["untrimmed", " Tabs"], ["words", "one two three"], ["long", "x".repeat(25)], ["control", "Tab\u0007"], ["type", 3]]) {
+    await assert.rejects(set(3, `bad-${key}`, bad), (error) => error.code === "INVALID_REQUEST" && error.message.includes("shortTitle"));
+  }
+  await assert.rejects(
+    store.create({ ...createRequest, workstreamId: "ws-3", idempotencyKey: "create-3", shortTitle: "one two three" }),
+    (error) => error.code === "INVALID_REQUEST" && error.message.includes("shortTitle"),
+  );
+  assert.equal((await store.inspect("ws-1")).revision, 3);
+});
+
 test("returns the original receipt for an exact retry and rejects conflicting key reuse", async () => {
   const { store } = memoryStore();
   const first = await store.create(createRequest);
