@@ -4,7 +4,7 @@
 // the host emitted after the relevant commit; no timing sleeps.
 import assert from "node:assert/strict";
 import { type ChildProcess, execFileSync, fork } from "node:child_process";
-import { closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, rmSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -557,36 +557,49 @@ async function quietChat(label: string) {
 	return { h, store, session, runs, settled };
 }
 
-/** An in-process faux Chat for the idle cache timer, with an injected delay instead of the model's cache TTL. */
-async function idleChat(store: string, cwd: string, delay: () => number) {
-	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: "chat-idle-timer" });
+/**
+ * An in-process scripted Chat on an Anthropic model for the idle cache timer, with an injected delay instead of the
+ * model's cache TTL and an injectable wall clock. The cheap summary model (Haiku) answers through the same script.
+ */
+const OPUS = { provider: "anthropic", modelId: "claude-opus-5-5" };
+async function idleChat(store: string, cwd: string, delay: () => number, options: { now?: () => number; notes?: string; keepRecentTokens?: number | null } = {}) {
+	const h = await openChatHost({ dir: store, cwd, model: `${OPUS.provider}/${OPUS.modelId}`, chatId: "chat-idle-timer", scriptedProviders: true });
 	const events: UiEvent[] = [];
 	let wake = () => {};
 	// The 80k-token threshold stays real: the faux model counts a request's chars / 4.
-	const session = new ChatSession(h, (event) => (events.push(event), wake()), { chatId: "chat-idle-timer", power: { onBattery: async () => false, alarm: () => {}, everyMs: 60_000 }, idleDelayMs: delay });
-	const until = async (done: () => boolean | Promise<boolean>, what: string) => {
-		const deadline = Date.now() + 20_000;
+	const session = new ChatSession(h, (event) => (events.push(event), wake()), {
+		chatId: "chat-idle-timer", power: { onBattery: async () => false, alarm: () => {}, everyMs: 60_000 }, idleDelayMs: () => delay(),
+		...(options.now === undefined ? {} : { now: options.now }), ...(options.notes === undefined ? {} : { idleNotes: options.notes }),
+	});
+	const until = async (done: () => boolean | Promise<boolean>, what: string, ms = 20_000) => {
+		const deadline = Date.now() + ms;
 		while (!(await done())) {
-			assert.ok(Date.now() < deadline, `no ${what} within 20 s`);
+			assert.ok(Date.now() < deadline, `no ${what} within ${String(ms / 1000)} s`);
 			await new Promise<void>((resolve) => ((wake = resolve), setTimeout(resolve, 50)));
 		}
 	};
 	const runs = () => events.filter((e) => e.type === "agent.end").length;
 	const settled = (count: number) => until(async () => runs() >= count && !(await session.status()).isStreaming, `${String(count)} settled runs`);
 	const markers = async () => (await h.root.entries({ order: "descending" }, 100, undefined, context)).items.filter((e) => e.kind === IDLE_COMPACTION_ENTRY).length;
+	const compacted = () => (session.messages() as { source?: string }[]).some((m) => m.source === "compaction");
+	const warnings = () => events.flatMap((e) => (e.type === "command.output" && (e as { level?: string }).level === "warning" ? [String((e as { message?: string }).message)] : []));
+	const quiet = () => until(async () => !(await session.status()).isCompacting, "a settled compaction");
 	await session.start();
-	// A small keep window, so the compaction has history to summarize.
-	await session.configure({}, { compaction: { keepRecentTokens: 1 } });
+	// A small keep window, so the compaction has history to summarize (null: the Chat's default, 20k).
+	if (options.keepRecentTokens !== null) await session.configure({}, { compaction: { keepRecentTokens: options.keepRecentTokens ?? 1 } });
 	session.setViewed(true);
-	return { session, events, until, settled, markers };
+	return { h, session, events, until, settled, markers, compacted, warnings, quiet };
 }
 const PAD = `pad:${"x".repeat(330_000)}`;
-const summaries = (store: string) => requests(store).filter((label) => label === "summarize").length;
+/** The model of each summary request, in order. */
+const summaries = (store: string) => readLog<{ label: string; model?: string }>(join(store, "requests.log")).filter((line) => line.label === "summarize").map((line) => line.model ?? "faux");
+const HAIKU = "anthropic/claude-haiku-5-5";
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("idle cache timer: a viewed idle Chat with a large prompt compacts once its timer fires, also when a `!` command ran over it; a new prompt cancels the timer", async () => {
+test("idle cache timer: a viewed idle Chat with a large prompt compacts on the cheap model once its timer fires, also when a `!` command ran over it; a new prompt cancels the timer", async () => {
 	const { store, cwd } = family("idle-timer");
 	let delay = 1_500;
-	const { session, events, until, settled, markers } = await idleChat(store, cwd, () => delay);
+	const { session, events, until, settled, markers, compacted } = await idleChat(store, cwd, () => delay);
 	try {
 		await session.prompt({ operationId: "op-1", text: PAD });
 		await settled(1);
@@ -594,8 +607,8 @@ test("idle cache timer: a viewed idle Chat with a large prompt compacts once its
 		delay = 60_000;
 		await session.prompt({ operationId: "op-2", text: "short" });
 		await settled(2);
-		await new Promise((resolve) => setTimeout(resolve, 2_500));
-		assert.equal(summaries(store), 0, "a new prompt cancelled the armed timer");
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [], "a new prompt cancelled the armed timer");
 
 		// A `!` command runs over the firing: its end checks again, and the Chat compacts.
 		delay = 1_500;
@@ -603,9 +616,9 @@ test("idle cache timer: a viewed idle Chat with a large prompt compacts once its
 		await settled(3);
 		await session.shell("!sleep 2.5");
 		await until(async () => (await markers()) === 1, "the idle compaction marker");
-		assert.equal(summaries(store), 1, "one idle compaction");
+		assert.deepEqual(summaries(store), [HAIKU], "one idle compaction, summarized by the cheap model, never the Chat's");
 		assert.ok(events.some((e) => e.type === "shell.end"), "the command ran");
-		assert.ok((session.messages() as { source?: string }[]).some((m) => m.source === "compaction"), "the summary is placed");
+		assert.ok(compacted(), "the summary is placed");
 	} finally {
 		await session.close();
 	}
@@ -618,17 +631,204 @@ test("idle cache timer: a restarted host arms it again, measured from the newest
 	await first.settled(1);
 	const turned = Date.now();
 	await first.session.close();
-	await new Promise((resolve) => setTimeout(resolve, 700));
-	// Its 0.5 s delay passed during the restart: no timer.
-	const expired = await idleChat(store, cwd, () => 500);
-	await new Promise((resolve) => setTimeout(resolve, 1_500));
+	await wait(700);
+	// Its 0.5 s delay (and 60 s lead) passed during the restart, as the injected clock says: no timer.
+	const expired = await idleChat(store, cwd, () => 500, { now: () => Date.now() + 61_000 });
+	await wait(1_500);
 	await expired.session.close();
-	assert.equal(summaries(store), 0, "an expired cache gets no timer after a restart");
+	assert.deepEqual(summaries(store), [], "an expired cache gets no timer after a restart");
 	const second = await idleChat(store, cwd, () => 8_000);
 	try {
 		await second.until(async () => (await second.markers()) === 1, "the idle compaction marker after the restart");
-		assert.equal(summaries(store), 1);
+		assert.deepEqual(summaries(store), [HAIKU]);
 		assert.ok(Date.now() - turned < 8_000 + 1_500, "fired 8 s after the turn's request, not after the reopen");
+	} finally {
+		await second.session.close();
+	}
+});
+
+test("idle cache timer: one pasted turn larger than the default keep window, then a small turn: the timer compaction still summarizes the paste", async () => {
+	const { store, cwd } = family("idle-one-paste");
+	let delay = 60_000;
+	const { session, until, settled, markers, compacted } = await idleChat(store, cwd, () => delay, { keepRecentTokens: null });
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		// The paste alone exceeds the 20k keep window; the small turn after it arms a 1.5 s timer.
+		delay = 1_500;
+		await session.prompt({ operationId: "op-2", text: "small" });
+		await settled(2);
+		await until(async () => (await markers()) === 1, "the idle compaction marker");
+		assert.ok(compacted(), "a summary is placed");
+		assert.deepEqual(summaries(store), [HAIKU]);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a timer compaction with nothing to summarize warns once and does not retry in that stretch", async () => {
+	const { store, cwd } = family("idle-empty");
+	const { session, until, settled, warnings, markers, quiet } = await idleChat(store, cwd, () => 1_500, { keepRecentTokens: 10_000_000 });
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(() => warnings().some((w) => w.startsWith("Idle compaction found nothing")), "the empty-compaction warning");
+		await quiet();
+		await wait(2_500);
+		await session.prompt({ operationId: "op-2", text: "again" });
+		await settled(2);
+		await wait(2_500);
+		assert.equal(warnings().filter((w) => w.startsWith("Idle compaction found nothing")).length, 1, "warned once");
+		assert.deepEqual(summaries(store), [], "nothing summarized");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a failed cheap summary declines the compaction with a warning, without a second (Chat model) summary", async () => {
+	const { store, cwd } = family("idle-cheap-fail");
+	const { session, until, settled, markers, compacted, warnings, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-fail ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => warnings().some((w) => w.startsWith("Idle compaction skipped")), "the decline warning");
+		await quiet();
+		await wait(500);
+		assert.deepEqual(summaries(store), [HAIKU], "only the cheap summary was asked for");
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: /compact still runs Durable's own summary on the Chat's model", async () => {
+	const { store, cwd } = family("idle-manual");
+	const { session, until, settled, markers, compacted } = await idleChat(store, cwd, () => 60_000);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await session.compact();
+		await until(compacted, "the /compact summary");
+		assert.deepEqual(summaries(store), [`${OPUS.provider}/${OPUS.modelId}`]);
+		assert.equal(await markers(), 0, "not a timer compaction");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: losing the last viewer cancels a timer compaction whose summary is in flight", async () => {
+	const { store, cwd } = family("idle-viewer-loss");
+	const gate = join(cwd, "summary-gate");
+	const { session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => summaries(store).length === 1, "the summary request");
+		session.setViewed(false);
+		writeFileSync(gate, "");
+		await quiet();
+		await wait(500);
+		assert.equal(compacted(), false, "the cancelled compaction placed nothing");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: due counts from the request's start on the wall clock: inside the last minute it fires at once, after expiry (a host asleep) never", async () => {
+	const { store, cwd } = family("idle-clock");
+	let offset = 61_000;
+	const { session, until, settled, markers } = await idleChat(store, cwd, () => 60_000, { now: () => Date.now() + offset });
+	try {
+		// 61 s after the request started: past its 60 s due, before its expiry 60 s later.
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(async () => (await markers()) === 1, "the immediate idle compaction", 8_000);
+	} finally {
+		await session.close();
+	}
+	const late = family("idle-clock-asleep");
+	offset = 0;
+	const asleep = await idleChat(late.store, late.cwd, () => 1_500, { now: () => Date.now() + offset });
+	try {
+		await asleep.session.prompt({ operationId: "op-1", text: PAD });
+		await asleep.settled(1);
+		// The host slept 10 minutes before the timer's callback ran: the cache is cold, nothing to save.
+		offset = 10 * 60_000;
+		await wait(2_500);
+		assert.deepEqual(summaries(late.store), [], "no compaction after expiry");
+	} finally {
+		await asleep.session.close();
+	}
+});
+
+test("idle cache timer: a turn on another model than the Chat's stored one (a cheap wake-up) never arms it", async () => {
+	const { store, cwd } = family("idle-other-model");
+	const { h, session, settled } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await h.root.configure({ model: { provider: "anthropic", modelId: "claude-sonnet-5-5" } }, context);
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		// As a cheap turn ends: the own model is stored again.
+		await h.root.configure({ model: OPUS }, context);
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [], "the other model's request armed nothing");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a replayed prompt (fresh: false) leaves the timer armed", async () => {
+	const { store, cwd } = family("idle-replay");
+	const { session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		const replay = await session.prompt({ operationId: "op-1", text: PAD });
+		assert.equal(replay.fresh, false);
+		await until(async () => (await markers()) === 1, "the idle compaction after the replay", 8_000);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a restart after the summary was placed finishes the marker and the Workstream note from the stored intent, without summarizing again", async () => {
+	const { IdleCacheDoc, checkpointState, IDLE_NOTE_PRODUCER } = await import("../src/idle-compact.ts");
+	const { userWorkstreamStore } = await import("../src/chat-message.ts");
+	const { store, cwd } = family("idle-restore");
+	// Outside PI_TMP: the store refuses references into swept temporary folders.
+	mkdirSync(join(import.meta.dirname, "..", ".runs"), { recursive: true });
+	const notes = mkdtempSync(join(import.meta.dirname, "..", ".runs", "idle-restore-"));
+	after(() => rmSync(notes, { recursive: true, force: true }));
+	const workstreams = userWorkstreamStore();
+	const created = await workstreams.create({ workstreamId: "ws-idle-restore", idempotencyKey: "c", title: "Restore", producer: "session" });
+	const payload = { sessionId: "chat-idle-timer", associationKey: "chat-idle-timer" };
+	await workstreams.append({ workstreamId: "ws-idle-restore", expectedRevision: created.acceptedRevision, idempotencyKey: "j", records: [{ type: "session.pending", producer: "session", payload }, { type: "session.confirmed", producer: "session", payload }] });
+	const first = await idleChat(store, cwd, () => 600_000, { notes });
+	await first.session.prompt({ operationId: "op-1", text: PAD });
+	await first.settled(1);
+	// The state a kill leaves between placement and note: a placed summary and its stored intent.
+	const task = await first.h.root.compact(undefined, context);
+	const { outcome } = (await first.h.harness.waitForTask(task, context)).state;
+	await (await first.h.harness.submission((outcome as unknown as { result: { submissionId: never } }).result.submissionId, context))!.wait(context);
+	const baseline = { workstreamId: "ws-idle-restore", checkpoint: checkpointState((await workstreams.inspect("ws-idle-restore")).sessions.find((s) => s.id === "chat-idle-timer")) };
+	const firedAt = Date.parse("2026-01-02T03:04:05.000Z");
+	await first.h.root.commit(async (tx) => {
+		(await tx.doc(IdleCacheDoc, first.h.root.id)).intent = { task: Number(task), rootId: Number(first.h.root.id), firedAt, expiresAt: Date.now() + 60_000, summaryModel: { provider: "anthropic", modelId: "claude-haiku-5-5" }, baseline };
+	}, context);
+	await first.session.close();
+	const second = await idleChat(store, cwd, () => 600_000, { notes });
+	try {
+		await second.until(async () => (await second.markers()) === 1, "the marker after the restart");
+		const path = join(notes, "ws-idle-restore", "idle-notes", "2026-01-02T03-04-05.000Z-chat-idle-timer.md");
+		await second.until(() => existsSync(path), "the idle note file");
+		await second.until(async () => (await workstreams.inspect("ws-idle-restore")).sessions.find((s) => s.id === "chat-idle-timer")?.latestCheckpoint?.references?.includes(path) === true, `the host checkpoint (${second.warnings().join("; ")})`);
+		const events = await workstreams.watch({ workstreamId: "ws-idle-restore" });
+		assert.equal(events.mode === "replay" ? (events.events.at(-1)?.records[0] as { producer: string }).producer : undefined, IDLE_NOTE_PRODUCER);
+		assert.equal(summaries(store).length, 1, "only the summary before the kill");
+		await second.until(async () => (await second.h.harness.snapshot(IdleCacheDoc, second.h.root.id, context))?.intent === null, "the intent cleared");
 	} finally {
 		await second.session.close();
 	}
