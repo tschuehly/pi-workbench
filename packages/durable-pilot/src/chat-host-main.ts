@@ -32,6 +32,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { CompactionSettings } from "@earendil-works/pi-durable";
 // The Workbench telemetry extension's recorder: same JSONL events, same PI_TELEMETRY_DIR.
 import { createRecorder } from "../../../extensions/telemetry/telemetry.mjs";
+import { chatBackupPath, startBackups } from "./backup.ts";
 import { openChatHost } from "./chat.ts";
 import { COMMANDS } from "./extensions.ts";
 import { redact, sealed } from "./redact.ts";
@@ -110,6 +111,8 @@ if (values["read-transcript"] === true) {
 	await new Promise((resolve, reject) => process.send?.({ transcript: { messages } }, (error) => (error === null ? resolve(undefined) : reject(error))) ?? reject(new Error("--read-transcript needs an IPC channel")));
 	process.exit(0);
 }
+// The Chat's backup copy (src/backup.ts): every 5 min while it changed, and on close. The family folder's name is the Chat ID.
+startBackups(host.store, chatBackupPath(basename(values.store)), (message) => process.stderr.write(`${redact(message)}\n`));
 // Crash-matrix barriers (tests only): the named reporter fault windows announce themselves and stop until killed;
 // `name@ms` releases the window after that many milliseconds instead, so a race can be staged without a kill.
 const holds = new Map((process.env.PI_DURABLE_HOLD ?? "").split(",").filter(Boolean).map((hold) => {

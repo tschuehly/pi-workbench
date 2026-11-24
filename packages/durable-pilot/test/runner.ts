@@ -17,6 +17,8 @@ const POWER_BIN = mkdtempSync(join(process.env.PI_TMP ?? tmpdir(), "dp-power-"))
 writeFileSync(join(POWER_BIN, "pmset"), "#!/bin/sh\necho \"Now drawing from 'AC Power'\"\n", { mode: 0o755 });
 for (const name of ["afplay", "say", "osascript"]) writeFileSync(join(POWER_BIN, name), "#!/bin/sh\n", { mode: 0o755 });
 process.env.PATH = `${POWER_BIN}:${process.env.PATH ?? ""}`;
+// And no copies in the owner's backup folder: the hosts they start back up into scratch.
+process.env.PI_WORKBENCH_BACKUP_DIR = join(POWER_BIN, "backups");
 export const ITERATIONS = Number(process.env.PILOT_ITERATIONS ?? 20);
 const CONCURRENCY = Number(process.env.PILOT_CONCURRENCY ?? 6);
 const TIMEOUT_MS = Number(process.env.PILOT_TIMEOUT_MS ?? 60_000);
