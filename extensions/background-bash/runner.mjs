@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { confine } from "./sandbox.mjs";
 
 /** Create `path` holding `data` unless it already exists; readers never see a partial file. */
 export function writeOnce(path, data) {
@@ -26,14 +27,23 @@ function run(dir) {
   const job = JSON.parse(readFileSync(join(dir, "job.json"), "utf8"));
   const finish = (result) => writeOnce(join(dir, "exit"), JSON.stringify({ ...result, finishedAt: Date.now() }));
   const output = openSync(join(dir, "output.log"), "a", 0o600);
-  if (job.owned) {
-    void runOwned(dir, job, output, finish).catch((error) => {
-      finish({ error: `Owned command supervision failed: ${String(error)}`, cleanup: { survivors: [], error: String(error) } });
-      process.exit(1);
-    });
-    return;
-  }
-  const child = spawn(job.shell, [...job.args, job.command], { cwd: job.cwd, stdio: ["ignore", output, output] });
+  // Both branches start the command only through the write fence; no fence, no command (sandbox.mjs).
+  void confine(job).then((launch) => {
+    if (job.owned) {
+      void runOwned(dir, job, output, finish, launch).catch((error) => {
+        finish({ error: `Owned command supervision failed: ${String(error)}`, cleanup: { survivors: [], error: String(error) } });
+        process.exit(1);
+      });
+    } else runLead(job, output, finish, launch);
+  }, (error) => {
+    closeSync(output);
+    finish({ error: error.message, ...(job.owned ? { cleanup: { survivors: [] } } : {}) });
+    process.exit(0);
+  });
+}
+
+function runLead(job, output, finish, launch) {
+  const child = spawn(launch.file, launch.args, { cwd: job.cwd, stdio: ["ignore", output, output], env: launch.env });
   child.once("error", (error) => { finish({ error: String(error) }); process.exit(0); });
   // Parity with Pi's bash tool: a signal-killed shell reports 128 + signal number.
   child.once("exit", (code, signal) => { finish({ exitCode: code ?? 128 + (constants.signals[signal] ?? 0) }); process.exit(0); });
@@ -113,7 +123,7 @@ async function cleanupOwned(job, dir) {
   }
 }
 
-async function runOwned(dir, job, output, finish) {
+async function runOwned(dir, job, output, finish, launch) {
   // Expiry was admitted before launch: an intent restored after expiry must not start possible writes.
   if (existsSync(join(dir, "cancel"))) {
     closeSync(output);
@@ -144,7 +154,7 @@ async function runOwned(dir, job, output, finish) {
     })();
     return ending;
   };
-  const child = spawn(job.shell, [...job.args, job.command], { cwd: job.cwd, stdio: ["ignore", output, output], env: { ...process.env, [OWNER]: job.id } });
+  const child = spawn(launch.file, launch.args, { cwd: job.cwd, stdio: ["ignore", output, output], env: { ...launch.env, [OWNER]: job.id } });
   child.once("error", (error) => void end({ error: String(error) }));
   child.once("exit", (code, signal) => void end({ exitCode: code ?? 128 + (constants.signals[signal] ?? 0) }, true));
   timer = setTimeout(() => void end({ error: `Timed out after ${job.timeout} seconds` }), Math.max(0, job.expiresAt - Date.now()));
