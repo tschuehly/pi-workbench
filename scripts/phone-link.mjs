@@ -18,7 +18,7 @@ const CONFIG_PATH = process.env.PING_A_HUMAN_CONFIG ?? join(homedir(), ".config"
 const MAX_REMEMBERED = 500;
 /** Waits between attempts of a transiently failing send; after the last one the ask waits for a reconcile. */
 const RETRY_DELAYS_MS = [2_000, 10_000, 30_000, 120_000];
-/** How often asks whose send failed, and Chats whose read failed, are reconciled while the socket stays up. */
+/** How often asks whose send failed, and Chats whose read failed, are reconciled, and the watermark moves, while the socket stays up. */
 const PENDING_RETRY_MS = 10 * 60_000;
 /** Clock slack when picking Chats changed since the last reconcile. */
 const RECONCILE_MARGIN_MS = 5 * 60_000;
@@ -26,6 +26,8 @@ const RECONCILE_MARGIN_MS = 5 * 60_000;
 const BOOTSTRAP_WINDOW_MS = 24 * 60 * 60_000;
 /** A Chat whose ask read keeps failing (PI WEB answers HTTP 500 for a deleted Chat) is given up after this many reconciles. */
 const MAX_READ_FAILURES = 6;
+/** Ask reads at once: each read of a cold Durable Chat starts its host. */
+const READ_CONCURRENCY = 2;
 
 /** The Telegram text for an opened question set, or undefined for any other event. */
 export function askMessage(event, base = PUBLIC_BASE) {
@@ -119,6 +121,14 @@ async function getJson(path) {
 	return response.json();
 }
 
+/** Runs `work` on each item, at most `limit` at once. */
+async function eachLimited(items, limit, work) {
+	const queue = [...items];
+	await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, async () => {
+		while (queue.length > 0) await work(queue.shift());
+	}));
+}
+
 const firstLine = (text) => (typeof text === "string" ? (text.trim().split(/\r?\n/u)[0] ?? "").slice(0, 120) : "");
 
 /**
@@ -129,6 +139,9 @@ const firstLine = (text) => (typeof text === "string" ? (text.trim().split(/\r?\
 export function createLinker({ send, getJson, state, save, log = (_message) => {}, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, retryDelays = RETRY_DELAYS_MS }) {
 	const inFlight = new Set();
 	const reconciling = new Set();
+	// A full reconcile completed on the current socket, so its events cover every ask opened since.
+	let connection = 0;
+	let synced = false;
 	const known = (id) => state.delivered.includes(id) || inFlight.has(id) || state.pending.some((ask) => ask.id === id);
 
 	state.recheck ??= [];
@@ -171,6 +184,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 	 */
 	async function reconcile(only) {
 		const startedAt = now();
+		const current = connection;
 		const wanted = only === undefined ? undefined : new Set(only);
 		const chats = new Map();
 		for (const ref of [...state.pending, ...state.recheck]) {
@@ -186,7 +200,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 			}
 		}
 		const sends = [];
-		await Promise.all([...chats.values()].map(async (chat) => {
+		await eachLimited(chats.values(), READ_CONCURRENCY, async (chat) => {
 			let open;
 			try {
 				const asks = await getJson(`/api/sessions/${encodeURIComponent(chat.id)}/asks?cwd=${encodeURIComponent(chat.cwd)}`);
@@ -217,11 +231,12 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 				const text = askMessage({ type: "session.attention", kind: "ask", id: ask.askId, sessionId: chat.id, sessionName, detail: firstLine(ask.questions?.[0]?.question) });
 				if (text !== undefined) sends.push(deliver({ id: ask.askId, sessionId: chat.id, cwd: chat.cwd, name: sessionName, text }));
 			}
-		}));
+		});
 		// A failed read stays in `recheck`, so the watermark may pass it.
 		if (only === undefined) {
 			state.checkedAt = new Date(startedAt).toISOString();
 			save(state);
+			if (connection === current) synced = true;
 		}
 		await Promise.all(sends);
 	}
@@ -237,7 +252,23 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 		return reconcile([sessionId]).finally(() => reconciling.delete(sessionId));
 	}
 
-	return { deliver, reconcile, onEvent };
+	/**
+	 * Moves the watermark to now while a synced socket is up, so a reconnect reads only Chats changed while it was down,
+	 * not every Chat changed since it connected (most now cold).
+	 */
+	function listening() {
+		if (!synced) return;
+		state.checkedAt = new Date(now()).toISOString();
+		save(state);
+	}
+
+	function disconnected() {
+		listening();
+		connection += 1;
+		synced = false;
+	}
+
+	return { deliver, reconcile, onEvent, listening, disconnected };
 }
 
 function log(message) {
@@ -251,6 +282,7 @@ function watch() {
 	setInterval(() => {
 		const retry = [...state.pending, ...state.recheck].map((ref) => ref.sessionId);
 		if (retry.length > 0) run(linker.reconcile(retry));
+		linker.listening();
 	}, PENDING_RETRY_MS);
 	let delay = 1_000;
 	const connect = () => {
@@ -266,6 +298,7 @@ function watch() {
 			run(linker.onEvent(event));
 		};
 		socket.onclose = () => {
+			linker.disconnected();
 			setTimeout(connect, delay);
 			delay = Math.min(delay * 2, 60_000);
 		};

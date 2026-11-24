@@ -59,17 +59,21 @@ const opening = (id, sessionId = "s1") => ({ ...opened, id, sessionId, detail: `
 
 /**
  * A linker over in-memory effects: `saved` holds a copy of every state write, `sent` every Telegram text.
- * `failing` holds Chat ids whose ask read fails.
- * @param {{ state?: any, send?: (text: string) => Promise<void>, sessions?: any[], asks?: Record<string, any[]>, retryDelays?: number[], failing?: Set<string> }} [options]
+ * `failing` holds Chat ids whose ask read fails; `reading.max` counts the most ask reads at once; `clock.now` is the time.
+ * @param {{ state?: any, send?: (text: string) => Promise<void>, sessions?: any[], asks?: Record<string, any[]>, retryDelays?: number[], failing?: Set<string>, clock?: { now: number } }} [options]
  */
-function harness({ state = { delivered: [], pending: [] }, send, sessions = [], asks = {}, retryDelays = [], failing = new Set() } = {}) {
+function harness({ state = { delivered: [], pending: [] }, send, sessions = [], asks = {}, retryDelays = [], failing = new Set(), clock = { now: Date.parse("2026-05-01T12:00:00Z") } } = {}) {
 	const saved = [];
 	const sent = [];
 	const reads = [];
+	const reading = { now: 0, max: 0 };
 	const getJson = async (path) => {
 		reads.push(path);
 		if (path.startsWith("/api/sessions/recent")) return sessions;
 		const id = decodeURIComponent(path.split("/")[3]?.split("?")[0] ?? "");
+		reading.max = Math.max(reading.max, ++reading.now);
+		await new Promise((resolve) => setImmediate(resolve));
+		reading.now -= 1;
 		if (failing.has(id)) throw transportError();
 		return { pendingAsks: asks[id] ?? [] };
 	};
@@ -79,10 +83,10 @@ function harness({ state = { delivered: [], pending: [] }, send, sessions = [], 
 		state,
 		save: (next) => saved.push(structuredClone(next)),
 		wait: async () => {},
-		now: () => Date.parse("2026-05-01T12:00:00Z"),
+		now: () => clock.now,
 		retryDelays,
 	});
-	return { linker, state, saved, sent, reads };
+	return { linker, state, saved, sent, reads, reading };
 }
 
 test("a send that fails while another succeeds is never saved as delivered", async () => {
@@ -203,6 +207,36 @@ test("a pending ask of a Chat outside the recent list is read by its saved id an
 	assert.ok(reads.includes("/api/sessions/far/asks?cwd=%2Fx"));
 	assert.ok(!reads.some((path) => path.startsWith("/api/sessions/recent")), "saved Chats need no Chat list");
 	assert.deepEqual(state.pending, []);
+});
+
+test("a reconnect reads at most two Chats at once", async () => {
+	const sessions = ["a", "b", "c", "d", "e"].map((id) => ({ id, cwd: "/w", name: id, modified: "2026-05-01T11:00:00Z" }));
+	const { linker, reads, reading } = harness({ state: { delivered: [], pending: [], checkedAt: "2026-05-01T10:00:00Z" }, sessions });
+	await linker.reconcile();
+	assert.equal(reads.filter((path) => path.includes("/asks")).length, 5);
+	assert.equal(reading.max, 2);
+});
+
+test("while the socket stays up the watermark follows, so a reconnect reads only Chats changed while it was down", async () => {
+	const clock = { now: Date.parse("2026-05-01T08:00:00Z") };
+	const sessions = [];
+	const { linker, state, reads } = harness({ state: { delivered: [], pending: [], checkedAt: "2026-05-01T07:00:00Z" }, sessions, clock });
+	await linker.reconcile();
+	clock.now = Date.parse("2026-05-01T11:00:00Z");
+	linker.listening();
+	clock.now = Date.parse("2026-05-01T12:00:00Z");
+	linker.disconnected();
+	assert.equal(state.checkedAt, "2026-05-01T12:00:00.000Z");
+	linker.listening();
+	clock.now = Date.parse("2026-05-01T13:00:00Z");
+	linker.listening();
+	assert.equal(state.checkedAt, "2026-05-01T12:00:00.000Z", "a socket that is down moves no watermark");
+	sessions.push(
+		{ id: "live", cwd: "/w", name: "Live", modified: "2026-05-01T10:00:00Z" },
+		{ id: "down", cwd: "/w", name: "Down", modified: "2026-05-01T12:30:00Z" },
+	);
+	await linker.reconcile();
+	assert.deepEqual(reads.filter((path) => path.includes("/asks")), ["/api/sessions/down/asks?cwd=%2Fw"]);
 });
 
 test("an old bare-array state file loads as delivered ids", (t) => {
