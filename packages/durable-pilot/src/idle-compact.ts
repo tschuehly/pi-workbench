@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Api, type CacheRetention, getPromptCacheTtlMs, type Model } from "@earendil-works/pi-ai";
+import { type Api, type CacheRetention, getPromptCacheTtlMs, type Model, type Usage } from "@earendil-works/pi-ai";
 import type { Checkpoint, WorkstreamStore } from "../../workstream-store/src/index.js";
 
 /** Every Durable Chat request asks for the long prompt-cache tier (1 h on Anthropic where the model has it). */
@@ -22,13 +22,24 @@ export const IDLE_COMPACTION_ENTRY = "workbench.idle-compaction";
 export const IDLE_NOTE_PRODUCER = "host:idle-compaction";
 
 const MIN_PROMPT_TOKENS = 80_000;
-const LEAD_MS = 60_000;
+export const LEAD_MS = 60_000;
+// shortcut: Codex backend has no documented TTL; ~30 min measured for Sol/Terra/Astra (github.com/volt-hq/Volt/issues/458), Luna ~3 min so skipped; replace if pi-ai ships Codex promptCache.
+const CODEX_TTL_MS = 30 * 60_000;
 const TEXT_LIMIT = 4_000;
 const NONE = "Unknown: this session has no earlier checkpoint; read the idle note.";
 
-/** When the idle timer fires after a turn ends: a minute before the last request's cache entry expires; none without a TTL. */
-export function idleDelayMs(model: Model<Api> | undefined): number | undefined {
-	const ttl = model === undefined ? undefined : getPromptCacheTtlMs(model, { cacheRetention: CACHE_RETENTION });
+/**
+ * When the idle timer fires after a turn ends: a minute before the last request's cache entry expires; none without a
+ * TTL. The long tier counts only where the request got it: the model has one, its compat does not turn it off (the flag
+ * pi-ai's Anthropic `getCacheControl` reads), and the usage does not show a cache write without its 1 h part.
+ */
+export function idleDelayMs(model: Model<Api> | undefined, usage?: Usage): number | undefined {
+	if (model === undefined) return undefined;
+	const deniedByCompat = (model.compat as { supportsLongCacheRetention?: boolean } | undefined)?.supportsLongCacheRetention === false;
+	const deniedByUsage = usage !== undefined && usage.cacheWrite > 0 && usage.cacheWrite1h === 0;
+	const long = model.promptCache?.long !== undefined && !deniedByCompat && !deniedByUsage;
+	let ttl = getPromptCacheTtlMs(model, { cacheRetention: long ? CACHE_RETENTION : "short" });
+	if (ttl === undefined && model.provider === "openai-codex" && !model.id.includes("luna")) ttl = CODEX_TTL_MS;
 	return ttl === undefined ? undefined : Math.max(0, ttl - LEAD_MS);
 }
 
@@ -72,12 +83,27 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
  */
 export async function writeIdleNote(
 	store: () => WorkstreamStore,
-	request: { workstreamId: string | undefined; sessionId: string; summary: string },
+	request: {
+		workstreamId: string | undefined;
+		sessionId: string;
+		summary: string;
+		/** The session's latest checkpoint ID when the timer fired (null: none); a different one now keeps it. */
+		checkpointId?: string | null;
+		/** True once a newer turn started: its checkpoint, or the owner's, is fresher than this note. */
+		stale?: () => boolean;
+	},
 	options: { scratch?: string; now?: Date } = {},
 ): Promise<string | undefined> {
 	const { workstreamId, sessionId, summary } = request;
 	if (workstreamId === undefined) return undefined;
 	const workstreams = store();
+	const member = (snapshot: Awaited<ReturnType<WorkstreamStore["inspect"]>>) => {
+		const session = snapshot.sessions.find((candidate) => candidate.id === sessionId);
+		if (session?.status !== "active") throw new Error(`session ${sessionId} is ${session?.status ?? "not a member"} in ${workstreamId}`);
+		return session;
+	};
+	let snapshot = await workstreams.inspect(workstreamId);
+	member(snapshot);
 	const dir = join(options.scratch ?? join(homedir(), ".pi-workbench", "scratch"), workstreamId, "idle-notes");
 	await mkdir(dir, { recursive: true });
 	// Colons replaced: the timestamp stays a valid file name on Windows too.
@@ -85,10 +111,10 @@ export async function writeIdleNote(
 	await writeFile(path, `${summary}\n`);
 	// One retry: another writer may move the revision between the read and the append.
 	for (let attempt = 0; ; attempt += 1) {
-		const snapshot = await workstreams.inspect(workstreamId);
-		const session = snapshot.sessions.find((candidate) => candidate.id === sessionId);
-		if (session?.status !== "active") throw new Error(`session ${sessionId} is ${session?.status ?? "not a member"} in ${workstreamId}`);
+		const session = member(snapshot);
 		const previous = session.latestCheckpoint;
+		// A fresher checkpoint stays; the note file is still there for whoever looks.
+		if (request.stale?.() === true || (request.checkpointId !== undefined && (previous?.id ?? null) !== request.checkpointId)) return path;
 		const content: Omit<Checkpoint, "id"> = {
 			whatChanged: `Idle compaction before cache expiry (host-written note, not reviewed by the model): ${lead(summary)}`.slice(0, TEXT_LIMIT),
 			remains: previous?.remains ?? NONE,
@@ -107,5 +133,6 @@ export async function writeIdleNote(
 		} catch (error) {
 			if (attempt > 0 || (error as { code?: string }).code !== "STALE_REVISION") throw error;
 		}
+		snapshot = await workstreams.inspect(workstreamId);
 	}
 }

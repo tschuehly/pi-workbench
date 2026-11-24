@@ -21,11 +21,20 @@ test("the fired timer compacts only an idle, viewed Chat with a large prompt, on
 		assert.equal(idleCompactDue({ ...due, [field]: value }), false, `${field}: ${String(value)} blocks it`);
 });
 
-test("the timer fires a minute before the long-retention cache entry expires; no TTL, no timer", () => {
-	const model = (promptCache?: Record<string, number>) => ({ promptCache }) as unknown as Model<Api>;
-	assert.equal(idleDelayMs(model({ short: 300, long: 3600 })), 3_540_000, "the long tier");
-	assert.equal(idleDelayMs(model({ short: 300 })), undefined, "a model without a long tier");
+test("the timer fires a minute before the cache entry expires: the long tier only where the request got it; no TTL, no timer", () => {
+	const model = (promptCache?: Record<string, number>, extra: object = {}) => ({ provider: "anthropic", id: "claude", promptCache, ...extra }) as unknown as Model<Api>;
+	const usage = (cacheWrite: number, cacheWrite1h?: number) => ({ input: 0, output: 1, cacheRead: 0, cacheWrite, ...(cacheWrite1h === undefined ? {} : { cacheWrite1h }), totalTokens: 1, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+	const tiers = { short: 300, long: 3600 };
+	assert.equal(idleDelayMs(model(tiers)), 3_540_000, "the long tier");
+	assert.equal(idleDelayMs(model(tiers), usage(90_000, 90_000)), 3_540_000, "a 1 h cache write");
+	assert.equal(idleDelayMs(model(tiers), usage(0, 0)), 3_540_000, "a cache read keeps the tier it was written with");
+	assert.equal(idleDelayMs(model(tiers), usage(90_000, 0)), 240_000, "a cache write without its 1 h part: the short tier");
+	assert.equal(idleDelayMs(model(tiers, { compat: { supportsLongCacheRetention: false } })), 240_000, "compat turns the long tier off");
+	assert.equal(idleDelayMs(model({ short: 300 })), 240_000, "a model without a long tier: the short one");
+	assert.equal(idleDelayMs(model(undefined)), undefined, "no TTL");
 	assert.equal(idleDelayMs(undefined), undefined, "an unknown model");
+	assert.equal(idleDelayMs(model(undefined, { provider: "openai-codex", id: "gpt-5.5-sol" })), 29 * 60_000, "Codex: the measured 30 min");
+	assert.equal(idleDelayMs(model(undefined, { provider: "openai-codex", id: "gpt-5.5-luna" })), undefined, "Codex Luna: too short to act on");
 });
 
 test("a Workstream Chat gets the summary as a note and a host-written checkpoint carrying the previous one forward; any other Chat writes nothing", async () => {
@@ -52,4 +61,29 @@ test("a Workstream Chat gets the summary as a note and a host-written checkpoint
 	const events = await store.watch({ workstreamId: "ws-1" });
 	const last = events.mode === "replay" ? (events.events.at(-1)?.records[0] as { producer: string }) : undefined;
 	assert.equal(last?.producer, IDLE_NOTE_PRODUCER, "marked host-written");
+});
+
+test("the host checkpoint never replaces a fresher one: a turn since the timer fired or a changed checkpoint keeps it, the note file stays; a session that is not active writes nothing", async () => {
+	const store = new WorkstreamStore({ adapter: new InMemoryWorkstreamAdapter() });
+	const created = await store.create({ workstreamId: "ws-2", idempotencyKey: "c", title: "Fresh", producer: "session" });
+	const payload = { sessionId: "chat-1", associationKey: "chat-1" };
+	const joined = await store.append({ workstreamId: "ws-2", expectedRevision: created.acceptedRevision, idempotencyKey: "j", records: [{ type: "session.pending", producer: "session", payload }, { type: "session.confirmed", producer: "session", payload }] });
+	const model = { id: "cp-model", whatChanged: "Wrote it during the owner's turn.", remains: "Review.", next: "Merge it." };
+	await store.append({ workstreamId: "ws-2", expectedRevision: joined.acceptedRevision, idempotencyKey: "cp", records: [{ type: "checkpoint.replaced", producer: "session", sourceSessionId: "chat-1", payload: { sessionId: "chat-1", checkpoint: model } }] });
+	const latest = async () => (await store.inspect("ws-2")).sessions.find((s) => s.id === "chat-1")!.latestCheckpoint?.id;
+	const write = (request: object, at: string) => writeIdleNote(() => store, { workstreamId: "ws-2", sessionId: "chat-1", summary: "## Goal\nKeep it.", ...request }, { scratch: root, now: new Date(at) });
+
+	const changed = await write({ checkpointId: null }, "2026-01-03T00:00:00.000Z");
+	assert.ok(existsSync(changed!), "the note file is written");
+	assert.equal(await latest(), "cp-model", "the checkpoint written after the timer fired stays");
+	const ran = await write({ checkpointId: "cp-model", stale: () => true }, "2026-01-03T00:00:01.000Z");
+	assert.ok(existsSync(ran!));
+	assert.equal(await latest(), "cp-model", "a turn started since the timer fired: its checkpoint stays");
+	await write({ checkpointId: "cp-model", stale: () => false }, "2026-01-03T00:00:02.000Z");
+	assert.match((await latest())!, /^cp-idle-/, "unchanged since the timer fired: the host note replaces it");
+
+	const revision = (await store.inspect("ws-2")).revision;
+	await store.append({ workstreamId: "ws-2", expectedRevision: revision, idempotencyKey: "pending", records: [{ type: "session.pending", producer: "session", payload: { sessionId: "chat-2", associationKey: "chat-2" } }] });
+	await assert.rejects(writeIdleNote(() => store, { workstreamId: "ws-2", sessionId: "chat-2", summary: "x" }, { scratch: root, now: new Date("2026-01-03T00:00:03.000Z") }), /is pending/);
+	assert.ok(!existsSync(join(root, "ws-2", "idle-notes", "2026-01-03T00-00-03.000Z.md")), "no note file for a session that is not active");
 });
