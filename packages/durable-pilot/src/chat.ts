@@ -29,7 +29,7 @@ import { redact, wrapProvider } from "./redact.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
-import { ChatMessenger } from "./chat-message.ts";
+import { ChatMessenger, homeWorkstream } from "./chat-message.ts";
 import { BackgroundBash } from "./background-bash.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
@@ -242,7 +242,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		chatTools(() => workbench.resources, options.cwd),
 		workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
 		workbenchExtensions(options.cwd),
-		checkpointExtension(() => opened!.harness),
+		checkpointExtension(() => opened!.harness, { rootId: () => opened?.root.id, workstream: () => homeWorkstream(chatId) }),
 		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data), leadOnly: [workbenchBash] }),
 		// Same runner, blocking API and a bounded lifetime for children; no async child scheduler.
 		bash.extension(true),

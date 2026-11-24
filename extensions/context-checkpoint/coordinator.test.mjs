@@ -3,9 +3,10 @@ import test from "node:test";
 import {
   compactionInstructions,
   createCheckpointCoordinator,
+  createContextCeiling,
   latestAssistantToolCallCount,
-  MAX_NEXT_PHASE_CHARS,
-  MAX_SUMMARY_FOCUS_CHARS,
+  MAX_NEXT_PHASE_WORDS,
+  MAX_SUMMARY_FOCUS_WORDS,
   validateCheckpointRequest,
 } from "./coordinator.mjs";
 import { createCheckpointBarrier } from "./checkpoint-barrier.mjs";
@@ -28,13 +29,15 @@ test("builds phase-boundary compaction instructions", () => {
 test("validates concise checkpoint directives with actionable lengths", () => {
   assert.equal(validateCheckpointRequest(request), undefined);
   assert.match(
-    validateCheckpointRequest({ ...request, summaryFocus: "x".repeat(MAX_SUMMARY_FOCUS_CHARS + 1) }),
-    new RegExp(`summaryFocus is ${MAX_SUMMARY_FOCUS_CHARS + 1} characters.*not the summary itself`),
+    validateCheckpointRequest({ ...request, summaryFocus: "x ".repeat(MAX_SUMMARY_FOCUS_WORDS + 1) }),
+    new RegExp(`summaryFocus is ${MAX_SUMMARY_FOCUS_WORDS + 1} words.*not the summary itself`),
   );
   assert.match(
-    validateCheckpointRequest({ ...request, nextPhase: "x".repeat(MAX_NEXT_PHASE_CHARS + 1) }),
-    new RegExp(`nextPhase is ${MAX_NEXT_PHASE_CHARS + 1} characters`),
+    validateCheckpointRequest({ ...request, nextPhase: "x ".repeat(MAX_NEXT_PHASE_WORDS + 1) }),
+    new RegExp(`nextPhase is ${MAX_NEXT_PHASE_WORDS + 1} words`),
   );
+  // The 1,471-character focus the character limit rejected passes as words.
+  assert.equal(validateCheckpointRequest({ ...request, summaryFocus: "words ".repeat(245).trim() }), undefined);
   assert.match(validateCheckpointRequest({ summaryFocus: "", nextPhase: "phase" }), /non-whitespace/);
 });
 
@@ -224,4 +227,15 @@ test("startup budget: notice only for a first reply above the budget", async () 
   assert.equal(startupBudgetNotice(reply(100, 60_000), 1), undefined, "not the session's first reply (resumed)");
   assert.equal(startupBudgetNotice({ role: "user", usage: { input: 90_000 } }, 0), undefined, "not an assistant reply");
   assert.equal(startupBudgetNotice(reply(100, 60_000), 0, 70_000), undefined, "budget is a parameter");
+});
+
+test("the ceiling note points a lead with a home Workstream to checkpoint_and_continue; wouldFire records nothing", () => {
+  const ceiling = createContextCeiling();
+  assert.equal(ceiling.wouldFire(150_000), false);
+  assert.equal(ceiling.wouldFire(210_000), true);
+  assert.equal(ceiling.wouldFire(210_000), true, "peeking does not record the level");
+  assert.match(ceiling(210_000, "ws-1").content, /write the checkpoint of this session's Workstream ws-1.*then call checkpoint_and_continue/);
+  assert.equal(ceiling.wouldFire(220_000), false, "same 50k step");
+  assert.match(ceiling(260_000, "ws-1").content, /Plan to checkpoint and continue/);
+  assert.match(createContextCeiling()(210_000).content, /compact with compact_and_continue/, "without a Workstream: the old note");
 });

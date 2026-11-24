@@ -4,8 +4,8 @@ import {
   createCheckpointCoordinator,
   createContextCeiling,
   latestAssistantToolCallCount,
-  MAX_NEXT_PHASE_CHARS,
-  MAX_SUMMARY_FOCUS_CHARS,
+  MAX_NEXT_PHASE_WORDS,
+  MAX_SUMMARY_FOCUS_WORDS,
   startupBudgetNotice,
   validateCheckpointRequest,
 } from "./coordinator.mjs";
@@ -60,22 +60,22 @@ export default function contextCheckpointExtension(pi: ExtensionAPI) {
     name: "compact_and_continue",
     label: "Compact and Continue",
     description:
-      "End the current agent run at a coherent phase boundary, compact older session context using a short focus directive, then automatically start the next phase in the same session. summaryFocus directs Pi's summarizer; it is not a handoff summary and must be 1200 characters or fewer.",
+      "End the current agent run at a coherent phase boundary, compact older session context using a short focus directive, then automatically start the next phase in the same session. summaryFocus directs Pi's summarizer; it is not a handoff summary and must be 750 words or fewer.",
     promptSnippet: "Compact context at a coherent phase boundary and continue with a named next phase",
     promptGuidelines: [
       "Call compact_and_continue alone as the final action of a completed phase, after saving and verifying work that must survive compaction.",
       "Use compact_and_continue only when the next phase is concrete and materially benefits from a smaller context; do not use it to avoid difficult reasoning or unfinished work.",
-      "Keep compact_and_continue summaryFocus at 1200 characters or fewer; use it as a short summarizer directive and reference existing evidence paths instead of restating session history.",
+      "Keep compact_and_continue summaryFocus at 750 words or fewer; use it as a short summarizer directive and reference existing evidence paths instead of restating session history.",
       "Do not create a progress file solely for compact_and_continue or call generated notes authoritative, durable checkpoints, Continuation Artifacts, or cross-session handoffs.",
     ],
     parameters: Type.Object({
       summaryFocus: Type.String({
         minLength: 1,
-        description: `Brief directive to Pi's summarizer, not a handoff summary; at most ${MAX_SUMMARY_FOCUS_CHARS} characters`,
+        description: `Brief directive to Pi's summarizer, not a handoff summary; at most ${MAX_SUMMARY_FOCUS_WORDS} words`,
       }),
       nextPhase: Type.String({
         minLength: 1,
-        description: `One concrete next phase to begin automatically after compaction; at most ${MAX_NEXT_PHASE_CHARS} characters`,
+        description: `One concrete next phase to begin automatically after compaction; at most ${MAX_NEXT_PHASE_WORDS} words`,
       }),
     }),
     executionMode: "sequential",

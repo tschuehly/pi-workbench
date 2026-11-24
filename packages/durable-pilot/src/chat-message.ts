@@ -99,6 +99,9 @@ async function workstreamsOf(ids: readonly string[]): Promise<Map<string, string
 	return found;
 }
 
+/** The chat's home Workstream id, or undefined without one (or without a readable store). */
+export const homeWorkstream = async (chatId: string): Promise<string | undefined> => (await workstreamsOf([chatId])).get(chatId);
+
 export class ChatMessenger extends DaemonRequests<ChatMessageEvent, ChatMessageResult | ChatListResult> {
 	readonly #chatId: string;
 	/** Sends whose answer timed out, by their arguments: retrying the same call asks with the same request ID, so PI WEB answers it as the first. */

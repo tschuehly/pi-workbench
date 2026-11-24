@@ -85,7 +85,7 @@ test("lead tool descriptions and parameter docs keep the pre-trim rules in fewer
 			compact_and_continue: {
 				size: 1386,
 				description: ["completed phase", "compact older context", "start the named next phase in this session", "alone as the final action", "after saving and verifying work", "next phase is concrete", "gains from a smaller context", "never to avoid hard reasoning or unfinished work", "Do not create a progress file", "authoritative", "durable checkpoints", "Continuation Artifacts", "cross-session handoffs"],
-				parameters: ["directive to the summarizer", "not a handoff summary", "at most 1200 characters", "existing evidence paths instead of restating history", "concrete next phase to begin after compaction"],
+				parameters: ["directive to the summarizer", "not a handoff summary", "at most 750 words", "existing evidence paths instead of restating history", "concrete next phase to begin after compaction"],
 			},
 		};
 		for (const [name, rule] of Object.entries(rules)) {

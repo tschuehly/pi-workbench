@@ -162,8 +162,8 @@ export function openAsks(branch: readonly any[], sessionId: string): any[] {
   return [...open.values()].filter((ask) => ask.questions.length > 0);
 }
 
-/** Compaction summary that replaces the whole context on `/back`: a pointer to the checkpoint plus the open questions verbatim. */
-export function backSummary(asks: readonly any[]) {
+/** The open question sets verbatim, or a line saying there are none. */
+function openSets(asks: readonly any[]) {
   const sets = asks.map((ask) => [
     `### Question set ${ask.askId}`,
     ...(ask.context ? [ask.context] : []),
@@ -173,12 +173,29 @@ export function backSummary(asks: readonly any[]) {
       ...(question.options ?? []).map((option: any) => `  - \`${option.value}\` ${option.label}${option.recommended ? " (recommended)" : ""}${option.detail ? `: ${option.detail}` : ""}`),
     ].join("\n")),
   ].join("\n\n"));
+  return sets.length
+    ? `These question sets are still open in Thomas's composer. Do not repost them; update or withdraw one only if the evidence shows it is stale.\n\n${sets.join("\n\n")}`
+    : "No question sets are open.";
+}
+
+const REENTRY = "The re-entry source is this session's home Workstream: run `workstreams` to find it, then read its latest checkpoint. Verify repository and remote state before relying on any recorded claim.";
+
+/** Compaction summary that replaces the whole context on `/back`: a pointer to the checkpoint plus the open questions verbatim. */
+export function backSummary(asks: readonly any[]) {
   return [
     "Thomas ran /back on his return. The earlier conversation was removed from your context on purpose; nothing was summarized from it.",
-    "The re-entry source is this session's home Workstream: run `workstreams` to find it, then read its latest checkpoint. Verify repository and remote state before relying on any recorded claim.",
-    sets.length
-      ? `These question sets are still open in Thomas's composer. Do not repost them; update or withdraw one only if the evidence shows it is stale.\n\n${sets.join("\n\n")}`
-      : "No question sets are open.",
+    REENTRY,
+    openSets(asks),
+  ].join("\n\n");
+}
+
+/** The new context `checkpoint_and_continue` starts: /back's pointer and open sets, then the next phase. */
+export function checkpointHandoff(asks: readonly any[], nextPhase: string) {
+  return [
+    "You wrote this session's Workstream checkpoint and called checkpoint_and_continue. The earlier conversation was removed from your context on purpose; nothing was summarized from it.",
+    REENTRY,
+    openSets(asks),
+    `Continue with the next phase: ${nextPhase}`,
   ].join("\n\n");
 }
 
