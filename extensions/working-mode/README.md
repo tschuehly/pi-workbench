@@ -52,6 +52,7 @@ When the model already sees the selection, it only notifies "Working Mode unchan
   PI WEB does). The session file keeps the old conversation, so the question panel stays answerable.
   It resets every axis to its starting value, clears alignment, then starts one turn that runs a brief
   `orient`.
+- **Durable Chats:** the Durable host (`packages/durable-pilot/src/chat-session.ts`) provides both the AFK closing checkpoint and `/back`; its `/back` resets the context with the same summary instead of compacting, so nothing is kept verbatim.
 - Guidance only: the `alignment_reached` and `alignment_reset` tools record state; no permissions or skill catalog change.
 
 The behavioral contract is [Working Mode](../../docs/foundation/working-mode.md).

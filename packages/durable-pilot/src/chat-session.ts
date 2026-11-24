@@ -13,6 +13,7 @@ import {
 	InboxDoc,
 	LiveDoc,
 	type LiveState,
+	ResetEntry,
 	type SubmissionId,
 	type TaskId,
 	type ToolSlot,
@@ -60,11 +61,14 @@ const { AFK_BATTERY_WARNING, batteryAlarm, onBattery } = (await import(new URL("
 	batteryAlarm: Power["alarm"];
 	onBattery: Power["onBattery"];
 };
+import { AFK_CLOSE_PROMPT, AFK_CLOSE_TYPE, BACK_PROMPT, BACK_TYPE, backSummary, writesCheckpoint } from "../../../extensions/working-mode/rules.mts";
 import {
+	AFK_CLOSE_ENTRY,
 	ANSWERS_ENTRY,
 	ASK_ANSWERS_CUSTOM_TYPE,
 	acknowledgeAttention,
 	afkActive,
+	BACK_ENTRY,
 	type CloseAsk,
 	closeAsk,
 	countTurn,
@@ -75,6 +79,7 @@ import {
 	pendingBlock,
 	questionsState,
 	RECONCILE_ENTRY,
+	resetMode,
 	type Resources,
 	ResourcesDoc,
 	selectMode,
@@ -83,6 +88,9 @@ import {
 	type WorkbenchSignal,
 	workingModeSnapshot,
 } from "./workbench.ts";
+
+/** `/back`, as the legacy Working Mode extension describes it. */
+const BACK_COMMAND = { name: "back", description: "Return from AFK: clear the context down to a pointer to the latest checkpoint and the open questions, reset Working Mode, and orient" };
 
 /** v2 adds Working Mode, questions and attention, models, resources, effect resolution and client operation IDs. */
 export const PROTOCOL = 2;
@@ -219,13 +227,16 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	if (message === undefined || message.role === "system") return [];
 	const parts = Array.isArray(message.content) ? (message.content as { type: string; text?: string }[]) : [];
 	const mode = entryWorkingMode(entry);
+	if (entry.kind === BACK_ENTRY)
+		return [...(mode === undefined ? [] : [custom(WORKING_MODE_CUSTOM_TYPE, parts[0]?.text ?? "", mode, `${entryId}:working-mode`)]), custom(BACK_TYPE, parts.at(-1)?.text ?? textOfContent(message.content), null)];
 	// A plain prompt's open-questions reminder is its last block, hidden as in a legacy Chat.
 	const userParts = entry.kind === PROMPT_ENTRY && (entry.data as { askReminder?: boolean } | undefined)?.askReminder === true ? parts.slice(0, -1) : parts;
 	if (mode !== undefined && message.role === "user") {
 		const block = custom(WORKING_MODE_CUSTOM_TYPE, parts[0]?.text ?? "", mode, entry.kind === MODE_ENTRY ? entryId : `${entryId}:working-mode`);
 		return entry.kind === MODE_ENTRY ? [block] : [block, { ...message, content: userParts.slice(1), entryId }];
 	}
-	if (entry.kind === CompactionEntry.kind) {
+	// `/back`'s reset handoff shows as a compaction summary does: it replaced the context the same way.
+	if (entry.kind === CompactionEntry.kind || entry.kind === ResetEntry.kind) {
 		// Pi's transcript shape for a compaction (PI WEB transcriptMessages.ts): the summary without Durable's framing.
 		const summary = /<summary>\n([\s\S]*)\n<\/summary>$/.exec(textOfContent(message.content))?.[1] ?? textOfContent(message.content);
 		return [{ role: "system", source: "compaction", content: `Compacted history:\n\n${summary}`, timestamp: message.timestamp, entryId }];
@@ -233,6 +244,7 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	if (userParts !== parts) return [{ ...message, content: userParts, entryId }];
 	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
+	if (entry.kind === AFK_CLOSE_ENTRY) return [custom(AFK_CLOSE_TYPE, textOfContent(message.content), null)];
 	// Delegation: the coalesced completion wake and a requested child update, as the legacy extension's custom messages.
 	if (entry.kind === COMPLETION_ENTRY) return [custom(COMPLETION_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === UPDATE_ENTRY) return [custom(UPDATE_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
@@ -345,6 +357,14 @@ export class ChatSession {
 	#warnedOnBattery = false;
 	#closed = false;
 	#cwd = "";
+	/**
+	 * AFK closing nudge (legacy Working Mode): a tool call ran since the last `workstreams checkpoint`, outside a nudge's
+	 * own run (`#nudgeRun`; the nudge is sent while quiet, so the next run to start is its own).
+	 * shortcut: in memory, so a host restart forgets unsaved work; scan the entries if that loses a checkpoint in practice.
+	 */
+	#unsaved = false;
+	#nudgeSent = false;
+	#nudgeRun = false;
 
 	/** The Chat's title for the AFK alarm, read when it sounds (a rename shows on the next one). */
 	readonly #title: () => string | undefined;
@@ -563,6 +583,8 @@ export class ChatSession {
 		switch (event.type) {
 			case "run_start":
 				this.#running = true;
+				this.#nudgeRun = this.#nudgeSent;
+				this.#nudgeSent = false;
 				this.#emit({ type: "agent.start" });
 				this.#record("agent.start", { sessionFile: null });
 				// Agent turns since an open set was posted drive the browser's "may be stale" mark.
@@ -577,6 +599,7 @@ export class ChatSession {
 				this.#emit({ type: "agent.end" });
 				this.#record("agent.settled", { sessionFile: null });
 				void this.#chat?.packages?.run("end");
+				void this.#afkClose().catch(() => {});
 				return;
 			case "message_start":
 				if (event.message.role !== "assistant") return;
@@ -610,6 +633,7 @@ export class ChatSession {
 				return;
 			case "tool_execution_start":
 				if (event.toolName === "bash") this.#shells.set(event.toolCallId, new Date().toISOString());
+				if (!this.#nudgeRun) this.#unsaved = !writesCheckpoint(event.args);
 				this.#emit({ type: "tool.start", toolName: event.toolName, toolCallId: event.toolCallId, summary: "", args: event.args });
 				return;
 			case "tool_execution_update":
@@ -745,18 +769,19 @@ export class ChatSession {
 		return this.#chat?.packages?.resources() ?? { skillPaths: [], promptPaths: [], themePaths: [] };
 	}
 
-	/** The Chat's slash commands: the host's own (`/quota-check`, `/fast`), then the bound Pi packages'. */
+	/** The Chat's slash commands: the host's own (`/quota-check`, `/fast`, `/back`), then the bound Pi packages'. */
 	commands(): { name: string; description?: string }[] {
-		return [...COMMANDS, ...(this.#chat === undefined ? [] : [FAST_COMMAND]), ...(this.#chat?.packages?.commands() ?? [])];
+		return [...COMMANDS, ...(this.#chat === undefined ? [] : [FAST_COMMAND, BACK_COMMAND]), ...(this.#chat?.packages?.commands() ?? [])];
 	}
 
 	/**
 	 * Run one of the Chat's commands. A host command runs outside the store (nothing committed or resumed); a package
 	 * command is refused visibly when blocked, unknown or in need of a dialog; any other is not available.
 	 */
-	async command(name: string, args: string): Promise<CommandResult | { type: "unsupported"; message: string }> {
+	async command(name: string, args: string, operationId: string = crypto.randomUUID()): Promise<CommandResult | { type: "unsupported"; message: string }> {
 		if (COMMANDS.some((command) => command.name === name)) return runCommand(name, args);
 		if (name === FAST_COMMAND.name) return this.#fast(args);
+		if (name === BACK_COMMAND.name && this.#chat !== undefined) return this.#back(operationId);
 		const packages = this.#chat?.packages;
 		if (packages === undefined) return { type: "unsupported", message: `/${name} is not available in Durable Chats yet` };
 		const result = await packages.command(args === "" ? `/${name}` : `/${name} ${args}`);
@@ -1019,6 +1044,55 @@ export class ChatSession {
 		});
 		if (answer.stopReason === "error" || answer.stopReason === "aborted") throw new Error(answer.errorMessage ?? `The model request ${answer.stopReason === "error" ? "failed" : "was aborted"}`);
 		return textOfContent(answer.content);
+	}
+
+	/**
+	 * `/back` (legacy Working Mode), when the Chat is idle: every axis to its starting value and alignment cleared, then
+	 * the model context restarts at a handoff the host writes, with no summarizer call: a pointer to the home Workstream's
+	 * latest checkpoint and every open question set verbatim (they stay open in the store). A Durable reset keeps nothing
+	 * verbatim, where a compaction keeps at least the newest turn; the stored transcript keeps everything. Then one
+	 * input starts a brief orient. If the reset fails, it still orients on the context as it is and says so.
+	 */
+	async #back(operationId: string): Promise<CommandResult> {
+		const { harness, root } = this.#host;
+		const requestId = `back:${operationId}`;
+		if ((await root.commit((tx) => tx.submissionByRequest(root.id, requestId), context)) !== undefined) return { type: "done" };
+		const status = await this.status();
+		if (status.isStreaming || status.isCompacting || status.isBashRunning || status.pendingMessageCount > 0) return { type: "done", message: "/back runs when the Chat is idle; stop it first." };
+		await this.#resume();
+		await resetMode(root);
+		await syncWorkersGroup(harness, this.#host.registry, root, this.#chat!.workbench.extensions);
+		this.#stopPower();
+		this.#unsaved = false;
+		const asks = Object.values((await questionsState(harness, root)).open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
+		let kept: string | undefined;
+		// The question sets repeat tool-call arguments (stored verbatim): sanitized before this new copy commits.
+		await root.reset(redact(backSummary(asks)), context).catch((error: unknown) => (kept = error instanceof Error ? error.message : String(error)));
+		// The orient input starts a turn, so it carries a pending block as a prompt does (none after a reset: all defaults).
+		const block = await pendingBlock(harness, root, false);
+		await admit(root, {
+			operationId: requestId,
+			text: BACK_PROMPT,
+			...(block === undefined ? {} : { content: [{ type: "text" as const, text: block.text }, { type: "text" as const, text: BACK_PROMPT }] }),
+			entry: { kind: BACK_ENTRY, ...(block === undefined ? {} : { data: { workingMode: block.details } }) },
+		});
+		await this.#publishStatus();
+		return kept === undefined ? { type: "done" } : { type: "done", message: `/back kept the context: ${redact(kept)}` };
+	}
+
+	/**
+	 * AFK closing nudge (legacy Working Mode): once AFK has started, at a run's end with nothing running (`#working`) and
+	 * a tool call since the last checkpoint, one visible input asks for the closing checkpoint. Keyed by the newest entry,
+	 * so overlapping checks send it once; work still running leaves it to the next run's end.
+	 */
+	async #afkClose(): Promise<void> {
+		if (!this.#unsaved || this.#chat === undefined || this.#closed) return;
+		const { harness, root } = this.#host;
+		if (!(await afkActive(harness, root)) || (await this.#working()) || !this.#unsaved) return;
+		this.#unsaved = false;
+		this.#nudgeSent = true;
+		const operationId = `afk-close:${String(this.#entries.at(-1)?.id ?? 0)}`;
+		await this.#deliver(() => admit(root, { operationId, text: AFK_CLOSE_PROMPT, entry: { kind: AFK_CLOSE_ENTRY } }));
 	}
 
 	/** `/fast [on|off|toggle]` (pi-openai-fast-mode), one of the Chat's commands. */

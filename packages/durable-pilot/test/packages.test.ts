@@ -437,7 +437,7 @@ test("without --packages no package code runs: tools and commands stay unavailab
 	const f = family("off");
 	const host = new ChatHost(f, false);
 	await host.ready;
-	assert.deepEqual((await host.call<{ name: string }[]>("commands")).map((command) => command.name), ["quota-check", "fast"], "only the host's own commands");
+	assert.deepEqual((await host.call<{ name: string }[]>("commands")).map((command) => command.name), ["quota-check", "fast", "back"], "only the host's own commands");
 	assert.equal((await host.call<{ type: string }>("command", { name: "ping" })).type, "unsupported");
 	const end = await host.tool("notify_human", { message: "x" }, "op-1");
 	assert.equal(end.isError, true);
