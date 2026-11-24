@@ -40,6 +40,18 @@ When the model already sees the selection, it only notifies "Working Mode unchan
   (one open per session), plus an error notification once per unplug. Sleep or a drained battery
   would stop the session. Leaving AFK in that session stops it, as does a disposed session; an idle
   session restored with an old AFK selection stays quiet.
+- **AFK closing checkpoint:** once AFK has started, when the agent settles with nothing running
+  (no queued message, Subagent, Worker, or background bash job) and a tool call ran after the last
+  `workstreams checkpoint`, the session gets one visible `working-mode-afk-close` message: write the
+  home Workstream's checkpoint with every open question, or, without a Workstream, one final
+  self-contained message. Its own run never triggers another. The state lives in memory, so a
+  reload forgets work done before it.
+- **`/back`:** on return, when the agent is idle, compacts the session with no summarizer call and
+  nothing kept: the whole context becomes a short summary that points to the home Workstream's
+  latest checkpoint and lists every still-open `ask_user` set verbatim (rebuilt from the branch as
+  PI WEB does). The session file keeps the old conversation, so the question panel stays answerable.
+  It resets every axis to its starting value, clears alignment, then starts one turn that runs a brief
+  `orient`.
 - Guidance only: the `alignment_reached` and `alignment_reset` tools record state; no permissions or skill catalog change.
 
 The behavioral contract is [Working Mode](../../docs/foundation/working-mode.md).

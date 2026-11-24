@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxProvider, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
-import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING } from "./index.ts";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING, AFK_CLOSE_PROMPT, BACK_PROMPT, openAsks } from "./index.ts";
 
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,17 +27,18 @@ const agentDir = `${cwd}/agent`;
 
 // A real Pi session with a scripted model: records every request the model receives.
 // `gate`, when given, holds the first reply open until it resolves so a test can act mid-run.
-async function session(entries, gate, { factories = [], tools } = {}) {
+// `respond`, when given, picks each reply from the request count; the default answers "ok".
+async function session(entries, gate, { factories = [], tools, respond, keepRecentTokens = 1 } = {}) {
   const faux = fauxProvider();
   const requests = [];
   const reply = async (context) => {
     requests.push(context);
     if (gate && requests.length === 1) await gate;
-    return fauxAssistantMessage("ok");
+    return respond?.(requests.length) ?? fauxAssistantMessage("ok");
   };
   faux.setResponses(Array.from({ length: 20 }, () => reply));
   const snapshots = [];
-  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens: 1 } });
+  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens } });
   const resourceLoader = new DefaultResourceLoader({
     cwd, agentDir, settingsManager, systemPrompt: "BASE",
     noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true,
@@ -594,4 +595,87 @@ test("Thomas can reset alignment himself with /mode unalign, and the agent hears
   const sent = s.sent.at(-1);
   assert.doesNotMatch(sent.content, /Alignment is reached/);
   assert.match(sent.content, /Acknowledge this change/);
+});
+
+const text = (message) => typeof message.content === "string" ? message.content : message.content?.map?.((part) => part.text ?? "").join("") ?? "";
+const until = async (check) => { for (let i = 0; i < 200 && !check(); i++) await tick(); assert.ok(check(), "timed out"); };
+const ask = (askId, questions, context) => ({ askId, askedAt: "t", updatedAt: "t", revision: "r", context, questions });
+const question = (id, extra = {}) => ({ id, question: `Question ${id}?`, options: [], ...extra });
+const posted = (sessionId, value) => ({ type: "message", message: { role: "toolResult", toolName: "ask_user", isError: false, details: { sessionId, ask: value } } });
+
+test("open question sets follow PI WEB's transcript rules: posts, revisions, withdrawals, partial and full closes, other sessions", () => {
+  const branch = [
+    posted("me", ask("a1", [question("x"), question("y")])),
+    posted("me", ask("a2", [question("z")])),
+    posted("me", ask("a3", [question("w")])),
+    posted("other", ask("a4", [question("v")])),
+    posted("me", ask("a5", [question("u")])),
+    posted("me", ask("a1", [question("x"), question("y", { question: "Revised y?" })])),
+    { type: "custom", customType: "pi-web.ask.closed", data: { askId: "a1", reason: "submitted", partial: true, revision: "r2", questions: [{ question: { id: "x" } }] } },
+    { type: "custom", customType: "pi-web.ask.closed", data: { askId: "a2", reason: "submitted", questions: [] } },
+    { type: "message", message: { role: "toolResult", toolName: "ask_user", isError: false, details: { withdrawn: { askId: "a3" } } } },
+    { type: "custom_message", customType: "pi-web.ask.answers", details: { askId: "a5" } },
+  ];
+  assert.deepEqual(openAsks(branch, "me").map((open) => [open.askId, open.questions.map((q) => q.question)]), [["a1", ["Revised y?"]]]);
+});
+
+test("/back clears the context to the checkpoint pointer and open questions, resets Working Mode, and orients", async () => {
+  const s = await session();
+  await s.session.prompt("/mode alignment align");
+  await s.session.prompt("/mode attention afk");
+  await s.session.prompt("old work one");
+  await s.session.prompt("old work two");
+  const id = s.sessionManager.getSessionId();
+  s.sessionManager.appendMessage({ role: "toolResult", toolCallId: "c1", toolName: "ask_user", content: [], isError: false, timestamp: Date.now(),
+    details: { sessionId: id, ask: ask("f0e4481d", [question("route", { detail: "Same session or new?", options: [{ value: "compact", label: "Compact", recommended: true }] })], "Going AFK and back") } });
+  const before = s.requests.length;
+  await s.session.prompt("/back");
+  await until(() => s.requests.length > before);
+  const context = s.last().messages.map(text).join("\n");
+  assert.doesNotMatch(context, /old work/);
+  assert.match(context, /run `workstreams` to find it/);
+  assert.match(context, /Question set f0e4481d[\s\S]*Going AFK and back[\s\S]*route: Question route\?[\s\S]*Same session or new\?[\s\S]*`compact` Compact \(recommended\)/);
+  assert.ok(context.endsWith(BACK_PROMPT));
+  assert.equal(s.blocks(s.last()).length, 0);
+  assert.deepEqual(s.snapshots.at(-1).selected, defaults);
+  assert.equal(s.snapshots.at(-1).aligned, false);
+  // The session file keeps the removed conversation.
+  assert.ok(s.sessionManager.getEntries().some((entry) => entry.type === "message" && text(entry.message) === "old work one"));
+  s.session.dispose();
+});
+
+test("/back on a session too small to compact keeps the context and still orients", async () => {
+  const s = await session(undefined, undefined, { keepRecentTokens: 100_000 });
+  await s.session.prompt("/mode attention afk");
+  await s.session.prompt("old work");
+  const before = s.requests.length;
+  await s.session.prompt("/back");
+  await until(() => s.requests.length > before);
+  const context = s.last().messages.map(text).join("\n");
+  assert.match(context, /old work/);
+  assert.ok(context.endsWith(BACK_PROMPT));
+  assert.deepEqual(s.snapshots.at(-1).selected, defaults);
+  s.session.dispose();
+});
+
+test("AFK asks once for a closing checkpoint when it settles idle after unsaved work", async () => {
+  const noop = (pi) => pi.registerTool({ name: "noop", label: "Noop", description: "noop", parameters: { type: "object", properties: {} }, async execute() { return { content: [{ type: "text", text: "done" }] }; } });
+  // Each prompt's first reply calls the tool with the prompt's command, then the model answers "ok".
+  const run = async (attention, command) => {
+    let calls = 0;
+    const s = await session(undefined, undefined, { factories: [noop], tools: ["noop"],
+      respond: (n) => n === 2 && calls++ === 0 ? fauxAssistantMessage([fauxToolCall("noop", { command })], { stopReason: "toolUse" }) : undefined });
+    await s.session.prompt(`/mode attention ${attention}`);
+    await s.session.prompt("start");
+    await s.session.prompt("work");
+    for (let i = 0; i < 30; i++) await tick();
+    const nudges = s.requests.filter((request) => request.messages.some((message) => text(message) === AFK_CLOSE_PROMPT)).length;
+    s.session.dispose();
+    return { nudges, requests: s.requests.length };
+  };
+  const afk = await run("afk", "git status");
+  assert.equal(afk.nudges, 1);
+  assert.equal(afk.requests, 4); // start, work + tool result, one nudge run; the nudge run does not nudge again
+  assert.equal((await run("afk", "workstreams checkpoint ws-1 --title x")).nudges, 0);
+  assert.equal((await run("focused", "git status")).nudges, 0);
 });

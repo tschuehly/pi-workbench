@@ -133,3 +133,60 @@ export function selectFromArgs(selection: WorkingModeState, aligned: boolean, ar
   // Changing the Alignment value asks for a new agreement.
   return { selection: { ...selection, [axis]: match }, aligned: axis === "alignment" && match !== selection.alignment ? false : aligned };
 }
+
+// PI WEB's ask_user transcript records (pi-web src/shared/apiTypes.ts, pendingAskStore.ts).
+const ASK_CLOSED = "pi-web.ask.closed";
+const ASK_ANSWERS = "pi-web.ask.answers";
+
+/** Question sets this session posted that are still open on the branch, as PI WEB's openAsksFromTranscript rebuilds them. */
+export function openAsks(branch: readonly any[], sessionId: string): any[] {
+  const open = new Map<string, any>();
+  for (const entry of branch) {
+    const message = entry?.type === "message" ? entry.message : undefined;
+    if (message?.role === "toolResult" && message.toolName === "ask_user" && !message.isError) {
+      const details = message.details;
+      if (details?.sessionId === sessionId && typeof details.ask?.askId === "string" && Array.isArray(details.ask.questions)) open.set(details.ask.askId, details.ask);
+      if (typeof details?.withdrawn?.askId === "string") open.delete(details.withdrawn.askId);
+    } else if (entry?.type === "custom" && entry.customType === ASK_CLOSED) {
+      const outcome = entry.data;
+      const ask = open.get(outcome?.askId);
+      if (!ask || !Array.isArray(outcome.questions)) continue;
+      // A partial send closes only the questions it sent.
+      if (outcome.partial !== true) { open.delete(ask.askId); continue; }
+      const sent = new Set(outcome.questions.map((record: any) => record?.question?.id));
+      open.set(ask.askId, { ...ask, questions: ask.questions.filter((question: any) => !sent.has(question.id)) });
+    } else if (entry?.type === "custom_message" && entry.customType === ASK_ANSWERS && entry.details?.partial !== true) {
+      open.delete(entry.details?.askId);
+    }
+  }
+  return [...open.values()].filter((ask) => ask.questions.length > 0);
+}
+
+/** Compaction summary that replaces the whole context on `/back`: a pointer to the checkpoint plus the open questions verbatim. */
+export function backSummary(asks: readonly any[]) {
+  const sets = asks.map((ask) => [
+    `### Question set ${ask.askId}`,
+    ...(ask.context ? [ask.context] : []),
+    ...ask.questions.map((question: any) => [
+      `- **${question.id}: ${question.question}**`,
+      ...(question.detail ? [`  ${question.detail.replace(/\n/g, "\n  ")}`] : []),
+      ...(question.options ?? []).map((option: any) => `  - \`${option.value}\` ${option.label}${option.recommended ? " (recommended)" : ""}${option.detail ? `: ${option.detail}` : ""}`),
+    ].join("\n")),
+  ].join("\n\n"));
+  return [
+    "Thomas ran /back on his return. The earlier conversation was removed from your context on purpose; nothing was summarized from it.",
+    "The re-entry source is this session's home Workstream: run `workstreams` to find it, then read its latest checkpoint. Verify repository and remote state before relying on any recorded claim.",
+    sets.length
+      ? `These question sets are still open in Thomas's composer. Do not repost them; update or withdraw one only if the evidence shows it is stale.\n\n${sets.join("\n\n")}`
+      : "No question sets are open.",
+  ].join("\n\n");
+}
+
+export const BACK_TYPE = "working-mode-back";
+export const BACK_PROMPT = "Thomas is back. Use the orient skill to give a brief re-entry from this session's home Workstream and its latest checkpoint (if the session has no home Workstream, orient from the summary alone and say so). Fold each question set still open in Thomas's composer into the orientation next to its context, by its id. Then stop.";
+
+export const AFK_CLOSE_TYPE = "working-mode-afk-close";
+export const AFK_CLOSE_PROMPT = "AFK closing step: you are idle and nothing is running. Run `workstreams` to find this session's home Workstream. If it has one, write its checkpoint now (Workstreams skill, section 3), carrying every open question for Thomas's return. If it has none, write one final message that stands on its own: what is done, every open question with your recommendation, and the next move. Start no new work. Then stop.";
+
+/** True for a tool call that writes a Workstream checkpoint. */
+export const writesCheckpoint = (input: unknown) => /\bworkstreams\s+checkpoint\b/.test(JSON.stringify(input ?? ""));
