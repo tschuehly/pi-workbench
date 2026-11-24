@@ -34,8 +34,8 @@ export function alarmSession(ctx: ExtensionContext) {
 }
 
 import {
-  afkPending, ALIGNMENT_RESET_TOOL, ALIGNMENT_TOOL, alignmentReachedText, alignmentResetText, alignmentResetTool, alignmentTool,
-  axes, axisNames, CUSTOM_TYPE, defaults, isSelection, renderBlock, same, selectFromArgs, usage,
+  AFK_CLOSE_PROMPT, AFK_CLOSE_TYPE, afkPending, ALIGNMENT_RESET_TOOL, ALIGNMENT_TOOL, alignmentReachedText, alignmentResetText, alignmentResetTool, alignmentTool,
+  axes, axisNames, BACK_PROMPT, BACK_TYPE, backSummary, CUSTOM_TYPE, defaults, isSelection, openAsks, renderBlock, same, selectFromArgs, usage, writesCheckpoint,
   type Axis, type WorkingModeDetails, type WorkingModeSnapshot, type WorkingModeState,
 } from "./rules.mts";
 
@@ -72,6 +72,13 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   let queued: WorkingModeDetails | null = null;
   let powerTimer: ReturnType<typeof setInterval> | undefined;
   let warnedOnBattery = false;
+  // AFK closing nudge: `unsaved` is work (tool calls) since the last checkpoint, outside a nudge's own run.
+  // shortcut: in memory, so a reload forgets unsaved work; scan the branch if that loses a checkpoint in practice.
+  let unsaved = false;
+  let nudgeSent = false;
+  let nudgeRun = false;
+  // Custom summary for the compaction `/back` started; null for every other compaction.
+  let backSummaryText: string | null = null;
   // Activity rows not yet ended: Subagents, Workers, background bash jobs, monitors, running shell calls.
   const activity = new Set<string>();
   pi.events?.on?.(ACTIVITY_CHANNEL, (event: any) => {
@@ -163,6 +170,50 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   // duplicate the block there; track message_end of the queued block if that shows up in practice.
   pi.on("agent_end", () => { queued = null; });
 
+  pi.on("tool_call", (event) => {
+    if (nudgeRun) return;
+    unsaved = !writesCheckpoint(event.input);
+  });
+
+  // AFK: once idle with nothing running, ask once for a closing checkpoint if work happened since the last one.
+  pi.on("agent_settled", (event, ctx) => {
+    if (!afkActive() || !unsaved || event.aborted || working(ctx)) return;
+    unsaved = false;
+    nudgeSent = true;
+    pi.sendMessage({ customType: AFK_CLOSE_TYPE, content: AFK_CLOSE_PROMPT, display: true }, { triggerTurn: true });
+  });
+
+  // Retain-none (no firstKeptEntryId): the whole context becomes the summary; the session file keeps every entry.
+  pi.on("session_before_compact", (event) => {
+    if (backSummaryText === null) return;
+    const summary = backSummaryText;
+    backSummaryText = null;
+    return { compaction: { summary, firstKeptEntryId: undefined as unknown as string, tokensBefore: event.preparation.tokensBefore } };
+  });
+
+  pi.registerCommand("back", {
+    description: "Return from AFK: clear the context down to a pointer to the latest checkpoint and the open questions, reset Working Mode, and orient",
+    handler: async (_args, ctx) => {
+      if (!ctx.isIdle()) {
+        if (ctx.hasUI) ctx.ui.notify("/back runs when the agent is idle; stop it first.", "warning");
+        return;
+      }
+      selected = { ...defaults };
+      aligned = false;
+      unsaved = false;
+      publish(ctx, "selected");
+      stopPower();
+      backSummaryText = backSummary(openAsks(ctx.sessionManager.getBranch(), ctx.sessionManager.getSessionId?.() ?? ""));
+      ctx.compact({
+        onComplete: () => pi.sendMessage({ customType: BACK_TYPE, content: BACK_PROMPT, display: true }, { triggerTurn: true }),
+        onError: (error) => {
+          backSummaryText = null;
+          if (ctx.hasUI) ctx.ui.notify(`/back could not clear the context: ${error.message}`, "error");
+        },
+      });
+    },
+  });
+
   pi.registerCommand("mode", {
     description: "Choose Working Mode guidance for the next prompt; /mode send delivers it now; /mode unalign clears the alignment",
     handler: async (args, ctx) => {
@@ -207,6 +258,9 @@ export default function workingModeExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
+    // The nudge is sent while idle, so the next run to start is the one it triggered.
+    nudgeRun = nudgeSent;
+    nudgeSent = false;
     applied = { ...selected };
     publish(ctx, "applied");
     watchPower(ctx, true);

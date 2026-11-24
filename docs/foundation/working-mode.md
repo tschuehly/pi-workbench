@@ -52,7 +52,11 @@ in the conversation, so the selected value alone chooses the channel.
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
 Only Phone uses `ask_human` and `notify_human`. Every other value posts decisions with PI WEB's `ask_user` (its own guidance covers Default); AFK lists
-them for Thomas's return instead. Thomas switches to Focused when he returns to the conversation.
+them for Thomas's return instead. When Pia settles in AFK with nothing running after work the last
+checkpoint does not cover, the extension asks her once to write the closing checkpoint (or, without
+a Workstream, one self-contained final message). On return, Thomas runs `/back`: it drops the
+conversation from Pia's context, keeps a pointer to the latest checkpoint and the open question
+sets, resets every Working Mode axis to its starting value, and has Pia orient him briefly.
 
 ### AFK adaptation and fallback
 
