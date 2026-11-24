@@ -676,6 +676,22 @@ test("ask_user: a question without detail is refused; a 4000-character detail is
 	assert.match(description, /The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted\./);
 });
 
+test("ask_user: the result of a new and of an updated set tells the model not to restate, summarize or add context in the Chat", async () => {
+	const { store, cwd } = family("ask-chat-rule");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-new", text: `call:ask_user ${JSON.stringify(ASK)}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string } };
+	await idle(host, 1);
+	await host.call("prompt", { operationId: "op-upd", text: `call:ask_user ${JSON.stringify({ update: opened.ask.askId })}` });
+	await idle(host, 2);
+	const results = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").map((m) => textOf(m.content));
+	assert.match(results[0]!, /^Posted 1 question/);
+	assert.match(results[1]!, /^Updated open question set/);
+	for (const r of results) assert.ok(r.includes("do not restate, summarize or add context in the Chat"), r);
+	await host.close();
+});
+
 test("ask_user showIf: a condition on a later or unknown question or an unoffered option is refused; a valid one is posted; the description asks for it", async () => {
 	const { store, cwd } = family("ask-show-if");
 	const host = new ChatHost(store, cwd);
