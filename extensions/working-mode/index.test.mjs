@@ -432,10 +432,10 @@ test("Test and Challenge require seeing each new check fail", () => {
 test("Challenge names the blind review pair, author swaps, and the Muse fallback", () => {
   const text = axes.checking.values.Challenge;
   assert.match(text, /two background `review` subagents with the same brief, blind to each other/);
-  assert.match(text, /`openai\/gpt-6\.2-sol`[\s\S]*`meta\/muse-ember-1\.0`, both at high/);
-  assert.match(text, /OpenAI author use `anthropic\/claude-opus-5-5` instead of Sol; for a Meta author use Opus instead of Ember/);
+  assert.match(text, /`openai\/gpt-6\.2-astra`[\s\S]*`meta\/muse-ember-1\.0`, both at high/);
+  assert.match(text, /OpenAI author use `anthropic\/claude-opus-5-5` instead of Astra; for a Meta author use Opus instead of Ember/);
   assert.match(text, /When Ember is in the pair and Muse quota is below its floor or Ember fails to launch or is rate-limited, run the other reviewer alone and say so in the report/);
-  assert.ok(text.indexOf("for a Meta author use Opus instead of Ember") < text.indexOf("When Ember is in the pair"), "the fallback follows the swap, so a Meta author's Sol+Opus pair has none");
+  assert.ok(text.indexOf("for a Meta author use Opus instead of Ember") < text.indexOf("When Ember is in the pair"), "the fallback follows the swap, so a Meta author's Astra+Opus pair has none");
   assert.match(text, /note which reviewer found each/);
 });
 
