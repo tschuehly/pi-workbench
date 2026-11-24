@@ -755,7 +755,11 @@ test("ask_user partial send: one answer is delivered, the rest stays open at the
 	assert.deepEqual(await send().then((r) => [r.result, r.retried]), ["closed", true], "a retried partial send gets its outcome back");
 	const rest = { ...partial, questions: [{ question: ask.questions[1], answered: true, values: ["now"] }], summary: "Answered 1 of 1; none left unanswered", partial: undefined, revision: undefined };
 	assert.equal((await host.call<{ result: string }>("closeAsk", { askId, revision, operationId: "op-p2", outcome: rest, content: "Answer: when now" })).result, "stale", "the old revision is stale");
-	assert.equal((await host.call<{ result: string }>("closeAsk", { askId, revision: "r2", operationId: "op-p2", outcome: rest, content: "Answer: when now" })).result, "closed");
+	const final = await host.call<{ result: string; earlier?: { questions: { question: { id: string } }[] }[] }>("closeAsk", { askId, revision: "r2", operationId: "op-p2", outcome: rest, content: "Answer: when now" });
+	assert.equal(final.result, "closed");
+	assert.deepEqual(final.earlier?.map((o) => o.questions.map((q) => q.question.id)), [["target"]], "the final close returns the earlier one-by-one send, so the record shows the whole set");
+	const retriedFinal = await host.call<{ earlier?: unknown[] }>("closeAsk", { askId, revision: "r2", operationId: "op-p2", outcome: rest, content: "Answer: when now" });
+	assert.equal(retriedFinal.earlier?.length, 1, "a retried final close returns the earlier sends too");
 	await host.until((e) => e.type === "ask.closed", "the set closed");
 	await host.until((e) => e.type === "agent.end", "the second delivery");
 	assert.equal((await host.call<Status>("status")).pendingAsks, undefined);
