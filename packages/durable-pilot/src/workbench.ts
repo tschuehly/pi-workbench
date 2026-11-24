@@ -219,6 +219,8 @@ type QuestionsState = {
 	/** Ask by the tool task that posted or revised it, so a rerun after a restart finds its own result. */
 	byTask: Record<string, string>;
 	closed: Record<string, Closed>;
+	/** Each set's question ids in the order its post and revisions first listed them, so PI WEB numbers its whole record in set order. */
+	order?: Record<string, string[]>;
 	attention: Attention | null;
 	/** Latest attention request (or ask) a notification went out for: reconnect never re-notifies. */
 	notified: string[];
@@ -472,6 +474,10 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 					};
 					doc.open[args.update] = updated;
 					doc.byTask[task] = args.update;
+					// A revision lists only the questions still open: earlier ones keep their place, new ones follow.
+					// Assigned whole: the commit keeps writes made through `doc`, not through an object assigned into it.
+					const order = doc.order?.[args.update] ?? [];
+					doc.order = { ...doc.order, [args.update]: [...order, ...updated.questions.map((q) => q.id).filter((id) => !order.includes(id))] };
 					return { kind: "updated" as const, ask: updated, rerun: false };
 				}
 				if (context === undefined)
@@ -485,6 +491,7 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				const opened: PendingAsk = { askId, askedAt: now, updatedAt: now, revision: stableId(chatId, task, "revision"), turnsSinceUpdate: 0, context, questions: validated };
 				doc.open[askId] = opened;
 				doc.byTask[task] = askId;
+				doc.order = { ...doc.order, [askId]: validated.map((q) => q.id) };
 				return { kind: "opened" as const, ask: opened, rerun: false };
 			}, c);
 			if (result.kind === "withdrawn") {
@@ -613,26 +620,29 @@ export function remainingAsk(ask: PendingAsk, outcome: unknown): PendingAsk | un
  * is gone, or of an older revision, is stale. A partial send (PI WEB's `outcome.partial`) removes only the questions it
  * answered and keeps the set open under the revision the outcome names (`ask`).
  */
-export async function closeAsk(conversation: Conversation, request: CloseAsk): Promise<{ result: "closed"; outcome: Closed["outcome"]; retried: boolean; ask?: PendingAsk; earlier?: Closed["outcome"][] } | { result: "stale" }> {
+export async function closeAsk(conversation: Conversation, request: CloseAsk): Promise<{ result: "closed"; outcome: Closed["outcome"]; retried: boolean; ask?: PendingAsk; earlier?: Closed["outcome"][]; order?: string[] } | { result: "stale" }> {
 	return conversation.commit(async (tx) => {
 		const doc = await tx.doc(QuestionsDoc, conversation.id);
-		// The set's earlier one-by-one sends, oldest first (insertion order), so PI WEB can show the whole set's record when it closes.
-		const earlierSends = (): Closed["outcome"][] => JSON.parse(JSON.stringify(Object.values(doc.closed).map((c) => c.outcome).filter((o) => o.askId === request.askId && (o as { partial?: unknown }).partial === true)));
+		// The set's earlier one-by-one sends, oldest first (insertion order), and its question order, so PI WEB can show the whole set's record when it closes.
+		const earlierSends = (): { earlier: Closed["outcome"][]; order: string[] } => JSON.parse(JSON.stringify({
+			earlier: Object.values(doc.closed).map((c) => c.outcome).filter((o) => o.askId === request.askId && (o as { partial?: unknown }).partial === true),
+			order: doc.order?.[request.askId] ?? [],
+		}));
 		const closed = Object.values(doc.closed).find((c) => c.operationId === request.operationId && c.outcome.askId === request.askId);
 		if (closed !== undefined) {
 			const final = (closed.outcome as { partial?: unknown }).partial !== true;
-			return { result: "closed" as const, outcome: JSON.parse(JSON.stringify(closed.outcome)), retried: true, ...(final ? { earlier: earlierSends() } : {}) };
+			return { result: "closed" as const, outcome: JSON.parse(JSON.stringify(closed.outcome)), retried: true, ...(final ? earlierSends() : {}) };
 		}
 		const open = doc.open[request.askId];
 		if (open === undefined || (request.revision !== undefined && request.revision !== open.revision)) return { result: "stale" as const };
 		const ask = remainingAsk(open, request.outcome);
-		const earlier = ask === undefined ? earlierSends() : undefined;
+		const whole = ask === undefined ? earlierSends() : undefined;
 		const key = ask === undefined ? request.askId : `${request.askId}@${ask.revision}`;
 		if (ask === undefined) delete doc.open[request.askId];
 		else doc.open[request.askId] = ask;
 		doc.closed[key] = { outcome: request.outcome, operationId: request.operationId, delivered: false };
 		await tx.createTask(AnswerDelivery, { askId: key, content: request.content }, { ownership: { kind: "conversation" }, background: true });
-		return { result: "closed" as const, outcome: request.outcome, retried: false, ...(ask === undefined ? { earlier } : { ask: JSON.parse(JSON.stringify(ask)) as PendingAsk }) };
+		return { result: "closed" as const, outcome: request.outcome, retried: false, ...(ask === undefined ? whole : { ask: JSON.parse(JSON.stringify(ask)) as PendingAsk }) };
 	}, context);
 }
 

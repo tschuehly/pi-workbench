@@ -676,6 +676,33 @@ test("ask_user: a question without detail is refused; a 4000-character detail is
 	assert.match(description, /The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted\./);
 });
 
+test("ask_user partial send: the final close returns the set's question order, as first posted and revised, so the whole record is numbered in set order", async () => {
+	const { store, cwd } = family("ask-order");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const when = { id: "when", question: "When?", detail: "The deploy window.", options: [{ value: "now", label: "Now" }] };
+	await host.call("prompt", { operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [ASK.questions[0]!, when] })}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string; revision: string } };
+	await idle(host, 1);
+	const { askId, revision } = opened.ask;
+	// The second question goes first, one by one; the agent then revises the set, which lists only target and a new question.
+	const partial = { askId, reason: "submitted", askedAt: "", closedAt: "", questions: [{ question: when, answered: true, values: ["now"] }], answeredCount: 1, unansweredIds: [], summary: "Answered 1; still open: target", partial: true, revision: "r2" };
+	assert.equal((await host.call<{ result: string }>("closeAsk", { askId, revision, operationId: "op-p1", outcome: partial, content: "Answer: when now" })).result, "closed");
+	await idle(host, 2);
+	const extra = { id: "extra", question: "Anything else?", detail: "Optional.", options: [{ value: "no", label: "No" }] };
+	await host.call("prompt", { operationId: "op-upd", text: `call:ask_user ${JSON.stringify({ update: askId, questions: [ASK.questions[0]!, extra] })}` });
+	await idle(host, 3);
+	const revised = (await host.call<Status>("status")).pendingAsks?.find((a) => a.askId === askId);
+	assert.deepEqual(revised?.questions.map((q) => q.id), ["target", "extra"]);
+	const rest = { askId, reason: "submitted", askedAt: "", closedAt: "", questions: [{ question: ASK.questions[0], answered: true, values: ["prod"] }, { question: extra, answered: true, values: ["no"] }], answeredCount: 2, unansweredIds: [], summary: "Answered 2 of 2; none left unanswered" };
+	const final = await host.call<{ result: string; order?: string[] }>("closeAsk", { askId, revision: revised?.revision, operationId: "op-p2", outcome: rest, content: "Answer: target prod" });
+	assert.equal(final.result, "closed");
+	assert.deepEqual(final.order, ["target", "when", "extra"], "each question where the set first listed it");
+	assert.deepEqual((await host.call<{ order?: string[] }>("closeAsk", { askId, revision: revised?.revision, operationId: "op-p2", outcome: rest, content: "Answer: target prod" })).order, ["target", "when", "extra"], "a retried final close returns it too");
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
 test("ask_user: the result of a new and of an updated set tells the model not to restate, summarize or add context in the Chat", async () => {
 	const { store, cwd } = family("ask-chat-rule");
 	const host = new ChatHost(store, cwd);
