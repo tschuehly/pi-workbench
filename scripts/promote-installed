@@ -57,7 +57,8 @@
 #       the host's protocol in its revision folder). prune keeps every build a running host runs from.
 #       Throwaway trials (spec AC4): PI_PROMOTE_DURABLE_TRIAL=<folder> and PI_PROMOTE_DURABLE_PORT=<port> (with their own
 #       PI_WORKBENCH_PROJECTS) keep builds, data and plists in that folder, under launchd labels com.pi-workbench.durable-trial.*;
-#       PI_PROMOTE_DURABLE_ENV="K=V ..." adds or overrides service environment (no spaces in values).
+#       PI_PROMOTE_DURABLE_ENV="K=V ..." adds or overrides service environment (no spaces in values), on the real
+#       instance as on a trial, e.g. PI_PROMOTE_DURABLE_ENV="GIT_CONFIG_GLOBAL=$HOME/.config/git/agent.gitconfig".
 set -Eeuo pipefail
 export PATH=${PI_PROMOTE_PATH:-$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
@@ -72,7 +73,10 @@ fi
 if [[ $instance == durable ]]; then
   STORE=$HOME/.pi-workbench/installed-durable PORT=8506 LABEL=com.pi-web-durable SUFFIX=.durable-installed
   DATA=$HOME/.pi-web-durable ME="$0 --instance durable"
-  T= LA=$HOME/Library/LaunchAgents HOSTLABEL=com.pi-workbench.durable-host JOBLABEL=com.pi-workbench.promote-installed-durable EXTRA=
+  # PI_PROMOTE_DURABLE_ENV reaches the real instance too, e.g. GIT_CONFIG_GLOBAL for the agent's git identity: the
+  # session daemon passes its environment on to the Durable hosts and their commands.
+  T= LA=$HOME/Library/LaunchAgents HOSTLABEL=com.pi-workbench.durable-host JOBLABEL=com.pi-workbench.promote-installed-durable
+  EXTRA=${PI_PROMOTE_DURABLE_ENV:-}
   if [[ -n ${PI_PROMOTE_DURABLE_TRIAL:-} ]]; then
     T=$PI_PROMOTE_DURABLE_TRIAL PORT=${PI_PROMOTE_DURABLE_PORT:-}
     # Compare numbers, not strings: lsof treats 08505 as 8505.
@@ -82,7 +86,7 @@ if [[ $instance == durable ]]; then
     tr=$(cd "$T" 2>/dev/null && pwd -P) && pr=$(cd "${PI_WORKBENCH_PROJECTS:-/nonexistent}" 2>/dev/null && pwd -P) && [[ $pr == "$tr"/* ]] ||
       { echo "a trial needs its own PI_WORKBENCH_PROJECTS inside PI_PROMOTE_DURABLE_TRIAL" >&2; exit 2; }
     STORE=$T/installed-durable DATA=$T/data LA=$T/LaunchAgents LABEL=com.pi-workbench.durable-trial
-    HOSTLABEL=$LABEL.host JOBLABEL=$LABEL.promote EXTRA=${PI_PROMOTE_DURABLE_ENV:-}
+    HOSTLABEL=$LABEL.host JOBLABEL=$LABEL.promote
   fi
 fi
 
