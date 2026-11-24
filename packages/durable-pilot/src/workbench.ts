@@ -314,7 +314,7 @@ const OptionParams = obj({
 	value: str({ maxLength: ID_MAX, description: "Stable machine value reported back." }),
 	label: str({ maxLength: TEXT_MAX, description: "Short label." }),
 	detail: opt(str({ maxLength: TEXT_MAX, description: "Its consequence." })),
-	recommended: opt(bool({ description: "Mark your recommendation." })),
+	recommended: opt(bool({ description: "Mark your recommendation; it starts selected." })),
 }, { open: true });
 const QuestionParams = obj({
 	id: str({ maxLength: ID_MAX, description: "Answer key, unique in this call." }),
@@ -334,7 +334,7 @@ const AskParams = obj({
 	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to drop. Send nothing else." })),
 }, { open: true });
 
-const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Give a follow-up question `showIf` instead of writing 'If X:' in its text. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them and end your turn if nothing does. Do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
+const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Give a follow-up question `showIf` instead of writing 'If X:' in its text. When one decision covers several independent items, use `multiple` with one option per item. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them and end your turn if nothing does. Do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
 
 const ATTENTION_DESCRIPTION = "Mark this Chat as needing the user until they look, and return immediately. Use when you need them but have no decision to ask: finished work to review, a login or credential, a manual check, or being blocked. Decisions go to ask_user. Not for routine progress or after every turn.";
 
@@ -425,9 +425,11 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				if (result.kind === "opened") signal({ type: "attention", kind: "ask", id: posted.askId, detail: posted.questions[0]?.question ?? "Needs an answer" });
 			}
 			const count = posted.questions.length;
+			// The user reads only the panel while answering, so context written into the Chat is lost or read twice.
+			const chatRule = "The user reads only the set while answering: say in one line that questions were posted; do not restate, summarize or add context in the Chat.";
 			const message = result.kind === "updated"
-				? `Updated open question set ${posted.askId} (${refs(posted)}). The answers still arrive later as a follow-up message.`
-				: `Posted ${count} question${count === 1 ? "" : "s"} to the user as question chips above their composer, ask ${posted.askId} (${refs(posted)}). You are not paused: keep working on whatever does not depend on the answers, and end your turn if nothing does. The answers arrive later as a follow-up message. Do not repost these questions; revise them with update or drop them with withdraw.`;
+				? `Updated open question set ${posted.askId} (${refs(posted)}). The answers still arrive later as a follow-up message. ${chatRule}`
+				: `Posted ${count} question${count === 1 ? "" : "s"} to the user as question chips above their composer, ask ${posted.askId} (${refs(posted)}). You are not paused: keep working on whatever does not depend on the answers, and end your turn if nothing does. The answers arrive later as a follow-up message. Do not repost these questions; revise them with update or drop them with withdraw. ${chatRule}`;
 			return { output: text(message), details: { ask: posted, sessionId: chatId } };
 		},
 	});
