@@ -59,6 +59,8 @@
 #       PI_WORKBENCH_PROJECTS) keep builds, data and plists in that folder, under launchd labels com.pi-workbench.durable-trial.*;
 #       PI_PROMOTE_DURABLE_ENV="K=V ..." adds or overrides service environment (no spaces in values), on the real
 #       instance as on a trial, e.g. PI_PROMOTE_DURABLE_ENV="GIT_CONFIG_GLOBAL=$HOME/.config/git/agent.gitconfig".
+#       Each switch keeps the current plists' extra keys (not the ones it sets itself) and merges this over them;
+#       "-K" removes key K. Chats already open keep their host's old environment until Upgrade host.
 set -Eeuo pipefail
 export PATH=${PI_PROMOTE_PATH:-$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}
 PROJECTS=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
@@ -361,16 +363,25 @@ label=$JOBLABEL.$(basename "$job")
 mkdir -p "$job/new"
 for s in sessiond web; do
   e=sessiond.js; [[ $s == web ]] && e=index.js
+  # Extra keys of the current plist survive a promotion without PI_PROMOTE_DURABLE_ENV (an install's GIT_CONFIG_GLOBAL);
+  # an unreadable plist stops here rather than dropping them.
+  prev='{}'; [[ -e $LA/$LABEL.$s.plist ]] && { prev=$(plutil -convert json -o - "$LA/$LABEL.$s.plist") ||
+    { echo "reading $LA/$LABEL.$s.plist failed" >&2; exit 1; }; }
   node -e '
-    const [label, zsh, cmd, log, ...env] = process.argv.slice(1);
+    const [label, zsh, cmd, log, prev, ...args] = process.argv.slice(1);
+    const pairs = (list) => list.map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)]);
+    const owned = Object.fromEntries(pairs(args.slice(0, args.indexOf("--"))));
+    // Carried: the old plist minus the keys this script sets; then PI_PROMOTE_DURABLE_ENV merges, -KEY removes.
+    const env = { ...owned, ...Object.fromEntries(Object.entries(JSON.parse(prev).EnvironmentVariables ?? {}).filter(([k]) => !(k in owned))) };
+    for (const e of args.slice(args.indexOf("--") + 1)) { if (e.startsWith("-")) delete env[e.slice(1)]; else env[e.slice(0, e.indexOf("="))] = e.slice(e.indexOf("=") + 1); }
     process.stdout.write(JSON.stringify({ Label: label, ProgramArguments: ["/usr/bin/env", zsh, "-lc", cmd],
-      EnvironmentVariables: Object.fromEntries(env.map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)])),
+      EnvironmentVariables: env,
       RunAtLoad: true, MaterializeDatalessFiles: true, KeepAlive: { SuccessfulExit: false }, StandardOutPath: log, StandardErrorPath: log }))' \
-    "$LABEL.$s" "${PI_PROMOTE_ZSH:-/bin/zsh}" "exec node '$pw/dist/server/$e'" "$DATA/logs/$s.log" \
+    "$LABEL.$s" "${PI_PROMOTE_ZSH:-/bin/zsh}" "exec node '$pw/dist/server/$e'" "$DATA/logs/$s.log" "$prev" \
     PI_WEB_DATA_DIR="$DATA" PI_WEB_CONFIG="$DATA/config.json" PI_WEB_PORT=$PORT PI_WEB_PI_PACKAGE_AUTO_INSTALL=0 \
     PI_WEB_PI_PACKAGE_DIR="$pw/node_modules/@earendil-works/pi-coding-agent" \
     PI_WEB_DURABLE_HOST="$wb/packages/durable-pilot/src/chat-host-main.ts" PI_WEB_DURABLE_DEFAULT=1 \
-    PI_WEB_DURABLE_HOST_LAUNCHD=$HOSTLABEL PI_WEB_DURABLE_AUTO_UPGRADE=1 $EXTRA |
+    PI_WEB_DURABLE_HOST_LAUNCHD=$HOSTLABEL PI_WEB_DURABLE_AUTO_UPGRADE=1 -- $EXTRA |
     plutil -convert xml1 -o "$job/new/$LABEL.$s.plist" - || { echo "writing $LABEL.$s.plist failed" >&2; exit 1; }
 done
 cat >"$job/job.sh" <<EOF
