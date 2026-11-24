@@ -18,10 +18,14 @@ const CONFIG_PATH = process.env.PING_A_HUMAN_CONFIG ?? join(homedir(), ".config"
 const MAX_REMEMBERED = 500;
 /** Waits between attempts of a transiently failing send; after the last one the ask waits for a reconcile. */
 const RETRY_DELAYS_MS = [2_000, 10_000, 30_000, 120_000];
-/** How often asks whose send failed are reconciled while the socket stays up. */
+/** How often asks whose send failed, and Chats whose read failed, are reconciled while the socket stays up. */
 const PENDING_RETRY_MS = 10 * 60_000;
 /** Clock slack when picking Chats changed since the last reconcile. */
 const RECONCILE_MARGIN_MS = 5 * 60_000;
+/** Without a watermark (a first run, or a state file from before), Chats changed this recently are read. */
+const BOOTSTRAP_WINDOW_MS = 24 * 60 * 60_000;
+/** A Chat whose ask read keeps failing (PI WEB answers HTTP 500 for a deleted Chat) is given up after this many reconciles. */
+const MAX_READ_FAILURES = 6;
 
 /** The Telegram text for an opened question set, or undefined for any other event. */
 export function askMessage(event, base = PUBLIC_BASE) {
@@ -44,7 +48,8 @@ export function remember(sent, id) {
 
 /**
  * `delivered`: ask ids Telegram confirmed. `pending`: asks whose send failed, retried at each reconcile while still open.
- * `checkedAt`: when the last full reconcile read PI WEB. A state file from before is a bare `delivered` array.
+ * `recheck`: Chats whose ask read failed, read again at each reconcile. `checkedAt`: when the last full reconcile read
+ * PI WEB. A state file from before is a bare `delivered` array.
  */
 export function loadState(path) {
 	let value;
@@ -54,9 +59,10 @@ export function loadState(path) {
 		value = undefined;
 	}
 	const ids = (list) => (Array.isArray(list) ? list.filter((id) => typeof id === "string") : []);
-	if (Array.isArray(value)) return { delivered: ids(value), pending: [] };
+	if (Array.isArray(value)) return { delivered: ids(value), pending: [], recheck: [] };
 	const pending = Array.isArray(value?.pending) ? value.pending.filter((ask) => typeof ask?.id === "string" && typeof ask.sessionId === "string") : [];
-	return { delivered: ids(value?.delivered), pending, ...(typeof value?.checkedAt === "string" ? { checkedAt: value.checkedAt } : {}) };
+	const recheck = Array.isArray(value?.recheck) ? value.recheck.filter((chat) => typeof chat?.sessionId === "string" && typeof chat.cwd === "string") : [];
+	return { delivered: ids(value?.delivered), pending, recheck, ...(typeof value?.checkedAt === "string" ? { checkedAt: value.checkedAt } : {}) };
 }
 
 /** Synchronous, so two sends finishing together never interleave their writes. */
@@ -125,7 +131,9 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 	const reconciling = new Set();
 	const known = (id) => state.delivered.includes(id) || inFlight.has(id) || state.pending.some((ask) => ask.id === id);
 
-	async function deliver({ id, sessionId, cwd, text }) {
+	state.recheck ??= [];
+
+	async function deliver({ id, sessionId, cwd, name, text }) {
 		if (state.delivered.includes(id) || inFlight.has(id)) return;
 		inFlight.add(id);
 		try {
@@ -136,7 +144,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 				} catch (error) {
 					if (!transient(error) || attempt >= retryDelays.length) {
 						if (!state.pending.some((ask) => ask.id === id)) {
-							state.pending.push({ id, sessionId, cwd });
+							state.pending.push({ id, sessionId, cwd, name });
 							save(state);
 						}
 						log(`could not send ask ${id}: ${describeError(error)}; retrying at the next reconcile`);
@@ -156,39 +164,61 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 	}
 
 	/**
-	 * Sends every still-open ask not yet delivered: of the given Chats, else of Chats with a failed send and of Chats
-	 * changed since the last full reconcile (an ask opened while the socket was down). Only changed Chats are read,
-	 * because reading a cold Durable Chat's asks starts its host. Resolves after the sends.
+	 * Sends every still-open ask not yet delivered: of the given Chats, else of Chats with a failed send or read and of
+	 * Chats changed since the last full reconcile (an ask opened while the socket was down). A Chat with a failed send or
+	 * read is read by its saved id and cwd, as it may be older than the latest 500. Only those Chats are read, because
+	 * reading a cold Durable Chat's asks starts its host. Resolves after the sends.
 	 */
 	async function reconcile(only) {
 		const startedAt = now();
-		const sessions = await getJson("/api/sessions/recent?limit=500");
-		if (!Array.isArray(sessions)) throw new SafeError("PI WEB sessions list is not an array");
-		const wanted = new Set(only ?? state.pending.map((ask) => ask.sessionId));
-		const since = only === undefined && state.checkedAt !== undefined ? Date.parse(state.checkedAt) - RECONCILE_MARGIN_MS : Infinity;
-		const chats = sessions.filter((chat) => typeof chat?.id === "string" && typeof chat.cwd === "string" && (wanted.has(chat.id) || Date.parse(chat.modified) >= since));
+		const wanted = only === undefined ? undefined : new Set(only);
+		const chats = new Map();
+		for (const ref of [...state.pending, ...state.recheck]) {
+			if (typeof ref.cwd === "string" && (wanted?.has(ref.sessionId) ?? true)) chats.set(ref.sessionId, { id: ref.sessionId, cwd: ref.cwd, name: ref.name });
+		}
+		if (only === undefined || only.some((id) => !chats.has(id))) {
+			const sessions = await getJson("/api/sessions/recent?limit=500");
+			if (!Array.isArray(sessions)) throw new SafeError("PI WEB sessions list is not an array");
+			const since = only !== undefined ? Infinity : state.checkedAt === undefined ? startedAt - BOOTSTRAP_WINDOW_MS : Date.parse(state.checkedAt) - RECONCILE_MARGIN_MS;
+			for (const chat of sessions) {
+				if (typeof chat?.id !== "string" || typeof chat.cwd !== "string" || !(wanted?.has(chat.id) || chats.has(chat.id) || Date.parse(chat.modified) >= since)) continue;
+				chats.set(chat.id, { id: chat.id, cwd: chat.cwd, name: typeof chat.name === "string" ? chat.name : chats.get(chat.id)?.name });
+			}
+		}
 		const sends = [];
-		await Promise.all(chats.map(async (chat) => {
+		await Promise.all([...chats.values()].map(async (chat) => {
 			let open;
 			try {
 				const asks = await getJson(`/api/sessions/${encodeURIComponent(chat.id)}/asks?cwd=${encodeURIComponent(chat.cwd)}`);
 				open = Array.isArray(asks?.pendingAsks) ? asks.pendingAsks.filter((ask) => typeof ask?.askId === "string") : [];
 			} catch (error) {
-				log(`could not read the open asks of Chat ${chat.id}: ${describeError(error)}`);
+				const failures = (state.recheck.find((ref) => ref.sessionId === chat.id)?.failures ?? 0) + 1;
+				state.recheck = state.recheck.filter((ref) => ref.sessionId !== chat.id);
+				if (failures < MAX_READ_FAILURES) {
+					state.recheck.push({ sessionId: chat.id, cwd: chat.cwd, name: chat.name, failures });
+					log(`could not read the open asks of Chat ${chat.id}: ${describeError(error)}; retrying at the next reconcile`);
+				} else {
+					state.pending = state.pending.filter((ask) => ask.sessionId !== chat.id);
+					log(`could not read the open asks of Chat ${chat.id}: ${describeError(error)}; giving up after ${String(failures)} reads`);
+				}
+				save(state);
 				return;
 			}
 			// A failed ask that closed meanwhile needs no link any more.
 			const kept = state.pending.filter((ask) => ask.sessionId !== chat.id || open.some(({ askId }) => askId === ask.id));
-			if (kept.length !== state.pending.length) {
+			const recheck = state.recheck.filter((ref) => ref.sessionId !== chat.id);
+			if (kept.length !== state.pending.length || recheck.length !== state.recheck.length) {
 				state.pending = kept;
+				state.recheck = recheck;
 				save(state);
 			}
 			for (const ask of open) {
 				const sessionName = typeof chat.name === "string" ? chat.name.slice(0, 120) : undefined;
 				const text = askMessage({ type: "session.attention", kind: "ask", id: ask.askId, sessionId: chat.id, sessionName, detail: firstLine(ask.questions?.[0]?.question) });
-				if (text !== undefined) sends.push(deliver({ id: ask.askId, sessionId: chat.id, cwd: chat.cwd, text }));
+				if (text !== undefined) sends.push(deliver({ id: ask.askId, sessionId: chat.id, cwd: chat.cwd, name: sessionName, text }));
 			}
 		}));
+		// A failed read stays in `recheck`, so the watermark may pass it.
 		if (only === undefined) {
 			state.checkedAt = new Date(startedAt).toISOString();
 			save(state);
@@ -199,7 +229,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 	/** The work an event starts, or undefined. A live Chat's `status.update` lists its open asks: one never seen is reconciled. */
 	function onEvent(event) {
 		const text = askMessage(event);
-		if (text !== undefined) return deliver({ id: event.id, sessionId: event.sessionId, cwd: event.cwd, text });
+		if (text !== undefined) return deliver({ id: event.id, sessionId: event.sessionId, cwd: event.cwd, name: event.sessionName, text });
 		const sessionId = event?.type === "status.update" ? event.status?.sessionId : undefined;
 		const asks = Array.isArray(event?.status?.pendingAsks) ? event.status.pendingAsks : [];
 		if (typeof sessionId !== "string" || reconciling.has(sessionId) || !asks.some((ask) => typeof ask?.askId === "string" && !known(ask.askId))) return undefined;
@@ -218,7 +248,10 @@ function watch() {
 	const state = loadState(STATE_PATH);
 	const linker = createLinker({ send: (text) => sendTelegram(text), getJson, state, save: (next) => saveState(STATE_PATH, next), log });
 	const run = (work) => void work?.catch((error) => log(`phone link work failed: ${describeError(error)}`));
-	setInterval(() => { if (state.pending.length > 0) run(linker.reconcile(state.pending.map((ask) => ask.sessionId))); }, PENDING_RETRY_MS);
+	setInterval(() => {
+		const retry = [...state.pending, ...state.recheck].map((ref) => ref.sessionId);
+		if (retry.length > 0) run(linker.reconcile(retry));
+	}, PENDING_RETRY_MS);
 	let delay = 1_000;
 	const connect = () => {
 		const socket = new WebSocket(EVENTS_URL);
