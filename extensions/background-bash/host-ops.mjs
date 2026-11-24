@@ -32,9 +32,9 @@ export function plan(argv) {
     const file = rest.find((a) => a.startsWith("@") && a !== "@-");
     return file === undefined ? { file: "workstreams", args: rest } : { error: `workstreams: ${file} reads a file outside the sandbox; pass it on stdin (-) instead` };
   }
-  // Withdrawn 25 Nov (DECISIONS D3): unfenced git could delete outside the fence or a late edit; the shim forwards it
-  // here so the real wt never half-empties a worktree inside the fence.
-  if (tool === "wt" && rest[0] === "remove") return { error: "wt remove is not available inside the sandbox; ask Thomas to remove the worktree or to turn on full access" };
+  // Withdrawn 25 Nov (DECISIONS D3): unfenced git could delete outside the fence or a late edit. The shim refuses it
+  // too; a command that runs the real wt by its full path is fenced like `rm -rf`.
+  if (tool === "wt" && rest[0] === "remove") return { error: "wt remove: removing a worktree is not available inside the sandbox; ask Thomas to remove it or to turn on full access" };
   if (tool !== "wt" || rest[0] !== "switch" || !rest.some((a) => a === "-c" || a === "--create")) return { error: `${tool} is not a host operation` };
   let branch;
   let base;

@@ -86,6 +86,9 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   cleanup owner record (`pi-owner.json`) and its creation receipt (`pi-creator.json`: the creating chat and only the
   Workstream whose scratch folder it started in). Only the receipt grants access: the cleanup record accumulates owners
   (`mac-storage-workspaces --record-owner`), so it would let a chat adopt a worktree it did not create.
+  Removing a worktree (`wt remove`, `wt merge` without `--no-remove`, `wt step prune`) is refused inside the fence;
+  Thomas removes it, or a Chat with full access does (review of the withdrawn host operation: unfenced git removal can
+  be steered outside the fence).
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
   a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
 - A fenced command that starts Pi or this runner again runs under the outer fence (`alreadyFenced`).

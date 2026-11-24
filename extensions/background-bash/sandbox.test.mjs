@@ -206,7 +206,7 @@ test("`wt switch --create` makes the sibling worktree outside the fence and reco
   assert.equal(git(tools, "branch", "--list", "other").trim(), "", "a refused call creates nothing");
 });
 
-test("`wt remove` is refused inside the sandbox, even for a clean merged worktree the chat created, and never falls through to the real wt", { skip }, async () => {
+test("`wt remove`, `wt merge` and `wt step prune` are refused inside the sandbox, even for a clean merged worktree the chat created, after global options and without a runner; never the real wt", { skip }, async () => {
   const main = join(home, "IdeaProjects", "rm");
   mkdirSync(main);
   git(main, "init", "-q");
@@ -215,13 +215,15 @@ test("`wt remove` is refused inside the sandbox, even for a clean merged worktre
   git(main, "worktree", "add", "-q", "-b", "done", done);
   const receipt = join(main, ".git", "worktrees", "rm.done", "pi-creator.json");
   writeFileSync(receipt, JSON.stringify({ branch: "done", sessions: ["sandbox-test"], workstreams: [] }));
-  const job = await run(['wt remove done --foreground; echo "exit=$?"', 'wt remove done --force -D; echo "exit=$?"', `cd "${done}" && wt remove; echo "exit=$?"`].join("; "), { cwd: main, env: withFakes });
+  const removals = ["remove done --foreground", "remove done --force -D", "-y remove done", "-C . remove done", "--config /dev/null -v remove done", "merge", "step prune"];
+  const job = await run([...removals.map((r) => `wt ${r}; echo "exit=$?"`), `cd "${done}" && PI_HOST_OPS= wt remove; echo "exit=$?"`, 'wt merge --no-remove; echo "exit=$?"'].join("; "), { cwd: main, env: withFakes });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
-  assert.equal(out.match(/wt remove is not available inside the sandbox[^\n]*\nexit=2/g)?.length, 3, out);
+  assert.equal(out.match(/removing a worktree is not available inside the sandbox[^\n]*\nexit=2/g)?.length, removals.length + 1, out);
+  assert.match(out, /REAL_WT_RAN merge --no-remove\nexit=0/, "a merge that keeps the worktree runs the real wt");
   assert.ok(existsSync(join(done, ".git")) && existsSync(receipt), "tree and receipt stay");
   assert.equal(git(main, "branch", "--list", "done", "--format=%(refname:short)").trim(), "done", "the branch stays");
-  assert.doesNotMatch(out, /REAL_WT_RAN/, "the real wt never ran");
+  assert.equal(out.match(/REAL_WT_RAN/g).length, 1, "the real wt never ran a removal");
 });
 
 test("a chat in its scratch folder may write the worktrees whose creation receipt names it; a cleanup owner record grants nothing; it cannot forge one", { skip }, async () => {
@@ -271,7 +273,7 @@ test("a chat in its scratch folder may write the worktrees whose creation receip
   assert.match(readFileSync(join(meta, "lib.mine", "pi-creator.json"), "utf8"), /child-1/, "its own creation receipt is unchanged");
   assert.match(readFileSync(join(meta, "lib.theirs", "pi-creator.json"), "utf8"), /another-chat/);
   const out = readFileSync(job.logPath, "utf8");
-  assert.match(out, /exit=0[\s\S]*wt remove is not available inside the sandbox[^\n]*\nexit=2/, out);
+  assert.match(out, /exit=0[\s\S]*removing a worktree is not available inside the sandbox[^\n]*\nexit=2/, out);
   assert.ok(existsSync(join(adopted, ".git")), "a cleanup owner cannot remove it");
   // The receipt names the chat and only the Workstream whose scratch folder it started in, never every one it is linked to.
   const receipt = JSON.parse(readFileSync(join(meta, "lib.from-ws", "pi-creator.json"), "utf8"));

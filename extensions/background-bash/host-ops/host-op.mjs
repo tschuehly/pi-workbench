@@ -9,7 +9,14 @@ import { basename, delimiter, dirname } from "node:path";
 const name = basename(process.argv[1]);
 const args = process.argv.slice(2);
 const here = dirname(process.argv[1]);
-const forwarded = name === "workstreams" || (name === "wt" && (args[0] === "remove" || (args[0] === "switch" && args.some((a) => a === "-c" || a === "--create"))));
+// wt's subcommand words, past its global options (-C <path>, --config <path>, -v, -y).
+const words = args.filter((a, i) => !a.startsWith("-") && args[i - 1] !== "-C" && args[i - 1] !== "--config");
+// Removal is refused here, runner or not: the real wt inside the fence would delete what it can and then stop.
+if (name === "wt" && (words[0] === "remove" || (words[0] === "merge" && !args.includes("--no-remove")) || (words[0] === "step" && words[1] === "prune"))) {
+  process.stderr.write(`wt ${words[0]}: removing a worktree is not available inside the sandbox; ask Thomas to remove it or to turn on full access${words[0] === "merge" ? " (or pass --no-remove)" : ""}\n`);
+  process.exit(2);
+}
+const forwarded = name === "workstreams" || (name === "wt" && args[0] === "switch" && args.some((a) => a === "-c" || a === "--create"));
 if (!forwarded || !process.env.PI_HOST_OPS) {
   const PATH = (process.env.PATH ?? "").split(delimiter).filter((p) => p !== here).join(delimiter);
   const real = spawnSync(name, args, { stdio: "inherit", env: { ...process.env, PATH } });
