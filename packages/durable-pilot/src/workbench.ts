@@ -467,7 +467,7 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 						revision: stableId(chatId, task, "revision"),
 						turnsSinceUpdate: 0,
 						...(context === undefined ? {} : { context }),
-						questions: questions === undefined ? current.questions : validateQuestions(questions),
+						questions: questions === undefined ? (JSON.parse(JSON.stringify(current.questions)) as Question[]) : validateQuestions(questions),
 					};
 					doc.open[args.update] = updated;
 					doc.byTask[task] = args.update;
