@@ -65,10 +65,10 @@ const opening = (id, sessionId = "s1") => ({ ...opened, id, sessionId, detail: `
 
 /**
  * A linker over in-memory effects: `saved` holds a copy of every state write, `sent` every Telegram text.
- * `failing` holds Chat ids whose ask read fails; `reading.max` counts the most ask reads at once; `clock.now` is the time.
- * @param {{ state?: any, send?: (text: string) => Promise<void>, sessions?: any[], asks?: Record<string, any[]>, retryDelays?: number[], failing?: Set<string>, clock?: { now: number } }} [options]
+ * `failing` holds Chat ids whose ask read fails, `gone` deleted Chats (HTTP 404), `cold` Chats whose host is not running; `reading.max` counts the most ask reads at once; `clock.now` is the time.
+ * @param {{ state?: any, send?: (text: string) => Promise<void>, sessions?: any[], asks?: Record<string, any[]>, retryDelays?: number[], failing?: Set<string>, gone?: Set<string>, cold?: Set<string>, clock?: { now: number } }} [options]
  */
-function harness({ state = { delivered: [], pending: [] }, send, sessions = [], asks = {}, retryDelays = [], failing = new Set(), clock = { now: Date.parse("2026-05-01T12:00:00Z") } } = {}) {
+function harness({ state = { delivered: [], pending: [] }, send, sessions = [], asks = {}, retryDelays = [], failing = new Set(), gone = new Set(), cold = new Set(), clock = { now: Date.parse("2026-05-01T12:00:00Z") } } = {}) {
 	const saved = [];
 	const sent = [];
 	const reads = [];
@@ -81,7 +81,8 @@ function harness({ state = { delivered: [], pending: [] }, send, sessions = [], 
 		await new Promise((resolve) => setImmediate(resolve));
 		reading.now -= 1;
 		if (failing.has(id)) throw transportError();
-		return { pendingAsks: asks[id] ?? [] };
+		if (gone.has(id)) throw Object.assign(new Error("PI WEB answered HTTP 404"), { status: 404 });
+		return cold.has(id) ? { pendingAsks: [], running: false } : { pendingAsks: asks[id] ?? [] };
 	};
 	const linker = createLinker({
 		send: async (text) => { sent.push(text); if (send !== undefined) await send(text); },
@@ -164,17 +165,16 @@ test("an exhausted send waits for the next reconcile, and a status.update with a
 
 const ask = (askId) => ({ askId, questions: [{ id: "q", question: `Question ${askId}?` }] });
 
-test("a first connect without a watermark sends the open asks of Chats changed in the last day", async () => {
-	const { linker, sent, reads } = harness({
+test("a first connect without a watermark sends the open asks of every listed Chat, however old", async () => {
+	const { linker, sent } = harness({
 		sessions: [
 			{ id: "s1", cwd: "/w", name: "Durable · Release", modified: "2026-05-01T09:00:00Z" },
-			{ id: "s2", cwd: "/w", name: "Durable · Old", modified: "2026-04-28T09:00:00Z" },
+			{ id: "s2", cwd: "/w", name: "Durable · Old", modified: "2026-04-01T09:00:00Z" },
 		],
-		asks: { s1: [ask("open")], s2: [ask("stale")] },
+		asks: { s1: [ask("open")], s2: [ask("old")] },
 	});
 	await linker.reconcile();
-	assert.deepEqual(sent, ["Pi needs an answer\nhttps://pi.tschuehly.de/?session=s1"]);
-	assert.ok(!reads.some((path) => path.includes("/s2/")), "a Chat unchanged for days is not read");
+	assert.deepEqual(sent.sort(), ["Pi needs an answer\nhttps://pi.tschuehly.de/?session=s1", "Pi needs an answer\nhttps://pi.tschuehly.de/?session=s2"]);
 });
 
 test("a failed ask read is retried at the next reconcile, though the watermark moved past it", async () => {
@@ -193,12 +193,29 @@ test("a failed ask read is retried at the next reconcile, though the watermark m
 	assert.deepEqual(state.recheck, []);
 });
 
-test("a Chat whose read keeps failing is given up with its pending asks", async () => {
-	const { linker, state } = harness({ state: { delivered: [], pending: [{ id: "p", sessionId: "gone", cwd: "/x" }], checkedAt: "2026-05-01T11:00:00Z" }, failing: new Set(["gone"]) });
-	for (let i = 0; i < 5; i += 1) await linker.reconcile(["gone"]);
-	assert.equal(state.recheck[0]?.failures, 5);
-	await linker.reconcile(["gone"]);
+test("a Chat whose read keeps failing keeps its pending ask; only a deleted Chat (404) retires it", async () => {
+	const failing = new Set(["c"]);
+	const gone = new Set();
+	const { linker, state } = harness({ state: { delivered: [], pending: [{ id: "p", sessionId: "c", cwd: "/x" }], checkedAt: "2026-05-01T11:00:00Z" }, failing, gone });
+	for (let i = 0; i < 10; i += 1) await linker.reconcile(["c"]);
+	assert.deepEqual(state.pending.map((ask) => ask.id), ["p"]);
+	assert.deepEqual(state.recheck.map((ref) => ref.sessionId), ["c"]);
+	failing.clear();
+	gone.add("c");
+	await linker.reconcile(["c"]);
+	assert.deepEqual(state.pending, []);
 	assert.deepEqual(state.recheck, []);
+});
+
+test("a cold Chat keeps its pending ask until its running host answers", async () => {
+	const cold = new Set(["c"]);
+	const { linker, state, sent } = harness({ state: { delivered: [], pending: [{ id: "p", sessionId: "c", cwd: "/x" }], checkedAt: "2026-05-01T11:00:00Z" }, cold, asks: { c: [ask("p")] } });
+	await linker.reconcile(["c"]);
+	assert.deepEqual(state.pending.map((ask) => ask.id), ["p"]);
+	assert.deepEqual(sent, []);
+	cold.clear();
+	await linker.reconcile(["c"]);
+	assert.deepEqual(sent, ["Pi needs an answer\nhttps://pi.tschuehly.de/?session=c"]);
 	assert.deepEqual(state.pending, []);
 });
 
@@ -259,7 +276,7 @@ test("an old bare-array state file loads as delivered ids", (t) => {
 	const path = join(dir, "sent-asks.json");
 	writeFileSync(path, JSON.stringify(["a", 3]));
 	assert.deepEqual(loadState(path), { delivered: ["a"], pending: [], recheck: [] });
-	const state = { delivered: ["a"], pending: [{ id: "b", sessionId: "s", cwd: "/w" }], recheck: [{ sessionId: "t", cwd: "/w", failures: 1 }], checkedAt: "2026-05-01T12:00:00.000Z" };
+	const state = { delivered: ["a"], pending: [{ id: "b", sessionId: "s", cwd: "/w" }], recheck: [{ sessionId: "t", cwd: "/w" }], checkedAt: "2026-05-01T12:00:00.000Z" };
 	saveState(path, state);
 	assert.deepEqual(loadState(path), state);
 });

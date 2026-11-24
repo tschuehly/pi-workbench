@@ -23,10 +23,6 @@ const RETRY_DELAYS_MS = [2_000, 10_000, 30_000, 120_000];
 const PENDING_RETRY_MS = 10 * 60_000;
 /** Clock slack when picking Chats changed since the last reconcile. */
 const RECONCILE_MARGIN_MS = 5 * 60_000;
-/** Without a watermark (a first run, or a state file from before), Chats changed this recently are read. */
-const BOOTSTRAP_WINDOW_MS = 24 * 60 * 60_000;
-/** A Chat whose ask read keeps failing (PI WEB answers HTTP 500 for a deleted Chat) is given up after this many reconciles. */
-const MAX_READ_FAILURES = 6;
 /** Ask reads at once, across every reconcile: scans and status events share it. */
 const READ_CONCURRENCY = 2;
 
@@ -49,8 +45,8 @@ export function remember(sent, id) {
 
 /**
  * `delivered`: ask ids Telegram confirmed. `pending`: asks whose send failed, retried at each reconcile while still open.
- * `recheck`: Chats whose ask read failed, read again at each reconcile. `checkedAt`: when the last full reconcile read
- * PI WEB. A state file from before is a bare `delivered` array.
+ * `recheck`: Chats whose ask read failed, read again at each reconcile until one succeeds or PI WEB answers 404.
+ * `checkedAt`: when the last full reconcile read PI WEB. A state file from before is a bare `delivered` array.
  */
 export function loadState(path) {
 	let value;
@@ -182,9 +178,10 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 
 	/**
 	 * Sends every still-open ask not yet delivered: of the given Chats, else of Chats with a failed send or read and of
-	 * Chats changed since the last full reconcile (an ask opened while the socket was down). A Chat with a failed send or
-	 * read is read by its saved id and cwd, as it may be older than the latest 500. Only those Chats are read, which keeps a
-	 * reconnect cheap; PI WEB's asks read never starts a cold Durable host. Resolves after the sends.
+	 * Chats changed since the last full reconcile (an ask opened while the socket was down), or of every listed Chat when
+	 * there is no watermark yet. A Chat with a failed send or read is read by its saved id and cwd, as it may be older than
+	 * the latest 500. Only those Chats are read, which keeps a reconnect cheap; PI WEB's asks read never starts a cold
+	 * Durable host. Resolves after the sends.
 	 */
 	async function reconcile(only) {
 		const startedAt = now();
@@ -195,9 +192,11 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 			if (typeof ref.cwd === "string" && (wanted?.has(ref.sessionId) ?? true)) chats.set(ref.sessionId, { id: ref.sessionId, cwd: ref.cwd });
 		}
 		if (only === undefined || only.some((id) => !chats.has(id))) {
+			// shortcut: PI WEB lists at most the latest 500 Chats and has no paging, so a first run misses an open ask in an older
+			// Chat until its next status.update; page the list if Thomas keeps more than 500 Chats.
 			const sessions = await getJson("/api/sessions/recent?limit=500");
 			if (!Array.isArray(sessions)) throw new SafeError("PI WEB sessions list is not an array");
-			const since = only !== undefined ? Infinity : state.checkedAt === undefined ? startedAt - BOOTSTRAP_WINDOW_MS : Date.parse(state.checkedAt) - RECONCILE_MARGIN_MS;
+			const since = only !== undefined ? Infinity : state.checkedAt === undefined ? -Infinity : Date.parse(state.checkedAt) - RECONCILE_MARGIN_MS;
 			for (const chat of sessions) {
 				if (typeof chat?.id !== "string" || typeof chat.cwd !== "string" || !(wanted?.has(chat.id) || chats.has(chat.id) || Date.parse(chat.modified) >= since)) continue;
 				chats.set(chat.id, { id: chat.id, cwd: chat.cwd });
@@ -208,29 +207,28 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 			let open;
 			try {
 				const asks = await limited(() => getJson(`/api/sessions/${encodeURIComponent(chat.id)}/asks?cwd=${encodeURIComponent(chat.cwd)}`));
-				open = Array.isArray(asks?.pendingAsks) ? asks.pendingAsks.filter((ask) => typeof ask?.askId === "string") : [];
+				// A cold Durable Chat (`running: false`) was not read: its pending asks stay, and an ask its host shows on its
+				// next start comes in a status.update.
+				open = asks?.running === false ? undefined : Array.isArray(asks?.pendingAsks) ? asks.pendingAsks.filter((ask) => typeof ask?.askId === "string") : [];
 			} catch (error) {
-				const failures = (state.recheck.find((ref) => ref.sessionId === chat.id)?.failures ?? 0) + 1;
+				// Only a deleted Chat (404) retires its asks; any other failure is read again at the next reconcile.
+				const deleted = error?.status === 404;
 				state.recheck = state.recheck.filter((ref) => ref.sessionId !== chat.id);
-				if (failures < MAX_READ_FAILURES) {
-					state.recheck.push({ sessionId: chat.id, cwd: chat.cwd, failures });
-					log(`could not read the open asks of Chat ${chat.id}: ${describeError(error)}; retrying at the next reconcile`);
-				} else {
-					state.pending = state.pending.filter((ask) => ask.sessionId !== chat.id);
-					log(`could not read the open asks of Chat ${chat.id}: ${describeError(error)}; giving up after ${String(failures)} reads`);
-				}
+				if (deleted) state.pending = state.pending.filter((ask) => ask.sessionId !== chat.id);
+				else state.recheck.push({ sessionId: chat.id, cwd: chat.cwd });
+				log(`could not read the open asks of Chat ${chat.id}: ${describeError(error)}; ${deleted ? "it is gone" : "retrying at the next reconcile"}`);
 				save(state);
 				return;
 			}
 			// A failed ask that closed meanwhile needs no link any more.
-			const kept = state.pending.filter((ask) => ask.sessionId !== chat.id || open.some(({ askId }) => askId === ask.id));
+			const kept = open === undefined ? state.pending : state.pending.filter((ask) => ask.sessionId !== chat.id || open.some(({ askId }) => askId === ask.id));
 			const recheck = state.recheck.filter((ref) => ref.sessionId !== chat.id);
 			if (kept.length !== state.pending.length || recheck.length !== state.recheck.length) {
 				state.pending = kept;
 				state.recheck = recheck;
 				save(state);
 			}
-			for (const ask of open) {
+			for (const ask of open ?? []) {
 				const text = askMessage({ type: "session.attention", kind: "ask", id: ask.askId, sessionId: chat.id });
 				if (text !== undefined) sends.push(deliver({ id: ask.askId, sessionId: chat.id, cwd: chat.cwd, text }));
 			}
