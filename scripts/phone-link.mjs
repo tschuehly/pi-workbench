@@ -48,17 +48,39 @@ function saveSent(sent) {
 	renameSync(`${STATE_PATH}.tmp`, STATE_PATH);
 }
 
-async function sendTelegram(text) {
-	// Read per send so a changed config needs no restart; never log its values.
-	const { telegram } = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-	if (typeof telegram?.botToken !== "string" || typeof telegram?.chatId !== "string") throw new Error(`no telegram.botToken/chatId in ${CONFIG_PATH}`);
+/** A send failure whose message is fixed text or an HTTP status, so it is safe to log. */
+class SendError extends Error {
+	constructor(message, status) {
+		super(message);
+		this.status = status;
+	}
+}
+
+/** Log text for a send failure: a SendError's fixed text, else only an allowlisted transport code; never a raw message, which may quote the config or the bot URL. */
+export function describeError(error) {
+	if (error instanceof SendError) return error.message;
+	const code = error?.cause?.code ?? error?.code;
+	if (typeof code === "string" && /^[A-Z][A-Z0-9_]{1,40}$/u.test(code)) return code;
+	if (error?.name === "TimeoutError" || error?.name === "AbortError") return error.name;
+	return "unknown error";
+}
+
+export async function sendTelegram(text, configPath = CONFIG_PATH) {
+	// Read per send so a changed config needs no restart; never log its values (a JSON.parse message quotes nearby text).
+	let telegram;
+	try {
+		({ telegram } = JSON.parse(readFileSync(configPath, "utf8")));
+	} catch {
+		throw new SendError(`telegram config ${configPath} is unreadable or not valid JSON`);
+	}
+	if (typeof telegram?.botToken !== "string" || typeof telegram?.chatId !== "string") throw new SendError(`no telegram.botToken/chatId in ${configPath}`);
 	const response = await fetch(`https://api.telegram.org/bot${telegram.botToken}/sendMessage`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ chat_id: telegram.chatId, text, disable_web_page_preview: true }),
 		signal: AbortSignal.timeout(15_000),
 	});
-	if (!response.ok) throw new Error(`Telegram sendMessage answered HTTP ${response.status}`);
+	if (!response.ok) throw new SendError(`Telegram sendMessage answered HTTP ${String(response.status)}`, response.status);
 }
 
 function log(message) {
@@ -81,9 +103,9 @@ function watch() {
 				saveSent(sent);
 				log(`sent link for ask ${event.id} in Chat ${event.sessionId}`);
 			} catch (error) {
-				// Not saved, so the id is retried if the event comes again; the message names no secret.
+				// Not saved, so the id is retried if the event comes again.
 				sent.splice(sent.indexOf(event.id), 1);
-				log(`could not send ask ${event.id}: ${error instanceof Error ? error.message : String(error)}`);
+				log(`could not send ask ${event.id}: ${describeError(error)}`);
 			}
 		};
 		socket.onclose = () => {
