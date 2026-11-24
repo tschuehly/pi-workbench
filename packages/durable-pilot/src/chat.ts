@@ -30,6 +30,7 @@ import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
 import { ChatMessenger, homeWorkstream } from "./chat-message.ts";
+import { CACHE_RETENTION } from "./idle-compact.ts";
 import { BackgroundBash } from "./background-bash.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
@@ -274,7 +275,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		provider: () => withBaseUrl(withStoredModels(anthropicProvider()), modelsJsonBaseUrl("anthropic")),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials,
-		settings: { get compaction() { return workbench.compaction; } },
+		// The idle timer (idle-compact.ts) reads the same retention for the cache TTL.
+		settings: { get compaction() { return workbench.compaction; }, stream: { cacheRetention: CACHE_RETENTION } },
 		rootAgent: { model: parseModel(options.model), cwd: options.cwd, thinkingLevel: (options.thinkingLevel ?? "medium") as ModelThinkingLevel },
 		env: async (target, c) => {
 			const cwd = target.cwd ?? options.cwd;

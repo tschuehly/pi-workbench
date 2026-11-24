@@ -52,7 +52,7 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
 
 /**
  * Script, by the last non-system message:
- * - `gen` → a long answer (stream slowly to observe partials);
+ * - `gen` → a long answer (stream slowly to observe partials); `pad:<filler>` → `padded` (a large prompt, a short answer);
  * - `call:<tool> <json args>` → call that tool;
  * - `spawn:<name> <message>` → call subagent spawn; `leaf:<message>` → call leaf;
  * - `ask:<text>` → call ask_user;
@@ -132,6 +132,7 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			return fauxAssistantMessage([fauxText(`done after ${last.toolName}`)]);
 		}
 		if (text === "gen") return fauxAssistantMessage([fauxText(LONG)]);
+		if (text.startsWith("pad:")) return fauxAssistantMessage([fauxText("padded")]);
 		// A completion notice carries the results it can; the lead collects only what it names.
 		if ((text.startsWith("Background children finished") && text.split("\n\n", 1)[0]!.includes("subagent_collect")) || text.startsWith("Your background Subagent"))
 			return fauxAssistantMessage([fauxToolCall("subagent_collect", {})], { stopReason: "toolUse" });

@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
 import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
+import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
 import { context } from "../src/host.ts";
 import { questionsState, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
@@ -27,6 +28,8 @@ process.env.PI_TELEMETRY_DIR = TELEMETRY;
 // Hermetic: no storage-guard notice from this machine's real free space, and PI_TMP folders in scratch.
 process.env.PI_STORAGE_GUARD_FREE_GB = "1000";
 process.env.PI_TMP_ROOT = scratch("chat-pi-tmp");
+// And a scratch Workstream store: no host reads the owner's (the idle compaction looks up a Chat's Workstream).
+process.env.PI_WORKBENCH_WORKSTREAM_DIR = scratch("chat-workstreams");
 // And a Pi agent dir with fake stored logins, so hosts never read or lock the owner's auth.json.
 process.env.PI_CODING_AGENT_DIR = fakeAgentDir("chat-agent");
 
@@ -163,7 +166,7 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	const host = new ChatHost(store, cwd);
 	const ready = await host.ready;
 	assert.equal(ready.protocol, 2);
-	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview"], "the gated PI WEB operations this host supports");
+	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "viewed"], "the gated PI WEB operations this host supports");
 	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt","description":"Read and write","foreground":true}' });
 	await host.until((e) => e.type === "agent.end", "the run to end");
 	const types = host.events.map((e) => e.type);
@@ -553,6 +556,83 @@ async function quietChat(label: string) {
 	await session.start();
 	return { h, store, session, runs, settled };
 }
+
+/** An in-process faux Chat for the idle cache timer, with an injected delay instead of the model's cache TTL. */
+async function idleChat(store: string, cwd: string, delay: () => number) {
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: "chat-idle-timer" });
+	const events: UiEvent[] = [];
+	let wake = () => {};
+	// The 80k-token threshold stays real: the faux model counts a request's chars / 4.
+	const session = new ChatSession(h, (event) => (events.push(event), wake()), { chatId: "chat-idle-timer", power: { onBattery: async () => false, alarm: () => {}, everyMs: 60_000 }, idleDelayMs: delay });
+	const until = async (done: () => boolean | Promise<boolean>, what: string) => {
+		const deadline = Date.now() + 20_000;
+		while (!(await done())) {
+			assert.ok(Date.now() < deadline, `no ${what} within 20 s`);
+			await new Promise<void>((resolve) => ((wake = resolve), setTimeout(resolve, 50)));
+		}
+	};
+	const runs = () => events.filter((e) => e.type === "agent.end").length;
+	const settled = (count: number) => until(async () => runs() >= count && !(await session.status()).isStreaming, `${String(count)} settled runs`);
+	const markers = async () => (await h.root.entries({ order: "descending" }, 100, undefined, context)).items.filter((e) => e.kind === IDLE_COMPACTION_ENTRY).length;
+	await session.start();
+	// A small keep window, so the compaction has history to summarize.
+	await session.configure({}, { compaction: { keepRecentTokens: 1 } });
+	session.setViewed(true);
+	return { session, events, until, settled, markers };
+}
+const PAD = `pad:${"x".repeat(330_000)}`;
+const summaries = (store: string) => requests(store).filter((label) => label === "summarize").length;
+
+test("idle cache timer: a viewed idle Chat with a large prompt compacts once its timer fires, also when a `!` command ran over it; a new prompt cancels the timer", async () => {
+	const { store, cwd } = family("idle-timer");
+	let delay = 1_500;
+	const { session, events, until, settled, markers } = await idleChat(store, cwd, () => delay);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		// Armed for 1.5 s; the next prompt's turn ends with a long delay, so only the first timer could compact.
+		delay = 60_000;
+		await session.prompt({ operationId: "op-2", text: "short" });
+		await settled(2);
+		await new Promise((resolve) => setTimeout(resolve, 2_500));
+		assert.equal(summaries(store), 0, "a new prompt cancelled the armed timer");
+
+		// A `!` command runs over the firing: its end checks again, and the Chat compacts.
+		delay = 1_500;
+		await session.prompt({ operationId: "op-3", text: "short again" });
+		await settled(3);
+		await session.shell("!sleep 2.5");
+		await until(async () => (await markers()) === 1, "the idle compaction marker");
+		assert.equal(summaries(store), 1, "one idle compaction");
+		assert.ok(events.some((e) => e.type === "shell.end"), "the command ran");
+		assert.ok((session.messages() as { source?: string }[]).some((m) => m.source === "compaction"), "the summary is placed");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a restarted host arms it again, measured from the newest request; one whose cache already expired does not", async () => {
+	const { store, cwd } = family("idle-restart");
+	const first = await idleChat(store, cwd, () => 60_000);
+	await first.session.prompt({ operationId: "op-1", text: PAD });
+	await first.settled(1);
+	const turned = Date.now();
+	await first.session.close();
+	await new Promise((resolve) => setTimeout(resolve, 700));
+	// Its 0.5 s delay passed during the restart: no timer.
+	const expired = await idleChat(store, cwd, () => 500);
+	await new Promise((resolve) => setTimeout(resolve, 1_500));
+	await expired.session.close();
+	assert.equal(summaries(store), 0, "an expired cache gets no timer after a restart");
+	const second = await idleChat(store, cwd, () => 8_000);
+	try {
+		await second.until(async () => (await second.markers()) === 1, "the idle compaction marker after the restart");
+		assert.equal(summaries(store), 1);
+		assert.ok(Date.now() - turned < 8_000 + 1_500, "fired 8 s after the turn's request, not after the reopen");
+	} finally {
+		await second.session.close();
+	}
+});
 
 test("/back: Working Mode returns to its starting values, the context restarts at the host's handoff with the open set verbatim (no summarizer call), the set stays open, one orient turn runs", async () => {
 	const { h, store, session, settled } = await quietChat("back");

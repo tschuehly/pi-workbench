@@ -34,7 +34,8 @@ import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
 import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BACKGROUND_BASH_STATUS, BashJobsDoc, FULL_ACCESS_COMMAND } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
-import { CHAT_MESSAGE_TYPE, CHAT_PAUSED, type ChatListResult, type ChatMessageDelivery, type ChatMessageResult, type Delivery, deliveredBefore, type IncomingChatMessage, submitChatMessage } from "./chat-message.ts";
+import { CHAT_MESSAGE_TYPE, CHAT_PAUSED, type ChatListResult, type ChatMessageDelivery, type ChatMessageResult, type Delivery, deliveredBefore, homeWorkstream, type IncomingChatMessage, submitChatMessage, userWorkstreamStore } from "./chat-message.ts";
+import { IDLE_COMPACTION_ENTRY, idleCompactDue, idleDelayMs, LEAD_MS, writeIdleNote } from "./idle-compact.ts";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -100,9 +101,13 @@ export const PROTOCOL = 2;
  * PI WEB's gated Chat operations (`CHAT_CAPABILITY_LABELS` in its `shared/apiTypes.ts`) this host supports, reported
  * in its ready message. PI WEB shows a control only once its name is here; add a name with the operation that
  * implements it. Protocol 2 hosts without the list support none of them. compact: `/compact` (method `compact`);
- * compact-and-continue: the model tool; tool-groups: `tools_enable`; tree: `/tree` and `navigate` (no branch summaries).
+ * compact-and-continue: the model tool; tool-groups: `tools_enable`; tree: `/tree` and `navigate` (no branch summaries);
+ * viewed: `setViewed` (whether a browser shows this Chat; the idle compaction timer acts only then).
  */
-export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview"] as const;
+export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "viewed"] as const;
+
+/** What the idle timer saw when it fired: runs started so far and the session's Workstream checkpoint (see `writeIdleNote`). */
+type IdleFired = { runs: number; checkpointId: string | null | undefined };
 
 /** A `!`/`!!` command's record: PI WEB's `bashExecution` message without role and timestamp. */
 export const BASH_ENTRY = "workbench.bash";
@@ -239,7 +244,7 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	// `/back`'s reset handoff shows as a compaction summary does: it replaced the context the same way.
 	if (entry.kind === CompactionEntry.kind || entry.kind === ResetEntry.kind) {
 		// Pi's transcript shape for a compaction (PI WEB transcriptMessages.ts): the summary without Durable's framing.
-		const summary = /<summary>\n([\s\S]*)\n<\/summary>$/.exec(textOfContent(message.content))?.[1] ?? textOfContent(message.content);
+		const summary = compactionSummary(message);
 		return [{ role: "system", source: "compaction", content: `Compacted history:\n\n${summary}`, timestamp: message.timestamp, entryId }];
 	}
 	if (userParts !== parts) return [{ ...message, content: userParts, entryId }];
@@ -260,6 +265,11 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	}
 	const content = message.role === "toolResult" ? { content: browserToolContent(message.content) } : {};
 	return [{ ...message, ...content, entryId, ...(streamId === undefined ? {} : { streamId }) }];
+}
+
+/** A compaction entry's summary without Durable's framing. */
+function compactionSummary(message: Message): string {
+	return /<summary>\n([\s\S]*)\n<\/summary>$/.exec(textOfContent(message.content))?.[1] ?? textOfContent(message.content);
 }
 
 function bashMessage(entry: EntryRecord): Record<string, unknown> {
@@ -367,10 +377,22 @@ export class ChatSession {
 	#nudgeSent = false;
 	#nudgeRun = false;
 
+	/** A browser shows this Chat (`setViewed`); not viewed until PI WEB says so. */
+	#viewed = false;
+	/** Idle prompt-cache timer, armed when a run ends; and whether it compacted in this idle stretch. */
+	#idleTimer: ReturnType<typeof setTimeout> | undefined;
+	#idleCompacted = false;
+	/** A fired timer found only a `!` command in the way: retried when it ends, until this time (the cache expiry). */
+	#idleRetryUntil: number | undefined;
+	/** Runs started, so an idle compaction's checkpoint write sees a turn that began after the timer fired. */
+	#runs = 0;
+	readonly #idleDelayMs: typeof idleDelayMs;
+
 	/** The Chat's title for the AFK alarm, read when it sounds (a rename shows on the next one). */
 	readonly #title: () => string | undefined;
 
-	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder; power?: Partial<Power>; title?: () => string | undefined } = {}) {
+	/** `idleDelayMs`: tests inject a short idle timer delay. */
+	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder; power?: Partial<Power>; title?: () => string | undefined; idleDelayMs?: typeof idleDelayMs } = {}) {
 		this.#host = host;
 		this.#chat = "workbench" in host ? host : undefined;
 		this.#emit = emit;
@@ -378,6 +400,7 @@ export class ChatSession {
 		this.#telemetry = options.telemetry;
 		this.#power = { onBattery, alarm: batteryAlarm, everyMs: 60_000, ...options.power };
 		this.#title = options.title ?? (() => undefined);
+		this.#idleDelayMs = options.idleDelayMs ?? idleDelayMs;
 	}
 
 	async start(): Promise<void> {
@@ -428,6 +451,8 @@ export class ChatSession {
 			provider: agent.model?.provider ?? null, model: agent.model?.modelId ?? null, effort: agent.thinkingLevel ?? null,
 			argv: null, parentSessionId: null, executionId: null, ownerEpoch: this.#host.store.owner.epoch,
 		});
+		// A restart or upgrade keeps the idle timer: measured from the newest request, skipped once its cache expired.
+		if (!this.#running) this.#armIdle(Date.now() - (this.#lastAssistant()?.timestamp ?? Date.now()));
 	}
 
 	/**
@@ -466,6 +491,7 @@ export class ChatSession {
 	async close(options: { end?: boolean; reason?: "upgrade" } = {}): Promise<void> {
 		if (options.end === true) await this.#chat?.bash?.cancelAll();
 		this.#closed = true;
+		this.#clearIdle();
 		this.#stopPower();
 		this.#chat?.bash?.close();
 		this.#chat?.atelier?.close();
@@ -584,6 +610,10 @@ export class ChatSession {
 		switch (event.type) {
 			case "run_start":
 				this.#running = true;
+				// A new turn: a new idle stretch once it ends.
+				this.#runs += 1;
+				this.#clearIdle();
+				this.#idleCompacted = false;
 				this.#nudgeRun = this.#nudgeSent;
 				this.#nudgeSent = false;
 				this.#emit({ type: "agent.start" });
@@ -601,6 +631,7 @@ export class ChatSession {
 				this.#record("agent.settled", { sessionFile: null });
 				void this.#chat?.packages?.run("end");
 				void this.#afkClose().catch(() => {});
+				this.#armIdle();
 				return;
 			case "message_start":
 				if (event.message.role !== "assistant") return;
@@ -957,6 +988,8 @@ export class ChatSession {
 			...(params.mode === undefined ? {} : { mode: params.mode }),
 			...(block === undefined && images.length === 0 && reminder === "" ? {} : { content, entry: { kind: PROMPT_ENTRY, data } }),
 		});
+		// Admitted: a new turn follows, so this idle stretch is over (a refused input leaves the timer armed).
+		this.#clearIdle();
 		if (existing === undefined) this.#record("prompt", { entryId: null, prompt: null, submissionId: String(submissionId) });
 		if (this.#chat !== undefined && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();
 		else if (block !== undefined) await this.#publishStatus();
@@ -1136,20 +1169,131 @@ export class ChatSession {
 	 * `/compact [instructions]`: a manual Durable compaction, which summarizes while the Chat keeps working and places
 	 * the summary when idle or at the next turn boundary; Esc cancels it. Its outcome is reported when it settles.
 	 */
-	async compact(instructions?: string): Promise<{ type: "done" }> {
+	async compact(instructions?: string, options: { idle?: IdleFired } = {}): Promise<{ type: "done" }> {
 		await this.#resume();
 		const focus = instructions?.trim();
 		// The instructions become task input, a new committed place: redacted like every other.
 		const id = await this.#host.root.compact(focus === undefined || focus === "" ? undefined : redact(focus), context);
 		await this.#publishStatus();
+		const idle = options.idle;
 		void this.#host.harness.waitForTask(id, context).then(({ state }) => {
 			const outcome = state.outcome;
 			if (outcome.status === "failed") this.#compactionFailed(outcome.error.message);
 			else if (outcome.status === "aborted") this.#emit({ type: "command.output", level: "info", message: "Compaction cancelled." });
 			else if (outcome.result?.submissionId === undefined && outcome.result?.entryId === undefined)
 				this.#emit({ type: "command.output", level: "info", message: "Nothing to compact yet." });
-		}, () => {});
+			else if (idle !== undefined) return this.#afterIdleCompaction(id, outcome.result, idle);
+		}).catch((error: unknown) => {
+			// The compaction stands; only its idle marker or Workstream note failed.
+			if (idle !== undefined) this.#idleWarning(`Idle compaction note failed: ${redact(error instanceof Error ? error.message : String(error))}`);
+		});
 		return { type: "done" };
+	}
+
+	/**
+	 * Arm the idle prompt-cache timer for the model the newest request used: a minute before its cache entry expires.
+	 * `elapsed`: how long ago that request ran (a restored Chat); none once its cache expired.
+	 */
+	#armIdle(elapsed = 0): void {
+		this.#clearIdle();
+		const last = this.#lastAssistant();
+		if (last === undefined || this.#closed) return;
+		const delay = this.#idleDelayMs(this.#host.models.getModel(last.provider, last.model), last.usage);
+		if (delay === undefined || delay - elapsed <= 0) return;
+		this.#idleTimer = setTimeout(() => void this.#idleFire().catch(() => {}), delay - elapsed);
+		this.#idleTimer.unref?.();
+	}
+
+	#clearIdle(): void {
+		clearTimeout(this.#idleTimer);
+		this.#idleTimer = undefined;
+		this.#idleRetryUntil = undefined;
+	}
+
+	/** The newest assistant message since the last compaction or reset: none once its context was already replaced. */
+	#lastAssistant(): AssistantMessage | undefined {
+		for (const entry of this.#entries.toReversed()) {
+			if (entry.kind === CompactionEntry.kind || entry.kind === ResetEntry.kind) return undefined;
+			const message = entry.model?.[0] as Message | undefined;
+			if (message?.role === "assistant") return message;
+		}
+		return undefined;
+	}
+
+	async #idleFire(): Promise<void> {
+		this.#idleTimer = undefined;
+		const fired = Date.now();
+		if (this.#closed || this.#navigating || this.#quiescing || this.#paused()) return;
+		const usage = this.#lastAssistant()?.usage;
+		const status = await this.status();
+		const promptTokens = usage === undefined ? 0 : usage.input + usage.cacheRead + usage.cacheWrite;
+		const state = { ...status, viewed: this.#viewed, promptTokens, compacted: this.#idleCompacted };
+		if (!idleCompactDue(state)) {
+			// Only a `!` command in the way: its end checks again (`shell`), while the cache entry still lives.
+			if (status.isBashRunning && idleCompactDue({ ...state, isBashRunning: false })) this.#idleRetryUntil = fired + LEAD_MS;
+			return;
+		}
+		this.#idleCompacted = true;
+		const runs = this.#runs;
+		const checkpointId = await this.#latestCheckpointId();
+		await this.exclusive(() => this.#idleAction({ runs, checkpointId }));
+	}
+
+	/** This Chat's latest Workstream checkpoint ID (null: none yet); undefined outside a Workstream or when unreadable. */
+	async #latestCheckpointId(): Promise<string | null | undefined> {
+		if (this.#chat === undefined) return undefined;
+		try {
+			const workstreamId = await homeWorkstream(this.#chatId);
+			if (workstreamId === undefined) return undefined;
+			const snapshot = await userWorkstreamStore().inspect(workstreamId);
+			return snapshot.sessions.find((session) => session.id === this.#chatId)?.latestCheckpoint?.id ?? null;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * What the idle timer does: compact, with no continuation turn. A Workstream Chat also gets a host-written note once
+	 * the summary is placed (`#afterIdleCompaction`), so `/back` orients on the latest state.
+	 */
+	async #idleAction(fired: IdleFired): Promise<void> {
+		await this.compact(undefined, { idle: fired });
+	}
+
+	/**
+	 * After an idle compaction: once its summary is placed, the marker entry, then the Workstream note when the Chat has
+	 * one. Its checkpoint is skipped when a turn started since the timer fired (the placement may wait for the end of a
+	 * turn the owner started, in which the model may checkpoint) or the session's checkpoint changed.
+	 */
+	async #afterIdleCompaction(task: TaskId, result: { submissionId?: number; entryId?: number }, fired: IdleFired): Promise<void> {
+		const { harness, root } = this.#host;
+		let entryId = result.entryId;
+		if (result.submissionId !== undefined) {
+			const placed = await (await harness.submission(result.submissionId as never, context))!.wait(context);
+			if (placed.status !== "done") return;
+			entryId = placed.entry as number;
+		}
+		await root.submit({ type: "write", entry: { kind: IDLE_COMPACTION_ENTRY, data: { task: Number(task) } } }, context);
+		if (this.#chat === undefined) return;
+		const entry = entryId === undefined ? undefined : (await root.entries({ minEntryId: entryId as never, maxEntryId: entryId as never }, 1, undefined, context)).items[0];
+		const message = entry?.kind === CompactionEntry.kind ? (entry.model?.[0] as Message | undefined) : undefined;
+		if (message === undefined) return this.#idleWarning(`Idle compaction note skipped: the placed summary (entry ${String(entryId)}) was not found.`);
+		await writeIdleNote(userWorkstreamStore, {
+			workstreamId: await homeWorkstream(this.#chatId),
+			sessionId: this.#chatId,
+			summary: compactionSummary(message),
+			...(fired.checkpointId === undefined ? {} : { checkpointId: fired.checkpointId }),
+			stale: () => this.#runs !== fired.runs,
+		});
+	}
+
+	#idleWarning(message: string): void {
+		this.#emit({ type: "command.output", level: "warning", message });
+	}
+
+	/** PI WEB: whether at least one browser tab or window shows this Chat. */
+	setViewed(viewed: boolean): void {
+		this.#viewed = viewed;
 	}
 
 	#compactionFailed(error: string): void {
@@ -1371,6 +1515,10 @@ export class ChatSession {
 			} finally {
 				this.#shell = undefined;
 				await this.#publishStatus();
+				// The idle timer fired while this command ran: check again while the cache entry lives.
+				const until = this.#idleRetryUntil;
+				this.#idleRetryUntil = undefined;
+				if (until !== undefined && Date.now() < until) void this.#idleFire().catch(() => {});
 			}
 		})();
 	}
@@ -1449,6 +1597,8 @@ export class ChatSession {
 			if (plan.select === undefined && plan.fork === undefined) return result;
 			const before = (await questionsState(harness, this.#host.root)).open;
 			const next = await commitNavigation(harness, this.#host.root, plan);
+			// Another branch: the timer measured this branch's newest request.
+			this.#clearIdle();
 			await this.#stop?.();
 			this.#host.root = next;
 			if (this.#chat !== undefined) await harness.commit((tx) => this.#syncSpawnTool(tx), context);
