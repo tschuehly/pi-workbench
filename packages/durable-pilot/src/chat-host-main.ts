@@ -245,7 +245,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
 	// One command list and dispatcher: host commands (/quota-check) and the bound Pi packages' commands.
 	commands: () => session.commands(),
-	command: (params) => session.command(text(params, "name"), typeof params.args === "string" ? params.args : ""),
+	command: (params) => session.command(text(params, "name"), typeof params.args === "string" ? params.args : "", typeof params.operationId === "string" ? params.operationId : undefined),
 	// One request outside the conversation (PI WEB's Chat title).
 	complete: (params) => {
 		const { maxTokens, reasoning, timeoutMs, model } = params;

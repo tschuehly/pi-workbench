@@ -11,6 +11,9 @@ import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
 import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
+import { context } from "../src/host.ts";
+import { questionsState, workingModeSnapshot } from "../src/workbench.ts";
+import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
 import { fakeAgentDir } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
@@ -509,14 +512,14 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 		const notified = events.filter((e) => e.type === "durable.notification" && e.severity === "error").length;
 		assert.ok(notified >= 1 && notified <= 2, `one notification per start of work, got ${String(notified)}`);
 
-		// The job ends (its completion runs one more turn); then the Chat is idle and the alarm stops.
-		await until(async () => runs() >= 2 && (await idle()), "the completion turn's end");
+		// The job ends (its completion runs one more turn, then the AFK closing nudge one); then the Chat is idle and the alarm stops.
+		await until(async () => runs() >= 3 && (await idle()), "the closing nudge's turn end");
 		await quiet("an idle AFK Chat on battery does not alarm");
 
 		// Work starting again alarms again.
 		const before = alarms.length;
 		await session.prompt({ operationId: "op-2", text: hold(4) });
-		await until(() => alarms.length > before && runs() >= 3, "alarm when work starts again");
+		await until(() => alarms.length > before && runs() >= 4, "alarm when work starts again");
 
 		await session.mode("attention default");
 		await quiet("leaving AFK stops the alarm");
@@ -529,6 +532,75 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 		await session.close();
 	}
 	await quiet("closing the host stops the alarm");
+});
+
+/** An in-process Chat on the faux model (no real battery alarm), with its run count and an event-driven wait. */
+async function quietChat(label: string) {
+	const { store, cwd } = family(label);
+	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: `chat-${label}` });
+	const events: UiEvent[] = [];
+	let wake = () => {};
+	const session = new ChatSession(h, (event) => (events.push(event), wake()), { chatId: `chat-${label}`, power: { onBattery: async () => false, alarm: () => {}, everyMs: 60_000 } });
+	const runs = () => events.filter((e) => e.type === "agent.end").length;
+	/** Until `count` runs ended and the Chat is idle. */
+	const settled = async (count: number) => {
+		const deadline = Date.now() + 20_000;
+		while (runs() < count || (await session.status()).isStreaming) {
+			assert.ok(Date.now() < deadline, `no ${String(count)} settled runs within 20 s`);
+			await new Promise<void>((resolve) => ((wake = resolve), setTimeout(resolve, 100)));
+		}
+	};
+	await session.start();
+	return { h, store, session, runs, settled };
+}
+
+test("/back: Working Mode returns to its starting values, the context restarts at the host's handoff with the open set verbatim (no summarizer call), the set stays open, one orient turn runs", async () => {
+	const { h, store, session, settled } = await quietChat("back");
+	try {
+		assert.ok(session.commands().some((c) => c.name === "back"), "PI WEB offers /back");
+		await session.mode("attention focused");
+		await session.mode("checking test");
+		const ask = { context: "Release choice", questions: [{ id: "ship", question: "Ship today?", detail: "The build is green.", options: [{ value: "yes", label: "Ship", recommended: true }, { value: "no", label: "Wait" }] }] };
+		await session.prompt({ operationId: "op-1", text: `call:ask_user ${JSON.stringify(ask)}` });
+		await settled(1);
+		assert.deepEqual(await session.command("back", "", "op-back"), { type: "done" });
+		await settled(2);
+		const mode = await workingModeSnapshot(h.harness, h.root);
+		assert.deepEqual(mode.selected, { alignment: "Default", attention: "Default", checking: "Default", orchestration: "Main" });
+		assert.equal(mode.aligned, false);
+		const users = (await h.root.context(context)).messages.filter((m) => m.role === "user").map((m) => textOf(m.content));
+		assert.equal(users.length, 2, `only the handoff and the orient input remain: ${JSON.stringify(users)}`);
+		for (const part of ["run `workstreams`", "Release choice", "**ship: Ship today?**", "The build is green.", "`yes` Ship (recommended)", "`no` Wait"]) assert.ok(users[0]!.includes(part), `handoff has ${part}`);
+		assert.equal(users[1], BACK_PROMPT);
+		assert.ok(!requests(store).includes("summarize"), "no summarizer call");
+		assert.equal(Object.keys((await questionsState(h.harness, h.root)).open).length, 1, "the set stays open and answerable");
+		assert.ok(session.messages().some((m) => textOf((m as { content?: unknown }).content).startsWith("call:ask_user")), "the transcript keeps the earlier conversation");
+	} finally {
+		await session.close();
+	}
+});
+
+test("AFK closing nudge: a run ending quiet after work since the last checkpoint gets one closing input; its own run, and a run that ended on a checkpoint, get none", async () => {
+	const { session, runs, settled } = await quietChat("afk-close");
+	const nudges = () => session.messages().filter((m) => textOf((m as { content?: unknown }).content) === AFK_CLOSE_PROMPT).length;
+	// Foreground: a background job's completion would wake a run of its own.
+	const bash = (command: string) => `call:bash ${JSON.stringify({ command, description: "Work", foreground: true })}`;
+	try {
+		await session.mode("attention afk");
+		await session.prompt({ operationId: "op-1", text: bash("echo work") });
+		await settled(2);
+		assert.equal(nudges(), 1, "one closing input after the working run");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal(runs(), 2, "the nudge's own run triggers no other");
+		// The checkpoint call fails here (no workstreams on PATH); the call alone counts, as in the legacy extension.
+		await session.prompt({ operationId: "op-2", text: bash("workstreams checkpoint ws-1 || true") });
+		await settled(3);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal(runs(), 3, "a run that ended on a checkpoint gets no nudge");
+		assert.equal(nudges(), 1);
+	} finally {
+		await session.close();
+	}
 });
 
 test("the AFK alarm's Chat title is PI WEB's name for the Chat in <data dir>/session-runtimes.json, else none", () => {

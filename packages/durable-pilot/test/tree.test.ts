@@ -193,7 +193,8 @@ test("tree: questions and Working Mode are those of the branch point; each branc
 	await idle(host, 2);
 	await host.call("mode", { args: "attention afk" });
 	await host.call("prompt", { operationId: "op-later", text: "later" });
-	await idle(host, 3);
+	// Under AFK the earlier ask_user call is unsaved work: the closing nudge runs one more turn.
+	await idle(host, 4);
 	assert.equal((await host.call<Asked>("status")).pendingAsks, undefined);
 
 	// Back to the question: it is open again on the new branch, and Working Mode is as of that point.

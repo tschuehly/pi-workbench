@@ -375,7 +375,7 @@ export class PiPackages {
 	/**
 	 * Bookkeeping the model never sees: appended in one commit, as Durable admits a display-only write busy or not, but
 	 * not through `Conversation.submit`, which enables scheduling and would resume a paused restore.
-	 * ponytail: lands ahead of a queued reset write; this host queues none (no `Conversation.reset`).
+	 * ponytail: lands ahead of a queued reset write; this host queues none (`/back` resets only an idle Chat).
 	 */
 	async #append(customType: string, data: unknown): Promise<void> {
 		const clean = sanitizeDeep(json(data), redact);

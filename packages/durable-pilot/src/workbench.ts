@@ -40,6 +40,9 @@ export const PROMPT_ENTRY = "workbench.prompt";
 export const MODE_ENTRY = "workbench.working-mode";
 /** Answers to a closed question set (`data` is PI WEB's `AskUserOutcome`). */
 export const ANSWERS_ENTRY = "workbench.ask-answers";
+/** `/back`'s orient input and the AFK closing nudge; PI WEB shows them as the legacy extension's custom messages. */
+export const BACK_ENTRY = "workbench.back";
+export const AFK_CLOSE_ENTRY = "workbench.afk-close";
 /** The owner's resolution of an uncertain tool effect. */
 export const RECONCILE_ENTRY = "workbench.reconciliation";
 
@@ -77,7 +80,7 @@ export async function afkActive(harness: Harness, conversation: Conversation): P
 /** The Working Mode block an entry delivered to the model, if any. */
 export function entryWorkingMode(entry: EntryRecord): WorkingModeDetails | undefined {
 	const data = entry.data as { workingMode?: WorkingModeDetails } | undefined;
-	return (entry.kind === PROMPT_ENTRY || entry.kind === MODE_ENTRY || entry.kind === "workbench.context-checkpoint") && isSelection(data?.workingMode?.selection) ? data!.workingMode : undefined;
+	return (entry.kind === PROMPT_ENTRY || entry.kind === MODE_ENTRY || entry.kind === BACK_ENTRY || entry.kind === "workbench.context-checkpoint") && isSelection(data?.workingMode?.selection) ? data!.workingMode : undefined;
 }
 
 /**
@@ -130,6 +133,16 @@ const reattachMode = hook(GenerationTask, {
 export async function unalign(conversation: Conversation): Promise<void> {
 	await conversation.commit(async (tx) => {
 		(await tx.doc(WorkingModeDoc, conversation.id)).aligned = false;
+	}, context);
+}
+
+/** `/back`: every axis back to its starting value and alignment cleared, as a new session starts. */
+export async function resetMode(conversation: Conversation): Promise<void> {
+	await conversation.commit(async (tx) => {
+		const doc = await tx.doc(WorkingModeDoc, conversation.id);
+		doc.selected = { ...defaults };
+		doc.aligned = false;
+		doc.phase = "selected";
 	}, context);
 }
 
