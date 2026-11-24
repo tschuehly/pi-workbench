@@ -566,6 +566,15 @@ private final class RouteMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
+private final class TitlebarMessageHandler: NSObject, WKScriptMessageHandler {
+    private let handle: (String) -> Void
+    init(_ handle: @escaping (String) -> Void) { self.handle = handle }
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, let command = message.body as? String else { return }
+        handle(command)
+    }
+}
+
 private final class BrowserWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private let serverURL: URL?
     private let actionHandler: (LifecycleAction) -> Void
@@ -640,6 +649,7 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
         window.contentView = webView
         super.init(window: window)
         userContentController.add(RouteMessageHandler { [weak self] url in self?.remember(url) }, contentWorld: .page, name: "piWebRoute")
+        userContentController.add(TitlebarMessageHandler { [weak self] command in self?.titlebar(command) }, contentWorld: .page, name: "piWebTitlebar")
         window.delegate = self
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -714,7 +724,53 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     func windowDidBecomeKey(_ notification: Notification) { NativeNotificationBridge().clearChat(shown: shownURL) }
     func windowDidMove(_ notification: Notification) { onChange() }
     func windowDidEndLiveResize(_ notification: Notification) { onChange() }
-    func windowDidResize(_ notification: Notification) { onChange() }
+    func windowDidResize(_ notification: Notification) { layoutTitlebar(); onChange() }
+    func windowDidEnterFullScreen(_ notification: Notification) { layoutTitlebar() }
+    func windowDidExitFullScreen(_ notification: Notification) { layoutTitlebar() }
+    // A new document starts with the plain title bar; PI WEB asks again once its tab row shows.
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { setTabsInTitlebar(false) }
+
+    /// PI WEB's tab row height, on which the traffic lights are centered.
+    private static let tabRowHeight: CGFloat = 36
+    private var tabsInTitlebar = false
+    /// Brave-style title bar: PI WEB's tab row replaces it and asks the window to drag or zoom from the row's empty space.
+    private func titlebar(_ command: String) {
+        guard let window, showsApplication else { return }
+        switch command {
+        case "tabs", "plain": setTabsInTitlebar(command == "tabs")
+        // The page's mousedown arrives after AppKit dispatched it; drag only while the button is still down.
+        case "drag": if let event = NSApp.currentEvent, NSEvent.pressedMouseButtons & 1 == 1 { window.performDrag(with: event) }
+        case "zoom":
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "Minimize": window.miniaturize(nil)
+            case "None": break
+            default: window.zoom(nil)
+            }
+        default: break
+        }
+    }
+    private func setTabsInTitlebar(_ on: Bool) {
+        guard let window, on != tabsInTitlebar else { return }
+        tabsInTitlebar = on
+        if on { window.styleMask.insert(.fullSizeContentView) } else { window.styleMask.remove(.fullSizeContentView) }
+        window.titlebarAppearsTransparent = on
+        window.titleVisibility = on ? .hidden : .visible
+        layoutTitlebar()
+    }
+    /// Centers the traffic lights on the tab row and tells the page how far its row must start to clear them.
+    private func layoutTitlebar() {
+        guard let window, tabsInTitlebar else { return }
+        var inset: CGFloat = 0
+        let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap(window.standardWindowButton)
+        if !window.styleMask.contains(.fullScreen), let zoom = buttons.last, let titlebar = zoom.superview, let container = titlebar.superview {
+            // shortcut: resizes AppKit's private title bar container, as Tauri's trafficLightPosition does; recheck on new macOS releases.
+            container.frame = NSRect(x: container.frame.minX, y: window.frame.height - Self.tabRowHeight, width: container.frame.width, height: Self.tabRowHeight)
+            titlebar.frame = container.bounds
+            for button in buttons { button.setFrameOrigin(NSPoint(x: button.frame.minX, y: ((Self.tabRowHeight - button.frame.height) / 2).rounded())) }
+            inset = zoom.frame.maxX + 12
+        }
+        webView.evaluateJavaScript("document.documentElement.style.setProperty('--pi-titlebar-inset', '\(Int(inset))px')")
+    }
 
     private func remember(_ url: URL) {
         guard let serverURL else { return }

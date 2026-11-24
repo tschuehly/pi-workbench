@@ -40,7 +40,10 @@ Object.defineProperty(window, "piWebNative", {
     getSleepDisabled: () => window.webkit.messageHandlers.piWebGetSleepDisabled.postMessage({}),
     setSleepDisabled: disabled => window.webkit.messageHandlers.piWebSetSleepDisabled.postMessage(disabled),
     openLocalFile: path => window.webkit.messageHandlers.piWebOpenLocalFile.postMessage(path),
-    revealLocalFile: path => window.webkit.messageHandlers.piWebRevealLocalFile.postMessage(path)
+    revealLocalFile: path => window.webkit.messageHandlers.piWebRevealLocalFile.postMessage(path),
+    setTabsInTitlebar: shown => window.webkit.messageHandlers.piWebTitlebar.postMessage(shown ? "tabs" : "plain"),
+    dragWindow: () => window.webkit.messageHandlers.piWebTitlebar.postMessage("drag"),
+    zoomWindow: () => window.webkit.messageHandlers.piWebTitlebar.postMessage("zoom")
   })
 });
 """
