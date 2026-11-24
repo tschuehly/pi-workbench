@@ -4,8 +4,8 @@ import {
   compactionInstructions,
   createCheckpointCoordinator,
   latestAssistantToolCallCount,
-  MAX_NEXT_PHASE_CHARS,
-  MAX_SUMMARY_FOCUS_CHARS,
+  MAX_NEXT_PHASE_WORDS,
+  MAX_SUMMARY_FOCUS_WORDS,
   validateCheckpointRequest,
 } from "./coordinator.mjs";
 import { createCheckpointBarrier } from "./checkpoint-barrier.mjs";
@@ -28,13 +28,15 @@ test("builds phase-boundary compaction instructions", () => {
 test("validates concise checkpoint directives with actionable lengths", () => {
   assert.equal(validateCheckpointRequest(request), undefined);
   assert.match(
-    validateCheckpointRequest({ ...request, summaryFocus: "x".repeat(MAX_SUMMARY_FOCUS_CHARS + 1) }),
-    new RegExp(`summaryFocus is ${MAX_SUMMARY_FOCUS_CHARS + 1} characters.*not the summary itself`),
+    validateCheckpointRequest({ ...request, summaryFocus: "x ".repeat(MAX_SUMMARY_FOCUS_WORDS + 1) }),
+    new RegExp(`summaryFocus is ${MAX_SUMMARY_FOCUS_WORDS + 1} words.*not the summary itself`),
   );
   assert.match(
-    validateCheckpointRequest({ ...request, nextPhase: "x".repeat(MAX_NEXT_PHASE_CHARS + 1) }),
-    new RegExp(`nextPhase is ${MAX_NEXT_PHASE_CHARS + 1} characters`),
+    validateCheckpointRequest({ ...request, nextPhase: "x ".repeat(MAX_NEXT_PHASE_WORDS + 1) }),
+    new RegExp(`nextPhase is ${MAX_NEXT_PHASE_WORDS + 1} words`),
   );
+  // The 1,471-character focus the character limit rejected passes as words.
+  assert.equal(validateCheckpointRequest({ ...request, summaryFocus: "words ".repeat(245).trim() }), undefined);
   assert.match(validateCheckpointRequest({ summaryFocus: "", nextPhase: "phase" }), /non-whitespace/);
 });
 

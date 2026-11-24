@@ -313,6 +313,27 @@ test("compact_and_continue: the run ends, the summary is placed, then exactly on
 	assert.equal(integrity(store), "ok");
 });
 
+test("checkpoint_and_continue: the same run goes on in a fresh context holding the checkpoint pointer, Working Mode and the next phase, with no summary", async () => {
+	const { store, cwd } = family("checkpoint-handoff");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("mode", { args: "attention focused" });
+	await twoTurns(host);
+	await host.call("prompt", { operationId: "op-cc", text: `call:checkpoint_and_continue ${JSON.stringify({ nextPhase: "write the docs" })}` });
+	const ended = await host.until((e) => e.type === "tool.end" && e.toolName === "checkpoint_and_continue", "the tool result");
+	assert.match(String(ended.text), /Context reset scheduled/);
+	const isFresh = (l: { label: string }) => l.label.trimStart().startsWith("You wrote this session's Workstream");
+	await waitFor(() => logged(store).some(isFresh), "the request in the fresh context");
+	const fresh = logged(store).find(isFresh) as { messages?: number; workingMode?: number };
+	assert.equal(fresh.messages, 1, "only the handoff is in context");
+	assert.ok(fresh.workingMode !== undefined, "the Working Mode block rides with the handoff");
+	assert.ok(!logged(store).some((l) => l.label === "summarize"), "no summarizer call");
+	const transcript = await host.call<Transcript>("transcript");
+	assert.ok(transcript.messages.some((m) => textOf(m.content).includes("No question sets are open.\n\nContinue with the next phase: write the docs")), "the handoff names the next phase");
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
 test("compact_and_continue refuses a sibling tool batch and schedules nothing", async () => {
 	const { store, cwd } = family("checkpoint-batch");
 	const host = new ChatHost(store, cwd);

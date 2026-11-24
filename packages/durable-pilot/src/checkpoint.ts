@@ -24,12 +24,14 @@ import type { Context } from "@earendil-works/chord/context";
 import {
 	compactionInstructions,
 	createContextCeiling,
-	MAX_NEXT_PHASE_CHARS,
-	MAX_SUMMARY_FOCUS_CHARS,
+	MAX_NEXT_PHASE_WORDS,
+	MAX_SUMMARY_FOCUS_WORDS,
 	validateCheckpointRequest,
+	validateNextPhase,
 } from "../../../extensions/context-checkpoint/coordinator.mjs";
+import { checkpointHandoff } from "../../../extensions/working-mode/rules.mts";
+import { pendingBlock, questionsState } from "./workbench.ts";
 import { redact, sealed } from "./redact.ts";
-import { pendingBlock } from "./workbench.ts";
 
 /** The continuation (or the record of a cancelled checkpoint) as placed in the transcript. */
 export const CHECKPOINT_ENTRY = "workbench.context-checkpoint";
@@ -168,8 +170,8 @@ export function checkpointExtension(harness: () => Harness) {
 		name: "compact_and_continue",
 		description: "End the run at a completed phase, compact older context, and start the named next phase in this session. Call it alone as the final action, after saving and verifying work that must survive compaction, and only when the next phase is concrete and gains from a smaller context, never to avoid hard reasoning or unfinished work. Do not create a progress file for it or call the generated notes authoritative, durable checkpoints, Continuation Artifacts, or cross-session handoffs.",
 		parameters: obj({
-			summaryFocus: str({ minLength: 1, description: `Short directive to the summarizer, not a handoff summary; at most ${MAX_SUMMARY_FOCUS_CHARS} characters; point to existing evidence paths instead of restating history` }),
-			nextPhase: str({ minLength: 1, description: `One concrete next phase to begin after compaction; at most ${MAX_NEXT_PHASE_CHARS} characters` }),
+			summaryFocus: str({ minLength: 1, description: `Short directive to the summarizer, not a handoff summary; at most ${MAX_SUMMARY_FOCUS_WORDS} words; point to existing evidence paths instead of restating history` }),
+			nextPhase: str({ minLength: 1, description: `One concrete next phase to begin after compaction; at most ${MAX_NEXT_PHASE_WORDS} words` }),
 		}, { open: true }),
 		// Scripts cannot schedule a checkpoint: it must be the model's sole call of its round.
 		callers: ["model"],
@@ -208,6 +210,36 @@ export function checkpointExtension(harness: () => Harness) {
 		},
 	});
 
+	// The run goes on in a fresh context (Durable's handoff control), as /back's reset but with no owner action: the
+	// Workstream checkpoint the model just wrote is the record; nothing is summarized.
+	const handoff = defineTool({
+		name: "checkpoint_and_continue",
+		description: "After writing this session's Workstream checkpoint (`workstreams checkpoint`), drop the earlier conversation from context and go on with the named next phase. The new context holds only a pointer to that checkpoint, the open question sets and Working Mode. Call it alone, only in a session with a home Workstream and once everything the next phase needs is in the checkpoint or the repository.",
+		parameters: obj({
+			nextPhase: str({ minLength: 1, description: `One concrete next phase to begin in the fresh context; at most ${MAX_NEXT_PHASE_WORDS} words` }),
+		}, { open: true }),
+		callers: ["model"],
+		executionMode: "sequential",
+		execute: async (args, api, c) => {
+			const nextPhase = args.nextPhase.trim();
+			const invalid = validateNextPhase(nextPhase);
+			if (invalid !== undefined) throw new Error(invalid);
+			if ((await batchSize(api, c)) > 1)
+				return { output: text("Context not reset: checkpoint_and_continue must be called alone in its assistant tool batch. Finish the current work, then call it as the sole final action."), details: { accepted: false, nextPhase: sanitize(nextPhase) } };
+			const main = await conversation(api.conversationId, c);
+			const asks = Object.values((await questionsState(harness(), main)).open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
+			// Forced: the block is still in the context being dropped, so pendingBlock would otherwise see it as sent.
+			const block = await pendingBlock(harness(), main, false, true);
+			// The question sets repeat tool-call arguments (stored verbatim): sanitized before this new copy commits.
+			const body = sanitize(checkpointHandoff(asks, nextPhase));
+			return {
+				output: text("Context reset scheduled: the run continues in a fresh context with the checkpoint pointer and the next phase."),
+				details: { accepted: true, nextPhase: sanitize(nextPhase) },
+				control: { handoff: block === undefined ? body : `${block.text}\n\n${body}` },
+			};
+		},
+	});
+
 	// The legacy turn_end nudge: from 200k context tokens, and every further 50k until a compaction drops it, a boundary
 	// entry the next request carries (a queued write while the run is busy). Context size as Pi's getContextUsage reads it.
 	// shortcut: the ceiling's level is per host process, so a restart above 200k repeats one note; persist it if that matters.
@@ -229,5 +261,5 @@ export function checkpointExtension(harness: () => Harness) {
 		},
 	});
 
-	return defineExtension({ name: "workbench.context-checkpoint", tools: [tool], tasks: [CheckpointTask], hooks: [ceilingNudge] });
+	return defineExtension({ name: "workbench.context-checkpoint", tools: [tool, handoff], tasks: [CheckpointTask], hooks: [ceilingNudge] });
 }

@@ -104,20 +104,29 @@ export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = 
   };
 }
 
-export const MAX_SUMMARY_FOCUS_CHARS = 1200;
-export const MAX_NEXT_PHASE_CHARS = 800;
+// Words, not characters or tokens: models estimate words best, and the code counts them exactly.
+export const MAX_SUMMARY_FOCUS_WORDS = 750;
+export const MAX_NEXT_PHASE_WORDS = 120;
+
+export const wordCount = (text) => text.split(/\s+/).filter(Boolean).length;
+
+/** nextPhase alone, shared with checkpoint_and_continue; undefined when valid. */
+export function validateNextPhase(nextPhase) {
+  if (nextPhase.length === 0) return "nextPhase must contain non-whitespace text";
+  const words = wordCount(nextPhase);
+  if (words > MAX_NEXT_PHASE_WORDS) return `nextPhase is ${words} words; shorten it to ${MAX_NEXT_PHASE_WORDS} or fewer and name one concrete phase.`;
+  return undefined;
+}
 
 export function validateCheckpointRequest(request) {
   if (request.summaryFocus.length === 0 || request.nextPhase.length === 0) {
     return "summaryFocus and nextPhase must contain non-whitespace text";
   }
-  if (request.summaryFocus.length > MAX_SUMMARY_FOCUS_CHARS) {
-    return `summaryFocus is ${request.summaryFocus.length} characters; shorten it to ${MAX_SUMMARY_FOCUS_CHARS} or fewer. It is a brief directive to Pi's summarizer, not the summary itself. Reference existing evidence paths instead of restating session history.`;
+  const words = wordCount(request.summaryFocus);
+  if (words > MAX_SUMMARY_FOCUS_WORDS) {
+    return `summaryFocus is ${words} words; shorten it to ${MAX_SUMMARY_FOCUS_WORDS} or fewer. It is a brief directive to Pi's summarizer, not the summary itself. Reference existing evidence paths instead of restating session history.`;
   }
-  if (request.nextPhase.length > MAX_NEXT_PHASE_CHARS) {
-    return `nextPhase is ${request.nextPhase.length} characters; shorten it to ${MAX_NEXT_PHASE_CHARS} or fewer and name one concrete phase.`;
-  }
-  return undefined;
+  return validateNextPhase(request.nextPhase);
 }
 
 export function compactionInstructions(request) {
