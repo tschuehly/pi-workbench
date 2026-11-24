@@ -86,6 +86,9 @@ pi-workbench checkout: it clones PI WEB beside it if missing, runs `promote-inst
 <origin/pi-workbench>` for the Durable instance and waits for the job (skipped when both links already point at
 those builds), then builds the native app with `--app-only` for :8506. `--dry-run` prints the plan;
 `PI_PROMOTE_DURABLE_ENV` passes through to the services (e.g. `GIT_CONFIG_GLOBAL` for an agent's git identity).
+Every later `promote-installed` switch keeps the extra keys of the current Durable plists (not the ones it sets itself)
+and merges its own `PI_PROMOTE_DURABLE_ENV` over them; `-KEY` in it removes a key. Chats already open keep their
+host's old environment until **Upgrade host**; restarting the daemon alone does not change it.
 
 The Durable instance (`docs/plans/pi-durable-cutover-spec.md`, B7) is a second installed PI WEB beside
 the legacy one: `promote-installed` (or `--instance durable`) runs `prepare`, `switch`, `switch-workbench`,

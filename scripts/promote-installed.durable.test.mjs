@@ -342,7 +342,7 @@ test("a full Durable switch restarts only the two Durable services, never a host
   assert.ok(existsSync(build("pi-workbench", wbRev(5))));
 });
 
-test("PI_PROMOTE_DURABLE_ENV adds service environment on the real Durable instance too (the agent's git identity)", () => {
+test("PI_PROMOTE_DURABLE_ENV adds service environment on the real Durable instance too, and later switches keep it (the agent's git identity)", () => {
   const h = harness();
   const promoted = h.switchDurable(wbRev(1), pwRev(1), { PI_PROMOTE_DURABLE_ENV: "GIT_CONFIG_GLOBAL=/home/agent.gitconfig PI_WEB_DURABLE_AUTO_UPGRADE=0" });
   assert.equal(promoted.status, 0, promoted.log);
@@ -352,9 +352,19 @@ test("PI_PROMOTE_DURABLE_ENV adds service environment on the real Durable instan
     assert.equal(env.PI_WEB_DURABLE_AUTO_UPGRADE, "0", "a later entry overrides the default");
     assert.equal(env.PI_WEB_PORT, "8506");
   }
-  // Without it, the services get only the defaults.
+  // Without it, the next switch keeps the extra keys but sets its own keys again.
   assert.equal(h.switchDurable(wbRev(2), pwRev(2)).status, 0);
-  assert.equal(h.plist("sessiond").EnvironmentVariables.GIT_CONFIG_GLOBAL, undefined);
+  for (const s of ["sessiond", "web"]) {
+    const env = h.plist(s).EnvironmentVariables;
+    assert.equal(env.GIT_CONFIG_GLOBAL, "/home/agent.gitconfig");
+    assert.equal(env.PI_WEB_DURABLE_AUTO_UPGRADE, "1", "a key the script owns comes from the script");
+    assert.match(env.PI_WEB_DURABLE_HOST, new RegExp(short(wbRev(2))));
+  }
+  // Given again, it merges: new keys add, -KEY removes a carried key.
+  assert.equal(h.switchDurable(wbRev(3), pwRev(3), { PI_PROMOTE_DURABLE_ENV: "-GIT_CONFIG_GLOBAL PI_OFFLINE=1" }).status, 0);
+  const env = h.plist("web").EnvironmentVariables;
+  assert.equal(env.GIT_CONFIG_GLOBAL, undefined);
+  assert.equal(env.PI_OFFLINE, "1");
 });
 
 test("prune keeps the build a stopped Durable Chat is pinned to (C3 hostEntry) and removes it once the pin goes", () => {
