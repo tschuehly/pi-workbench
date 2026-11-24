@@ -5,7 +5,7 @@ description: "Orient an owner returning to a current or previous Chat or Workstr
 
 # Orient
 
-Restore shared understanding before the next move. `/skill:orient` defaults to the current session's associated Workstream, then the current Chat if unassociated. `/skill:orient this Chat` or `/skill:orient <session or Workstream>` uses the explicit source. This skill reads and reports; it does not authorize execution, task changes, account connections, or unrelated scans; its one write is the checkpoint in step 2 when the orientation finds the record out of date. A fresh-session launch may ask for **brief** or **full** orientation; the launcher, not this skill, decides when elapsed time requires full orientation. An explicit request for full orientation always wins.
+Restore shared understanding before the next move. `/skill:orient` defaults to the current session's associated Workstream, then the current Chat if unassociated. `/skill:orient this Chat` or `/skill:orient <session or Workstream>` uses the explicit source. This skill reads and reports; it does not authorize execution, task changes, account connections, or unrelated scans; its one write is the checkpoint in step 2 when the orientation finds the record out of date. A fresh-session launch may ask for **brief** or **full** orientation; the launcher, not this skill, decides when elapsed time requires full orientation. An explicit request for full orientation always wins. `/skill:orient request` followed by an owner request follows **Request mode** at the end instead: a short tagged context, then the request itself.
 
 ## 1. Choose the source
 
@@ -59,3 +59,21 @@ Otherwise give a **brief** re-entry: goal, current position with its open items 
 Stop after the orientation. If the owner's reply is a question or a request to check something, answer it before starting any longer work. A separate, already-authorized continuation may proceed after presenting it; this skill supplies context, not permission. Beyond that checkpoint, do not write a new plan, mutate the Workstream, or automatically follow up.
 
 **Complete when:** the owner can retell the original and current goals, the few meaningful turns in the work, the current position, and what happens next without looking up jargon, raw checkpoints, or earlier messages, and could act on each open item without asking "what is X?"
+
+## Request mode
+
+PI WEB sends a Workstream Chat's first owner message as `/skill:orient request` followed by that message. Orient yourself for the request instead of the owner: select the Workstream as in step 1, then read only what the request needs, usually the latest checkpoint and its `Decided (do not re-ask)` line, open Human Tasks, the overview's goal, and the linked branches, PRs, plans and files the request touches, with live state for any remote object among them (step 2's refresh). Skip scouts, the storage check, the checkpoint write and section 3's story. Then reply with one block in the system prompt's tagged form, followed by the work on the request itself:
+
+```
+<workstream-context id="<workstream id>" revision="<n>" checkpoint="<id>, <date>">
+Goal: <the outcome in one sentence>
+Where it stands: <what works, what is open, who is waiting; 2–4 sentences>
+Decided: <owner decisions that bind this request, or none>
+For this request: <what the evidence means for it: conflicts, prior attempts, constraints, the branch or worktree to use>
+Pointers:
+- <path, repo@sha or link>: <why it matters to the request>
+Unchecked: <sources you could not read, or none>
+</workstream-context>
+```
+
+Give each claim a pointer the owner or a later agent can open. If the evidence conflicts with the request (it repeats a decided question, undoes accepted work, or needs an open decision first), say so in `For this request` and ask before acting. Otherwise the request is the owner's instruction: carry it out under the current Working Mode, as if the owner had sent it alone.
