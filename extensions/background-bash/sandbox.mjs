@@ -3,7 +3,7 @@
 // environment, never from files the command can write. No usable sandbox means the command does not start.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
@@ -18,6 +18,10 @@ const CACHES = [".cache", "Library/Caches"];
 // ~/.gradle and ~/Library/pnpm are simply never granted; this one sits inside a granted cache.
 const CODE_CACHES = ["Library/Caches/ms-playwright"];
 const AGENT_CACHES = ".pi-workbench/sandbox-caches";
+// Seeded once from Thomas's copy as an APFS clone (no extra disk until changed), so a fenced Playwright does not
+// download the same browsers again; later changes never flow back. Only direct children of the agent caches folder,
+// which no fenced command can rename or replace (a grant's own folder), so no planted symlink redirects the copy.
+const SEEDS = [["Library/Caches/ms-playwright", "ms-playwright"]];
 // Inside a granted repo: what would let a command run code later outside the fence or redirect the agent.
 const REPO_READ_ONLY = [".pi", "AGENTS.md", "AGENTS.override.md", ".mcp.json"];
 
@@ -152,6 +156,8 @@ function profile({ write, read, reopen = [], locked = [], history = [], hidden, 
     ...(history.length ? [
       `(deny file-write-unlink file-write-data${history.map((h) => ` (subpath ${p(h)})`).join("")})`,
       `(allow file-write-unlink file-write-data${history.map((h) => ` (require-all (subpath ${p(h)}) (regex #"/(tmp_[^/]*|\\.tmp-[^/]*|[^/]*\\.(lock|keep))$"))`).join("")}${history.map((h) => ` (subpath ${p(join(h, "info"))})`).join("")})`,
+      // An alternates file makes the owner's next unfenced gc drop every object the alternate store also has.
+      `(deny file-write*${history.map((h) => ` (literal ${p(join(h, "info", "alternates"))}) (literal ${p(join(h, "info", "http-alternates"))})`).join("")})`,
     ] : []),
     // A grant's own folder cannot be deleted or renamed away, only its contents.
     ...(write.length ? [`(deny file-write-unlink${write.map((w) => ` (literal ${p(w)})`).join("")})`] : []),
@@ -195,6 +201,36 @@ function proven(bin, env, home) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+const present = (path) => { try { lstatSync(path); return true; } catch { return false; } };
+
+/** Clones `from` to `to`, built where no fenced command can write (same disk), then renamed into place. */
+function seed(from, to, home) {
+  if (present(to) || !existsSync(from)) return;
+  mkdirSync(join(home, ".pi-workbench", "sandbox"), { recursive: true, mode: 0o700 });
+  const work = mkdtempSync(join(home, ".pi-workbench", "sandbox", "seed-"));
+  try {
+    execFileSync("/bin/cp", ["-cR", from, join(work, "copy")], { stdio: "ignore", timeout: 60_000 });
+    renameSync(join(work, "copy"), to);
+  } catch { /* another runner won the race, or no clone: the tool starts a fresh cache */ }
+  finally { rmSync(work, { recursive: true, force: true }); }
+}
+
+/**
+ * A short path for the Chat's temp folder: `PI_TMP` itself can pass the 104-byte Unix socket limit (tmux, Chromium and
+ * any `listen($TMPDIR/x.sock)` fail). A link under ~/.pi-workbench/t, which no fenced command can write, to PI_TMP.
+ */
+function shortTmp(home, piTmp) {
+  const dir = join(home, ".pi-workbench", "t");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Links whose PI_TMP was swept go; a fresh one is made on the next command.
+  for (const name of readdirSync(dir)) if (!existsSync(join(dir, name))) rmSync(join(dir, name), { force: true });
+  const link = join(dir, createHash("sha256").update(piTmp).digest("hex").slice(0, 12));
+  let target;
+  try { target = readlinkSync(link); } catch { /* none yet */ }
+  if (target !== piTmp) { rmSync(link, { recursive: true, force: true }); symlinkSync(piTmp, link); }
+  return link;
+}
+
 /**
  * The fenced command's environment: its temp folder is the Chat's own PI_TMP (the shared system temp folders hold code
  * unfenced Pi loads later, e.g. compiled extensions, so no fence grants them), and its package caches are the agents'
@@ -203,11 +239,12 @@ function proven(bin, env, home) {
 export function fencedEnv(env, home, grantedTmp) {
   const caches = join(real(home), AGENT_CACHES);
   mkdirSync(caches, { recursive: true, mode: 0o700 });
+  for (const [from, to] of SEEDS) seed(join(real(home), from), join(caches, to), real(home));
   const gradleCaches = join(real(home), ".gradle", "caches");
   return {
     ...env,
     // shortcut: no PI_TMP grant leaves TMPDIR unwritable (temp files fail visibly); every Pi-started command has one.
-    ...(grantedTmp === undefined ? {} : { TMPDIR: `${grantedTmp}/` }),
+    ...(grantedTmp === undefined ? {} : { TMPDIR: `${shortTmp(real(home), grantedTmp)}/` }),
     GRADLE_USER_HOME: join(caches, "gradle"),
     ...(existsSync(join(gradleCaches, "modules-2")) ? { GRADLE_RO_DEP_CACHE: gradleCaches } : {}),
     MAVEN_USER_HOME: join(caches, "m2"),

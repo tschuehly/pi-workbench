@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { launchJob, readJob } from "./jobs.mjs";
+// Fenced commands write only in granted folders, never system temp: a test-owned PI_TMP under ~/.pi-workbench/tmp.
+const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
+mkdirSync(base, { recursive: true });
+process.env.PI_TMP ??= mkdtempSync(join(base, "bb-test-"));
+const tmpdir = () => process.env.PI_TMP;
 
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; } };

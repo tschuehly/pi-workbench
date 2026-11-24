@@ -2,7 +2,7 @@
 // make a forbidden write look allowed. macOS only, like the fence.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
@@ -319,9 +319,10 @@ test("git history: commits, branch deletes and fetches work; the command cannot 
     `f=$(find .git/objects -type f -path "*/objects/[0-9a-f][0-9a-f]/*" | head -1); chmod u+w "$f"; : 2>/dev/null > "$f" || echo OVERWRITE_REFUSED`,
     // gc packs what it can; the objects it would delete stay.
     `${g} gc -q 2>/dev/null; echo GC_RAN`,
+    `{ echo "$PI_TMP/alt" > .git/objects/info/alternates; } 2>/dev/null && echo ALTERNATES_WRITTEN || echo ALTERNATES_REFUSED`,
   ].join("; "), { cwd: hist });
   assert.equal(job.state, "complete", job.error);
-  assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["COMMIT_OK", "BRANCH_DELETED", "FETCH_OK", "RM_REFUSED", "MV_REFUSED", "OVERWRITE_REFUSED", "GC_RAN"]);
+  assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["COMMIT_OK", "BRANCH_DELETED", "FETCH_OK", "RM_REFUSED", "MV_REFUSED", "OVERWRITE_REFUSED", "GC_RAN", "ALTERNATES_REFUSED"]);
   git(hist, "fsck", "--no-progress");
   assert.match(git(hist, "log", "-1", "--format=%s"), /fenced/);
   assert.equal(git(hist, "for-each-ref", "--format=%(refname)", "refs/heads/fetched").trim(), "refs/heads/fetched");
@@ -335,6 +336,7 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
   try {
     const job = await run([
       'echo "tmp=$TMPDIR"', 'touch "${TMPDIR}t" && echo TMP_OK',
+      'ln -sfn / "${TMPDIR%/}" 2>/dev/null && echo RELINKED || echo RELINK_DENIED',
       `touch "${join(shared, "x")}" 2>/dev/null && echo SHARED_WRITTEN || echo SHARED_DENIED`,
       'touch /private/tmp/fence-x-$$ 2>/dev/null && { rm -f /private/tmp/fence-x-$$; echo SLASHTMP_WRITTEN; } || echo SLASHTMP_DENIED',
       'for c in .gradle/caches/modules-2 .npm Library/Caches/ms-playwright; do touch "$HOME/$c/x" 2>/dev/null && echo "WRITTEN $c" || echo "DENIED $c"; done',
@@ -343,7 +345,13 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
     ].join("; "));
     assert.equal(job.state, "complete", job.error);
     const caches = join(home, ".pi-workbench", "sandbox-caches");
-    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), [`tmp=${piTmp}/`, "TMP_OK", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "AGENT_CACHES_OK", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
+    const lines = readFileSync(job.logPath, "utf8").trim().split("\n");
+    // A short link to PI_TMP (the 104-byte socket path limit), in a folder the command cannot write.
+    const link = lines[0].slice("tmp=".length, -1);
+    assert.equal(realpathSync(link), realpathSync(piTmp));
+    // In production 42 bytes under /Users/<name>, so sockets there fit (this fake home is too long to show it).
+    assert.match(link, /\/\.pi-workbench\/t\/[0-9a-f]{12}$/);
+    assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "AGENT_CACHES_OK", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
     assert.ok(existsSync(join(caches, "gradle")));
   } finally { rmSync(shared, { recursive: true, force: true }); }
 });

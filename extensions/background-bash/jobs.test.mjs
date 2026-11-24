@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { createBackgroundBashJobs } from "./jobs.mjs";
+// Fenced commands write only in granted folders, never system temp: a test-owned PI_TMP under ~/.pi-workbench/tmp.
+const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
+mkdirSync(base, { recursive: true });
+process.env.PI_TMP ??= mkdtempSync(join(base, "bb-test-"));
+const tmpdir = () => process.env.PI_TMP;
 
 const cwd = process.cwd();
 // Completions are redacted; keep the real ~/.pi/agent/auth.json out of tests.
