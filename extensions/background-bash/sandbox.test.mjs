@@ -216,7 +216,7 @@ test("inside the sandbox the real wt runs only list, switch and config: removal,
   git(main, "worktree", "add", "-q", "-b", "done", done);
   const receipt = join(main, ".git", "worktrees", "rm.done", "pi-creator.json");
   writeFileSync(receipt, JSON.stringify({ branch: "done", sessions: ["sandbox-test"], workstreams: [] }));
-  const refused = ["remove done --foreground", "remove done --force -D", "-y remove done", "-C . remove done", "--config /dev/null -v remove done", "-yC . remove done", "merge", "merge --no-remove", "merge -- --no-remove", "step prune", "step promote", "hook pre-remove", "my_alias"];
+  const refused = ["remove done --foreground", "remove done --force -D", "-y remove done", "-C . remove done", "--config /dev/null -v remove done", "-yC . remove done", "merge", "merge --no-remove", "merge -- --no-remove", "step prune", "step promote", "hook pre-remove", "my_alias", "help", "-y switch --create made --no-cd"];
   const allowed = ["list", "-C . list", "--config=/dev/null switch other", "--version", "config"];
   const job = await run([...refused.map((r) => `wt ${r}; echo "exit=$?"`), `cd "${done}" && PI_HOST_OPS= wt remove; echo "exit=$?"`, ...allowed.map((r) => `wt ${r}; echo "exit=$?"`)].join("; "), { cwd: main, env: withFakes });
   assert.equal(job.state, "complete", job.error);

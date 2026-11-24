@@ -22,8 +22,14 @@ if (name === "wt") {
     else break;
   }
   const command = args[i];
-  if (command !== undefined && !["list", "switch", "config", "help", "-h", "--help", "-V", "--version"].includes(command)) {
+  // `help` is no wt subcommand: an alias or wt-help program of that name would run.
+  if (command !== undefined && !["list", "switch", "config", "-h", "--help", "-V", "--version"].includes(command)) {
     process.stderr.write(`wt ${command}: is not available inside the sandbox (only list, switch and config run here; removing a worktree never); ask Thomas or turn on full access\n`);
+    process.exit(2);
+  }
+  // The host operation takes `switch --create` first only; a prefixed one would run the real wt here, unrecorded.
+  if (i > 0 && command === "switch" && args.some((a) => a === "-c" || a === "--create")) {
+    process.stderr.write("wt switch --create: is not available inside the sandbox after global options; write `wt switch --create …` first\n");
     process.exit(2);
   }
 }
