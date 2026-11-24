@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -496,6 +496,8 @@ test("actual installed Pi resource is distinct from injected preview harness evi
   // The installed Pi, not the dev dependency a run script puts first on PATH (pnpm's node_modules/.bin/pi is a shell shim outside the package).
   const PATH=(process.env.PATH??"").split(":").filter((dir)=>!dir.endsWith("/node_modules/.bin")).join(":");
   let pi; try { pi=realpathSync(execFileSync("which",["pi"],{encoding:"utf8",env:{...process.env,PATH}}).trim()); } catch { return t.skip("pi executable unavailable"); }
+  // The managed installer's `pi` is a shell launcher that execs install/releases/<current-version>/node_modules/.bin/pi, which is the running process's argv[1].
+  const managed=join(dirname(dirname(pi)),"install"); if(existsSync(join(managed,"current-version"))) pi=realpathSync(join(managed,"releases",readFileSync(join(managed,"current-version"),"utf8").trim(),"node_modules",".bin","pi"));
   const packages=runtimePackages(pi); assert.equal(packages.piCodingAgent.runningProcess.status,"observed");
   assert.equal(packages.piCodingAgent.runningProcess.resolution,"process.argv[1] nearest matching package");
   const built=await loadPiBasePrompt({cwd:repo,skills:[],contextFiles:[],selectedTools:[]},pi);
