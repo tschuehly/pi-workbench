@@ -27,7 +27,7 @@ const RECONCILE_MARGIN_MS = 5 * 60_000;
 const BOOTSTRAP_WINDOW_MS = 24 * 60 * 60_000;
 /** A Chat whose ask read keeps failing (PI WEB answers HTTP 500 for a deleted Chat) is given up after this many reconciles. */
 const MAX_READ_FAILURES = 6;
-/** Ask reads at once: each read of a cold Durable Chat starts its host. */
+/** Ask reads at once, across every reconcile: scans and status events share it. */
 const READ_CONCURRENCY = 2;
 
 /** The Telegram text for an opened question set, or undefined for any other event. */
@@ -120,14 +120,6 @@ async function getJson(path) {
 	return response.json();
 }
 
-/** Runs `work` on each item, at most `limit` at once. */
-async function eachLimited(items, limit, work) {
-	const queue = [...items];
-	await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, async () => {
-		while (queue.length > 0) await work(queue.shift());
-	}));
-}
-
 /**
  * Delivers each opened ask's link once. An id counts as delivered only after Telegram confirms it; while a send runs it
  * is only in flight, so a parallel success never saves it. Effects come in: `send(text)`, `getJson(path)` on PI WEB,
@@ -142,6 +134,21 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 	const known = (id) => state.delivered.includes(id) || inFlight.has(id) || state.pending.some((ask) => ask.id === id);
 
 	state.recheck ??= [];
+
+	// One limit for every ask read, whichever reconcile asks.
+	let reading = 0;
+	const waiting = [];
+	async function limited(work) {
+		if (reading < READ_CONCURRENCY) reading += 1;
+		else await new Promise((resolve) => waiting.push(resolve)); // The finishing read hands its slot over.
+		try {
+			return await work();
+		} finally {
+			const next = waiting.shift();
+			if (next === undefined) reading -= 1;
+			else next();
+		}
+	}
 
 	async function deliver({ id, sessionId, cwd, text }) {
 		if (state.delivered.includes(id) || inFlight.has(id)) return;
@@ -176,8 +183,8 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 	/**
 	 * Sends every still-open ask not yet delivered: of the given Chats, else of Chats with a failed send or read and of
 	 * Chats changed since the last full reconcile (an ask opened while the socket was down). A Chat with a failed send or
-	 * read is read by its saved id and cwd, as it may be older than the latest 500. Only those Chats are read, because
-	 * reading a cold Durable Chat's asks starts its host. Resolves after the sends.
+	 * read is read by its saved id and cwd, as it may be older than the latest 500. Only those Chats are read, which keeps a
+	 * reconnect cheap; PI WEB's asks read never starts a cold Durable host. Resolves after the sends.
 	 */
 	async function reconcile(only) {
 		const startedAt = now();
@@ -197,10 +204,10 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 			}
 		}
 		const sends = [];
-		await eachLimited(chats.values(), READ_CONCURRENCY, async (chat) => {
+		await Promise.all([...chats.values()].map(async (chat) => {
 			let open;
 			try {
-				const asks = await getJson(`/api/sessions/${encodeURIComponent(chat.id)}/asks?cwd=${encodeURIComponent(chat.cwd)}`);
+				const asks = await limited(() => getJson(`/api/sessions/${encodeURIComponent(chat.id)}/asks?cwd=${encodeURIComponent(chat.cwd)}`));
 				open = Array.isArray(asks?.pendingAsks) ? asks.pendingAsks.filter((ask) => typeof ask?.askId === "string") : [];
 			} catch (error) {
 				const failures = (state.recheck.find((ref) => ref.sessionId === chat.id)?.failures ?? 0) + 1;
@@ -227,7 +234,7 @@ export function createLinker({ send, getJson, state, save, log = (_message) => {
 				const text = askMessage({ type: "session.attention", kind: "ask", id: ask.askId, sessionId: chat.id });
 				if (text !== undefined) sends.push(deliver({ id: ask.askId, sessionId: chat.id, cwd: chat.cwd, text }));
 			}
-		});
+		}));
 		// A failed read stays in `recheck`, so the watermark may pass it.
 		if (only === undefined) {
 			state.checkedAt = new Date(startedAt).toISOString();

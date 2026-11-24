@@ -222,6 +222,15 @@ test("a reconnect reads at most two Chats at once", async () => {
 	assert.equal(reading.max, 2);
 });
 
+test("a scan and four status events together read at most two Chats at once", async () => {
+	const ids = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+	const sessions = ids.map((id) => ({ id, cwd: "/w", modified: "2026-05-01T11:00:00Z" }));
+	const { linker, reads, reading } = harness({ state: { delivered: [], pending: [], checkedAt: "2026-05-01T10:00:00Z" }, sessions });
+	await Promise.all([linker.reconcile(), ...["f", "g", "h", "i"].map((id) => linker.onEvent({ type: "status.update", status: { sessionId: id, pendingAsks: [{ askId: `x${id}` }] } }))]);
+	assert.ok(reads.filter((path) => path.includes("/asks")).length >= ids.length);
+	assert.equal(reading.max, 2);
+});
+
 test("while the socket stays up the watermark follows, so a reconnect reads only Chats changed while it was down", async () => {
 	const clock = { now: Date.parse("2026-05-01T08:00:00Z") };
 	const sessions = [];
