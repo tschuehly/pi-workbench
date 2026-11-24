@@ -126,7 +126,7 @@ test("inside a fence the runner starts commands under the outer fence instead of
 
 test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a scratch folder counts once", () => {
   const h = "/Users/someone";
-  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("Cache") && !p.includes(".cache") && !p.includes("sandbox-caches"));
+  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("sandbox-caches"));
   assert.deepEqual(rules(h), []);
   assert.deepEqual(rules(`${h}/IdeaProjects`), []);
   assert.deepEqual(rules(`${h}/.pi-workbench/scratch`), []);
@@ -135,9 +135,8 @@ test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a 
   assert.deepEqual(rules(h, { piTmp: `${h}/.pi/agent`, scratch: `${h}/.pi-workbench/workstreams` }), [], "Pi's own state is never granted");
   // Caches with code Thomas's builds run: never writable; the agents' own instead.
   const all = grants({ cwd: h, home: h });
-  for (const cache of [".npm", ".m2", ".gradle", "Library/pnpm"]) assert.ok(!all.write.some((w) => w === `${h}/${cache}` || w.startsWith(`${h}/${cache}/`)), cache);
+  for (const cache of [".npm", ".m2", ".gradle", "Library/pnpm", "Library/Caches", ".cache"]) assert.ok(!all.write.some((w) => w === `${h}/${cache}` || w.startsWith(`${h}/${cache}/`)), cache);
   assert.ok(all.write.includes(`${h}/.pi-workbench/sandbox-caches`));
-  assert.ok(all.read.includes(`${h}/Library/Caches/ms-playwright`));
   assert.ok(grants({ cwd: h, home: h }).hidden.includes(`${h}/Desktop`));
   assert.ok(!all.write.some((w) => w.startsWith("/private/") || w.startsWith("/var/")), "no shared system temp folder");
 });
@@ -333,13 +332,14 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
   mkdirSync(join(home, ".gradle", "caches", "modules-2"), { recursive: true });
   mkdirSync(join(home, ".npm"), { recursive: true });
   mkdirSync(join(home, "Library", "Caches", "ms-playwright"), { recursive: true });
+  mkdirSync(join(home, ".cache"), { recursive: true });
   try {
     const job = await run([
       'echo "tmp=$TMPDIR"', 'touch "${TMPDIR}t" && echo TMP_OK',
       'ln -sfn / "${TMPDIR%/}" 2>/dev/null && echo RELINKED || echo RELINK_DENIED',
       `touch "${join(shared, "x")}" 2>/dev/null && echo SHARED_WRITTEN || echo SHARED_DENIED`,
       'touch /private/tmp/fence-x-$$ 2>/dev/null && { rm -f /private/tmp/fence-x-$$; echo SLASHTMP_WRITTEN; } || echo SLASHTMP_DENIED',
-      'for c in .gradle/caches/modules-2 .npm Library/Caches/ms-playwright; do touch "$HOME/$c/x" 2>/dev/null && echo "WRITTEN $c" || echo "DENIED $c"; done',
+      'for c in .gradle/caches/modules-2 .npm Library/Caches/ms-playwright Library/Caches .cache; do touch "$HOME/$c/x" 2>/dev/null && echo "WRITTEN $c" || echo "DENIED $c"; done',
       'mkdir -p "$GRADLE_USER_HOME" "$npm_config_cache" "$PLAYWRIGHT_BROWSERS_PATH" && echo AGENT_CACHES_OK',
       'echo "ro=$GRADLE_RO_DEP_CACHE"; echo "maven=$MAVEN_OPTS"',
     ].join("; "));
@@ -351,7 +351,7 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
     assert.equal(realpathSync(link), realpathSync(piTmp));
     // In production 42 bytes under /Users/<name>, so sockets there fit (this fake home is too long to show it).
     assert.match(link, /\/\.pi-workbench\/t\/[0-9a-f]{12}$/);
-    assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "AGENT_CACHES_OK", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
+    assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "DENIED Library/Caches", "DENIED .cache", "AGENT_CACHES_OK", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
     assert.ok(existsSync(join(caches, "gradle")));
   } finally { rmSync(shared, { recursive: true, force: true }); }
 });

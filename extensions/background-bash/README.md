@@ -66,12 +66,13 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Writable:** the chat's git checkout or linked worktree (its `hooks`, `config`, `info`, other worktrees' metadata,
   owner records and `.git` link stay read-only), linked worktrees whose owner record names the chat (or, for a chat
   started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP` (the command's `TMPDIR`
-  is a short link to it, `~/.pi-workbench/t/<hash>`, so Unix sockets there stay under the 104-byte limit), `~/.cache`, `~/Library/Caches` and the agents' own caches. Never home, `~/IdeaProjects`, Pi's own state,
-  the shared system temp folders (unfenced Pi loads compiled extensions from there) or caches whose code Thomas's own
-  builds run (`~/.gradle`, `~/.m2`, `~/.npm`, `~/Library/pnpm`, Playwright's browsers).
+  is a short link to it, `~/.pi-workbench/t/<hash>`, so Unix sockets there stay under the 104-byte limit), and the agents' own caches. Never home, `~/IdeaProjects`, Pi's own state, the shared system temp
+  folders (unfenced Pi loads compiled extensions from there) or Thomas's caches (`~/Library/Caches`, `~/.cache`,
+  `~/.gradle`, `~/.m2`, `~/.npm`, `~/Library/pnpm`): unfenced tools load code from them, e.g. Python's `.pyc` files.
 - **Agent caches:** `~/.pi-workbench/sandbox-caches`, through `GRADLE_USER_HOME` (with Thomas's jars read-only via
   `GRADLE_RO_DEP_CACHE`), `MAVEN_USER_HOME` and `-Dmaven.repo.local`, `npm_config_cache`, `pnpm_config_store_dir` and
-  `PLAYWRIGHT_BROWSERS_PATH`. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
+  `PLAYWRIGHT_BROWSERS_PATH`, `pnpm_config_cache_dir`, `XDG_CACHE_HOME`, `PYTHONPYCACHEPREFIX`, `GOCACHE` and
+  `CLANG_MODULE_CACHE_PATH`; a tool without such a setting just does not cache inside the fence. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
   downloads its other dependencies again.
 - **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,
   lock and keep files, and `objects/info/alternates` is locked (it would let the owner's next gc drop the history);
@@ -86,3 +87,5 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
   a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
 - A fenced command that starts Pi or this runner again runs under the outer fence (`alreadyFenced`).
+- **Known limit:** `swift build` fails inside the fence (it nests its own sandbox, writes `~/.swiftpm` and the
+  per-user temp folder it gets from macOS, not `TMPDIR`); a Chat that builds Swift uses full access.

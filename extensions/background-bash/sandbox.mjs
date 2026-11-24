@@ -11,12 +11,9 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 // Thomas's private folders and other apps' data: unreadable, so macOS never shows a permission prompt for them.
 const PRIVATE = ["Desktop", "Documents", "Downloads", "Pictures", "Library/Containers", "Library/Group Containers", "Library/Mail", "Library/Messages", "Library/Safari"];
-// Other rebuildable caches stay writable (Thomas, 24 Nov).
-const CACHES = [".cache", "Library/Caches"];
-// Caches holding code Thomas's own builds run (jars, Gradle and Maven distributions, npx and pnpm packages, browsers):
-// read-only to fenced commands, which get their own copies in AGENT_CACHES instead (Thomas, 24 Nov). ~/.npm, ~/.m2,
-// ~/.gradle and ~/Library/pnpm are simply never granted; this one sits inside a granted cache.
-const CODE_CACHES = ["Library/Caches/ms-playwright"];
+// Thomas's caches are all read-only to fenced commands: unfenced tools load code from them (Python's .pyc, pnpm dlx,
+// Homebrew's bootsnap, jars, browsers). Fenced commands get their own, pointed at through the environment (Thomas,
+// 24 Nov); a tool without such a setting just does not cache inside the fence.
 const AGENT_CACHES = ".pi-workbench/sandbox-caches";
 // Seeded once from Thomas's copy as an APFS clone (no extra disk until changed), so a fenced Playwright does not
 // download the same browsers again; later changes never flow back. Only direct children of the agent caches folder,
@@ -130,8 +127,7 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
   if (typeof piTmp === "string" && piTmp !== "" && grantable(real(piTmp))) write.push(real(piTmp));
   // One Workstream's own folder, directly under scratch/, never a path an ID could lead elsewhere.
   if (typeof scratch === "string" && scratch !== "" && dirname(real(scratch)) === scratchRoot && grantable(real(scratch))) write.push(real(scratch));
-  write.push(...CACHES.map((p) => join(home, p)), join(home, AGENT_CACHES));
-  read.push(...CODE_CACHES.map((p) => join(home, p)));
+  write.push(join(home, AGENT_CACHES));
   return { write, read, reopen, locked, history, hidden: PRIVATE.map((p) => join(home, p)) };
 }
 
@@ -225,9 +221,12 @@ function shortTmp(home, piTmp) {
   // Links whose PI_TMP was swept go; a fresh one is made on the next command.
   for (const name of readdirSync(dir)) if (!existsSync(join(dir, name))) rmSync(join(dir, name), { force: true });
   const link = join(dir, createHash("sha256").update(piTmp).digest("hex").slice(0, 12));
-  let target;
-  try { target = readlinkSync(link); } catch { /* none yet */ }
-  if (target !== piTmp) { rmSync(link, { recursive: true, force: true }); symlinkSync(piTmp, link); }
+  const target = () => { try { return readlinkSync(link); } catch { return undefined; } };
+  if (target() !== piTmp) {
+    rmSync(link, { recursive: true, force: true });
+    // Two commands of one Chat can start together: the other runner's identical link is as good as ours.
+    try { symlinkSync(piTmp, link); } catch (error) { if (error.code !== "EEXIST" || target() !== piTmp) throw error; }
+  }
   return link;
 }
 
@@ -252,6 +251,12 @@ export function fencedEnv(env, home, grantedTmp) {
     npm_config_cache: join(caches, "npm"),
     pnpm_config_store_dir: join(caches, "pnpm-store"),
     PLAYWRIGHT_BROWSERS_PATH: join(caches, "ms-playwright"),
+    pnpm_config_cache_dir: join(caches, "pnpm-cache"),
+    XDG_CACHE_HOME: join(caches, "xdg"),
+    PYTHONPYCACHEPREFIX: join(caches, "python"),
+    GOCACHE: join(caches, "go-build"),
+    // clang (and Swift) keep compiled modules in the per-user cache folder, which no fence grants.
+    CLANG_MODULE_CACHE_PATH: join(caches, "clang-modules"),
   };
 }
 
