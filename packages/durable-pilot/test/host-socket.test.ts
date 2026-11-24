@@ -160,6 +160,26 @@ test("P064 a spawn_session request made while no daemon is connected is re-sent 
 	assert.equal(await host.exited, 0, host.stderr());
 });
 
+test("viewed: a closed or replaced daemon connection resets it to false; the next daemon sets it again", async () => {
+	const dir = mkdtempSync(join(SOCKETS, "v-"));
+	const path = join(dir, "host.sock");
+	const host = start("viewed", path);
+	const first = await connected(path, host);
+	await first.ready;
+	assert.deepEqual(await first.call("setViewed", { viewed: true }), { was: false });
+	first.socket.destroy();
+
+	const second = await connected(path, host);
+	await second.ready;
+	assert.deepEqual(await second.call("setViewed", { viewed: true }), { was: false }, "the closed connection's true is gone");
+	// A third daemon replaces the second while it is still connected.
+	const third = await connected(path, host);
+	await third.ready;
+	assert.deepEqual(await third.call("setViewed", { viewed: false }), { was: false }, "the replaced connection's true is gone");
+	await third.call("close");
+	assert.equal(await host.exited, 0, host.stderr());
+});
+
 test("refuses a socket folder others can reach", async () => {
 	const dir = mkdtempSync(join(SOCKETS, "o-"));
 	chmodSync(dir, 0o755);
