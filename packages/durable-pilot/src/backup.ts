@@ -32,11 +32,24 @@ export function integrityOk(copy: DatabaseSync): void {
 	if (result.join() !== "ok") throw new Error(`integrity_check: ${result.slice(0, 3).join("; ")}`);
 }
 
+/** Every table of the copy has as many rows as in the source (read on the owning connection, nothing in between). */
+export function sameRowCounts(raw: DatabaseSync, copy: DatabaseSync): void {
+	const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => String(row.name));
+	for (const table of tables) {
+		const count = (db: DatabaseSync) => Number(db.prepare(`SELECT count(*) AS n FROM "${table.replaceAll('"', '""')}"`).get()!.n);
+		if (count(copy) !== count(raw)) throw new Error(`row count of ${table}: copy ${count(copy)}, source ${count(raw)}`);
+	}
+}
+
 /**
  * Copy `raw` (the owning connection, no transaction open) to `destination`: online backup into a temporary file, then
  * `check` on the copy, then an atomic rename. A failed backup or check leaves the previous copy in place.
  */
-export async function copyStore(raw: DatabaseSync, destination: string, check: (copy: DatabaseSync) => void = integrityOk): Promise<void> {
+export async function copyStore(
+	raw: DatabaseSync,
+	destination: string,
+	check: (copy: DatabaseSync) => void = (copy) => (integrityOk(copy), sameRowCounts(raw, copy)),
+): Promise<void> {
 	const directory = dirname(destination);
 	mkdirSync(directory, { recursive: true, mode: 0o700 });
 	chmodSync(directory, 0o700);
@@ -88,6 +101,8 @@ export function startBackups(store: OpenedStore, destination: string, log: (mess
 			}),
 		));
 	const timer = setInterval(() => void copyNow(), BACKUP_INTERVAL_MS).unref();
+	// A first copy at open: a host that crashes within 5 min, or a Chat closed before backups existed, still has one.
+	void copyNow();
 	// The final copy: Durable closes the database last, after its own close writes.
 	const close = store.database.close.bind(store.database);
 	store.database.close = async () => {

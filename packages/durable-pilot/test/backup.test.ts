@@ -93,6 +93,8 @@ test("an unchanged store is not copied again, a failed check keeps the previous 
 	await session.start();
 	const logs: string[] = [];
 	const backups = startBackups(host.store, destination, (message) => logs.push(message));
+	assert.equal(await backups.copyNow(), false, "copied at start already");
+	assert.ok(existsSync(destination), "a copy exists right after start");
 	const ask = async (operationId: string, text: string) => {
 		const { submissionId } = await session.prompt({ operationId, text });
 		await (await host.harness.submission(submissionId, context))!.wait(context);
