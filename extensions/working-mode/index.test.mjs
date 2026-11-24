@@ -524,7 +524,7 @@ test("AFK with an Alignment value stays interactive until alignment is reached",
   assert.equal(s.prompt(), undefined, "unchanged state posts nothing");
 
   await s.mode("alignment plan");
-  assert.match(s.prompt().content, /AFK \(preparing\)[\s\S]*persist the plan/);
+  assert.match(s.prompt().content, /AFK \(preparing\)[\s\S]*file path of the plan you persisted/);
 });
 
 test("AFK with Default Alignment starts immediately", async () => {
