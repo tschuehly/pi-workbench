@@ -752,10 +752,15 @@ private final class BrowserWindowController: NSWindowController, NSWindowDelegat
     private func setTabsInTitlebar(_ on: Bool) {
         guard let window, on != tabsInTitlebar else { return }
         tabsInTitlebar = on
+        // Changing the style mask would resize the window; it keeps its frame.
+        let frame = window.frame
         if on { window.styleMask.insert(.fullSizeContentView) } else { window.styleMask.remove(.fullSizeContentView) }
         window.titlebarAppearsTransparent = on
         window.titleVisibility = on ? .hidden : .visible
+        window.setFrame(frame, display: true)
         layoutTitlebar()
+        // AppKit lays the title bar out again after a style change, undoing the centring; center once more after it.
+        DispatchQueue.main.async { [weak self] in self?.layoutTitlebar() }
     }
     /// Centers the traffic lights on the tab row and tells the page how far its row must start to clear them.
     private func layoutTitlebar() {
