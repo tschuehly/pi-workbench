@@ -429,6 +429,14 @@ test("Test and Challenge require seeing each new check fail", () => {
   for (const value of ["Test", "Challenge"]) assert.match(axes.checking.values[value], /check failing on the unfixed or deliberately broken code, or say why you could not/);
 });
 
+test("Align, Plan and Spec ask through ask_user, or ask_human under Phone Attention", () => {
+  for (const value of ["Align", "Plan", "Spec"]) {
+    const text = axes.alignment.values[value];
+    assert.match(text, /`ask_user`/, value);
+    assert.match(text, /under Phone Attention, (ask )?through `ask_human`/, value);
+  }
+});
+
 test("Challenge names the blind review pair, author swaps, and the Muse fallback", () => {
   const text = axes.checking.values.Challenge;
   assert.match(text, /two background `review` subagents with the same brief, blind to each other/);
