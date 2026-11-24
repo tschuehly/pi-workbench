@@ -28,7 +28,7 @@ const agentDir = `${cwd}/agent`;
 // A real Pi session with a scripted model: records every request the model receives.
 // `gate`, when given, holds the first reply open until it resolves so a test can act mid-run.
 // `respond`, when given, picks each reply from the request count; the default answers "ok".
-async function session(entries, gate, { factories = [], tools, respond } = {}) {
+async function session(entries, gate, { factories = [], tools, respond, keepRecentTokens = 1 } = {}) {
   const faux = fauxProvider();
   const requests = [];
   const reply = async (context) => {
@@ -38,7 +38,7 @@ async function session(entries, gate, { factories = [], tools, respond } = {}) {
   };
   faux.setResponses(Array.from({ length: 20 }, () => reply));
   const snapshots = [];
-  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens: 1 } });
+  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens } });
   const resourceLoader = new DefaultResourceLoader({
     cwd, agentDir, settingsManager, systemPrompt: "BASE",
     noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true,
@@ -641,6 +641,20 @@ test("/back clears the context to the checkpoint pointer and open questions, res
   assert.equal(s.snapshots.at(-1).aligned, false);
   // The session file keeps the removed conversation.
   assert.ok(s.sessionManager.getEntries().some((entry) => entry.type === "message" && text(entry.message) === "old work one"));
+  s.session.dispose();
+});
+
+test("/back on a session too small to compact keeps the context and still orients", async () => {
+  const s = await session(undefined, undefined, { keepRecentTokens: 100_000 });
+  await s.session.prompt("/mode attention afk");
+  await s.session.prompt("old work");
+  const before = s.requests.length;
+  await s.session.prompt("/back");
+  await until(() => s.requests.length > before);
+  const context = s.last().messages.map(text).join("\n");
+  assert.match(context, /old work/);
+  assert.ok(context.endsWith(BACK_PROMPT));
+  assert.deepEqual(s.snapshots.at(-1).selected, defaults);
   s.session.dispose();
 });
 

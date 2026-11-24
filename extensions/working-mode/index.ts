@@ -204,11 +204,14 @@ export default function workingModeExtension(pi: ExtensionAPI) {
       publish(ctx, "selected");
       stopPower();
       backSummaryText = backSummary(openAsks(ctx.sessionManager.getBranch(), ctx.sessionManager.getSessionId?.() ?? ""));
+      const orient = () => pi.sendMessage({ customType: BACK_TYPE, content: BACK_PROMPT, display: true }, { triggerTurn: true });
       ctx.compact({
-        onComplete: () => pi.sendMessage({ customType: BACK_TYPE, content: BACK_PROMPT, display: true }, { triggerTurn: true }),
+        onComplete: orient,
+        // Pi refuses a session below keepRecentTokens ("too small") or just compacted; orient on the context as it is.
         onError: (error) => {
           backSummaryText = null;
-          if (ctx.hasUI) ctx.ui.notify(`/back could not clear the context: ${error.message}`, "error");
+          if (ctx.hasUI) ctx.ui.notify(`/back kept the context: ${error.message}`, "warning");
+          orient();
         },
       });
     },
