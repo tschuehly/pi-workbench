@@ -116,6 +116,8 @@ export function createContextCeiling(threshold = CONTEXT_CEILING_TOKENS, step = 
 export const MAX_SUMMARY_FOCUS_WORDS = 750;
 export const MAX_NEXT_PHASE_WORDS = 120;
 
+const VAGUE_PHASE = /\bphase you are on\b|^(continue|carry on|keep going|resume|same|next( phase| step)?|(the )?current (phase|step|task|work))[.!]*$/i;
+
 export const wordCount = (text) => text.split(/\s+/).filter(Boolean).length;
 
 /** nextPhase alone, shared with checkpoint_and_continue; undefined when valid. */
@@ -123,6 +125,8 @@ export function validateNextPhase(nextPhase) {
   if (nextPhase.length === 0) return "nextPhase must contain non-whitespace text";
   const words = wordCount(nextPhase);
   if (words > MAX_NEXT_PHASE_WORDS) return `nextPhase is ${words} words; shorten it to ${MAX_NEXT_PHASE_WORDS} or fewer and name one concrete phase.`;
+  // The fresh context has no earlier turn to resolve a placeholder against.
+  if (VAGUE_PHASE.test(nextPhase)) return `nextPhase "${nextPhase}" is a placeholder; name the concrete work: what to do and where it stands.`;
   return undefined;
 }
 

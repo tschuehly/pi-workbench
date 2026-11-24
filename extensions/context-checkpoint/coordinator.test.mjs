@@ -39,6 +39,10 @@ test("validates concise checkpoint directives with actionable lengths", () => {
   // The 1,471-character focus the character limit rejected passes as words.
   assert.equal(validateCheckpointRequest({ ...request, summaryFocus: "words ".repeat(245).trim() }), undefined);
   assert.match(validateCheckpointRequest({ summaryFocus: "", nextPhase: "phase" }), /non-whitespace/);
+  for (const vague of ["the phase you are on", "Continue.", "current step"]) {
+    assert.match(validateCheckpointRequest({ ...request, nextPhase: vague }), /placeholder/);
+  }
+  assert.equal(validateCheckpointRequest({ ...request, nextPhase: "Continue the login fix: make auth.test.ts pass" }), undefined);
 });
 
 test("counts sibling tool calls in the latest assistant message", () => {
