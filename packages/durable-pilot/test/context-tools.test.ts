@@ -23,12 +23,27 @@ import { admit, context, type Host, MODEL, openHost } from "../src/host.ts";
 import { entriesOf } from "../src/pilot.ts";
 import { ChatHost, eventCopies, family, hideIn, integrity, live, logged, type Message, type Status, textOf, type Transcript, waitFor } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
+import { createUserLocalWorkstreamStore } from "../../workstream-store/src/index.js";
 
 process.env.PI_TELEMETRY_DIR = scratch("context-telemetry");
 // Hosts read Pi's agent directory (auth.json): an empty one here, never the owner's.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(scratch("context-agent"), "agent-"));
 const SECRET = "contextSummarySecret-4f1e9a2b7c6d0e83";
 process.env.PILOT_CONTEXT_TOKEN = SECRET;
+process.env.PI_WORKBENCH_WORKSTREAM_DIR = scratch("context-workstreams");
+
+/** Makes `session` (a test host's `--session-id`; a store path has characters the store refuses) the session of a new Workstream. */
+async function homeWorkstream(session: string): Promise<void> {
+	const workstreams = createUserLocalWorkstreamStore({ directory: process.env.PI_WORKBENCH_WORKSTREAM_DIR! });
+	await workstreams.create({ workstreamId: "ws-handoff", idempotencyKey: "create", title: "Handoff", producer: "test" });
+	await workstreams.append({
+		workstreamId: "ws-handoff", expectedRevision: 1, idempotencyKey: "join",
+		records: [
+			{ type: "session.pending", producer: "session", payload: { sessionId: session, associationKey: session } },
+			{ type: "session.confirmed", producer: "session", payload: { sessionId: session, associationKey: session } },
+		],
+	});
+}
 
 function scan(paths: readonly string[], needles: readonly string[]): string[] {
 	const found: string[] = [];
@@ -315,7 +330,8 @@ test("compact_and_continue: the run ends, the summary is placed, then exactly on
 
 test("checkpoint_and_continue: the same run goes on in a fresh context holding the checkpoint pointer, Working Mode and the next phase, with no summary", async () => {
 	const { store, cwd } = family("checkpoint-handoff");
-	const host = new ChatHost(store, cwd);
+	await homeWorkstream("chat-handoff");
+	const host = new ChatHost(store, cwd, { args: ["--session-id", "chat-handoff"] });
 	await host.ready;
 	await host.call("mode", { args: "attention focused" });
 	await twoTurns(host);
@@ -332,6 +348,21 @@ test("checkpoint_and_continue: the same run goes on in a fresh context holding t
 	assert.ok(transcript.messages.some((m) => textOf(m.content).includes("No question sets are open.\n\nContinue with the next phase: write the docs")), "the handoff names the next phase");
 	await host.close();
 	assert.equal(integrity(store), "ok");
+});
+
+test("/checkpoint asks the model to checkpoint and continue; without a home Workstream checkpoint_and_continue refuses", async () => {
+	const { store, cwd } = family("checkpoint-command");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	assert.deepEqual(await host.call("command", { name: "checkpoint", args: " write the docs " }), { type: "done" });
+	await waitFor(() => logged(store).some((l) => l.label.startsWith("Thomas ran /checkpoint")), "the instruction reaches the model");
+	const transcript = await host.call<Transcript>("transcript");
+	assert.ok(transcript.messages.some((m) => textOf(m.content).includes("with the next phase: write the docs. If the session has no home Workstream")), "the instruction names the next phase");
+	await host.idle(1);
+	await host.call("prompt", { operationId: "op-cc", text: `call:checkpoint_and_continue ${JSON.stringify({ nextPhase: "write the docs" })}` });
+	const ended = await host.until((e) => e.type === "tool.end" && e.toolName === "checkpoint_and_continue", "the tool result");
+	assert.match(String(ended.text), /no home Workstream.*compact_and_continue/);
+	await host.close();
 });
 
 test("compact_and_continue refuses a sibling tool batch and schedules nothing", async () => {

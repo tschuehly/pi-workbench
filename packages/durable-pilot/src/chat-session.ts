@@ -61,7 +61,7 @@ const { AFK_BATTERY_WARNING, batteryAlarm, onBattery } = (await import(new URL("
 	batteryAlarm: Power["alarm"];
 	onBattery: Power["onBattery"];
 };
-import { AFK_CLOSE_PROMPT, AFK_CLOSE_TYPE, BACK_PROMPT, BACK_TYPE, backSummary, writesCheckpoint } from "../../../extensions/working-mode/rules.mts";
+import { AFK_CLOSE_PROMPT, AFK_CLOSE_TYPE, BACK_PROMPT, BACK_TYPE, backSummary, checkpointPrompt, writesCheckpoint } from "../../../extensions/working-mode/rules.mts";
 import {
 	AFK_CLOSE_ENTRY,
 	ANSWERS_ENTRY,
@@ -91,6 +91,7 @@ import {
 
 /** `/back`, as the legacy Working Mode extension describes it. */
 const BACK_COMMAND = { name: "back", description: "Return from AFK: clear the context down to a pointer to the latest checkpoint and the open questions, reset Working Mode, and orient" };
+const CHECKPOINT_COMMAND = { name: "checkpoint", description: "Checkpoint and continue: after the current turn, the model writes the Workstream checkpoint and goes on in a fresh context ([next phase])" };
 
 /** v2 adds Working Mode, questions and attention, models, resources, effect resolution and client operation IDs. */
 export const PROTOCOL = 2;
@@ -771,7 +772,7 @@ export class ChatSession {
 
 	/** The Chat's slash commands: the host's own (`/quota-check`, `/fast`, `/back`), then the bound Pi packages'. */
 	commands(): { name: string; description?: string }[] {
-		return [...COMMANDS, ...(this.#chat === undefined ? [] : [FAST_COMMAND, BACK_COMMAND]), ...(this.#chat?.packages?.commands() ?? [])];
+		return [...COMMANDS, ...(this.#chat === undefined ? [] : [FAST_COMMAND, BACK_COMMAND, CHECKPOINT_COMMAND]), ...(this.#chat?.packages?.commands() ?? [])];
 	}
 
 	/**
@@ -782,6 +783,8 @@ export class ChatSession {
 		if (COMMANDS.some((command) => command.name === name)) return runCommand(name, args);
 		if (name === FAST_COMMAND.name) return this.#fast(args);
 		if (name === BACK_COMMAND.name && this.#chat !== undefined) return this.#back(operationId);
+		// A follow-up: queued behind a running turn, at once when idle.
+		if (name === CHECKPOINT_COMMAND.name && this.#chat !== undefined) return this.prompt({ operationId: `checkpoint:${operationId}`, text: checkpointPrompt(args.trim()), mode: "followUp" }).then(() => ({ type: "done" as const }));
 		const packages = this.#chat?.packages;
 		if (packages === undefined) return { type: "unsupported", message: `/${name} is not available in Durable Chats yet` };
 		const result = await packages.command(args === "" ? `/${name}` : `/${name} ${args}`);

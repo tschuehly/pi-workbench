@@ -227,6 +227,9 @@ export function checkpointExtension(harness: () => Harness, lead?: { rootId: () 
 			if (invalid !== undefined) throw new Error(invalid);
 			if ((await batchSize(api, c)) > 1)
 				return { output: text("Context not reset: checkpoint_and_continue must be called alone in its assistant tool batch. Finish the current work, then call it as the sole final action."), details: { accepted: false, nextPhase: sanitize(nextPhase) } };
+			// Without a home Workstream the handoff would point at no checkpoint.
+			if (lead !== undefined && api.conversationId === lead.rootId() && (await lead.workstream().catch(() => undefined)) === undefined)
+				return { output: text("Context not reset: this session has no home Workstream, so there is no checkpoint to point to. Call compact_and_continue alone instead."), details: { accepted: false, nextPhase: sanitize(nextPhase) } };
 			const main = await conversation(api.conversationId, c);
 			const asks = Object.values((await questionsState(harness(), main)).open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 			// Forced: the block is still in the context being dropped, so pendingBlock would otherwise see it as sent.
