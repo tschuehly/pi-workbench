@@ -32,6 +32,7 @@ import { SessionSpawner } from "./spawn-session.ts";
 import { ChatMessenger, homeWorkstream } from "./chat-message.ts";
 import { CACHE_RETENTION } from "./idle-compact.ts";
 import { BackgroundBash } from "./background-bash.ts";
+import { cheapWakeExtension, submitWake } from "./cheap-wake.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
 export const PREAMBLE = [
@@ -228,7 +229,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const chatId = options.chatId ?? options.dir;
 	let opened: Host | undefined;
 	// The lead is the active branch: history navigation may select another.
-	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id });
+	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, wake: (conversation, draft) => submitWake(conversation, draft, opened!.models) });
 	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, ...(options.release ? { release: options.release } : {}) });
 	const workbenchBash = bash.extension();
 	const spawner = new SessionSpawner(chatId);
@@ -252,6 +253,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		spawner.extension(),
 		messenger.extension(),
 		codemodeExtension(sandbox, inlineBudget),
+		cheapWakeExtension,
 	];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
 	const aliases = claudeAliases("pi");

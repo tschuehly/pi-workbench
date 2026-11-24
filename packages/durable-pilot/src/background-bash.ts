@@ -18,7 +18,7 @@ import type { Context } from "@earendil-works/chord/context";
 import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
-import { AgentDoc, type Conversation, type ConversationId, defineExtension, defineTool, type DocumentReader, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import { AgentDoc, type Conversation, type ConversationId, defineExtension, defineTool, type DocumentReader, type InputSubmissionDraft, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { defineDoc } from "./store-schema.ts";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail } from "../../../extensions/background-bash/jobs.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
@@ -148,6 +148,8 @@ export type BackgroundBashOptions = {
 	/** The lead conversation; other conversations wait for their commands as native bash does. */
 	readonly rootId: () => ConversationId | undefined;
 	readonly root?: string;
+	/** Submits a completion that wakes the Chat (the cheap wake-up); default a plain submit. */
+	readonly wake?: (conversation: Conversation, draft: InputSubmissionDraft) => Promise<unknown>;
 };
 
 /** The Workbench bash tools, and the reporter that delivers completions to the lead conversation. */
@@ -458,7 +460,10 @@ export class BackgroundBash {
 		// A cancelled job's completion is context for the next turn; any other wakes the Chat (queued while it is busy).
 		if (job.state === "cancelled")
 			await conversation.submit({ type: "write", requestId, entry: { kind: PACKAGE_MESSAGE_ENTRY, data, model: [{ role: "user", content, timestamp: Date.now() }] } }, context);
-		else await conversation.submit({ type: "input", content, whenBusy: "followUp", requestId, entry: { kind: PACKAGE_MESSAGE_ENTRY, data } }, context);
+		else {
+			const draft: InputSubmissionDraft = { type: "input", content, whenBusy: "followUp", requestId, entry: { kind: PACKAGE_MESSAGE_ENTRY, data } };
+			await (this.#options.wake === undefined ? conversation.submit(draft, context) : this.#options.wake(conversation, draft));
+		}
 		crashPoint("bash.admitted");
 		await conversation.commit(async (tx) => {
 			const ref = (await tx.doc(BashJobsDoc, conversation.id)).jobs[job.id];
