@@ -5,9 +5,9 @@ export const axes = {
     label: "Alignment",
     values: {
       Default: "",
-      Align: "Investigate freely, but before the first edit, delegation, or long-running job on nontrivial work, stop and confirm shared understanding: state the outcome, scope, consequential assumptions, and how success will be checked in at most five bullets, ask Thomas to confirm or correct them, and wait for his answer. Do not ask again about what he already confirmed. After confirmation, implement one bounded slice and return with evidence before starting the next. Record lasting decisions in existing documentation.",
-      Plan: "Before implementation, persist a plan with the outcome, approach, boundaries, and evidence, then obtain Thomas's acceptance and wait for it before editing code. Reuse the accepted plan and adapt ordinary tactics within it.",
-      Spec: "Before implementation, persist a specification with user stories, required behavior, constraints, and acceptance criteria, then obtain Thomas's acceptance and wait for it before editing code. Reuse the accepted specification; adapt implementation within its criteria.",
+      Align: "Investigate freely, but before the first edit, delegation, or long-running job on nontrivial work, stop and confirm shared understanding: post one `ask_user` set whose context states the outcome, scope, consequential assumptions, and how success will be checked in at most five bullets, with a question to confirm or correct them (without `ask_user`, ask in the conversation), and wait for his answer. Do not ask again about what he already confirmed. After confirmation, implement one bounded slice and return with evidence before starting the next. Record lasting decisions in existing documentation.",
+      Plan: "Before implementation, persist a plan with the outcome, approach, boundaries, and evidence, then obtain Thomas's acceptance through `ask_user` (its summary and the file path in the context) and wait for it before editing code. Reuse the accepted plan and adapt ordinary tactics within it.",
+      Spec: "Before implementation, persist a specification with user stories, required behavior, constraints, and acceptance criteria, then obtain Thomas's acceptance through `ask_user` (its summary and the file path in the context) and wait for it before editing code. Reuse the accepted specification; adapt implementation within its criteria.",
     },
   },
   attention: {
@@ -57,9 +57,9 @@ export const ALIGNMENT_RESET_TOOL = "alignment_reset";
 
 /** How each Alignment value reaches alignment before AFK starts; Default needs none. */
 const afkPreparation: Record<string, string> = {
-  Align: "state the outcome, scope, consequential assumptions, and success check in at most five bullets, followed by the checklist you will work through while he is away",
-  Plan: "persist the plan, including the checklist you will work through while he is away, and ask him to accept it",
-  Spec: "persist the specification, including the checklist you will work through while he is away, and ask him to accept it",
+  Align: "the outcome, scope, consequential assumptions, and success check in at most five bullets, followed by the checklist you will work through while he is away",
+  Plan: "the summary and file path of the plan you persisted, including the checklist you will work through while he is away",
+  Spec: "the summary and file path of the specification you persisted, including the checklist you will work through while he is away",
 };
 
 /** AFK waits for alignment when an Alignment value asks for it and Thomas has not yet confirmed. */
@@ -67,7 +67,7 @@ export const afkPending = (selection: WorkingModeState, aligned: boolean) =>
   selection.attention === "AFK" && selection.alignment !== "Default" && !aligned;
 
 export function afkPreparationText(selection: WorkingModeState) {
-  return `AFK has not started: alignment is not reached yet. Prepare to go AFK while Thomas is still here: stay interactive in this conversation and do not use phone tools. In one message, ${afkPreparation[selection.alignment]}. In the same message, add a numbered list of every question you can foresee while he is away, each with a recommended default. Wait for his answer. Once he confirms, call \`${ALIGNMENT_TOOL}\` with the agreed outcome and checklist; from then on the AFK rules apply.`;
+  return `AFK has not started: alignment is not reached yet. Prepare to go AFK while Thomas is still here: stay interactive in this conversation and do not use phone tools. Post one \`ask_user\` set: its context holds ${afkPreparation[selection.alignment]}; add a question to confirm or correct it and one question for every issue you can foresee while he is away, each with your default as the recommended option. Without \`ask_user\`, do the same in one message with a numbered list of those questions. Wait for his answers. Once he confirms, call \`${ALIGNMENT_TOOL}\` with the agreed outcome and checklist; from then on the AFK rules apply.`;
 }
 
 export const CUSTOM_TYPE = "working-mode";

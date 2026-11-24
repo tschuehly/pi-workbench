@@ -513,7 +513,7 @@ test("AFK with an Alignment value stays interactive until alignment is reached",
   await s.mode("attention afk");
   const preparing = s.prompt().content;
   assert.match(preparing, /Attention — AFK \(preparing\): AFK has not started/);
-  assert.match(preparing, /five bullets[\s\S]*numbered list of every question[\s\S]*`alignment_reached`/);
+  assert.match(preparing, /Post one `ask_user` set: its context holds the outcome[\s\S]*five bullets[\s\S]*one question for every issue you can foresee[\s\S]*Without `ask_user`[\s\S]*`alignment_reached`/);
   assert.doesNotMatch(preparing, /Do not contact Thomas/);
 
   assert.match(await s.confirm(), /^Alignment recorded\. AFK starts now: .*Do not contact Thomas/);
