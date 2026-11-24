@@ -276,7 +276,8 @@ export function alreadyFenced() {
 }
 
 /**
- * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`. Throws when no proven sandbox is
+ * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`, with the `owners` whose worktrees it may
+ * write (and remove through the host operation). Throws when no proven sandbox is
  * available; the caller then records the failure and never starts the command.
  */
 export async function confine(job, env = process.env, { ownSocket } = {}) {
@@ -302,5 +303,5 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const rules = grants({ cwd: job.cwd, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
   const net = { ports, sockets: [...dataDirs, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
-  return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true };
+  return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };
 }

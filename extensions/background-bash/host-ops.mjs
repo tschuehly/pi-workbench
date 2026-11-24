@@ -1,16 +1,17 @@
 // Host operations for fenced commands (ws-workbench-sandbox-20261124, step 2). The runner stays outside the fence and
 // does the few writes agents need beyond their grants, in fixed shapes only: `workstreams` calls (the CLI's own rules
-// guard the store) and `wt switch --create`, done here with git in a main checkout under ~/IdeaProjects. Nothing the
+// guard the store), `wt switch --create` and `wt remove` of an owned worktree, done here with git in a main checkout
+// under ~/IdeaProjects. Nothing the
 // command controls runs outside the fence: not its environment (the runner's is used), not a repo it set up, not
 // worktrunk's project config, not an owner-record script it could edit.
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, userInfo } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { linked, workstreamOf } from "./sandbox.mjs";
+import { linked, ownedWorktrees, workstreamOf } from "./sandbox.mjs";
 
 /** Folder of the `workstreams` and `wt` shims put first on a fenced command's PATH. */
 export const SHIMS = join(dirname(fileURLToPath(import.meta.url)), "host-ops");
@@ -30,6 +31,18 @@ export function plan(argv) {
   if (tool === "workstreams") {
     const file = rest.find((a) => a.startsWith("@") && a !== "@-");
     return file === undefined ? { file: "workstreams", args: rest } : { error: `workstreams: ${file} reads a file outside the sandbox; pass it on stdin (-) instead` };
+  }
+  if (tool === "wt" && rest[0] === "remove") {
+    const remove = { branches: [], force: false, deleteBranch: "-d" };
+    for (const a of rest.slice(1)) {
+      if (a === "--foreground") continue;
+      if (a === "-f" || a === "--force") remove.force = true;
+      else if (a === "-D" || a === "--force-delete") remove.deleteBranch = remove.deleteBranch && "-D";
+      else if (a === "--no-delete-branch") remove.deleteBranch = undefined;
+      else if (!a.startsWith("-")) remove.branches.push(a);
+      else return { error: `wt remove: ${a} is not available inside the sandbox; allowed are --force, -D, --no-delete-branch and --foreground` };
+    }
+    return { remove };
   }
   if (tool !== "wt" || rest[0] !== "switch" || !rest.some((a) => a === "-c" || a === "--create")) return { error: `${tool} is not a host operation` };
   let branch;
@@ -98,8 +111,44 @@ async function createWorktree({ branch, base }, cwd, env) {
   return { code: 0, stdout: `${path}\n`, stderr: `${added.stderr}✓ Created branch ${branch}${base === undefined ? "" : ` from ${base}`} and worktree @ ${path} (owner ${ws ?? sessions[0] ?? "unknown"})\n` };
 }
 
-/** Run one request `{ argv, cwd, stdin }` with the runner's environment `env`; never throws. */
-export async function handle(request, env) {
+/**
+ * `wt remove`, via git without hooks: only linked worktrees whose owner record names `owners` (the ones the fence lets
+ * the command write, so nothing it could not already delete), never a main checkout or one holding `.scratch/` (the
+ * rescue hook of worktrunk does not run here). Unmerged branches stay unless -D, as in worktrunk.
+ */
+async function removeWorktrees({ branches, force, deleteBranch }, cwd, env, owners) {
+  const home = env.HOME ?? homedir();
+  const repo = mainCheckout(cwd, home, env);
+  if (repo === undefined) return fail("wt remove: run it inside a checkout under ~/IdeaProjects (or one of its worktrees)");
+  const git = (args) => run("git", ["-C", repo.main, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { cwd: repo.main, env });
+  const list = await git(["worktree", "list", "--porcelain"]);
+  if (list.code !== 0) return list;
+  const trees = list.stdout.split("\n\n").map((block) => ({ path: block.match(/^worktree (.+)$/m)?.[1], branch: block.match(/^branch refs\/heads\/(.+)$/m)?.[1] })).filter((t) => t.path !== undefined);
+  const projects = real(join(home, "IdeaProjects"));
+  const current = join(projects, relative(projects, real(cwd)).split(sep)[0]);
+  const targets = branches.length === 0 ? trees.filter((t) => real(t.path) === current) : branches.map((b) => trees.find((t) => t.branch === b) ?? { missing: b });
+  const owned = ownedWorktrees(real(home), owners);
+  for (const t of targets) {
+    if (t.missing !== undefined) return fail(`wt remove: no worktree has branch ${t.missing}`);
+    if (real(t.path) === real(repo.main)) return fail(`wt remove: ${t.path} is the main checkout`);
+    if (!owned.includes(real(t.path))) return fail(`wt remove: ${t.path} is not a worktree this Chat owns (its owner record names another Chat or Workstream)`);
+    if (existsSync(join(t.path, ".scratch"))) return fail(`wt remove: ${t.path} holds .scratch/; move what is worth keeping, delete the folder, then remove`);
+  }
+  if (targets.length === 0) return fail("wt remove: this folder is the main checkout, not a worktree; name the branch");
+  let stderr = "";
+  for (const t of targets) {
+    const removed = await git(["worktree", "remove", ...(force ? ["--force"] : []), t.path]);
+    if (removed.code !== 0) return { ...removed, stderr: `${stderr}${removed.stderr}${force ? "" : "wt remove: pass --force to remove it with its untracked or changed files\n"}` };
+    stderr += `✓ Removed worktree @ ${t.path}\n`;
+    if (deleteBranch === undefined || t.branch === undefined) continue;
+    const deleted = await git(["branch", deleteBranch, t.branch]);
+    stderr += deleted.code === 0 ? `✓ Deleted branch ${t.branch}\n` : `↳ Kept branch ${t.branch}: ${deleted.stderr.split("\n")[0].replace(/^error: /, "")}${deleteBranch === "-d" ? " (-D deletes an unmerged branch)" : ""}\n`;
+  }
+  return { code: 0, stdout: "", stderr };
+}
+
+/** Run one request `{ argv, cwd, stdin }` with the runner's environment `env` for a job owned by `owners`; never throws. */
+export async function handle(request, env, owners = []) {
   try {
     const { argv, cwd, stdin } = request ?? {};
     if (!Array.isArray(argv) || !argv.every((a) => typeof a === "string") || typeof cwd !== "string") return fail("host operation: malformed request");
@@ -107,6 +156,7 @@ export async function handle(request, env) {
     const step = plan(argv);
     if (step.error !== undefined) return fail(step.error);
     if (step.worktree !== undefined) return await createWorktree(step.worktree, cwd, env);
+    if (step.remove !== undefined) return await removeWorktrees(step.remove, cwd, env, owners);
     return await run(step.file, step.args, { cwd, env, input: typeof stdin === "string" ? stdin : "" });
   } catch (error) {
     return { code: 1, stdout: "", stderr: `host operation failed: ${error.message}\n` };
@@ -117,7 +167,7 @@ export async function handle(request, env) {
  * Serve one job's host operations on `opsPath(dir)`; resolves once listening, with the environment additions for the
  * fenced command and a synchronous `close`. The fence lets the command connect to this socket only.
  */
-export async function serve(dir, env) {
+export async function serve(dir, env, owners = []) {
   const path = opsPath(dir);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   rmSync(path, { force: true });
@@ -135,7 +185,7 @@ export async function serve(dir, env) {
       if (end < 0) { socket.end(`${JSON.stringify(fail("host operation: request too large"))}\n`); return; }
       let request;
       try { request = JSON.parse(data.slice(0, end)); } catch { request = undefined; }
-      void handle(request, env).then((result) => socket.end(`${JSON.stringify(result)}\n`));
+      void handle(request, env, owners).then((result) => socket.end(`${JSON.stringify(result)}\n`));
     });
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(path, resolve); });

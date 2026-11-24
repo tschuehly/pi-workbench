@@ -141,12 +141,14 @@ test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a 
   assert.ok(!all.write.some((w) => w.startsWith("/private/") || w.startsWith("/var/")), "no shared system temp folder");
 });
 
-test("host operations: only `workstreams` (no @file) and `wt switch --create` with --base/--no-cd, never --execute or --clobber", () => {
+test("host operations: only `workstreams` (no @file), `wt switch --create` with --base/--no-cd and `wt remove`, never --execute, --clobber or --no-hooks", () => {
   assert.deepEqual(plan(["workstreams", "checkpoint", "ws-a", "--stdin"]), { file: "workstreams", args: ["checkpoint", "ws-a", "--stdin"] });
   assert.deepEqual(plan(["workstreams", "append", "@-"]).args, ["append", "@-"]);
   assert.deepEqual(plan(["wt", "switch", "-c", "feat", "-b", "main"]), { worktree: { branch: "feat", base: "main" } });
   assert.deepEqual(plan(["wt", "switch", "--create", "feat", "--no-cd", "--base=dev"]), { worktree: { branch: "feat", base: "dev" } });
-  for (const argv of [["wt", "switch", "-c", "feat", "-x", "rm -rf ~"], ["wt", "switch", "-c", "feat", "--clobber"], ["wt", "switch", "-c"], ["wt", "remove", "feat"], ["git", "push"], ["wt", "switch", "-c", "feat", "-C", "/"], ["wt", "switch", "-c", "feat", "--base=--upload-pack=x"], ["workstreams", "append", "@/Users/x/Documents/secret"]])
+  assert.deepEqual(plan(["wt", "remove", "feat", "--foreground", "-D"]), { remove: { branches: ["feat"], force: false, deleteBranch: "-D" } });
+  assert.deepEqual(plan(["wt", "remove", "-f", "--no-delete-branch", "-D"]), { remove: { branches: [], force: true, deleteBranch: undefined } });
+  for (const argv of [["wt", "switch", "-c", "feat", "-x", "rm -rf ~"], ["wt", "switch", "-c", "feat", "--clobber"], ["wt", "switch", "-c"], ["wt", "remove", "feat", "-x", "rm -rf ~"], ["wt", "remove", "--no-hooks"], ["git", "push"], ["wt", "switch", "-c", "feat", "-C", "/"], ["wt", "switch", "-c", "feat", "--base=--upload-pack=x"], ["workstreams", "append", "@/Users/x/Documents/secret"]])
     assert.ok(plan(argv).error, argv.join(" "));
 });
 
@@ -200,6 +202,41 @@ test("`wt switch --create` makes the sibling worktree outside the fence and reco
   assert.equal(existsSync(join(home, "owner-script-ran")), false, "no owner-record script ran");
   assert.equal(existsSync(join(home, "escaped")), false);
   assert.equal(git(tools, "branch", "--list", "other").trim(), "", "a refused call creates nothing");
+});
+
+test("`wt remove` removes an owned worktree outside the fence with its merged branch; never the main checkout, another chat's worktree or one holding .scratch/", { skip }, async () => {
+  const main = join(home, "IdeaProjects", "rm");
+  mkdirSync(main);
+  git(main, "init", "-q");
+  git(main, "commit", "-q", "--allow-empty", "-m", "init");
+  const add = (name, owner) => {
+    const path = join(home, "IdeaProjects", `rm.${name}`);
+    git(main, "worktree", "add", "-q", "-b", name, path);
+    writeFileSync(join(main, ".git", "worktrees", `rm.${name}`, "pi-owner.json"), JSON.stringify({ sessions: [owner] }));
+    return path;
+  };
+  const [done, dirty, kept, theirs, scratchy] = [["done", "sandbox-test"], ["dirty", "sandbox-test:child-1"], ["kept", "sandbox-test"], ["theirs", "another-chat"], ["scratchy", "sandbox-test"]].map(([name, owner]) => add(name, owner));
+  writeFileSync(join(dirty, "untracked"), "x");
+  git(kept, "commit", "-q", "--allow-empty", "-m", "unmerged");
+  mkdirSync(join(scratchy, ".scratch"));
+  const job = await run([
+    'wt remove done --foreground; echo "exit=$?"',
+    'wt remove dirty; echo "exit=$?"',
+    'wt remove dirty --force; echo "exit=$?"',
+    `cd "${kept}" && wt remove; echo "exit=$?"`,
+    `cd "${main}"; wt remove theirs; echo "exit=$?"`,
+    'wt remove scratchy; echo "exit=$?"',
+    'wt remove; echo "exit=$?"',
+  ].join("; "), { cwd: main, env: withFakes });
+  assert.equal(job.state, "complete", job.error);
+  const out = readFileSync(job.logPath, "utf8");
+  assert.match(out, /Removed worktree @ [^\n]*rm\.done\n.*Deleted branch done\nexit=0/, out);
+  assert.match(out, /pass --force[\s\S]*exit=128[\s\S]*rm\.dirty\n.*Deleted branch dirty\nexit=0/);
+  assert.match(out, /rm\.kept\n.*Kept branch kept: the branch 'kept' is not fully merged \(-D deletes an unmerged branch\)\nexit=0/);
+  assert.match(out, /rm\.theirs is not a worktree this Chat owns[^\n]*\nexit=2[\s\S]*holds \.scratch\/[^\n]*\nexit=2[\s\S]*rm is the main checkout\nexit=2/);
+  for (const path of [done, dirty, kept]) assert.equal(existsSync(path), false, path);
+  for (const path of [theirs, scratchy, main]) assert.ok(existsSync(join(path, ".git")), path);
+  assert.deepEqual(git(main, "branch", "--format=%(refname:short)").trim().split("\n").sort(), ["kept", "master", "scratchy", "theirs"].sort());
 });
 
 test("a chat in its scratch folder may write the worktrees whose owner record names it; it cannot forge one", { skip }, async () => {

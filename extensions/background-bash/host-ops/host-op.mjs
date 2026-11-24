@@ -9,7 +9,7 @@ import { basename, delimiter, dirname } from "node:path";
 const name = basename(process.argv[1]);
 const args = process.argv.slice(2);
 const here = dirname(process.argv[1]);
-const forwarded = name === "workstreams" || (name === "wt" && args[0] === "switch" && args.some((a) => a === "-c" || a === "--create"));
+const forwarded = name === "workstreams" || (name === "wt" && (args[0] === "remove" || (args[0] === "switch" && args.some((a) => a === "-c" || a === "--create"))));
 if (!forwarded || !process.env.PI_HOST_OPS) {
   const PATH = (process.env.PATH ?? "").split(delimiter).filter((p) => p !== here).join(delimiter);
   const real = spawnSync(name, args, { stdio: "inherit", env: { ...process.env, PATH } });
