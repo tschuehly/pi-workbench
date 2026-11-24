@@ -81,6 +81,12 @@ it, and the commands above, which name `~/.pi-workbench/installed`, `*.installed
 Chats, `launchctl enable gui/$(id -u)/com.pi-web.sessiond` (and `com.pi-web.web`), bootstrap both plists from
 `~/Library/LaunchAgents` and open http://127.0.0.1:8505/.
 
+A fresh Mac (or an update to the integration-branch tips) installs with `scripts/install` from the main
+pi-workbench checkout: it clones PI WEB beside it if missing, runs `promote-installed switch <origin/main>
+<origin/pi-workbench>` for the Durable instance and waits for the job (skipped when both links already point at
+those builds), then builds the native app with `--app-only` for :8506. `--dry-run` prints the plan;
+`PI_PROMOTE_DURABLE_ENV` passes through to the services (e.g. `GIT_CONFIG_GLOBAL` for an agent's git identity).
+
 The Durable instance (`docs/plans/pi-durable-cutover-spec.md`, B7) is a second installed PI WEB beside
 the legacy one: `promote-installed` (or `--instance durable`) runs `prepare`, `switch`, `switch-workbench`,
 `switch-web`, `prune` and `check-idle` on `~/IdeaProjects/*.durable-installed`, builds under
