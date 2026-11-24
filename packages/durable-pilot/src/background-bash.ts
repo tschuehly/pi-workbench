@@ -395,7 +395,8 @@ export class BackgroundBash {
 
 	async status(): Promise<Record<string, string>> {
 		if (this.#conversation === undefined) return {};
-		const access: Record<string, string> = this.#fullAccess ? { [FULL_ACCESS_STATUS]: "full access" } : {};
+		// "on" or "off" wherever the write fence applies (macOS), so PI WEB shows its toggle for this Chat.
+		const access: Record<string, string> = process.platform === "darwin" ? { [FULL_ACCESS_STATUS]: this.#fullAccess ? "on" : "off" } : {};
 		const running = (await this.#read()).filter((job) => job.state === "running");
 		if (running.length === 0) return access;
 		const refs = (await this.#reader!.snapshot(BashJobsDoc, this.#conversation().id, context))?.jobs ?? {};

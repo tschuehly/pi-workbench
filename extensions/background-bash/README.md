@@ -65,8 +65,15 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 
 - **Writable:** the chat's git checkout or linked worktree (its `hooks`, `config`, `info`, other worktrees' metadata,
   owner records and `.git` link stay read-only), linked worktrees whose owner record names the chat (or, for a chat
-  started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP`, system temp and package
-  caches (not their credential or init files). Never home, `~/IdeaProjects`, or Pi's own state.
+  started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP` (also the command's
+  `TMPDIR`), `~/.cache`, `~/Library/Caches` and the agents' own caches. Never home, `~/IdeaProjects`, Pi's own state,
+  the shared system temp folders (unfenced Pi loads compiled extensions from there) or caches whose code Thomas's own
+  builds run (`~/.gradle`, `~/.m2`, `~/.npm`, `~/Library/pnpm`, Playwright's browsers).
+- **Agent caches:** `~/.pi-workbench/sandbox-caches`, through `GRADLE_USER_HOME` (with Thomas's jars read-only via
+  `GRADLE_RO_DEP_CACHE`), `MAVEN_USER_HOME` and `-Dmaven.repo.local`, `npm_config_cache`, `pnpm_config_store_dir` and
+  `PLAYWRIGHT_BROWSERS_PATH`. A first fenced build downloads its dependencies (and Playwright browsers) again.
+- **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,
+  lock and keep files; commits, branches and fetches work, `git gc` and repack fail inside the fence.
 - **Unreadable:** Desktop, Documents, Downloads, Pictures and other apps' data, so macOS never asks.
 - **Unreachable:** PI WEB's port and the sockets in its data folder (they run `!` commands and prompts unfenced), other
   jobs' host-operation sockets, and Apple events.

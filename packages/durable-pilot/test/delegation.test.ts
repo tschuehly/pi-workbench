@@ -1892,7 +1892,7 @@ test("/full-access: on only after Allow in the owner's dialog; then the lead's c
 		writeFileSync(answer, "Allow");
 		assert.match((await fullAccess("on")).message, /Full access is on/);
 		assert.match(readFileSync(`${answer}.asked`, "utf8"), /Allow full access for the Chat .* in .*workspace/);
-		assert.equal((await host.call<Status>("status")).extensionStatuses?.["workbench.full-access"], "full access");
+		assert.equal((await host.call<Status>("status")).extensionStatuses?.["workbench.full-access"], "on");
 		assert.equal(await touch("lead"), true, "the lead's command ran without the fence");
 		await prompt(host, call("subagent", scout(call("bash", { command: `touch "${join(target, "child")}" 2>/dev/null; touch "${join(cwd, "child-ran")}"` }), { background: false, profile: "implementer" })));
 		await toolResult(host, "subagent");
@@ -1900,7 +1900,7 @@ test("/full-access: on only after Allow in the owner's dialog; then the lead's c
 		assert.ok(existsSync(join(cwd, "child-ran")), "the Subagent's command ran");
 		assert.equal(existsSync(join(target, "child")), false, "a Subagent's command stays fenced");
 		assert.match((await fullAccess("off")).message, /Full access is off/);
-		assert.equal((await host.call<Status>("status")).extensionStatuses?.["workbench.full-access"], undefined);
+		assert.equal((await host.call<Status>("status")).extensionStatuses?.["workbench.full-access"], "off");
 		assert.equal(await touch("after-off"), false, "off fences again");
 	} finally {
 		await host.close();

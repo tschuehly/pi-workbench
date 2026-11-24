@@ -126,16 +126,20 @@ test("inside a fence the runner starts commands under the outer fence instead of
 
 test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a scratch folder counts once", () => {
   const h = "/Users/someone";
-  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("Cache") && !p.includes(".npm") && !p.includes("pnpm") && !p.includes(".m2") && !p.includes(".gradle") && !p.includes(".cache"));
+  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("Cache") && !p.includes(".cache") && !p.includes("sandbox-caches"));
   assert.deepEqual(rules(h), []);
   assert.deepEqual(rules(`${h}/IdeaProjects`), []);
   assert.deepEqual(rules(`${h}/.pi-workbench/scratch`), []);
   assert.deepEqual(rules(`${h}/.pi-workbench/scratch/ws-a/research`), [`${h}/.pi-workbench/scratch/ws-a`]);
   assert.deepEqual(rules(h, { piTmp: `${h}/.pi-workbench/tmp/ws-a/s1`, scratch: `${h}/.pi-workbench/scratch/ws-a` }), [`${h}/.pi-workbench/tmp/ws-a/s1`, `${h}/.pi-workbench/scratch/ws-a`]);
   assert.deepEqual(rules(h, { piTmp: `${h}/.pi/agent`, scratch: `${h}/.pi-workbench/workstreams` }), [], "Pi's own state is never granted");
-  assert.ok(grants({ cwd: h, home: h }).read.includes(`${h}/.gradle/gradle.properties`));
+  // Caches with code Thomas's builds run: never writable; the agents' own instead.
+  const all = grants({ cwd: h, home: h });
+  for (const cache of [".npm", ".m2", ".gradle", "Library/pnpm"]) assert.ok(!all.write.some((w) => w === `${h}/${cache}` || w.startsWith(`${h}/${cache}/`)), cache);
+  assert.ok(all.write.includes(`${h}/.pi-workbench/sandbox-caches`));
+  assert.ok(all.read.includes(`${h}/Library/Caches/ms-playwright`));
   assert.ok(grants({ cwd: h, home: h }).hidden.includes(`${h}/Desktop`));
-  assert.deepEqual(grants({ cwd: h, home: h, temp: ["/private/tmp"] }).write.slice(0, 1), ["/private/tmp"]);
+  assert.ok(!all.write.some((w) => w.startsWith("/private/") || w.startsWith("/var/")), "no shared system temp folder");
 });
 
 test("host operations: only `workstreams` (no @file) and `wt switch --create` with --base/--no-cd, never --execute or --clobber", () => {
@@ -298,4 +302,48 @@ test("a planted commondir or a relative hooks folder never runs through the work
   const again = await run('wt switch --create second; echo "exit=$?"', { cwd: wtree, env: withFakes });
   assert.match(readFileSync(again.logPath, "utf8"), /run it inside a checkout under ~\/IdeaProjects[\s\S]*exit=2/);
   rmSync(join(app, ".git", "commondir"));
+});
+
+test("git history: commits, branch deletes and fetches work; the command cannot delete, move or overwrite objects", { skip }, async () => {
+  const hist = join(home, "IdeaProjects", "history");
+  const src = join(piTmp, "history-src");
+  for (const dir of [hist, src]) { mkdirSync(dir, { recursive: true }); git(dir, "init", "-q"); git(dir, "commit", "-q", "--allow-empty", "-m", "init"); }
+  const g = "git -c user.email=t@example.com -c user.name=t -c commit.gpgsign=false";
+  const job = await run([
+    `${commit} && echo COMMIT_OK`,
+    `${g} branch gone && ${g} branch -D gone >/dev/null 2>&1 && echo BRANCH_DELETED`,
+    // unpackLimit=1 keeps the fetched pack, so git writes and removes a .keep file and renames a temporary pack.
+    `${g} -c fetch.unpackLimit=1 fetch -q "${src}" HEAD:refs/heads/fetched && echo FETCH_OK`,
+    `rm -rf .git/objects 2>/dev/null || echo RM_REFUSED`,
+    `mv .git/objects .git/moved 2>/dev/null || echo MV_REFUSED`,
+    `f=$(find .git/objects -type f -path "*/objects/[0-9a-f][0-9a-f]/*" | head -1); chmod u+w "$f"; : 2>/dev/null > "$f" || echo OVERWRITE_REFUSED`,
+    // gc packs what it can; the objects it would delete stay.
+    `${g} gc -q 2>/dev/null; echo GC_RAN`,
+  ].join("; "), { cwd: hist });
+  assert.equal(job.state, "complete", job.error);
+  assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["COMMIT_OK", "BRANCH_DELETED", "FETCH_OK", "RM_REFUSED", "MV_REFUSED", "OVERWRITE_REFUSED", "GC_RAN"]);
+  git(hist, "fsck", "--no-progress");
+  assert.match(git(hist, "log", "-1", "--format=%s"), /fenced/);
+  assert.equal(git(hist, "for-each-ref", "--format=%(refname)", "refs/heads/fetched").trim(), "refs/heads/fetched");
+});
+
+test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's code caches stay untouched, the agents' own caches work", { skip }, async () => {
+  const shared = mkdtempSync(join(tmpdir(), "fence-shared-"));
+  mkdirSync(join(home, ".gradle", "caches", "modules-2"), { recursive: true });
+  mkdirSync(join(home, ".npm"), { recursive: true });
+  mkdirSync(join(home, "Library", "Caches", "ms-playwright"), { recursive: true });
+  try {
+    const job = await run([
+      'echo "tmp=$TMPDIR"', 'touch "${TMPDIR}t" && echo TMP_OK',
+      `touch "${join(shared, "x")}" 2>/dev/null && echo SHARED_WRITTEN || echo SHARED_DENIED`,
+      'touch /private/tmp/fence-x-$$ 2>/dev/null && { rm -f /private/tmp/fence-x-$$; echo SLASHTMP_WRITTEN; } || echo SLASHTMP_DENIED',
+      'for c in .gradle/caches/modules-2 .npm Library/Caches/ms-playwright; do touch "$HOME/$c/x" 2>/dev/null && echo "WRITTEN $c" || echo "DENIED $c"; done',
+      'mkdir -p "$GRADLE_USER_HOME" "$npm_config_cache" "$PLAYWRIGHT_BROWSERS_PATH" && echo AGENT_CACHES_OK',
+      'echo "ro=$GRADLE_RO_DEP_CACHE"; echo "maven=$MAVEN_OPTS"',
+    ].join("; "));
+    assert.equal(job.state, "complete", job.error);
+    const caches = join(home, ".pi-workbench", "sandbox-caches");
+    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), [`tmp=${piTmp}/`, "TMP_OK", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "AGENT_CACHES_OK", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
+    assert.ok(existsSync(join(caches, "gradle")));
+  } finally { rmSync(shared, { recursive: true, force: true }); }
 });

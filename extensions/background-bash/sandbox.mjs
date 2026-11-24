@@ -11,10 +11,13 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 // Thomas's private folders and other apps' data: unreadable, so macOS never shows a permission prompt for them.
 const PRIVATE = ["Desktop", "Documents", "Downloads", "Pictures", "Library/Containers", "Library/Group Containers", "Library/Mail", "Library/Messages", "Library/Safari"];
-// Rebuildable package caches stay writable (Thomas, 24 Nov); their credential files are not caches and stay read-only.
-const CACHES = [".npm", "Library/pnpm", ".m2/repository", ".gradle", ".cache", "Library/Caches"];
-// Also what Gradle runs on every build, an unfenced one included: a planted init script would run outside the fence.
-const CACHE_SECRETS = [".gradle/gradle.properties", ".gradle/init.d", ".gradle/init.gradle", ".gradle/init.gradle.kts"];
+// Other rebuildable caches stay writable (Thomas, 24 Nov).
+const CACHES = [".cache", "Library/Caches"];
+// Caches holding code Thomas's own builds run (jars, Gradle and Maven distributions, npx and pnpm packages, browsers):
+// read-only to fenced commands, which get their own copies in AGENT_CACHES instead (Thomas, 24 Nov). ~/.npm, ~/.m2,
+// ~/.gradle and ~/Library/pnpm are simply never granted; this one sits inside a granted cache.
+const CODE_CACHES = ["Library/Caches/ms-playwright"];
+const AGENT_CACHES = ".pi-workbench/sandbox-caches";
 // Inside a granted repo: what would let a command run code later outside the fence or redirect the agent.
 const REPO_READ_ONLY = [".pi", "AGENTS.md", "AGENTS.override.md", ".mcp.json"];
 
@@ -87,7 +90,7 @@ export function ownedWorktrees(home, owners) {
  * granted only as its git checkout or worktree, or as one Workstream scratch folder; never home, ~/IdeaProjects, the
  * scratch root or Pi's own state, so a chat started there runs read-only. `worktrees` adds the chat's owned worktrees.
  */
-export function grants({ cwd, home = homedir(), piTmp, scratch, temp = [], worktrees = [] }) {
+export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }) {
   home = real(home);
   cwd = real(cwd);
   const pw = join(home, ".pi-workbench");
@@ -98,10 +101,13 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, temp = [], workt
   const read = [];
   const reopen = [];
   const locked = [];
+  const history = [];
   const checkout = (repo) => {
     // A linked worktree whose links disagree (its .git file repointed) is no checkout of this repo: no grant.
     if (repo.gitDir !== repo.common && !linked(repo.top, repo.gitDir)) return;
     write.push(repo.top, repo.gitDir, repo.common);
+    // Git history: objects are only ever added, so none may be deleted, renamed or overwritten (Thomas, 24 Nov).
+    if (!history.includes(join(repo.common, "objects"))) history.push(join(repo.common, "objects"));
     read.push(...["hooks", "config", "info", "worktrees"].map((p) => join(repo.common, p)), ...REPO_READ_ONLY.map((p) => join(repo.top, p)));
     // Its own worktree metadata only, minus the files that decide ownership and the worktree link (ownedWorktrees).
     if (repo.gitDir !== repo.common) reopen.push(repo.gitDir);
@@ -120,16 +126,16 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, temp = [], workt
   if (typeof piTmp === "string" && piTmp !== "" && grantable(real(piTmp))) write.push(real(piTmp));
   // One Workstream's own folder, directly under scratch/, never a path an ID could lead elsewhere.
   if (typeof scratch === "string" && scratch !== "" && dirname(real(scratch)) === scratchRoot && grantable(real(scratch))) write.push(real(scratch));
-  write.push(...temp, ...CACHES.map((p) => join(home, p)));
-  read.push(...CACHE_SECRETS.map((p) => join(home, p)));
-  return { write, read, reopen, locked, hidden: PRIVATE.map((p) => join(home, p)) };
+  write.push(...CACHES.map((p) => join(home, p)), join(home, AGENT_CACHES));
+  read.push(...CODE_CACHES.map((p) => join(home, p)));
+  return { write, read, reopen, locked, history, hidden: PRIVATE.map((p) => join(home, p)) };
 }
 
 /**
- * The Seatbelt profile: everything as today except writes, which only the grants and the system temp folders get, and
+ * The Seatbelt profile: everything as today except writes, which only the grants get, and
  * reads of Thomas's private folders. Later rules win. Paths enter as -D parameters, never as profile text.
  */
-function profile({ write, read, reopen = [], locked = [], hidden, ports = [], sockets = [], ownSocket }) {
+function profile({ write, read, reopen = [], locked = [], history = [], hidden, ports = [], sockets = [], ownSocket }) {
   const params = [];
   const p = (path) => { params.push(`-D`, `P${params.length / 2}=${path}`); return `(param "P${params.length / 2 - 1}")`; };
   const rules = [
@@ -141,6 +147,12 @@ function profile({ write, read, reopen = [], locked = [], hidden, ports = [], so
     ...(read.length ? [`(deny file-write*${read.map((r) => ` (subpath ${p(r)})`).join("")})`] : []),
     ...(reopen.length ? [`(allow file-write*${reopen.map((r) => ` (subpath ${p(r)})`).join("")})`] : []),
     ...(locked.length ? [`(deny file-write*${locked.map((r) => ` (literal ${p(r)})`).join("")})`] : []),
+    // Objects folders: no deletes (a rename over a file is one) or overwrites, except git's own temporary files, lock
+    // and keep files, and info/ (commit-graph and pack lists, rewritten by rename). `git gc` and repack then fail here.
+    ...(history.length ? [
+      `(deny file-write-unlink file-write-data${history.map((h) => ` (subpath ${p(h)})`).join("")})`,
+      `(allow file-write-unlink file-write-data${history.map((h) => ` (require-all (subpath ${p(h)}) (regex #"/(tmp_[^/]*|\\.tmp-[^/]*|[^/]*\\.(lock|keep))$"))`).join("")}${history.map((h) => ` (subpath ${p(join(h, "info"))})`).join("")})`,
+    ] : []),
     // A grant's own folder cannot be deleted or renamed away, only its contents.
     ...(write.length ? [`(deny file-write-unlink${write.map((w) => ` (literal ${p(w)})`).join("")})`] : []),
     // Refused before macOS asks, so no "node wants to access your Desktop" prompt appears (Thomas, 24 Nov).
@@ -183,11 +195,27 @@ function proven(bin, env, home) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-/** The shared system temp folders (Thomas, 24 Nov): $TMPDIR, the per-user cache folder beside it, /tmp. */
-function temps(env) {
-  let cache;
-  try { cache = execFileSync("getconf", ["DARWIN_USER_CACHE_DIR"], { encoding: "utf8", timeout: 2000 }).trim(); } catch { /* none */ }
-  return [env.TMPDIR, cache, "/private/tmp"].filter((d) => typeof d === "string" && d !== "" && existsSync(d)).map(real);
+/**
+ * The fenced command's environment: its temp folder is the Chat's own PI_TMP (the shared system temp folders hold code
+ * unfenced Pi loads later, e.g. compiled extensions, so no fence grants them), and its package caches are the agents'
+ * own (Thomas, 24 Nov). Gradle still reads Thomas's downloaded jars, read-only.
+ */
+export function fencedEnv(env, home, grantedTmp) {
+  const caches = join(real(home), AGENT_CACHES);
+  mkdirSync(caches, { recursive: true, mode: 0o700 });
+  const gradleCaches = join(real(home), ".gradle", "caches");
+  return {
+    ...env,
+    // shortcut: no PI_TMP grant leaves TMPDIR unwritable (temp files fail visibly); every Pi-started command has one.
+    ...(grantedTmp === undefined ? {} : { TMPDIR: `${grantedTmp}/` }),
+    GRADLE_USER_HOME: join(caches, "gradle"),
+    ...(existsSync(join(gradleCaches, "modules-2")) ? { GRADLE_RO_DEP_CACHE: gradleCaches } : {}),
+    MAVEN_USER_HOME: join(caches, "m2"),
+    MAVEN_OPTS: [env.MAVEN_OPTS, `-Dmaven.repo.local=${join(caches, "m2", "repository")}`].filter(Boolean).join(" "),
+    npm_config_cache: join(caches, "npm"),
+    pnpm_config_store_dir: join(caches, "pnpm-store"),
+    PLAYWRIGHT_BROWSERS_PATH: join(caches, "ms-playwright"),
+  };
 }
 
 /**
@@ -229,7 +257,8 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const owners = [job.sessionId, started].filter((id) => typeof id === "string" && id !== "");
   const dataDirs = [env.PI_WEB_DATA_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
   const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];
-  const rules = grants({ cwd: job.cwd, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), temp: temps(env), worktrees: ownedWorktrees(real(home), owners) });
+  const rules = grants({ cwd: job.cwd, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
+  const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
   const net = { ports, sockets: [...dataDirs, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
-  return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env, fenced: true };
+  return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true };
 }
