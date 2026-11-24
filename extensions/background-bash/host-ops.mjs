@@ -11,7 +11,7 @@ import { createServer } from "node:net";
 import { homedir, userInfo } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { linked, ownedWorktrees, workstreamOf } from "./sandbox.mjs";
+import { CREATOR, linked, ownedWorktrees, workstreamId, workstreamOf } from "./sandbox.mjs";
 
 /** Folder of the `workstreams` and `wt` shims put first on a fenced command's PATH. */
 export const SHIMS = join(dirname(fileURLToPath(import.meta.url)), "host-ops");
@@ -89,7 +89,7 @@ function mainCheckout(cwd, home, env) {
 }
 
 /** `wt switch --create` as worktrunk's default layout makes it (`<repo>.<branch>` beside the main checkout), via git. */
-async function createWorktree({ branch, base }, cwd, env) {
+async function createWorktree({ branch, base }, cwd, env, owners) {
   const home = env.HOME ?? homedir();
   const repo = mainCheckout(cwd, home, env);
   if (repo === undefined) return fail("wt switch --create: run it inside a checkout under ~/IdeaProjects (or one of its worktrees)");
@@ -107,12 +107,15 @@ async function createWorktree({ branch, base }, cwd, env) {
   // The owner record mac-storage-workspaces keeps (its format), written here: its script lives in a repo agents edit.
   const sessions = [env.PI_SESSION_ID, env.PI_TELEMETRY_PARENT_SESSION_ID].filter((s) => typeof s === "string" && s !== "");
   const ws = await workstreamOf(env.PI_SESSION_ID?.split(":")[0], home, env);
-  writeFileSync(join(meta, "pi-owner.json"), `${JSON.stringify({ createdAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"), branch, sessions: [...new Set(sessions)].sort(), workstreams: ws === undefined ? [] : [ws] }, null, 1)}\n`);
+  const createdAt = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  writeFileSync(join(meta, "pi-owner.json"), `${JSON.stringify({ createdAt, branch, sessions: [...new Set(sessions)].sort(), workstreams: ws === undefined ? [] : [ws] }, null, 1)}\n`);
+  // The receipt names only the Workstream whose scratch folder the Chat started in, not every one it is linked to.
+  writeFileSync(join(meta, CREATOR), `${JSON.stringify({ createdAt, branch, sessions: [...new Set(sessions)].sort(), workstreams: owners.filter((o) => workstreamId(o) !== undefined) }, null, 1)}\n`, { flag: "wx" });
   return { code: 0, stdout: `${path}\n`, stderr: `${added.stderr}✓ Created branch ${branch}${base === undefined ? "" : ` from ${base}`} and worktree @ ${path} (owner ${ws ?? sessions[0] ?? "unknown"})\n` };
 }
 
 /**
- * `wt remove`, via git without hooks: only linked worktrees whose owner record names `owners` (the ones the fence lets
+ * `wt remove`, via git without hooks: only linked worktrees whose creation receipt names `owners` (the ones the fence lets
  * the command write, so nothing it could not already delete), never a main checkout or one holding `.scratch/` (the
  * rescue hook of worktrunk does not run here). Unmerged branches stay unless -D, as in worktrunk.
  */
@@ -131,7 +134,7 @@ async function removeWorktrees({ branches, force, deleteBranch }, cwd, env, owne
   for (const t of targets) {
     if (t.missing !== undefined) return fail(`wt remove: no worktree has branch ${t.missing}`);
     if (real(t.path) === real(repo.main)) return fail(`wt remove: ${t.path} is the main checkout`);
-    if (!owned.includes(real(t.path))) return fail(`wt remove: ${t.path} is not a worktree this Chat owns (its owner record names another Chat or Workstream)`);
+    if (!owned.includes(real(t.path))) return fail(`wt remove: ${t.path} is not a worktree this Chat owns (its creation receipt names another Chat or Workstream)`);
     if (existsSync(join(t.path, ".scratch"))) return fail(`wt remove: ${t.path} holds .scratch/; move what is worth keeping, delete the folder, then remove`);
   }
   if (targets.length === 0) return fail("wt remove: this folder is the main checkout, not a worktree; name the branch");
@@ -155,7 +158,7 @@ export async function handle(request, env, owners = []) {
     try { if (!statSync(cwd).isDirectory()) throw new Error(); } catch { return fail(`host operation: ${cwd} is not a folder`); }
     const step = plan(argv);
     if (step.error !== undefined) return fail(step.error);
-    if (step.worktree !== undefined) return await createWorktree(step.worktree, cwd, env);
+    if (step.worktree !== undefined) return await createWorktree(step.worktree, cwd, env, owners);
     if (step.remove !== undefined) return await removeWorktrees(step.remove, cwd, env, owners);
     return await run(step.file, step.args, { cwd, env, input: typeof stdin === "string" ? stdin : "" });
   } catch (error) {

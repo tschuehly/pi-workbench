@@ -199,6 +199,8 @@ test("`wt switch --create` makes the sibling worktree outside the fence and reco
   assert.match(out, /exit=0[\s\S]*-x is not available inside the sandbox[\s\S]*exit=2[\s\S]*run it inside a checkout under ~\/IdeaProjects[\s\S]*exit=2/);
   const record = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "tools.made-by-host", "pi-owner.json"), "utf8"));
   assert.deepEqual([record.branch, record.sessions], ["made-by-host", ["sandbox-test"]]);
+  const receipt = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "tools.made-by-host", "pi-creator.json"), "utf8"));
+  assert.deepEqual([receipt.branch, receipt.sessions, receipt.workstreams], ["made-by-host", ["sandbox-test"], []], "a creation receipt beside the cleanup record");
   assert.equal(existsSync(join(home, "owner-script-ran")), false, "no owner-record script ran");
   assert.equal(existsSync(join(home, "escaped")), false);
   assert.equal(git(tools, "branch", "--list", "other").trim(), "", "a refused call creates nothing");
@@ -212,7 +214,7 @@ test("`wt remove` removes an owned worktree outside the fence with its merged br
   const add = (name, owner) => {
     const path = join(home, "IdeaProjects", `rm.${name}`);
     git(main, "worktree", "add", "-q", "-b", name, path);
-    writeFileSync(join(main, ".git", "worktrees", `rm.${name}`, "pi-owner.json"), JSON.stringify({ sessions: [owner] }));
+    writeFileSync(join(main, ".git", "worktrees", `rm.${name}`, "pi-creator.json"), JSON.stringify({ sessions: [owner] }));
     return path;
   };
   const [done, dirty, kept, theirs, scratchy] = [["done", "sandbox-test"], ["dirty", "sandbox-test:child-1"], ["kept", "sandbox-test"], ["theirs", "another-chat"], ["scratchy", "sandbox-test"]].map(([name, owner]) => add(name, owner));
@@ -239,7 +241,7 @@ test("`wt remove` removes an owned worktree outside the fence with its merged br
   assert.deepEqual(git(main, "branch", "--format=%(refname:short)").trim().split("\n").sort(), ["kept", "master", "scratchy", "theirs"].sort());
 });
 
-test("a chat in its scratch folder may write the worktrees whose owner record names it; it cannot forge one", { skip }, async () => {
+test("a chat in its scratch folder may write the worktrees whose creation receipt names it; a cleanup owner record grants nothing; it cannot forge one", { skip }, async () => {
   const main = join(home, "IdeaProjects", "lib");
   const mine = join(home, "IdeaProjects", "lib.mine");
   const theirs = join(home, "IdeaProjects", "lib.theirs");
@@ -249,16 +251,21 @@ test("a chat in its scratch folder may write the worktrees whose owner record na
   git(main, "worktree", "add", "-q", "-b", "mine", mine);
   git(main, "worktree", "add", "-q", "-b", "theirs", theirs);
   const meta = join(main, ".git", "worktrees");
-  writeFileSync(join(meta, "lib.mine", "pi-owner.json"), JSON.stringify({ sessions: ["sandbox-test:child-1"], workstreams: [] }));
-  writeFileSync(join(meta, "lib.theirs", "pi-owner.json"), JSON.stringify({ sessions: ["another-chat"], workstreams: ["ws-other"] }));
+  writeFileSync(join(meta, "lib.mine", "pi-creator.json"), JSON.stringify({ sessions: ["sandbox-test:child-1"], workstreams: [] }));
+  writeFileSync(join(meta, "lib.theirs", "pi-creator.json"), JSON.stringify({ sessions: ["another-chat"], workstreams: ["ws-other"] }));
   const viaWorkstream = join(home, "IdeaProjects", "lib.ws");
   git(main, "worktree", "add", "-q", "-b", "ws", viaWorkstream);
-  writeFileSync(join(meta, "lib.ws", "pi-owner.json"), JSON.stringify({ sessions: ["earlier-chat"], workstreams: ["ws-x"] }));
+  writeFileSync(join(meta, "lib.ws", "pi-creator.json"), JSON.stringify({ sessions: ["earlier-chat"], workstreams: ["ws-x"] }));
+  // Adopted: another chat made it; `mac-storage-workspaces --record-owner` later added this chat and ws-x as cleanup owners.
+  const adopted = join(home, "IdeaProjects", "lib.adopted");
+  git(main, "worktree", "add", "-q", "-b", "adopted", adopted);
+  writeFileSync(join(meta, "lib.adopted", "pi-creator.json"), JSON.stringify({ sessions: ["another-chat"], workstreams: [] }));
+  writeFileSync(join(meta, "lib.adopted", "pi-owner.json"), JSON.stringify({ sessions: ["another-chat", "sandbox-test"], workstreams: ["ws-other", "ws-x"] }));
   // A forged record: a worktree entry naming this chat, pointing at the main checkout (whose .git is a folder).
   mkdirSync(join(meta, "forged"));
   writeFileSync(join(meta, "forged", "gitdir"), `${join(main, ".git")}\n`);
-  writeFileSync(join(meta, "forged", "pi-owner.json"), JSON.stringify({ sessions: ["sandbox-test"] }));
-  assert.deepEqual(ownedWorktrees(home, ["sandbox-test"]).filter((p) => p.includes(`${sep}lib.`)), [mine], "a child's session counts as its chat; theirs and the forgery do not");
+  writeFileSync(join(meta, "forged", "pi-creator.json"), JSON.stringify({ sessions: ["sandbox-test"] }));
+  assert.deepEqual(ownedWorktrees(home, ["sandbox-test"]).filter((p) => p.includes(`${sep}lib.`)), [mine], "a child's session counts as its chat; theirs, the adopted one and the forgery do not");
   const scratchDir = join(home, ".pi-workbench", "scratch", "ws-x");
   mkdirSync(scratchDir, { recursive: true });
   const job = await run([
@@ -267,16 +274,25 @@ test("a chat in its scratch folder may write the worktrees whose owner record na
     `printf 'gitdir: ${join(main, ".git")}\n' > "${join(mine, ".git")}" 2>/dev/null`,
     `touch "${join(theirs, "x")}" "${join(main, "x")}" "${join(meta, "lib.mine", "pi-owner.json")}" "${join(meta, "lib.mine", "gitdir")}" "${join(main, ".git", "pi-owner.json")}" 2>/dev/null`,
     `mkdir "${join(meta, "planted")}" 2>/dev/null`,
-    `echo "{}" > "${join(meta, "lib.theirs", "pi-owner.json")}" 2>/dev/null`,
+    `echo "{}" > "${join(meta, "lib.theirs", "pi-creator.json")}" 2>/dev/null`,
+    `touch "${join(adopted, "x")}" 2>/dev/null`,
+    `cd "${main}" && wt switch --create from-ws --no-cd; echo "exit=$?"`,
+    `cd "${main}" && wt remove adopted; echo "exit=$?"`,
     "true",
-  ].join("; "), { cwd: scratchDir, owned: true });
+  ].join("; "), { cwd: scratchDir, owned: true, env: withFakes });
   assert.equal(job.state, "complete", job.error);
   assert.match(git(mine, "log", "-1", "--format=%s"), /fenced/, "a commit in the owned worktree works");
   assert.match(git(viaWorkstream, "log", "-1", "--format=%s"), /fenced/, "a worktree of the Workstream whose scratch folder the chat started in");
   assert.match(readFileSync(join(mine, ".git"), "utf8"), /worktrees\/lib\.mine/, "its .git file cannot be repointed");
-  for (const path of [join(theirs, "x"), join(main, "x"), join(main, ".git", "pi-owner.json"), join(meta, "planted")]) assert.equal(existsSync(path), false, path);
-  assert.match(readFileSync(join(meta, "lib.mine", "pi-owner.json"), "utf8"), /child-1/, "its own owner record is unchanged");
-  assert.match(readFileSync(join(meta, "lib.theirs", "pi-owner.json"), "utf8"), /another-chat/);
+  for (const path of [join(theirs, "x"), join(main, "x"), join(main, ".git", "pi-owner.json"), join(meta, "planted"), join(adopted, "x")]) assert.equal(existsSync(path), false, path);
+  assert.match(readFileSync(join(meta, "lib.mine", "pi-creator.json"), "utf8"), /child-1/, "its own creation receipt is unchanged");
+  assert.match(readFileSync(join(meta, "lib.theirs", "pi-creator.json"), "utf8"), /another-chat/);
+  const out = readFileSync(job.logPath, "utf8");
+  assert.match(out, /exit=0[\s\S]*lib\.adopted is not a worktree this Chat owns[^\n]*\nexit=2/, out);
+  assert.ok(existsSync(join(adopted, ".git")), "a cleanup owner cannot remove it");
+  // The receipt names the chat and only the Workstream whose scratch folder it started in, never every one it is linked to.
+  const receipt = JSON.parse(readFileSync(join(meta, "lib.from-ws", "pi-creator.json"), "utf8"));
+  assert.deepEqual([receipt.branch, receipt.sessions, receipt.workstreams], ["from-ws", ["sandbox-test"], ["ws-x"]]);
 });
 
 test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or another job's host operations", { skip }, async () => {
@@ -325,7 +341,7 @@ test("a planted commondir or a relative hooks folder never runs through the work
   git(app, "config", "core.hooksPath", ".githooks");
   mkdirSync(join(app, ".githooks"));
   writeFileSync(join(app, ".githooks", "post-checkout"), `#!/bin/sh\ntouch "${join(home, "hook-ran")}"\n`, { mode: 0o755 });
-  writeFileSync(join(app, ".git", "worktrees", "hooked.mine", "pi-owner.json"), JSON.stringify({ sessions: ["sandbox-test"] }));
+  writeFileSync(join(app, ".git", "worktrees", "hooked.mine", "pi-creator.json"), JSON.stringify({ sessions: ["sandbox-test"] }));
   // From its owned worktree the chat can write the shared git folder, but not plant a commondir there.
   const job = await run(`printf '${piTmp}\\n' > "${join(app, ".git", "commondir")}" 2>/dev/null || echo COMMONDIR_REFUSED; wt switch --create via-host; echo "exit=$?"`, { cwd: wtree, env: withFakes });
   assert.equal(job.state, "complete", job.error);
