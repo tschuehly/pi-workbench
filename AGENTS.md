@@ -67,6 +67,10 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
   child profiles, skills, AGENTS.md, prompts, Pi packages or their config), run
   `node scripts/context-usage.mjs` before and after, and report the lead and child token change to
   Thomas. Explain any increase.
+- Thomas uses only Pi Durable: Durable Chats in the Durable PI WEB instance (port 8506), never the legacy
+  instance. Build Chat behavior for the Durable host (`packages/durable-pilot/`): it has its own Working
+  Mode, compaction, and question store, so a Pi extension's hooks and commands reach Durable Chats
+  only through that host. Promote with `scripts/promote-installed switch`.
 - Verify by trial, not by test volume. Outside AFK, add only the one small check a change needs and run
   no sandbox trials: after Thomas approves, merge and let him trial it live. In AFK, write the tests and
   trial the change yourself with subagents before reporting.
