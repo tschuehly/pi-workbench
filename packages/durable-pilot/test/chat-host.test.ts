@@ -703,6 +703,7 @@ test("ask_user showIf: a condition on a later or unknown question or an unoffere
 	const { workbenchExtension } = await import("../src/workbench.ts");
 	const description = (workbenchExtension({ chatId: "x", signal: () => {} }) as unknown as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "ask_user")!.description;
 	assert.match(description, /Give a follow-up question `showIf` instead of writing 'If X:' in its text\./);
+	assert.match(description, /The user can edit the context; treat an edited context as his version, so put text for approval \(a plan, draft or message\) there\./);
 });
 
 test("ask_user partial send: one answer is delivered, the rest stays open at the new revision across a kill, and answering it closes the set", async () => {
@@ -977,4 +978,13 @@ test("remainingAsk: a partial send's skipped dependents leave the set with its a
 	const ask = { askId: "a1", askedAt: "", updatedAt: "", revision: "r1", turnsSinceUpdate: 0, questions: [q("location"), q("machine"), q("other")] };
 	const outcome = { partial: true, revision: "r2", questions: [{ question: q("location"), answered: true }, { question: q("machine"), answered: false, skipped: true }] };
 	assert.deepEqual(remainingAsk(ask, outcome)?.questions.map((question) => question.id), ["other"]);
+});
+
+test("remainingAsk: a partial send's edited context becomes the set's context; none keeps the agent's", async () => {
+	const { remainingAsk } = await import("../src/workbench.ts");
+	const q = (id: string) => ({ id, question: `${id}?`, options: [] });
+	const ask = { askId: "a1", askedAt: "", updatedAt: "", revision: "r1", turnsSinceUpdate: 0, context: "Agent's plan", questions: [q("db"), q("cache")] };
+	const outcome = { partial: true, revision: "r2", questions: [{ question: q("db"), answered: true }] };
+	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "My plan" })?.context, "My plan");
+	assert.equal(remainingAsk(ask, outcome)?.context, "Agent's plan");
 });
