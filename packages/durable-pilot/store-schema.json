@@ -10,6 +10,7 @@
     "workbench.child": 1,
     "workbench.context-checkpoint": 1,
     "workbench.delegation": 1,
+    "workbench.idle-cache": 1,
     "workbench.package-outbox": 1,
     "workbench.questions": 1,
     "workbench.resources": 1,

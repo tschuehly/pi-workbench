@@ -171,6 +171,15 @@ const text = (params: Record<string, unknown>, name: string): string => {
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** The `viewed` state the controlling daemon set; a socket host drops it with that daemon's connection. */
+let viewed = false;
+const setViewed = (value: boolean): { was: boolean } => {
+	const was = viewed;
+	viewed = value;
+	session.setViewed(value);
+	return { was };
+};
+
 const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	transcript: () => session.transcript(),
 	status: () => session.status(),
@@ -244,9 +253,10 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	},
 	compact: (params) => session.compact(typeof params.instructions === "string" ? params.instructions : undefined),
 	// Capability `viewed`: true while at least one browser tab or window shows this Chat, false when the last closes.
+	// The reply names the state it replaced (`was`).
 	setViewed: (params) => {
 		if (typeof params.viewed !== "boolean") throw new Error("viewed must be a boolean");
-		session.setViewed(params.viewed);
+		return setViewed(params.viewed);
 	},
 	// One command list and dispatcher: host commands (/quota-check) and the bound Pi packages' commands.
 	commands: () => session.commands(),
@@ -363,11 +373,14 @@ else {
 	const server = createServer((socket) => {
 		peer?.destroy();
 		peer = socket;
+		// Only the daemon that set `viewed` knows it still holds; a new one re-sends true on its ready.
+		setViewed(false);
 		socket.setEncoding("utf8");
 		socket.on("error", () => undefined);
 		socket.on("close", () => {
 			if (peer !== socket) return;
 			peer = undefined;
+			setViewed(false);
 			host.spawner.disconnected();
 			host.messenger.disconnected();
 		});

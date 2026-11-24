@@ -30,7 +30,7 @@ import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
 import { ChatMessenger, homeWorkstream } from "./chat-message.ts";
-import { CACHE_RETENTION } from "./idle-compact.ts";
+import { CACHE_RETENTION, idleCompaction, type IdleGate } from "./idle-compact.ts";
 import { BackgroundBash } from "./background-bash.ts";
 import { cheapWakeExtension, submitWake } from "./cheap-wake.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
@@ -148,6 +148,8 @@ export type ChatHost = Host & {
 	readonly spawner: SessionSpawner;
 	/** send_chat_message's requests to PI WEB and their answers. */
 	readonly messenger: ChatMessenger;
+	/** The idle timer compaction's summary hook and what the session tells it (idle-compact.ts); without it no timer runs. */
+	readonly idle?: IdleGate;
 };
 
 /**
@@ -235,6 +237,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const spawner = new SessionSpawner(chatId);
 	const messenger = new ChatMessenger(chatId);
 	const sandbox = new CodemodeSandbox();
+	const idle = idleCompaction();
 	const agentDir = options.packages?.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	// Like the packages: only a Chat that runs the user's Pi settings (PI WEB's `--packages`) reads them.
 	const inlineBudget = options.packages === undefined || options.readOnly === true ? undefined : codemodeInlineBudget(options.cwd, agentDir);
@@ -254,6 +257,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		messenger.extension(),
 		codemodeExtension(sandbox, inlineBudget),
 		cheapWakeExtension,
+		// The timer compaction's cheap summary; removing it makes those compactions summarize on the Chat's model.
+		idle.extension,
 	];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
 	const aliases = claudeAliases("pi");
@@ -341,6 +346,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		atelier,
 		spawner,
 		messenger,
+		idle: idle.gate,
 		...(packages === undefined ? {} : { packages }),
 		listenPackages: (listener: (event: PackageEvent) => void) => {
 			chat.onPackageEvent = listener;
