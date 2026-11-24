@@ -251,7 +251,7 @@ function stripNumbering(value: string): string {
 }
 
 /** PI WEB `pendingAskStore.ts` validation of a question set (ids, duplicates, limits, required prose). */
-function validateQuestions(questions: readonly Question[]): Question[] {
+export function validateQuestions(questions: readonly Question[]): Question[] {
 	if (questions.length === 0) throw new AskError("An ask must contain at least one question");
 	if (questions.length > QUESTION_LIMIT) throw new AskError(`An ask must not contain more than ${QUESTION_LIMIT} questions`);
 	const earlier = new Map<string, Question>();
@@ -295,7 +295,7 @@ function validateShowIf(showIf: ShowIf, id: string, earlier: ReadonlyMap<string,
 	return { question: parent.id, values: [...new Set(showIf.values)] };
 }
 
-function validateContext(value: string | undefined): string | undefined {
+export function validateContext(value: string | undefined): string | undefined {
 	if (value === undefined || value.trim() === "") return undefined;
 	if (value.length > CONTEXT_MAX) throw new AskError("context exceeds its length limit");
 	return value;
@@ -346,7 +346,7 @@ export type WorkbenchSignal =
 
 type Signal = (signal: WorkbenchSignal) => void;
 
-function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean; showIf?: ShowIf }): Question {
+export function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean; showIf?: ShowIf }): Question {
 	return {
 		id: param.id,
 		question: param.question,
