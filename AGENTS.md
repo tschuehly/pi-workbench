@@ -67,6 +67,9 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
   child profiles, skills, AGENTS.md, prompts, Pi packages or their config), run
   `node scripts/context-usage.mjs` before and after, and report the lead and child token change to
   Thomas. Explain any increase.
+- Verify by trial, not by test volume. Outside AFK, add only the one small check a change needs and run
+  no sandbox trials: after Thomas approves, merge and let him trial it live. In AFK, write the tests and
+  trial the change yourself with subagents before reporting.
 - Commit each coherent unit after it is complete and needs no further human input.
   Before committing, check that the staged diff contains only that unit. This rule does not authorize merging or pushing.
 - Change Pi Workbench and PI WEB code only in a development worktree you own, on its own branch.
