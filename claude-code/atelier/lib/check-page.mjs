@@ -456,7 +456,8 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
   delete env.AGENT_BROWSER_NAMESPACE;
   const ab = (args, { timeout = 45_000, signal = stop } = {}) => new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(signal.reason); return; }
-    const child = spawn(browser, args, { detached: true, env: { ...env, AGENT_BROWSER_SOCKET_DIR: sockets }, stdio: ["ignore", "pipe", "ignore"] });
+    // The unknown --atelier-check switch tags the browser's main process: macOS hides a signed browser's environment from `ps`.
+    const child = spawn(browser, args, { detached: true, env: { ...env, AGENT_BROWSER_SOCKET_DIR: sockets, AGENT_BROWSER_ARGS: [env.AGENT_BROWSER_ARGS, `--atelier-check=${sockets}`].filter(Boolean).join(",") }, stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const end = (error) => {
       clearTimeout(timer);
@@ -476,10 +477,19 @@ export async function checkPage(pageArg, { tmp = process.env.PI_TMP, browser = "
   // daemon (even one still starting), the browser and its helpers. ponytail: `ps e` (macOS, Linux); not Windows.
   const teardown = async () => {
     await ab(["--session", session, "close"], { timeout: 5_000, signal: null }).catch(() => {});
-    const left = () => execFileSync("ps", ["eww", "-A", "-o", "pid=,command="], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, env: { PATH: `${process.env.PATH}:/bin:/usr/bin` } }).split("\n")
-      .filter((l) => l.includes(`AGENT_BROWSER_SOCKET_DIR=${sockets}`)).map((l) => Number(l.trim().split(/\s/)[0]));
+    // Matched by environment or by the --atelier-check switch, plus their children: the browser's GPU and renderer
+    // processes show neither, and a main process left alive respawns its helpers.
+    const left = () => {
+      const procs = execFileSync("ps", ["eww", "-A", "-o", "pid=,ppid=,command="], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, env: { PATH: `${process.env.PATH}:/bin:/usr/bin` } }).split("\n")
+        .map((l) => l.trim().match(/^(\d+)\s+(\d+)\s(.*)$/)).filter(Boolean).map(([, pid, ppid, cmd]) => ({ pid: Number(pid), ppid: Number(ppid), cmd }));
+      const ours = new Set(procs.filter((p) => p.cmd.includes(`AGENT_BROWSER_SOCKET_DIR=${sockets}`) || p.cmd.includes(`--atelier-check=${sockets}`)).map((p) => p.pid));
+      for (let n = -1; n !== ours.size;) { n = ours.size; for (const p of procs) if (ours.has(p.ppid)) ours.add(p.pid); }
+      ours.delete(process.pid);
+      return [...ours];
+    };
     for (const until = Date.now() + 2_000; Date.now() < until && left().length;) await sleep(200);
-    for (const pid of left()) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+    for (let until = Date.now() + 3_000, pids; (pids = left()).length && Date.now() < until; await sleep(200))
+      for (const pid of pids) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
   };
   const b = async (...args) => {
     const r = JSON.parse(await ab(["--session", session, "--json", ...args]));
