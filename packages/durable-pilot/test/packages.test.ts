@@ -5,9 +5,11 @@
 import assert from "node:assert/strict";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { createServer as createSocketServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { alreadyFenced } from "../../../extensions/background-bash/sandbox.mjs";
 import { claudeAliases, claudePayload } from "../src/claude.ts";
 import { codemodeInlineBudget, openChatHost } from "../src/chat.ts";
 import { ChatSession } from "../src/chat-session.ts";
@@ -269,6 +271,57 @@ test("P133 P135: a tail watcher pings the Chat, survives a kill and resumes; pin
 	await host.until((e) => e.type === "message.end" && textOf((e.message as Message).content).startsWith("ok: [watcher"), "the ping's turn after restart");
 	await host.close();
 	assert.ok(!storeBytes(f.store).includes(SECRET), "neither the ping nor the watcher state holds the token");
+});
+
+test("Monitor fence: ordinary commands still deliver output", async () => {
+	const host = new ChatHost(family("monitor-echo"));
+	try {
+		await host.ready;
+		await host.tool("tools_enable", { group: "monitor" }, "op-enable");
+		await monitorOutput(host, "echo", "echo normal-command-ok", /normal-command-ok/);
+	} finally { await host.close(); }
+});
+
+async function monitorOutput(host: ChatHost, label: string, command: string, expected: RegExp) {
+	const created = await host.tool("monitor", { source: { type: "spawn", command }, options: { label } }, `op-${label}`);
+	assert.match(String(created.text), /CREATED: watcher/);
+	const ping = await host.until((e) => e.type === "message.end" && (e.message as Message).customType === "monitor"
+		&& textOf((e.message as Message).content).includes(` · ${label}]`) && expected.test(textOf((e.message as Message).content)), `Monitor output for ${label}`);
+	return textOf((ping.message as Message).content);
+}
+
+test("Monitor fence: only a lead with confirmed full access can write outside or reach the PI WEB socket", {
+	skip: process.platform !== "darwin" ? "Seatbelt requires macOS" : alreadyFenced() && "run in an unfenced shell to test both fence states",
+}, async () => {
+	const f = family("monitor-fence");
+	const data = join(f.env.HOME, ".pi-web-durable");
+	mkdirSync(data);
+	const dialog = join(f.cwd, "allow");
+	writeFileSync(dialog, "#!/bin/sh\necho 'button returned:Allow'\n", { mode: 0o700 });
+	const socket = createSocketServer((client) => client.end());
+	// Bind and close in the fixture directory: a long scratch path exceeds Darwin's 104-byte socket limit.
+	const cwd = process.cwd();
+	process.chdir(data);
+	try {
+		await new Promise<void>((resolve, reject) => socket.once("error", reject).listen("s", resolve));
+		const env = { ...f.env, PI_WEB_DATA_DIR: data, PI_SANDBOX_OSASCRIPT: dialog };
+		const host = new ChatHost({ ...f, env });
+		try {
+			await host.ready;
+			await host.tool("tools_enable", { group: "monitor" }, "op-enable");
+			const outcomes = [];
+			for (const state of ["initial", "on", "off"]) {
+				if (state !== "initial") assert.match((await host.call<{ message: string }>("command", { name: "full-access", args: state })).message, new RegExp(`Full access is ${state}`));
+				const command = `cd "$PI_WEB_DATA_DIR" && (touch ${state} 2>/dev/null; node -e 'require("node:net").connect("s", () => console.log("socket:connected")).on("error", e => console.log("socket:"+e.code))')`;
+				const line = await monitorOutput(host, state, command, /socket:/);
+				outcomes.push([existsSync(join(data, state)), line.split("socket:").at(-1)?.trim()]);
+			}
+			assert.deepEqual(outcomes, [[false, "EPERM"], [true, "connected"], [false, "EPERM"]], "[outside write, fixture socket] before Allow, after Allow, and after off");
+		} finally { await host.close(); }
+	} finally {
+		if (socket.listening) await new Promise<void>((resolve) => socket.close(() => resolve()));
+		process.chdir(cwd);
+	}
 });
 
 test("P113 with a ChatGPT model: current-model OpenAI hosted search sees the real Codex model, uses only the stored subscription login and reaches the (mocked) ChatGPT endpoint", async () => {
