@@ -59,7 +59,8 @@ const KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*
  * header lies beyond the text read.
  */
 function dropCutHead(text, tailLength) {
-  const cut = text.length - tailLength;
+  // A tail cut inside a terminal code cleans to more text than the whole log's suffix: never past the start.
+  const cut = Math.max(0, text.length - tailLength);
   // The cut token is dropped below, so a key whose header overlaps it (or starts exactly at the cut) is masked too.
   const token = cut + (/^\S*/.exec(text.slice(cut))?.[0].length ?? 0);
   for (const block of text.matchAll(KEY_BLOCK)) {

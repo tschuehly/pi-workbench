@@ -120,7 +120,10 @@ test("a byte cut through a key's opening or closing line masks the key and keeps
   // The same, with terminal colour inside the header (stripped before redaction).
   const COLOURED = "-----BEGIN \u001b[31mPRIVATE\u001b[0m KEY-----";
   const coloured = `${pre}${COLOURED}\nKEYBODY${"A".repeat(12_000 - COLOURED.length - 1 - 7)}`;
-  for (const [name, text] of [["opening", opening], ["exact", exact], ["coloured", coloured], ["closing", closing]]) {
+  // A 12,001-byte log whose cut falls just after the ESC of a leading colour code.
+  const ESC_CODE = "\u001b[38;2;255;128;0m";
+  const insideCode = `${ESC_CODE}DIAG\n${BEGIN}\nKEYBODY${"A".repeat(12_001 - ESC_CODE.length - 5 - BEGIN.length - 1 - 7)}`;
+  for (const [name, text] of [["opening", opening], ["exact", exact], ["coloured", coloured], ["inside a code", insideCode], ["closing", closing]]) {
     const logPath = join(dir, `${name}.log`);
     writeFileSync(logPath, text);
     const content = redact(completionContent({ id: "k", state: "failed", exitCode: 1, logPath, bytes: statSync(logPath).size }));
