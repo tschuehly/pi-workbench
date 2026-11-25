@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
 import { alreadyFenced, grants, ownedWorktrees, workstreamId } from "./sandbox.mjs";
@@ -232,7 +233,7 @@ test("inside the sandbox the real wt runs only list, switch and config: removal,
 
 // The shim alone, no fence needed (so it also runs inside one): two PATH folders each link `wt` to it.
 test("wt shim: refuses --clobber, runs a local switch without hooks, and finds the real wt by real path past every link to itself", () => {
-  const shim = join(dirname(new URL(import.meta.url).pathname), "host-ops", "host-op.mjs");
+  const shim = join(dirname(fileURLToPath(import.meta.url)), "host-ops", "host-op.mjs");
   const [a, b, realBin] = ["shim-a", "shim-b", "real-wt"].map((d) => mkdtempSync(join(root, `${d}-`)));
   for (const d of [a, b]) symlinkSync(shim, join(d, "wt"));
   writeFileSync(join(realBin, "wt"), '#!/bin/sh\necho "REAL_WT_RAN $*"\n', { mode: 0o755 });
@@ -247,6 +248,40 @@ test("wt shim: refuses --clobber, runs a local switch without hooks, and finds t
   // Without a runner a `switch --create` runs the real wt here, also without hooks.
   assert.equal(wt("switch", "--create", "n").stdout, "REAL_WT_RAN switch --no-hooks --create n\n");
   assert.equal(wt("list").stdout, "REAL_WT_RAN list\n");
+});
+
+// Same shim setup, one subtest per hardening so each fails on its own.
+test("wt shim: grouped short options, a repeated --no-hooks, options after `--`, a relative PATH entry and a folder named wt", async (t) => {
+  const shim = join(dirname(fileURLToPath(import.meta.url)), "host-ops", "host-op.mjs");
+  const [a, realBin, dot, folder] = ["shim-a", "real-wt", "dot-wt", "folder-wt"].map((d) => mkdtempSync(join(root, `${d}-`)));
+  symlinkSync(shim, join(a, "wt"));
+  writeFileSync(join(realBin, "wt"), '#!/bin/sh\necho "REAL_WT_RAN $*"\n', { mode: 0o755 });
+  writeFileSync(join(dot, "wt"), '#!/bin/sh\necho "DOT_WT $0 $*"\n', { mode: 0o755 });
+  mkdirSync(join(folder, "wt"));
+  const wt = (args, { path = [a, realBin], cwd, env = {} } = {}) => spawnSync(join(a, "wt"), args, { cwd, encoding: "utf8", timeout: 10_000, env: { ...env, PATH: [...path, dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter) } });
+  await t.test("a short-option group could hide --create or --clobber: refused", () => {
+    for (const group of ["-yc", "-cy"]) {
+      const refused = wt(["switch", group, "n"]);
+      assert.equal(refused.status, 2, group);
+      assert.match(refused.stderr, /write each short option separately/);
+    }
+  });
+  await t.test("--no-hooks goes in once", () => {
+    assert.equal(wt(["switch", "--no-hooks", "other"]).stdout, "REAL_WT_RAN switch --no-hooks other\n");
+  });
+  await t.test("options end at `--`: --execute's arguments neither refuse nor forward", () => {
+    const args = ["switch", "other", "-x", "echo", "--", "--clobber", "--no-hooks", "-c"];
+    const ran = wt(args, { env: { PI_HOST_OPS: join(root, "no-runner.sock") } });
+    assert.equal(ran.stdout, `REAL_WT_RAN switch --no-hooks ${args.slice(1).join(" ")}\n`, ran.stderr);
+  });
+  await t.test("a relative PATH entry: the real wt runs by its absolute path, never a bare name the lookup could send to the shim", () => {
+    const ran = wt(["list"], { path: [".", a], cwd: dot });
+    assert.equal(ran.stdout, `DOT_WT ${join(realpathSync(dot), "wt")} list\n`, ran.stderr);
+  });
+  await t.test("only a regular file counts as the real wt, not a folder named wt", () => {
+    const ran = wt(["list"], { path: [folder, a, realBin] });
+    assert.equal(ran.stdout, "REAL_WT_RAN list\n", ran.stderr);
+  });
 });
 
 test("a chat in its scratch folder may write the worktrees whose creation receipt names it; a cleanup owner record grants nothing; it cannot forge one", { skip }, async () => {
