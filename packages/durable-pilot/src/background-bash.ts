@@ -164,7 +164,10 @@ export class BackgroundBash {
 	/** The lead: the Chat's active branch at each use (history navigation may select another). */
 	#conversation: (() => Conversation) | undefined;
 	#reader: DocumentReader | undefined;
-	/** The owner's full-access switch for the lead's commands: in memory only, so it ends with this host (Thomas, 24 Nov). */
+	/**
+	 * The owner's full-access switch for the lead's commands: in memory only, so it ends with the Chat (Thomas, 24 Nov);
+	 * only PI WEB's upgrade restart carries it to the next host (`carryFullAccess`), over the host's owner-only socket.
+	 */
 	#fullAccess = false;
 
 	constructor(options: BackgroundBashOptions) {
@@ -387,10 +390,16 @@ export class BackgroundBash {
 		}
 		if (word !== "on") return { type: "done", message: `Full access is ${this.#fullAccess ? "on" : "off"}. Usage: /full-access [on|off]` };
 		if (this.#fullAccess) return { type: "done", message: "Full access is already on." };
-		const text = `Allow full access for the Chat ${chat}?\n\nIts own commands (not its Subagents') will run without the write fence until you send /full-access off or the Chat's host stops.`;
+		const text = `Allow full access for the Chat ${chat}?\n\nIts own commands (not its Subagents') will run without the write fence until you send /full-access off or the Chat ends (it stays on across Pi Workbench installs).`;
 		if (!(await confirm(text))) return { type: "done", message: "Full access stays off: the confirmation dialog was not answered with Allow." };
 		this.#fullAccess = true;
-		return { type: "done", message: "Full access is on for this Chat's own commands until /full-access off or the Chat's host stops." };
+		return { type: "done", message: "Full access is on for this Chat's own commands until /full-access off or the Chat ends (it stays on across Pi Workbench installs)." };
+	}
+
+	/** Whether full access is on; with `on`, PI WEB's upgrade restart turns it back on in the new host first. */
+	carryFullAccess(on = false): boolean {
+		if (on) this.#fullAccess = true;
+		return this.#fullAccess;
 	}
 
 	async status(): Promise<Record<string, string>> {

@@ -1907,3 +1907,28 @@ test("/full-access: on only after Allow in the owner's dialog; then the lead's c
 		rmSync(target, { recursive: true, force: true });
 	}
 });
+
+test("/full-access survives PI WEB's upgrade restart (the close answer, handed back in resume), but a plain stop and start turns it off", { skip: process.platform !== "darwin" && "the write fence applies on macOS only" }, async () => {
+	const { store, cwd } = family("full-access-upgrade");
+	const dialog = join(store, "..", "fake-osascript");
+	writeFileSync(dialog, "#!/bin/sh\nprintf 'button returned:Allow\\n'\n", { mode: 0o755 });
+	const env = { PI_SANDBOX_OSASCRIPT: dialog };
+	const access = async (host: ChatHost) => (await host.call<Status>("status")).extensionStatuses?.["workbench.full-access"];
+	const first = open(store, cwd, env);
+	await first.ready;
+	assert.match((await first.call<{ message: string }>("command", { name: "full-access", args: "on" })).message, /until \/full-access off or the Chat ends/);
+	assert.deepEqual(await first.call("close", { reason: "upgrade", ifRestartSafe: true }), { closed: true, fullAccess: true });
+	assert.equal(await first.exited, 0);
+	const upgraded = open(store, cwd, env);
+	await upgraded.ready;
+	await upgraded.call("resume", { reason: "upgrade-restart", fullAccess: true });
+	assert.equal(await access(upgraded), "on", "still on after the upgrade restart");
+	await upgraded.close();
+	const restarted = open(store, cwd, env);
+	try {
+		await restarted.ready;
+		assert.equal(await access(restarted), "off", "a plain stop and start resets it");
+	} finally {
+		await restarted.close();
+	}
+});

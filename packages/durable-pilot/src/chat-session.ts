@@ -461,9 +461,10 @@ export class ChatSession {
 
 	/**
 	 * `end`: the owner ends the Chat, so its background jobs are cancelled first; any other close (a restart) keeps them.
-	 * `reason: "upgrade"`: PI WEB's Upgrade now closes the host to start its family on new code (telemetry `upgrade-restart`).
+	 * `reason: "upgrade"`: PI WEB's Upgrade now closes the host to start its family on new code (telemetry `upgrade-restart`);
+	 * its answer says whether full access was on, which PI WEB hands back in the new host's `resume`.
 	 */
-	async close(options: { end?: boolean; reason?: "upgrade" } = {}): Promise<void> {
+	async close(options: { end?: boolean; reason?: "upgrade" } = {}): Promise<{ fullAccess?: true }> {
 		if (options.end === true) await this.#chat?.bash?.cancelAll();
 		this.#closed = true;
 		this.#stopPower();
@@ -475,6 +476,7 @@ export class ChatSession {
 		await this.#host.close();
 		this.#record("session.shutdown", { sessionFile: null, reason: options.reason === "upgrade" ? "upgrade-restart" : "close" });
 		this.#telemetry?.close();
+		return options.reason === "upgrade" && this.#chat?.bash?.carryFullAccess() === true ? { fullAccess: true } : {};
 	}
 
 	#record(type: string, data: Record<string, unknown> = {}): void {
@@ -861,7 +863,9 @@ export class ChatSession {
 	 * Resume a restore without a new input: the host started by PI WEB's Upgrade now. Restored work runs as after any
 	 * restart (an interrupted answer is requested again, safe tools rerun, unsafe ones stay held for the owner).
 	 */
-	async resume(reason: "upgrade-restart"): Promise<void> {
+	async resume(reason: "upgrade-restart", fullAccess = false): Promise<void> {
+		// Before any restored work runs: the old host's full access (its close answer), from PI WEB only.
+		this.#chat?.bash?.carryFullAccess(fullAccess);
 		await this.#resume();
 		this.#record("session.restart", { reason, ownerEpoch: this.#host.store.owner.epoch });
 		await this.#publishStatus();

@@ -105,7 +105,7 @@ async function openChat(agent: string, model = "faux", cwd?: string): Promise<Ch
 	const events: UiEvent[] = [];
 	const session = new ChatSession(host, (event) => events.push(event));
 	await session.start();
-	return { session, host, events, dir: join(dir, "family"), cwd: work, close: () => session.close() };
+	return { session, host, events, dir: join(dir, "family"), cwd: work, close: async () => { await session.close(); } };
 }
 
 /** Send a prompt and wait for its run to end (an event the host emits after the commit). */

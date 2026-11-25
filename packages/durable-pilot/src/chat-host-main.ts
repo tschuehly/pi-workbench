@@ -137,7 +137,7 @@ if (socketPath !== undefined) {
 const session = new ChatSession(host, (event: UiEvent) => send({ event }), { chatId, telemetry: createRecorder() as Recorder, title: () => piWebChatTitle(values.store!, chatId) });
 await session.start();
 
-let closing: Promise<void> | undefined;
+let closing: Promise<{ fullAccess?: true }> | undefined;
 /** `end` (optional on `close`): an explicit end of the Chat, which cancels its background jobs; restarts omit it. */
 const close = (end = false, upgrade = false) => (closing ??= session.close({ end, ...(upgrade ? { reason: "upgrade" as const } : {}) }));
 /**
@@ -145,22 +145,23 @@ const close = (end = false, upgrade = false) => (closing ??= session.close({ end
  * Past the quiet check the session admits nothing, so a close that fails or outlives its deadline must not leave a host
  * that runs on admitting nothing: it exits non-zero, its work interrupted as after a crash, as `shutdown` does.
  */
-const closeIfRestartSafe = async (): Promise<{ closed: boolean; busy?: string }> => {
+const closeIfRestartSafe = async (): Promise<{ closed: boolean; busy?: string; fullAccess?: true }> => {
 	const busy = closing === undefined ? await session.quiesce() : undefined;
 	if (busy !== undefined) return { closed: false, busy };
 	const deadline = setTimeout(() => {
 		process.stderr.write(`Durable host: close did not finish within ${CLOSE_DEADLINE_MS} ms; exiting with running work interrupted\n`);
 		process.exit(1);
 	}, CLOSE_DEADLINE_MS);
+	let carried: { fullAccess?: true } = {};
 	try {
-		await close(false, true);
+		carried = await close(false, true);
 	} catch (error) {
 		process.stderr.write(`Durable host: close failed: ${redact(error instanceof Error ? error.message : String(error))}\n`);
 		process.exit(1);
 	} finally {
 		clearTimeout(deadline);
 	}
-	return { closed: true };
+	return { closed: true, ...carried };
 };
 
 const text = (params: Record<string, unknown>, name: string): string => {
@@ -285,7 +286,8 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	// The host after an Upgrade now: restored work resumes at once (recovery as after any restart), not paused.
 	resume: (params) => {
 		if (params.reason !== "upgrade-restart") throw new Error("resume needs reason upgrade-restart");
-		return session.resume("upgrade-restart");
+		// Full access carried over from the old host: only PI WEB, the owner-only socket's peer, can say so.
+		return session.resume("upgrade-restart", params.fullAccess === true);
 	},
 };
 
