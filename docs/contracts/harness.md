@@ -82,7 +82,7 @@ host's old environment until **Upgrade host**; restarting the daemon alone does 
 `promote-installed` supports `prepare`, `switch`, `switch-workbench`, `switch-web`, `latest`, `current`, `prune`, `check-idle`,
 `check-hosts` and `sessiond-unchanged` (`docs/plans/pi-durable-cutover-spec.md`, B7). `latest --dry-run --json` prints the
 installed pair, the latest pair (origin/main of the integration pi-workbench checkout and its `pi-web.rev`) and the
-first-parent commits between them, for PI WEB's Install latest button; `latest --from <live pair>` switches to it like `switch`. The services run with
+first-parent commits between them, for PI WEB's Install latest button; `latest --from <live pair> --to <latest pair shown>` switches to it like `switch` and refuses (exit 9) when the latest pair moved since it was shown. The services run with
 `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_DURABLE_DEFAULT=1`, `PI_WEB_DURABLE_AUTO_UPGRADE=1` and the
 build's own Durable host. `promote-installed` writes its own plists and never changes `~/.pi/agent`.
 

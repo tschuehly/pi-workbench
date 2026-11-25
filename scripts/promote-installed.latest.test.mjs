@@ -93,7 +93,7 @@ test("latest --dry-run --json: installed and latest full revisions, first-parent
   assert.equal(human.status, 0, human.stderr);
   assert.match(human.stdout, new RegExp(`latest +pi-workbench ${wbPin.slice(0, 12)} +pi-web ${pw2.slice(0, 12)}`));
   assert.match(human.stdout, /Merge branch 'feature'/);
-  assert.match(human.stdout, new RegExp(`latest --from ${wb1.slice(0, 12)} ${pw1.slice(0, 12)}`));
+  assert.match(human.stdout, new RegExp(`latest --from ${wb1.slice(0, 12)} ${pw1.slice(0, 12)} --to ${wbPin.slice(0, 12)} ${pw2.slice(0, 12)}`));
 
   h.build("pi-workbench", wbPin, true);
   h.build("pi-web", pw2, true);
@@ -144,6 +144,8 @@ test("latest --from switches to the latest pair with switch's lock and stale che
   assert.ok(sh.includes(`wb=${wbDir} pw=${pwDir}`), sh);
   assert.equal(jobs(), 1);
 
+  assert.equal(h.run("latest", "--to", wbPin, pw2).status, 2);
+
   // Up to date: nothing to switch, no job.
   rmSync(join(h.store, "promote.lock"), { recursive: true, force: true });
   h.build("pi-workbench", wbPin, true);
@@ -152,4 +154,32 @@ test("latest --from switches to the latest pair with switch's lock and stale che
   assert.equal(same.status, 0, same.stderr);
   assert.match(same.stdout, /up to date/);
   assert.equal(jobs(), 1);
+});
+
+test("latest --to refuses (exit 9) when origin/main moved after the preview, and switches to the pair shown otherwise", () => {
+  const h = harness();
+  const wb1 = h.repos["pi-workbench"].first, pw1 = h.repos["pi-web"].first;
+  h.build("pi-workbench", wb1, true);
+  h.build("pi-web", pw1, true);
+  const { wbPin, pw2 } = moveOn(h);
+  h.build("pi-workbench", wbPin);
+  const pwDir = h.build("pi-web", pw2);
+  const shown = JSON.parse(h.run("latest", "--dry-run", "--json").stdout).latest;
+  assert.deepEqual(shown, { workbench: wbPin, piWeb: pw2 });
+
+  // Someone merges to main between the owner's look and the click.
+  const wb = h.repos["pi-workbench"];
+  const wbNext = h.commit(wb.seed, "later merge", "h");
+  h.git(wb.seed, "push", "-q", "origin", "HEAD:main");
+  const moved = h.run("latest", "--from", wb1, pw1, "--to", shown.workbench, shown.piWeb, "0");
+  assert.equal(moved.status, 9, moved.stderr);
+  assert.match(moved.stderr, new RegExp(`latest moved since you looked: now ${wbNext.slice(0, 12)} ${pw2.slice(0, 12)}.*review again`));
+  assert.ok(!existsSync(join(h.store, "jobs")));
+
+  // The pair now shown installs; its job switches to exactly that pair.
+  h.build("pi-workbench", wbNext);
+  const ok = h.run("latest", "--from", wb1, pw1, "--to", wbNext, pw2, "0");
+  assert.equal(ok.status, 0, ok.stderr);
+  const job = readdirSync(join(h.store, "jobs"))[0];
+  assert.ok(readFileSync(join(h.store, "jobs", job, "job.sh"), "utf8").includes(`wb=${join(h.store, `pi-workbench-${wbNext.slice(0, 12)}`)} pw=${pwDir}`));
 });

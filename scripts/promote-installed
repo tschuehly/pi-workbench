@@ -31,8 +31,9 @@
 #       PI WEB at that commit's pi-web.rev, else origin/pi-workbench) and the first-parent commits between them.
 #       --json prints {installed:{workbench,piWeb}, latest:{workbench,piWeb}, merges:[{repo,sha,subject}], upToDate}
 #       with full revisions (PI WEB's Install latest button reads it). Changes nothing.
-#   promote-installed latest --from <live-workbench-rev> <live-pi-web-rev> [delay-seconds]
+#   promote-installed latest --from <live-workbench-rev> <live-pi-web-rev> [--to <workbench-rev> <pi-web-rev>] [delay-seconds]
 #       switch to the latest pair, with switch's lock, stale check and exit codes; exit 0 without a switch when up to date.
+#       --to is the latest pair the owner saw: refuses (exit 9, nothing changed) when the latest pair is another by now.
 #   promote-installed switch-workbench <workbench-rev>
 #       Prepare, then make current the release of that build and the live PI WEB build. The running daemon keeps
 #       the Durable host it started with until the next switch. Roll back by switching to the previous revision,
@@ -366,7 +367,7 @@ preview() { # <json 0|1>: the installed and latest pair and what lies between (P
       if (out.upToDate) return console.log("up to date");
       console.log(`${merges.length} commits to install:`);
       for (const m of merges) console.log(`  ${m.repo.padEnd(12)} ${s(m.sha)} ${m.subject}`);
-      console.log(`install with the owner'\''s go-ahead: ${me} latest --from ${s(workbench)} ${s(piWeb)}`);
+      console.log(`install with the owner'\''s go-ahead: ${me} latest --from ${s(workbench)} ${s(piWeb)} --to ${s(lwb)} ${s(lpw)}`);
     })' "$1" "$ME" "$iwb" "$ipw" "$LATEST_WB" "$LATEST_PW"
 }
 
@@ -429,18 +430,24 @@ if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
 fi
 LATEST=
 if [[ ${1:-} == latest ]]; then
-  shift; json=0 dry=0 from=() ldelay=()
+  shift; json=0 dry=0 from=() to=() ldelay=()
+  usage="usage: $ME latest [--dry-run] [--json] | latest --from <live-workbench-rev> <live-pi-web-rev> [--to <workbench-rev> <pi-web-rev>] [delay]"
   while (( $# )); do
     case $1 in
       --json) json=1;; --dry-run) dry=1;;
-      --from) [[ $# -ge 3 ]] || { echo "latest --from needs the installed pair: $ME latest --from <live-workbench-rev> <live-pi-web-rev> [delay]" >&2; exit 2; }
-        from=("$2" "$3"); shift 2;;
-      *) [[ ${#from[@]} == 2 && $1 =~ ^[0-9]+$ ]] || { echo "usage: $ME latest [--dry-run] [--json] | latest --from <live-workbench-rev> <live-pi-web-rev> [delay]" >&2; exit 2; }
+      --from|--to) [[ $# -ge 3 ]] || { echo "latest $1 needs a pair; $usage" >&2; exit 2; }
+        if [[ $1 == --from ]]; then from=("$2" "$3"); else to=("$2" "$3"); fi; shift 2;;
+      *) [[ ${#from[@]} == 2 && $1 =~ ^[0-9]+$ ]] || { echo "$usage" >&2; exit 2; }
         ldelay=("$1");;
     esac; shift
   done
+  [[ ${#to[@]} == 0 || ${#from[@]} == 2 ]] || { echo "latest --to needs --from; $usage" >&2; exit 2; }
   latest_pair || exit 1
   if [[ $dry == 1 || ${#from[@]} == 0 ]]; then preview "$json"; exit $?; fi
+  if [[ ${#to[@]} == 2 ]] && ! { matches "$LATEST_WB" "${to[0]}" && matches "$LATEST_PW" "${to[1]}"; }; then
+    echo "refusing: latest moved since you looked: now ${LATEST_WB:0:12} ${LATEST_PW:0:12} (workbench, pi-web), not the --to pair ${to[0]} ${to[1]}; review again. Nothing changed." >&2
+    exit 9
+  fi
   LATEST=1
   set -- switch "$LATEST_WB" "$LATEST_PW" --from "${from[@]}" ${ldelay[@]+"${ldelay[@]}"}
 fi
