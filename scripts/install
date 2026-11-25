@@ -2,8 +2,8 @@
 # Install (or update) Pi Workbench and PI WEB on this Mac from the tips of their integration branches, as the Durable
 # instance (docs/contracts/harness.md, "Installed and Development Checkouts"). Run it from the pi-workbench checkout:
 #   1. clone PI WEB beside it if missing (branch pi-workbench of $PI_WEB_REPO), then fetch both repos (no checkout moves);
-#   2. scripts/promote-installed switch <pi-workbench origin/main> <pi-web origin/pi-workbench> --from <the installed pair>
-#      and wait for its job;
+#   2. scripts/promote-installed switch <pi-workbench origin/main> <its pi-web.rev> --from <the installed pair>
+#      and wait for its job (origin/pi-workbench of PI WEB when that main has no pi-web.rev);
 #      skipped when both *.durable-installed links already point at those builds, so a rerun interrupts no session;
 #   3. build the native app (apps/pi-web-macos, --app-only: no services) for the Durable instance on :8506.
 # PI_PROMOTE_DURABLE_ENV passes through to the services, e.g. "GIT_CONFIG_GLOBAL=$HOME/.config/git/agent.gitconfig".
@@ -41,7 +41,10 @@ if [[ $dry == 0 ]]; then
 fi
 tip() { git -C "$1" rev-parse --verify --quiet "$2^{commit}" 2>/dev/null; }
 wb_rev=$(tip "$wb" origin/main) || { echo "install: no origin/main in $wb" >&2; exit 1; }
-if [[ -d $pw/.git ]]; then pw_rev=$(tip "$pw" origin/pi-workbench) || { echo "install: no origin/pi-workbench in $pw" >&2; exit 1; }
+# The PI WEB commit pinned by that pi-workbench commit (docs/contracts/harness.md, "Pinned pair").
+if pin=$(git -C "$wb" show "$wb_rev:pi-web.rev" 2>/dev/null); then
+  pw_rev=$(tr -d '[:space:]' <<<"$pin"); [[ $pw_rev =~ ^[0-9a-f]{40}$ ]] || { echo "install: pi-web.rev at $wb_rev is not a full commit" >&2; exit 1; }
+elif [[ -d $pw/.git ]]; then pw_rev=$(tip "$pw" origin/pi-workbench) || { echo "install: no origin/pi-workbench in $pw" >&2; exit 1; }
 else pw_rev="origin/pi-workbench (after the clone)"; fi
 say "pi-workbench: $wb_rev"; say "pi-web:       $pw_rev"
 

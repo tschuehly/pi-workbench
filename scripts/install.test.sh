@@ -69,6 +69,12 @@ code=$(RESULT="rollback done" rc "$I" --no-app --force)
 check "new PI WEB tip with a failed job: exit 1, --force passed on" bash -c "test $code = 1 && grep -qx 'promote --force switch $wb_rev $new_pw --from ${wb_rev:0:12} ${pw_rev:0:12} 0 env=' '$HOME/calls'"
 check "failed job: the checkouts stayed where they were" test "$(git -C "$t/projects/pi-web" rev-parse HEAD)" = "$pw_rev"
 
+# A pi-web.rev on main pins PI WEB to that commit, not the pi-workbench branch tip.
+printf '%s\n' "$pw_rev" >"$t/seed-wb/pi-web.rev"; git -C "$t/seed-wb" add pi-web.rev; git -C "$t/seed-wb" commit -qm pin; git -C "$t/seed-wb" push -q origin HEAD:refs/heads/main
+pin_wb=$(git -C "$t/wb.git" rev-parse main); : >"$HOME/calls"
+code=$(rc "$I" --no-app)
+check "pinned: switches to pi-web.rev, not the PI WEB tip" bash -c "test $code = 0 && grep -q '^promote switch $pin_wb $pw_rev --from ' '$HOME/calls'"
+
 mkdir -p "$t/other/scripts"; cp "$src" "$t/other/scripts/install"
 code=$(rc "$t/other/scripts/install" --no-app)
 check "run from another checkout: exit 1" test "$code" = 1
