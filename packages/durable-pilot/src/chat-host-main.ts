@@ -172,7 +172,11 @@ const text = (params: Record<string, unknown>, name: string): string => {
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
-	transcript: () => session.transcript(),
+	transcript: (params) => {
+		const { before, limit } = params;
+		for (const value of [before, limit]) if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 0)) throw new Error("before and limit must be non-negative integers");
+		return session.transcript(before === undefined && limit === undefined ? undefined : { ...(before === undefined ? {} : { before: before as number }), ...(limit === undefined ? {} : { limit: limit as number }) });
+	},
 	status: () => session.status(),
 	info: () => session.info(),
 	prompt: (params) => {

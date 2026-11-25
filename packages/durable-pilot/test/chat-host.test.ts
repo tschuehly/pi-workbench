@@ -181,6 +181,8 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	assert.ok(transcript.messages.every((m) => typeof m.entryId === "string"));
 	assert.equal(transcript.partial, null);
 	assert.equal(transcript.status.isStreaming, false);
+	assert.deepEqual(await host.call("transcript", { limit: 1 }), { ...transcript, start: 0, total: 4, usage: transcript.messages.filter((m) => m.role === "assistant").map(({ role, provider, model, usage, timestamp, stopReason, entryId }: Record<string, unknown>) => ({ role, provider, model, usage, timestamp, stopReason, entryId })) }, "a page from the turn's user message");
+	await assert.rejects(host.call("transcript", { limit: -1 }), /non-negative integers/);
 	// Every turn request asks for the long prompt-cache tier.
 	const retention = readLog<{ cacheRetention?: string }>(join(store, "requests.log")).map((line) => line.cacheRetention);
 	assert.deepEqual(retention, ["long", "long"]);
@@ -556,6 +558,46 @@ async function quietChat(label: string) {
 	await session.start();
 	return { h, store, session, runs, settled };
 }
+
+test("a paged transcript holds only its page from a user message on; chained earlier pages cover it exactly once; the partial matches a whole read", async () => {
+	const { session, settled } = await quietChat("paging");
+	type Page = { messages: { role: string; entryId?: string; usage?: unknown; content?: unknown }[]; start: number; total: number; usage: { entryId?: string; usage?: unknown; content?: unknown }[]; partial: unknown };
+	const read = (page?: { before?: number; limit?: number }) => session.transcript(page) as Promise<Page>;
+	const bash = `call:bash ${JSON.stringify({ command: "echo hi", description: "Echo", foreground: true })}`;
+	try {
+		for (let turn = 1; turn <= 6; turn++) {
+			await session.prompt({ operationId: `op-${String(turn)}`, text: turn % 2 === 0 ? bash : `turn ${String(turn)}` });
+			await settled(turn);
+		}
+		const whole = (await session.transcript()).messages as Page["messages"];
+		const last = await read({ limit: 3 });
+		assert.equal(last.total, whole.length);
+		assert.deepEqual(last.messages, whole.slice(-4), "back to the last turn's user message (a bash turn has 4 messages)");
+		assert.equal(last.start, whole.length - 4);
+		const pages = [last.messages];
+		for (let start = last.start; start > 0;) {
+			const earlier = await read({ before: start, limit: 3 });
+			assert.equal(earlier.messages[0]!.role, "user");
+			pages.unshift(earlier.messages);
+			start = earlier.start;
+		}
+		assert.deepEqual(pages.flat(), whole, "every message once, in order");
+		const assistants = whole.filter((m) => m.role === "assistant");
+		assert.deepEqual(last.usage.map((m) => [m.entryId, m.usage]), assistants.map((m) => [m.entryId, m.usage]), "every turn's usage, for cache-miss notices");
+		assert.ok(last.usage.every((m) => m.content === undefined), "usage only, no content");
+		await session.prompt({ operationId: "op-7", text: "gen" });
+		while (session.partial() === null) await new Promise((resolve) => setTimeout(resolve, 5));
+		// Both capture synchronously before their await: the same moment.
+		const [paged, all] = await Promise.all([read({ limit: 2 }), session.transcript()]);
+		assert.notEqual(paged.partial, null);
+		assert.deepEqual(paged.partial, all.partial);
+		assert.deepEqual(paged.messages, all.messages.slice(paged.start));
+		assert.equal(paged.total, all.messages.length);
+		await settled(7);
+	} finally {
+		await session.close();
+	}
+});
 
 test("/back: Working Mode returns to its starting values, the context restarts at the host's handoff with the open set verbatim (no summarizer call), the set stays open, one orient turn runs", async () => {
 	const { h, store, session, settled } = await quietChat("back");
