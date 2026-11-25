@@ -5,6 +5,7 @@
 // reattaches to the live runner, a machine restart (runner gone) reports an unknown exit and never reruns.
 import assert from "node:assert/strict";
 import cp, { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
@@ -115,6 +116,24 @@ test("an owner run masks a private key that never ends, and once its job record 
 	rmSync(join(JOBS, started.jobId), { recursive: true }); // the registry's weekly prune
 	await assert.rejects(host.call("ownerRun", request), /already ran/);
 	assert.equal(launches(cwd), 1, "ran once");
+	await host.close();
+});
+
+test("an owner run whose launch failed after its record committed launches on the retry", async () => {
+	const { store, cwd } = family("owner-run-unlaunched");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const request = { operationId: "owner-run:unlaunched", command: "echo x >> launches.log", cwd };
+	// The host's job ID for this operation (background-bash.ts jobId; the Chat ID is the store without --session-id).
+	const hex = createHash("sha256").update(`bash\0${store}\0owner-run\0${request.operationId}`).digest("hex");
+	const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+	mkdirSync(JOBS, { recursive: true });
+	writeFileSync(join(JOBS, id), ""); // the registry cannot make the job's folder
+	await assert.rejects(host.call("ownerRun", request));
+	rmSync(join(JOBS, id));
+	assert.equal((await host.call<{ jobId: string }>("ownerRun", request)).jobId, id);
+	await host.until(() => logged(store).some((l) => l.label.startsWith("[Owner run result]")), "the completion");
+	assert.equal(launches(cwd), 1, "ran once, on the retry");
 	await host.close();
 });
 

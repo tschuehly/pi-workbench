@@ -41,18 +41,33 @@ export function readTail(path, size) {
   const fd = openSync(path, "r");
   try { readSync(fd, buffer, 0, length, size - length); } finally { closeSync(fd); }
   const tail = buffer.toString("utf8").replace(/^\uFFFD+/u, "");
-  return length < size ? dropCutHead(tail) : tail;
+  if (length === size) return tail;
+  // shortcut: looks 16 KB back for an open key header; a key block longer than that cut mid-body is not recognized.
+  const back = Math.min(size - length, 16 * 1024);
+  const before = Buffer.alloc(back);
+  const head = openSync(path, "r");
+  try { readSync(head, before, 0, back, size - length - back); } finally { closeSync(head); }
+  return dropCutHead(tail, OPEN_KEY.test(before.toString("utf8")));
 }
+
+const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
+/** A private-key block that has not ended (yet): its header with no end line after it. */
+const OPEN_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----END [A-Z ]*PRIVATE KEY-----)[\s\S])*$/;
 
 /**
  * A tail cut from a longer log may start inside a secret, where no redactor recognizes it: drop the cut token, and the
- * rest of a private-key block whose header was cut off.
+ * rest of a private-key block whose header was cut off (`inKey`: the text before the cut left a key block open).
  */
-function dropCutHead(tail) {
+function dropCutHead(tail, inKey) {
   const text = tail.replace(/^\S+/, "");
-  const end = /-----END [A-Z ]*PRIVATE KEY-----/.exec(text);
-  return end !== null && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text.slice(0, end.index)) ? text.slice(end.index + end[0].length) : text;
+  const end = KEY_END.exec(text);
+  const headless = end !== null ? !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text.slice(0, end.index)) : inKey;
+  if (!headless) return text;
+  return end === null ? "[REDACTED:private-key]" : text.slice(end.index + end[0].length);
 }
+
+/** For a finished log, which will not grow: also masks a private-key block that never ended. */
+const sealedRedact = (text) => redact(text).replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/, "[REDACTED:private-key]");
 
 /** A job as tools, status and completions show it. */
 export function describeJob(job) {
@@ -64,7 +79,7 @@ export function describeJob(job) {
  * 20 lines of a success and the whole retained tail otherwise, with truncation disclosed. The output is sanitized
  * before lines are dropped, so a cut never separates a secret from the part the redactor recognizes it by.
  */
-export function completionContent(job, sanitize = redact) {
+export function completionContent(job, sanitize = sealedRedact) {
   const tail = readTail(job.logPath, job.bytes);
   const clean = sanitize(cleanOutput(tail));
   const shown = job.exitCode === 0 ? clean.replace(/\n$/, "").split("\n").slice(-20).join("\n") : clean;
@@ -124,11 +139,13 @@ export function readJob(root, id) {
   if (record === undefined) return undefined;
   const logPath = join(dir, "output.log");
   const lastOutputAt = Math.max(record.startedAt, ...[logPath, ...(record.owned && record.progressLog ? [joinPath(record.cwd, record.progressLog)] : [])].map((path) => { try { const stat = statSync(path); return stat.size > 0 ? stat.mtimeMs : 0; } catch { return 0; } }));
+  // Sampled before the claim is read: a claim missing then and a deadline already past mean no runner may still start it.
+  const now = Date.now();
   const job = { id, expiresAt: record.expiresAt, lastOutputAt, ...(record.owned ? { owned: true } : {}), command: record.command, ...(typeof record.description === "string" && record.description.trim() !== "" ? { description: record.description } : {}), startedAt: record.startedAt, logPath, dir, bytes: fileSize(logPath), state: "running" };
   let result = readJson(join(dir, "exit"));
   const claim = readJson(join(dir, "claim"));
   if (result === undefined && claim === undefined) {
-    if (Date.now() < record.expiresAt) return { ...job, state: "pending" };
+    if (now < record.expiresAt) return { ...job, state: "pending" };
     // The launching host may have died before observing a pre-claim runner failure. Its committed expiry still wins.
     writeOnce(join(dir, "exit"), JSON.stringify({ error: `Timed out after ${record.timeout ?? Math.round((record.expiresAt - record.startedAt) / 1000)} seconds before launch; runner admission was not observed`, finishedAt: Date.now(), ...(record.owned ? { cleanup: { survivors: [] } } : {}) }));
     result = readJson(join(dir, "exit"));

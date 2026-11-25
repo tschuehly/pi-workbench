@@ -95,6 +95,32 @@ test("a success's 20-line cut never shows the body of a private key whose header
   assert.match(content, /done$/);
 });
 
+test("a completion never shows the body of a private key that never ends, also when the byte cut dropped its header", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-background-bash-open-key-"));
+  for (const [lines, exitCode] of [[5, 0], [300, 1]]) {
+    const logPath = join(dir, `output-${lines}.log`);
+    writeFileSync(logPath, ["-----BEGIN PRIVATE KEY-----", ...Array.from({ length: lines }, (_, i) => `KEYBODY${String(i).padStart(3, "0")}${"A".repeat(56)}`), ""].join("\n"));
+    const content = redact(completionContent({ id: "k", state: "failed", exitCode, logPath, bytes: statSync(logPath).size }));
+    assert.doesNotMatch(content, /KEYBODY/, `${lines} lines`);
+  }
+});
+
+test("the deadline reader never settles a job as unlaunched when its runner claimed it while the reader ran", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-background-bash-race-"));
+  const now = Date.now();
+  mkdirSync(join(root, "raced"));
+  writeFileSync(join(root, "raced", "job.json"), JSON.stringify({ id: "raced", command: "x", cwd, sessionId: "s1", startedAt: now - 2000, expiresAt: now + 1000 }));
+  const realNow = Date.now;
+  let first = true;
+  // The first clock reading is where the runner claims the job and the deadline passes.
+  Date.now = () => {
+    if (first) { first = false; writeFileSync(join(root, "raced", "claim"), JSON.stringify({ pid: process.pid, at: now })); }
+    return now + 5000;
+  };
+  try { assert.doesNotMatch(readJob(root, "raced").error ?? "", /before launch/); }
+  finally { Date.now = realNow; }
+});
+
 test("a lead job never starts past its deadline, and an unclaimed one settles there", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-background-bash-late-"));
   const marker = join(root, "ran");
