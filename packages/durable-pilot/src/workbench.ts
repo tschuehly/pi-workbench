@@ -298,6 +298,8 @@ function valueError(question: Typed, value: unknown): string | undefined {
 		case "text":
 			if (typeof value !== "string") return "must be text";
 			if (value.trim() === "") return "must not be blank";
+			// A one-line field cannot show or edit a line break, yet would send it.
+			if (question.multiline !== true && /[\r\n]/u.test(value)) return "must be one line";
 			if (value.length > (question.maxLength ?? ANSWER_MAX)) return `must be at most ${question.maxLength ?? ANSWER_MAX} characters`;
 			return question.minLength !== undefined && value.length < question.minLength ? `must be at least ${question.minLength} characters` : undefined;
 		case "number":
