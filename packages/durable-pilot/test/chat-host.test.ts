@@ -12,6 +12,8 @@ import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
 import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
 import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
+import { CheapWakeDoc, submitWake } from "../src/cheap-wake.ts";
+import { AgentDoc } from "@earendil-works/pi-durable";
 import { context } from "../src/host.ts";
 import { questionsState, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
@@ -775,6 +777,54 @@ test("idle cache timer: a turn on another model than the Chat's stored one (a ch
 		await h.root.configure({ model: OPUS }, context);
 		await wait(2_500);
 		assert.deepEqual(summaries(store), [], "the other model's request armed nothing");
+	} finally {
+		await session.close();
+	}
+});
+
+/** A background-bash completion submitted as BackgroundBash delivers it (`submitWake`). */
+const wakeDraft = (requestId: string, output: string) => ({ type: "input" as const, content: output.startsWith("pad:") ? output : `Background bash ${requestId} complete (exit 0).\n${output}`, whenBusy: "followUp" as const, requestId });
+const turns = (store: string) => readLog<{ label: string; model?: string }>(join(store, "requests.log")).filter((line) => line.label !== "summarize");
+
+test("idle cache timer and cheap wake: a wake after a timer compaction runs on the cheap model; that large cheap turn never arms the timer", async () => {
+	const { store, cwd } = family("idle-then-cheap");
+	const { h, session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(async () => (await markers()) === 1, "the timer compaction and its marker");
+		// The marker entry and the IdleCacheDoc intent do not hide the compaction: the wake is cheap.
+		const id = await submitWake(h.root, wakeDraft("job-1", PAD), h.models);
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		assert.deepEqual(turns(store).map((t) => t.model), [`${OPUS.provider}/${OPUS.modelId}`, "anthropic/claude-sonnet-5-5"]);
+		await until(async () => (await h.harness.snapshot(CheapWakeDoc, h.root.id, context))?.turn === null, "the cheap turn ended");
+		// A padded completion (the faux model answers it briefly): the cheap turn's >80k-token prompt on Sonnet, and its run reset the stretch: only its usage could arm a second compaction.
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [HAIKU], "the cheap turn armed nothing");
+		assert.equal(await markers(), 1);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer and cheap wake: a wake while the timer's cheap summary is in flight never switches to the cheap model", async () => {
+	const { store, cwd } = family("idle-cheap-race");
+	const gate = join(cwd, "summary-gate");
+	const { h, session, until, settled, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => summaries(store).length === 1, "the timer's summary request");
+		const id = await submitWake(h.root, wakeDraft("job-1", "all tests passed"), h.models);
+		assert.equal((await h.harness.snapshot(CheapWakeDoc, h.root.id, context))?.turn ?? null, null, "no cheap turn during a timer compaction");
+		writeFileSync(gate, "");
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		await quiet();
+		assert.deepEqual(turns(store).map((t) => t.model), [`${OPUS.provider}/${OPUS.modelId}`, `${OPUS.provider}/${OPUS.modelId}`], "the wake ran on the own model");
+		assert.deepEqual(summaries(store), [HAIKU]);
+		assert.deepEqual((await h.harness.snapshot(AgentDoc, h.root.id, context))?.model, OPUS);
 	} finally {
 		await session.close();
 	}
