@@ -478,7 +478,13 @@ export class BackgroundBash {
 			doc.jobs[id] ??= { taskId: operationId, startedAt: record.startedAt, expiresAt: record.expiresAt, background: true, owner: true };
 			return { ...doc.jobs[id]! };
 		}, context);
-		launchJob({ ...job, startedAt: ref.startedAt, expiresAt: ref.expiresAt ?? record.expiresAt, cancelled: this.#ending });
+		// The prepared record only: one lost during the commit is refused, never made again.
+		try {
+			launchJob({ ...job, startedAt: ref.startedAt, expiresAt: ref.expiresAt ?? record.expiresAt, cancelled: this.#ending, prepared: true });
+		} catch {
+			throw new Error("This command already ran; its job record has expired");
+		}
+		if (readJob(this.#root, id) === undefined) throw new Error("This command already ran; its job record has expired");
 		this.#poke();
 		return { jobId: id, logPath: readJob(this.#root, id)!.logPath };
 	}

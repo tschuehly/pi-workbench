@@ -58,9 +58,11 @@ const KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*
  */
 function dropCutHead(text, tailLength) {
   const cut = text.length - tailLength;
+  // The cut token is dropped below, so a key whose header overlaps it (or starts exactly at the cut) is masked too.
+  const token = cut + (/^\S*/.exec(text.slice(cut))?.[0].length ?? 0);
   for (const block of text.matchAll(KEY_BLOCK)) {
     const end = block.index + block[0].length;
-    if (block.index < cut && end > cut) return `[REDACTED:private-key]${text.slice(end)}`;
+    if (block.index < token && end > cut) return `[REDACTED:private-key]${text.slice(end)}`;
   }
   const rest = text.slice(cut).replace(/^\S+/, "");
   const end = KEY_END.exec(rest);
@@ -106,14 +108,17 @@ const VANISHED = "The job runner ended without recording an exit status";
  * it runs the command (runner.mjs). Returns whether a runner was started. `cancelled`: record the job as cancelled
  * without starting a runner (its owner ended meanwhile).
  */
-export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false, prepare = false }) {
+export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false, prepare = false, prepared = false }) {
   if (!/^[\w-]+$/.test(id)) throw new Error(`Invalid job ID ${id}`);
   const dir = join(root, id);
   if (existsSync(join(dir, "claim")) || existsSync(join(dir, "exit"))) return false;
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  closeSync(openSync(join(dir, "output.log"), "a", 0o600));
+  // `prepared`: start only the record made by an earlier `prepare` call; a lost record is never made again (throws).
+  if (prepared) {
+    if (!existsSync(join(dir, "job.json"))) throw new Error(`The record of job ${id} is gone; it is not started again`);
+  } else mkdirSync(dir, { recursive: true, mode: 0o700 });
+  closeSync(openSync(join(dir, "output.log"), prepared ? "r" : "a", 0o600));
   // An admitted deadline is immutable, even when a host dies before the runner claims it.
-  if (!existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}), ...(fullAccess === true ? { fullAccess: true } : {}) }));
+  if (!prepared && !existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}), ...(fullAccess === true ? { fullAccess: true } : {}) }));
   // `prepare`: only the record, for a caller that commits its own reference to the job before the runner starts.
   if (prepare) return false;
   if (cancelled) {

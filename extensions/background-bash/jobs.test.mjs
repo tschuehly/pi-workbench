@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -115,13 +115,29 @@ test("a byte cut through a key's opening or closing line masks the key and keeps
   // Cut 5 bytes into the closing line, with a diagnostic at the end of the log.
   const diag = "DIAG-AT-EOF\n";
   const closing = `${pre}${BEGIN}\nKEYBODY${"A".repeat(56)}\n${END}\n${"z".repeat(12_000 - (END.length - 5) - 1 - diag.length - 1)}\n${diag}`;
-  for (const [name, text] of [["opening", opening], ["closing", closing]]) {
+  // The tail starts exactly at the opening line of a key that never ends.
+  const exact = `${pre}${BEGIN}\nKEYBODY${"A".repeat(12_000 - BEGIN.length - 1 - 7)}`;
+  for (const [name, text] of [["opening", opening], ["exact", exact], ["closing", closing]]) {
     const logPath = join(dir, `${name}.log`);
     writeFileSync(logPath, text);
     const content = redact(completionContent({ id: "k", state: "failed", exitCode: 1, logPath, bytes: statSync(logPath).size }));
     assert.doesNotMatch(content, /KEYBODY/, name);
     if (name === "closing") assert.match(content, /DIAG-AT-EOF\n$/, "the output after the key stays");
   }
+});
+
+test("starting a prepared job whose record is gone never makes it again or runs anything", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-background-bash-prepared-"));
+  const marker = join(root, "ran");
+  const now = Date.now();
+  const job = { root, id: "lost", command: `touch ${marker}`, cwd, env: process.env, sessionId: "s1", startedAt: now, expiresAt: now + 60_000 };
+  launchJob({ ...job, prepare: true });
+  assert.equal(existsSync(join(root, "lost", "job.json")), true, "prepare writes the record");
+  assert.equal(existsSync(join(root, "lost", "claim")), false, "and starts no runner");
+  rmSync(join(root, "lost"), { recursive: true });
+  assert.throws(() => launchJob({ ...job, prepared: true }), /gone/);
+  assert.equal(existsSync(join(root, "lost")), false, "the record is not made again");
+  assert.equal(existsSync(marker), false);
 });
 
 test("the deadline reader never settles a job as unlaunched when its runner claimed it while the reader ran", () => {
