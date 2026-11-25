@@ -724,9 +724,11 @@ export function wholeRecord(outcome: Outcome, earlier: readonly Outcome[], order
 	const lastEdit = [...earlier].reverse().find((each) => each.editedContext !== undefined)?.editedContext;
 	const editedContext = outcome.editedContext ?? (contextEdited ? lastEdit : undefined);
 	// Each earlier send's images keep its revision, since `[PIC_n]` restarts per send and its bytes are in that send's entry.
-	const shown = new Set(questions.map((record) => record.question.id));
+	// Keyed by (revision, id): a reused id's hidden send keeps its photos out, so the record stays under PI WEB's image limit.
+	const sendKey = (revision: unknown, id: unknown) => JSON.stringify([typeof revision === "string" ? revision : null, String(id)]);
+	const shown = new Set(questions.map((record) => sendKey((record as { revision?: unknown }).revision, record.question.id)));
 	const sentImages = (each: Outcome, revision?: unknown) => ((each.images ?? []) as RecordImage[]).map((image) => (typeof revision === "string" ? { ...image, revision } : image));
-	const images = [...earlier.flatMap((each) => sentImages(each, each.revision)), ...sentImages(outcome)].filter((image) => image.target.kind === "note" || shown.has(String(image.target.id)));
+	const images = [...earlier.flatMap((each) => sentImages(each, each.revision)), ...sentImages(outcome)].filter((image) => image.target.kind === "note" || shown.has(sendKey(image.revision, image.target.id)));
 	const summary = `Answered ${String(answered(questions) + answered(hidden))} of ${String(questions.length + hidden.length - skippedIds.length - skipped(hidden).length)}; `
 		+ (unansweredIds.length === 0 ? "none left unanswered" : `unanswered: ${unansweredIds.join(", ")}`)
 		+ (skippedIds.length === 0 ? "" : `; skipped (condition not met): ${skippedIds.join(", ")}`)

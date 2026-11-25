@@ -847,6 +847,12 @@ test("wholeRecord: an earlier send's answer rows carry that send's revision, as 
 	assert.deepEqual(whole?.questions.map((row) => row.revision), ["r2", undefined], "the earlier row carries r2, the final row none");
 	const photos = (row: { revision?: string }) => whole?.images.filter((i) => i.revision === row.revision).map((i) => i.reference);
 	assert.deepEqual(whole?.questions.map(photos), [["[PIC_A]"], ["[PIC_B]"]], "row 1 shows only A, row 2 only B");
+	// 101 sends reusing one id, 16 photos each: only the kept rows' sends keep their photos, under PI WEB's 1,600-image limit.
+	const sixteen = (send_: ReturnType<typeof send>) => ({ ...send_, images: Array.from({ length: 16 }, (_, i) => image(`[PIC_${String(i + 1)}]`)) });
+	const many = Array.from({ length: 100 }, (_, i) => sixteen(send("q?", `r${String(i)}`, "")));
+	const bounded = wholeRecord(sixteen(send("q?", undefined, "")), many, ["q"], false) as { images: { revision?: string }[] } | undefined;
+	assert.equal(bounded?.images.length, 1600, "the hidden send's 16 photos drop out");
+	assert.ok(bounded?.images.every((i) => i.revision !== "r0"), "none from the hidden send r0");
 });
 
 test("ask_user: approval: true marks the set for an Approve button; a revision without it keeps it, approval: false drops it", async () => {
