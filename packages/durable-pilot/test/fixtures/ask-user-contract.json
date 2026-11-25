@@ -32,7 +32,7 @@
           "question": "3) Why?",
           "detail": "Free text only."
         },
-        { "id": "backup", "question": "Enable backup?", "detail": "A switch.", "kind": "boolean", "default": true, "options": [], "minimum": 1 },
+        { "id": "backup", "question": "Enable backup?", "detail": "A switch.", "kind": "boolean", "default": true, "labels": ["Back up", "Skip"], "options": [], "minimum": 1 },
         {
           "id": "folder",
           "question": "Backup folder?",
@@ -79,7 +79,7 @@
           "detail": "Free text only.",
           "options": []
         },
-        { "id": "backup", "question": "Enable backup?", "detail": "A switch.", "kind": "boolean", "default": true, "options": [] },
+        { "id": "backup", "question": "Enable backup?", "detail": "A switch.", "kind": "boolean", "default": true, "labels": ["Back up", "Skip"], "options": [] },
         {
           "id": "folder",
           "question": "Backup folder?",
@@ -187,6 +187,48 @@
         { "id": "b", "question": "More?", "detail": "d", "showIf": { "question": "flag", "values": ["yes"] } }
       ],
       "error": "showIf of question b: question flag is a boolean; use \"true\" or \"false\", not yes"
+    },
+    {
+      "name": "labels on a choice question",
+      "questions": [
+        { "id": "pick", "question": "Pick?", "detail": "d", "options": [{ "value": "y", "label": "Yes" }], "labels": ["Ship it", "Hold"] }
+      ],
+      "error": "labels of question pick need kind boolean, not choice"
+    },
+    {
+      "name": "labels on a text question",
+      "questions": [
+        { "id": "t", "question": "Name?", "detail": "d", "kind": "text", "labels": ["Ship it", "Hold"] }
+      ],
+      "error": "labels of question t need kind boolean, not text"
+    },
+    {
+      "name": "three labels on a boolean question",
+      "questions": [
+        { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship it", "Hold", "Maybe"] }
+      ],
+      "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
+    },
+    {
+      "name": "a blank label",
+      "questions": [
+        { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship it", " "] }
+      ],
+      "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
+    },
+    {
+      "name": "a label over 40 characters",
+      "questions": [
+        { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship it now, all of it, to every customer", "Hold"] }
+      ],
+      "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
+    },
+    {
+      "name": "a two-line label",
+      "questions": [
+        { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship\nit", "Hold"] }
+      ],
+      "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
     }
   ]
 }

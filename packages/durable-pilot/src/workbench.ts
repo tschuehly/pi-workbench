@@ -203,11 +203,12 @@ const TEXT_MAX = 1_000;
 const DETAIL_MAX = 4_000;
 const CONTEXT_MAX = 4_000;
 const ANSWER_MAX = 4_000;
+const LABEL_MAX = 40;
 const KINDS = ["choice", "boolean", "text", "number", "date"] as const;
 
 type Option = { value: string; label: string; detail?: string; recommended?: boolean };
 type ShowIf = { question: string; values: string[] };
-type Typed = { kind?: (typeof KINDS)[number]; default?: boolean | number | string; multiline?: boolean; minLength?: number; maxLength?: number; minimum?: number; maximum?: number; integer?: boolean };
+type Typed = { kind?: (typeof KINDS)[number]; default?: boolean | number | string; labels?: string[]; multiline?: boolean; minLength?: number; maxLength?: number; minimum?: number; maximum?: number; integer?: boolean };
 type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean; showIf?: ShowIf } & Typed;
 /** `contextEdited`: the user's edit in a partial send supplied the current context (absent when cleared), as PI WEB's; an agent revision that sets context ends it. */
 export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; contextEdited?: true; questions: Question[] };
@@ -319,6 +320,8 @@ function valueError(question: Typed, value: unknown): string | undefined {
 /** PI WEB `validateTyped`: a typed question's kind and the fields that kind takes; other fields are dropped. */
 function validateTyped(question: Question, id: string): Typed {
 	const kind = question.kind ?? "choice";
+	const { labels } = question;
+	if (labels !== undefined && kind !== "boolean") throw new AskError(`labels of question ${id} need kind boolean, not ${kind}`);
 	if (kind === "choice") return {};
 	if (!KINDS.includes(kind)) throw new AskError(`Question ${id} has unknown kind ${kind}`);
 	if (question.options.length > 0 || question.multiple === true) throw new AskError(`Question ${id} of kind ${kind} takes no options or multiple`);
@@ -327,7 +330,7 @@ function validateTyped(question: Question, id: string): Typed {
 		? { kind, ...(question.multiline === true ? { multiline: true } : {}), ...(minLength === undefined ? {} : { minLength }), ...(maxLength === undefined ? {} : { maxLength }) }
 		: kind === "number"
 			? { kind, ...(minimum === undefined ? {} : { minimum }), ...(maximum === undefined ? {} : { maximum }), ...(question.integer === true ? { integer: true } : {}) }
-			: { kind };
+			: kind === "boolean" && labels !== undefined ? { kind, labels: validateLabels(labels, id) } : { kind };
 	for (const [field, bound] of Object.entries({ minLength: typed.minLength, maxLength: typed.maxLength })) {
 		if (bound !== undefined && !(Number.isInteger(bound) && bound >= 0 && bound <= ANSWER_MAX)) throw new AskError(`${field} of question ${id} must be a whole number from 0 to ${ANSWER_MAX}`);
 	}
@@ -340,6 +343,13 @@ function validateTyped(question: Question, id: string): Typed {
 	const error = valueError(typed, question.default);
 	if (error !== undefined) throw new AskError(`default of question ${id} ${error}`);
 	return { ...typed, default: question.default };
+}
+
+/** PI WEB `validateLabels`: a boolean question's [true, false] labels, each one non-blank line of at most LABEL_MAX characters. */
+function validateLabels(labels: unknown, id: string): string[] {
+	const fits = (label: unknown) => typeof label === "string" && label.trim() !== "" && !/[\r\n]/u.test(label) && label.length <= LABEL_MAX;
+	if (!Array.isArray(labels) || labels.length !== 2 || !labels.every(fits)) throw new AskError(`labels of question ${id} must be two one-line texts of at most ${LABEL_MAX} characters, [true, false]`);
+	return [...labels] as string[];
 }
 
 /** PI WEB `validateShowIf`: a condition names an earlier choice question of the set and only option values it offers ("true"/"false" for a boolean one). */
@@ -389,6 +399,7 @@ const QuestionParams = obj({
 	}, { open: true, description: "Show only while that question has one of these picked; hidden, it is skipped." })),
 	kind: opt(oneOf(KINDS, { description: "Default choice; other kinds take no options." })),
 	default: opt(union([bool(), num(), str({ maxLength: ANSWER_MAX })], { description: "Prefilled answer; date as YYYY-MM-DD." })),
+	labels: opt(arr(str({ maxLength: TEXT_MAX }), { maxItems: OPTION_LIMIT, description: "boolean: [true, false] labels, default [\"Yes\", \"No\"]." })),
 	multiline: opt(bool({ description: "text: a textarea." })),
 	minLength: opt(int({ minimum: 0, maximum: ANSWER_MAX })),
 	maxLength: opt(int({ minimum: 0, maximum: ANSWER_MAX })),
@@ -416,7 +427,7 @@ export type WorkbenchSignal =
 type Signal = (signal: WorkbenchSignal) => void;
 
 export function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean; showIf?: ShowIf } & Typed): Question {
-	const { kind, multiline, minLength, maxLength, minimum, maximum, integer } = param;
+	const { kind, labels, multiline, minLength, maxLength, minimum, maximum, integer } = param;
 	return {
 		id: param.id,
 		question: param.question,
@@ -427,6 +438,7 @@ export function toQuestion(param: { id: string; question: string; detail?: strin
 		// Typed-kind fields copy as given; validateQuestions keeps those the kind takes.
 		...(kind === undefined ? {} : { kind }),
 		...(param.default === undefined ? {} : { default: param.default }),
+		...(labels === undefined ? {} : { labels: Array.isArray(labels) ? [...labels] : labels }),
 		...(multiline === undefined ? {} : { multiline }),
 		...(minLength === undefined ? {} : { minLength }),
 		...(maxLength === undefined ? {} : { maxLength }),
