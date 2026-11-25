@@ -151,6 +151,8 @@ export type ChatStatus = {
 	cost: number;
 	warnings?: { severity: "info" | "warning" | "error"; message: string }[];
 	extensionStatuses?: Record<string, string>;
+	/** Raised each time this host samples Working Mode for a status: a reader keeps the `working-mode` status with the highest (this host's life). */
+	workingModeSample: number;
 	pendingAsks?: unknown[];
 	pendingAsk?: unknown;
 	attentionRequest?: { id: string; reason: string };
@@ -336,6 +338,7 @@ export class ChatSession {
 	#streamId: string | undefined;
 	#streams = 0;
 	#running = false;
+	#modeSamples = 0;
 	/** Running bash calls of the current round (activity), from committed tool events. */
 	#shells = new Map<string, string>();
 	#stop: (() => Promise<unknown>) | undefined;
@@ -729,7 +732,8 @@ export class ChatSession {
 		const warnings = paused
 			? [{ severity: "info" as const, message: `Restored paused: unfinished work waits until you send a message.${this.#partial === undefined ? "" : ` ${INTERRUPTED}`}` }]
 			: [];
-		const [mode, questions, reconcile, delegates] = await Promise.all([workingModeSnapshot(harness, root), questionsState(harness, root), harness.snapshot(Reconcile, context), roster(harness, root.id, context)]);
+		// Numbered as the snapshot resolves: snapshots resolve in the order they read, so a higher number never carries an older mode.
+		const [[mode, workingModeSample], questions, reconcile, delegates] = await Promise.all([workingModeSnapshot(harness, root).then((snapshot) => [snapshot, ++this.#modeSamples] as const), questionsState(harness, root), harness.snapshot(Reconcile, context), roster(harness, root.id, context)]);
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
 			.filter(([, item]) => item.resolved === undefined && item.conversationId === root.id)
@@ -760,6 +764,7 @@ export class ChatSession {
 				...(await this.#chat?.bash?.status()),
 				...this.#chat?.atelier?.status(),
 			},
+			workingModeSample,
 			...(pendingAsks.length === 0 ? {} : { pendingAsks, pendingAsk: pendingAsks[0] }),
 			...(questions.attention === null ? {} : { attentionRequest: questions.attention }),
 			...(unresolvedEffects.length === 0 ? {} : { unresolvedEffects }),

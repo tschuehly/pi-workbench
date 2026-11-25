@@ -334,6 +334,7 @@ test("crash row ownership: a second host on the same store refuses to open", asy
 type Status = Transcript["status"] & {
 	model?: { provider: string; id: string };
 	extensionStatuses?: Record<string, string>;
+	workingModeSample: number;
 	pendingAsks?: { askId: string; revision: string; questions: { id: string }[]; turnsSinceUpdate: number }[];
 	attentionRequest?: { id: string; reason: string };
 	unresolvedEffects?: { id: string; toolName: string; arguments: string }[];
@@ -413,6 +414,9 @@ test("Working Mode: a selection survives a restart, rides with the next prompt o
 	assert.deepEqual(await host.call("mode", { args: "attention focused" }), { type: "done" });
 	assert.equal((await host.call<{ type: string }>("mode", { args: "attention sideways" })).type, "unsupported");
 	assert.equal(mode(await host.call<Status>("status")).selected.attention, "Focused");
+	// Each status numbers its Working Mode sample, so PI WEB orders a reply against the events by when the host read it.
+	const [first, second] = await Promise.all([host.call<Status>("status"), host.call<Status>("status")]);
+	assert.ok(first.workingModeSample < second.workingModeSample, "a later sample gets a higher number");
 	await host.close();
 
 	host = new ChatHost(store, cwd);
