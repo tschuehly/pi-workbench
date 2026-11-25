@@ -52,11 +52,14 @@ export async function workstreamOf(sessionId, home, env) {
 }
 
 const OWNER = "pi-owner.json";
+// The creation receipt: written once by the `wt switch --create` host operation, never merged. Only it grants access;
+// pi-owner.json is the storage-cleanup record, which any later owner may join (mac-storage-workspaces --record-owner).
+export const CREATOR = "pi-creator.json";
 const readText = (path) => { try { return readFileSync(path, "utf8"); } catch { return undefined; } };
 
 /**
- * Linked worktrees in ~/IdeaProjects whose owner record (written outside the fence: by `wt`'s record-owner hook or
- * the runner's host operation) names this chat (a child's `<chat>:<conversation>` session counts as the chat) or
+ * Linked worktrees in ~/IdeaProjects whose creation receipt (written outside the fence by the runner's
+ * `wt switch --create` host operation only) names this chat (a child's `<chat>:<conversation>` session counts as the chat) or
  * `owners`' Workstream. Trusted only when git's two links agree: the record's `gitdir` names a worktree
  * whose own `.git` file points back. Fenced commands cannot write either record (see `grants`).
  */
@@ -74,7 +77,7 @@ export function ownedWorktrees(home, owners) {
     try { names = readdirSync(meta); } catch { continue; }
     for (const name of names) {
       let record;
-      try { record = JSON.parse(readText(join(meta, name, OWNER)) ?? "null"); } catch { continue; }
+      try { record = JSON.parse(readText(join(meta, name, CREATOR)) ?? "null"); } catch { continue; }
       if (record === null || ![...(record.sessions ?? []), ...(record.workstreams ?? [])].some((id) => typeof id === "string" && owners.includes(id.split(":")[0]))) continue;
       const dotGit = readText(join(meta, name, "gitdir"))?.trim();
       if (dotGit === undefined || !dotGit.endsWith(`${sep}.git`)) continue;
@@ -113,7 +116,7 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
     // Its own worktree metadata only, minus the files that decide ownership and the worktree link (ownedWorktrees).
     if (repo.gitDir !== repo.common) reopen.push(repo.gitDir);
     // commondir/config.worktree in the common folder would redirect every later git there to an agent-written config.
-    locked.push(...[OWNER, `${OWNER}.lock`, "commondir", "config.worktree"].map((f) => join(repo.common, f)), ...[OWNER, `${OWNER}.lock`, "gitdir", "commondir", "config.worktree"].map((f) => join(repo.gitDir, f)));
+    locked.push(...[OWNER, `${OWNER}.lock`, CREATOR, "commondir", "config.worktree"].map((f) => join(repo.common, f)), ...[OWNER, `${OWNER}.lock`, CREATOR, "gitdir", "commondir", "config.worktree"].map((f) => join(repo.gitDir, f)));
     // Its .git file: repointed, every later git there (an unfenced one too) would read a config the agent wrote.
     if (repo.gitDir !== repo.common) locked.push(join(repo.top, ".git"));
   };
@@ -277,7 +280,7 @@ export function alreadyFenced() {
 
 /**
  * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`, with the `owners` whose worktrees it may
- * write (and remove through the host operation). Throws when no proven sandbox is
+ * write. Throws when no proven sandbox is
  * available; the caller then records the failure and never starts the command.
  */
 export async function confine(job, env = process.env, { ownSocket } = {}) {

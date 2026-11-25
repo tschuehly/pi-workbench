@@ -1,20 +1,46 @@
 #!/usr/bin/env node
 // Shim for fenced commands, linked as `workstreams` and `wt` (host-ops.mjs): forwards the call to the job's runner,
-// which runs it outside the fence. Other `wt` calls, and any call without a runner, run the real program here.
+// which runs it outside the fence. Other allowed `wt` calls, and any call without a runner, run the real program here.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync, realpathSync } from "node:fs";
 import { connect } from "node:net";
-import { basename, delimiter, dirname } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 
 const name = basename(process.argv[1]);
 const args = process.argv.slice(2);
 const here = dirname(process.argv[1]);
-const forwarded = name === "workstreams" || (name === "wt" && (args[0] === "remove" || (args[0] === "switch" && args.some((a) => a === "-c" || a === "--create"))));
+const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+// Inside the fence the real wt runs only commands that never remove a worktree (it would delete what the fence lets
+// it, then stop). Global options in their exact forms only; anything unclassified (e.g. grouped -yC) is refused.
+if (name === "wt") {
+  let i = 0;
+  for (;;) {
+    const a = args[i];
+    if (["-y", "--yes", "-v", "--verbose", "-vv", "-vvv"].includes(a)) i += 1;
+    else if (a === "-C" || a === "--config") i += 2;
+    else if (a !== undefined && /^(-C[^-]|--config=)/.test(a)) i += 1;
+    else break;
+  }
+  const command = args[i];
+  // `help` is no wt subcommand: an alias or wt-help program of that name would run.
+  if (command !== undefined && !["list", "switch", "config", "-h", "--help", "-V", "--version"].includes(command)) {
+    process.stderr.write(`wt ${command}: is not available inside the sandbox (only list, switch and config run here; removing a worktree never); ask Thomas or turn on full access\n`);
+    process.exit(2);
+  }
+  // The host operation takes `switch --create` first only; a prefixed one would run the real wt here, unrecorded.
+  if (i > 0 && command === "switch" && args.some((a) => a === "-c" || a === "--create")) {
+    process.stderr.write("wt switch --create: is not available inside the sandbox after global options; write `wt switch --create …` first\n");
+    process.exit(2);
+  }
+}
+const forwarded = name === "workstreams" || (name === "wt" && args[0] === "switch" && args.some((a) => a === "-c" || a === "--create"));
 if (!forwarded || !process.env.PI_HOST_OPS) {
-  const PATH = (process.env.PATH ?? "").split(delimiter).filter((p) => p !== here).join(delimiter);
-  const real = spawnSync(name, args, { stdio: "inherit", env: { ...process.env, PATH } });
-  if (real.error) { process.stderr.write(`${name}: ${real.error.message}\n`); process.exit(127); }
-  process.exit(real.status ?? 1);
+  // The real program by its full path; the shim stays first on PATH for anything it starts (a wt alias or hook).
+  const bin = (process.env.PATH ?? "").split(delimiter).filter((p) => p !== "" && real(p) !== real(here)).map((p) => join(p, name)).find((f) => { try { accessSync(f, constants.X_OK); return true; } catch { return false; } });
+  if (bin === undefined) { process.stderr.write(`${name}: command not found\n`); process.exit(127); }
+  const ran = spawnSync(bin, args, { stdio: "inherit" });
+  if (ran.error) { process.stderr.write(`${name}: ${ran.error.message}\n`); process.exit(127); }
+  process.exit(ran.status ?? 1);
 }
 let stdin = "";
 if (!process.stdin.isTTY) try { stdin = readFileSync(0, "utf8"); } catch { /* no stdin */ }
