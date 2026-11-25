@@ -1,5 +1,5 @@
 {
-	"name": "pi-process-monitor",
+	"name": "pi-web-access",
 	"private": true,
 	"type": "module",
 	"description": "Test fixture: a package tool that ignores cancellation, bound under a bound package's name so the host loads it.",

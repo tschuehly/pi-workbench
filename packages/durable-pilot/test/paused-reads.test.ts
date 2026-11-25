@@ -6,7 +6,7 @@
 // owner explicitly resumes by sending; then every held delivery arrives once.
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { packagePaths } from "./package-paths.ts";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { fork } from "node:child_process";
@@ -16,14 +16,12 @@ import { cleanup, PACKAGE, scratch } from "./runner.ts";
 
 type Status = { isStreaming: boolean; warnings?: { message: string }[] };
 
-const INSTALLED = process.env.PILOT_PI_PACKAGES ?? join(homedir(), ".pi", "agent", "npm", "node_modules");
 const ROOT = scratch("paused-reads");
 const JOBS = join(ROOT, "jobs");
 const UNDO = 3_000;
 
 before(() => {
-	for (const name of ["pi-web-access", "ping-a-human-pi", "pi-process-monitor"])
-		assert.ok(existsSync(join(INSTALLED, name, "package.json")), `installed package ${name} in ${INSTALLED}`);
+	for (const path of packagePaths) assert.ok(existsSync(join(path, "package.json")), `missing test package: ${path}`);
 });
 
 after(() => {
@@ -44,7 +42,7 @@ function family() {
 	const cwd = join(ROOT, "workspace");
 	for (const path of [agentDir, cwd, join(ROOT, "tmp")]) mkdirSync(path, { recursive: true });
 	writeFakeLogins(agentDir, "paused");
-	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["pi-web-access", "ping-a-human-pi", "pi-process-monitor"].map((name) => join(INSTALLED, name)) }));
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: packagePaths }));
 	writeFileSync(join(cwd, "page.html"), "<!doctype html><title>t</title><div atl-key='a' atl-ver='1'>A</div>");
 	writeFileSync(join(cwd, "job.log"), "");
 	const quota = join(ROOT, "quota.json");

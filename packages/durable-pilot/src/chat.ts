@@ -271,6 +271,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 				chatId,
 				agentDir,
 				scratch: join(options.dir, "pi-packages"),
+				monitorFullAccess: (caller) => bash.monitorFullAccess(caller),
 				emit: emitPackage,
 			});
 	const credentials = new PiAuthStore();

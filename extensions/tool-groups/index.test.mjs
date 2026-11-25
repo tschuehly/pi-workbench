@@ -107,7 +107,7 @@ test("Orchestration Cockpit activates worker and Atelier tools", async () => {
 
 test("groups match by package source and cover claude-code-use aliases", () => {
   const tools = [
-    { name: "monitor", sourceInfo: { source: "npm:pi-process-monitor@2" } },
+    { name: "monitor", sourceInfo: { source: "git:github.com/tschuehly/pi-process-monitor@revision" } },
     { name: "mcp__process_monitor__monitor", sourceInfo: { source: "npm:@benvargas/pi-claude-code-use" } },
     { name: "mcp__linear__list_issues", sourceInfo: { source: "builtin:mcp" } },
     { name: "read", sourceInfo: { source: "builtin" } },

@@ -1,4 +1,5 @@
 {
+  "packages": ["git:github.com/tschuehly/pi-process-monitor@ebe9e6083c1f0991a3e3b63ddc7f4a714f7fcccb"],
   "retry": {
     "enabled": true,
     "maxRetries": 8,
