@@ -82,8 +82,11 @@ export function warningTool<T extends ToolRegistration>(tool: T): T {
 	return { ...tool, execute } as T;
 }
 
-/** Durable binding of pi-tmp's path guard, before intent. */
-export function workbenchExtensions(defaultCwd: string) {
+/** Why the write fence refuses a write or edit tool's path, if it does (background-bash.ts `writeRefusal`). */
+export type WriteFence = (path: unknown, cwd: string, conversationId: ConversationId) => Promise<string | undefined>;
+
+/** Durable binding of pi-tmp's path guard and the write fence of the Chat's commands, before intent. */
+export function workbenchExtensions(defaultCwd: string, fence?: WriteFence) {
 	return defineExtension({
 		name: "workbench.extensions",
 		hooks: [
@@ -92,7 +95,8 @@ export function workbenchExtensions(defaultCwd: string) {
 				beforeTool: async (call, api, c) => {
 					if (call.name !== "write" && call.name !== "edit") return undefined;
 					const cwd = (await api.snapshot(AgentDoc, api.conversationId, c))?.cwd ?? defaultCwd;
-					const reason = blockTmpWrite((call.arguments as { path?: unknown }).path, cwd) as string | undefined;
+					const path = (call.arguments as { path?: unknown }).path;
+					const reason = (blockTmpWrite(path, cwd) as string | undefined) ?? (await fence?.(path, cwd, api.conversationId));
 					return reason === undefined ? undefined : { block: reason };
 				},
 			}),

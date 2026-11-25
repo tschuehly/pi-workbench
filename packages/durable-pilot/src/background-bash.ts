@@ -10,17 +10,20 @@
 // Completions are delivered by a host-side reporter, not a Durable task, so a reopened idle Chat delivers them at once
 // while a restore with interrupted work stays paused until the user resumes it (owner decision 2).
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Context } from "@earendil-works/chord/context";
 import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { AgentDoc, type Conversation, type ConversationId, defineExtension, defineTool, type DocumentReader, type InputSubmissionDraft, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import { err, FileError, type FileErrorCode, ok, type Result } from "@earendil-works/pi-durable/env";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { defineDoc } from "./store-schema.ts";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail } from "../../../extensions/background-bash/jobs.mjs";
+import { alreadyFenced, fenced, fencedMkdir, fencedWrite, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
 import { ChildDoc, DelegationDoc } from "./delegation.ts";
@@ -145,6 +148,53 @@ function confirmDialog(text: string): Promise<boolean> {
 }
 
 type Hooks = { deliver: <T>(work: () => Promise<T>) => Promise<T>; changed: () => void };
+
+/** fs error codes of the fenced helper as Durable's file errors; anything else (no sandbox) is a refusal. */
+const FILE_ERRORS: Record<string, FileErrorCode> = { ABORT_ERR: "aborted", EISDIR: "is_directory", ENOTDIR: "not_directory", ENOENT: "not_found", EIO: "unknown" };
+function refusal<T>(error: unknown, path: string): Result<T, FileError> {
+	return err(new FileError(FILE_ERRORS[String((error as { code?: unknown }).code)] ?? "permission_denied", (error as Error).message, path));
+}
+
+/**
+ * Writes in the fence of the conversation's commands: `write` true when written, `tempDir` the folder made; false or
+ * undefined when they run unfenced (then done here). Both throw when the fence refuses.
+ */
+type Fence = {
+	write: (path: string, content: string | Uint8Array, signal: AbortSignal | undefined) => Promise<boolean>;
+	tempDir: (prefix: string, signal: AbortSignal | undefined) => Promise<string | undefined>;
+};
+
+/** A conversation's execution environment whose file writes (write and edit tools, codemode's files) go through `fence`. */
+class FencedEnv extends NodeExecutionEnv {
+	readonly #fence: Fence;
+
+	constructor(options: ConstructorParameters<typeof NodeExecutionEnv>[0], fence: Fence) {
+		super(options);
+		this.#fence = fence;
+	}
+
+	override async createTempDir(prefix: string | undefined, c: Context): Promise<Result<string, FileError>> {
+		// Codemode's output folder inside its commands' fence (PI_TMP), made by the fenced helper: OS temp lies outside
+		// every grant, and an exemption for it let a job redirect or share it (Astra rounds 5-6).
+		try {
+			const dir = await this.#fence.tempDir(prefix ?? "tmp-", c.abortSignal);
+			return dir === undefined ? await super.createTempDir(prefix, c) : ok(dir);
+		} catch (error) {
+			return refusal(error, prefix ?? "tmp-");
+		}
+	}
+
+	override async writeFile(path: string, content: string | Uint8Array, c: Context): Promise<Result<void, FileError>> {
+		const target = await this.absolutePath(path, c);
+		if (!target.ok || c.abortSignal?.aborted === true) return super.writeFile(path, content, c);
+		try {
+			return (await this.#fence.write(target.value, content, c.abortSignal)) ? ok(undefined) : await super.writeFile(path, content, c);
+		} catch (error) {
+			// Fail closed: a refused write, or no proven sandbox, writes nothing.
+			return refusal(error, target.value);
+		}
+	}
+}
 
 export type BackgroundBashOptions = {
 	readonly chatId: string;
@@ -397,6 +447,47 @@ export class BackgroundBash {
 		if (!(await confirm(text))) return { type: "done", message: "Full access stays off: the confirmation dialog was not answered with Allow." };
 		this.#fullAccess = true;
 		return { type: "done", message: "Full access is on for this Chat's own commands until /full-access off or the Chat's host stops." };
+	}
+
+	/**
+	 * Why a write or edit tool call of `conversationId` may not write `path`: the write fence its commands run in, lifted
+	 * where they run unfenced (the lead under /full-access, no fence on this machine, or a host already inside one).
+	 */
+	async writeRefusal(path: unknown, cwd: string, conversationId: ConversationId): Promise<string | undefined> {
+		if (this.#unfenced(conversationId)) return undefined;
+		const env = { ...process.env, ...toolEnv({ chatId: this.#options.chatId, conversationId, rootId: this.#options.rootId(), cwd }) };
+		return (await fenceRefusal(path, { cwd, sessionId: this.#options.chatId, env })) as string | undefined;
+	}
+
+	/**
+	 * `conversationId`'s execution environment: its file writes run in a sandboxed helper under the write fence a command
+	 * of it would get at that moment (DECISIONS D13), so a folder swapped for a link after `writeRefusal` leads nowhere.
+	 * Its temp folders (codemode's output files) are made in its PI_TMP by the same helper.
+	 * shortcut: the grants follow the chat folder as it resolves then, as every command's do; the fence-wide follow-up in
+	 * D13 (a chat folder swapped for a link) fixes both.
+	 */
+	env(options: { cwd: string; shellEnv: NodeJS.ProcessEnv }, conversationId: ConversationId): NodeExecutionEnv {
+		const at = (signal: AbortSignal | undefined) => ({ cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv }, signal });
+		return new FencedEnv(options, {
+			write: async (path, content, signal) => {
+				if (this.#unfenced(conversationId)) return false;
+				await fencedWrite(path, content, at(signal));
+				return true;
+			},
+			tempDir: async (prefix, signal) => {
+				if (this.#unfenced(conversationId)) return undefined;
+				const root = at(signal).env.PI_TMP;
+				if (root === undefined || root === "") throw new Error("No temp folder inside the write fence (PI_TMP is unset)");
+				const dir = join(root, `${basename(prefix)}${randomBytes(6).toString("hex")}`);
+				await fencedMkdir(dir, at(signal));
+				return dir;
+			},
+		});
+	}
+
+	/** Where its commands run unfenced: no fence on this machine, the lead under /full-access, or a host already inside one. */
+	#unfenced(conversationId: ConversationId): boolean {
+		return !fenced() || (conversationId === this.#options.rootId() && this.#fullAccess) || alreadyFenced();
 	}
 
 	async status(): Promise<Record<string, string>> {

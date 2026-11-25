@@ -1,11 +1,12 @@
 // Write fence for background-bash commands (ws-workbench-sandbox-20261124). The runner stays outside and starts each
 // command under Apple's sandbox-exec with a Seatbelt profile built here from the job record and the runner's own
 // environment, never from files the command can write. No usable sandbox means the command does not start.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Absolute: never a sandbox-exec found on the command's PATH. Codex and srt crash Chromium (Thomas chose this, 24 Nov).
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
@@ -29,7 +30,7 @@ const SEEDS = [["Library/Caches/ms-playwright", "ms-playwright"]];
 // Inside a granted repo: what would let a command run code later outside the fence or redirect the agent.
 const REPO_READ_ONLY = [".pi", "AGENTS.md", "AGENTS.override.md", ".mcp.json"];
 
-const inside = (path, root) => { const rel = relative(root, path); return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel); };
+export const inside = (path, root) => { const rel = relative(root, path); return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel); };
 const real = (path) => { try { return realpathSync(path); } catch { return path; } };
 
 /** Only macOS is fenced; Linux machines are the agent VMs and CI, isolated as whole machines. */
@@ -290,13 +291,151 @@ function privateDir(dir) {
  * ~/.pi-workbench/sandbox, so only a fenced process gets EPERM writing there.
  */
 export function alreadyFenced() {
-  const probe = join(userInfo().homedir, ".pi-workbench", "sandbox", `probe-${process.pid}`);
+  const state = join(userInfo().homedir, ".pi-workbench", "sandbox");
   try {
-    mkdirSync(join(probe, ".."), { recursive: true, mode: 0o700 });
-    writeFileSync(probe, "");
-    unlinkSync(probe);
+    mkdirSync(state, { recursive: true, mode: 0o700 });
+    // A fresh folder of its own: never truncates or removes an entry someone planted under a predictable name.
+    rmdirSync(mkdtempSync(join(state, "probe-")));
     return false;
   } catch (error) { return error.code === "EPERM"; }
+}
+
+/** The grants of a job of chat `sessionId` started in `cwd` with `env` (its PI_TMP), and the owners of its worktrees. */
+async function jobGrants({ cwd: at, sessionId }, env) {
+  const home = env.HOME ?? homedir();
+  const ws = await workstreamOf(sessionId, home, env);
+  // Worktrees by Workstream only for a chat started in that Workstream's scratch folder: any chat can associate
+  // itself with any Workstream (`workstreams associate`), but not change the folder it was started in.
+  const scratchRoot = join(real(home), ".pi-workbench", "scratch");
+  const cwd = real(at);
+  const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
+  const owners = [sessionId, started].filter((id) => typeof id === "string" && id !== "");
+  const rules = grants({ cwd: at, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
+  return { home, owners, rules };
+}
+
+/** `path` with every link resolved as far as it exists; undefined when a link points nowhere (its target is unknown). */
+function resolved(path) {
+  const rest = [];
+  for (let at = path; ; at = dirname(at)) {
+    // Native: the on-disk spelling (case, Unicode form) of what exists, as the deny rules below compare it.
+    try { return join(realpathSync.native(at), ...rest.reverse()); } catch { /* not there yet */ }
+    if (present(at) || dirname(at) === at) return undefined;
+    rest.push(basename(at));
+  }
+}
+
+/**
+ * Whether the fence lets a command write the absolute `path`, by the profile's rules in their order. Stricter in one
+ * place: nothing inside git's objects folders (the fence lets commands add objects there; no file-edit tool needs to).
+ */
+export function mayWrite(path, { write, read = [], reopen = [], locked = [], history = [] }) {
+  const target = resolved(path);
+  if (target === undefined) return false;
+  const under = (roots, at = target) => roots.some((root) => at === root || inside(at, root));
+  // Refusals ignore case and Unicode form (APFS does: `.GIT/Config` is `.git/config`). A locked name above the target
+  // counts too: creating the parent folders would make it.
+  const fold = (p) => p.normalize("NFD").toLowerCase();
+  const folded = (roots) => under(roots.map(fold), fold(target));
+  return under(write) && (!folded(read) || folded(reopen)) && !folded(locked) && !folded(history);
+}
+
+/**
+ * Why a write or edit tool of chat `sessionId`, in `cwd` with its tool environment `env`, may not write `path`;
+ * undefined when its commands could write it too. Every spelling a tool layer may make of it must pass: with and
+ * without a leading `@` and Unicode spaces made plain, then as Durable resolves it (`~`, `file://`, relative to `cwd`).
+ */
+export async function writeRefusal(path, { cwd, sessionId, env }) {
+  if (typeof path !== "string") return undefined;
+  const rules = await writeGrants({ cwd, sessionId, env });
+  const target = toolPaths(path, { cwd, env }).find((t) => !mayWrite(t, rules));
+  if (target === undefined) return undefined;
+  return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi). Only the owner can lift it, with /full-access.`;
+}
+
+/** The write folders of chat `sessionId`'s tools in `cwd`: its commands' grants, computed now. */
+const writeGrants = async ({ cwd, sessionId, env }) => (await jobGrants({ cwd, sessionId }, env)).rules;
+
+/**
+ * Every absolute path a tool layer may make of the tool argument `path`: with and without a leading `@` and Unicode
+ * spaces made plain, each resolved as Durable does.
+ */
+export function toolPaths(path, at) {
+  const spellings = [path, path.replace(/^@/, "")].flatMap((p) => [p, p.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ")]);
+  return [...new Set(spellings.map((p) => toolPath(p, at)))];
+}
+
+/** `p` as Durable's file tools resolve it (env/node.js resolvePath): `~`, `file://`, relative to `cwd`. */
+export function toolPath(p, { cwd, env }) {
+  const home = env.HOME ?? homedir();
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
+  if (p.startsWith("file://")) try { return resolve(fileURLToPath(p)); } catch { /* an ordinary path then */ }
+  return resolve(cwd, p);
+}
+
+// Fixed: the paths are its arguments, never script text. Makes the parent folders, then writes stdin to the file.
+const WRITE_SCRIPT = '/bin/mkdir -p -- "$1" && exec /bin/cat > "$2"';
+// Makes the parent folders, then the new private folder itself (fails if anything is there).
+const MKDIR_SCRIPT = '/bin/mkdir -p -- "$1" && exec /bin/mkdir -m 700 -- "$2"';
+
+/** A proven sandbox-exec, or a throw: nothing runs without one. */
+function sandboxBin(env, home, what) {
+  // PI_SANDBOX_EXEC (set by the host, e.g. tests) replaces Apple's binary; it never falls back to another one.
+  const bin = env.PI_SANDBOX_EXEC || SANDBOX_EXEC;
+  if (!existsSync(bin)) throw new Error(`Sandbox unavailable: ${bin} is missing; ${what}`);
+  try { proven(bin, env, home); }
+  catch (error) { throw new Error(`Sandbox unavailable: ${error.message}; ${what}`); }
+  return bin;
+}
+
+/**
+ * Writes `content` to the absolute `path` of a write or edit tool of chat `sessionId` (in `cwd`, tool environment
+ * `env`), making its parent folders, in a fixed helper under the profile its commands get, with git's objects folders
+ * read-only too. The kernel checks the path as it is when the file opens, so a folder a background job swaps for a link
+ * after the tool's approval (`writeRefusal`) leads nowhere. Throws when the fence refuses or no sandbox is proven, with
+ * `code` as Node's fs errors carry it.
+ */
+export const fencedWrite = (path, content, at) => fencedHelper(WRITE_SCRIPT, path, content, at);
+
+/**
+ * Makes the new folder `path` (and its parents) as `fencedWrite` writes a file: a temp folder of the Chat's environment
+ * (codemode's output files) inside its commands' grants, so a parent a job redirected leads nowhere.
+ */
+export const fencedMkdir = (path, at) => fencedHelper(MKDIR_SCRIPT, path, "", at);
+
+async function fencedHelper(script, path, content, { cwd, sessionId, env, signal }) {
+  const home = env.HOME ?? homedir();
+  const bin = sandboxBin(env, home, "nothing was written");
+  const rules = await writeGrants({ cwd, sessionId, env });
+  if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
+  const args = sandboxArgs({ ...rules, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", script, "sh", dirname(path), path]);
+  const { code, stderr } = await new Promise((done) => {
+    // A fixed environment: nothing of the tool's (BASH_ENV, ENV) reaches the shell.
+    const child = spawn(bin, args, { env: { PATH: "/usr/bin:/bin" }, stdio: ["pipe", "ignore", "pipe"], ...(signal ? { signal } : {}) });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => done({ code: -1, stderr: error.message }));
+    child.on("close", (code) => done({ code, stderr }));
+    child.stdin.on("error", () => {});
+    child.stdin.end(content);
+  });
+  if (code === 0) return;
+  if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
+  throw writeError(stderr, path, code);
+}
+
+const CAUSES = { "Operation not permitted": "EPERM", "Permission denied": "EACCES", "Is a directory": "EISDIR", "Not a directory": "ENOTDIR", "No such file or directory": "ENOENT" };
+
+/**
+ * The helper's failure as an fs-style error. Its message ends `<file>: <reason>` (mkdir, sh), so the reason is the last
+ * line's text after the last ": ", never a file name; only the sandbox's EPERM is a fence block.
+ */
+export function writeError(stderr, path, code) {
+  const line = stderr.trim().split("\n").at(-1) ?? "";
+  const cause = CAUSES[line.slice(line.lastIndexOf(": ") + 2)] ?? "EIO";
+  const detail = stderr.trim() || `exit ${code}`;
+  return Object.assign(new Error(cause === "EPERM" ? `Blocked by the write fence: ${path} could not be written (${detail})` : `${path} could not be written (${detail})`), { code: cause });
 }
 
 /**
@@ -310,21 +449,10 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   // host writes it into the job record, which no command can write.
   if (!fenced() || job.fullAccess === true || alreadyFenced()) return { file: argv[0], args: argv.slice(1), env };
   const home = env.HOME ?? homedir();
-  // PI_SANDBOX_EXEC (set by the host, e.g. tests) replaces Apple's binary; it never falls back to another one.
-  const bin = env.PI_SANDBOX_EXEC || SANDBOX_EXEC;
-  if (!existsSync(bin)) throw new Error(`Sandbox unavailable: ${bin} is missing; the command was not run`);
-  try { proven(bin, env, home); }
-  catch (error) { throw new Error(`Sandbox unavailable: ${error.message}; the command was not run`); }
-  const ws = await workstreamOf(job.sessionId, home, env);
-  // Worktrees by Workstream only for a chat started in that Workstream's scratch folder: any chat can associate
-  // itself with any Workstream (`workstreams associate`), but not change the folder it was started in.
-  const scratchRoot = join(real(home), ".pi-workbench", "scratch");
-  const cwd = real(job.cwd);
-  const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
-  const owners = [job.sessionId, started].filter((id) => typeof id === "string" && id !== "");
+  const bin = sandboxBin(env, home, "the command was not run");
+  const { owners, rules } = await jobGrants(job, env);
   const dataDirs = [env.PI_WEB_DATA_DIR, env.PI_DURABLE_HOST_SOCKET_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
   const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];
-  const rules = grants({ cwd: job.cwd, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
   const net = { ports, sockets: [...dataDirs, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
   return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };

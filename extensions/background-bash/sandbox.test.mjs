@@ -6,10 +6,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, grants, ownedWorktrees, workstreamId } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -449,6 +449,77 @@ test("pnpm 12's lock folder: XDG_RUNTIME_DIR is one user-only folder outside the
   assert.equal(fencedEnv({ XDG_RUNTIME_DIR: "/tmp" }, fake, undefined).XDG_RUNTIME_DIR, undefined, "nor an inherited one");
   const g = grants({ cwd: fake, home: fake });
   assert.ok(g.write.includes(runtime) && g.locked.includes(runtime), "contents writable, the folder itself locked");
+});
+
+// Runs inside a fence too: it only computes the grants and resolves paths, on a fake home.
+test("file-edit tools: a path is writable exactly where the Chat's commands could write it", async () => {
+  const fake = realpathSync(mkdtempSync(join(root, "edit-home-")));
+  const app = join(fake, "IdeaProjects", "app");
+  mkdirSync(app, { recursive: true });
+  execFileSync("git", ["init", "-q", app]);
+  const outside = mkdtempSync(join(root, "edit-outside-"));
+  symlinkSync(outside, join(app, "link-out"));
+  symlinkSync(join(app, "gone"), join(app, "dangling"));
+  const env = { HOME: fake, PI_TMP: join(fake, ".pi-workbench", "tmp", "ws-x", "s"), PI_WORKBENCH_WORKSTREAM_DIR: join(fake, "workstreams") };
+  mkdirSync(env.PI_TMP, { recursive: true });
+  const refusal = (path) => writeRefusal(path, { cwd: app, sessionId: "edit-test", env });
+  for (const path of ["src/new/file.ts", "@README.md", join(app, "link-out", "..", "x"), join(env.PI_TMP, "x")]) assert.equal(await refusal(path), undefined, path);
+  const refused = [join(fake, "elsewhere"), "~/elsewhere", "../app.other/x", "AGENTS.md", ".pi/settings.json", ".git/hooks/pre-commit", ".git/config", ".git/objects/ab/cdef", "link-out/x", "dangling", join(outside, "x")];
+  for (const path of refused) assert.match(await refusal(path) ?? "", /^Blocked: .* outside this Chat's write folders/, path);
+  // Review of fc1e881: every spelling a tool may make of the path; case and Unicode form as APFS sees them; a locked
+  // name that creating parent folders would make.
+  const reviewed = [pathToFileURL(join(outside, "x")).href, "@~/elsewhere", ".GIT/Config", "AGENTS.MD", ".git/commondir/x"];
+  const allowed = [];
+  for (const path of reviewed) if (!/^Blocked: /.test(await refusal(path) ?? "")) allowed.push(path);
+  assert.deepEqual(allowed, [], "each one refused");
+  assert.match(await writeRefusal(join(fake, "x"), { cwd: fake, sessionId: "edit-test", env }) ?? "", /^Blocked/, "a Chat in home writes only PI_TMP, like its commands");
+  assert.equal(await writeRefusal(join(env.PI_TMP, "y"), { cwd: fake, sessionId: "edit-test", env }), undefined);
+  // Astra re-check of 2604454: the path Durable writes (`@` stripped, spaces made plain) is among the approved ones.
+  assert.ok(toolPaths("@src/a\u00A0b.ts", { cwd: app, env }).includes(join(app, "src", "a b.ts")));
+  assert.ok(toolPaths("file:///x//file.txt", { cwd: app, env }).includes("/x/file.txt"), "normalized as Durable resolves it");
+  // Astra re-check of 97836da: codemode's OS-temp folders, written unfenced, are never a write or edit tool's target.
+  assert.match(await refusal(join(realpathSync(tmpdir()), "pi-codemode-x", "out.png")) ?? "", /^Blocked/);
+  // The helper's reason is the text after a message's last ": ", never a file name; only EPERM is the fence.
+  const cause = (stderr) => { const e = writeError(stderr, "/x", 1); return [e.code, /write fence/.test(e.message)]; };
+  assert.deepEqual(cause("sh: /a/Operation not permitted/f: Is a directory\n"), ["EISDIR", false]);
+  assert.deepEqual(cause("sh: /a/f: Permission denied\n"), ["EACCES", false]);
+  assert.deepEqual(cause("mkdir: /a/Is a directory: Operation not permitted\n"), ["EPERM", true]);
+  assert.deepEqual(cause(""), ["EIO", false]);
+});
+
+// D13: the approval (writeRefusal, before the tool runs) does not bind the write; the write itself runs in the fence.
+test("file-edit tools: a folder swapped for a link after the approval leads nowhere; an allowed write works; no sandbox writes nothing", { skip }, async () => {
+  const fake = realpathSync(mkdtempSync(join(root, "race-home-")));
+  const app = join(fake, "IdeaProjects", "app");
+  mkdirSync(join(app, "src"), { recursive: true });
+  execFileSync("git", ["init", "-q", app]);
+  writeFileSync(join(app, "src", "f.txt"), "inside");
+  const outside = realpathSync(mkdtempSync(join(root, "race-outside-")));
+  writeFileSync(join(outside, "f.txt"), "orig");
+  const env = { HOME: fake, PI_TMP: join(fake, ".pi-workbench", "tmp", "ws-x", "s"), PI_WORKBENCH_WORKSTREAM_DIR: join(fake, "workstreams") };
+  const at = { cwd: app, sessionId: "race-test", env };
+  const created = join(app, "src", "new.txt");
+  const edited = join(app, "src", "f.txt");
+  for (const path of [created, edited]) assert.equal(await writeRefusal(path, at), undefined, `approved: ${path}`);
+  // A background job's swap between approval and write.
+  rmSync(join(app, "src"), { recursive: true });
+  symlinkSync(outside, join(app, "src"));
+  await assert.rejects(fencedWrite(created, "new", at), /Blocked by the write fence/, "write");
+  await assert.rejects(fencedWrite(edited, "changed", at), /Blocked by the write fence/, "edit");
+  assert.equal(existsSync(join(outside, "new.txt")), false);
+  assert.equal(readFileSync(join(outside, "f.txt"), "utf8"), "orig");
+  // Allowed: parents made, content exact; git's objects stay out of reach.
+  await fencedWrite(join(app, "a", "b", "c.txt"), "ü\n", at);
+  assert.equal(readFileSync(join(app, "a", "b", "c.txt"), "utf8"), "ü\n");
+  await assert.rejects(fencedWrite(join(app, ".git", "objects", "ab", "cdef"), "x", at), /Blocked by the write fence/);
+  // Ordinary errors keep their cause; a cancel before the helper starts writes nothing.
+  await assert.rejects(fencedWrite(join(app, "a"), "x", at), (error) => error.code === "EISDIR" && !/write fence/.test(error.message));
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await assert.rejects(fencedWrite(join(app, "late.txt"), "x", { ...at, signal: cancelled.signal }), { code: "ABORT_ERR" });
+  assert.equal(existsSync(join(app, "late.txt")), false);
+  await assert.rejects(fencedWrite(join(app, "none.txt"), "x", { ...at, env: { ...env, PI_SANDBOX_EXEC: join(fake, "missing") } }), /Sandbox unavailable/);
+  assert.equal(existsSync(join(app, "none.txt")), false);
 });
 
 test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's code caches stay untouched, the agents' own caches work", { skip }, async () => {

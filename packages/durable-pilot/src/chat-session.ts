@@ -1063,7 +1063,7 @@ export class ChatSession {
 		if (result.ok && this.#chat !== undefined) await syncWorkersGroup(harness, this.#host.registry, root, this.#chat.workbench.extensions);
 		await this.#watchPower(false);
 		await this.#publishStatus();
-		return result.ok ? { type: "done", message: result.message } : { type: "unsupported", message: result.message };
+		return result.ok ? { type: "done" } : { type: "unsupported", message: result.message };
 	}
 
 	/** Close an open question set with PI WEB's validated outcome; the answers reach the model once, as a follow-up. */
