@@ -20,7 +20,11 @@ function harness() {
   const shim = (name, body) => { put(join(bin, name), `#!/bin/sh\n${body}\n`); spawnSync("chmod", ["+x", join(bin, name)]); };
   // git: rev-parse echoes the revision; worktree add makes the folder (with the Durable host's package for pi-workbench).
   shim("git", `case "$3" in rev-parse) r="$5"; echo "\${r%^{commit\\}}";;
-  worktree) if [ "$4" = add ]; then mkdir -p "$6"; case "$6" in */pi-workbench-*) mkdir -p "$6/packages/durable-pilot/src";; esac; fi;; esac`);
+  worktree) if [ "$4" = add ]; then mkdir -p "$6"; case "$6" in */pi-workbench-*) mkdir -p "$6/packages/durable-pilot/src";; esac
+    # LOCKFILE: the revision has pnpm lockfiles with that content.
+    if [ -n "$LOCKFILE" ]; then echo "$LOCKFILE" > "$6/pnpm-lock.yaml"; if [ -d "$6/packages/durable-pilot" ]; then echo "$LOCKFILE" > "$6/packages/durable-pilot/pnpm-lock.yaml"; fi; fi; fi;; esac`);
+  shim("pnpm", `echo "pnpm $1 $PWD" >> "$HOME/npm.log"; mkdir -p node_modules/node-pty/prebuilds/x && touch node_modules/node-pty/prebuilds/x/spawn-helper && echo "$PWD" > node_modules/installed-in`);
+  shim("cp", `[ -n "$FAIL_CP" ] && exit 1; exec /bin/cp "$@"`);
   shim("npm", `echo "$1 $PWD" >> "$HOME/npm.log"
   case "$1" in ci) mkdir -p node_modules/node-pty/prebuilds/x && touch node_modules/node-pty/prebuilds/x/spawn-helper;;
   run) mkdir -p dist/server/sessions && echo web > dist/server/index.js && echo lock > package-lock.json
@@ -215,11 +219,33 @@ test("switch needs the live pair (--from), refuses a stale one, and one promotio
   assert.ok(!existsSync(lock));
 });
 
-test("switch waits 10 seconds by default", () => {
+test("switch waits 3 seconds by default", () => {
   const h = harness();
   assert.equal(h.sw(wbRev(1), pwRev(1), {}, []).status, 0);
   const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
-  assert.match(readFileSync(join(job, "job.sh"), "utf8"), /\nsleep 10\n/);
+  assert.match(readFileSync(join(job, "job.sh"), "utf8"), /\nsleep 3\n/);
+});
+
+test("prepare clones node_modules from a prepared build with the same lockfile, else installs", () => {
+  const h = harness();
+  const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
+  const dirs = (n) => [build("pi-workbench", wbRev(n)), join(build("pi-workbench", wbRev(n)), "packages/durable-pilot"), build("pi-web", pwRev(n))];
+  const installs = () => h.log("npm.log").split("\n").filter((l) => l.startsWith("pnpm "));
+  const prepare = (n, extra) => { const r = h.run(["prepare", wbRev(n), pwRev(n)], extra); assert.equal(r.status, 0, r.stderr); return r; };
+  prepare(1, { LOCKFILE: "one" });
+  assert.equal(installs().length, 3);
+  // Same lockfiles: all three node_modules are clones of build 1's, the post-install steps still run.
+  const reused = prepare(2, { LOCKFILE: "one" });
+  assert.equal(installs().length, 3, reused.stderr);
+  assert.equal((reused.stderr.match(/node_modules: cloned from/g) ?? []).length, 3);
+  dirs(2).forEach((dir, i) => assert.equal(readFileSync(join(dir, "node_modules/installed-in"), "utf8").trim(), dirs(1)[i]));
+  assert.match(h.log("npm.log"), new RegExp(`run ${build("pi-web", pwRev(2))}`));
+  // A changed lockfile, or a failed clone, installs.
+  prepare(3, { LOCKFILE: "two" });
+  assert.equal(installs().length, 6);
+  prepare(4, { LOCKFILE: "one", FAIL_CP: "1" });
+  assert.equal(installs().length, 9);
+  for (const dir of dirs(4)) assert.equal(readFileSync(join(dir, "node_modules/installed-in"), "utf8").trim(), dir);
 });
 
 test("prune keeps its live and rollback builds", () => {
