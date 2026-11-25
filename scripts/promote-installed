@@ -10,13 +10,17 @@
 #
 #   promote-installed prepare <workbench-rev> <pi-web-rev>
 #       Build immutable copies under ~/.pi-workbench/installed-durable. Touches nothing running.
+#   Releases: <store>/releases/<wb12>-<pw12>/{pi-workbench,pi-web} link the two builds; <store>/current links the live
+#       release and <store>/previous the one it replaced; each *.durable-installed links <store>/current/<product>. Every
+#       switch replaces current in one rename (temp link + mv -h), so both products change together; rollback renames it
+#       back. Each switch first migrates links that still point straight at builds (the old layout); nothing they resolve
+#       to changes. The service plists and Durable host plists name the resolved build folders.
 #   promote-installed current
 #       Print the installed pair as `<workbench-rev> <pi-web-rev>` (12 characters each; none before the first install).
 #   promote-installed switch <workbench-rev> <pi-web-rev> --from <live-workbench-rev> <live-pi-web-rev> [delay-seconds, default 3]
 #       --from is the installed pair `current` printed just before the owner approved. The switch refuses (exit 8,
 #       nothing changed) when another pair is installed by now: someone switched since, so it needs a fresh approval.
-#       Prepare, then schedule a detached launchd job that repoints the *.durable-installed links and the plugin
-#       link and restarts the two Durable services. INTERRUPTS EVERY OPEN SESSION except Durable hosts. Run only
+#       Prepare, then schedule a detached launchd job that swaps current to the new release and restarts the two Durable services. INTERRUPTS EVERY OPEN SESSION except Durable hosts. Run only
 #       with the owner's go-ahead. Roll back by switching to the previous revisions (the job also restores on failure).
 #       Refuses while subagents or workers run, at scheduling and again when the job starts, because the restart
 #       kills them. --force (first argument) skips that check.
@@ -30,12 +34,12 @@
 #   promote-installed latest --from <live-workbench-rev> <live-pi-web-rev> [delay-seconds]
 #       switch to the latest pair, with switch's lock, stale check and exit codes; exit 0 without a switch when up to date.
 #   promote-installed switch-workbench <workbench-rev>
-#       Prepare, then atomically repoint only ~/IdeaProjects/pi-workbench.durable-installed. The running daemon keeps
+#       Prepare, then make current the release of that build and the live PI WEB build. The running daemon keeps
 #       the Durable host it started with until the next switch. Roll back by switching to the previous revision,
 #       which it prints.
 #   promote-installed switch-web <pi-web-rev>
-#       Prepare, then restart only PI WEB's web service on the new build and repoint
-#       ~/IdeaProjects/pi-web.durable-installed. The session daemon, open sessions and their children keep
+#       Prepare, then restart only PI WEB's web service on the new build and make current the release of the live
+#       Pi Workbench build and that one. The session daemon, open sessions and their children keep
 #       running; browsers reconnect. Refuses (exit 5) when the code the session daemon loads or the
 #       dependency lock differs from its running build; use switch then. Restores the previous web
 #       service if it does not become healthy. Prints the command that switches back.
@@ -49,7 +53,8 @@
 #       Exit 7 unless that build's daemon runs Durable hosts as launchd jobs and speaks every running host's protocol.
 #   promote-installed prune [--apply]
 #       List the builds under ~/.pi-workbench/installed-durable to keep and to remove; --apply removes them and
-#       their Git worktree registrations. Keeps per product the live build, one rollback (the build
+#       their Git worktree registrations, and every release folder but current and previous. Keeps per product the live
+#       build and the builds of the current and previous release, one rollback (the build
 #       most recently switched away from), any build the PI WEB services, a Workstream or a Durable Chat
 #       names, any build a running process or Durable host has as working directory or open file, and any build
 #       retired after the oldest running session daemon or Pi process started. Every successful
@@ -154,7 +159,7 @@ JS
 
 prune_builds() { # [--apply]
   [[ -d $STORE ]] || return 0
-  local apply=${1:-} real used refs hostrevs product build live rollback reason oldest
+  local apply=${1:-} real used refs hostrevs product build live released rollback reason oldest
   real=$(cd "$STORE" && pwd -P)
   used=$(lsof -n -P -w -Fn 2>/dev/null | sed -n "s|^n$real/\([^/]*\).*|\1|p" | sort -u || true)
   # Pi reads a build's modules once and closes them, so lsof misses open sessions; their extensions
@@ -172,6 +177,7 @@ prune_builds() { # [--apply]
   pins=$(durable_pins) || { echo "refusing to prune: cannot read $DATA/session-runtimes.json" >&2; return 1; }
   for product in pi-workbench pi-web; do
     live=$(cd "$PROJECTS/$product$SUFFIX" 2>/dev/null && pwd -P || true)
+    released=$(for r in current previous; do readlink "$STORE/$r/$product" 2>/dev/null || true; done)
     # Rollback: the build most recently switched away from; before any .retired marker, the newest prepared.
     rollback=$(cd "$STORE" && ls -t $product-????????????.retired 2>/dev/null | sed 's/\.retired$//' | grep -vx "${live##*/}" | head -1 || true)
     [[ -n $rollback ]] || rollback=$(cd "$STORE" && ls -t $product-????????????.prepared 2>/dev/null | sed 's/\.prepared$//' | grep -vx "${live##*/}" | head -1 || true)
@@ -180,6 +186,7 @@ prune_builds() { # [--apply]
       reason=
       if [[ $real/${build##*/} == "$live" ]]; then reason=live
       elif [[ ${build##*/} == "$rollback" ]]; then reason=rollback
+      elif grep -qx "$STORE/${build##*/}" <<<"$released"; then reason="rollback (in the current or previous release)"
       elif grep -qx "$real/${build##*/}" <<<"$hostrevs"; then reason="a running Durable host runs from it"
       elif grep -qF "$real/${build##*/}/" <<<"$pins"; then reason="a Durable Chat is pinned to it"
       elif grep -qx "${build##*/}" <<<"$used"; then reason="in use by a running process"
@@ -194,6 +201,12 @@ prune_builds() { # [--apply]
       echo "removed ${build##*/}"
     done
     [[ $apply != --apply ]] || git -C "$PROJECTS/$product" worktree prune 2>/dev/null || true
+  done
+  # Release folders hold only links; every one but current and previous goes.
+  for build in "$STORE"/releases/*; do
+    [[ -d $build ]] || continue
+    [[ $(readlink "$STORE/current" 2>/dev/null) == "releases/${build##*/}" || $(readlink "$STORE/previous" 2>/dev/null) == "releases/${build##*/}" ]] && continue
+    if [[ $apply == --apply ]]; then rm -rf "$build"; echo "removed release ${build##*/}"; else echo "remove release ${build##*/}"; fi
   done
   [[ $apply == --apply ]] || echo "dry run: nothing removed; rerun with --apply"
 }
@@ -246,9 +259,43 @@ check_idle() { # the Durable session daemon's descendants, except its Durable ho
   echo "$busy" | cut -c1-160 >&2
   return 3
 }
+# Release layout: <store>/releases/<wb12>-<pw12>/{pi-workbench,pi-web} link the two builds, <store>/current and
+# <store>/previous link releases, and each *.durable-installed links <store>/current/<product>. One rename of current
+# switches both products, so a reader never sees a mixed pair. Plists and Durable hosts name build folders directly.
+target() { # <product>: the build its *.durable-installed link resolves to (through current, or directly as before)
+  local t; t=$(readlink "$PROJECTS/$1$SUFFIX" 2>/dev/null) || return 1
+  [[ -L $t ]] && t=$(readlink "$t"); echo "$t"
+}
 live() { # <product>: the installed build's 12-character revision, or none
-  local t; t=$(readlink "$PROJECTS/$1$SUFFIX" 2>/dev/null) || { echo none; return; }
+  local t; t=$(target "$1") || { echo none; return; }
   t=${t##*/}; echo "${t#"$1"-}"
+}
+relink() { # <link> <target>: replace the link in one rename
+  ln -sfn "$2" "$1.new.$$" && mv -h "$1.new.$$" "$1" || { rm -f "$1.new.$$"; return 1; }
+}
+release() { # <workbench-build> <pi-web-build>: create the release linking both if missing; prints its name
+  local b=${1##*/} w=${2##*/} name
+  name=${b#pi-workbench-}-${w#pi-web-}
+  mkdir -p "$STORE/releases/$name" && ln -sfn "$1" "$STORE/releases/$name/pi-workbench" && ln -sfn "$2" "$STORE/releases/$name/pi-web" &&
+    echo "$name"
+}
+activate() { # <release>: make it current (one rename); the release it replaces becomes previous
+  local old p; old=$(readlink "$STORE/current" 2>/dev/null || true)
+  if [[ $old != "releases/$1" ]]; then
+    if [[ -n $old ]]; then relink "$STORE/previous" "$old" || return 1; fi
+    relink "$STORE/current" "releases/$1" || return 1
+  fi
+  for p in pi-workbench pi-web; do
+    [[ $(readlink "$PROJECTS/$p$SUFFIX" 2>/dev/null) == "$STORE/current/$p" ]] || relink "$PROJECTS/$p$SUFFIX" "$STORE/current/$p" || return 1
+  done
+}
+migrate() { # links straight to builds (the old layout) -> the release layout; every link resolves to the same build
+  local wb pw r
+  wb=$(target pi-workbench) && pw=$(target pi-web) || return 0 # not both installed: the switch creates the layout
+  [[ $(readlink "$PROJECTS/pi-workbench$SUFFIX") == "$STORE/current/pi-workbench" &&
+     $(readlink "$PROJECTS/pi-web$SUFFIX") == "$STORE/current/pi-web" ]] && return 0
+  echo "migrating the *.durable-installed links to the release layout ($STORE/current)" >&2
+  r=$(release "$wb" "$pw") && activate "$r"
 }
 matches() { # <live> <given>: given is none for none, else a hex revision prefix of live (or live of it)
   [[ $2 == none ]] && { [[ $1 == none ]]; return; }
@@ -342,9 +389,12 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   if ! sessiond_unchanged "$running" "$pw"; then
     echo "refusing: the files above differ from the running session daemon ($running); use switch" >&2; exit 5
   fi
+  migrate || { echo "migrating to the release layout failed" >&2; exit 1; }
+  wbt=$(target pi-workbench) || { echo "no Pi Workbench build installed; use switch" >&2; exit 1; }
+  prev=$(readlink "$STORE/previous" 2>/dev/null || true)
   swap() { # <from-dir> <to-dir>
     sed -i '' "s|$1/dist/server/index.js|$2/dist/server/index.js|" "$web"
-    ln -sfn "$2" "$PROJECTS/pi-web$SUFFIX"
+    r=$(release "$wbt" "$2") && activate "$r" || echo "repointing $PROJECTS/pi-web$SUFFIX to $2 failed" >&2
     launchctl bootout "gui/$(id -u)/$LABEL.web" 2>/dev/null || true
     sleep 1
     launchctl bootstrap "gui/$(id -u)" "$web"
@@ -359,15 +409,17 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   fi
   echo "FAILED; restoring $old" >&2
   swap "$pw" "$old"
+  [[ -z $prev ]] || relink "$STORE/previous" "$prev" || true
   up && exit 1
   echo "ROLLBACK FAILED: web service unhealthy on $old" >&2; exit 4
 fi
 if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   lock
   wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
-  link=$PROJECTS/pi-workbench$SUFFIX
-  previous=$(readlink "$link" || true)
-  python3 -c 'import os,sys; t,l=sys.argv[1:]; os.symlink(t,l+".new"); os.replace(l+".new",l)' "$wb" "$link"
+  migrate || { echo "migrating to the release layout failed" >&2; exit 1; }
+  pwt=$(target pi-web) || { echo "no PI WEB build installed; use switch" >&2; exit 1; }
+  previous=$(target pi-workbench || true)
+  r=$(release "$wb" "$pwt") && activate "$r" || { echo "repointing to $wb failed; $(live pi-workbench) stays installed" >&2; exit 1; }
   echo "pi-workbench$SUFFIX: ${previous:-none} -> $wb" | tee -a "$STORE/switch-workbench.log"
   echo "roll back: $ME switch-workbench ${previous##*-}"
   [[ -z $previous || $previous == "$wb" ]] || touch "$previous.retired"
@@ -416,6 +468,8 @@ echo "prepared: $wb"
 echo "prepared: $pw"
 [[ $1 == switch ]] || exit 0
 check_hosts "$pw" || exit 7
+migrate || { echo "migrating to the release layout failed" >&2; exit 1; }
+rel=$(release "$wb" "$pw") || { echo "creating the release for $wb and $pw failed" >&2; exit 1; }
 
 uid=$(id -u)
 self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
@@ -465,6 +519,7 @@ mkdir -p "\$la"
 # This instance's state only: its plists (none before the first install), links and plugin link.
 cp -p \$la/$LABEL.*.plist "$job/backup/" 2>/dev/null || true
 for l in pi-workbench$SUFFIX pi-web$SUFFIX; do readlink "$PROJECTS/\$l" >>"$job/backup/links" || echo >>"$job/backup/links"; done
+for r in current previous; do readlink "$STORE/\$r" >"$job/backup/\$r" || : >"$job/backup/\$r"; done
 readlink "$DATA/plugins/pi-workbench" >"$job/backup/plugin-link" || true
 
 holders() { { lsof -ti tcp:$PORT -sTCP:LISTEN; lsof -t "$DATA/sessiond.sock"; } 2>/dev/null || true; }
@@ -480,6 +535,8 @@ stop_all() {
 }
 PORT=$PORT
 $(declare -f healthy)
+STORE=$(printf %q "$STORE") PROJECTS=$(printf %q "$PROJECTS") SUFFIX=$SUFFIX
+$(declare -f target relink activate)
 rollback() {
   echo "FAILED; restoring previous services"
   stop_all
@@ -490,9 +547,15 @@ rollback() {
   t=\$(cat "$job/backup/plugin-link")
   if [[ -n \$t ]]; then ln -sfn "\$t" "$DATA/plugins/pi-workbench"; else rm -f "$DATA/plugins/pi-workbench"; fi ||
     { echo "ROLLBACK FAILED: restoring the plugin link"; exit 4; }
+  # current first: one rename puts the old pair back; a swap that never happened leaves nothing to undo.
+  for r in current previous; do
+    t=\$(cat "$job/backup/\$r")
+    if [[ -z \$t ]]; then rm -f "$STORE/\$r" || { echo "ROLLBACK FAILED: removing \$r"; exit 4; }
+    elif [[ \$(readlink "$STORE/\$r") != "\$t" ]]; then relink "$STORE/\$r" "\$t" || { echo "ROLLBACK FAILED: restoring \$r"; exit 4; }; fi
+  done
   i=0; for l in pi-workbench$SUFFIX pi-web$SUFFIX; do
     i=\$((i+1)); t=\$(sed -n "\${i}p" "$job/backup/links")
-    if [[ -n \$t ]]; then ln -sfn "\$t" "$PROJECTS/\$l" || { echo "ROLLBACK FAILED: restoring \$l"; exit 4; }
+    if [[ -n \$t ]]; then [[ \$(readlink "$PROJECTS/\$l") == "\$t" ]] || relink "$PROJECTS/\$l" "\$t" || { echo "ROLLBACK FAILED: restoring \$l"; exit 4; }
     else rm -f "$PROJECTS/\$l" || { echo "ROLLBACK FAILED: removing \$l"; exit 4; }; fi
   done
   compgen -G "$job/backup/$LABEL.*.plist" >/dev/null || { echo "rollback done \$(date -u +%FT%TZ): no previous Durable instance"; exit 1; }
@@ -507,9 +570,9 @@ rollback() {
   exit 4
 }
 
-for l in pi-workbench$SUFFIX pi-web$SUFFIX; do t=\$(readlink "$PROJECTS/\$l") && [[ -d \$t ]] && touch "\$t.retired"; done
-ln -sfn "$wb" "$PROJECTS/pi-workbench$SUFFIX"
-ln -sfn "$pw" "$PROJECTS/pi-web$SUFFIX"
+for p in pi-workbench pi-web; do t=\$(target \$p) && [[ -d \$t ]] && touch "\$t.retired"; done
+# Both products in one rename of current; the release it replaces becomes previous.
+activate $rel || rollback
 mkdir -p "$DATA/plugins" "$DATA/logs"
 ln -sfn "$PROJECTS/pi-workbench$SUFFIX/packages" "$DATA/plugins/pi-workbench"
 [[ -e "$DATA/config.json" ]] || echo '{}' >"$DATA/config.json"

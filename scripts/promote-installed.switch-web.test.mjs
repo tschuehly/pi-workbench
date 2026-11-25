@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +28,9 @@ function scenario({ healthy, daemonChanged = false }) {
   put(join(la, "com.pi-web-durable.web.plist"), plist(`${old}/dist/server/index.js`));
   mkdirSync(join(projects, "pi-web"), { recursive: true });
   symlinkSync(old, join(projects, "pi-web.durable-installed"));
+  // The old layout (each link straight at its build): switch-web migrates it to <store>/current first.
+  mkdirSync(join(store, "pi-workbench-222222222222"), { recursive: true });
+  symlinkSync(join(store, "pi-workbench-222222222222"), join(projects, "pi-workbench.durable-installed"));
   const shim = (name, body) => { put(join(bin, name), `#!/bin/sh\n${body}\n`); spawnSync("chmod", ["+x", join(bin, name)]); };
   shim("git", `echo ${sha}`);
   shim("sleep", "exit 0");
@@ -40,14 +43,14 @@ function scenario({ healthy, daemonChanged = false }) {
   });
   const web = readFileSync(join(la, "com.pi-web-durable.web.plist"), "utf8");
   const log = (() => { try { return readFileSync(join(home, "launchctl.log"), "utf8"); } catch { return ""; } })();
-  return { result, web, log, link: readlinkSync(join(projects, "pi-web.durable-installed")), old, next, stale };
+  return { result, web, log, link: realpathSync(join(projects, "pi-web.durable-installed")), old, next, stale };
 }
 
 test("switch-web restarts only the web service on the new build", () => {
   const { result, web, log, link, old, next, stale } = scenario({ healthy: true });
   assert.equal(result.status, 0, result.stderr);
   assert.match(web, new RegExp(`${next}/dist/server/index.js`));
-  assert.equal(link, next);
+  assert.equal(link, realpathSync(next));
   assert.doesNotMatch(log, /sessiond/);
   assert.match(result.stdout, /roll back: .* switch-web 000000000000/);
   // The build switched away from becomes the rollback; older builds are pruned.
@@ -60,7 +63,7 @@ test("switch-web restores the previous web service when the new one stays unheal
   assert.equal(result.status, 1);
   assert.match(result.stderr, /FAILED; restoring/);
   assert.match(web, new RegExp(`${old}/dist/server/index.js`));
-  assert.equal(link, old);
+  assert.equal(link, realpathSync(old));
 });
 
 test("switch-web refuses when the session daemon's code changed", () => {
@@ -68,5 +71,5 @@ test("switch-web refuses when the session daemon's code changed", () => {
   assert.equal(result.status, 5);
   assert.match(result.stderr, /dist\/server\/sessiond\.js[\s\S]*use switch/);
   assert.equal(log, "");
-  assert.equal(link, old);
+  assert.equal(link, realpathSync(old));
 });

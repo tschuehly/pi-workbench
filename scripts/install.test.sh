@@ -22,18 +22,16 @@ mkdir -p "$t/projects/pi-workbench/scripts"; cp "$src" "$t/projects/pi-workbench
 export PI_WEB_REPO=$t/pw.git
 I=$t/projects/pi-workbench/scripts/install
 
-# Stub promote-installed: records its arguments and environment, links the builds, writes the job log (RESULT picks the outcome).
+# Stub promote-installed: records its arguments and environment, keeps the installed pair in $HOME/pair (no links, so
+# install must ask `current`), writes the job log (RESULT picks the outcome).
 cat >"$t/promote" <<'EOF'
 #!/usr/bin/env bash
-if [[ $1 == current ]]; then
-  for p in pi-workbench pi-web; do t=$(readlink "$PI_WORKBENCH_PROJECTS/$p.durable-installed") && printf '%s ' "${t##*-}" || printf 'none '; done; echo; exit 0
-fi
+if [[ $1 == current ]]; then cat "$HOME/pair" 2>/dev/null || echo "none none"; exit 0; fi
 echo "promote $* env=${PI_PROMOTE_DURABLE_ENV:-}" >>"$HOME/calls"
 [[ $1 == --force ]] && shift
 s=$HOME/.pi-workbench/installed-durable; mkdir -p "$s/jobs/j"
 if [[ ${RESULT:-promoted} == promoted ]]; then
-  ln -sfn "$s/pi-workbench-${2:0:12}" "$PI_WORKBENCH_PROJECTS/pi-workbench.durable-installed"
-  ln -sfn "$s/pi-web-${3:0:12}" "$PI_WORKBENCH_PROJECTS/pi-web.durable-installed"
+  echo "${2:0:12} ${3:0:12}" >"$HOME/pair"
 fi
 echo "${RESULT:-promoted} 2026-11-24T00:00:00Z" >"$s/jobs/j/job.log"
 echo "scheduled x in 0s; log: $s/jobs/j/job.log"

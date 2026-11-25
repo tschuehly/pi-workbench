@@ -11,6 +11,8 @@ const script = new URL("./promote-installed", import.meta.url).pathname;
 const put = (path, data) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, data); };
 const wbRev = (n) => `${"a".repeat(11)}${n}0000`, pwRev = (n) => `${"b".repeat(11)}${n}0000`;
 const short = (rev) => rev.slice(0, 12);
+/** The build a *.durable-installed link resolves to: through <store>/current/<product>, or directly (the old layout). */
+const resolve = (link) => { const t = readlinkSync(link); return lstatSync(t).isSymbolicLink() ? readlinkSync(t) : t; };
 
 function harness() {
   const root = mkdtempSync(join(tmpdir(), "promote-durable-"));
@@ -34,6 +36,8 @@ function harness() {
   // print: a scheduled switch job runs while $HOME/job-running exists.
   shim("launchctl", `if [ "$1" = print ]; then [ -e "$HOME/job-running" ] && echo "state = running"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
   shim("lsof", `echo "$*" >> "$HOME/lsof.log"`);
+  // FAIL_MV_CURRENT: the rename that replaces <store>/current fails (the one step that switches both products).
+  shim("mv", `case "$*" in */installed-durable/current) [ -n "$FAIL_MV_CURRENT" ] && exit 1;; esac; exec /bin/mv "$@"`);
   shim("sleep", "exit 0");
   // Job folders are named by the second; give each switch its own.
   shim("date", `case "$*" in *%Y%m%dT*) n=$(cat "$HOME/dates" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$HOME/dates"; echo "20261117T0000\${n}Z";; *) exec /bin/date "$@";; esac`);
@@ -109,7 +113,7 @@ const legacyLabels = /com\.pi-web\.(web|sessiond|ui-dev)\b/; // the old non-Dura
 
 test("the Durable instance installs from clean folders, promotes twice and rolls back a failed health check", () => {
   const h = harness();
-  const links = () => ["pi-workbench", "pi-web"].map((p) => readlinkSync(join(h.projects, `${p}.durable-installed`)));
+  const links = () => ["pi-workbench", "pi-web"].map((p) => resolve(join(h.projects, `${p}.durable-installed`)));
   const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
   assert.ok(!existsSync(h.store));
 
@@ -118,6 +122,8 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
   assert.equal(install.status, 0, install.log);
   assert.match(install.log, /promoted/);
   assert.deepEqual(links(), [build("pi-workbench", wbRev(1)), build("pi-web", pwRev(1))]);
+  for (const p of ["pi-workbench", "pi-web"]) assert.equal(readlinkSync(join(h.projects, `${p}.durable-installed`)), join(h.store, "current", p));
+  assert.equal(readlinkSync(join(h.store, "current")), `releases/${short(wbRev(1))}-${short(pwRev(1))}`);
   assert.match(h.log("npm.log"), new RegExp(`ci ${build("pi-workbench", wbRev(1))}\nci ${build("pi-workbench", wbRev(1))}/packages/durable-pilot\n`));
   assert.equal(readlinkSync(join(h.data, "plugins/pi-workbench")), join(h.projects, "pi-workbench.durable-installed/packages"));
   assert.equal(readFileSync(join(h.data, "config.json"), "utf8"), "{}\n");
@@ -166,7 +172,7 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
   const wb = h.run(["switch-workbench", wbRev(5)]);
   assert.equal(wb.status, 0, wb.stderr);
   assert.match(wb.stdout, /roll back: .* switch-workbench aaaaaaaaaaa3/);
-  assert.equal(readlinkSync(join(h.projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(5)));
+  assert.equal(resolve(join(h.projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(5)));
   const web = h.run(["switch-web", pwRev(5)]);
   assert.equal(web.status, 0, web.stderr);
   assert.match(web.stdout, /roll back: .* switch-web bbbbbbbbbbb3/);
@@ -482,7 +488,7 @@ test("a trial (PI_PROMOTE_DURABLE_TRIAL) promotes and rolls back only its own fo
       PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-trial.host", PI_WEB_DURABLE_AUTO_UPGRADE: "1", PI_WEB_DURABLE_AGENT_DIR: "/trial/agent", PI_OFFLINE: "1",
     });
   }
-  assert.equal(readlinkSync(join(projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(2)));
+  assert.equal(resolve(join(projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(2)));
   assert.equal(readlinkSync(join(data, "plugins/pi-workbench")), join(projects, "pi-workbench.durable-installed/packages"));
 
   // A forced failed health check restores the trial's previous services.
@@ -531,4 +537,82 @@ test("the removed legacy commands and --instance are refused", () => {
     assert.equal(r.status, 2, args.join(" "));
     assert.match(r.stderr, /promote-installed supports/);
   }
+});
+
+test("release layout: an old two-link install migrates on the next switch without changing what runs; again is a no-op", () => {
+  const h = harness();
+  const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
+  assert.equal(h.run(["prepare", wbRev(1), pwRev(1)]).status, 0);
+  for (const [p, rev] of [["pi-workbench", wbRev(1)], ["pi-web", pwRev(1)]]) symlinkSync(build(p, rev), join(h.projects, `${p}.durable-installed`));
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(1))} ${short(pwRev(1))}\n`);
+
+  const scheduled = h.sw(wbRev(2), pwRev(2));
+  assert.equal(scheduled.status, 0, scheduled.stderr);
+  assert.match(scheduled.stderr, /migrating the \*\.durable-installed links/);
+  // Scheduled, not yet run: the same builds, now through current.
+  assert.equal(readlinkSync(join(h.store, "current")), `releases/${short(wbRev(1))}-${short(pwRev(1))}`);
+  for (const [p, rev] of [["pi-workbench", wbRev(1)], ["pi-web", pwRev(1)]]) {
+    assert.equal(readlinkSync(join(h.projects, `${p}.durable-installed`)), join(h.store, "current", p));
+    assert.equal(resolve(join(h.projects, `${p}.durable-installed`)), build(p, rev));
+  }
+  const jobs = join(h.store, "jobs"), job = join(jobs, readdirSync(jobs).sort().at(-1));
+  assert.equal(spawnSync("bash", [join(job, "job.sh")], { env: h.env }).status, 0, readFileSync(join(job, "job.log"), "utf8"));
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(2))} ${short(pwRev(2))}\n`);
+  assert.equal(readlinkSync(join(h.store, "previous")), `releases/${short(wbRev(1))}-${short(pwRev(1))}`);
+
+  const again = h.switchDurable(wbRev(3), pwRev(3));
+  assert.equal(again.status, 0, again.log);
+  assert.doesNotMatch(again.scheduled.stderr, /migrating/);
+});
+
+test("release layout: a failed swap of current or a failed health check leaves the old pair whole, previous restored", () => {
+  const h = harness();
+  const pair = () => h.run(["current"]).stdout.trim();
+  for (const n of [1, 2]) assert.equal(h.switchDurable(wbRev(n), pwRev(n)).status, 0);
+  const before = { current: readlinkSync(join(h.store, "current")), previous: readlinkSync(join(h.store, "previous")), pair: pair() };
+  assert.equal(before.pair, `${short(wbRev(2))} ${short(pwRev(2))}`);
+  const after = () => ({ current: readlinkSync(join(h.store, "current")), previous: readlinkSync(join(h.store, "previous")), pair: pair() });
+
+  // The rename of current fails after previous moved: the job rolls back, both products stay on pair 2.
+  const failedSwap = h.switchDurable(wbRev(3), pwRev(3), { FAIL_MV_CURRENT: "1" });
+  assert.equal(failedSwap.status, 1, failedSwap.log);
+  assert.match(failedSwap.log, /rollback done/);
+  assert.deepEqual(after(), before);
+  // The swap succeeded but PI WEB stays unhealthy: rollback swaps current back in one rename.
+  const unhealthy = h.switchDurable(wbRev(3), pwRev(3), { BAD: short(pwRev(3)) });
+  assert.equal(unhealthy.status, 1, unhealthy.log);
+  assert.deepEqual(after(), before);
+  // switch-workbench whose rename fails changes nothing either.
+  const wb = h.run(["switch-workbench", wbRev(4)], { FAIL_MV_CURRENT: "1" });
+  assert.equal(wb.status, 1);
+  assert.equal(pair(), before.pair);
+  const ok = h.run(["switch-workbench", wbRev(4)]);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(pair(), `${short(wbRev(4))} ${short(pwRev(2))}`);
+  assert.equal(readlinkSync(join(h.store, "previous")), before.current);
+});
+
+test("prune never removes a build named by the current or previous release, and drops other release folders", () => {
+  const h = harness();
+  const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
+  for (const n of [1, 2]) assert.equal(h.switchDurable(wbRev(n), pwRev(n)).status, 0);
+  assert.equal(h.run(["prepare", wbRev(3), pwRev(3)]).status, 0);
+  assert.equal(h.run(["prepare", wbRev(4), pwRev(4)]).status, 0);
+  // Every retired marker older than any running Pi; build 3 is the newest retired, so the rollback guess picks it, not 1.
+  for (const [n, hours] of [[1, 3], [3, 1]]) for (const product of ["pi-workbench", "pi-web"]) {
+    const marker = `${build(product, product === "pi-web" ? pwRev(n) : wbRev(n))}.retired`, when = new Date(Date.now() - hours * 3600e3);
+    writeFileSync(marker, ""); utimesSync(marker, when, when);
+  }
+  mkdirSync(join(h.store, "releases", "000000000000-111111111111"));
+  const dry = h.run(["prune"]);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /keep   pi-workbench-aaaaaaaaaaa1: rollback \(in the current or previous release\)/);
+  assert.match(dry.stdout, /remove release 000000000000-111111111111/);
+  assert.equal(h.run(["prune", "--apply"]).status, 0);
+  for (const product of ["pi-workbench", "pi-web"]) {
+    const rev = product === "pi-web" ? pwRev : wbRev;
+    for (const n of [1, 2, 3]) assert.ok(existsSync(build(product, rev(n))), `${product} ${n}`);
+    assert.ok(!existsSync(build(product, rev(4))), `${product} 4`);
+  }
+  assert.deepEqual(readdirSync(join(h.store, "releases")).sort(), [`${short(wbRev(1))}-${short(pwRev(1))}`, `${short(wbRev(2))}-${short(pwRev(2))}`]);
 });

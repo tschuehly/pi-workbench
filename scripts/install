@@ -4,7 +4,7 @@
 #   1. clone PI WEB beside it if missing (branch pi-workbench of $PI_WEB_REPO), then fetch both repos (no checkout moves);
 #   2. scripts/promote-installed switch <pi-workbench origin/main> <its pi-web.rev> --from <the installed pair>
 #      and wait for its job (origin/pi-workbench of PI WEB when that main has no pi-web.rev);
-#      skipped when both *.durable-installed links already point at those builds, so a rerun interrupts no session;
+#      skipped when `promote-installed current` already prints that pair, so a rerun interrupts no session;
 #   3. build the native app (apps/pi-web-macos, --app-only: no services) for the Durable instance on :8506.
 # PI_PROMOTE_DURABLE_ENV passes through to the services, e.g. "GIT_CONFIG_GLOBAL=$HOME/.config/git/agent.gitconfig".
 # A switch restarts PI WEB and interrupts its open sessions; promote-installed refuses while subagents run.
@@ -23,7 +23,6 @@ done
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 projects=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
 wb=$projects/pi-workbench pw=$projects/pi-web
-store=$HOME/.pi-workbench/installed-durable
 promote=${PI_INSTALL_PROMOTE:-$here/scripts/promote-installed}
 app_script=${PI_INSTALL_APP_SCRIPT:-$projects/pi-workbench.durable-installed/apps/pi-web-macos/Scripts/install-app.sh}
 repo=${PI_WEB_REPO:-https://github.com/tschuehly/pi-web.git}
@@ -48,11 +47,10 @@ elif [[ -d $pw/.git ]]; then pw_rev=$(tip "$pw" origin/pi-workbench) || { echo "
 else pw_rev="origin/pi-workbench (after the clone)"; fi
 say "pi-workbench: $wb_rev"; say "pi-web:       $pw_rev"
 
-current() { [[ $(readlink "$projects/$1.durable-installed" 2>/dev/null) == "$store/$1-${2:0:12}" ]]; }
 # Running install is the owner's approval, so the pair installed right now is the one the switch replaces.
 read -r from_wb from_pw < <("$promote" current) || { echo "install: cannot read the installed pair" >&2; exit 1; }
-if current pi-workbench "$wb_rev" && current pi-web "$pw_rev"; then
-  say "already installed: both *.durable-installed links point at these builds; no switch"
+if [[ $from_wb == "${wb_rev:0:12}" && $from_pw == "${pw_rev:0:12}" ]]; then
+  say "already installed: this pair is the installed one; no switch"
 elif [[ $dry == 1 ]]; then
   run "$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" --from "$from_wb" "$from_pw" 0
 else
