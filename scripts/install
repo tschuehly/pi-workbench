@@ -34,7 +34,7 @@ run() { if [[ $dry == 1 ]]; then printf '+'; printf ' %q' "$@"; printf '\n'; els
 # Running install is the owner's approval, so the pair installed right now is the one the switch replaces.
 status=0; installed=$("$promote" current --settled) || status=$?
 if [[ $status == 10 ]]; then
-  read -r from_wb from_pw wb_rev pw_rev <<<"$installed"
+  read -r from_wb from_pw wb_rev pw_rev mode <<<"$installed"
   say "finishing the interrupted promotion before selecting a newer pair"
 elif [[ $status == 0 ]]; then
   read -r from_wb from_pw <<<"$installed"
@@ -57,6 +57,8 @@ say "pi-workbench: $wb_rev"; say "pi-web:       $pw_rev"
 
 if [[ $status == 0 && $from_wb == "${wb_rev:0:12}" && $from_pw == "${pw_rev:0:12}" ]]; then
   say "already installed: this pair is the installed one; no switch"
+elif [[ ${mode:-} == switch-web ]]; then
+  run "$promote" switch-web "$pw_rev" --from "$from_wb" "$from_pw"
 elif [[ $dry == 1 ]]; then
   run "$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" --from "$from_wb" "$from_pw" 0
 else

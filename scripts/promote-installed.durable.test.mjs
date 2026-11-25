@@ -34,7 +34,8 @@ function harness() {
     if [ -n "$NO_LAUNCHD" ]; then echo daemon > dist/server/sessiond.js; else echo 'daemon env["PI_WEB_DURABLE_HOST_LAUNCHD"]' > dist/server/sessiond.js; fi
     echo "export const DURABLE_HOST_PROTOCOL = \${PROTOCOL:-2};" > dist/server/sessions/durableChatService.js;; esac`);
   // print: a scheduled switch job runs while $HOME/job-running exists.
-  shim("launchctl", `if [ "$CRASH_STOP" = 1 ] && [ "$1" = bootout ]; then case "$2" in */com.pi-web-durable.sessiond) kill -KILL "$PPID";; esac; fi
+  shim("launchctl", `if [ "$CRASH_WEB" = 1 ] && [ "$1" = bootout ]; then case "$2" in */com.pi-web-durable.web) kill -KILL "$PPID";; esac; fi
+  if [ "$CRASH_STOP" = 1 ] && [ "$1" = bootout ]; then case "$2" in */com.pi-web-durable.sessiond) kill -KILL "$PPID";; esac; fi
   if [ "$1" = print ]; then [ -e "$HOME/job-running" ] || exit 1; echo "state = waiting"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
   shim("lsof", `echo "$*" >> "$HOME/lsof.log"; case "$*" in *tcp:*) echo "$FOREIGN_PID";; esac`);
   // FAIL_MV_CURRENT: the rename that replaces <store>/current fails (the one step that switches both products).
@@ -622,6 +623,20 @@ test("SIGKILL after both bootouts: replay the same switch with original backups,
     assert.equal(h.run(["current", "--settled"]).stdout, `${short(wbRev(n))} ${short(pwRev(n))}\n`);
     for (const s of ["web", "sessiond"]) assert.ok(h.plist(s).ProgramArguments[3].includes(short(pwRev(n))));
   }
+});
+
+test("an interrupted web-only restart resumes without restarting the session daemon", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const before = h.log("launchctl.log"), cmd = ["switch-web", pwRev(2), "--from", wbRev(1), pwRev(1)];
+  assert.equal(h.run(cmd, { CRASH_WEB: "1" }).signal, "SIGKILL");
+  const status = h.run(["current", "--settled"]);
+  assert.equal(status.status, 10);
+  assert.match(status.stdout, /switch-web\n$/);
+  assert.equal(h.run(["prune", "--apply"]).status, 6);
+  assert.equal(h.run(cmd).status, 0);
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(1))} ${short(pwRev(2))}\n`);
+  assert.doesNotMatch(h.log("launchctl.log").slice(before.length), /sessiond/);
 });
 
 test("first install can resume with one dangling public link; reselecting a release never rewrites it", () => {

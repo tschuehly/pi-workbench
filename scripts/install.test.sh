@@ -64,8 +64,11 @@ grep -q "already installed" "$t/out" && ok "rerun: says already installed" || fa
 code=$(rc "$I" --dry-run --no-app)
 check "dry run at the same tips: plans no switch" bash -c "test $code = 0 && grep -q 'already installed' '$t/out' && ! grep -q 'promote' '$t/out'"
 
-code=$(INTERRUPTED="${wb_rev:0:12} ${pw_rev:0:12} $wb_rev $pw_rev" rc "$I" --no-app)
+code=$(INTERRUPTED="${wb_rev:0:12} ${pw_rev:0:12} $wb_rev $pw_rev switch" rc "$I" --no-app)
 check "interrupted same-pair install resumes instead of skipping" bash -c "test $code = 0 && grep -q '^promote switch $wb_rev $pw_rev --from ' '$HOME/calls'"
+
+code=$(INTERRUPTED="${wb_rev:0:12} ${pw_rev:0:12} $wb_rev $pw_rev switch-web" rc "$I" --dry-run --no-app)
+check "web-only recovery does not request a daemon restart" bash -c "test $code = 0 && grep -q 'switch-web $pw_rev --from' '$t/out'"
 
 echo two >>"$t/seed-pw/f"; git -C "$t/seed-pw" commit -qam two; git -C "$t/seed-pw" push -q origin HEAD:refs/heads/pi-workbench
 new_pw=$(git -C "$t/pw.git" rev-parse pi-workbench)

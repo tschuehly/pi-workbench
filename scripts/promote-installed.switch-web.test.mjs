@@ -32,7 +32,8 @@ function scenario({ healthy, daemonChanged = false }) {
   mkdirSync(join(store, "pi-workbench-222222222222"), { recursive: true });
   symlinkSync(join(store, "pi-workbench-222222222222"), join(projects, "pi-workbench.durable-installed"));
   const shim = (name, body) => { put(join(bin, name), `#!/bin/sh\n${body}\n`); spawnSync("chmod", ["+x", join(bin, name)]); };
-  shim("git", `echo ${sha}`);
+  shim("git", `if [ "$3" = rev-parse ]; then echo ${sha}; fi`);
+  shim("lsof", "exit 0");
   shim("sleep", "exit 0");
   shim("launchctl", `echo "$*" >> "$HOME/launchctl.log"`);
   // Healthy only while the web plist points at the build that works.

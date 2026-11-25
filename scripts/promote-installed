@@ -352,11 +352,15 @@ busy() {
   echo "When it has finished, read the installed pair again ($ME current) and ask the owner for a fresh approval." >&2
   exit 6
 }
+journal_mode() { if [[ -f $1/web.plist ]]; then echo switch-web; else echo switch; fi; }
 lock() {
-  local owner kind who pid state
+  local owner kind who pid state journal mode
   mkdir -p "$STORE"
   mutex now || busy 'active writer'
-  if [[ -L $STORE/in-progress && ${1:-} != switch ]]; then busy "unfinished switch; rerun the original switch or install"; fi
+  if journal=$(readlink "$STORE/in-progress"); then
+    mode=$(journal_mode "$journal")
+    [[ ${1:-} == "$mode" ]] || busy "unfinished $mode; rerun it or install"
+  fi
   [[ -d $LOCK ]] || return 0
   owner=$(cat "$LOCK/owner" 2>/dev/null || true); read -r kind who pid <<<"$owner"
   case $kind in
@@ -431,8 +435,8 @@ while [[ ${1:-} == --force || ${1:-} == --allow-downgrade ]]; do
 done
 if [[ ${1:-} == current ]]; then
   if journal=$(readlink "$STORE/in-progress"); then
-    echo "switch unfinished: rerun the original command; details: $journal/job.log" >&2
-    if [[ ${2:-} == --settled ]]; then paste -d ' ' "$journal/from" "$journal/to"; exit 10; fi
+    echo "switch unfinished: rerun the original command; recovery data: $journal" >&2
+    if [[ ${2:-} == --settled ]]; then echo "$(cat "$journal/from") $(cat "$journal/to") $(journal_mode "$journal")"; exit 10; fi
     cat "$journal/from"
   else committed_pair; fi
   exit 0
@@ -443,42 +447,55 @@ fi
 [[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
 if [[ ${1:-} == switch-web || ${1:-} == switch-workbench ]]; then
   [[ $# == 5 && $3 == --from ]] || { echo "usage: $ME $1 <rev> --from <live-workbench-rev> <live-pi-web-rev>" >&2; exit 2; }
-  lock
+  lock "$1"
   baseline "$4" "$5"
 fi
 if [[ ${1:-} == switch-web ]]; then
   la=${LA:-$HOME/Library/LaunchAgents}; web=$la/$LABEL.web.plist
   entry() { sed -e "s/&apos;/'/g" "$1" | sed -n "s|.*exec node '\(.*\)/dist/server/$2'.*|\1|p"; }
-  running=$(entry "$la/$LABEL.sessiond.plist" sessiond.js); old=$(entry "$web" index.js)
-  [[ -n $running && -n $old ]] || { echo "cannot read the running PI WEB builds from $la" >&2; exit 1; }
-  mkdir -p "$STORE"
+  running=$(entry "$la/$LABEL.sessiond.plist" sessiond.js)
+  [[ -n $running ]] || { echo "cannot read session daemon entry from $la" >&2; exit 1; }
   pw=$(prepare_one pi-web "$2" "$lpw") || { echo "prepare pi-web failed" >&2; exit 1; }
   if ! sessiond_unchanged "$running" "$pw"; then
     echo "refusing: the files above differ from the running session daemon ($running); use switch" >&2; exit 5
   fi
-  migrate || { echo "migrating to the release layout failed" >&2; exit 1; }
-  wbt=$(target pi-workbench) || { echo "no Pi Workbench build installed; use switch" >&2; exit 1; }
-  prev=$(readlink "$STORE/previous" 2>/dev/null || true)
-  swap() { # <from-dir> <to-dir>
-    sed -i '' "s|$1/dist/server/index.js|$2/dist/server/index.js|" "$web"
-    r=$(release "$wbt" "$2") && activate "$r" || echo "repointing $PROJECTS/pi-web$SUFFIX to $2 failed" >&2
+  if job=$(readlink "$STORE/in-progress"); then
+    [[ $(cat "$job/to") == "$lwb ${pw##*-}" ]] || busy "unfinished switch-web to $(cat "$job/to")"
+  else
+    migrate || { echo "migrating to the release layout failed" >&2; exit 1; }
+    [[ -n $(entry "$web" index.js) && $lwb != none && $lpw != none ]] || { echo "no running pair; use switch" >&2; exit 1; }
+    mkdir -p "$STORE/jobs"
+    job=$(mktemp -d "$STORE/jobs/web.XXXXXXXX")
+    cp -p "$web" "$job/web.plist"
+    old=$(entry "$job/web.plist" index.js)
+    sed "s|$old/dist/server/index.js|$pw/dist/server/index.js|" "$job/web.plist" >"$job/new-web.plist"
+    echo "$lwb $lpw" >"$job/from"; echo "$lwb ${pw##*-}" >"$job/to"
+    readlink "$STORE/previous" >"$job/previous" || true
+    release "$STORE/pi-workbench-$lwb" "$pw" >/dev/null
+    ln -s "$job" "$STORE/in-progress"
+  fi
+  swap() { # <release> <plist>: replayable from any point, including a failed bootstrap
+    activate "$1" && cp -p "$2" "$web.new" && mv -f "$web.new" "$web" || return 1
     launchctl bootout "gui/$(id -u)/$LABEL.web" 2>/dev/null || true
-    sleep 1
-    launchctl bootstrap "gui/$(id -u)" "$web"
+    local holders; for _ in $(seq 50); do holders=$(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null) || :; [[ -z $holders ]] && break; sleep 0.1; done
+    [[ -z $holders ]] || { echo "port $PORT still occupied; not signalling its holder" >&2; return 1; }
+    launchctl bootstrap "gui/$(id -u)" "$web" || return 1
+    for _ in $(seq 60); do healthy && return 0; sleep 1; done; return 1
   }
-  up() { for _ in $(seq 60); do healthy && return 0; sleep 1; done; return 1; }
-  swap "$old" "$pw"
-  if up; then
-    echo "web: $old -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $ME --allow-downgrade switch-web ${old##*-} --from $(pair)"
-    [[ $old == "$pw" ]] || touch "$old.retired"
+  if swap "$lwb-${pw##*-}" "$job/new-web.plist"; then
+    rm "$STORE/in-progress"
+    echo "web: $lpw -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $ME --allow-downgrade switch-web $lpw --from $(pair)"
+    [[ $lpw == "${pw##*-}" ]] || touch "$STORE/pi-web-$lpw.retired"
     prune_builds --apply || true
     exit 0
   fi
-  echo "FAILED; restoring $old" >&2
-  swap "$pw" "$old"
-  [[ -z $prev ]] || relink "$STORE/previous" "$prev" || true
-  up && exit 1
-  echo "ROLLBACK FAILED: web service unhealthy on $old" >&2; exit 4
+  echo "FAILED; restoring $lpw" >&2
+  if swap "$lwb-$lpw" "$job/web.plist"; then
+    prev=$(cat "$job/previous")
+    if [[ -n $prev ]]; then relink "$STORE/previous" "$prev"; else rm -f "$STORE/previous"; fi
+    rm "$STORE/in-progress"; exit 1
+  fi
+  echo "ROLLBACK FAILED: web service unhealthy on $lpw" >&2; exit 4
 fi
 if [[ ${1:-} == switch-workbench ]]; then
   wb=$(prepare_one pi-workbench "$2" "${lwb:-none}") || { echo "prepare pi-workbench failed" >&2; exit 1; }
