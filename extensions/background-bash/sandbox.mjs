@@ -1,7 +1,7 @@
 // Write fence for background-bash commands (ws-workbench-sandbox-20261124). The runner stays outside and starts each
 // command under Apple's sandbox-exec with a Seatbelt profile built here from the job record and the runner's own
 // environment, never from files the command can write. No usable sandbox means the command does not start.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
@@ -361,6 +361,43 @@ export async function writeRefusal(path, { cwd, sessionId, env }) {
   return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi). Only the owner can lift it, with /full-access.`;
 }
 
+// Fixed: the paths are its arguments, never script text. Makes the parent folders, then writes stdin to the file.
+const WRITE_SCRIPT = '/bin/mkdir -p -- "$1" && exec /bin/cat > "$2"';
+
+/** A proven sandbox-exec, or a throw: nothing runs without one. */
+function sandboxBin(env, home, what) {
+  // PI_SANDBOX_EXEC (set by the host, e.g. tests) replaces Apple's binary; it never falls back to another one.
+  const bin = env.PI_SANDBOX_EXEC || SANDBOX_EXEC;
+  if (!existsSync(bin)) throw new Error(`Sandbox unavailable: ${bin} is missing; ${what}`);
+  try { proven(bin, env, home); }
+  catch (error) { throw new Error(`Sandbox unavailable: ${error.message}; ${what}`); }
+  return bin;
+}
+
+/**
+ * Writes `content` to the absolute `path` of a write or edit tool of chat `sessionId` (in `cwd`, tool environment
+ * `env`), making its parent folders, in a fixed helper under the profile its commands get, with git's objects folders
+ * read-only too. The kernel checks the path as it is when the file opens, so a folder a background job swaps for a link
+ * after the tool's approval (`writeRefusal`) leads nowhere. Throws when the fence refuses or no sandbox is proven.
+ */
+export async function fencedWrite(path, content, { cwd, sessionId, env }) {
+  const home = env.HOME ?? homedir();
+  const bin = sandboxBin(env, home, "nothing was written");
+  const { rules } = await jobGrants({ cwd, sessionId }, env);
+  const args = sandboxArgs({ ...rules, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", WRITE_SCRIPT, "sh", dirname(path), path]);
+  const { code, stderr } = await new Promise((done) => {
+    // A fixed environment: nothing of the tool's (BASH_ENV, ENV) reaches the shell.
+    const child = spawn(bin, args, { env: { PATH: "/usr/bin:/bin" }, stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => done({ code: -1, stderr: error.message }));
+    child.on("close", (code) => done({ code, stderr }));
+    child.stdin.on("error", () => {});
+    child.stdin.end(content);
+  });
+  if (code !== 0) throw new Error(`Blocked by the write fence: ${path} could not be written (${stderr.trim() || `exit ${code}`})`);
+}
+
 /**
  * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`, with the `owners` whose worktrees it may
  * write. Throws when no proven sandbox is
@@ -372,11 +409,7 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   // host writes it into the job record, which no command can write.
   if (!fenced() || job.fullAccess === true || alreadyFenced()) return { file: argv[0], args: argv.slice(1), env };
   const home = env.HOME ?? homedir();
-  // PI_SANDBOX_EXEC (set by the host, e.g. tests) replaces Apple's binary; it never falls back to another one.
-  const bin = env.PI_SANDBOX_EXEC || SANDBOX_EXEC;
-  if (!existsSync(bin)) throw new Error(`Sandbox unavailable: ${bin} is missing; the command was not run`);
-  try { proven(bin, env, home); }
-  catch (error) { throw new Error(`Sandbox unavailable: ${error.message}; the command was not run`); }
+  const bin = sandboxBin(env, home, "the command was not run");
   const { owners, rules } = await jobGrants(job, env);
   const dataDirs = [env.PI_WEB_DATA_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
   const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];

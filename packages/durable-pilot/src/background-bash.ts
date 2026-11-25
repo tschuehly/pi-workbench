@@ -12,16 +12,18 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Context } from "@earendil-works/chord/context";
 import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { AgentDoc, type Conversation, type ConversationId, defineExtension, defineTool, type DocumentReader, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import { err, FileError, ok, type Result } from "@earendil-works/pi-durable/env";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { defineDoc } from "./store-schema.ts";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail } from "../../../extensions/background-bash/jobs.mjs";
-import { alreadyFenced, fenced, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
+import { alreadyFenced, fenced, fencedWrite, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
 import { ChildDoc, DelegationDoc } from "./delegation.ts";
@@ -142,6 +144,42 @@ function confirmDialog(text: string): Promise<boolean> {
 }
 
 type Hooks = { deliver: <T>(work: () => Promise<T>) => Promise<T>; changed: () => void };
+
+/**
+ * Temp folders the Chat's environments made (codemode's output files), in OS temp, which no fenced command can write.
+ * shortcut: in memory, so a codemode rerun after a host restart cannot write its recorded folder; record them if that matters.
+ */
+const tempDirs = new Set<string>();
+
+/**
+ * A conversation's execution environment whose file writes (write and edit tools, codemode's files) go through `fence`:
+ * true when it wrote the file inside the write fence, false when this conversation runs unfenced (then written here).
+ */
+class FencedEnv extends NodeExecutionEnv {
+	readonly #fence: (path: string, content: string | Uint8Array) => Promise<boolean>;
+
+	constructor(options: ConstructorParameters<typeof NodeExecutionEnv>[0], fence: (path: string, content: string | Uint8Array) => Promise<boolean>) {
+		super(options);
+		this.#fence = fence;
+	}
+
+	override async createTempDir(prefix: string | undefined, c: Context): Promise<Result<string, FileError>> {
+		const made = await super.createTempDir(prefix, c);
+		if (made.ok) tempDirs.add(made.value);
+		return made;
+	}
+
+	override async writeFile(path: string, content: string | Uint8Array, c: Context): Promise<Result<void, FileError>> {
+		const target = await this.absolutePath(path, c);
+		if (!target.ok || c.abortSignal?.aborted === true || tempDirs.has(dirname(target.value))) return super.writeFile(path, content, c);
+		try {
+			return (await this.#fence(target.value, content)) ? ok(undefined) : await super.writeFile(path, content, c);
+		} catch (error) {
+			// Fail closed: a refused write, or no proven sandbox, writes nothing.
+			return err(new FileError("permission_denied", (error as Error).message, target.value));
+		}
+	}
+}
 
 export type BackgroundBashOptions = {
 	readonly chatId: string;
@@ -399,10 +437,26 @@ export class BackgroundBash {
 	 * where they run unfenced (the lead under /full-access, no fence on this machine, or a host already inside one).
 	 */
 	async writeRefusal(path: unknown, cwd: string, conversationId: ConversationId): Promise<string | undefined> {
-		const rootId = this.#options.rootId();
-		if (!fenced() || (conversationId === rootId && this.#fullAccess) || alreadyFenced()) return undefined;
-		const env = { ...process.env, ...toolEnv({ chatId: this.#options.chatId, conversationId, rootId, cwd }) };
+		if (this.#unfenced(conversationId)) return undefined;
+		const env = { ...process.env, ...toolEnv({ chatId: this.#options.chatId, conversationId, rootId: this.#options.rootId(), cwd }) };
 		return (await fenceRefusal(path, { cwd, sessionId: this.#options.chatId, env })) as string | undefined;
+	}
+
+	/**
+	 * `conversationId`'s execution environment: its file writes run in a sandboxed helper under the write fence of its
+	 * commands, so they bind to what `writeRefusal` approved (DECISIONS D13), checked at each write.
+	 */
+	env(options: { cwd: string; shellEnv: NodeJS.ProcessEnv }, conversationId: ConversationId): NodeExecutionEnv {
+		return new FencedEnv(options, async (path, content) => {
+			if (this.#unfenced(conversationId)) return false;
+			await fencedWrite(path, content, { cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv } });
+			return true;
+		});
+	}
+
+	/** Where its commands run unfenced: no fence on this machine, the lead under /full-access, or a host already inside one. */
+	#unfenced(conversationId: ConversationId): boolean {
+		return !fenced() || (conversationId === this.#options.rootId() && this.#fullAccess) || alreadyFenced();
 	}
 
 	async status(): Promise<Record<string, string>> {

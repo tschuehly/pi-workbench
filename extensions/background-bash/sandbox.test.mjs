@@ -9,7 +9,7 @@ import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, grants, ownedWorktrees, workstreamId, writeRefusal } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, workstreamId, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -413,6 +413,35 @@ test("file-edit tools: a path is writable exactly where the Chat's commands coul
   assert.deepEqual(allowed, [], "each one refused");
   assert.match(await writeRefusal(join(fake, "x"), { cwd: fake, sessionId: "edit-test", env }) ?? "", /^Blocked/, "a Chat in home writes only PI_TMP, like its commands");
   assert.equal(await writeRefusal(join(env.PI_TMP, "y"), { cwd: fake, sessionId: "edit-test", env }), undefined);
+});
+
+// D13: the approval (writeRefusal, before the tool runs) does not bind the write; the write itself runs in the fence.
+test("file-edit tools: a folder swapped for a link after the approval leads nowhere; an allowed write works; no sandbox writes nothing", { skip }, async () => {
+  const fake = realpathSync(mkdtempSync(join(root, "race-home-")));
+  const app = join(fake, "IdeaProjects", "app");
+  mkdirSync(join(app, "src"), { recursive: true });
+  execFileSync("git", ["init", "-q", app]);
+  writeFileSync(join(app, "src", "f.txt"), "inside");
+  const outside = realpathSync(mkdtempSync(join(root, "race-outside-")));
+  writeFileSync(join(outside, "f.txt"), "orig");
+  const env = { HOME: fake, PI_TMP: join(fake, ".pi-workbench", "tmp", "ws-x", "s"), PI_WORKBENCH_WORKSTREAM_DIR: join(fake, "workstreams") };
+  const at = { cwd: app, sessionId: "race-test", env };
+  const created = join(app, "src", "new.txt");
+  const edited = join(app, "src", "f.txt");
+  for (const path of [created, edited]) assert.equal(await writeRefusal(path, at), undefined, `approved: ${path}`);
+  // A background job's swap between approval and write.
+  rmSync(join(app, "src"), { recursive: true });
+  symlinkSync(outside, join(app, "src"));
+  await assert.rejects(fencedWrite(created, "new", at), /Blocked by the write fence/, "write");
+  await assert.rejects(fencedWrite(edited, "changed", at), /Blocked by the write fence/, "edit");
+  assert.equal(existsSync(join(outside, "new.txt")), false);
+  assert.equal(readFileSync(join(outside, "f.txt"), "utf8"), "orig");
+  // Allowed: parents made, content exact; git's objects stay out of reach.
+  await fencedWrite(join(app, "a", "b", "c.txt"), "ü\n", at);
+  assert.equal(readFileSync(join(app, "a", "b", "c.txt"), "utf8"), "ü\n");
+  await assert.rejects(fencedWrite(join(app, ".git", "objects", "ab", "cdef"), "x", at), /Blocked by the write fence/);
+  await assert.rejects(fencedWrite(join(app, "none.txt"), "x", { ...at, env: { ...env, PI_SANDBOX_EXEC: join(fake, "missing") } }), /Sandbox unavailable/);
+  assert.equal(existsSync(join(app, "none.txt")), false);
 });
 
 test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's code caches stay untouched, the agents' own caches work", { skip }, async () => {

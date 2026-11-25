@@ -5,7 +5,7 @@
 // reattaches to the live runner, a machine restart (runner gone) reports an unknown exit and never reruns.
 import assert from "node:assert/strict";
 import cp, { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { userInfo } from "node:os";
 import { join } from "node:path";
@@ -610,12 +610,25 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 	assert.doesNotMatch(readFileSync(join(ROOT, ".git", "config"), "utf8"), /hooksPath/);
 	// The owner's switch, as the dialog answers it: the lead's tools write where its commands then may, a Subagent's never.
 	const bash = new BackgroundBash({ chatId: "chat-write-fence", cwd, rootId: () => "lead" as never, root: JOBS });
+	const away = mkdtempSync(`${outside}-race-`);
 	try {
 		assert.ok(await bash.writeRefusal(outside, cwd, "lead" as never));
+		// D13: the Chat's environment writes in the fence, so a folder swapped for a link after the approval leads nowhere.
+		mkdirSync(join(cwd, "sub"));
+		assert.equal(await bash.writeRefusal(join(cwd, "sub", "x.txt"), cwd, "lead" as never), undefined);
+		rmSync(join(cwd, "sub"), { recursive: true });
+		symlinkSync(away, join(cwd, "sub"));
+		const raced = await bash.env({ cwd, shellEnv: {} }, "lead" as never).writeFile(join(cwd, "sub", "x.txt"), "x", {} as never);
+		assert.equal(raced.ok ? "written" : raced.error.code, "permission_denied");
+		assert.deepEqual(readdirSync(away), []);
 		await bash.fullAccess("on", "test", async () => true);
 		assert.equal(await bash.writeRefusal(outside, cwd, "lead" as never), undefined);
 		assert.ok(await bash.writeRefusal(outside, cwd, "child" as never), "a Subagent stays fenced");
+		const child = await bash.env({ cwd, shellEnv: {} }, "child" as never).writeFile(join(cwd, "sub", "x.txt"), "x", {} as never);
+		assert.equal(child.ok, false, "a Subagent's writes stay fenced");
+		assert.deepEqual(readdirSync(away), []);
 	} finally {
 		bash.close();
+		rmSync(away, { recursive: true, force: true });
 	}
 });
