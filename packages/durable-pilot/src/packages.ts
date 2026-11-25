@@ -25,7 +25,8 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import { type Conversation, type Cursor, defineExtension, type DocumentReader, type ToolRegistration } from "@earendil-works/pi-durable";
+import { type Conversation, type ConversationId, type Cursor, defineExtension, type DocumentReader, type ToolRegistration } from "@earendil-works/pi-durable";
+import { registerMonitorPolicy } from "../../../extensions/background-bash/monitor-policy.mjs";
 import { defineDoc } from "./store-schema.ts";
 import { fileRevision } from "./claude.ts";
 import { context } from "./host.ts";
@@ -188,6 +189,7 @@ const textOf = (content: string | Content): string => (typeof content === "strin
 const plainTheme = new Proxy({}, { get: () => (...args: unknown[]) => args.at(-1) });
 
 export type PackageOptions = {
+	readonly monitorFullAccess: (caller: ConversationId | undefined) => boolean;
 	readonly cwd: string;
 	/** PI WEB's Chat ID: the session ID packages key their state by (watcher leases). */
 	readonly chatId: string;
@@ -221,7 +223,7 @@ export class PiPackages {
 	#outbox: Promise<void> = Promise.resolve();
 	#deliver: Deliver | undefined;
 	readonly #attached = Promise.withResolvers<void>();
-	readonly #calls = new AsyncLocalStorage<{ offered: Set<string>; added: string[] }>();
+	readonly #calls = new AsyncLocalStorage<{ caller: ConversationId; tools?: { offered: Set<string>; added: string[] } }>();
 
 	private constructor(options: PackageOptions, extensions: PiExtension[], providers: ProviderRegistration[]) {
 		this.#options = options;
@@ -236,14 +238,15 @@ export class PiPackages {
 		const settingsManager = pi.SettingsManager.create(options.cwd, options.agentDir, { projectTrusted: false });
 		const manager = new pi.DefaultPackageManager({ cwd: options.cwd, agentDir: options.agentDir, settingsManager });
 		const resolved = await manager.resolve(async () => "skip");
-		const of = (names: string[]) =>
-			resolved.extensions
-				.filter((resource) => resource.enabled && resource.metadata.scope === "user" && names.includes(packageName(resource.metadata.packageRoot) ?? ""))
-				.map((resource) => resource.path);
+		const enabled = resolved.extensions.filter((r) => r.enabled && r.metadata.scope === "user")
+			.map((r) => ({ path: r.path, name: packageName(r.metadata.packageRoot, options.emit) }));
+		const of = (names: string[]) => enabled.filter((r) => r.name !== undefined && names.includes(r.name)).map((r) => r.path);
 		mkdirSync(options.scratch, { recursive: true, mode: 0o700 });
 		// The scratch directory as cwd and agent dir: only the given paths load, no project or global extensions. Provider
 		// packages load apart, so nothing of theirs but the providers reaches the Chat.
-		const loaded = await pi.discoverAndLoadExtensions(of(BOUND_PACKAGES), options.scratch, options.scratch);
+		const events = pi.createEventBus();
+		registerMonitorPolicy(events, () => options.monitorFullAccess(packages.#calls.getStore()?.caller));
+		const loaded = await pi.discoverAndLoadExtensions(of(BOUND_PACKAGES), options.scratch, options.scratch, events);
 		const failed = (load: typeof loaded) => {
 			for (const failure of load.errors) options.emit({ type: "session.diagnostic", message: `Package extension ${failure.path} failed to load: ${redact(failure.error)}` });
 		};
@@ -293,13 +296,13 @@ export class PiPackages {
 			getSessionName: () => undefined,
 			setLabel: () => {},
 			getActiveTools: () => {
-				const call = this.#calls.getStore();
+				const call = this.#calls.getStore()?.tools;
 				return call === undefined ? [...this.#active] : [...new Set([...call.offered, ...call.added])];
 			},
 			getAllTools: () => this.#tools().map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
 			getSettings: () => ({}),
 			setActiveTools: (names: string[]) => {
-				const call = this.#calls.getStore();
+				const call = this.#calls.getStore()?.tools;
 				if (call === undefined) this.#active = new Set(names);
 				else call.added.push(...names.filter((name) => !call.offered.has(name)));
 			},
@@ -491,7 +494,7 @@ export class PiPackages {
 				const update = (partial: { details?: unknown }) => {
 					if (partial?.details !== undefined) void api.details(json(partial.details), c).catch(() => {});
 				};
-				const result = await this.#calls.run(call, () => definition.execute(api.callId, args, c.abortSignal, update, this.#context(false, c.abortSignal)));
+				const result = await this.#calls.run({ caller: api.conversationId, tools: call }, () => definition.execute(api.callId, args, c.abortSignal, update, this.#context(false, c.abortSignal)));
 				const added = [...new Set(call.added)];
 				return {
 					output: (result.content ?? []) as never,
@@ -635,7 +638,7 @@ export class PiPackages {
 		if (command === undefined) return { type: "unsupported", message: `/${name} is not available in Durable Chats yet` };
 		const controller = new AbortController();
 		try {
-			await command.handler(match?.[2]?.trim() ?? "", this.#context(true, controller.signal));
+			await this.#calls.run({ caller: this.#root().id }, () => command.handler(match?.[2]?.trim() ?? "", this.#context(true, controller.signal)));
 		} catch (error) {
 			if (error instanceof DialogUnavailable) return { type: "unsupported", message: `/${name} needs an extension dialog: ${error.message}` };
 			throw new Error(redact(error instanceof Error ? error.message : String(error)));
@@ -657,10 +660,15 @@ export class PiPackages {
 	}
 }
 
-function packageName(root: string | undefined): string | undefined {
+function packageName(root: string | undefined, emit: PackageOptions["emit"]): string | undefined {
 	if (root === undefined) return undefined;
 	try {
-		return (JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { name?: string }).name;
+		const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+		if (pkg.name === "pi-process-monitor" && pkg.monitorLaunchPolicy !== 1) {
+			emit({ type: "session.diagnostic", message: "Skipped incompatible Monitor: install the pinned launch-policy fork." });
+			return undefined;
+		}
+		return pkg.name;
 	} catch {
 		return undefined;
 	}

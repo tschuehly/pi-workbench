@@ -226,6 +226,11 @@ export class BackgroundBash {
 		this.#root = options.root ?? defaultRoot();
 	}
 
+	/** Restored watchers lack a verified caller; only a live lead's watcher may use the owner's switch. */
+	monitorFullAccess(caller: ConversationId | undefined): boolean {
+		return caller !== undefined && caller === this.#options.rootId() && this.#fullAccess;
+	}
+
 	extension(child = false) {
 		const native = createBashTool();
 		const bash = defineTool({

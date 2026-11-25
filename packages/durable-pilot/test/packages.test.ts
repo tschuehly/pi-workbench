@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as createSocketServer } from "node:net";
-import { homedir } from "node:os";
+import { packagePaths } from "./package-paths.ts";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { alreadyFenced } from "../../../extensions/background-bash/sandbox.mjs";
@@ -23,8 +23,6 @@ import { cleanup, PACKAGE, scratch } from "./runner.ts";
 type Message = { role: string; customType?: string; content?: unknown; details?: unknown; isError?: boolean; toolName?: string };
 type Status = { isStreaming: boolean; queuedMessages: { kind: string; text: string }[]; warnings?: { message: string }[]; unresolvedEffects?: { id: string; toolName: string }[] };
 
-/** Where the owner's installed packages are; only read. */
-const INSTALLED = process.env.PILOT_PI_PACKAGES ?? join(homedir(), ".pi", "agent", "npm", "node_modules");
 const SECRET = `ghp_${"a".repeat(36)}`;
 
 let fixture: Server;
@@ -32,8 +30,7 @@ let port = 0;
 const pageHits: string[] = [];
 
 before(async () => {
-	for (const name of ["pi-web-access", "ping-a-human-pi", "pi-process-monitor"])
-		assert.ok(existsSync(join(INSTALLED, name, "package.json")), `installed package ${name} in ${INSTALLED}`);
+	for (const path of packagePaths) assert.ok(existsSync(join(path, "package.json")), `missing test package: ${path}`);
 	fixture = createServer((request, response) => {
 		pageHits.push(request.url ?? "");
 		if (request.url?.startsWith("/search")) {
@@ -63,7 +60,7 @@ function family(label: string) {
 	const bin = join(dir, "bin");
 	for (const path of [agentDir, cwd, bin]) mkdirSync(path, { recursive: true });
 	writeFakeLogins(agentDir, label);
-	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["pi-web-access", "ping-a-human-pi", "pi-process-monitor"].map((name) => join(INSTALLED, name)) }));
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: packagePaths }));
 	writeFileSync(join(agentDir, "web-search.json"), JSON.stringify({ provider: "searxng", searxngBaseUrl: `http://127.0.0.1:${port}`, ssrf: { allowRanges: ["127.0.0.0/8"] } }));
 	const pingLog = join(dir, "ping-calls.log");
 	const pingConfig = join(dir, "ping-a-human.json");
@@ -273,6 +270,22 @@ test("P133 P135: a tail watcher pings the Chat, survives a kill and resumes; pin
 	assert.ok(!storeBytes(f.store).includes(SECRET), "neither the ping nor the watcher state holds the token");
 });
 
+test("Monitor fence: Durable skips a pre-hook Monitor before its factory runs", async () => {
+	const f = family("old-monitor");
+	const dir = join(f.cwd, "old-monitor");
+	mkdirSync(dir);
+	writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "pi-process-monitor", pi: { extensions: ["./index.mjs"] } }));
+	const marker = join(dir, "loaded");
+	writeFileSync(join(dir, "index.mjs"), `import { writeFileSync } from "node:fs"; export default () => writeFileSync(${JSON.stringify(marker)}, "loaded");`);
+	writeFileSync(join(f.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ packages: [dir] }));
+	const host = new ChatHost(f);
+	try {
+		await host.ready;
+		await host.until((e) => e.type === "session.diagnostic" && String(e.message).includes("Skipped incompatible Monitor"), "compatibility diagnostic");
+		assert.ok(!existsSync(marker));
+	} finally { await host.close(); }
+});
+
 test("Monitor fence: ordinary commands still deliver output", async () => {
 	const host = new ChatHost(family("monitor-echo"));
 	try {
@@ -432,7 +445,7 @@ function probeFamily(label: string) {
 	const dir = join(f.store, "..", "probe-package");
 	const skill = join(dir, "contributed", "probe-skill");
 	mkdirSync(skill, { recursive: true });
-	writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "pi-process-monitor", pi: { extensions: ["./probe.ts"] } }));
+	writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "pi-web-access", pi: { extensions: ["./probe.ts"] } }));
 	writeFileSync(join(skill, "SKILL.md"), "---\nname: probe-skill\ndescription: Contributed by the probe\n---\nProbe skill body.\n");
 	writeFileSync(
 		join(dir, "probe.ts"),
@@ -578,7 +591,7 @@ test("P028: a package's own warnings and errors reach PI WEB as retained notific
 	// A local stub in a bound package slot, notifying outside any command, as the legacy notification inbox retains.
 	const stub = join(f.store, "..", "notify-stub");
 	mkdirSync(stub, { recursive: true });
-	writeFileSync(join(stub, "package.json"), JSON.stringify({ name: "pi-process-monitor", version: "0.0.0", type: "module", pi: { extensions: ["./index.mjs"] } }));
+	writeFileSync(join(stub, "package.json"), JSON.stringify({ name: "pi-web-access", version: "0.0.0", type: "module", pi: { extensions: ["./index.mjs"] } }));
 	writeFileSync(join(stub, "index.mjs"), `export default function (pi) {
   pi.on("session_start", (_event, ctx) => { ctx.ui.notify("watch A", "warning"); ctx.ui.notify("quiet", "info"); ctx.ui.notify("leak ${SECRET}", "error"); });
 }`);

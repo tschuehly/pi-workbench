@@ -1,6 +1,7 @@
 import { createBashToolDefinition, getAgentDir, getShellConfig, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { delimiter, join } from "node:path";
 import { Type } from "typebox";
+import { registerMonitorPolicy } from "./monitor-policy.mjs";
 import { createBackgroundBashJobs } from "./jobs.mjs";
 import { piTmpDir } from "../pi-tmp/pitmp.mjs";
 
@@ -8,6 +9,7 @@ import { piTmpDir } from "../pi-tmp/pitmp.mjs";
 const FOREGROUND_WAIT_MS = 30_000;
 
 export default function backgroundBashExtension(pi: ExtensionAPI) {
+  registerMonitorPolicy(pi.events);
   // Short-lived Subagents and Workers must receive the native blocking tool: their Pi process exits at agent_settled.
   if (process.env.PI_WORKBENCH_EXECUTION_KIND !== undefined) return;
   // ponytail: Pi does not expose the configured base bash tool; foreground and background both use stock shellPath/prefix defaults (getShellConfig()). Forward configured shell settings when the extension API exposes them.
