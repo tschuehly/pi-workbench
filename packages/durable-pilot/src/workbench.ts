@@ -212,7 +212,8 @@ type Question = { id: string; question: string; detail?: string; options: Option
 /** `contextEdited`: the user's edit in a partial send supplied the current context (absent when cleared), as PI WEB's; an agent revision that sets context ends it. */
 export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; contextEdited?: true; questions: Question[] };
 type Outcome = JsonObject & { askId: string; reason: string };
-type Closed = { outcome: Outcome; operationId?: string; delivered: boolean };
+/** `record`: what a final close after one-by-one sends shows in the transcript (the whole set); the model reads `outcome`'s text. */
+type Closed = { outcome: Outcome; record?: Outcome; operationId?: string; delivered: boolean };
 export type Attention = { id: string; reason: string };
 
 type QuestionsState = {
@@ -571,7 +572,8 @@ export const AnswerDelivery = defineTask<{ askId: string; content: string }, { p
 	phases: {
 		deliver: async (task, runtime, c) => {
 			const doc = await runtime.snapshot(QuestionsDoc, runtime.conversationId, c);
-			const outcome = doc?.closed[task.input.askId]?.outcome;
+			const closed = doc?.closed[task.input.askId];
+			const outcome = closed?.record ?? closed?.outcome;
 			const main = (await runtime.conversation(runtime.conversationId, c))!;
 			await main.submit(
 				{
@@ -647,10 +649,42 @@ export async function closeAsk(conversation: Conversation, request: CloseAsk, re
 		const key = ask === undefined ? request.askId : `${request.askId}@${ask.revision}`;
 		if (ask === undefined) delete doc.open[request.askId];
 		else doc.open[request.askId] = ask;
-		doc.closed[key] = { outcome: request.outcome, operationId: request.operationId, delivered: false };
+		const record = whole === undefined ? undefined : wholeRecord(request.outcome, whole.earlier, whole.order, open.contextEdited === true);
+		doc.closed[key] = { outcome: request.outcome, ...(record === undefined ? {} : { record }), operationId: request.operationId, delivered: false };
 		await tx.createTask(AnswerDelivery, { askId: key, content: request.content }, { ownership: { kind: "conversation" }, background: true });
 		return { result: "closed" as const, outcome: request.outcome, retried: false, ...(ask === undefined ? whole : { ask: JSON.parse(JSON.stringify(ask)) as PendingAsk }) };
 	}, context);
+}
+
+type AnswerRecord = { question: { id: string }; answered: boolean; skipped?: boolean };
+/** PI WEB's ASK_USER_RECORD_QUESTION_LIMIT: the most question records one record carries. */
+const RECORD_MAX = 100;
+
+/**
+ * PI WEB `withEarlierAnswers` (pendingAskStore.ts), which builds the submitting browser's record from the same inputs: a
+ * final close's record with the questions its earlier one-by-one sends closed, in `order`, counts and summary over all of
+ * them; the user's last edit still labels the context while `contextEdited`. Undefined when there were no earlier sends.
+ */
+export function wholeRecord(outcome: Outcome, earlier: readonly Outcome[], order: readonly string[], contextEdited: boolean): Outcome | undefined {
+	const all = earlier.flatMap((each) => each.questions as unknown as AnswerRecord[]);
+	if (all.length === 0 || outcome.partial === true) return undefined;
+	const own = outcome.questions as unknown as AnswerRecord[];
+	// shortcut: past the record limit the oldest earlier answers drop out (each send's own card keeps them; the summary counts them), page the record if sets get revised that often.
+	const cut = Math.max(0, all.length + own.length - RECORD_MAX);
+	const hidden = all.slice(0, cut);
+	const rank = (record: AnswerRecord) => { const index = order.indexOf(record.question.id); return index < 0 ? order.length : index; };
+	const questions = [...all.slice(cut), ...own].sort((a, b) => rank(a) - rank(b));
+	const answered = (list: AnswerRecord[]) => list.filter((record) => record.answered).length;
+	const skipped = (list: AnswerRecord[]) => list.filter((record) => record.skipped === true);
+	const unansweredIds = questions.filter((record) => !record.answered && record.skipped !== true).map((record) => record.question.id);
+	const skippedIds = skipped(questions).map((record) => record.question.id);
+	const lastEdit = [...earlier].reverse().find((each) => each.editedContext !== undefined)?.editedContext;
+	const editedContext = outcome.editedContext ?? (contextEdited ? lastEdit : undefined);
+	const summary = `Answered ${String(answered(questions) + answered(hidden))} of ${String(questions.length + hidden.length - skippedIds.length - skipped(hidden).length)}; `
+		+ (unansweredIds.length === 0 ? "none left unanswered" : `unanswered: ${unansweredIds.join(", ")}`)
+		+ (skippedIds.length === 0 ? "" : `; skipped (condition not met): ${skippedIds.join(", ")}`)
+		+ (hidden.length === 0 ? "" : `; ${String(hidden.length)} earlier ${hidden.length === 1 ? "answer" : "answers"} not shown`);
+	return { ...outcome, ...(editedContext === undefined ? {} : { editedContext }), questions: questions as unknown as JsonObject[], answeredCount: answered(questions), unansweredIds, summary };
 }
 
 export async function questionsState(harness: Harness, conversation: Conversation): Promise<QuestionsState> {

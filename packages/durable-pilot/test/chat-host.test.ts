@@ -833,8 +833,13 @@ test("ask_user partial send: one answer is delivered, the rest stays open at the
 	await host.until((e) => e.type === "agent.end", "the second delivery");
 	assert.equal((await host.call<Status>("status")).pendingAsks, undefined);
 	assert.equal(logged(store).filter((l) => l.label.startsWith("Answer:")).length, 2, "each send reached the model once");
-	const transcript = await host.call<{ messages: { customType?: string }[] }>("transcript");
-	assert.equal(transcript.messages.filter((m) => m.customType === "pi-web.ask.answers").length, 2);
+	const transcript = await host.call<{ messages: { customType?: string; content?: unknown; details?: { questions: { question: { id: string } }[]; summary: string; answeredCount: number } }[] }>("transcript");
+	const records = transcript.messages.filter((m) => m.customType === "pi-web.ask.answers");
+	assert.equal(records.length, 2);
+	// A reload or another device shows the whole set in the last card; the model's message keeps only this send's answer.
+	assert.deepEqual(records[1]!.details?.questions.map((q) => q.question.id), ["target", "when"]);
+	assert.deepEqual([records[1]!.details?.answeredCount, records[1]!.details?.summary], [2, "Answered 2 of 2; none left unanswered"]);
+	assert.equal(textOf(records[1]!.content), "Answer: when now");
 	await host.close();
 	assert.equal(integrity(store), "ok");
 });
@@ -1078,4 +1083,16 @@ test("remainingAsk: a partial send's edited context becomes the set's context; n
 	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "My plan" })?.context, "My plan");
 	assert.equal(remainingAsk(ask, outcome)?.context, "Agent's plan");
 	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "" })?.context, undefined, "a cleared context stays cleared");
+});
+
+test("wholeRecord: as PI WEB's withEarlierAnswers, unanswered ids follow the set order, and past the bound the summary counts every answer and names the hidden ones", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const record = (id: string, answered: boolean) => ({ question: { id, question: `${id}?`, options: [] }, answered, values: answered ? ["x"] : [] });
+	const send = (questions: ReturnType<typeof record>[], partial: boolean) => ({ askId: "a1", reason: "submitted", questions, answeredCount: questions.filter((q) => q.answered).length, unansweredIds: [], summary: "s", ...(partial ? { partial: true, revision: "r" } : {}) });
+	// a went first; the agent revised the rest to c, b; both left unanswered.
+	const whole = wholeRecord(send([record("c", false), record("b", false)], false), [send([record("a", true)], true)], ["a", "b", "c"], false) as { questions: { question: { id: string } }[]; unansweredIds: string[]; summary: string } | undefined;
+	assert.deepEqual([whole?.questions.map((q) => q.question.id), whole?.unansweredIds, whole?.summary], [["a", "b", "c"], ["b", "c"], "Answered 1 of 3; unanswered: b, c"]);
+	const many = Array.from({ length: 6 }, (_, s) => send(Array.from({ length: 20 }, (_, i) => record(`s${String(s)}-${String(i)}`, true)), true));
+	const bounded = wholeRecord(send([record("last", true)], false), many, [], false) as { questions: unknown[]; answeredCount: number; summary: string } | undefined;
+	assert.deepEqual([bounded?.questions.length, bounded?.answeredCount, bounded?.summary], [100, 100, "Answered 121 of 121; none left unanswered; 21 earlier answers not shown"]);
 });
