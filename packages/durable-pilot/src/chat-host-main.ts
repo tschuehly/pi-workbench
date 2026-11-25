@@ -74,6 +74,8 @@ if (socketPath !== undefined) {
 	// Only the owner may reach the host: its folder admits nobody else (the socket itself is 0600 too).
 	const folder = lstatSync(dirname(socketPath));
 	if (!folder.isDirectory() || folder.uid !== process.getuid?.() || (folder.mode & 0o077) !== 0) throw new Error(`--socket must be in an owner-only folder: ${dirname(socketPath)}`);
+	// Its methods run commands unfenced (`shell`, `ownerRun`): the write fence denies its jobs this folder (sandbox.mjs).
+	process.env.PI_DURABLE_HOST_SOCKET_DIR = dirname(socketPath);
 }
 /** The daemon connected over the socket, if any. */
 let peer: Socket | undefined;
@@ -171,6 +173,35 @@ const text = (params: Record<string, unknown>, name: string): string => {
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** The image types PI WEB attaches (its `parsePromptAttachments`), which every model provider accepts. */
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+/** PI WEB's answer-image limits (its ask route and store), checked again here before a close commits. */
+const ANSWER_IMAGE_LIMIT = 16;
+const ANSWER_IMAGE_BYTES = 10 * 1024 * 1024;
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/** Non-empty canonical base64, as PI WEB's askUserImages.ts: whole quads, padding only at the end, zero padding bits ("AA==" yes, "AB==" no). */
+const canonicalBase64 = (data: string): boolean => {
+	if (data.length === 0 || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(data)) return false;
+	const pad = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	return pad === 0 || (BASE64_ALPHABET.indexOf(data[data.length - pad - 1]!) & (pad === 2 ? 0b1111 : 0b11)) === 0;
+};
+
+/** A prompt's or answer's `images` as image blocks, or undefined when absent; anything else is refused. `answer`: also PI WEB's answer-image limits. */
+function imageBlocks(images: unknown, answer = false): { type: "image"; data: string; mimeType: string }[] | undefined {
+	if (images === undefined) return undefined;
+	if (!Array.isArray(images) || !images.every((i) => typeof i?.data === "string" && IMAGE_TYPES.includes(i?.mimeType))) throw new Error("images must be image blocks of image/jpeg, image/png, image/gif or image/webp");
+	if (answer) {
+		if (images.length > ANSWER_IMAGE_LIMIT) throw new Error(`answers take at most ${ANSWER_IMAGE_LIMIT} images`);
+		images.forEach(({ data }: { data: string }, index) => {
+			const n = index + 1;
+			if (!canonicalBase64(data)) throw new Error(`image ${n} is not valid base64`);
+			if ((data.length / 4) * 3 - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0) > ANSWER_IMAGE_BYTES) throw new Error(`image ${n} is larger than 10 MiB`);
+		});
+	}
+	return images.map((i: { data: string; mimeType: string }) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
+}
+
 /** The `viewed` state the controlling daemon set; a socket host drops it with that daemon's connection. */
 let viewed = false;
 const setViewed = (value: boolean): { was: boolean } => {
@@ -188,11 +219,11 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		const { operationId, text: body, mode } = params;
 		if (typeof operationId !== "string" || operationId === "" || typeof body !== "string") throw new Error("prompt needs operationId and text");
 		if (mode !== undefined && mode !== "steer" && mode !== "followUp") throw new Error("mode must be steer or followUp");
-		const { images, attachments } = params;
-		if (images !== undefined && (!Array.isArray(images) || !images.every((i) => typeof i?.data === "string" && typeof i?.mimeType === "string"))) throw new Error("images must be image blocks");
+		const { attachments } = params;
+		const images = imageBlocks(params.images);
 		return session.prompt({
 			operationId, text: body, ...(mode === undefined ? {} : { mode }),
-			...(images === undefined ? {} : { images: images.map((i: { data: string; mimeType: string }) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType })) }),
+			...(images === undefined ? {} : { images }),
 			...(Array.isArray(attachments) ? { attachments: attachments as Attachment[] } : {}),
 		});
 	},
@@ -200,11 +231,13 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	closeAsk: (params) => {
 		const outcome = params.outcome as CloseAsk["outcome"] | undefined;
 		if (outcome === undefined || typeof outcome !== "object" || typeof params.content !== "string") throw new Error("closeAsk needs outcome and content");
+		const images = imageBlocks(params.images, true);
 		return session.closeAsk({
 			askId: text(params, "askId"),
 			operationId: text(params, "operationId"),
 			outcome,
 			content: params.content,
+			...(images === undefined || images.length === 0 ? {} : { images }),
 			...(typeof params.revision === "string" ? { revision: params.revision } : {}),
 		});
 	},
@@ -287,6 +320,8 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	setThinkingLevel: (params) => session.setThinkingLevel(text(params, "level")),
 	cycleThinkingLevel: () => session.cycleThinkingLevel(),
 	shell: (params) => session.shell(text(params, "text")),
+	// PI WEB's Run button, after the owner confirmed the command: an unfenced background job; `operationId` makes it idempotent.
+	ownerRun: (params) => session.ownerRun({ operationId: text(params, "operationId"), command: text(params, "command"), cwd: text(params, "cwd") }),
 	clearQueue: () => session.clearQueue(),
 	// History navigation: the tree of retained branches, and continuing from an earlier entry.
 	tree: () => session.tree(),
@@ -305,7 +340,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 };
 
 /** Operations that must not overlap history navigation (legacy `assertTreeNavigationInactive`). */
-const EXCLUSIVE = new Set(["prompt", "resume", "mode", "closeAsk", "setModel", "resolveEffect", "compact", "command", "mutateQueue", "setThinkingLevel", "cycleThinkingLevel", "shell"]);
+const EXCLUSIVE = new Set(["prompt", "resume", "mode", "closeAsk", "setModel", "resolveEffect", "compact", "command", "mutateQueue", "setThinkingLevel", "cycleThinkingLevel", "shell", "ownerRun"]);
 
 /** One request; the reply goes back the way it came (a socket request to the connection that sent it). */
 async function handle(message: Request, reply: (message: unknown) => void): Promise<void> {

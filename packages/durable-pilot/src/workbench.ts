@@ -4,7 +4,7 @@
 // delivered once as a follow-up), and the resources PI WEB resolves with Pi's own loader (AGENTS.md, APPEND_SYSTEM.md,
 // the skill catalog) as system-prompt sections in Pi's order.
 import { createHash } from "node:crypto";
-import { arr, bool, obj, opt, str } from "@earendil-works/pi-schema";
+import { arr, bool, int, num, obj, oneOf, opt, str, union } from "@earendil-works/pi-schema";
 import type { Context } from "@earendil-works/chord/context";
 import { type Conversation, type JsonObject, defineExtension, defineTool, type EntryRecord, GenerationTask, type Harness, hook, type ToolRegistration } from "@earendil-works/pi-durable";
 import { defineDoc, defineTask } from "./store-schema.ts";
@@ -172,7 +172,7 @@ const alignmentTools: ToolRegistration[] = [
 				const doc = await tx.doc(WorkingModeDoc, api.conversationId);
 				const wasPending = afkPending(doc.selected, doc.aligned);
 				doc.aligned = true;
-				return { text: alignmentReachedText(wasPending), alignment: doc.selected.alignment };
+				return { text: alignmentReachedText(wasPending, doc.selected), alignment: doc.selected.alignment };
 			}, c);
 			return { output: text(result.text), details: { alignment: result.alignment, agreement: args.agreement } };
 		},
@@ -202,13 +202,19 @@ const ID_MAX = 128;
 const TEXT_MAX = 1_000;
 const DETAIL_MAX = 4_000;
 const CONTEXT_MAX = 4_000;
+const ANSWER_MAX = 4_000;
+const LABEL_MAX = 40;
+const KINDS = ["choice", "boolean", "text", "number", "date"] as const;
 
 type Option = { value: string; label: string; detail?: string; recommended?: boolean };
 type ShowIf = { question: string; values: string[] };
-type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean; showIf?: ShowIf };
-export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; questions: Question[] };
+type Typed = { kind?: (typeof KINDS)[number]; default?: boolean | number | string; labels?: string[]; multiline?: boolean; minLength?: number; maxLength?: number; minimum?: number; maximum?: number; integer?: boolean };
+type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean; showIf?: ShowIf } & Typed;
+/** `contextEdited`: the user's edit in a partial send supplied the current context (absent when cleared), as PI WEB's; an agent revision that sets context ends it. */
+export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; contextEdited?: true; approval?: true; questions: Question[] };
 type Outcome = JsonObject & { askId: string; reason: string };
-type Closed = { outcome: Outcome; operationId?: string; delivered: boolean };
+/** `record`: what a final close after one-by-one sends shows in the transcript (the whole set); the model reads `outcome`'s text. */
+type Closed = { outcome: Outcome; record?: Outcome; operationId?: string; delivered: boolean };
 export type Attention = { id: string; reason: string };
 
 type QuestionsState = {
@@ -216,6 +222,8 @@ type QuestionsState = {
 	/** Ask by the tool task that posted or revised it, so a rerun after a restart finds its own result. */
 	byTask: Record<string, string>;
 	closed: Record<string, Closed>;
+	/** Each set's question ids in the order its post and revisions first listed them, so PI WEB numbers its whole record in set order. */
+	order?: Record<string, string[]>;
 	attention: Attention | null;
 	/** Latest attention request (or ask) a notification went out for: reconnect never re-notifies. */
 	notified: string[];
@@ -250,9 +258,9 @@ function stripNumbering(value: string): string {
 	return stripped.trim() === "" ? value : stripped;
 }
 
-/** PI WEB `pendingAskStore.ts` validation of a question set (ids, duplicates, limits, required prose). */
-function validateQuestions(questions: readonly Question[]): Question[] {
-	if (questions.length === 0) throw new AskError("An ask must contain at least one question");
+/** PI WEB `pendingAskStore.ts` validation of a question set (ids, duplicates, limits, required prose); only an approval set may have none. */
+export function validateQuestions(questions: readonly Question[], approval?: true): Question[] {
+	if (questions.length === 0 && approval !== true) throw new AskError("An ask must contain at least one question");
 	if (questions.length > QUESTION_LIMIT) throw new AskError(`An ask must not contain more than ${QUESTION_LIMIT} questions`);
 	const earlier = new Map<string, Question>();
 	return questions.map((question) => {
@@ -266,9 +274,12 @@ function validateQuestions(questions: readonly Question[]): Question[] {
 			const value = requireId(option.value, `option value of question ${id}`);
 			if (values.has(value)) throw new AskError(`Duplicate option value ${value} in question ${id}`);
 			values.add(value);
+			const label = requireText(option.label, `label of option ${value} in question ${id}`);
+			// The panel adds its own Custom choice; an agent's second one could never be picked as Custom.
+			if (/^custom$|\(custom\)$/iu.test(label.trim())) throw new AskError(`Option ${value} is labelled Custom; a Custom choice is always added, so drop this option`);
 			return {
 				value,
-				label: requireText(option.label, `label of option ${value} in question ${id}`),
+				label,
 				...(option.detail === undefined ? {} : { detail: requireText(option.detail, `detail of option ${value} in question ${id}`) }),
 				...(option.recommended === true ? { recommended: true } : {}),
 			};
@@ -279,23 +290,93 @@ function validateQuestions(questions: readonly Question[]): Question[] {
 			...(question.detail === undefined ? {} : { detail: requireText(question.detail, `detail of question ${id}`, DETAIL_MAX) }),
 			options,
 			...(question.multiple === true ? { multiple: true } : {}),
+			...validateTyped(question, id),
 			...(showIf === undefined ? {} : { showIf }),
 		};
 	});
 }
 
-/** PI WEB `validateShowIf`: a condition names an earlier question of the set and only option values it offers. */
+/** PI WEB `askValueError`: why a value does not fit a typed question, or undefined. The host checks only defaults. */
+function valueError(question: Typed, value: unknown): string | undefined {
+	switch (question.kind) {
+		case "boolean":
+			return typeof value === "boolean" ? undefined : "must be true or false";
+		case "text":
+			if (typeof value !== "string") return "must be text";
+			if (value.trim() === "") return "must not be blank";
+			// A one-line field cannot show or edit a line break, yet would send it.
+			if (question.multiline !== true && /[\r\n]/u.test(value)) return "must be one line";
+			if (value.length > (question.maxLength ?? ANSWER_MAX)) return `must be at most ${question.maxLength ?? ANSWER_MAX} characters`;
+			return question.minLength !== undefined && value.length < question.minLength ? `must be at least ${question.minLength} characters` : undefined;
+		case "number":
+			if (typeof value !== "number" || !Number.isFinite(value)) return "must be a number";
+			if (question.integer === true && !Number.isInteger(value)) return "must be a whole number";
+			if (question.minimum !== undefined && value < question.minimum) return `must be at least ${question.minimum}`;
+			return question.maximum !== undefined && value > question.maximum ? `must be at most ${question.maximum}` : undefined;
+		case "date":
+			return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().startsWith(value) ? undefined : "must be a date as YYYY-MM-DD";
+		default:
+			return undefined;
+	}
+}
+
+/** PI WEB `validateTyped`: a typed question's kind and the fields that kind takes; other fields are dropped. */
+function validateTyped(question: Question, id: string): Typed {
+	const kind = question.kind ?? "choice";
+	const { labels } = question;
+	if (labels !== undefined && kind !== "boolean") throw new AskError(`labels of question ${id} need kind boolean, not ${kind}`);
+	if (kind === "choice") return {};
+	if (!KINDS.includes(kind)) throw new AskError(`Question ${id} has unknown kind ${kind}`);
+	if (question.options.length > 0 || question.multiple === true) throw new AskError(`Question ${id} of kind ${kind} takes no options or multiple`);
+	const { minLength, maxLength, minimum, maximum } = question;
+	const typed: Typed = kind === "text"
+		? { kind, ...(question.multiline === true ? { multiline: true } : {}), ...(minLength === undefined ? {} : { minLength }), ...(maxLength === undefined ? {} : { maxLength }) }
+		: kind === "number"
+			? { kind, ...(minimum === undefined ? {} : { minimum }), ...(maximum === undefined ? {} : { maximum }), ...(question.integer === true ? { integer: true } : {}) }
+			: kind === "boolean" && labels !== undefined ? { kind, labels: validateLabels(labels, id) } : { kind };
+	for (const [field, bound] of Object.entries({ minLength: typed.minLength, maxLength: typed.maxLength })) {
+		if (bound !== undefined && !(Number.isInteger(bound) && bound >= 0 && bound <= ANSWER_MAX)) throw new AskError(`${field} of question ${id} must be a whole number from 0 to ${ANSWER_MAX}`);
+	}
+	for (const [field, bound] of Object.entries({ minimum: typed.minimum, maximum: typed.maximum })) {
+		if (bound !== undefined && !Number.isFinite(bound)) throw new AskError(`${field} of question ${id} must be a number`);
+	}
+	if ((typed.minLength ?? 0) > (typed.maxLength ?? Infinity)) throw new AskError(`minLength of question ${id} exceeds its maxLength`);
+	if ((typed.minimum ?? -Infinity) > (typed.maximum ?? Infinity)) throw new AskError(`minimum of question ${id} exceeds its maximum`);
+	if (question.default === undefined) return typed;
+	const error = valueError(typed, question.default);
+	if (error !== undefined) throw new AskError(`default of question ${id} ${error}`);
+	return { ...typed, default: question.default };
+}
+
+/** PI WEB `validateLabels`: a boolean question's [true, false] labels, each one non-blank line of at most LABEL_MAX characters. */
+function validateLabels(labels: unknown, id: string): string[] {
+	const fits = (label: unknown) => typeof label === "string" && label.trim() !== "" && !/[\r\n]/u.test(label) && label.length <= LABEL_MAX;
+	if (!Array.isArray(labels) || labels.length !== 2 || !labels.every(fits)) throw new AskError(`labels of question ${id} must be two one-line texts of at most ${LABEL_MAX} characters, [true, false]`);
+	return [...labels] as string[];
+}
+
+/** PI WEB `validateShowIf`: a condition names an earlier choice question of the set and only option values it offers ("true"/"false" for a boolean one). */
 function validateShowIf(showIf: ShowIf, id: string, earlier: ReadonlyMap<string, Question>): ShowIf {
 	const parent = earlier.get(showIf.question);
 	if (parent === undefined) throw new AskError(`showIf of question ${id} must name an earlier question of this set, not ${showIf.question}`);
 	if (showIf.values.length === 0) throw new AskError(`showIf of question ${id} must list at least one option value of question ${parent.id}`);
-	const offered = new Set(parent.options.map((option) => option.value));
+	const kind = parent.kind ?? "choice";
+	if (kind !== "choice" && kind !== "boolean") throw new AskError(`showIf of question ${id}: question ${parent.id} is a ${kind} question; showIf needs a choice or boolean question`);
+	const offered = new Set(kind === "boolean" ? ["true", "false"] : parent.options.map((option) => option.value));
 	const unknown = showIf.values.find((value) => !offered.has(value));
+	if (unknown !== undefined && kind === "boolean") throw new AskError(`showIf of question ${id}: question ${parent.id} is a boolean; use "true" or "false", not ${unknown}`);
 	if (unknown !== undefined) throw new AskError(`showIf of question ${id}: question ${parent.id} has no option ${unknown}`);
 	return { question: parent.id, values: [...new Set(showIf.values)] };
 }
 
-function validateContext(value: string | undefined): string | undefined {
+/** PI WEB `validateApproval`: true asks the user to approve the context (an Approve button); false or absent asks none. */
+export function validateApproval(value: unknown): true | undefined {
+	if (value === undefined || value === false) return undefined;
+	if (value === true) return true;
+	throw new AskError("approval must be true or false");
+}
+
+export function validateContext(value: string | undefined): string | undefined {
 	if (value === undefined || value.trim() === "") return undefined;
 	if (value.length > CONTEXT_MAX) throw new AskError("context exceeds its length limit");
 	return value;
@@ -314,7 +395,7 @@ const OptionParams = obj({
 	value: str({ maxLength: ID_MAX, description: "Stable machine value reported back." }),
 	label: str({ maxLength: TEXT_MAX, description: "Short label." }),
 	detail: opt(str({ maxLength: TEXT_MAX, description: "Its consequence." })),
-	recommended: opt(bool({ description: "Mark your recommendation." })),
+	recommended: opt(bool({ description: "Mark your recommendation; it starts selected." })),
 }, { open: true });
 const QuestionParams = obj({
 	id: str({ maxLength: ID_MAX, description: "Answer key, unique in this call." }),
@@ -324,17 +405,27 @@ const QuestionParams = obj({
 	multiple: opt(bool({ description: "Allow several options. Default: one answer per question." })),
 	showIf: opt(obj({
 		question: str({ maxLength: ID_MAX, description: "id of an earlier question in this set." }),
-		values: arr(str({ maxLength: ID_MAX }), { minItems: 1, maxItems: OPTION_LIMIT, description: "Its option values that show this question." }),
+		values: arr(str({ maxLength: ID_MAX }), { minItems: 1, maxItems: OPTION_LIMIT, description: "Its option values (boolean: \"true\"/\"false\") that show this question." }),
 	}, { open: true, description: "Show only while that question has one of these picked; hidden, it is skipped." })),
+	kind: opt(oneOf(KINDS, { description: "Default choice; other kinds take no options." })),
+	default: opt(union([bool(), num(), str({ maxLength: ANSWER_MAX })], { description: "Prefilled answer; date as YYYY-MM-DD." })),
+	labels: opt(arr(str({ maxLength: TEXT_MAX }), { maxItems: OPTION_LIMIT, description: "boolean: [true, false] labels, default [\"Yes\", \"No\"]." })),
+	multiline: opt(bool({ description: "text: a textarea." })),
+	minLength: opt(int({ minimum: 0, maximum: ANSWER_MAX })),
+	maxLength: opt(int({ minimum: 0, maximum: ANSWER_MAX })),
+	minimum: opt(num()),
+	maximum: opt(num()),
+	integer: opt(bool()),
 }, { open: true });
 const AskParams = obj({
 	context: opt(str({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown above the questions: what they all share." })),
-	questions: opt(arr(QuestionParams, { minItems: 1, maxItems: QUESTION_LIMIT, description: "Required for a new set, in reading order." })),
+	questions: opt(arr(QuestionParams, { maxItems: QUESTION_LIMIT, description: "Required for a new set, in reading order; questions may be omitted when approval is true." })),
 	update: opt(str({ maxLength: ID_MAX, description: "askId of an open set to revise; given context/questions replace the old ones." })),
 	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to drop. Send nothing else." })),
+	approval: opt(bool({ description: "true for a plan or text in context to approve, instead of a separate confirm question: adds an Approve button." })),
 }, { open: true });
 
-const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Give a follow-up question `showIf` instead of writing 'If X:' in its text. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them and end your turn if nothing does. Do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
+const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Unlike ask_human (Telegram, blocks until he replies), it stays in this Chat. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Give a follow-up question `showIf` instead of writing 'If X:' in its text. When one decision covers several independent items, use `multiple` with one option per item. `context` and `detail` may hold Markdown images (https or workspace file path) and ```mermaid diagrams, including pie and xychart-beta charts, each shown folded until opened; to approve a code or text change, show it as ```diff or ```worddiff (old text, a `>>>` line, new text). The user can edit the context; treat an edited context as his version, so put text for approval (a plan, draft or message) there. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them and end your turn if nothing does. Do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
 
 const ATTENTION_DESCRIPTION = "Mark this Chat as needing the user until they look, and return immediately. Use when you need them but have no decision to ask: finished work to review, a login or credential, a manual check, or being blocked. Decisions go to ask_user. Not for routine progress or after every turn.";
 
@@ -346,7 +437,8 @@ export type WorkbenchSignal =
 
 type Signal = (signal: WorkbenchSignal) => void;
 
-function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean; showIf?: ShowIf }): Question {
+export function toQuestion(param: { id: string; question: string; detail?: string; options?: Option[]; multiple?: boolean; showIf?: ShowIf } & Typed): Question {
+	const { kind, labels, multiline, minLength, maxLength, minimum, maximum, integer } = param;
 	return {
 		id: param.id,
 		question: param.question,
@@ -354,6 +446,16 @@ function toQuestion(param: { id: string; question: string; detail?: string; opti
 		options: (param.options ?? []).map((o) => ({ value: o.value, label: o.label, ...(o.detail === undefined ? {} : { detail: o.detail }), ...(o.recommended === true ? { recommended: true } : {}) })),
 		...(param.multiple === undefined ? {} : { multiple: param.multiple }),
 		...(param.showIf === undefined ? {} : { showIf: { question: param.showIf.question, values: [...param.showIf.values] } }),
+		// Typed-kind fields copy as given; validateQuestions keeps those the kind takes.
+		...(kind === undefined ? {} : { kind }),
+		...(param.default === undefined ? {} : { default: param.default }),
+		...(labels === undefined ? {} : { labels: Array.isArray(labels) ? [...labels] : labels }),
+		...(multiline === undefined ? {} : { multiline }),
+		...(minLength === undefined ? {} : { minLength }),
+		...(maxLength === undefined ? {} : { maxLength }),
+		...(minimum === undefined ? {} : { minimum }),
+		...(maximum === undefined ? {} : { maximum }),
+		...(integer === undefined ? {} : { integer }),
 	};
 }
 
@@ -371,7 +473,7 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				const doc = await tx.doc(QuestionsDoc, api.conversationId);
 				const task = String(api.taskId);
 				if (args.withdraw !== undefined) {
-					if (args.update !== undefined || args.context !== undefined || questions !== undefined) throw new AskError("withdraw takes no other parameters");
+					if (args.update !== undefined || args.context !== undefined || questions !== undefined || args.approval !== undefined) throw new AskError("withdraw takes no other parameters");
 					const open = doc.open[args.withdraw];
 					const closed = doc.closed[args.withdraw];
 					if (open === undefined) {
@@ -386,32 +488,49 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				const known = doc.byTask[task];
 				if (known !== undefined && doc.open[known] !== undefined) return { kind: args.update === undefined ? ("opened" as const) : ("updated" as const), ask: doc.open[known]!, rerun: true };
 				const context = validateContext(args.context);
+				const approval = validateApproval(args.approval);
 				if (args.update !== undefined) {
 					const current = doc.open[args.update];
 					if (current === undefined) throw new AskError(`No open question set ${args.update}: it was already answered, withdrawn, or closed.`);
+					const kept = args.approval === undefined ? current.approval : approval;
+					// A revision that drops approval from a set without questions must give some.
+					if (questions === undefined && current.questions.length === 0 && kept === undefined) throw new AskError("An ask must contain at least one question");
 					const updated: PendingAsk = {
 						...current,
 						updatedAt: now,
 						revision: stableId(chatId, task, "revision"),
 						turnsSinceUpdate: 0,
 						...(context === undefined ? {} : { context }),
-						questions: questions === undefined ? current.questions : validateQuestions(questions),
+						questions: questions === undefined ? (JSON.parse(JSON.stringify(current.questions)) as Question[]) : validateQuestions(questions, kept),
 					};
+					// The agent supplied this context, even when its text equals the user's earlier edit.
+					if (context !== undefined) delete updated.contextEdited;
+					// Given, approval replaces the set's; absent, it stays.
+					if (args.approval !== undefined) {
+						if (approval === undefined) delete updated.approval;
+						else updated.approval = approval;
+					}
 					doc.open[args.update] = updated;
 					doc.byTask[task] = args.update;
+					// A revision lists only the questions still open: earlier ones keep their place, new ones follow.
+					// Assigned whole: the commit keeps writes made through `doc`, not through an object assigned into it.
+					// A set with no order (posted before the host kept one, or open in a fork) gets none: its final close reads history.
+					const order = doc.order?.[args.update];
+					if (order !== undefined) doc.order = { ...doc.order, [args.update]: [...order, ...updated.questions.map((q) => q.id).filter((id) => !order.includes(id))] };
 					return { kind: "updated" as const, ask: updated, rerun: false };
 				}
 				if (context === undefined)
 					throw new AskError("context is required: explain the finding, the options, their consequences, and your recommendation so the user can answer without reading the Chat");
-				if (questions === undefined) throw new AskError("questions are required for a new question set");
-				const validated = validateQuestions(questions);
+				if (questions === undefined && approval === undefined) throw new AskError("questions are required for a new question set");
+				const validated = validateQuestions(questions ?? [], approval);
 				// A fresh ID whose 3-character question-ref prefix no open set shares, as PI WEB's store picks one.
 				const taken = new Set(Object.keys(doc.open).map((id) => id.slice(0, 3)));
 				let askId = stableId(chatId, task);
 				for (let n = 1; n < 20 && taken.has(askId.slice(0, 3)); n++) askId = stableId(chatId, task, String(n));
-				const opened: PendingAsk = { askId, askedAt: now, updatedAt: now, revision: stableId(chatId, task, "revision"), turnsSinceUpdate: 0, context, questions: validated };
+				const opened: PendingAsk = { askId, askedAt: now, updatedAt: now, revision: stableId(chatId, task, "revision"), turnsSinceUpdate: 0, context, ...(approval === undefined ? {} : { approval }), questions: validated };
 				doc.open[askId] = opened;
 				doc.byTask[task] = askId;
+				doc.order = { ...doc.order, [askId]: validated.map((q) => q.id) };
 				return { kind: "opened" as const, ask: opened, rerun: false };
 			}, c);
 			if (result.kind === "withdrawn") {
@@ -422,12 +541,14 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 			const posted = JSON.parse(JSON.stringify(result.ask)) as PendingAsk;
 			if (!result.rerun) {
 				signal({ type: "ask.opened", ask: posted });
-				if (result.kind === "opened") signal({ type: "attention", kind: "ask", id: posted.askId, detail: posted.questions[0]?.question ?? "Needs an answer" });
+				if (result.kind === "opened") signal({ type: "attention", kind: "ask", id: posted.askId, detail: posted.questions[0]?.question ?? (posted.approval === true ? "Needs approval" : "Needs an answer") });
 			}
 			const count = posted.questions.length;
+			// The user reads only the panel while answering, so context written into the Chat is lost or read twice.
+			const chatRule = "The user reads only the set while answering: say in one line that questions were posted; do not restate, summarize or add context in the Chat.";
 			const message = result.kind === "updated"
-				? `Updated open question set ${posted.askId} (${refs(posted)}). The answers still arrive later as a follow-up message.`
-				: `Posted ${count} question${count === 1 ? "" : "s"} to the user as question chips above their composer, ask ${posted.askId} (${refs(posted)}). You are not paused: keep working on whatever does not depend on the answers, and end your turn if nothing does. The answers arrive later as a follow-up message. Do not repost these questions; revise them with update or drop them with withdraw.`;
+				? `Updated open question set ${posted.askId} (${refs(posted)}). The answers still arrive later as a follow-up message. ${chatRule}`
+				: `Posted ${count === 0 ? "the context for approval" : `${count} question${count === 1 ? "" : "s"}`} to the user as question chips above their composer, ask ${posted.askId}${count === 0 ? "" : ` (${refs(posted)})`}. You are not paused: keep working on whatever does not depend on the answers, and end your turn if nothing does. The answers arrive later as a follow-up message. Do not repost these questions; revise them with update or drop them with withdraw. ${chatRule}`;
 			return { output: text(message), details: { ask: posted, sessionId: chatId } };
 		},
 	});
@@ -478,14 +599,15 @@ function unansweredOutcome(ask: PendingAsk, reason: string, closedAt: string): O
  * Delivers one closed set's answers to the model, once, as a follow-up keyed by the ask. `askId` is the key of its
  * `closed` record: the ask ID, or `<askId>@<revision>` for a partial send (one ask may send several before it closes).
  */
-export const AnswerDelivery = defineTask<{ askId: string; content: string }, { phase: "deliver" }, null>({
+export const AnswerDelivery = defineTask<{ askId: string; content: AnswerContent }, { phase: "deliver" }, null>({
 	name: "workbench.answer-delivery",
 	version: 1,
 	initial: () => ({ phase: "deliver" }),
 	phases: {
 		deliver: async (task, runtime, c) => {
 			const doc = await runtime.snapshot(QuestionsDoc, runtime.conversationId, c);
-			const outcome = doc?.closed[task.input.askId]?.outcome;
+			const closed = doc?.closed[task.input.askId];
+			const outcome = closed?.record ?? closed?.outcome;
 			const main = (await runtime.conversation(runtime.conversationId, c))!;
 			await main.submit(
 				{
@@ -507,6 +629,10 @@ export const AnswerDelivery = defineTask<{ askId: string; content: string }, { p
 	abort: (_task, runtime, c) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c),
 });
 
+/** The follow-up's content: the answers text alone, or (with answer images) a text block then the images, as `UserInput`. */
+type AnswerContent = string | ({ type: "text"; text: string } | ImageBlock)[];
+type ImageBlock = { type: "image"; data: string; mimeType: string };
+
 export type CloseAsk = {
 	readonly askId: string;
 	/** The revision the user answered; a cancel names none. */
@@ -515,37 +641,99 @@ export type CloseAsk = {
 	/** PI WEB's validated outcome and the model-facing text it rendered from it (with its open-asks reminder). */
 	readonly outcome: Closed["outcome"];
 	readonly content: string;
+	/** Images the user attached to the answers, delivered after the text. */
+	readonly images?: readonly ImageBlock[];
 };
 
-/** The set still open after a partial send (PI WEB `outcome.partial`, with the revision it continues under), else undefined. */
+/**
+ * The set still open after a partial send (PI WEB `outcome.partial`, with the revision it continues under), else
+ * undefined. A context the user edited in that send (`editedContext`) becomes the set's context, as PI WEB's store does.
+ */
 export function remainingAsk(ask: PendingAsk, outcome: unknown): PendingAsk | undefined {
-	const { partial, revision, questions } = (outcome ?? {}) as { partial?: unknown; revision?: unknown; questions?: { question?: { id?: string } }[] };
+	const { partial, revision, questions, editedContext } = (outcome ?? {}) as { partial?: unknown; revision?: unknown; questions?: { question?: { id?: string } }[]; editedContext?: unknown };
 	if (partial !== true || typeof revision !== "string") return undefined;
 	const sent = new Set((questions ?? []).map((record) => record.question?.id));
-	return { ...ask, revision, questions: ask.questions.filter((question) => !sent.has(question.id)) };
+	const rest: PendingAsk = { ...ask, revision, questions: ask.questions.filter((question) => !sent.has(question.id)) };
+	// A blank edit means the user cleared the context; the open questions must not show the agent's original again.
+	if (editedContext === "") delete rest.context;
+	else if (typeof editedContext === "string" && editedContext.trim() !== "" && editedContext.length <= CONTEXT_MAX) rest.context = editedContext;
+	else return rest;
+	rest.contextEdited = true;
+	return rest;
 }
 
 /**
  * Close an open set with the user's answers (or a cancel) and commit its delivery in the same transaction, before the
  * browser hears it closed. A retry under the same operation ID returns the same outcome; any other close of a set that
  * is gone, or of an older revision, is stale. A partial send (PI WEB's `outcome.partial`) removes only the questions it
- * answered and keeps the set open under the revision the outcome names (`ask`).
+ * answered and keeps the set open under the revision the outcome names (`ask`). `recoveredOrder`: the set's question order
+ * read from history, for a set this document holds no order for (posted before it kept one, or open in a fork).
  */
-export async function closeAsk(conversation: Conversation, request: CloseAsk): Promise<{ result: "closed"; outcome: Closed["outcome"]; retried: boolean; ask?: PendingAsk } | { result: "stale" }> {
+export async function closeAsk(conversation: Conversation, request: CloseAsk, recoveredOrder?: readonly string[]): Promise<{ result: "closed"; outcome: Closed["outcome"]; retried: boolean; ask?: PendingAsk; earlier?: Closed["outcome"][]; order?: string[] } | { result: "stale" }> {
 	return conversation.commit(async (tx) => {
 		const doc = await tx.doc(QuestionsDoc, conversation.id);
+		// The set's earlier one-by-one sends, oldest first (insertion order), and its question order, so PI WEB can show the whole set's record when it closes.
+		const earlierSends = (): { earlier: Closed["outcome"][]; order: string[] } => JSON.parse(JSON.stringify({
+			earlier: Object.values(doc.closed).map((c) => c.outcome).filter((o) => o.askId === request.askId && (o as { partial?: unknown }).partial === true),
+			order: doc.order?.[request.askId] ?? recoveredOrder ?? [],
+		}));
 		const closed = Object.values(doc.closed).find((c) => c.operationId === request.operationId && c.outcome.askId === request.askId);
-		if (closed !== undefined) return { result: "closed" as const, outcome: JSON.parse(JSON.stringify(closed.outcome)), retried: true };
+		if (closed !== undefined) {
+			const final = (closed.outcome as { partial?: unknown }).partial !== true;
+			return { result: "closed" as const, outcome: JSON.parse(JSON.stringify(closed.outcome)), retried: true, ...(final ? earlierSends() : {}) };
+		}
 		const open = doc.open[request.askId];
 		if (open === undefined || (request.revision !== undefined && request.revision !== open.revision)) return { result: "stale" as const };
 		const ask = remainingAsk(open, request.outcome);
+		const whole = ask === undefined ? earlierSends() : undefined;
 		const key = ask === undefined ? request.askId : `${request.askId}@${ask.revision}`;
 		if (ask === undefined) delete doc.open[request.askId];
 		else doc.open[request.askId] = ask;
-		doc.closed[key] = { outcome: request.outcome, operationId: request.operationId, delivered: false };
-		await tx.createTask(AnswerDelivery, { askId: key, content: request.content }, { ownership: { kind: "conversation" }, background: true });
-		return { result: "closed" as const, outcome: request.outcome, retried: false, ...(ask === undefined ? {} : { ask: JSON.parse(JSON.stringify(ask)) as PendingAsk }) };
+		const record = whole === undefined ? undefined : wholeRecord(request.outcome, whole.earlier, whole.order, open.contextEdited === true);
+		doc.closed[key] = { outcome: request.outcome, ...(record === undefined ? {} : { record }), operationId: request.operationId, delivered: false };
+		await tx.createTask(AnswerDelivery, { askId: key, content: request.images === undefined || request.images.length === 0 ? request.content : [{ type: "text" as const, text: request.content }, ...request.images.map((i) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }))] }, { ownership: { kind: "conversation" }, background: true });
+		return { result: "closed" as const, outcome: request.outcome, retried: false, ...(ask === undefined ? whole : { ask: JSON.parse(JSON.stringify(ask)) as PendingAsk }) };
 	}, context);
+}
+
+type AnswerRecord = { question: { id: string }; answered: boolean; skipped?: boolean };
+/** PI WEB `AskUserOutcomeImage`: an attached image's metadata (its bytes are in that send's answers entry). */
+type RecordImage = JsonObject & { target: { kind: string; id?: string } };
+/** PI WEB's ASK_USER_RECORD_QUESTION_LIMIT: the most question records one record carries. */
+const RECORD_MAX = 100;
+
+/**
+ * PI WEB `withEarlierAnswers` (pendingAskStore.ts), which builds the submitting browser's record from the same inputs: a
+ * final close's record with the questions its earlier one-by-one sends closed, in `order`, counts and summary over all of
+ * them, and every send's image metadata; the user's last edit still labels the context while `contextEdited`. Undefined when there were no earlier sends.
+ */
+export function wholeRecord(outcome: Outcome, earlier: readonly Outcome[], order: readonly string[], contextEdited: boolean): Outcome | undefined {
+	// Each earlier send's rows carry its revision, as its images do, so a reused question id still matches its own photos.
+	const all = earlier.flatMap((each) => (each.questions as unknown as AnswerRecord[]).map((row) => (typeof each.revision === "string" ? { ...row, revision: each.revision } : row)));
+	if (all.length === 0 || outcome.partial === true) return undefined;
+	const own = outcome.questions as unknown as AnswerRecord[];
+	// shortcut: past the record limit the oldest earlier answers drop out (each send's own card keeps them; the summary counts them), page the record if sets get revised that often.
+	const cut = Math.max(0, all.length + own.length - RECORD_MAX);
+	const hidden = all.slice(0, cut);
+	const rank = (record: AnswerRecord) => { const index = order.indexOf(record.question.id); return index < 0 ? order.length : index; };
+	const questions = [...all.slice(cut), ...own].sort((a, b) => rank(a) - rank(b));
+	const answered = (list: AnswerRecord[]) => list.filter((record) => record.answered).length;
+	const skipped = (list: AnswerRecord[]) => list.filter((record) => record.skipped === true);
+	const unansweredIds = questions.filter((record) => !record.answered && record.skipped !== true).map((record) => record.question.id);
+	const skippedIds = skipped(questions).map((record) => record.question.id);
+	const lastEdit = [...earlier].reverse().find((each) => each.editedContext !== undefined)?.editedContext;
+	const editedContext = outcome.editedContext ?? (contextEdited ? lastEdit : undefined);
+	// Each earlier send's images keep its revision, since `[PIC_n]` restarts per send and its bytes are in that send's entry.
+	// Keyed by (revision, id): a reused id's hidden send keeps its photos out, so the record stays under PI WEB's image limit.
+	const sendKey = (revision: unknown, id: unknown) => JSON.stringify([typeof revision === "string" ? revision : null, String(id)]);
+	const shown = new Set(questions.map((record) => sendKey((record as { revision?: unknown }).revision, record.question.id)));
+	const sentImages = (each: Outcome, revision?: unknown) => ((each.images ?? []) as RecordImage[]).map((image) => (typeof revision === "string" ? { ...image, revision } : image));
+	const images = [...earlier.flatMap((each) => sentImages(each, each.revision)), ...sentImages(outcome)].filter((image) => image.target.kind === "note" || shown.has(sendKey(image.revision, image.target.id)));
+	const summary = `Answered ${String(answered(questions) + answered(hidden))} of ${String(questions.length + hidden.length - skippedIds.length - skipped(hidden).length)}; `
+		+ (unansweredIds.length === 0 ? "none left unanswered" : `unanswered: ${unansweredIds.join(", ")}`)
+		+ (skippedIds.length === 0 ? "" : `; skipped (condition not met): ${skippedIds.join(", ")}`)
+		+ (hidden.length === 0 ? "" : `; ${String(hidden.length)} earlier ${hidden.length === 1 ? "answer" : "answers"} not shown`);
+	return { ...outcome, ...(editedContext === undefined ? {} : { editedContext }), ...(images.length === 0 ? {} : { images }), questions: questions as unknown as JsonObject[], answeredCount: answered(questions), unansweredIds, summary };
 }
 
 export async function questionsState(harness: Harness, conversation: Conversation): Promise<QuestionsState> {

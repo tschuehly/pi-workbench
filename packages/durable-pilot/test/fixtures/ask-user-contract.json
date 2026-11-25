@@ -1,0 +1,246 @@
+{
+  "note": "ask_user question rules contract, kept byte-identical in two repos: pi-workbench packages/durable-pilot/test/fixtures/ask-user-contract.json (host copy: src/workbench.ts toQuestion/validateQuestions) and pi-web src/server/sessions/askUserContract.fixture.json (copies: askUserTool.ts toQuestion/toOption, pendingAskStore.ts validateQuestion/validateOption/validateTyped). A field added to one copy must be added to the others and here. approval: [given, kept] pairs (null: absent), a rejected value, and withoutQuestions (accepted as expected with approval true, rejected with error without it).",
+  "valid": {
+    "input": {
+      "context": "**Context** shared by every question.",
+      "questions": [
+        {
+          "id": "db",
+          "question": "1. Which database?",
+          "detail": "Markdown detail of db.",
+          "kind": "choice",
+          "options": [
+            { "value": "pg", "label": "Postgres", "detail": "One store.", "recommended": true, "unknownOptionField": "dropped" },
+            { "value": "sqlite", "label": "SQLite", "recommended": false }
+          ],
+          "multiple": false,
+          "unknownQuestionField": "dropped"
+        },
+        {
+          "id": "features",
+          "question": "Which features?",
+          "detail": "Pick any.",
+          "options": [
+            { "value": "a", "label": "A" },
+            { "value": "b", "label": "B" }
+          ],
+          "multiple": true,
+          "showIf": { "question": "db", "values": ["pg", "sqlite", "pg"], "unknownShowIfField": "dropped" }
+        },
+        {
+          "id": "why",
+          "question": "3) Why?",
+          "detail": "Free text only."
+        },
+        { "id": "backup", "question": "Enable backup?", "detail": "A switch.", "kind": "boolean", "default": true, "labels": ["Back up", "Skip"], "options": [], "minimum": 1 },
+        {
+          "id": "folder",
+          "question": "Backup folder?",
+          "detail": "Text.",
+          "kind": "text",
+          "default": "~/Backups",
+          "multiline": true,
+          "minLength": 1,
+          "maxLength": 200,
+          "integer": true,
+          "showIf": { "question": "backup", "values": ["true", "true"] }
+        },
+        { "id": "count", "question": "How many copies?", "detail": "A number.", "kind": "number", "default": 7, "minimum": 1, "maximum": 10, "integer": true, "multiple": false, "maxLength": 3 },
+        { "id": "due", "question": "Due when?", "detail": "A date.", "kind": "date", "default": "2026-12-01", "multiline": true },
+        { "id": "plain", "question": "Note?", "detail": "One line.", "kind": "text", "multiline": false, "showIf": { "question": "backup", "values": ["false"] } }
+      ]
+    },
+    "expected": {
+      "context": "**Context** shared by every question.",
+      "questions": [
+        {
+          "id": "db",
+          "question": "Which database?",
+          "detail": "Markdown detail of db.",
+          "options": [
+            { "value": "pg", "label": "Postgres", "detail": "One store.", "recommended": true },
+            { "value": "sqlite", "label": "SQLite" }
+          ]
+        },
+        {
+          "id": "features",
+          "question": "Which features?",
+          "detail": "Pick any.",
+          "options": [
+            { "value": "a", "label": "A" },
+            { "value": "b", "label": "B" }
+          ],
+          "multiple": true,
+          "showIf": { "question": "db", "values": ["pg", "sqlite"] }
+        },
+        {
+          "id": "why",
+          "question": "Why?",
+          "detail": "Free text only.",
+          "options": []
+        },
+        { "id": "backup", "question": "Enable backup?", "detail": "A switch.", "kind": "boolean", "default": true, "labels": ["Back up", "Skip"], "options": [] },
+        {
+          "id": "folder",
+          "question": "Backup folder?",
+          "detail": "Text.",
+          "kind": "text",
+          "default": "~/Backups",
+          "multiline": true,
+          "minLength": 1,
+          "maxLength": 200,
+          "options": [],
+          "showIf": { "question": "backup", "values": ["true"] }
+        },
+        { "id": "count", "question": "How many copies?", "detail": "A number.", "kind": "number", "default": 7, "minimum": 1, "maximum": 10, "integer": true, "options": [] },
+        { "id": "due", "question": "Due when?", "detail": "A date.", "kind": "date", "default": "2026-12-01", "options": [] },
+        { "id": "plain", "question": "Note?", "detail": "One line.", "kind": "text", "options": [], "showIf": { "question": "backup", "values": ["false"] } }
+      ]
+    }
+  },
+  "approval": {
+    "accepted": [[true, true], [false, null], [null, null]],
+    "invalid": { "value": "yes", "error": "approval must be true or false" },
+    "withoutQuestions": { "name": "approval-only set without questions", "questions": [], "expected": [], "error": "An ask must contain at least one question" }
+  },
+  "invalid": [
+    {
+      "name": "showIf names a later question",
+      "questions": [
+        { "id": "first", "question": "First?", "detail": "d", "showIf": { "question": "second", "values": ["y"] } },
+        { "id": "second", "question": "Second?", "detail": "d", "options": [{ "value": "y", "label": "Yes" }] }
+      ],
+      "error": "showIf of question first must name an earlier question of this set, not second"
+    },
+    {
+      "name": "showIf names a value the earlier question does not offer",
+      "questions": [
+        { "id": "first", "question": "First?", "detail": "d", "options": [{ "value": "y", "label": "Yes" }] },
+        { "id": "second", "question": "Second?", "detail": "d", "showIf": { "question": "first", "values": ["n"] } }
+      ],
+      "error": "showIf of question second: question first has no option n"
+    },
+    {
+      "name": "duplicate option value",
+      "questions": [
+        { "id": "q", "question": "Pick?", "detail": "d", "options": [{ "value": "a", "label": "A" }, { "value": "a", "label": "Again" }] }
+      ],
+      "error": "Duplicate option value a in question q"
+    },
+    {
+      "name": "duplicate question id",
+      "questions": [
+        { "id": "same", "question": "First?", "detail": "d" },
+        { "id": "same", "question": "Second?", "detail": "d" }
+      ],
+      "error": "Duplicate question id same"
+    },
+    {
+      "name": "blank question text",
+      "questions": [
+        { "id": "q", "question": "  ", "detail": "d" }
+      ],
+      "error": "text of question q must not be empty"
+    },
+    {
+      "name": "options on a boolean question",
+      "questions": [
+        { "id": "flag", "question": "On?", "detail": "d", "kind": "boolean", "options": [{ "value": "y", "label": "Yes" }] }
+      ],
+      "error": "Question flag of kind boolean takes no options or multiple"
+    },
+    {
+      "name": "a default out of range",
+      "questions": [
+        { "id": "n", "question": "How many?", "detail": "d", "kind": "number", "maximum": 10, "default": 11 }
+      ],
+      "error": "default of question n must be at most 10"
+    },
+    {
+      "name": "a bad date default",
+      "questions": [
+        { "id": "d", "question": "When?", "detail": "d", "kind": "date", "default": "2026-13-01" }
+      ],
+      "error": "default of question d must be a date as YYYY-MM-DD"
+    },
+    {
+      "name": "a blank text default",
+      "questions": [
+        { "id": "t", "question": "Note?", "detail": "t", "kind": "text", "default": "   " }
+      ],
+      "error": "default of question t must not be blank"
+    },
+    {
+      "name": "a multiline default on a one-line text question",
+      "questions": [
+        { "id": "t", "question": "Note?", "detail": "t", "kind": "text", "default": "first\nsecond" }
+      ],
+      "error": "default of question t must be one line"
+    },
+    {
+      "name": "showIf on a text question",
+      "questions": [
+        { "id": "t", "question": "Name?", "detail": "d", "kind": "text" },
+        { "id": "b", "question": "More?", "detail": "d", "showIf": { "question": "t", "values": ["x"] } }
+      ],
+      "error": "showIf of question b: question t is a text question; showIf needs a choice or boolean question"
+    },
+    {
+      "name": "showIf on a boolean question with a value other than true or false",
+      "questions": [
+        { "id": "flag", "question": "On?", "detail": "d", "kind": "boolean" },
+        { "id": "b", "question": "More?", "detail": "d", "showIf": { "question": "flag", "values": ["yes"] } }
+      ],
+      "error": "showIf of question b: question flag is a boolean; use \"true\" or \"false\", not yes"
+    },
+    {
+      "name": "labels on a choice question",
+      "questions": [
+        { "id": "pick", "question": "Pick?", "detail": "d", "options": [{ "value": "y", "label": "Yes" }], "labels": ["Ship it", "Hold"] }
+      ],
+      "error": "labels of question pick need kind boolean, not choice"
+    },
+    {
+      "name": "labels on a text question",
+      "questions": [
+        { "id": "t", "question": "Name?", "detail": "d", "kind": "text", "labels": ["Ship it", "Hold"] }
+      ],
+      "error": "labels of question t need kind boolean, not text"
+    },
+    {
+      "name": "three labels on a boolean question",
+      "questions": [
+        { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship it", "Hold", "Maybe"] }
+      ],
+      "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
+    },
+    {
+      "name": "a blank label",
+      "questions": [
+        { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship it", " "] }
+      ],
+      "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
+    },
+    {
+      "name": "a label over 40 characters",
+      "questions": [
+        { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship it now, all of it, to every customer", "Hold"] }
+      ],
+      "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
+    },
+    {
+      "name": "a two-line label",
+      "questions": [
+        { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship\nit", "Hold"] }
+      ],
+      "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
+    },
+    {
+      "name": "option labelled Custom",
+      "questions": [
+        { "id": "q", "question": "Pick?", "detail": "d", "options": [{ "value": "keep", "label": "Keep it" }, { "value": "fix", "label": " Correct it (custom) " }] }
+      ],
+      "error": "Option fix is labelled Custom; a Custom choice is always added, so drop this option"
+    }
+  ]
+}

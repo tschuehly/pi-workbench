@@ -15,7 +15,7 @@ import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
 import { submitWake } from "../src/cheap-wake.ts";
 import { AgentDoc, LiveDoc } from "@earendil-works/pi-durable";
 import { context } from "../src/host.ts";
-import { questionsState, workingModeSnapshot } from "../src/workbench.ts";
+import { QuestionsDoc, questionsState, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
 import { fakeAgentDir } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
@@ -168,7 +168,7 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	const host = new ChatHost(store, cwd);
 	const ready = await host.ready;
 	assert.equal(ready.protocol, 2);
-	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "viewed"], "the gated PI WEB operations this host supports");
+	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "viewed", "ask-images", "owner-run"], "the gated PI WEB operations this host supports");
 	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt","description":"Read and write","foreground":true}' });
 	await host.until((e) => e.type === "agent.end", "the run to end");
 	const types = host.events.map((e) => e.type);
@@ -186,6 +186,9 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	assert.ok(transcript.messages.every((m) => typeof m.entryId === "string"));
 	assert.equal(transcript.partial, null);
 	assert.equal(transcript.status.isStreaming, false);
+	// Every turn request asks for the long prompt-cache tier.
+	const retention = readLog<{ cacheRetention?: string }>(join(store, "requests.log")).map((line) => line.cacheRetention);
+	assert.deepEqual(retention, ["long", "long"]);
 	await host.close();
 	assert.equal(integrity(store), "ok");
 });
@@ -340,7 +343,7 @@ type Status = Transcript["status"] & {
 	attentionRequest?: { id: string; reason: string };
 	unresolvedEffects?: { id: string; toolName: string; arguments: string }[];
 };
-type Logged = { label: string; workingMode?: number; sections?: string[] };
+type Logged = { label: string; workingMode?: number; sections?: string[]; images?: number };
 const logged = (store: string) => readLog<Logged>(join(store, "requests.log"));
 const mode = (status: Status) => JSON.parse(status.extensionStatuses?.["working-mode"] ?? "null") as { phase: string; selected: Record<string, string>; applied: Record<string, string> | null; aligned: boolean };
 const idle = (host: ChatHost, count: number) => host.until(() => host.events.filter((e) => e.type === "agent.end").length >= count, `${count} runs`);
@@ -1348,6 +1351,78 @@ test("crash row question: an open set survives a kill, a stale answer is refused
 	assert.equal(integrity(store), "ok");
 });
 
+/** A 1×1 PNG. */
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("ask_user images: closeAsk with images delivers the answers text plus the images once, refuses a non-image, and the answers record keeps them", async () => {
+	const { store, cwd } = family("ask-images");
+	const host = new ChatHost(store, cwd);
+	assert.ok((await host.ready).capabilities?.includes("ask-images"), "the host reports answer images");
+	await host.call("prompt", { operationId: "op-ask", text: `call:ask_user ${JSON.stringify(ASK)}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string; revision: string } };
+	await idle(host, 1);
+	const close = (operationId: string, images: unknown) =>
+		host.call<{ result: string; retried?: boolean }>("closeAsk", { askId: opened.ask.askId, revision: opened.ask.revision, operationId, outcome: answered(opened.ask.askId), content: "Answers: target staging", images });
+	await assert.rejects(close("op-bad", [{ data: PNG, mimeType: "image/svg+xml" }]), /images must be image blocks of image\/jpeg, image\/png, image\/gif or image\/webp/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png" }]), /images must be image blocks/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "not base64" }]), /image 1 is not valid base64/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "iVBORw0" }]), /image 1 is not valid base64/, "a length that is no multiple of 4");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "" }]), /image 1 is not valid base64/, "empty data");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "AB==" }]), /image 1 is not valid base64/, "'==' with nonzero padding bits");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "AAB=" }]), /image 1 is not valid base64/, "'=' with nonzero padding bits");
+	await assert.rejects(close("op-bad", Array.from({ length: 17 }, () => ({ mimeType: "image/png", data: PNG }))), /at most 16 images/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "A".repeat(Math.ceil(10 * 1024 * 1024 / 3) * 4 + 4) }]), /image 1 is larger than 10 MiB/);
+	assert.deepEqual((await host.call<Status>("status")).pendingAsks?.length, 1, "a refused close leaves the set open");
+	const image = { type: "image", data: PNG, mimeType: "image/png" };
+	assert.equal((await close("op-i1", [image])).result, "closed");
+	const retried = await close("op-i1", [image]);
+	assert.deepEqual([retried.result, retried.retried], ["closed", true], "a retry returns the outcome");
+	await idle(host, 2);
+	const deliveries = logged(store).filter((l) => l.label.startsWith("Answers: target staging"));
+	assert.equal(deliveries.length, 1, "the answers reached the model exactly once");
+	assert.equal(deliveries[0]?.images, 1, "with their image");
+	const record = (await host.call<Transcript>("transcript")).messages.find((m) => (m as { customType?: string }).customType === "pi-web.ask.answers");
+	assert.deepEqual(record?.content, [{ type: "text", text: "Answers: target staging" }, image], "the answers record keeps the text and the image");
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+test("ask_user approval-only: a set with approval: true may omit questions or give none; without approval it is refused; its approval reaches the model first", async () => {
+	const { store, cwd } = family("ask-approval-only");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-none", text: `call:ask_user ${JSON.stringify({ context: ASK.context })}` });
+	await idle(host, 1);
+	const refused = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+	assert.equal(refused?.isError, true);
+	assert.match(textOf(refused?.content), /questions are required for a new question set/);
+	await host.call("prompt", { operationId: "op-empty", text: `call:ask_user ${JSON.stringify({ context: ASK.context, questions: [] })}` });
+	await idle(host, 2);
+	assert.equal((await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1)?.isError, true, "an empty list without approval is refused");
+	let runs = 2;
+	for (const [n, call] of [{ context: ASK.context, approval: true }, { context: ASK.context, approval: true, questions: [] }].entries()) {
+		await host.call("prompt", { operationId: `op-approve-${String(n)}`, text: `call:ask_user ${JSON.stringify(call)}` });
+		await idle(host, ++runs);
+		const posted = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+		assert.equal(posted?.isError, false, textOf(posted?.content));
+		assert.match(textOf(posted?.content), /^Posted the context for approval to the user/);
+		const opened = host.events.filter((e) => e.type === "ask.opened")[n] as UiEvent & { ask: { askId: string; revision: string; approval?: true; questions: unknown[] } };
+		assert.deepEqual([opened.ask.approval, opened.ask.questions], [true, []]);
+		await host.call("prompt", { operationId: `op-drop-${String(n)}`, text: `call:ask_user ${JSON.stringify({ update: opened.ask.askId, approval: false })}` });
+		await idle(host, ++runs);
+		const dropped = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+		assert.match(textOf(dropped?.content), /An ask must contain at least one question/, "dropping approval from a set without questions is refused");
+		const outcome = { askId: opened.ask.askId, reason: "submitted", askedAt: "", closedAt: "", context: ASK.context, approved: true, questions: [], answeredCount: 0, unansweredIds: [], summary: "Answered 0 of 0; none left unanswered" };
+		const content = `The user approved the context.\nThe user submitted answers to question set ${opened.ask.askId}.\n\nAnswered 0 of 0; none left unanswered`;
+		assert.equal((await host.call<{ result: string }>("closeAsk", { askId: opened.ask.askId, revision: opened.ask.revision, operationId: `op-close-${String(n)}`, outcome, content })).result, "closed");
+		await idle(host, ++runs);
+	}
+	assert.equal(logged(store).filter((l) => l.label.startsWith("The user approved the context.")).length, 2, "each approval reached the model, approval first");
+	assert.equal((await host.call<Status>("status")).pendingAsks, undefined);
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
 test("ask_user: a question without detail is refused; a 4000-character detail is accepted and numbering is stripped; the description puts all explanation in the set", async () => {
 	const { store, cwd } = family("ask-detail");
 	const host = new ChatHost(store, cwd);
@@ -1367,6 +1442,145 @@ test("ask_user: a question without detail is refused; a 4000-character detail is
 	const { workbenchExtension } = await import("../src/workbench.ts");
 	const description = (workbenchExtension({ chatId: "x", signal: () => {} }) as unknown as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "ask_user")!.description;
 	assert.match(description, /The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted\./);
+});
+
+test("ask_user partial send: the final close returns the set's question order, as first posted and revised, so the whole record is numbered in set order", async () => {
+	const { store, cwd } = family("ask-order");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const when = { id: "when", question: "When?", detail: "The deploy window.", options: [{ value: "now", label: "Now" }] };
+	await host.call("prompt", { operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [ASK.questions[0]!, when] })}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string; revision: string } };
+	await idle(host, 1);
+	const { askId, revision } = opened.ask;
+	// The second question goes first, one by one; the agent then revises the set, which lists only target and a new question.
+	const partial = { askId, reason: "submitted", askedAt: "", closedAt: "", questions: [{ question: when, answered: true, values: ["now"] }], answeredCount: 1, unansweredIds: [], summary: "Answered 1; still open: target", partial: true, revision: "r2" };
+	assert.equal((await host.call<{ result: string }>("closeAsk", { askId, revision, operationId: "op-p1", outcome: partial, content: "Answer: when now" })).result, "closed");
+	await idle(host, 2);
+	const extra = { id: "extra", question: "Anything else?", detail: "Optional.", options: [{ value: "no", label: "No" }] };
+	await host.call("prompt", { operationId: "op-upd", text: `call:ask_user ${JSON.stringify({ update: askId, questions: [ASK.questions[0]!, extra] })}` });
+	await idle(host, 3);
+	const revised = (await host.call<Status>("status")).pendingAsks?.find((a) => a.askId === askId);
+	assert.deepEqual(revised?.questions.map((q) => q.id), ["target", "extra"]);
+	const rest = { askId, reason: "submitted", askedAt: "", closedAt: "", questions: [{ question: ASK.questions[0], answered: true, values: ["prod"] }, { question: extra, answered: true, values: ["no"] }], answeredCount: 2, unansweredIds: [], summary: "Answered 2 of 2; none left unanswered" };
+	const final = await host.call<{ result: string; order?: string[] }>("closeAsk", { askId, revision: revised?.revision, operationId: "op-p2", outcome: rest, content: "Answer: target prod" });
+	assert.equal(final.result, "closed");
+	assert.deepEqual(final.order, ["target", "when", "extra"], "each question where the set first listed it");
+	assert.deepEqual((await host.call<{ order?: string[] }>("closeAsk", { askId, revision: revised?.revision, operationId: "op-p2", outcome: rest, content: "Answer: target prod" })).order, ["target", "when", "extra"], "a retried final close returns it too");
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+test("ask_user partial send: a set with no recorded order (posted before the host kept one) gets it back from history on its final close", async () => {
+	const { h, session, settled } = await quietChat("ask-order-history");
+	try {
+		const when = { id: "when", question: "When?", detail: "The deploy window.", options: [{ value: "now", label: "Now" }] };
+		await session.prompt({ operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [ASK.questions[0]!, when] })}` });
+		await settled(1);
+		// As a host before the order was kept: the document has none for the set.
+		await h.harness.commit(async (tx) => { delete (await tx.doc(QuestionsDoc, h.root.id)).order; }, context);
+		const { askId, revision } = Object.values((await questionsState(h.harness, h.root)).open)[0]!;
+		const partial = { askId, reason: "submitted", askedAt: "", closedAt: "", questions: [{ question: when, answered: true, values: ["now"] }], answeredCount: 1, unansweredIds: [], summary: "Answered 1; still open: target", partial: true, revision: "r2" };
+		assert.equal((await session.closeAsk({ askId, revision, operationId: "op-p1", outcome: partial, content: "Answer: when now" })).result, "closed");
+		const rest = { askId, reason: "submitted", askedAt: "", closedAt: "", questions: [{ question: ASK.questions[0], answered: true, values: ["prod"] }], answeredCount: 1, unansweredIds: [], summary: "Answered 1 of 1; none left unanswered" };
+		// The JSON PI WEB sends (ASK's optional fields are not JSON-typed).
+		const final = await session.closeAsk({ askId, revision: "r2", operationId: "op-p2", outcome: JSON.parse(JSON.stringify(rest)), content: "Answer: target prod" });
+		assert.deepEqual(final.result === "closed" ? final.order : undefined, ["target", "when"], "the order the set was posted in, not send order");
+	} finally {
+		await session.close();
+	}
+});
+
+test("ask_user: the set tracks who supplied its context; the user's edit, kept by a revision without context, ended by one with the same text", async () => {
+	const { h, session, settled } = await quietChat("ask-context-by");
+	try {
+		const when = { id: "when", question: "When?", detail: "The deploy window.", options: [{ value: "now", label: "Now" }] };
+		await session.prompt({ operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [ASK.questions[0]!, when] })}` });
+		await settled(1);
+		const open = async () => Object.values((await questionsState(h.harness, h.root)).open)[0]!;
+		const { askId, revision } = await open();
+		const partial = { askId, reason: "submitted", askedAt: "", closedAt: "", editedContext: "Mine", questions: [{ question: when, answered: true, values: ["now"] }], answeredCount: 1, unansweredIds: [], summary: "Answered 1; still open: target", partial: true, revision: "r2" };
+		await session.closeAsk({ askId, revision, operationId: "op-p1", outcome: partial, content: "Answer: when now" });
+		assert.deepEqual([(await open()).context, (await open()).contextEdited], ["Mine", true]);
+		await session.prompt({ operationId: "op-u1", text: `call:ask_user ${JSON.stringify({ update: askId })}` });
+		await settled(3);
+		assert.equal((await open()).contextEdited, true, "a revision without context keeps the user's");
+		await session.prompt({ operationId: "op-u2", text: `call:ask_user ${JSON.stringify({ update: askId, context: "Mine" })}` });
+		await settled(4);
+		assert.deepEqual([(await open()).context, (await open()).contextEdited], ["Mine", undefined], "the agent's revision, though its text is the user's");
+	} finally {
+		await session.close();
+	}
+});
+
+test("wholeRecord: each one-by-one send's image metadata stays in the whole record under its own answer, tagged with that send's revision; a hidden answer's images drop out", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const record = (id: string) => ({ question: { id, question: `${id}?`, options: [] }, answered: true, values: ["x"] });
+	const image = (id: string | undefined, reference: string): { target: { kind: string; id?: string }; reference: string; mimeType: string } => ({ target: id === undefined ? { kind: "note" } : { kind: "question", id }, reference, mimeType: "image/png" });
+	const send = (ids: string[], revision: string | undefined, images: ReturnType<typeof image>[]) => ({ askId: "a1", reason: "submitted", questions: ids.map(record), answeredCount: ids.length, unansweredIds: [], summary: "s", images, ...(revision === undefined ? {} : { partial: true, revision }) });
+	// A question with id "note" is not the note: targets are objects.
+	const whole = wholeRecord(send(["c"], undefined, [image("c", "[PIC_1]"), image(undefined, "[PIC_2]")]), [send(["a"], "r2", [image("a", "[PIC_1]")]), send(["note"], "r3", [image("note", "[PIC_1]"), image("note", "[PIC_2]")])], ["a", "note", "c"], false) as { images?: unknown[] } | undefined;
+	assert.deepEqual(whole?.images, [
+		{ ...image("a", "[PIC_1]"), revision: "r2" },
+		{ ...image("note", "[PIC_1]"), revision: "r3" },
+		{ ...image("note", "[PIC_2]"), revision: "r3" },
+		image("c", "[PIC_1]"),
+		image(undefined, "[PIC_2]"),
+	]);
+	const many = Array.from({ length: 101 }, (_, i) => send([`q${String(i)}`], `r${String(i)}`, [image(`q${String(i)}`, "[PIC_1]")]));
+	const bounded = wholeRecord(send(["last"], undefined, []), many, [], false) as { images?: { target: { id?: string } }[] } | undefined;
+	assert.deepEqual([bounded?.images?.length, bounded?.images?.[0]?.target.id], [99, "q2"], "the two hidden answers' images drop out");
+});
+
+test("wholeRecord: an earlier send's answer rows carry that send's revision, as its images do, so a reused question id keeps each photo under its own row", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const image = (reference: string) => ({ target: { kind: "question", id: "q" }, reference, mimeType: "image/png" });
+	const send = (wording: string, revision: string | undefined, reference: string) => ({ askId: "a1", reason: "submitted", questions: [{ question: { id: "q", question: wording, options: [] }, answered: true, values: ["x"] }], answeredCount: 1, unansweredIds: [], summary: "s", images: [image(reference)], ...(revision === undefined ? {} : { partial: true, revision }) });
+	const whole = wholeRecord(send("q again?", undefined, "[PIC_B]"), [send("q?", "r2", "[PIC_A]")], ["q"], false) as { questions: { revision?: string }[]; images: { revision?: string; reference: string }[] } | undefined;
+	assert.deepEqual(whole?.questions.map((row) => row.revision), ["r2", undefined], "the earlier row carries r2, the final row none");
+	const photos = (row: { revision?: string }) => whole?.images.filter((i) => i.revision === row.revision).map((i) => i.reference);
+	assert.deepEqual(whole?.questions.map(photos), [["[PIC_A]"], ["[PIC_B]"]], "row 1 shows only A, row 2 only B");
+	// 101 sends reusing one id, 16 photos each: only the kept rows' sends keep their photos, under PI WEB's 1,600-image limit.
+	const sixteen = (send_: ReturnType<typeof send>) => ({ ...send_, images: Array.from({ length: 16 }, (_, i) => image(`[PIC_${String(i + 1)}]`)) });
+	const many = Array.from({ length: 100 }, (_, i) => sixteen(send("q?", `r${String(i)}`, "")));
+	const bounded = wholeRecord(sixteen(send("q?", undefined, "")), many, ["q"], false) as { images: { revision?: string }[] } | undefined;
+	assert.equal(bounded?.images.length, 1600, "the hidden send's 16 photos drop out");
+	assert.ok(bounded?.images.every((i) => i.revision !== "r0"), "none from the hidden send r0");
+});
+
+test("ask_user: approval: true marks the set for an Approve button; a revision without it keeps it, approval: false drops it", async () => {
+	const { h, session, settled } = await quietChat("ask-approval");
+	try {
+		await session.prompt({ operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, approval: true })}` });
+		await settled(1);
+		const open = async () => Object.values((await questionsState(h.harness, h.root)).open)[0]!;
+		const { askId, approval } = await open();
+		assert.equal(approval, true);
+		await session.prompt({ operationId: "op-u1", text: `call:ask_user ${JSON.stringify({ update: askId })}` });
+		await settled(2);
+		assert.equal((await open()).approval, true, "a revision without approval keeps it");
+		await session.prompt({ operationId: "op-u2", text: `call:ask_user ${JSON.stringify({ update: askId, approval: false })}` });
+		await settled(3);
+		assert.equal((await open()).approval, undefined);
+	} finally {
+		await session.close();
+	}
+});
+
+test("ask_user: the result of a new and of an updated set tells the model not to restate, summarize or add context in the Chat", async () => {
+	const { store, cwd } = family("ask-chat-rule");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-new", text: `call:ask_user ${JSON.stringify(ASK)}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string } };
+	await idle(host, 1);
+	await host.call("prompt", { operationId: "op-upd", text: `call:ask_user ${JSON.stringify({ update: opened.ask.askId })}` });
+	await idle(host, 2);
+	const results = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").map((m) => textOf(m.content));
+	assert.match(results[0]!, /^Posted 1 question/);
+	assert.match(results[1]!, /^Updated open question set/);
+	for (const r of results) assert.ok(r.includes("do not restate, summarize or add context in the Chat"), r);
+	await host.close();
 });
 
 test("ask_user showIf: a condition on a later or unknown question or an unoffered option is refused; a valid one is posted; the description asks for it", async () => {
@@ -1396,6 +1610,8 @@ test("ask_user showIf: a condition on a later or unknown question or an unoffere
 	const { workbenchExtension } = await import("../src/workbench.ts");
 	const description = (workbenchExtension({ chatId: "x", signal: () => {} }) as unknown as { tools: { name: string; description: string }[] }).tools.find((t) => t.name === "ask_user")!.description;
 	assert.match(description, /Give a follow-up question `showIf` instead of writing 'If X:' in its text\./);
+	assert.match(description, /The user can edit the context; treat an edited context as his version, so put text for approval \(a plan, draft or message\) there\./);
+	assert.match(description, /Unlike ask_human \(Telegram, blocks until he replies\), it stays in this Chat\./);
 });
 
 test("ask_user partial send: one answer is delivered, the rest stays open at the new revision across a kill, and answering it closes the set", async () => {
@@ -1430,13 +1646,22 @@ test("ask_user partial send: one answer is delivered, the rest stays open at the
 	assert.deepEqual(await send().then((r) => [r.result, r.retried]), ["closed", true], "a retried partial send gets its outcome back");
 	const rest = { ...partial, questions: [{ question: ask.questions[1], answered: true, values: ["now"] }], summary: "Answered 1 of 1; none left unanswered", partial: undefined, revision: undefined };
 	assert.equal((await host.call<{ result: string }>("closeAsk", { askId, revision, operationId: "op-p2", outcome: rest, content: "Answer: when now" })).result, "stale", "the old revision is stale");
-	assert.equal((await host.call<{ result: string }>("closeAsk", { askId, revision: "r2", operationId: "op-p2", outcome: rest, content: "Answer: when now" })).result, "closed");
+	const final = await host.call<{ result: string; earlier?: { questions: { question: { id: string } }[] }[] }>("closeAsk", { askId, revision: "r2", operationId: "op-p2", outcome: rest, content: "Answer: when now" });
+	assert.equal(final.result, "closed");
+	assert.deepEqual(final.earlier?.map((o) => o.questions.map((q) => q.question.id)), [["target"]], "the final close returns the earlier one-by-one send, so the record shows the whole set");
+	const retriedFinal = await host.call<{ earlier?: unknown[] }>("closeAsk", { askId, revision: "r2", operationId: "op-p2", outcome: rest, content: "Answer: when now" });
+	assert.equal(retriedFinal.earlier?.length, 1, "a retried final close returns the earlier sends too");
 	await host.until((e) => e.type === "ask.closed", "the set closed");
 	await host.until((e) => e.type === "agent.end", "the second delivery");
 	assert.equal((await host.call<Status>("status")).pendingAsks, undefined);
 	assert.equal(logged(store).filter((l) => l.label.startsWith("Answer:")).length, 2, "each send reached the model once");
-	const transcript = await host.call<{ messages: { customType?: string }[] }>("transcript");
-	assert.equal(transcript.messages.filter((m) => m.customType === "pi-web.ask.answers").length, 2);
+	const transcript = await host.call<{ messages: { customType?: string; content?: unknown; details?: { questions: { question: { id: string } }[]; summary: string; answeredCount: number } }[] }>("transcript");
+	const records = transcript.messages.filter((m) => m.customType === "pi-web.ask.answers");
+	assert.equal(records.length, 2);
+	// A reload or another device shows the whole set in the last card; the model's message keeps only this send's answer.
+	assert.deepEqual(records[1]!.details?.questions.map((q) => q.question.id), ["target", "when"]);
+	assert.deepEqual([records[1]!.details?.answeredCount, records[1]!.details?.summary], [2, "Answered 2 of 2; none left unanswered"]);
+	assert.equal(textOf(records[1]!.content), "Answer: when now");
 	await host.close();
 	assert.equal(integrity(store), "ok");
 });
@@ -1670,4 +1895,26 @@ test("remainingAsk: a partial send's skipped dependents leave the set with its a
 	const ask = { askId: "a1", askedAt: "", updatedAt: "", revision: "r1", turnsSinceUpdate: 0, questions: [q("location"), q("machine"), q("other")] };
 	const outcome = { partial: true, revision: "r2", questions: [{ question: q("location"), answered: true }, { question: q("machine"), answered: false, skipped: true }] };
 	assert.deepEqual(remainingAsk(ask, outcome)?.questions.map((question) => question.id), ["other"]);
+});
+
+test("remainingAsk: a partial send's edited context becomes the set's context; none keeps the agent's", async () => {
+	const { remainingAsk } = await import("../src/workbench.ts");
+	const q = (id: string) => ({ id, question: `${id}?`, options: [] });
+	const ask = { askId: "a1", askedAt: "", updatedAt: "", revision: "r1", turnsSinceUpdate: 0, context: "Agent's plan", questions: [q("db"), q("cache")] };
+	const outcome = { partial: true, revision: "r2", questions: [{ question: q("db"), answered: true }] };
+	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "My plan" })?.context, "My plan");
+	assert.equal(remainingAsk(ask, outcome)?.context, "Agent's plan");
+	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "" })?.context, undefined, "a cleared context stays cleared");
+});
+
+test("wholeRecord: as PI WEB's withEarlierAnswers, unanswered ids follow the set order, and past the bound the summary counts every answer and names the hidden ones", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const record = (id: string, answered: boolean) => ({ question: { id, question: `${id}?`, options: [] }, answered, values: answered ? ["x"] : [] });
+	const send = (questions: ReturnType<typeof record>[], partial: boolean) => ({ askId: "a1", reason: "submitted", questions, answeredCount: questions.filter((q) => q.answered).length, unansweredIds: [], summary: "s", ...(partial ? { partial: true, revision: "r" } : {}) });
+	// a went first; the agent revised the rest to c, b; both left unanswered.
+	const whole = wholeRecord(send([record("c", false), record("b", false)], false), [send([record("a", true)], true)], ["a", "b", "c"], false) as { questions: { question: { id: string } }[]; unansweredIds: string[]; summary: string } | undefined;
+	assert.deepEqual([whole?.questions.map((q) => q.question.id), whole?.unansweredIds, whole?.summary], [["a", "b", "c"], ["b", "c"], "Answered 1 of 3; unanswered: b, c"]);
+	const many = Array.from({ length: 6 }, (_, s) => send(Array.from({ length: 20 }, (_, i) => record(`s${String(s)}-${String(i)}`, true)), true));
+	const bounded = wholeRecord(send([record("last", true)], false), many, [], false) as { questions: unknown[]; answeredCount: number; summary: string } | undefined;
+	assert.deepEqual([bounded?.questions.length, bounded?.answeredCount, bounded?.summary], [100, 100, "Answered 121 of 121; none left unanswered; 21 earlier answers not shown"]);
 });

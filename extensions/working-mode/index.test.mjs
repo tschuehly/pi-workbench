@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
-import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING, AFK_CLOSE_PROMPT, BACK_PROMPT, openAsks } from "./index.ts";
+import workingMode, { axes, defaults, renderBlock, alignmentReachedText, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING, AFK_CLOSE_PROMPT, BACK_PROMPT, openAsks } from "./index.ts";
 
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,7 +22,8 @@ writeFileSync(join(bin, "pgrep"), "#!/bin/sh\nexit 1\n");
 for (const name of ["pmset", "afplay", "say", "osascript", "pgrep"]) chmodSync(join(bin, name), 0o755);
 process.env.PATH = `${bin}:${process.env.PATH}`;
 
-const cwd = "/tmp/working-mode-test";
+// A fresh private folder: a fixed /tmp path is unwritable inside the write fence and could be a planted link.
+const cwd = mkdtempSync(join(process.env.PI_TMP ?? tmpdir(), "working-mode-test-"));
 const agentDir = `${cwd}/agent`;
 
 // A real Pi session with a scripted model: records every request the model receives.
@@ -429,6 +430,14 @@ test("Test and Challenge require seeing each new check fail", () => {
   for (const value of ["Test", "Challenge"]) assert.match(axes.checking.values[value], /check failing on the unfixed or deliberately broken code, or say why you could not/);
 });
 
+test("Align, Plan and Spec ask through ask_user, or ask_human under Phone Attention", () => {
+  for (const value of ["Align", "Plan", "Spec"]) {
+    const text = axes.alignment.values[value];
+    assert.match(text, /`ask_user`/, value);
+    assert.match(text, /under Phone Attention, (ask )?through `ask_human`/, value);
+  }
+});
+
 test("Challenge names the blind review pair, author swaps, and the Muse fallback", () => {
   const text = axes.checking.values.Challenge;
   assert.match(text, /two background `review` subagents with the same brief, blind to each other/);
@@ -447,6 +456,36 @@ test("every non-starting value has guidance; starting values render none", () =>
       else assert.ok(text && block.includes(text), `${axis}=${value}`);
     }
   }
+});
+
+test("Checking Challenge: after any required confirmation the agent decides reversible in-goal design choices with an advisor, under every Attention; the rest stays Thomas's", () => {
+  const decides = /Once any confirmation your Alignment setting requires is reached, decide a design choice that is reversible and inside the agreed goal yourself with an advisor \(`openai\/gpt-6\.2-sol`, high\) instead of asking Thomas: record the choice, the advice and how to undo it in the Workstream's DECISIONS file, and continue\./;
+  const keeps = /A choice that changes the goal, the scope or a success check, or cannot be undone, stays Thomas's: /;
+  for (const attention of Object.keys(axes.attention.values)) {
+    for (const checking of Object.keys(axes.checking.values)) {
+      const block = renderBlock({ ...defaults, attention, checking }, 1, true);
+      const on = checking === "Challenge";
+      assert.equal(decides.test(block), on, `${attention}+${checking}`);
+      assert.equal(keeps.test(block), on, `${attention}+${checking}`);
+      if (!on) continue;
+      // AFK never contacts Thomas; every other Attention asks him through its own channel.
+      if (attention === "AFK") {
+        assert.match(block, /stays Thomas's: do not contact him: list it for his return, pause only the work it affects and continue independent work\./);
+        assert.doesNotMatch(block, /stays Thomas's: ask him/);
+      } else assert.match(block, /stays Thomas's: ask him wherever your other Working Mode guidance routes questions\./, attention);
+      // Where to ask stays with Attention and Cockpit; the rule names no channel of its own.
+      assert.doesNotMatch(block.slice(block.indexOf("Checking Challenge")), /ask_user|ask_human/, attention);
+    }
+  }
+  const cockpit = renderBlock({ ...defaults, attention: "Focused", checking: "Challenge", orchestration: "Cockpit" }, 1, true);
+  assert.match(cockpit, /Ask every question as a Page Decision/);
+  assert.match(cockpit, /stays Thomas's: ask him wherever your other Working Mode guidance routes questions\./);
+  // While AFK waits for alignment, its preparation asks every foreseeable question; the rule starts with AFK itself.
+  const waiting = { ...defaults, alignment: "Align", attention: "AFK", checking: "Challenge" };
+  assert.doesNotMatch(renderBlock(waiting, 1, false), decides);
+  assert.match(renderBlock(waiting, 1, true), decides);
+  assert.match(alignmentReachedText(true, waiting), decides);
+  assert.doesNotMatch(alignmentReachedText(true, { ...waiting, checking: "Test" }), decides);
 });
 
 test("the terminal picker changes one axis; cancel changes nothing", async () => {
@@ -513,7 +552,7 @@ test("AFK with an Alignment value stays interactive until alignment is reached",
   await s.mode("attention afk");
   const preparing = s.prompt().content;
   assert.match(preparing, /Attention — AFK \(preparing\): AFK has not started/);
-  assert.match(preparing, /five bullets[\s\S]*numbered list of every question[\s\S]*`alignment_reached`/);
+  assert.match(preparing, /Post one `ask_user` set: its context holds the outcome[\s\S]*five bullets[\s\S]*one question for every issue you can foresee[\s\S]*Without `ask_user`[\s\S]*`alignment_reached`/);
   assert.doesNotMatch(preparing, /Do not contact Thomas/);
 
   assert.match(await s.confirm(), /^Alignment recorded\. AFK starts now: .*Do not contact Thomas/);
@@ -524,7 +563,7 @@ test("AFK with an Alignment value stays interactive until alignment is reached",
   assert.equal(s.prompt(), undefined, "unchanged state posts nothing");
 
   await s.mode("alignment plan");
-  assert.match(s.prompt().content, /AFK \(preparing\)[\s\S]*persist the plan/);
+  assert.match(s.prompt().content, /AFK \(preparing\)[\s\S]*file path of the plan you persisted/);
 });
 
 test("AFK with Default Alignment starts immediately", async () => {
@@ -678,4 +717,13 @@ test("AFK asks once for a closing checkpoint when it settles idle after unsaved 
   assert.equal(afk.requests, 4); // start, work + tool result, one nudge run; the nudge run does not nudge again
   assert.equal((await run("afk", "workstreams checkpoint ws-1 --title x")).nudges, 0);
   assert.equal((await run("focused", "git status")).nudges, 0);
+});
+
+test("plans, specs and alignment summaries go to the user as an ask_user set with approval: true, not a confirm question", async () => {
+  const { afkPreparationText } = await import("./rules.mts");
+  const texts = [axes.alignment.values.Align, axes.alignment.values.Plan, axes.alignment.values.Spec, afkPreparationText({ ...defaults, attention: "AFK", alignment: "Align" })];
+  for (const text of texts) {
+    assert.match(text, /`approval: true`/);
+    assert.doesNotMatch(text, /question to confirm/);
+  }
 });

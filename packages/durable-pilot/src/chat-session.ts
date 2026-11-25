@@ -34,7 +34,7 @@ import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./r
 import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
 import { type ContributedResources, PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
-import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
+import { BUSY, commitNavigation, entries, historyOrder, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BACKGROUND_BASH_STATUS, BashJobsDoc, FULL_ACCESS_COMMAND } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
 import { CHAT_MESSAGE_TYPE, CHAT_PAUSED, type ChatListResult, type ChatMessageDelivery, type ChatMessageResult, type Delivery, deliveredBefore, homeWorkstream, type IncomingChatMessage, submitChatMessage, userWorkstreamStore } from "./chat-message.ts";
@@ -107,7 +107,7 @@ export const PROTOCOL = 2;
  * compact-and-continue: the model tool; tool-groups: `tools_enable`; tree: `/tree` and `navigate` (no branch summaries);
  * viewed: `setViewed` (whether a browser shows this Chat; the idle compaction timer acts only then).
  */
-export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "viewed"] as const;
+export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "viewed", "ask-images", "owner-run"] as const;
 
 /** An armed idle timer: when it fires, when the cache entry expires, and the branch and request it measured. */
 type IdleArm = { timer?: ReturnType<typeof setTimeout>; epoch: number; due: number; expiresAt: number; rootId: number; entryId: number };
@@ -225,7 +225,7 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	if (entry.kind === BASH_ENTRY) return [bashMessage(entry)];
 	const message = entry.model?.[0] as Message | undefined;
 	const entryId = String(entry.id);
-	const custom = (customType: string, content: string, details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message?.timestamp ?? 0, entryId: id });
+	const custom = (customType: string, content: string | Record<string, unknown>[], details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message?.timestamp ?? 0, entryId: id });
 	if (entry.kind === CHECKPOINT_ENTRY) {
 		// The legacy extension's `context-checkpoint` message, after the Working Mode block it carried.
 		const { workingMode, text, ...details } = (entry.data ?? {}) as CheckpointData & { workingMode?: WorkingModeDetailsLike };
@@ -251,7 +251,12 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 		return [{ role: "system", source: "compaction", content: `Compacted history:\n\n${summary}`, timestamp: message.timestamp, entryId }];
 	}
 	if (userParts !== parts) return [{ ...message, content: userParts, entryId }];
-	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
+	if (entry.kind === ANSWERS_ENTRY) {
+		// Answers with images keep them after the text, so PI WEB's record can show them; without, the text alone as before.
+		const images = parts.filter((part) => part.type === "image") as unknown as Record<string, unknown>[];
+		const text = images.length === 0 ? textOfContent(message.content) : textOfContent(parts.filter((part) => part.type === "text"));
+		return [custom(ASK_ANSWERS_CUSTOM_TYPE, images.length === 0 ? text : [{ type: "text", text }, ...images], entry.data ?? null)];
+	}
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === AFK_CLOSE_ENTRY) return [custom(AFK_CLOSE_TYPE, textOfContent(message.content), null)];
 	// Delegation: the coalesced completion wake and a requested child update, as the legacy extension's custom messages.
@@ -855,6 +860,14 @@ export class ChatSession {
 		return result;
 	}
 
+	/** PI WEB's Run button: the owner's confirmed command as an unfenced background job of the lead (background-bash.ts). */
+	async ownerRun(request: { operationId: string; command: string; cwd: string }): Promise<{ jobId: string; logPath: string }> {
+		if (this.#chat?.bash === undefined) throw new Error("Run buttons need the Chat's background jobs");
+		const started = await this.#chat.bash.ownerRun(request);
+		await this.#publishStatus();
+		return started;
+	}
+
 	/**
 	 * Context size as Pi's `getContextUsage` reads it: the last answer's usage (not aborted, failed or empty).
 	 * ponytail: ignores the estimate of messages after that answer and compaction; add both with Durable compaction.
@@ -1056,7 +1069,10 @@ export class ChatSession {
 	/** Close an open question set with PI WEB's validated outcome; the answers reach the model once, as a follow-up. */
 	async closeAsk(request: CloseAsk): Promise<Awaited<ReturnType<typeof closeAsk>>> {
 		await this.#resume();
-		const result = await closeAsk(this.#host.root, request);
+		const { harness, root } = this.#host;
+		// A final close of a set with no recorded order (posted before the host kept one, or open in a fork) reads it from history.
+		const known = (request.outcome as { partial?: unknown }).partial === true || (await questionsState(harness, root)).order?.[request.askId] !== undefined;
+		const result = await closeAsk(root, request, known ? undefined : historyOrder(await entries(root), request.askId));
 		// A partial send keeps the set open under a new revision: browsers replace its card, as on an update.
 		if (result.result === "closed" && !result.retried) this.#emit(result.ask === undefined ? { type: "ask.closed", askId: request.askId, reason: result.outcome.reason } : { type: "ask.opened", ask: result.ask });
 		await this.#publishStatus();

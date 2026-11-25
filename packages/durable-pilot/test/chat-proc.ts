@@ -59,7 +59,9 @@ export class ChatHost {
 		live.add(this.child);
 		this.child.stderr!.on("data", (data) => (this.stderr += data.toString()));
 		let markReady!: (ready: NonNullable<Reply["ready"]>) => void;
-		this.ready = new Promise((resolve) => (markReady = resolve));
+		let failReady!: (error: Error) => void;
+		this.ready = new Promise((resolve, reject) => ((markReady = resolve), (failReady = reject)));
+		this.ready.catch(() => {}); // a test that never awaits ready must not crash on a host that exits
 		this.child.on("message", (message: Reply) => {
 			if (message.ready !== undefined) markReady(message.ready);
 			if (message.event !== undefined) {
@@ -74,6 +76,8 @@ export class ChatHost {
 			}
 		});
 		this.exited = new Promise((resolve) => this.child.on("exit", (code) => (live.delete(this.child), resolve(code))));
+		// A host that dies at startup (e.g. an unwritable telemetry folder) fails `await host.ready` instead of hanging the test.
+		void this.exited.then((code) => failReady(new Error(`host exited (code ${code}) before ready: ${this.stderr}`)));
 	}
 
 	call<T = unknown>(method: string, params?: object): Promise<T> {

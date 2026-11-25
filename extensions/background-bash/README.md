@@ -64,15 +64,17 @@ On macOS the runner starts every command under Apple's `/usr/bin/sandbox-exec` w
 sandbox means the command does not start (`Sandbox unavailable: …; the command was not run`).
 
 - **Writable:** the chat's git checkout or linked worktree (its `hooks`, `config`, `info`, other worktrees' metadata,
-  owner records and `.git` link stay read-only), linked worktrees whose owner record names the chat (or, for a chat
-  started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP` (the command's `TMPDIR`
+  owner and creator records and `.git` link stay read-only), linked worktrees whose creation receipt
+  (`pi-creator.json`) names the chat (or, for a chat started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP` (the command's `TMPDIR`
   is a short link to it, `~/.pi-workbench/t/<hash>`, so Unix sockets there stay under the 104-byte limit), and the agents' own caches. Never home, `~/IdeaProjects`, Pi's own state, the shared system temp
   folders (unfenced Pi loads compiled extensions from there) or Thomas's caches (`~/Library/Caches`, `~/.cache`,
   `~/.gradle`, `~/.m2`, `~/.npm`, `~/Library/pnpm`): unfenced tools load code from them, e.g. Python's `.pyc` files.
 - **Agent caches:** `~/.pi-workbench/sandbox-caches`, through `GRADLE_USER_HOME` (with Thomas's jars read-only via
   `GRADLE_RO_DEP_CACHE`), `MAVEN_USER_HOME` and `-Dmaven.repo.local`, `npm_config_cache`, `pnpm_config_store_dir` and
   `PLAYWRIGHT_BROWSERS_PATH`, `pnpm_config_cache_dir`, `XDG_CACHE_HOME`, `PYTHONPYCACHEPREFIX`, `GOCACHE` and
-  `CLANG_MODULE_CACHE_PATH`; a tool without such a setting just does not cache inside the fence. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
+  `CLANG_MODULE_CACHE_PATH`, plus `XDG_RUNTIME_DIR` (`~/.pi-workbench/sandbox-runtime`, one 0700 folder the runner
+  makes and checks, where pnpm 12 keeps its store operation locks instead of the unwritable `/tmp`; fenced commands
+  write its contents but cannot replace it or change its mode); a tool without such a setting just does not cache inside the fence. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
   downloads its other dependencies again.
 - **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,
   lock and keep files, and `objects/info/alternates` is locked (it would let the owner's next gc drop the history);
@@ -83,7 +85,12 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Host operations** (`host-ops.mjs`): shims first on the fenced PATH forward `workstreams` (no `@file` arguments) and
   `wt switch --create <branch> [--base <ref>]` to the job's runner, which runs them outside the fence with its own
   environment; the worktree is created with git in the main checkout under `~/IdeaProjects`, and the runner writes its
-  owner record.
+  cleanup owner record (`pi-owner.json`) and its creation receipt (`pi-creator.json`: the creating chat and only the
+  Workstream whose scratch folder it started in). Only the receipt grants access: the cleanup record accumulates owners
+  (`mac-storage-workspaces --record-owner`), so it would let a chat adopt a worktree it did not create.
+  Inside the fence the real `wt` runs only `list`, `switch` and `config` (global options in exact forms only), so no
+  `wt remove`, `merge`, `step prune` or alias half-empties a worktree; Thomas removes worktrees, or a Chat with full
+  access does (the withdrawn removal host operation could be steered outside the fence).
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
   a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
 - A fenced command that starts Pi or this runner again runs under the outer fence (`alreadyFenced`).
