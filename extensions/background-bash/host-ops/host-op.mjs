@@ -42,8 +42,9 @@ if (name === "wt") {
     process.stderr.write("wt switch --clobber: is not available inside the sandbox\n");
     process.exit(2);
   }
-  // A short-option group (-yc) could hide --create or --clobber from the checks above.
-  const group = command === "switch" ? opts.find((a) => /^-[^-]./.test(a)) : undefined;
+  // A short-option group (-yc) could hide --create or --clobber from the checks above. After -x, -b or -C the rest is
+  // that option's value (-xpwd runs pwd), never more options.
+  const group = command === "switch" ? opts.find((a) => /^-[^-xbC]./.test(a)) : undefined;
   if (group !== undefined) {
     process.stderr.write(`wt switch ${group}: is not available inside the sandbox; write each short option separately\n`);
     process.exit(2);

@@ -266,6 +266,9 @@ test("wt shim: grouped short options, a repeated --no-hooks, options after `--`,
       assert.match(refused.stderr, /write each short option separately/);
     }
   });
+  await t.test("a value attached to -x is no group: both spellings run", () => {
+    for (const args of [["switch", "topic", "-xpwd"], ["switch", "topic", "-x", "pwd"]]) assert.equal(wt(args).stdout, `REAL_WT_RAN switch --no-hooks ${args.slice(1).join(" ")}\n`, args.join(" "));
+  });
   await t.test("--no-hooks goes in once", () => {
     assert.equal(wt(["switch", "--no-hooks", "other"]).stdout, "REAL_WT_RAN switch --no-hooks other\n");
   });
