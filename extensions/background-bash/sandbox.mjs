@@ -3,7 +3,7 @@
 // environment, never from files the command can write. No usable sandbox means the command does not start.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
@@ -15,6 +15,13 @@ const PRIVATE = ["Desktop", "Documents", "Downloads", "Pictures", "Library/Conta
 // Homebrew's bootsnap, jars, browsers). Fenced commands get their own, pointed at through the environment (Thomas,
 // 24 Nov); a tool without such a setting just does not cache inside the fence.
 const AGENT_CACHES = ".pi-workbench/sandbox-caches";
+// pnpm 12 keeps its store operation locks in XDG_RUNTIME_DIR when only this user can write it, else in /tmp, which no
+// fence grants. One folder for every fenced job (they all lock the shared agent store), outside the agent caches so no
+// fenced command can replace it or change its mode: only its contents are granted.
+const RUNTIME = ".pi-workbench/sandbox-runtime";
+// shortcut: a job can plant a file where pnpm's lock folder goes and break later fenced installs, like it can break
+// the shared agent store itself; delete the entry to recover. Upgrade to per-job store and runtime if this happens.
+
 // Seeded once from Thomas's copy as an APFS clone (no extra disk until changed), so a fenced Playwright does not
 // download the same browsers again; later changes never flow back. Only direct children of the agent caches folder,
 // which no fenced command can rename or replace (a grant's own folder), so no planted symlink redirects the copy.
@@ -130,7 +137,8 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
   if (typeof piTmp === "string" && piTmp !== "" && grantable(real(piTmp))) write.push(real(piTmp));
   // One Workstream's own folder, directly under scratch/, never a path an ID could lead elsewhere.
   if (typeof scratch === "string" && scratch !== "" && dirname(real(scratch)) === scratchRoot && grantable(real(scratch))) write.push(real(scratch));
-  write.push(join(home, AGENT_CACHES));
+  write.push(join(home, AGENT_CACHES), join(home, RUNTIME));
+  locked.push(join(home, RUNTIME));
   return { write, read, reopen, locked, history, hidden: PRIVATE.map((p) => join(home, p)) };
 }
 
@@ -241,10 +249,12 @@ function shortTmp(home, piTmp) {
 export function fencedEnv(env, home, grantedTmp) {
   const caches = join(real(home), AGENT_CACHES);
   mkdirSync(caches, { recursive: true, mode: 0o700 });
+  const runtime = join(real(home), RUNTIME);
   for (const [from, to] of SEEDS) seed(join(real(home), from), join(caches, to), real(home));
   const gradleCaches = join(real(home), ".gradle", "caches");
+  const { XDG_RUNTIME_DIR: _inherited, ...rest } = env;
   return {
-    ...env,
+    ...rest,
     // shortcut: no PI_TMP grant leaves TMPDIR unwritable (temp files fail visibly); every Pi-started command has one.
     ...(grantedTmp === undefined ? {} : { TMPDIR: `${shortTmp(real(home), grantedTmp)}/` }),
     GRADLE_USER_HOME: join(caches, "gradle"),
@@ -260,7 +270,18 @@ export function fencedEnv(env, home, grantedTmp) {
     GOCACHE: join(caches, "go-build"),
     // clang (and Swift) keep compiled modules in the per-user cache folder, which no fence grants.
     CLANG_MODULE_CACHE_PATH: join(caches, "clang-modules"),
+    ...(privateDir(runtime) ? { XDG_RUNTIME_DIR: runtime } : {}),
   };
+}
+
+/** Made and checked here, outside the fence: a real folder of this user, mode 0700, or false (then pnpm 12 fails visibly). */
+function privateDir(dir) {
+  try { mkdirSync(dir, { mode: 0o700 }); } catch (error) { if (error.code !== "EEXIST") return false; }
+  const stat = lstatSync(dir);
+  if (!stat.isDirectory() || stat.uid !== process.getuid()) return false;
+  // Fenced commands cannot chmod it (`locked` in grants), so a wrong mode predates the fence: the runner resets it.
+  if ((stat.mode & 0o777) !== 0o700) chmodSync(dir, 0o700);
+  return true;
 }
 
 /**
