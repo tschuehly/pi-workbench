@@ -278,6 +278,10 @@ export function alreadyFenced() {
   } catch (error) { return error.code === "EPERM"; }
 }
 
+/** Every place PI WEB puts a socket: its data dir, and the host-folder and sessiond-socket overrides (pi-web sessiond.ts). */
+export const piWebSockets = (env, home) => [env.PI_WEB_DATA_DIR, env.PI_WEB_DURABLE_HOST_DIR, env.PI_WEB_SESSIOND_SOCKET, join(home, ".pi-web-durable")]
+  .filter((d) => typeof d === "string" && d !== "").map(real);
+
 /**
  * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`, with the `owners` whose worktrees it may
  * write. Throws when no proven sandbox is
@@ -301,10 +305,9 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const cwd = real(job.cwd);
   const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
   const owners = [job.sessionId, started].filter((id) => typeof id === "string" && id !== "");
-  const dataDirs = [env.PI_WEB_DATA_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
   const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];
   const rules = grants({ cwd: job.cwd, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
-  const net = { ports, sockets: [...dataDirs, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
+  const net = { ports, sockets: [...piWebSockets(env, home), join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
   return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };
 }

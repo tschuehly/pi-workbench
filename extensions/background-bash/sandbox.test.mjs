@@ -8,7 +8,7 @@ import { dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, grants, ownedWorktrees, workstreamId } from "./sandbox.mjs";
+import { alreadyFenced, grants, ownedWorktrees, piWebSockets, workstreamId } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -290,6 +290,7 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
   // A short socket path (the 104-byte limit): a stand-in PI WEB data folder in the system temp folder.
   const dataDir = mkdtempSync(join(tmpdir(), "pw-"));
   mkdirSync(join(dataDir, "hosts"));
+  mkdirSync(join(dataDir, "elsewhere"));
   const otherOps = join(userInfo().homedir, ".pi-workbench", "sandbox", "ops", `test-${process.pid}.sock`);
   mkdirSync(dirname(otherOps), { recursive: true });
   try {
@@ -298,14 +299,27 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
     await listen(otherOps);
     const free = await listen(0);
     const nc = (target) => `nc ${target} </dev/null 2>/dev/null | grep -q hello && echo REACHED || echo REFUSED`;
+    // PI_WEB_DURABLE_HOST_DIR and PI_WEB_SESSIOND_SOCKET put host and daemon sockets outside the data dir.
+    await listen(join(dataDir, "elsewhere", "h.sock"));
+    await listen(join(dataDir, "sd.sock"));
     const job = await run([nc(`-w2 127.0.0.1 ${web.address().port}`), nc(`-U -w2 "${join(dataDir, "hosts", "h.sock")}"`), nc(`-U -w2 "${otherOps}"`), nc(`-w2 127.0.0.1 ${free.address().port}`)].join("; "), { env: { PI_WEB_PORT: String(web.address().port), PI_WEB_DATA_DIR: dataDir } });
     assert.equal(job.state, "complete", job.error);
     assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "REFUSED", "REACHED"], "only the unrelated port answers");
+    // The overrides alone, with no PI_WEB_DATA_DIR naming their parent: still refused.
+    const elsewhere = join(dataDir, "elsewhere", "h.sock");
+    const overridden = await run([nc(`-U -w2 "${elsewhere}"`), nc(`-U -w2 "${join(dataDir, "sd.sock")}"`)].join("; "), { env: { PI_WEB_DURABLE_HOST_DIR: dirname(elsewhere), PI_WEB_SESSIOND_SOCKET: join(dataDir, "sd.sock") } });
+    assert.equal(overridden.state, "complete", overridden.error);
+    assert.deepEqual(readFileSync(overridden.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED"], "the overridden host folder and sessiond socket");
   } finally {
     for (const server of servers) server.close();
     rmSync(otherOps, { force: true });
     rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test("the socket deny rule covers PI WEB's data dir, its host-folder and sessiond-socket overrides, and the default", () => {
+  assert.deepEqual(piWebSockets({ PI_WEB_DATA_DIR: "/x/data", PI_WEB_DURABLE_HOST_DIR: "/x/hosts", PI_WEB_SESSIOND_SOCKET: "/x/sd.sock" }, "/x/home"), ["/x/data", "/x/hosts", "/x/sd.sock", "/x/home/.pi-web-durable"]);
+  assert.deepEqual(piWebSockets({ PI_WEB_DURABLE_HOST_DIR: "" }, "/x/home"), ["/x/home/.pi-web-durable"]);
 });
 
 test("signals reach only the command's own processes: no SIGUSR1 opens an unfenced Node debugger", { skip }, async () => {

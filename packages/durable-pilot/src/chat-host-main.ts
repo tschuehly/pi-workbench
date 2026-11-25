@@ -59,6 +59,7 @@ const { values } = parseArgs({
 		socket: { type: "string" },
 		"end-jobs": { type: "boolean" },
 		"read-transcript": { type: "boolean" },
+		"full-access-nonce": { type: "string" },
 	},
 });
 if (values["end-jobs"] === true) {
@@ -69,6 +70,8 @@ if (values["end-jobs"] === true) {
 }
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
 const socketPath = values.socket;
+/** One-shot: PI WEB's upgrade restart launched this host to carry `/full-access`; the first resume consumes it. */
+let fullAccessNonce = (values["full-access-nonce"]?.length ?? 0) >= 16 ? values["full-access-nonce"] : undefined;
 if (socketPath === undefined && process.send === undefined) throw new Error("chat-host-main must be started with an IPC channel or --socket");
 if (socketPath !== undefined) {
 	// Only the owner may reach the host: its folder admits nobody else (the socket itself is 0600 too).
@@ -286,8 +289,12 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	// The host after an Upgrade now: restored work resumes at once (recovery as after any restart), not paused.
 	resume: (params) => {
 		if (params.reason !== "upgrade-restart") throw new Error("resume needs reason upgrade-restart");
-		// Full access carried over from the old host: only PI WEB, the owner-only socket's peer, can say so.
-		return session.resume("upgrade-restart", params.fullAccess === true);
+		// Full access carried over from the old host: only the first resume, repeating the nonce PI WEB put in this
+		// host's launch arguments for its upgrade restart; any other client (or a later resume) leaves it off.
+		const granted = fullAccessNonce !== undefined && params.fullAccess === fullAccessNonce;
+		fullAccessNonce = undefined;
+		if (params.fullAccess !== undefined && !granted) console.error("resume: fullAccess refused (not this launch's upgrade nonce, or not the first resume)");
+		return session.resume("upgrade-restart", granted);
 	},
 };
 
