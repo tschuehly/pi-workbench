@@ -745,6 +745,25 @@ test("ask_user: the set tracks who supplied its context; the user's edit, kept b
 	}
 });
 
+test("ask_user: approval: true marks the set for an Approve button; a revision without it keeps it, approval: false drops it", async () => {
+	const { h, session, settled } = await quietChat("ask-approval");
+	try {
+		await session.prompt({ operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, approval: true })}` });
+		await settled(1);
+		const open = async () => Object.values((await questionsState(h.harness, h.root)).open)[0]!;
+		const { askId, approval } = await open();
+		assert.equal(approval, true);
+		await session.prompt({ operationId: "op-u1", text: `call:ask_user ${JSON.stringify({ update: askId })}` });
+		await settled(2);
+		assert.equal((await open()).approval, true, "a revision without approval keeps it");
+		await session.prompt({ operationId: "op-u2", text: `call:ask_user ${JSON.stringify({ update: askId, approval: false })}` });
+		await settled(3);
+		assert.equal((await open()).approval, undefined);
+	} finally {
+		await session.close();
+	}
+});
+
 test("ask_user: the result of a new and of an updated set tells the model not to restate, summarize or add context in the Chat", async () => {
 	const { store, cwd } = family("ask-chat-rule");
 	const host = new ChatHost(store, cwd);

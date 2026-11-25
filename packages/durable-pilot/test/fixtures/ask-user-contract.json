@@ -1,5 +1,5 @@
 {
-  "note": "ask_user question rules contract, kept byte-identical in two repos: pi-workbench packages/durable-pilot/test/fixtures/ask-user-contract.json (host copy: src/workbench.ts toQuestion/validateQuestions) and pi-web src/server/sessions/askUserContract.fixture.json (copies: askUserTool.ts toQuestion/toOption, pendingAskStore.ts validateQuestion/validateOption/validateTyped). A field added to one copy must be added to the others and here.",
+  "note": "ask_user question rules contract, kept byte-identical in two repos: pi-workbench packages/durable-pilot/test/fixtures/ask-user-contract.json (host copy: src/workbench.ts toQuestion/validateQuestions) and pi-web src/server/sessions/askUserContract.fixture.json (copies: askUserTool.ts toQuestion/toOption, pendingAskStore.ts validateQuestion/validateOption/validateTyped). A field added to one copy must be added to the others and here. approval: [given, kept] pairs (null: absent) and a rejected value.",
   "valid": {
     "input": {
       "context": "**Context** shared by every question.",
@@ -97,6 +97,10 @@
         { "id": "plain", "question": "Note?", "detail": "One line.", "kind": "text", "options": [], "showIf": { "question": "backup", "values": ["false"] } }
       ]
     }
+  },
+  "approval": {
+    "accepted": [[true, true], [false, null], [null, null]],
+    "invalid": { "value": "yes", "error": "approval must be true or false" }
   },
   "invalid": [
     {

@@ -687,3 +687,12 @@ test("AFK asks once for a closing checkpoint when it settles idle after unsaved 
   assert.equal((await run("afk", "workstreams checkpoint ws-1 --title x")).nudges, 0);
   assert.equal((await run("focused", "git status")).nudges, 0);
 });
+
+test("plans, specs and alignment summaries go to the user as an ask_user set with approval: true, not a confirm question", async () => {
+  const { afkPreparationText } = await import("./rules.mts");
+  const texts = [axes.alignment.values.Align, axes.alignment.values.Plan, axes.alignment.values.Spec, afkPreparationText({ ...defaults, attention: "AFK", alignment: "Align" })];
+  for (const text of texts) {
+    assert.match(text, /`approval: true`/);
+    assert.doesNotMatch(text, /question to confirm/);
+  }
+});

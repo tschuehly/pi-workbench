@@ -211,7 +211,7 @@ type ShowIf = { question: string; values: string[] };
 type Typed = { kind?: (typeof KINDS)[number]; default?: boolean | number | string; labels?: string[]; multiline?: boolean; minLength?: number; maxLength?: number; minimum?: number; maximum?: number; integer?: boolean };
 type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean; showIf?: ShowIf } & Typed;
 /** `contextEdited`: the user's edit in a partial send supplied the current context (absent when cleared), as PI WEB's; an agent revision that sets context ends it. */
-export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; contextEdited?: true; questions: Question[] };
+export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; contextEdited?: true; approval?: true; questions: Question[] };
 type Outcome = JsonObject & { askId: string; reason: string };
 /** `record`: what a final close after one-by-one sends shows in the transcript (the whole set); the model reads `outcome`'s text. */
 type Closed = { outcome: Outcome; record?: Outcome; operationId?: string; delivered: boolean };
@@ -366,6 +366,13 @@ function validateShowIf(showIf: ShowIf, id: string, earlier: ReadonlyMap<string,
 	return { question: parent.id, values: [...new Set(showIf.values)] };
 }
 
+/** PI WEB `validateApproval`: true asks the user to approve the context (an Approve button); false or absent asks none. */
+export function validateApproval(value: unknown): true | undefined {
+	if (value === undefined || value === false) return undefined;
+	if (value === true) return true;
+	throw new AskError("approval must be true or false");
+}
+
 export function validateContext(value: string | undefined): string | undefined {
 	if (value === undefined || value.trim() === "") return undefined;
 	if (value.length > CONTEXT_MAX) throw new AskError("context exceeds its length limit");
@@ -412,6 +419,7 @@ const AskParams = obj({
 	questions: opt(arr(QuestionParams, { minItems: 1, maxItems: QUESTION_LIMIT, description: "Required for a new set, in reading order." })),
 	update: opt(str({ maxLength: ID_MAX, description: "askId of an open set to revise; given context/questions replace the old ones." })),
 	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to drop. Send nothing else." })),
+	approval: opt(bool({ description: "true for a plan or text in context to approve, instead of a separate confirm question: adds an Approve button." })),
 }, { open: true });
 
 const ASK_DESCRIPTION = "Post a question set as chips above the user's composer and return immediately. Unlike ask_human (Telegram, blocks until he replies), it stays in this Chat. Answers arrive later as a follow-up message that wakes you; any question may stay unanswered. Give a follow-up question `showIf` instead of writing 'If X:' in its text. When one decision covers several independent items, use `multiple` with one option per item. `context` and `detail` may hold Markdown images (https or workspace file path) and ```mermaid diagrams, including pie and xychart-beta charts, each shown folded until opened; to approve a code or text change, show it as ```diff or ```worddiff (old text, a `>>>` line, new text). The user can edit the context; treat an edited context as his version, so put text for approval (a plan, draft or message) there. Batch the decisions you need into one set instead of asking in prose, keep working on what does not depend on them and end your turn if nothing does. Do not poll or repost. The panel covers the Chat: put all explanation into the set, and let your Chat message only say that questions were posted. When the facts change, call again with update: <askId> (no other fields confirms the set) or withdraw: <askId>.";
@@ -462,7 +470,7 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				const doc = await tx.doc(QuestionsDoc, api.conversationId);
 				const task = String(api.taskId);
 				if (args.withdraw !== undefined) {
-					if (args.update !== undefined || args.context !== undefined || questions !== undefined) throw new AskError("withdraw takes no other parameters");
+					if (args.update !== undefined || args.context !== undefined || questions !== undefined || args.approval !== undefined) throw new AskError("withdraw takes no other parameters");
 					const open = doc.open[args.withdraw];
 					const closed = doc.closed[args.withdraw];
 					if (open === undefined) {
@@ -477,6 +485,7 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				const known = doc.byTask[task];
 				if (known !== undefined && doc.open[known] !== undefined) return { kind: args.update === undefined ? ("opened" as const) : ("updated" as const), ask: doc.open[known]!, rerun: true };
 				const context = validateContext(args.context);
+				const approval = validateApproval(args.approval);
 				if (args.update !== undefined) {
 					const current = doc.open[args.update];
 					if (current === undefined) throw new AskError(`No open question set ${args.update}: it was already answered, withdrawn, or closed.`);
@@ -490,6 +499,11 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 					};
 					// The agent supplied this context, even when its text equals the user's earlier edit.
 					if (context !== undefined) delete updated.contextEdited;
+					// Given, approval replaces the set's; absent, it stays.
+					if (args.approval !== undefined) {
+						if (approval === undefined) delete updated.approval;
+						else updated.approval = approval;
+					}
 					doc.open[args.update] = updated;
 					doc.byTask[task] = args.update;
 					// A revision lists only the questions still open: earlier ones keep their place, new ones follow.
@@ -507,7 +521,7 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				const taken = new Set(Object.keys(doc.open).map((id) => id.slice(0, 3)));
 				let askId = stableId(chatId, task);
 				for (let n = 1; n < 20 && taken.has(askId.slice(0, 3)); n++) askId = stableId(chatId, task, String(n));
-				const opened: PendingAsk = { askId, askedAt: now, updatedAt: now, revision: stableId(chatId, task, "revision"), turnsSinceUpdate: 0, context, questions: validated };
+				const opened: PendingAsk = { askId, askedAt: now, updatedAt: now, revision: stableId(chatId, task, "revision"), turnsSinceUpdate: 0, context, ...(approval === undefined ? {} : { approval }), questions: validated };
 				doc.open[askId] = opened;
 				doc.byTask[task] = askId;
 				doc.order = { ...doc.order, [askId]: validated.map((q) => q.id) };
