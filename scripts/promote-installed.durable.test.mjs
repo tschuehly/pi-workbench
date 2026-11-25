@@ -582,6 +582,18 @@ test("release layout: an old two-link install migrates on the next switch withou
   assert.doesNotMatch(again.scheduled.stderr, /migrating/);
 });
 
+test("first install can resume with one dangling public link; reselecting a release never rewrites it", () => {
+  const h = harness();
+  symlinkSync(join(h.store, "current/pi-workbench"), join(h.projects, "pi-workbench.durable-installed"));
+  assert.equal(h.run(["current"]).stdout, "none none\n");
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const dir = realpathSync(join(h.store, "current"));
+  const times = () => [dir, ...["pi-workbench", "pi-web"].map(p => join(dir, p))].map(p => lstatSync(p).ctimeMs);
+  const before = times();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  assert.deepEqual(times(), before);
+});
+
 test("release layout: a failed swap of current or a failed health check leaves the old pair whole, previous restored", () => {
   const h = harness();
   const pair = () => h.run(["current"]).stdout.trim();

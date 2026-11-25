@@ -266,30 +266,44 @@ check_idle() { # the Durable session daemon's descendants, except its Durable ho
 # switches both products, so a reader never sees a mixed pair. Plists and Durable hosts name build folders directly.
 target() { # <product>: the build its *.durable-installed link resolves to (through current, or directly as before)
   local t; t=$(readlink "$PROJECTS/$1$SUFFIX" 2>/dev/null) || return 1
+  [[ -d $t ]] || return 1
   [[ -L $t ]] && t=$(readlink "$t"); echo "$t"
 }
 live() { # <product>: the installed build's 12-character revision, or none
   local t; t=$(target "$1") || { echo none; return; }
   t=${t##*/}; echo "${t#"$1"-}"
 }
+pair() { # Sample one release, not two product links on opposite sides of a concurrent rename.
+  local r legacy
+  if ! r=$(readlink "$STORE/current"); then
+    legacy="$(live pi-workbench) $(live pi-web)"
+    r=$(readlink "$STORE/current") || { echo "$legacy"; return; }
+  fi
+  r=${r#releases/}; echo "${r%-*} ${r#*-}"
+}
 relink() { # <link> <target>: replace the link in one rename
   ln -sfn "$2" "$1.new.$$" && mv -h "$1.new.$$" "$1" || { rm -f "$1.new.$$"; return 1; }
 }
 release() { # <workbench-build> <pi-web-build>: create the release linking both if missing; prints its name
-  local b=${1##*/} w=${2##*/} name
+  local b=${1##*/} w=${2##*/} name dir stage
   name=${b#pi-workbench-}-${w#pi-web-}
-  mkdir -p "$STORE/releases/$name" && ln -sfn "$1" "$STORE/releases/$name/pi-workbench" && ln -sfn "$2" "$STORE/releases/$name/pi-web" &&
-    echo "$name"
+  dir=$STORE/releases/$name
+  if [[ ! -d $dir ]]; then
+    mkdir -p "$STORE/releases" && stage=$(mktemp -d "$STORE/releases/.new.XXXXXXXX") &&
+      ln -s "$1" "$stage/pi-workbench" && ln -s "$2" "$stage/pi-web" && mv "$stage" "$dir" || return 1
+  fi
+  [[ $(readlink "$dir/pi-workbench") == "$1" && $(readlink "$dir/pi-web") == "$2" ]] || return 1
+  echo "$name"
 }
 activate() { # <release>: make it current (one rename); the release it replaces becomes previous
   local old p; old=$(readlink "$STORE/current" 2>/dev/null || true)
+  for p in pi-workbench pi-web; do
+    [[ $(readlink "$PROJECTS/$p$SUFFIX" 2>/dev/null) == "$STORE/current/$p" ]] || relink "$PROJECTS/$p$SUFFIX" "$STORE/current/$p" || return 1
+  done
   if [[ $old != "releases/$1" ]]; then
     if [[ -n $old ]]; then relink "$STORE/previous" "$old" || return 1; fi
     relink "$STORE/current" "releases/$1" || return 1
   fi
-  for p in pi-workbench pi-web; do
-    [[ $(readlink "$PROJECTS/$p$SUFFIX" 2>/dev/null) == "$STORE/current/$p" ]] || relink "$PROJECTS/$p$SUFFIX" "$STORE/current/$p" || return 1
-  done
 }
 migrate() { # links straight to builds (the old layout) -> the release layout; every link resolves to the same build
   local wb pw r
@@ -297,7 +311,9 @@ migrate() { # links straight to builds (the old layout) -> the release layout; e
   [[ $(readlink "$PROJECTS/pi-workbench$SUFFIX") == "$STORE/current/pi-workbench" &&
      $(readlink "$PROJECTS/pi-web$SUFFIX") == "$STORE/current/pi-web" ]] && return 0
   echo "migrating the *.durable-installed links to the release layout ($STORE/current)" >&2
-  r=$(release "$wb" "$pw") && activate "$r"
+  r=$(release "$wb" "$pw") || return 1
+  [[ -L $STORE/current ]] || relink "$STORE/current" "releases/$r" || return 1
+  activate "$r"
 }
 matches() { # <live> <given>: given is none for none, else a hex revision prefix of live (or live of it)
   [[ $2 == none ]] && { [[ $1 == none ]]; return; }
@@ -375,7 +391,7 @@ case ${1:-} in prepare|switch|switch-workbench|switch-web|latest|current|prune|c
   *) echo "promote-installed supports prepare, switch, switch-workbench, switch-web, latest, current, prune, check-idle, check-hosts" >&2; exit 2;; esac
 
 force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
-[[ ${1:-} == current ]] && { echo "$(live pi-workbench) $(live pi-web)"; exit 0; }
+[[ ${1:-} == current ]] && { pair; exit 0; }
 [[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
 [[ ${1:-} == check-hosts && $# -eq 2 ]] && { check_hosts "$2"; exit $?; }
 [[ ${1:-} == prune && $# -le 2 ]] && { [[ ${2:-} != --apply ]] || lock; prune_builds "${2:-}"; exit $?; }
