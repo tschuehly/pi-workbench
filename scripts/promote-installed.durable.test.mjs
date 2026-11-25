@@ -2,7 +2,7 @@
 // promotes and rolls back only its own links, plists and folders.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -35,7 +35,7 @@ function harness() {
     echo "export const DURABLE_HOST_PROTOCOL = \${PROTOCOL:-2};" > dist/server/sessions/durableChatService.js;; esac`);
   // print: a scheduled switch job runs while $HOME/job-running exists.
   shim("launchctl", `if [ "$1" = print ]; then [ -e "$HOME/job-running" ] || exit 1; echo "state = waiting"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
-  shim("lsof", `echo "$*" >> "$HOME/lsof.log"`);
+  shim("lsof", `echo "$*" >> "$HOME/lsof.log"; case "$*" in *tcp:*) echo "$FOREIGN_PID";; esac`);
   // FAIL_MV_CURRENT: the rename that replaces <store>/current fails (the one step that switches both products).
   shim("mv", `case "$*" in */installed-durable/current) [ -n "$FAIL_MV_CURRENT" ] && exit 1;; esac; exec /bin/mv "$@"`);
   shim("sleep", "exit 0");
@@ -235,6 +235,18 @@ test("a displaced queued job cannot run or unlock its replacement", () => {
   assert.equal(spawnSync("bash", [join(job, "job.sh")], { env: h.env }).status, 6);
   assert.equal(readFileSync(owner, "utf8"), next);
   assert.equal(h.run(["current"]).stdout, "none none\n");
+});
+
+test("a foreign listener survives a failed stop and the new pair is not installed", () => {
+  const h = harness(), foreign = spawn("/bin/sleep", ["60"]);
+  try {
+    assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+    const r = h.switchDurable(wbRev(2), pwRev(2), { FOREIGN_PID: String(foreign.pid) });
+    assert.notEqual(r.status, 0);
+    assert.match(r.log, /still held after launchd bootout.*not signalling/);
+    process.kill(foreign.pid, 0);
+    assert.equal(h.run(["current"]).stdout, `${short(wbRev(1))} ${short(pwRev(1))}\n`);
+  } finally { foreign.kill(); }
 });
 
 test("switch waits 3 seconds by default", () => {

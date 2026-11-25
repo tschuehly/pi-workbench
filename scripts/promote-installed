@@ -565,8 +565,8 @@ stop_all() {
   # C1 hook: Durable hosts run as launchd jobs com.pi-workbench.durable-host.<family> and outlive this; never stop them here.
   for s in web sessiond; do launchctl bootout gui/$uid/$LABEL.\$s 2>/dev/null || true; done
   gone 50 && return 0
-  for p in \$(holders); do kill -TERM "\$p" 2>/dev/null || true; done
-  gone 50 || echo "still held after TERM: \$(holders | tr '\n' ' ')"
+  echo "refusing: port $PORT or $DATA/sessiond.sock still held after launchd bootout (PIDs: \$(holders | tr '\n' ' ')); not signalling them"
+  return 1
 }
 PORT=$PORT
 $(declare -f healthy)
@@ -611,7 +611,7 @@ activate $rel || rollback
 mkdir -p "$DATA/plugins" "$DATA/logs"
 ln -sfn "$PROJECTS/pi-workbench$SUFFIX/packages" "$DATA/plugins/pi-workbench"
 [[ -e "$DATA/config.json" ]] || echo '{}' >"$DATA/config.json"
-stop_all
+stop_all || rollback
 cp -p "$job"/new/$LABEL.*.plist \$la/ || rollback
 for s in sessiond web; do launchctl bootstrap gui/$uid \$la/$LABEL.\$s.plist || rollback; done
 for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; trap 'launchctl bootout gui/$uid/$label' EXIT; rm -rf "$LOCK"; exec 9>&-; "$self" prune --apply || true; exit 0; }; sleep 1; done
