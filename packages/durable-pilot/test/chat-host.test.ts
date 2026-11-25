@@ -839,6 +839,16 @@ test("wholeRecord: each one-by-one send's image metadata stays in the whole reco
 	assert.deepEqual([bounded?.images?.length, bounded?.images?.[0]?.target.id], [99, "q2"], "the two hidden answers' images drop out");
 });
 
+test("wholeRecord: an earlier send's answer rows carry that send's revision, as its images do, so a reused question id keeps each photo under its own row", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const image = (reference: string) => ({ target: { kind: "question", id: "q" }, reference, mimeType: "image/png" });
+	const send = (wording: string, revision: string | undefined, reference: string) => ({ askId: "a1", reason: "submitted", questions: [{ question: { id: "q", question: wording, options: [] }, answered: true, values: ["x"] }], answeredCount: 1, unansweredIds: [], summary: "s", images: [image(reference)], ...(revision === undefined ? {} : { partial: true, revision }) });
+	const whole = wholeRecord(send("q again?", undefined, "[PIC_B]"), [send("q?", "r2", "[PIC_A]")], ["q"], false) as { questions: { revision?: string }[]; images: { revision?: string; reference: string }[] } | undefined;
+	assert.deepEqual(whole?.questions.map((row) => row.revision), ["r2", undefined], "the earlier row carries r2, the final row none");
+	const photos = (row: { revision?: string }) => whole?.images.filter((i) => i.revision === row.revision).map((i) => i.reference);
+	assert.deepEqual(whole?.questions.map(photos), [["[PIC_A]"], ["[PIC_B]"]], "row 1 shows only A, row 2 only B");
+});
+
 test("ask_user: approval: true marks the set for an Approve button; a revision without it keeps it, approval: false drops it", async () => {
 	const { h, session, settled } = await quietChat("ask-approval");
 	try {

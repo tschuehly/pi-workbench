@@ -708,7 +708,8 @@ const RECORD_MAX = 100;
  * them, and every send's image metadata; the user's last edit still labels the context while `contextEdited`. Undefined when there were no earlier sends.
  */
 export function wholeRecord(outcome: Outcome, earlier: readonly Outcome[], order: readonly string[], contextEdited: boolean): Outcome | undefined {
-	const all = earlier.flatMap((each) => each.questions as unknown as AnswerRecord[]);
+	// Each earlier send's rows carry its revision, as its images do, so a reused question id still matches its own photos.
+	const all = earlier.flatMap((each) => (each.questions as unknown as AnswerRecord[]).map((row) => (typeof each.revision === "string" ? { ...row, revision: each.revision } : row)));
 	if (all.length === 0 || outcome.partial === true) return undefined;
 	const own = outcome.questions as unknown as AnswerRecord[];
 	// shortcut: past the record limit the oldest earlier answers drop out (each send's own card keeps them; the summary counts them), page the record if sets get revised that often.
