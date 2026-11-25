@@ -115,6 +115,12 @@ not silently lower it. Owner direction, repository policy, or task consequences 
 stronger evidence. If the selected evidence cannot be produced, report the gap rather than claim
 it was satisfied. Independent scrutiny does not replace automated proof.
 
+With `Challenge` and Attention `Focused`, `Switching` or `AFK`, the agent decides a design choice that
+is reversible and inside the agreed goal itself with an advisor (Sol, high), records the choice, the
+advice and how to undo it in the Workstream's DECISIONS file, and continues; it asks Thomas only when
+a choice changes the goal, the scope or a success check, or cannot be undone (Thomas, 25 Nov 2026;
+`CHALLENGE_DECIDES` in `extensions/working-mode/rules.mts`).
+
 Use [model-orchestration](../../skills/model-orchestration/SKILL.md) for independent routing.
 Existing consequence-based checking requirements remain in effect; this redesign does not replace
 them with a universal one-review limit.

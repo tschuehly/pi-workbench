@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
-import workingMode, { axes, defaults, renderBlock, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING, AFK_CLOSE_PROMPT, BACK_PROMPT, openAsks } from "./index.ts";
+import workingMode, { axes, defaults, renderBlock, CHALLENGE_DECIDES, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING, AFK_CLOSE_PROMPT, BACK_PROMPT, openAsks } from "./index.ts";
 
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -453,6 +453,15 @@ test("every non-starting value has guidance; starting values render none", () =>
       const block = renderBlock({ ...defaults, [axis]: value }, 1);
       if (value === defaults[axis]) assert.match(block, /no Working Mode guidance applies/);
       else assert.ok(text && block.includes(text), `${axis}=${value}`);
+    }
+  }
+});
+
+test("Challenge with Focused, Switching or AFK lets the agent decide reversible design choices with an advisor; other combinations do not", () => {
+  for (const attention of Object.keys(axes.attention.values)) {
+    for (const checking of Object.keys(axes.checking.values)) {
+      const block = renderBlock({ ...defaults, attention, checking }, 1, true);
+      assert.equal(block.includes(CHALLENGE_DECIDES), checking === "Challenge" && ["Focused", "Switching", "AFK"].includes(attention), `${attention}+${checking}`);
     }
   }
 });

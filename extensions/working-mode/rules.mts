@@ -81,6 +81,9 @@ export function isSelection(value: any): value is WorkingModeState {
 
 export const same = (a: WorkingModeState, b: WorkingModeState) => axisNames.every((axis) => a[axis] === b[axis]);
 
+/** Guidance for a combination of values, added after the per-axis guidance (Thomas, 25 Nov 2026). */
+export const CHALLENGE_DECIDES = "A design choice that is reversible and inside the agreed goal you decide yourself with an advisor (`openai/gpt-6.2-sol`, high) instead of posting it with `ask_user`: record the choice, the advice and how to undo it in the Workstream's DECISIONS file, and continue. Ask Thomas only when a choice changes the goal, the scope or a success check, or cannot be undone.";
+
 export function renderBlock(selection: WorkingModeState, seq: number, aligned = false, sent = false) {
   const summary = axisNames.map((axis) => `${axes[axis].label}: ${selection[axis]}`).join(" · ");
   const guidance = axisNames
@@ -88,6 +91,9 @@ export function renderBlock(selection: WorkingModeState, seq: number, aligned = 
     .map((axis) => axis === "attention" && afkPending(selection, aligned)
       ? `Attention — AFK (preparing): ${afkPreparationText(selection)}`
       : `${axes[axis].label} — ${selection[axis]}: ${(axes[axis].values as Record<string, string>)[selection[axis]]}`);
+  if (selection.checking === "Challenge" && ["Focused", "Switching", "AFK"].includes(selection.attention)) {
+    guidance.push(`Attention ${selection.attention} with Checking Challenge: ${CHALLENGE_DECIDES}`);
+  }
   return [
     `<working-mode seq="${seq}">`,
     `Thomas selected Working Mode ${summary}.${aligned ? " Alignment is reached. When Thomas changes the scope or direction, call `alignment_reset` before continuing." : ""}`,
