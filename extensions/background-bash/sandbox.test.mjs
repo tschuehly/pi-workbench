@@ -1,10 +1,10 @@
 // Write-fence tests on fake folders only: a fake HOME outside every temp folder, so the shared temp grant cannot
 // make a forbidden write look allowed. macOS only, like the fence.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { delimiter, dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
@@ -216,17 +216,37 @@ test("inside the sandbox the real wt runs only list, switch and config: removal,
   git(main, "worktree", "add", "-q", "-b", "done", done);
   const receipt = join(main, ".git", "worktrees", "rm.done", "pi-creator.json");
   writeFileSync(receipt, JSON.stringify({ branch: "done", sessions: ["sandbox-test"], workstreams: [] }));
-  const refused = ["remove done --foreground", "remove done --force -D", "-y remove done", "-C . remove done", "--config /dev/null -v remove done", "-yC . remove done", "merge", "merge --no-remove", "merge -- --no-remove", "step prune", "step promote", "hook pre-remove", "my_alias", "help", "-y switch --create made --no-cd"];
-  const allowed = ["list", "-C . list", "--config=/dev/null switch other", "--version", "config"];
-  const job = await run([...refused.map((r) => `wt ${r}; echo "exit=$?"`), `cd "${done}" && PI_HOST_OPS= wt remove; echo "exit=$?"`, ...allowed.map((r) => `wt ${r}; echo "exit=$?"`)].join("; "), { cwd: main, env: withFakes });
+  const refused = ["remove done --foreground", "remove done --force -D", "-y remove done", "-C . remove done", "--config /dev/null -v remove done", "-yC . remove done", "merge", "merge --no-remove", "merge -- --no-remove", "step prune", "step promote", "hook pre-remove", "my_alias", "help", "-y switch --create made --no-cd", "switch --clobber other", "-y switch other --clobber"];
+  // What the real wt receives: a local switch always without hooks.
+  const allowed = { "list": "list", "-C . list": "-C . list", "--config=/dev/null switch other": "--config=/dev/null switch --no-hooks other", "--version": "--version", "config": "config" };
+  const job = await run([...refused.map((r) => `wt ${r}; echo "exit=$?"`), `cd "${done}" && PI_HOST_OPS= wt remove; echo "exit=$?"`, ...Object.keys(allowed).map((r) => `wt ${r}; echo "exit=$?"`)].join("; "), { cwd: main, env: withFakes });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
   assert.equal(out.match(/is not available inside the sandbox[^\n]*\nexit=2/g)?.length, refused.length + 1, out);
   assert.match(out, /REAL_WT_RAN config\nwt remove: is not available inside the sandbox/, "a wt started by the real wt meets the shim too");
-  for (const r of allowed) assert.ok(out.includes(`REAL_WT_RAN ${r}\n`), r);
+  for (const r of Object.values(allowed)) assert.ok(out.includes(`REAL_WT_RAN ${r}\n`), r);
   assert.ok(existsSync(join(done, ".git")) && existsSync(receipt), "tree and receipt stay");
   assert.equal(git(main, "branch", "--list", "done", "--format=%(refname:short)").trim(), "done", "the branch stays");
-  assert.equal(out.match(/REAL_WT_RAN/g).length, allowed.length, "the real wt ran only the allowed commands");
+  assert.equal(out.match(/REAL_WT_RAN/g).length, Object.keys(allowed).length, "the real wt ran only the allowed commands");
+});
+
+// The shim alone, no fence needed (so it also runs inside one): two PATH folders each link `wt` to it.
+test("wt shim: refuses --clobber, runs a local switch without hooks, and finds the real wt by real path past every link to itself", () => {
+  const shim = join(dirname(new URL(import.meta.url).pathname), "host-ops", "host-op.mjs");
+  const [a, b, realBin] = ["shim-a", "shim-b", "real-wt"].map((d) => mkdtempSync(join(root, `${d}-`)));
+  for (const d of [a, b]) symlinkSync(shim, join(d, "wt"));
+  writeFileSync(join(realBin, "wt"), '#!/bin/sh\necho "REAL_WT_RAN $*"\n', { mode: 0o755 });
+  const wt = (...args) => spawnSync(join(a, "wt"), args, { encoding: "utf8", timeout: 10_000, env: { PATH: [a, b, realBin, dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter) } });
+  const local = wt("-y", "switch", "other");
+  assert.equal(local.stdout, "REAL_WT_RAN -y switch --no-hooks other\n", local.stderr || local.error?.message);
+  for (const args of [["switch", "--clobber", "x"], ["switch", "x", "--clobber=true"]]) {
+    const refused = wt(...args);
+    assert.equal(refused.status, 2, args.join(" "));
+    assert.match(refused.stderr, /--clobber: is not available inside the sandbox/);
+  }
+  // Without a runner a `switch --create` runs the real wt here, also without hooks.
+  assert.equal(wt("switch", "--create", "n").stdout, "REAL_WT_RAN switch --no-hooks --create n\n");
+  assert.equal(wt("list").stdout, "REAL_WT_RAN list\n");
 });
 
 test("a chat in its scratch folder may write the worktrees whose creation receipt names it; a cleanup owner record grants nothing; it cannot forge one", { skip }, async () => {
