@@ -209,7 +209,8 @@ type Option = { value: string; label: string; detail?: string; recommended?: boo
 type ShowIf = { question: string; values: string[] };
 type Typed = { kind?: (typeof KINDS)[number]; default?: boolean | number | string; multiline?: boolean; minLength?: number; maxLength?: number; minimum?: number; maximum?: number; integer?: boolean };
 type Question = { id: string; question: string; detail?: string; options: Option[]; multiple?: boolean; showIf?: ShowIf } & Typed;
-export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; questions: Question[] };
+/** `contextEdited`: the user's edit in a partial send supplied the current context (absent when cleared), as PI WEB's; an agent revision that sets context ends it. */
+export type PendingAsk = { askId: string; askedAt: string; updatedAt: string; revision: string; turnsSinceUpdate: number; context?: string; contextEdited?: true; questions: Question[] };
 type Outcome = JsonObject & { askId: string; reason: string };
 type Closed = { outcome: Outcome; operationId?: string; delivered: boolean };
 export type Attention = { id: string; reason: string };
@@ -472,12 +473,15 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 						...(context === undefined ? {} : { context }),
 						questions: questions === undefined ? (JSON.parse(JSON.stringify(current.questions)) as Question[]) : validateQuestions(questions),
 					};
+					// The agent supplied this context, even when its text equals the user's earlier edit.
+					if (context !== undefined) delete updated.contextEdited;
 					doc.open[args.update] = updated;
 					doc.byTask[task] = args.update;
 					// A revision lists only the questions still open: earlier ones keep their place, new ones follow.
 					// Assigned whole: the commit keeps writes made through `doc`, not through an object assigned into it.
-					const order = doc.order?.[args.update] ?? [];
-					doc.order = { ...doc.order, [args.update]: [...order, ...updated.questions.map((q) => q.id).filter((id) => !order.includes(id))] };
+					// A set with no order (posted before the host kept one, or open in a fork) gets none: its final close reads history.
+					const order = doc.order?.[args.update];
+					if (order !== undefined) doc.order = { ...doc.order, [args.update]: [...order, ...updated.questions.map((q) => q.id).filter((id) => !order.includes(id))] };
 					return { kind: "updated" as const, ask: updated, rerun: false };
 				}
 				if (context === undefined)
@@ -611,6 +615,8 @@ export function remainingAsk(ask: PendingAsk, outcome: unknown): PendingAsk | un
 	// A blank edit means the user cleared the context; the open questions must not show the agent's original again.
 	if (editedContext === "") delete rest.context;
 	else if (typeof editedContext === "string" && editedContext.trim() !== "" && editedContext.length <= CONTEXT_MAX) rest.context = editedContext;
+	else return rest;
+	rest.contextEdited = true;
 	return rest;
 }
 
@@ -618,15 +624,16 @@ export function remainingAsk(ask: PendingAsk, outcome: unknown): PendingAsk | un
  * Close an open set with the user's answers (or a cancel) and commit its delivery in the same transaction, before the
  * browser hears it closed. A retry under the same operation ID returns the same outcome; any other close of a set that
  * is gone, or of an older revision, is stale. A partial send (PI WEB's `outcome.partial`) removes only the questions it
- * answered and keeps the set open under the revision the outcome names (`ask`).
+ * answered and keeps the set open under the revision the outcome names (`ask`). `recoveredOrder`: the set's question order
+ * read from history, for a set this document holds no order for (posted before it kept one, or open in a fork).
  */
-export async function closeAsk(conversation: Conversation, request: CloseAsk): Promise<{ result: "closed"; outcome: Closed["outcome"]; retried: boolean; ask?: PendingAsk; earlier?: Closed["outcome"][]; order?: string[] } | { result: "stale" }> {
+export async function closeAsk(conversation: Conversation, request: CloseAsk, recoveredOrder?: readonly string[]): Promise<{ result: "closed"; outcome: Closed["outcome"]; retried: boolean; ask?: PendingAsk; earlier?: Closed["outcome"][]; order?: string[] } | { result: "stale" }> {
 	return conversation.commit(async (tx) => {
 		const doc = await tx.doc(QuestionsDoc, conversation.id);
 		// The set's earlier one-by-one sends, oldest first (insertion order), and its question order, so PI WEB can show the whole set's record when it closes.
 		const earlierSends = (): { earlier: Closed["outcome"][]; order: string[] } => JSON.parse(JSON.stringify({
 			earlier: Object.values(doc.closed).map((c) => c.outcome).filter((o) => o.askId === request.askId && (o as { partial?: unknown }).partial === true),
-			order: doc.order?.[request.askId] ?? [],
+			order: doc.order?.[request.askId] ?? recoveredOrder ?? [],
 		}));
 		const closed = Object.values(doc.closed).find((c) => c.operationId === request.operationId && c.outcome.askId === request.askId);
 		if (closed !== undefined) {
