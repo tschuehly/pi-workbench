@@ -84,8 +84,8 @@ After a promotion the same labels and PIDs are still there, with their old `revi
 P=~/IdeaProjects/pi-workbench.durable-installed/scripts/promote-installed
 $P current                                                  # the installed pair: <wb-sha> <pw-sha>
 $P switch <wb-sha> <pw-sha> --from <live-wb> <live-pw>      # full: both services; --from is what `current` printed
-$P switch-workbench <wb-sha> --from <live pair>                                # Workbench plugin and skills only
-$P switch-web <pw-sha> --from <live pair>                                      # PI WEB web/API only
+$P switch-workbench <wb-sha> --from <live-wb> <live-pw>      # Workbench plugin and skills only
+$P switch-web <pw-sha> --from <live-wb> <live-pw>            # PI WEB web/API only
 ```
 
 - `switch` keeps Durable Chats running: it restarts only `com.pi-web-durable.sessiond` and `.web`, never a `com.pi-workbench.durable-host.*` job. Streams, subagents, Workers, background bash and open questions go on in their hosts; the new daemon reattaches every host and browsers reconnect. Chats opened before the first switch with launchd hosts ran as the daemon's children; that one switch still closes them, and they reopen paused.
@@ -101,7 +101,7 @@ Each successful command prunes `~/.pi-workbench/installed-durable/` (keeps live,
 
 - Automatic: a `switch` whose services do not become healthy in 90 s restores the previous Durable plists, links and plugin link, boots them and checks health (`rollback done` in the job log, exit 1; `ROLLBACK FAILED` means exit 4: check `~/.pi-web-durable/logs/`). It never touches a host: the restored daemon reattaches them.
 - To the previous revision (after 1.5.2, see the two-step rule below): each command prints its `roll back:` line; for `switch`, use the `wb=` and `pw=` of the earlier `start` line in `~/.pi-workbench/installed-durable/jobs/*/job.log`:
-  `$P switch <previous-wb-sha> <previous-pw-sha> --from <live-wb> <live-pw>`
+  `$P --allow-downgrade switch <previous-wb-sha> <previous-pw-sha> --from <live-wb> <live-pw>`
 - Back to the legacy instance: `launchctl enable gui/$(id -u)/com.pi-web.sessiond; launchctl enable gui/$(id -u)/com.pi-web.web`, bootstrap both `~/Library/LaunchAgents/com.pi-web.*.plist`, then open http://127.0.0.1:8505/; Durable Chats stay readable on :8506. To stop the Durable instance:
   `launchctl bootout gui/$(id -u)/com.pi-web-durable.web; launchctl bootout gui/$(id -u)/com.pi-web-durable.sessiond`
   Its hosts keep running (and keep working) until stopped one by one, which interrupts that family's Chats: `launchctl bootout gui/$(id -u)/com.pi-workbench.durable-host.<family>` for each label from `launchctl list` above.

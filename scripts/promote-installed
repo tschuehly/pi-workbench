@@ -21,11 +21,11 @@
 #       --from is the installed pair `current` printed just before the owner approved. The switch refuses (exit 8,
 #       nothing changed) when another pair is installed by now: someone switched since, so it needs a fresh approval.
 #       Prepare, then schedule a detached launchd job that swaps current to the new release and restarts the two Durable services. INTERRUPTS EVERY OPEN SESSION except Durable hosts. Run only
-#       with the owner's go-ahead. Roll back by switching to the previous revisions (the job also restores on failure).
+#       with the owner's go-ahead. For an intentional rollback, put --allow-downgrade before switch (the job also restores on failure).
 #       Refuses while subagents or workers run, at scheduling and again when the job starts, because the restart
 #       kills them. --force (first argument) skips that check.
-#       One promotion at a time: switch, switch-workbench and switch-web refuse (exit 6) while another holds the lock
-#       <store>/promote.lock (a switch holds it until its job ends); a lock whose holder is gone is taken over.
+#       One writer at a time: prepare, switches and prune --apply refuse (exit 6) while another holds the kernel lock
+#       or a launchd job reserves the store. Rerun an interrupted switch to finish it before selecting another pair.
 #   promote-installed latest [--dry-run] [--json]
 #       Show the installed pair, the latest pair (origin/main of $PROJECTS/pi-workbench after a fetch, else local main;
 #       PI WEB at that commit's pi-web.rev, else origin/pi-workbench) and the first-parent commits between them.

@@ -174,11 +174,11 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
   const plists = h.durable();
   const wb = h.partial("switch-workbench", wbRev(5));
   assert.equal(wb.status, 0, wb.stderr);
-  assert.match(wb.stdout, /roll back: .* switch-workbench aaaaaaaaaaa3/);
+  assert.match(wb.stdout, /roll back: .* --allow-downgrade switch-workbench aaaaaaaaaaa3 --from aaaaaaaaaaa5 bbbbbbbbbbb3/);
   assert.equal(resolve(join(h.projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(5)));
   const web = h.partial("switch-web", pwRev(5));
   assert.equal(web.status, 0, web.stderr);
-  assert.match(web.stdout, /roll back: .* switch-web bbbbbbbbbbb3/);
+  assert.match(web.stdout, /roll back: .* --allow-downgrade switch-web bbbbbbbbbbb3 --from aaaaaaaaaaa5 bbbbbbbbbbb5/);
   assert.equal(h.plist("web").ProgramArguments[3], `exec node '${build("pi-web", pwRev(5))}/dist/server/index.js'`);
   const sessiond = relative(h.root, join(h.la, "com.pi-web-durable.sessiond.plist"));
   assert.equal(h.durable()[sessiond], plists[sessiond]);
