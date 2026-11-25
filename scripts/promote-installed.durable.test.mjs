@@ -19,7 +19,9 @@ function harness() {
   const home = join(root, "home"), projects = join(root, "projects"), bin = join(root, "bin");
   const la = join(home, "Library/LaunchAgents");
   const store = join(home, ".pi-workbench/installed-durable"), data = join(home, ".pi-web-durable");
-  const shim = (name, body) => { put(join(bin, name), `#!/bin/sh\n${body}\n`); spawnSync("chmod", ["+x", join(bin, name)]); };
+  // Commands that may leave a detached child behind log when they inherit the writer lock's fd 9.
+  const fd9 = (name) => (["git", "pnpm", "npm", "cp", "launchctl"].includes(name) ? `[ -e /dev/fd/9 ] && echo "${name} $*" >> "$HOME/fd9.log"\n` : "");
+  const shim = (name, body) => { put(join(bin, name), `#!/bin/sh\n${fd9(name)}${body}\n`); spawnSync("chmod", ["+x", join(bin, name)]); };
   // git: rev-parse echoes the revision; worktree add makes the folder (with the Durable host's package for pi-workbench).
   shim("git", `case "$3" in rev-parse) r="$5"; echo "\${r%^{commit\\}}";;
   worktree) if [ "$4" = add ]; then mkdir -p "$6"; case "$6" in */pi-workbench-*) mkdir -p "$6/packages/durable-pilot/src";; esac
@@ -640,6 +642,26 @@ test("SIGKILL after both bootouts: replay the same switch with original backups,
     assert.equal(h.run(["current", "--settled"]).stdout, `${short(wbRev(n))} ${short(pwRev(n))}\n`);
     for (const s of ["web", "sessiond"]) assert.ok(h.plist(s).ProgramArguments[3].includes(short(pwRev(n))));
   }
+});
+
+test("a rerun of an interrupted switch applies its own --force; no child inherits the writer lock", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const cmd = ["switch", wbRev(2), pwRev(2), "--from", wbRev(1), pwRev(1), "0"];
+  assert.equal(h.run(cmd).status, 0);
+  const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
+  const busy = join(h.root, "ps-busy.txt");
+  writeFileSync(busy, `200 1 node ${h.store}/pi-web-${short(pwRev(1))}/dist/server/sessiond.js\n220 200 pi --mode rpc\n`);
+  const execute = (extra) => spawnSync("bash", [join(job, "job.sh")], { env: { ...h.env, ...extra } });
+  assert.equal(execute({ CRASH_STOP: "1" }).signal, "SIGKILL");
+  // Old services' subagents still run: a plain rerun refuses, a forced rerun goes ahead.
+  assert.equal(h.run(cmd).status, 0);
+  assert.equal(execute({ PI_PROMOTE_PS: `cat ${busy}` }).status, 3);
+  const forced = h.run(["--force", ...cmd]);
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.equal(execute({ PI_PROMOTE_PS: `cat ${busy}` }).status, 0, readFileSync(join(job, "job.log"), "utf8"));
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(2))} ${short(pwRev(2))}\n`);
+  assert.equal(h.log("fd9.log"), "");
 });
 
 test("an interrupted web-only restart resumes without restarting the session daemon", () => {

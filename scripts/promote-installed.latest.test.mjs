@@ -155,6 +155,28 @@ test("failed fetch cannot roll back a newer installed Workbench or PI WEB withou
   assert.equal(rollback.status, 0, rollback.stderr);
 });
 
+test("latest preview after switch-web to a newer PI WEB reports the downgrade instead of failing", () => {
+  const h = harness();
+  const wb1 = h.repos["pi-workbench"].first;
+  const { wbPin, pw2, pw3 } = moveOn(h);
+  h.build("pi-workbench", wbPin);
+  h.build("pi-workbench", wb1, true);
+  h.build("pi-web", pw3, true);
+  h.git(join(h.projects, "pi-web"), "fetch", "-q", "origin");
+  const r = h.run("latest", "--dry-run", "--json");
+  assert.equal(r.status, 0, r.stderr);
+  const preview = JSON.parse(r.stdout);
+  assert.deepEqual(preview.installed, { workbench: wb1, piWeb: pw3 });
+  assert.equal(preview.latest.piWeb, pw2);
+  assert.equal(preview.upToDate, false);
+  assert.match(preview.blocked, /refusing: pi-web .*--allow-downgrade/);
+  assert.match(h.run("latest").stdout, /blocked: refusing: pi-web/);
+  const install = h.run("latest", "--from", wb1, pw3, "--to", preview.latest.workbench, pw2, "0");
+  assert.notEqual(install.status, 0);
+  assert.match(install.stderr, /refusing: pi-web .*--allow-downgrade/);
+  assert.ok(!existsSync(join(h.store, "jobs")));
+});
+
 test("latest --from switches to the latest pair with switch's lock and stale check", () => {
   const h = harness();
   const wb1 = h.repos["pi-workbench"].first, pw1 = h.repos["pi-web"].first;

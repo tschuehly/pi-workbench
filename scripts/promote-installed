@@ -30,7 +30,8 @@
 #       Show the installed pair, the latest pair (origin/main of $PROJECTS/pi-workbench after a fetch, else local main;
 #       PI WEB at that commit's pi-web.rev, else origin/pi-workbench) and the first-parent commits between them.
 #       --json prints {installed:{workbench,piWeb}, latest:{workbench,piWeb}, merges:[{repo,sha,subject}], upToDate}
-#       with full revisions (PI WEB's Install latest button reads it). Changes nothing.
+#       with full revisions (PI WEB's Install latest button reads it), plus blocked:<reason> (upToDate false, exit 0) when
+#       the latest pair would downgrade the installed one, e.g. after switch-web to a newer PI WEB. Changes nothing.
 #   promote-installed latest --from <live-workbench-rev> <live-pi-web-rev> [--to <workbench-rev> <pi-web-rev>] [delay-seconds]
 #       switch to the latest pair, with switch's lock, stale check and exit codes; exit 0 without a switch when up to date.
 #       --to is the latest pair the owner saw: refuses (exit 9, nothing changed) when the latest pair is another by now.
@@ -343,6 +344,13 @@ baseline() { # check the approved pair while holding the writer lock
 }
 
 LOCK=$STORE/promote.lock
+# Children that may outlive this shell (git gc --auto, fsmonitor, a package manager's daemon) must not inherit fd 9,
+# or they would hold the kernel lock after it exits; the shell itself keeps it.
+git() { command git "$@" 9>&-; }
+pnpm() { command pnpm "$@" 9>&-; }
+npm() { command npm "$@" 9>&-; }
+launchctl() { command launchctl "$@" 9>&-; }
+cp() { command cp "$@" 9>&-; }
 mutex() { # macOS has flock(2) but no flock command. FD 9 holds the kernel lock until this shell exits.
   exec 9>>"$STORE/promote.mutex"
   /usr/bin/perl -MFcntl=:flock -e 'open my $fd, ">&=9" or die $!; flock($fd, LOCK_EX | ($ARGV[0] eq "wait" ? 0 : LOCK_NB)) or exit 6' "$1"
@@ -381,6 +389,8 @@ schedule() {
   local reservation
   reservation=$(mktemp -d "$job/reservation.XXXXXXXX")
   echo "queued $label" >"$reservation/owner"
+  # The job reads --force from here, so a rerun of an interrupted switch applies its own --force.
+  if [[ $force == 1 ]]; then touch "$job/force"; else rm -f "$job/force"; fi
   ln -s "$reservation" "$LOCK" # release is now one unlink, even if interrupted
   launchctl bootstrap "gui/$uid" "$job/job.plist" || { rm -f "$LOCK"; exit 1; }
   echo "scheduled $label in ${delay}s; log: $job/job.log"
@@ -411,20 +421,22 @@ preview() { # <json 0|1>: the installed and latest pair and what lies between (P
   local iwb ipw
   iwb=$(full pi-workbench "$2") ipw=$(full pi-web "$3")
   { merges pi-workbench "$iwb" "$LATEST_WB"; merges pi-web "$ipw" "$LATEST_PW"; } | node -e '
-    const [json, me, workbench, piWeb, lwb, lpw, unfinished] = process.argv.slice(1); let d = "";
+    const [json, me, workbench, piWeb, lwb, lpw, unfinished, blocked] = process.argv.slice(1); let d = "";
     process.stdin.on("data", (c) => d += c).on("end", () => {
       const merges = d.split("\n").filter(Boolean).map((l) => { const [repo, sha, ...s] = l.split("\t"); return { repo, sha, subject: s.join("\t") }; });
-      const out = { installed: { workbench, piWeb }, latest: { workbench: lwb, piWeb: lpw }, merges, upToDate: !unfinished && workbench === lwb && piWeb === lpw };
+      const out = { installed: { workbench, piWeb }, latest: { workbench: lwb, piWeb: lpw }, merges, upToDate: !unfinished && !blocked && workbench === lwb && piWeb === lpw };
+      if (blocked) out.blocked = blocked;
       if (json === "1") return console.log(JSON.stringify(out));
       const s = (r) => r.slice(0, 12);
       console.log(`installed  pi-workbench ${s(workbench)}  pi-web ${s(piWeb)}`);
       console.log(`latest     pi-workbench ${s(lwb)}  pi-web ${s(lpw)}`);
       if (out.upToDate) return console.log("up to date");
+      if (blocked) return console.log(`blocked: ${blocked}`);
       if (unfinished) console.log("Unfinished switch: resume the saved target.");
       else console.log(`${merges.length} commits to install:`);
       for (const m of merges) console.log(`  ${m.repo.padEnd(12)} ${s(m.sha)} ${m.subject}`);
       console.log(`install with the owner'\''s go-ahead: ${me} latest --from ${s(workbench)} ${s(piWeb)} --to ${s(lwb)} ${s(lpw)}`);
-    })' "$1" "$ME" "$iwb" "$ipw" "$LATEST_WB" "$LATEST_PW" "$4"
+    })' "$1" "$ME" "$iwb" "$ipw" "$LATEST_WB" "$LATEST_PW" "$4" "$5"
 }
 
 case ${1:-} in prepare|switch|switch-workbench|switch-web|latest|current|prune|check-idle|check-hosts|sessiond-unchanged|--force|--allow-downgrade) ;;
@@ -532,8 +544,9 @@ if [[ ${1:-} == latest ]]; then
   else latest_pair || exit 1; fi
   if [[ $dry == 1 || ${#from[@]} == 0 ]]; then
     read -r iwb ipw < <(committed_pair)
-    forward pi-workbench "$iwb" "$LATEST_WB" && forward pi-web "$ipw" "$LATEST_PW" || exit 1
-    preview "$json" "$iwb" "$ipw" "$journal"; exit $?
+    # A newer build installed by hand (switch-web) is reported, not an error; the real switch still refuses it.
+    blocked=$({ forward pi-workbench "$iwb" "$LATEST_WB" && forward pi-web "$ipw" "$LATEST_PW"; } 2>&1) && blocked=
+    preview "$json" "$iwb" "$ipw" "$journal" "$blocked"; exit $?
   fi
   if [[ ${#to[@]} == 2 ]] && ! { matches "$LATEST_WB" "${to[0]}" && matches "$LATEST_PW" "${to[1]}"; }; then
     echo "refusing: latest moved since you looked: now ${LATEST_WB:0:12} ${LATEST_PW:0:12} (workbench, pi-web), not the --to pair ${to[0]} ${to[1]}; review again. Nothing changed." >&2
@@ -620,7 +633,7 @@ export PATH=$(printf %q "$PATH")
 export PI_WORKBENCH_PROJECTS=$(printf %q "$PROJECTS")${T:+ PI_PROMOTE_DURABLE_TRIAL=$(printf %q "$T") PI_PROMOTE_DURABLE_PORT=$PORT}
 exec >>"$job/job.log" 2>&1
 STORE=$(printf %q "$STORE")
-$(declare -f mutex)
+$(declare -f git pnpm npm launchctl cp mutex)
 mutex wait || exit 6
 trap 'launchctl bootout gui/$uid/$label' EXIT
 [[ \$(cat "$LOCK/owner" 2>/dev/null) == "queued $label" ]] || { echo 'refused: job no longer owns the reservation'; exit 6; }
@@ -628,7 +641,7 @@ echo "running $label" >"$LOCK/next" && mv "$LOCK/next" "$LOCK/owner" || exit 1
 trap 'rm -f "$LOCK"; launchctl bootout gui/$uid/$label' EXIT
 sleep $delay
 [[ \$("$self" current) == "$lwb $lpw" ]] || { echo 'refused: installed pair changed before job started'; exit 8; }
-if [[ $force == 0 ]] && ! "$self" check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
+if [[ ! -e "$job/force" ]] && ! "$self" check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
 if ! "$self" check-hosts "$pw"; then echo "refused \$(date -u +%FT%TZ): a host started during the delay that the new daemon cannot reattach; nothing changed"; exit 7; fi
 echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"
 la="$LA"
