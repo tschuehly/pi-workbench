@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
 import { alreadyFenced, fencedEnv, grants, ownedWorktrees, workstreamId, writeRefusal } from "./sandbox.mjs";
@@ -404,6 +405,12 @@ test("file-edit tools: a path is writable exactly where the Chat's commands coul
   for (const path of ["src/new/file.ts", "@README.md", join(app, "link-out", "..", "x"), join(env.PI_TMP, "x")]) assert.equal(await refusal(path), undefined, path);
   const refused = [join(fake, "elsewhere"), "~/elsewhere", "../app.other/x", "AGENTS.md", ".pi/settings.json", ".git/hooks/pre-commit", ".git/config", ".git/objects/ab/cdef", "link-out/x", "dangling", join(outside, "x")];
   for (const path of refused) assert.match(await refusal(path) ?? "", /^Blocked: .* outside this Chat's write folders/, path);
+  // Review of fc1e881: every spelling a tool may make of the path; case and Unicode form as APFS sees them; a locked
+  // name that creating parent folders would make.
+  const reviewed = [pathToFileURL(join(outside, "x")).href, "@~/elsewhere", ".GIT/Config", "AGENTS.MD", ".git/commondir/x"];
+  const allowed = [];
+  for (const path of reviewed) if (!/^Blocked: /.test(await refusal(path) ?? "")) allowed.push(path);
+  assert.deepEqual(allowed, [], "each one refused");
   assert.match(await writeRefusal(join(fake, "x"), { cwd: fake, sessionId: "edit-test", env }) ?? "", /^Blocked/, "a Chat in home writes only PI_TMP, like its commands");
   assert.equal(await writeRefusal(join(env.PI_TMP, "y"), { cwd: fake, sessionId: "edit-test", env }), undefined);
 });

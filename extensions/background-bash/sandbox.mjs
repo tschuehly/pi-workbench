@@ -5,6 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
+import { fileURLToPath } from "node:url";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Absolute: never a sandbox-exec found on the command's PATH. Codex and srt crash Chromium (Thomas chose this, 24 Nov).
@@ -317,7 +318,8 @@ async function jobGrants({ cwd: at, sessionId }, env) {
 function resolved(path) {
   const rest = [];
   for (let at = path; ; at = dirname(at)) {
-    try { return join(realpathSync(at), ...rest.reverse()); } catch { /* not there yet */ }
+    // Native: the on-disk spelling (case, Unicode form) of what exists, as the deny rules below compare it.
+    try { return join(realpathSync.native(at), ...rest.reverse()); } catch { /* not there yet */ }
     if (present(at) || dirname(at) === at) return undefined;
     rest.push(basename(at));
   }
@@ -330,19 +332,32 @@ function resolved(path) {
 export function mayWrite(path, { write, read = [], reopen = [], locked = [], history = [] }) {
   const target = resolved(path);
   if (target === undefined) return false;
-  const under = (roots) => roots.some((root) => target === root || inside(target, root));
-  return under(write) && (!under(read) || under(reopen)) && !locked.includes(target) && !under(history);
+  const under = (roots, at = target) => roots.some((root) => at === root || inside(at, root));
+  // Refusals ignore case and Unicode form (APFS does: `.GIT/Config` is `.git/config`). A locked name above the target
+  // counts too: creating the parent folders would make it.
+  const fold = (p) => p.normalize("NFD").toLowerCase();
+  const folded = (roots) => under(roots.map(fold), fold(target));
+  return under(write) && (!folded(read) || folded(reopen)) && !folded(locked) && !folded(history);
 }
 
 /**
- * Why a write or edit tool of chat `sessionId`, in `cwd` with its tool environment `env`, may not write `path` (as Pi's
- * tools resolve it: `@` dropped, `~` expanded, relative to `cwd`); undefined when its commands could write it too.
+ * Why a write or edit tool of chat `sessionId`, in `cwd` with its tool environment `env`, may not write `path`;
+ * undefined when its commands could write it too. Every spelling a tool layer may make of it must pass: with and
+ * without a leading `@` and Unicode spaces made plain, then as Durable resolves it (`~`, `file://`, relative to `cwd`).
  */
 export async function writeRefusal(path, { cwd, sessionId, env }) {
   if (typeof path !== "string") return undefined;
   const home = env.HOME ?? homedir();
-  const target = resolve(cwd, path.replace(/^@/, "").replace(/^~(?=$|\/)/, home));
-  if (mayWrite(target, (await jobGrants({ cwd, sessionId }, env)).rules)) return undefined;
+  const toolPath = (p) => {
+    if (p === "~") return home;
+    if (p.startsWith("~/")) return join(home, p.slice(2));
+    if (p.startsWith("file://")) try { return fileURLToPath(p); } catch { /* an ordinary path then */ }
+    return resolve(cwd, p);
+  };
+  const spellings = [path, path.replace(/^@/, "")].flatMap((p) => [p, p.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ")]);
+  const rules = (await jobGrants({ cwd, sessionId }, env)).rules;
+  const target = [...new Set(spellings.map(toolPath))].find((t) => !mayWrite(t, rules));
+  if (target === undefined) return undefined;
   return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi). Only the owner can lift it, with /full-access.`;
 }
 
