@@ -81,6 +81,15 @@ export function isSelection(value: any): value is WorkingModeState {
 
 export const same = (a: WorkingModeState, b: WorkingModeState) => axisNames.every((axis) => a[axis] === b[axis]);
 
+/** Checking Challenge's rule for design choices, worded for the Attention value; added after the per-axis guidance (Thomas, 25 Nov 2026). */
+export function challengeDecides(attention: string) {
+  const his = attention === "AFK"
+    ? "do not contact him: list it for his return, pause only the work it affects and continue independent work"
+    : "ask him wherever your other Working Mode guidance routes questions";
+  return `Once any confirmation your Alignment setting requires is reached, decide a design choice that is reversible and inside the agreed goal yourself with an advisor (\`openai/gpt-6.2-sol\`, high) instead of asking Thomas: record the choice, the advice and how to undo it in the Workstream's DECISIONS file, and continue. A choice that changes the goal, the scope or a success check, or cannot be undone, stays Thomas's: ${his}.`;
+}
+const challengeLine = (attention: string) => `Checking Challenge${attention === "Default" ? "" : ` with Attention ${attention}`}: ${challengeDecides(attention)}`;
+
 export function renderBlock(selection: WorkingModeState, seq: number, aligned = false, sent = false) {
   const summary = axisNames.map((axis) => `${axes[axis].label}: ${selection[axis]}`).join(" · ");
   const guidance = axisNames
@@ -88,6 +97,8 @@ export function renderBlock(selection: WorkingModeState, seq: number, aligned = 
     .map((axis) => axis === "attention" && afkPending(selection, aligned)
       ? `Attention — AFK (preparing): ${afkPreparationText(selection)}`
       : `${axes[axis].label} — ${selection[axis]}: ${(axes[axis].values as Record<string, string>)[selection[axis]]}`);
+  // While AFK waits for alignment, its preparation asks Thomas every foreseeable question instead.
+  if (selection.checking === "Challenge" && !afkPending(selection, aligned)) guidance.push(challengeLine(selection.attention));
   return [
     `<working-mode seq="${seq}">`,
     `Thomas selected Working Mode ${summary}.${aligned ? " Alignment is reached. When Thomas changes the scope or direction, call `alignment_reset` before continuing." : ""}`,
@@ -114,8 +125,8 @@ export const alignmentResetTool = {
 };
 
 /** Result text of `alignment_reached`; `wasPending` when AFK waited for this alignment. */
-export function alignmentReachedText(wasPending: boolean) {
-  return wasPending ? `Alignment recorded. AFK starts now: ${axes.attention.values.AFK}` : "Alignment recorded.";
+export function alignmentReachedText(wasPending: boolean, selection: WorkingModeState) {
+  return wasPending ? `Alignment recorded. AFK starts now: ${axes.attention.values.AFK}${selection.checking === "Challenge" ? `\n\n${challengeLine("AFK")}` : ""}` : "Alignment recorded.";
 }
 
 /** Result text of `alignment_reset` for the selection after the reset. */

@@ -281,7 +281,7 @@ export default function workingModeExtension(pi: ExtensionAPI) {
       aligned = true;
       publish(ctx, "applied");
       watchPower(ctx, true);
-      const text = alignmentReachedText(wasPending);
+      const text = alignmentReachedText(wasPending, selected);
       return { content: [{ type: "text", text }], details: { alignment: selected.alignment, agreement: params.agreement } };
     },
   });

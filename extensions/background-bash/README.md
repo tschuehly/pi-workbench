@@ -72,7 +72,9 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Agent caches:** `~/.pi-workbench/sandbox-caches`, through `GRADLE_USER_HOME` (with Thomas's jars read-only via
   `GRADLE_RO_DEP_CACHE`), `MAVEN_USER_HOME` and `-Dmaven.repo.local`, `npm_config_cache`, `pnpm_config_store_dir` and
   `PLAYWRIGHT_BROWSERS_PATH`, `pnpm_config_cache_dir`, `XDG_CACHE_HOME`, `PYTHONPYCACHEPREFIX`, `GOCACHE` and
-  `CLANG_MODULE_CACHE_PATH`; a tool without such a setting just does not cache inside the fence. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
+  `CLANG_MODULE_CACHE_PATH`, plus `XDG_RUNTIME_DIR` (`~/.pi-workbench/sandbox-runtime`, one 0700 folder the runner
+  makes and checks, where pnpm 12 keeps its store operation locks instead of the unwritable `/tmp`; fenced commands
+  write its contents but cannot replace it or change its mode); a tool without such a setting just does not cache inside the fence. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
   downloads its other dependencies again.
 - **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,
   lock and keep files, and `objects/info/alternates` is locked (it would let the owner's next gc drop the history);

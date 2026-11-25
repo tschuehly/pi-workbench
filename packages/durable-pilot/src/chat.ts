@@ -274,7 +274,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		provider: () => withBaseUrl(withStoredModels(anthropicProvider()), modelsJsonBaseUrl("anthropic")),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials,
-		settings: { get compaction() { return workbench.compaction; } },
+		// Long prompt-cache retention: 1 h on Claude, the 30 min tier on Codex; an idle Chat resumes warm within it.
+		settings: { get compaction() { return workbench.compaction; }, stream: { cacheRetention: "long" } },
 		rootAgent: { model: parseModel(options.model), cwd: options.cwd, thinkingLevel: (options.thinkingLevel ?? "medium") as ModelThinkingLevel },
 		env: async (target, c) => {
 			const cwd = target.cwd ?? options.cwd;
