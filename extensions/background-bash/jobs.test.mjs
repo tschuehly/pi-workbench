@@ -105,6 +105,25 @@ test("a completion never shows the body of a private key that never ends, also w
   }
 });
 
+test("a byte cut through a key's opening or closing line masks the key and keeps the output after it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-background-bash-delimiter-"));
+  const BEGIN = "-----BEGIN PRIVATE KEY-----";
+  const END = "-----END PRIVATE KEY-----";
+  const pre = `${"p".repeat(999)}\n`;
+  // Cut 10 bytes into the opening line of a key that never ends: the tail is the last 12,000 bytes.
+  const opening = `${pre}${BEGIN}\nKEYBODY${"A".repeat(12_009 - BEGIN.length - 7)}`;
+  // Cut 5 bytes into the closing line, with a diagnostic at the end of the log.
+  const diag = "DIAG-AT-EOF\n";
+  const closing = `${pre}${BEGIN}\nKEYBODY${"A".repeat(56)}\n${END}\n${"z".repeat(12_000 - (END.length - 5) - 1 - diag.length - 1)}\n${diag}`;
+  for (const [name, text] of [["opening", opening], ["closing", closing]]) {
+    const logPath = join(dir, `${name}.log`);
+    writeFileSync(logPath, text);
+    const content = redact(completionContent({ id: "k", state: "failed", exitCode: 1, logPath, bytes: statSync(logPath).size }));
+    assert.doesNotMatch(content, /KEYBODY/, name);
+    if (name === "closing") assert.match(content, /DIAG-AT-EOF\n$/, "the output after the key stays");
+  }
+});
+
 test("the deadline reader never settles a job as unlaunched when its runner claimed it while the reader ran", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-background-bash-race-"));
   const now = Date.now();

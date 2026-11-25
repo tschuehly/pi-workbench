@@ -458,23 +458,27 @@ export class BackgroundBash {
 		if (command.trim() === "") throw new Error("A non-empty command is required");
 		if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
 		const id = jobId(this.#options.chatId, `owner-run\0${operationId}`);
-		const ref = await conversation.commit(async (tx) => {
-			const doc = await tx.doc(BashJobsDoc, conversation.id);
-			const startedAt = Date.now();
-			doc.jobs[id] ??= { taskId: operationId, startedAt, expiresAt: startedAt + 43_200 * 1000, background: true, owner: true };
-			return { ...doc.jobs[id]! };
-		}, context);
-		// The registry prunes week-old jobs: a delivered run whose job is gone ran already and is never relaunched. An
-		// undelivered ref without a job never launched (registry write failed, or a crash before it), so it launches now.
-		// shortcut: the record is the active branch's, and a finished run pruned before its delivery (host closed for a
-		// week) counts as never launched; both run again only after a re-confirmation. Keep a family-wide receipt if that matters.
-		if (ref.delivery !== undefined && readJob(this.#root, id) === undefined) throw new Error("This command already ran; its job record has expired");
 		const { shell, args } = getShellConfig();
 		const identity = { chatId: this.#options.chatId, conversationId: conversation.id, rootId: this.#options.rootId(), cwd };
-		launchJob({
-			root: this.#root, id, command, description: "Owner run (pi-run)", cwd, timeout: undefined, expiresAt: ref.expiresAt ?? NaN, env: { ...process.env, ...toolEnv(identity) },
-			sessionId: this.#options.chatId, shell, args, startedAt: ref.startedAt, cancelled: this.#ending, fullAccess: true,
-		});
+		const startedAt = Date.now();
+		const job = {
+			root: this.#root, id, command, description: "Owner run (pi-run)", cwd, timeout: undefined, expiresAt: startedAt + 43_200 * 1000, env: { ...process.env, ...toolEnv(identity) },
+			sessionId: this.#options.chatId, shell, args, startedAt, fullAccess: true,
+		};
+		// The registry record comes first, the reference second, the runner last: a reference whose record is gone (the
+		// weekly prune, a lost registry) may have run, so it never runs again; a failed record write leaves no reference.
+		// shortcut: the reference is the active branch's; a branch navigated to before the run may run it again after a re-confirmation.
+		if (readJob(this.#root, id) === undefined) {
+			if ((await this.#reader!.snapshot(BashJobsDoc, conversation.id, context))?.jobs[id] !== undefined) throw new Error("This command already ran; its job record has expired");
+			launchJob({ ...job, prepare: true });
+		}
+		const record = readJob(this.#root, id)!;
+		const ref = await conversation.commit(async (tx) => {
+			const doc = await tx.doc(BashJobsDoc, conversation.id);
+			doc.jobs[id] ??= { taskId: operationId, startedAt: record.startedAt, expiresAt: record.expiresAt, background: true, owner: true };
+			return { ...doc.jobs[id]! };
+		}, context);
+		launchJob({ ...job, startedAt: ref.startedAt, expiresAt: ref.expiresAt ?? record.expiresAt, cancelled: this.#ending });
 		this.#poke();
 		return { jobId: id, logPath: readJob(this.#root, id)!.logPath };
 	}

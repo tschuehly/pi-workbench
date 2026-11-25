@@ -37,33 +37,34 @@ export function ownsProcess(job) {
 }
 export function readTail(path, size) {
   const length = Math.min(size, MAX_TAIL);
-  const buffer = Buffer.alloc(length);
-  const fd = openSync(path, "r");
-  try { readSync(fd, buffer, 0, length, size - length); } finally { closeSync(fd); }
-  const tail = buffer.toString("utf8").replace(/^\uFFFD+/u, "");
-  if (length === size) return tail;
-  // shortcut: looks 16 KB back for an open key header; a key block longer than that cut mid-body is not recognized.
+  // A cut tail is read with up to 16 KB before it, so key blocks are found in continuous text, delimiters whole.
+  // shortcut: a key block that starts more than 16 KB before the cut and never ends there is not recognized.
   const back = Math.min(size - length, 16 * 1024);
-  const before = Buffer.alloc(back);
-  const head = openSync(path, "r");
-  try { readSync(head, before, 0, back, size - length - back); } finally { closeSync(head); }
-  return dropCutHead(tail, OPEN_KEY.test(before.toString("utf8")));
+  const buffer = Buffer.alloc(back + length);
+  const fd = openSync(path, "r");
+  try { readSync(fd, buffer, 0, back + length, size - length - back); } finally { closeSync(fd); }
+  const tail = buffer.subarray(back).toString("utf8").replace(/^\uFFFD+/u, "");
+  return length < size ? dropCutHead(buffer.toString("utf8"), tail.length) : tail;
 }
 
 const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
-/** A private-key block that has not ended (yet): its header with no end line after it. */
-const OPEN_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----END [A-Z ]*PRIVATE KEY-----)[\s\S])*$/;
+/** A private-key block, or one that never ends (to the end of the text). */
+const KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
 
 /**
- * A tail cut from a longer log may start inside a secret, where no redactor recognizes it: drop the cut token, and the
- * rest of a private-key block whose header was cut off (`inKey`: the text before the cut left a key block open).
+ * The last `tailLength` characters of `text`, cut where no redactor would recognize a secret: a private-key block the
+ * cut runs through is masked up to its end; otherwise the cut token is dropped, and the rest of a key block whose
+ * header lies beyond the text read.
  */
-function dropCutHead(tail, inKey) {
-  const text = tail.replace(/^\S+/, "");
-  const end = KEY_END.exec(text);
-  const headless = end !== null ? !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text.slice(0, end.index)) : inKey;
-  if (!headless) return text;
-  return end === null ? "[REDACTED:private-key]" : text.slice(end.index + end[0].length);
+function dropCutHead(text, tailLength) {
+  const cut = text.length - tailLength;
+  for (const block of text.matchAll(KEY_BLOCK)) {
+    const end = block.index + block[0].length;
+    if (block.index < cut && end > cut) return `[REDACTED:private-key]${text.slice(end)}`;
+  }
+  const rest = text.slice(cut).replace(/^\S+/, "");
+  const end = KEY_END.exec(rest);
+  return end !== null && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(rest.slice(0, end.index)) ? rest.slice(end.index + end[0].length) : rest;
 }
 
 /** For a finished log, which will not grow: also masks a private-key block that never ended. */
@@ -105,7 +106,7 @@ const VANISHED = "The job runner ended without recording an exit status";
  * it runs the command (runner.mjs). Returns whether a runner was started. `cancelled`: record the job as cancelled
  * without starting a runner (its owner ended meanwhile).
  */
-export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false }) {
+export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false, prepare = false }) {
   if (!/^[\w-]+$/.test(id)) throw new Error(`Invalid job ID ${id}`);
   const dir = join(root, id);
   if (existsSync(join(dir, "claim")) || existsSync(join(dir, "exit"))) return false;
@@ -113,6 +114,8 @@ export function launchJob({ root = defaultRoot(), id, command, description, cwd,
   closeSync(openSync(join(dir, "output.log"), "a", 0o600));
   // An admitted deadline is immutable, even when a host dies before the runner claims it.
   if (!existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}), ...(fullAccess === true ? { fullAccess: true } : {}) }));
+  // `prepare`: only the record, for a caller that commits its own reference to the job before the runner starts.
+  if (prepare) return false;
   if (cancelled) {
     writeOnce(join(dir, "exit"), JSON.stringify({ cancelled: true, finishedAt: Date.now(), ...(owned ? { cleanup: { survivors: [] } } : {}) }));
     return false;

@@ -137,6 +137,20 @@ test("an owner run whose launch failed after its record committed launches on th
 	await host.close();
 });
 
+test("an owner run whose job record is lost before its completion is delivered is refused on a retry, not run again", async () => {
+	const { store, cwd } = family("owner-run-lost");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const request = { operationId: "owner-run:lost", command: "echo x >> launches.log; sleep 1", cwd };
+	const started = await host.call<{ jobId: string }>("ownerRun", request);
+	await waitFor(() => launches(cwd) === 1, "the command ran");
+	rmSync(join(JOBS, started.jobId), { recursive: true }); // a lost registry while it still runs: nothing delivered yet
+	await assert.rejects(host.call("ownerRun", request), /already ran/);
+	await sleep(1500);
+	assert.equal(launches(cwd), 1, "ran once");
+	await host.close();
+});
+
 test("a completion queued behind a busy turn stays out of the owner's queue, and the owner's queued message stays editable", async () => {
 	const { store, cwd } = family("queued-notice");
 	const host = new ChatHost(store, cwd);
