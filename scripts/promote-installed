@@ -16,7 +16,7 @@
 #       back. Each switch first migrates links that still point straight at builds (the old layout); nothing they resolve
 #       to changes. The service plists and Durable host plists name the resolved build folders.
 #   promote-installed current
-#       Print the installed pair as `<workbench-rev> <pi-web-rev>` (12 characters each; none before the first install).
+#       Print the last committed pair as `<workbench-rev> <pi-web-rev>` (12 characters each; none before the first install).
 #   promote-installed switch <workbench-rev> <pi-web-rev> --from <live-workbench-rev> <live-pi-web-rev> [delay-seconds, default 3]
 #       --from is the installed pair `current` printed just before the owner approved. The switch refuses (exit 8,
 #       nothing changed) when another pair is installed by now: someone switched since, so it needs a fresh approval.
@@ -326,8 +326,14 @@ matches() { # <live> <given>: given is none for none, else a hex revision prefix
   [[ $2 =~ ^[0-9a-f]{7,40}$ && $1 != none ]] && [[ $1 == "$2"* || $2 == "$1"* ]]
 }
 
+# Until both services pass their health check, the journal names the job with the last committed baseline and backups.
+committed_pair() {
+  local physical journal
+  physical=$(pair) || return 1
+  if journal=$(readlink "$STORE/in-progress"); then cat "$journal/from"; else echo "$physical"; fi
+}
 baseline() { # check the approved pair while holding the writer lock
-  read -r lwb lpw < <(pair)
+  read -r lwb lpw < <(committed_pair)
   if ! matches "$lwb" "$1" || ! matches "$lpw" "$2"; then
     echo "refusing: installed now is $lwb $lpw (workbench, pi-web), not the --from pair $1 $2. Nothing changed." >&2
     echo "Someone switched after that pair was read, so the owner's approval was for another starting point: show the" >&2
@@ -347,20 +353,33 @@ busy() {
   exit 6
 }
 lock() {
-  local owner kind who pid
+  local owner kind who pid state
   mkdir -p "$STORE"
   mutex now || busy 'active writer'
+  if [[ -L $STORE/in-progress && ${1:-} != switch ]]; then busy "unfinished switch; rerun the original switch or install"; fi
   [[ -d $LOCK ]] || return 0
   owner=$(cat "$LOCK/owner" 2>/dev/null || true); read -r kind who pid <<<"$owner"
   case $kind in
     pid) kill -0 "$who" 2>/dev/null && busy "$owner";; # pre-mutex promotion
     job) if kill -0 "${pid:-0}" 2>/dev/null || launchctl print "gui/$(id -u)/$who" >/dev/null 2>&1; then busy "$owner"; fi;;
-    queued) if launchctl print "gui/$(id -u)/$who" >/dev/null 2>&1; then busy "$owner"; fi;;
+    queued) if state=$(launchctl print "gui/$(id -u)/$who" 2>/dev/null); then
+      # RunAtLoad only: distinguish an exited first invocation from one not yet dispatched.
+      grep -Eq '^[[:space:]]*state = not running$' <<<"$state" && grep -Eq '^[[:space:]]*runs = [1-9]' <<<"$state" || busy "$owner"
+    fi;;
     running) :;; # a live new job would still hold the kernel lock
     *) busy 'unknown owner';;
   esac
   echo "taking over a stale promotion lock ($owner)" >&2
   rm -rf "$LOCK"
+}
+
+schedule() {
+  local reservation
+  reservation=$(mktemp -d "$job/reservation.XXXXXXXX")
+  echo "queued $label" >"$reservation/owner"
+  mv "$reservation" "$LOCK"
+  launchctl bootstrap "gui/$uid" "$job/job.plist" || { rm -rf "$LOCK"; exit 1; }
+  echo "scheduled $label in ${delay}s; log: $job/job.log"
 }
 
 full() { # <product> <12-character rev or none>: the full revision when its integration checkout knows it
@@ -410,7 +429,14 @@ force=0 allow_downgrade=0
 while [[ ${1:-} == --force || ${1:-} == --allow-downgrade ]]; do
   if [[ $1 == --force ]]; then force=1; else allow_downgrade=1; fi; shift
 done
-[[ ${1:-} == current ]] && { pair; exit 0; }
+if [[ ${1:-} == current ]]; then
+  if journal=$(readlink "$STORE/in-progress"); then
+    echo "switch unfinished: rerun the original command; details: $journal/job.log" >&2
+    if [[ ${2:-} == --settled ]]; then paste -d ' ' "$journal/from" "$journal/to"; exit 10; fi
+    cat "$journal/from"
+  else committed_pair; fi
+  exit 0
+fi
 [[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
 [[ ${1:-} == check-hosts && $# -eq 2 ]] && { check_hosts "$2"; exit $?; }
 [[ ${1:-} == prune && $# -le 2 ]] && { [[ ${2:-} != --apply ]] || lock; prune_builds "${2:-}"; exit $?; }
@@ -480,9 +506,11 @@ if [[ ${1:-} == latest ]]; then
     esac; shift
   done
   [[ ${#to[@]} == 0 || ${#from[@]} == 2 ]] || { echo "latest --to needs --from; $usage" >&2; exit 2; }
-  latest_pair || exit 1
+  if [[ $dry == 0 && ${#from[@]} == 2 ]] && journal=$(readlink "$STORE/in-progress"); then
+    read -r LATEST_WB LATEST_PW <"$journal/to" # retry the approved job, not a newer remote tip
+  else latest_pair || exit 1; fi
   if [[ $dry == 1 || ${#from[@]} == 0 ]]; then
-    read -r iwb ipw < <(pair)
+    read -r iwb ipw < <(committed_pair)
     forward pi-workbench "$iwb" "$LATEST_WB" && forward pi-web "$ipw" "$LATEST_PW" || exit 1
     preview "$json" "$iwb" "$ipw"; exit $?
   fi
@@ -501,8 +529,18 @@ if [[ $1 == switch ]]; then
     echo "Read the live pair with: $ME current (installed now: $(live pi-workbench) $(live pi-web))" >&2; exit 2; }
   delay=${7:-$delay}
   [[ $# -le 7 && $delay =~ ^[0-9]+$ ]] || { echo "invalid switch delay" >&2; exit 2; }
-  lock
+  lock switch
   baseline "$5" "$6"
+  if job=$(readlink "$STORE/in-progress"); then
+    read -r twb tpw <"$job/to"
+    matches "$twb" "$(git -C "$PROJECTS/pi-workbench" rev-parse --verify "$2^{commit}")" &&
+      matches "$tpw" "$(git -C "$PROJECTS/pi-web" rev-parse --verify "$3^{commit}")" || busy "unfinished switch to $twb $tpw; finish that pair first"
+    uid=$(id -u); label=$JOBLABEL.${job##*/}
+    if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then launchctl bootout "gui/$uid/$label"; fi
+    [[ ! -f $job/job.log ]] || mv "$job/job.log" "$(mktemp "$job/interrupted.XXXXXXXX")"
+    echo "resuming interrupted switch to $twb $tpw"
+    schedule; exit 0
+  fi
   if [[ -n $LATEST ]] && matches "$lwb" "$2" && matches "$lpw" "$3"; then echo "up to date: $lwb $lpw is the latest pair; nothing to switch"; exit 0; fi
 fi
 [[ $1 != prepare ]] || lock
@@ -522,6 +560,8 @@ self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
 mkdir -p "$STORE/jobs"
 job=$(mktemp -d "$STORE/jobs/$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")
 mkdir -p "$job/backup"
+echo "$lwb $lpw" >"$job/from"
+echo "${rel%-*} ${rel#*-}" >"$job/to"
 label=$JOBLABEL.$(basename "$job")
 # The new services' plists, written now so a failure stops before anything changes. `pi-web install` cannot write them:
 # its labels and log folder (com.pi-web.*) are fixed (pi-web src/nativeServices/servicePlan.ts, src/cli.ts). Same keys.
@@ -553,8 +593,8 @@ for s in sessiond web; do
 done
 cat >"$job/job.sh" <<EOF
 #!/bin/bash
-set -Euo pipefail
-export PATH=$PATH
+set -Eeuo pipefail
+export PATH=$(printf %q "$PATH")
 # launchd starts this without the caller's environment; its own calls of this script must act on the same trial.
 export PI_WORKBENCH_PROJECTS=$(printf %q "$PROJECTS")${T:+ PI_PROMOTE_DURABLE_TRIAL=$(printf %q "$T") PI_PROMOTE_DURABLE_PORT=$PORT}
 exec >>"$job/job.log" 2>&1
@@ -573,10 +613,16 @@ echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"
 la="$LA"
 mkdir -p "\$la"
 # This instance's state only: its plists (none before the first install), links and plugin link.
-cp -p \$la/$LABEL.*.plist "$job/backup/" 2>/dev/null || true
-for l in pi-workbench$SUFFIX pi-web$SUFFIX; do readlink "$PROJECTS/\$l" >>"$job/backup/links" || echo >>"$job/backup/links"; done
-for r in current previous; do readlink "$STORE/\$r" >"$job/backup/\$r" || : >"$job/backup/\$r"; done
-readlink "$DATA/plugins/pi-workbench" >"$job/backup/plugin-link" || true
+if [[ ! -L "$STORE/in-progress" ]]; then
+  for f in "\$la"/$LABEL.*.plist; do [[ ! -e \$f ]] || cp -p "\$f" "$job/backup/"; done
+  : >"$job/backup/links"
+  for l in pi-workbench$SUFFIX pi-web$SUFFIX; do readlink "$PROJECTS/\$l" >>"$job/backup/links" || echo >>"$job/backup/links"; done
+  for r in current previous; do readlink "$STORE/\$r" >"$job/backup/\$r" || : >"$job/backup/\$r"; done
+  readlink "$DATA/plugins/pi-workbench" >"$job/backup/plugin-link" || true
+  ln -s "$job" "$STORE/in-progress"
+else
+  [[ \$(readlink "$STORE/in-progress") == "$job" ]] || exit 6
+fi
 
 holders() { { lsof -ti tcp:$PORT -sTCP:LISTEN; lsof -t "$DATA/sessiond.sock"; } 2>/dev/null || true; }
 gone() { # <tenths of a second>: wait until nothing listens on the port or holds the socket
@@ -595,10 +641,10 @@ STORE=$(printf %q "$STORE") PROJECTS=$(printf %q "$PROJECTS") SUFFIX=$SUFFIX
 $(declare -f target relink activate)
 rollback() {
   echo "FAILED; restoring previous services"
-  stop_all
-  rm -f \$la/$LABEL.*.plist || { echo "ROLLBACK FAILED: removing the new plists"; exit 4; }
+  stop_all || echo "rollback: port or socket still occupied"
+  rm -f "\$la"/$LABEL.*.plist || { echo "ROLLBACK FAILED: removing the new plists"; exit 4; }
   if compgen -G "$job/backup/$LABEL.*.plist" >/dev/null; then
-    cp -p "$job"/backup/$LABEL.*.plist \$la/ || { echo "ROLLBACK FAILED: restoring saved plists"; exit 4; }
+    cp -p "$job"/backup/$LABEL.*.plist "\$la/" || { echo "ROLLBACK FAILED: restoring saved plists"; exit 4; }
   fi
   t=\$(cat "$job/backup/plugin-link")
   if [[ -n \$t ]]; then ln -sfn "\$t" "$DATA/plugins/pi-workbench"; else rm -f "$DATA/plugins/pi-workbench"; fi ||
@@ -614,12 +660,12 @@ rollback() {
     if [[ -n \$t ]]; then [[ \$(readlink "$PROJECTS/\$l") == "\$t" ]] || relink "$PROJECTS/\$l" "\$t" || { echo "ROLLBACK FAILED: restoring \$l"; exit 4; }
     else rm -f "$PROJECTS/\$l" || { echo "ROLLBACK FAILED: removing \$l"; exit 4; }; fi
   done
-  compgen -G "$job/backup/$LABEL.*.plist" >/dev/null || { echo "rollback done \$(date -u +%FT%TZ): no previous Durable instance"; exit 1; }
+  compgen -G "$job/backup/$LABEL.*.plist" >/dev/null || { rm "$STORE/in-progress"; echo "rollback done \$(date -u +%FT%TZ): no previous Durable instance"; exit 1; }
   boot_failed=0
-  for f in \$la/$LABEL.*.plist; do launchctl bootstrap gui/$uid "\$f" || boot_failed=1; done
+  for f in "\$la"/$LABEL.*.plist; do launchctl bootstrap gui/$uid "\$f" || boot_failed=1; done
   if [[ \$boot_failed == 1 ]]; then echo "ROLLBACK FAILED: old service bootstrap"; exit 4; fi
   for i in \$(seq 90); do
-    if healthy; then echo "rollback done \$(date -u +%FT%TZ)"; exit 1; fi
+    if healthy; then rm "$STORE/in-progress"; echo "rollback done \$(date -u +%FT%TZ)"; exit 1; fi
     sleep 1
   done
   echo "ROLLBACK FAILED: old service health check"
@@ -630,12 +676,12 @@ for p in pi-workbench pi-web; do t=\$(target \$p) && [[ -d \$t ]] && touch "\$t.
 # Both products in one rename of current; the release it replaces becomes previous.
 activate $rel || rollback
 mkdir -p "$DATA/plugins" "$DATA/logs"
-ln -sfn "$PROJECTS/pi-workbench$SUFFIX/packages" "$DATA/plugins/pi-workbench"
-[[ -e "$DATA/config.json" ]] || echo '{}' >"$DATA/config.json"
+relink "$DATA/plugins/pi-workbench" "$PROJECTS/pi-workbench$SUFFIX/packages"
+[[ -e "$DATA/config.json" ]] || { echo '{}' >"$DATA/config.json.new" && mv "$DATA/config.json.new" "$DATA/config.json"; }
 stop_all || rollback
-cp -p "$job"/new/$LABEL.*.plist \$la/ || rollback
-for s in sessiond web; do launchctl bootstrap gui/$uid \$la/$LABEL.\$s.plist || rollback; done
-for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; trap 'launchctl bootout gui/$uid/$label' EXIT; rm -rf "$LOCK"; exec 9>&-; "$self" prune --apply || true; exit 0; }; sleep 1; done
+cp -p "$job"/new/$LABEL.*.plist "\$la/" || rollback
+for s in sessiond web; do launchctl bootstrap gui/$uid "\$la/$LABEL.\$s.plist" || rollback; done
+for i in \$(seq 90); do healthy && { rm "$STORE/in-progress"; echo "promoted \$(date -u +%FT%TZ)"; trap 'launchctl bootout gui/$uid/$label' EXIT; rm -rf "$LOCK"; exec 9>&-; "$self" prune --apply || true; exit 0; }; sleep 1; done
 rollback
 EOF
 chmod +x "$job/job.sh"
@@ -644,8 +690,4 @@ plutil -insert Label -string "$label" "$job/job.plist"
 plutil -insert ProgramArguments -array "$job/job.plist"
 plutil -insert ProgramArguments.0 -string "$job/job.sh" "$job/job.plist"
 plutil -insert RunAtLoad -bool true "$job/job.plist"
-mkdir "$job/reservation"
-echo "queued $label" >"$job/reservation/owner"
-mv "$job/reservation" "$LOCK"
-launchctl bootstrap "gui/$uid" "$job/job.plist" || { rm -rf "$LOCK"; exit 1; }
-echo "scheduled $label in ${delay}s; log: $job/job.log"
+schedule

@@ -28,6 +28,7 @@ cat >"$t/promote" <<'EOF'
 #!/usr/bin/env bash
 if [[ $1 == current ]]; then
   [[ -z ${BEFORE_CLONE:-} || ! -d $PI_WORKBENCH_PROJECTS/pi-web ]] || exit 1
+  if [[ -n ${INTERRUPTED:-} && $2 == --settled ]]; then echo "$INTERRUPTED"; exit 10; fi
   cat "$HOME/pair" 2>/dev/null || echo "none none"; exit 0; fi
 echo "promote $* env=${PI_PROMOTE_DURABLE_ENV:-}" >>"$HOME/calls"
 [[ $1 == --force ]] && shift
@@ -62,6 +63,9 @@ check "rerun at the same tips: no switch, no app (--no-app), exit 0" test "$code
 grep -q "already installed" "$t/out" && ok "rerun: says already installed" || fail "rerun: says already installed"
 code=$(rc "$I" --dry-run --no-app)
 check "dry run at the same tips: plans no switch" bash -c "test $code = 0 && grep -q 'already installed' '$t/out' && ! grep -q 'promote' '$t/out'"
+
+code=$(INTERRUPTED="${wb_rev:0:12} ${pw_rev:0:12} $wb_rev $pw_rev" rc "$I" --no-app)
+check "interrupted same-pair install resumes instead of skipping" bash -c "test $code = 0 && grep -q '^promote switch $wb_rev $pw_rev --from ' '$HOME/calls'"
 
 echo two >>"$t/seed-pw/f"; git -C "$t/seed-pw" commit -qam two; git -C "$t/seed-pw" push -q origin HEAD:refs/heads/pi-workbench
 new_pw=$(git -C "$t/pw.git" rev-parse pi-workbench)

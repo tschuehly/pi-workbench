@@ -34,7 +34,8 @@ function harness() {
     if [ -n "$NO_LAUNCHD" ]; then echo daemon > dist/server/sessiond.js; else echo 'daemon env["PI_WEB_DURABLE_HOST_LAUNCHD"]' > dist/server/sessiond.js; fi
     echo "export const DURABLE_HOST_PROTOCOL = \${PROTOCOL:-2};" > dist/server/sessions/durableChatService.js;; esac`);
   // print: a scheduled switch job runs while $HOME/job-running exists.
-  shim("launchctl", `if [ "$1" = print ]; then [ -e "$HOME/job-running" ] || exit 1; echo "state = waiting"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
+  shim("launchctl", `if [ "$CRASH_STOP" = 1 ] && [ "$1" = bootout ]; then case "$2" in */com.pi-web-durable.sessiond) kill -KILL "$PPID";; esac; fi
+  if [ "$1" = print ]; then [ -e "$HOME/job-running" ] || exit 1; echo "state = waiting"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
   shim("lsof", `echo "$*" >> "$HOME/lsof.log"; case "$*" in *tcp:*) echo "$FOREIGN_PID";; esac`);
   // FAIL_MV_CURRENT: the rename that replaces <store>/current fails (the one step that switches both products).
   shim("mv", `case "$*" in */installed-durable/current) [ -n "$FAIL_MV_CURRENT" ] && exit 1;; esac; exec /bin/mv "$@"`);
@@ -597,6 +598,30 @@ test("release layout: an old two-link install migrates on the next switch withou
   const again = h.switchDurable(wbRev(3), pwRev(3));
   assert.equal(again.status, 0, again.log);
   assert.doesNotMatch(again.scheduled.stderr, /migrating/);
+});
+
+test("SIGKILL after both bootouts: replay the same switch with original backups, even if replay must roll back", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const cmd = ["switch", wbRev(2), pwRev(2), "--from", wbRev(1), pwRev(1), "0"];
+  for (const fail of [true, false]) {
+    assert.equal(h.run(cmd).status, 0);
+    const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
+    const execute = extra => spawnSync("bash", [join(job, "job.sh")], { env: { ...h.env, ...extra } });
+    assert.equal(execute({ CRASH_STOP: "1" }).signal, "SIGKILL");
+    assert.match(readlinkSync(join(h.store, "current")), /aaa2-bbbbbbbbbbb2$/);
+    assert.equal(h.run(["current", "--settled"]).status, 10);
+    assert.equal(h.run(["prune", "--apply"]).status, 6);
+    assert.notEqual(h.sw(wbRev(3), pwRev(3)).status, 0);
+    const resumed = h.run(cmd);
+    assert.equal(resumed.status, 0, resumed.stderr);
+    assert.match(resumed.stdout, /resuming interrupted switch/);
+    const r = execute(fail ? { BAD: short(pwRev(2)) } : {});
+    assert.equal(r.status, fail ? 1 : 0, readFileSync(join(job, "job.log"), "utf8"));
+    const n = fail ? 1 : 2;
+    assert.equal(h.run(["current", "--settled"]).stdout, `${short(wbRev(n))} ${short(pwRev(n))}\n`);
+    for (const s of ["web", "sessiond"]) assert.ok(h.plist(s).ProgramArguments[3].includes(short(pwRev(n))));
+  }
 });
 
 test("first install can resume with one dangling public link; reselecting a release never rewrites it", () => {
