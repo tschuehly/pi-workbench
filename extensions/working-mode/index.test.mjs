@@ -429,6 +429,14 @@ test("Test and Challenge require seeing each new check fail", () => {
   for (const value of ["Test", "Challenge"]) assert.match(axes.checking.values[value], /check failing on the unfixed or deliberately broken code, or say why you could not/);
 });
 
+test("Align, Plan and Spec ask through ask_user, or ask_human under Phone Attention", () => {
+  for (const value of ["Align", "Plan", "Spec"]) {
+    const text = axes.alignment.values[value];
+    assert.match(text, /`ask_user`/, value);
+    assert.match(text, /under Phone Attention, (ask )?through `ask_human`/, value);
+  }
+});
+
 test("Challenge names the blind review pair, author swaps, and the Muse fallback", () => {
   const text = axes.checking.values.Challenge;
   assert.match(text, /two background `review` subagents with the same brief, blind to each other/);
@@ -513,7 +521,7 @@ test("AFK with an Alignment value stays interactive until alignment is reached",
   await s.mode("attention afk");
   const preparing = s.prompt().content;
   assert.match(preparing, /Attention — AFK \(preparing\): AFK has not started/);
-  assert.match(preparing, /five bullets[\s\S]*numbered list of every question[\s\S]*`alignment_reached`/);
+  assert.match(preparing, /Post one `ask_user` set: its context holds the outcome[\s\S]*five bullets[\s\S]*one question for every issue you can foresee[\s\S]*Without `ask_user`[\s\S]*`alignment_reached`/);
   assert.doesNotMatch(preparing, /Do not contact Thomas/);
 
   assert.match(await s.confirm(), /^Alignment recorded\. AFK starts now: .*Do not contact Thomas/);
@@ -524,7 +532,7 @@ test("AFK with an Alignment value stays interactive until alignment is reached",
   assert.equal(s.prompt(), undefined, "unchanged state posts nothing");
 
   await s.mode("alignment plan");
-  assert.match(s.prompt().content, /AFK \(preparing\)[\s\S]*persist the plan/);
+  assert.match(s.prompt().content, /AFK \(preparing\)[\s\S]*file path of the plan you persisted/);
 });
 
 test("AFK with Default Alignment starts immediately", async () => {

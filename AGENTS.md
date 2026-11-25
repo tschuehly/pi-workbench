@@ -80,6 +80,9 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - Change Pi Workbench and PI WEB code only in a development worktree you own, on its own branch.
   The `*.durable-installed` checkouts and the integration checkouts are what the owner runs; changes reach
   them only by merge and owner-approved promotion. Verify the target path is in that worktree before the first edit.
+- Text-only edits that change no behavior (`todo.md`, a plan or idea note, a typo in docs) go straight to `main`
+  in the integration checkout as one commit; no worktree or branch. Code, config, skills, prompts and AGENTS.md
+  itself still need a worktree.
 - Before changing sibling PI WEB, fetch `upstream` and the `origin` fork. Work on a fork branch and
   never push to upstream directly.
 - Keep sibling PI WEB `main` as a clean fast-forward mirror of `upstream/main`. Use `pi-workbench`
