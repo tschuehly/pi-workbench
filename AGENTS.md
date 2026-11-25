@@ -70,7 +70,10 @@ client reuses PI WEB runtime without adopting the PI WEB application shell.
 - Thomas uses only Pi Durable: Durable Chats in the Durable PI WEB instance (port 8506), never the legacy
   instance. Build Chat behavior for the Durable host (`packages/durable-pilot/`): it has its own Working
   Mode, compaction, and question store, so a Pi extension's hooks and commands reach Durable Chats
-  only through that host. Promote with `scripts/promote-installed switch`.
+  only through that host. Promote with `scripts/promote-installed switch <wb-rev> <pi-web-rev> --from <live pair>`,
+  the pair `promote-installed current` printed just before you proposed it; a refusal means ask the owner again.
+- Merging into `main` means ready to ship: any Chat's promotion may install it. Work the owner holds back stays on its
+  branch until he releases it.
 - Verify by trial, not by test volume. Outside AFK, add only the one small check a change needs; run it
   in the background while you wait for Thomas's approval. After he approves, merge and promote without
   waiting for a trial, then trial it live yourself while he does and report what you saw. In AFK, write
